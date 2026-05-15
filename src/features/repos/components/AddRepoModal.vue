@@ -6,7 +6,7 @@
   >
     <form class="add-repo-modal" @submit.prevent="submit">
       <div class="add-repo-modal__grid">
-        <label>
+        <label class="add-repo-modal__field">
           <span>类型</span>
           <select v-model="form.type">
             <option value="github">GitHub</option>
@@ -14,14 +14,14 @@
             <option value="local">Local</option>
           </select>
         </label>
-        <label>
+        <label class="add-repo-modal__field">
           <span>显示名称</span>
           <input v-model.trim="form.name" type="text" placeholder="可选" />
         </label>
       </div>
 
-      <label>
-        <span>{{ form.type === 'local' ? '本地目录' : '仓库地址' }}</span>
+      <label class="add-repo-modal__field">
+        <span>{{ form.type === "local" ? "本地目录" : "仓库地址" }}</span>
         <input
           v-model.trim="form.source"
           required
@@ -31,47 +31,51 @@
       </label>
 
       <div class="add-repo-modal__actions">
-        <button class="action-button" type="button" @click="$emit('close')">取消</button>
-        <button class="action-button action-button--primary" type="submit">添加 Repo</button>
+        <button class="action-button" type="button" @click="$emit('close')">
+          取消
+        </button>
+        <button class="action-button action-button--primary" type="submit">
+          添加 Repo
+        </button>
       </div>
     </form>
   </BaseModal>
 </template>
 
 <script setup>
-import { computed, reactive } from 'vue'
-import BaseModal from '@/components/BaseModal.vue'
+import { computed, reactive } from "vue"
+import BaseModal from "@/components/BaseModal.vue"
 
-const emit = defineEmits(['close', 'submit'])
+const emit = defineEmits(["close", "submit"])
 
 const form = reactive({
-  type: 'github',
-  name: '',
-  source: ''
+  type: "github",
+  name: "",
+  source: ""
 })
 
 const placeholderText = computed(() => {
-  if (form.type === 'github') {
-    return '例如：owner/repo 或 https://github.com/owner/repo.git'
+  if (form.type === "github") {
+    return "例如：owner/repo 或 https://github.com/owner/repo.git"
   }
 
-  if (form.type === 'git') {
-    return '例如：https://git.example.com/team/repo.git'
+  if (form.type === "git") {
+    return "例如：https://git.example.com/team/repo.git"
   }
 
-  return '例如：D:\\skills-repo'
+  return "例如：D:\\skills-repo"
 })
 
 function submit() {
-  emit('submit', {
+  emit("submit", {
     type: form.type,
     name: form.name,
     source: form.source
   })
 
-  form.type = 'github'
-  form.name = ''
-  form.source = ''
+  form.type = "github"
+  form.name = ""
+  form.source = ""
 }
 </script>
 
@@ -82,14 +86,14 @@ function submit() {
   gap: 16px;
 }
 
-.add-repo-modal label {
+.add-repo-modal__field {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
 .add-repo-modal span {
-  color: rgba(43, 57, 84, 0.7);
+  color: var(--color-text-muted);
   font-size: 0.84rem;
   font-weight: 700;
 }
@@ -99,10 +103,10 @@ function submit() {
   width: 100%;
   height: 46px;
   padding: 0 14px;
-  border: 1px solid rgba(58, 69, 94, 0.14);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.92);
-  color: #1f314f;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-text);
   font: inherit;
 }
 
@@ -122,23 +126,17 @@ function submit() {
 .action-button {
   height: 40px;
   padding: 0 16px;
-  border: 1px solid rgba(58, 69, 94, 0.14);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #2a4366;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
 }
 
 .action-button--primary {
-  border-color: rgba(38, 92, 183, 0.2);
-  background: linear-gradient(135deg, #1f5ca2, #d66a2c);
+  border-color: var(--color-primary);
+  background: var(--color-primary);
   color: #fff;
-}
-
-@media (max-width: 720px) {
-  .add-repo-modal__grid {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

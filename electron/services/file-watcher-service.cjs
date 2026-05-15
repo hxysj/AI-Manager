@@ -1,4 +1,4 @@
-const chokidar = require('chokidar')
+const chokidar = require("chokidar")
 
 class FileWatcherService {
   constructor() {
@@ -21,8 +21,8 @@ class FileWatcherService {
       followSymlinks: false
     })
 
-    const trigger = changedPath => {
-      if (changedPath.endsWith('prompt.md')) {
+    const trigger = (changedPath) => {
+      if (changedPath.endsWith("prompt.md")) {
         return
       }
 
@@ -32,11 +32,11 @@ class FileWatcherService {
       }, 250)
     }
 
-    this.watcher.on('add', trigger)
-    this.watcher.on('addDir', trigger)
-    this.watcher.on('change', trigger)
-    this.watcher.on('unlink', trigger)
-    this.watcher.on('unlinkDir', trigger)
+    this.watcher.on("add", trigger)
+    this.watcher.on("addDir", trigger)
+    this.watcher.on("change", trigger)
+    this.watcher.on("unlink", trigger)
+    this.watcher.on("unlinkDir", trigger)
   }
 
   stop() {

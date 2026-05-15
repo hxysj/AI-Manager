@@ -1,5 +1,5 @@
-const fs = require('node:fs/promises')
-const path = require('node:path')
+const fs = require("node:fs/promises")
+const path = require("node:path")
 
 async function getPathStat(targetPath) {
   try {
@@ -36,9 +36,9 @@ class LinkManager {
     if (!cliTarget.installed) {
       return {
         targetId: cliTarget.id,
-        state: 'disabled',
-        targetPath: path.join(cliTarget.skillsPath || '', skill.name),
-        reason: 'CLI 未安装'
+        state: "disabled",
+        targetPath: path.join(cliTarget.skillsPath || "", skill.name),
+        reason: "CLI 未安装"
       }
     }
 
@@ -48,7 +48,7 @@ class LinkManager {
     if (!targetStat) {
       return {
         targetId: cliTarget.id,
-        state: 'not-installed',
+        state: "not-installed",
         targetPath
       }
     }
@@ -58,7 +58,7 @@ class LinkManager {
     if (!sourceExists) {
       return {
         targetId: cliTarget.id,
-        state: 'broken-link',
+        state: "broken-link",
         targetPath
       }
     }
@@ -67,9 +67,9 @@ class LinkManager {
       if (!targetStat.isSymbolicLink()) {
         return {
           targetId: cliTarget.id,
-          state: 'disabled',
+          state: "disabled",
           targetPath,
-          reason: '目标路径已被真实目录占用'
+          reason: "目标路径已被真实目录占用"
         }
       }
 
@@ -79,21 +79,21 @@ class LinkManager {
       if (resolvedTarget === resolvedSource) {
         return {
           targetId: cliTarget.id,
-          state: 'installed',
+          state: "installed",
           targetPath
         }
       }
 
       return {
         targetId: cliTarget.id,
-        state: 'disabled',
+        state: "disabled",
         targetPath,
-        reason: '目标路径已被其他内容占用'
+        reason: "目标路径已被其他内容占用"
       }
     } catch {
       return {
         targetId: cliTarget.id,
-        state: 'broken-link',
+        state: "broken-link",
         targetPath
       }
     }
@@ -135,7 +135,7 @@ class LinkManager {
       await removeManagedLink(targetPath)
     }
 
-    await fs.symlink(skill.sourcePath, targetPath, 'junction')
+    await fs.symlink(skill.sourcePath, targetPath, "junction")
 
     return {
       targetId,

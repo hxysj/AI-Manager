@@ -6,13 +6,21 @@
         <h1>Skill Repos</h1>
       </div>
       <div class="repos-view__toolbar-actions">
-        <button class="action-button action-button--primary" type="button" @click="$emit('add-repo')">
+        <button
+          class="action-button action-button--primary"
+          type="button"
+          @click="$emit('add-repo')"
+        >
           添加 Repo
         </button>
         <button class="action-button" type="button" @click="$emit('sync-all')">
           同步全部
         </button>
-        <button class="action-button" type="button" @click="$emit('open-path', paths.reposDir)">
+        <button
+          class="action-button"
+          type="button"
+          @click="$emit('open-path', paths.reposDir)"
+        >
           打开 Repos 目录
         </button>
       </div>
@@ -50,13 +58,25 @@
         </div>
 
         <div class="repos-view__card-actions">
-          <button class="action-button" type="button" @click="$emit('open-path', repo.localPath)">
+          <button
+            class="action-button"
+            type="button"
+            @click="$emit('open-path', repo.localPath)"
+          >
             打开目录
           </button>
-          <button class="action-button" type="button" @click="$emit('sync-repo', repo.id)">
+          <button
+            class="action-button"
+            type="button"
+            @click="$emit('sync-repo', repo.id)"
+          >
             同步
           </button>
-          <button class="action-button action-button--alert" type="button" @click="$emit('remove-repo', repo.id)">
+          <button
+            class="action-button action-button--alert"
+            type="button"
+            @click="$emit('remove-repo', repo.id)"
+          >
             删除
           </button>
         </div>
@@ -65,13 +85,16 @@
 
     <div v-else class="repos-view__empty">
       <h2>还没有 Repo</h2>
-      <p>添加 GitHub、Git 或本地目录后，系统会自动扫描其中的 `SKILL.md` 并注册到 Registry。</p>
+      <p>
+        添加 GitHub、Git 或本地目录后，系统会自动扫描其中的 `SKILL.md` 并注册到
+        Registry。
+      </p>
     </div>
   </section>
 </template>
 
 <script setup>
-import { formatDateTime } from '@/utils/formatters'
+import { formatDateTime } from "@/utils/formatters"
 
 defineProps({
   paths: {
@@ -84,7 +107,7 @@ defineProps({
   }
 })
 
-defineEmits(['add-repo', 'sync-all', 'open-path', 'sync-repo', 'remove-repo'])
+defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
 </script>
 
 <style scoped lang="less">
@@ -103,7 +126,7 @@ defineEmits(['add-repo', 'sync-all', 'open-path', 'sync-repo', 'remove-repo'])
 
 .repos-view__eyebrow {
   margin: 0 0 8px;
-  color: rgba(43, 57, 84, 0.58);
+  color: var(--color-text-soft);
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.18em;
@@ -112,7 +135,6 @@ defineEmits(['add-repo', 'sync-all', 'open-path', 'sync-repo', 'remove-repo'])
 
 .repos-view__toolbar h1 {
   margin: 0;
-  font-family: 'Georgia', 'Times New Roman', serif;
   font-size: 2rem;
 }
 
@@ -133,9 +155,9 @@ defineEmits(['add-repo', 'sync-all', 'open-path', 'sync-repo', 'remove-repo'])
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px;
   padding: 20px;
-  border: 1px solid rgba(58, 69, 94, 0.1);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
 }
 
 .repos-view__card-head {
@@ -153,7 +175,7 @@ defineEmits(['add-repo', 'sync-all', 'open-path', 'sync-repo', 'remove-repo'])
 
 .repos-view__card-head p {
   margin: 0;
-  color: rgba(43, 57, 84, 0.64);
+  color: var(--color-text-muted);
   line-height: 1.6;
   word-break: break-all;
 }
@@ -164,8 +186,8 @@ defineEmits(['add-repo', 'sync-all', 'open-path', 'sync-repo', 'remove-repo'])
   justify-content: center;
   padding: 6px 12px;
   border-radius: 999px;
-  background: rgba(36, 94, 161, 0.1);
-  color: #245ea1;
+  background: var(--color-primary-soft);
+  color: var(--color-text-muted);
   font-size: 0.76rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -180,14 +202,15 @@ defineEmits(['add-repo', 'sync-all', 'open-path', 'sync-repo', 'remove-repo'])
 
 .repos-view__grid div {
   padding: 16px;
-  border-radius: 18px;
-  background: rgba(245, 239, 230, 0.72);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel-soft);
 }
 
 .repos-view__grid span {
   display: block;
   margin-bottom: 8px;
-  color: rgba(43, 57, 84, 0.58);
+  color: var(--color-text-muted);
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -209,63 +232,42 @@ defineEmits(['add-repo', 'sync-all', 'open-path', 'sync-repo', 'remove-repo'])
   display: grid;
   min-height: 360px;
   place-items: center;
-  border: 1px dashed rgba(58, 69, 94, 0.16);
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.58);
+  border: 1px dashed var(--color-line-strong);
+  border-radius: 8px;
+  background: var(--color-panel);
   text-align: center;
 }
 
 .repos-view__empty h2 {
   margin: 0 0 10px;
-  font-family: 'Georgia', 'Times New Roman', serif;
   font-size: 1.5rem;
 }
 
 .repos-view__empty p {
   margin: 0;
-  color: rgba(43, 57, 84, 0.6);
+  color: var(--color-text-muted);
 }
 
 .action-button {
   height: 42px;
   padding: 0 16px;
-  border: 1px solid rgba(58, 69, 94, 0.14);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #2a4366;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
 }
 
 .action-button--primary {
-  border-color: rgba(38, 92, 183, 0.2);
-  background: linear-gradient(135deg, #1f5ca2, #d66a2c);
+  border-color: var(--color-primary);
+  background: var(--color-primary);
   color: #fff;
 }
 
 .action-button--alert {
-  border-color: rgba(220, 38, 38, 0.18);
-  background: rgba(220, 38, 38, 0.08);
-  color: #b91c1c;
-}
-
-@media (max-width: 1080px) {
-  .repos-view__toolbar,
-  .repos-view__card {
-    grid-template-columns: 1fr;
-  }
-
-  .repos-view__toolbar-actions {
-    justify-content: flex-start;
-  }
-
-  .repos-view__grid {
-    grid-template-columns: 1fr;
-  }
-
-  .repos-view__card-actions {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
+  border-color: var(--color-danger-soft);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 </style>

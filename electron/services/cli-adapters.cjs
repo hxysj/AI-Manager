@@ -1,8 +1,8 @@
-const fs = require('node:fs/promises')
-const os = require('node:os')
-const path = require('node:path')
-const { execFile } = require('node:child_process')
-const { promisify } = require('node:util')
+const fs = require("node:fs/promises")
+const os = require("node:os")
+const path = require("node:path")
+const { execFile } = require("node:child_process")
+const { promisify } = require("node:util")
 
 const execFileAsync = promisify(execFile)
 
@@ -20,7 +20,7 @@ async function pathExists(targetPath) {
 }
 
 async function resolveBinary(binaryName) {
-  const locator = process.platform === 'win32' ? 'where.exe' : 'which'
+  const locator = process.platform === "win32" ? "where.exe" : "which"
 
   try {
     const { stdout } = await execFileAsync(locator, [binaryName], {
@@ -28,7 +28,7 @@ async function resolveBinary(binaryName) {
     })
     const firstLine = stdout
       .split(/\r?\n/)
-      .map(item => item.trim())
+      .map((item) => item.trim())
       .find(Boolean)
 
     return firstLine || null
@@ -43,12 +43,12 @@ async function detectVersion(binaryPath) {
   }
 
   try {
-    const { stdout, stderr } = await execFileAsync(binaryPath, ['--version'], {
+    const { stdout, stderr } = await execFileAsync(binaryPath, ["--version"], {
       windowsHide: true
     })
     const output = `${stdout}\n${stderr}`
       .split(/\r?\n/)
-      .map(item => item.trim())
+      .map((item) => item.trim())
       .find(Boolean)
 
     return output || undefined
@@ -58,10 +58,19 @@ async function detectVersion(binaryPath) {
 }
 
 class BaseCliAdapter {
-  constructor({ id, type, name, binaryName, configDirName, sessionsDirName }) {
+  constructor({
+    id,
+    type,
+    name,
+    icon,
+    binaryName,
+    configDirName,
+    sessionsDirName
+  }) {
     this.id = id
     this.type = type
     this.name = name
+    this.icon = icon
     this.binaryName = binaryName
     this.configDirName = configDirName
     this.sessionsDirName = sessionsDirName
@@ -72,7 +81,7 @@ class BaseCliAdapter {
   }
 
   getSkillsPath() {
-    return path.join(this.getConfigPath(), 'skills')
+    return path.join(this.getConfigPath(), "skills")
   }
 
   getSessionsPath() {
@@ -93,6 +102,7 @@ class BaseCliAdapter {
       id: this.id,
       type: this.type,
       name: this.name,
+      icon: this.icon,
       installed,
       executablePath: executablePath || undefined,
       configPath,
@@ -116,33 +126,36 @@ class BaseCliAdapter {
 function createCliAdapters() {
   return [
     new BaseCliAdapter({
-      id: 'claude',
-      type: 'claude',
-      name: 'Claude',
-      binaryName: 'claude',
-      configDirName: '.claude',
-      sessionsDirName: 'projects'
+      id: "claude",
+      type: "claude",
+      name: "Claude",
+      icon: "claudecode.svg",
+      binaryName: "claude",
+      configDirName: ".claude",
+      sessionsDirName: "projects"
     }),
     new BaseCliAdapter({
-      id: 'codex',
-      type: 'codex',
-      name: 'Codex',
-      binaryName: 'codex',
-      configDirName: '.codex'
+      id: "codex",
+      type: "codex",
+      name: "Codex",
+      icon: "codex.svg",
+      binaryName: "codex",
+      configDirName: ".codex"
     }),
     new BaseCliAdapter({
-      id: 'gemini',
-      type: 'gemini',
-      name: 'Gemini',
-      binaryName: 'gemini',
-      configDirName: '.gemini'
+      id: "gemini",
+      type: "gemini",
+      name: "Gemini",
+      icon: "geminicli.svg",
+      binaryName: "gemini",
+      configDirName: ".gemini"
     }),
     new BaseCliAdapter({
-      id: 'opencode',
-      type: 'opencode',
-      name: 'OpenCode',
-      binaryName: 'opencode',
-      configDirName: '.opencode'
+      id: "opencode",
+      type: "opencode",
+      name: "OpenCode",
+      binaryName: "opencode",
+      configDirName: ".opencode"
     })
   ]
 }

@@ -1,14 +1,18 @@
-const fs = require('node:fs/promises')
-const path = require('node:path')
-const { EventEmitter } = require('node:events')
-const { resolveAppPaths, ensureAppDirectories, slugifyName } = require('./path-utils.cjs')
-const { JsonStorage } = require('./json-storage.cjs')
-const { CliDetectionService } = require('./cli-detection-service.cjs')
-const { MetadataParser } = require('./metadata-parser.cjs')
-const { SkillScanner } = require('./skill-scanner.cjs')
-const { LinkManager } = require('./link-manager.cjs')
-const { RepoService } = require('./repo-service.cjs')
-const { FileWatcherService } = require('./file-watcher-service.cjs')
+const fs = require("node:fs/promises")
+const path = require("node:path")
+const { EventEmitter } = require("node:events")
+const {
+  resolveAppPaths,
+  ensureAppDirectories,
+  slugifyName
+} = require("./path-utils.cjs")
+const { JsonStorage } = require("./json-storage.cjs")
+const { CliDetectionService } = require("./cli-detection-service.cjs")
+const { MetadataParser } = require("./metadata-parser.cjs")
+const { SkillScanner } = require("./skill-scanner.cjs")
+const { LinkManager } = require("./link-manager.cjs")
+const { RepoService } = require("./repo-service.cjs")
+const { FileWatcherService } = require("./file-watcher-service.cjs")
 
 async function pathExists(targetPath) {
   try {
@@ -61,7 +65,7 @@ class ManagerService extends EventEmitter {
   }
 
   startWatcher() {
-    const repoPaths = this.repoService.listRepos().map(item => item.localPath)
+    const repoPaths = this.repoService.listRepos().map((item) => item.localPath)
 
     this.fileWatcherService.restart(
       [this.paths.skillsDir, this.paths.reposDir, ...repoPaths],
@@ -76,17 +80,19 @@ class ManagerService extends EventEmitter {
   }
 
   async refreshAll({ emit = true } = {}) {
-    const previousSkills = await this.storage.read('skills', [])
-    const installIndex = await this.storage.read('installs', {})
+    const previousSkills = await this.storage.read("skills", [])
+    const installIndex = await this.storage.read("installs", {})
     const normalizedInstallIndex = { ...installIndex }
-    const [cliTargets] = await Promise.all([this.cliDetectionService.detectAll()])
-    const repos = this.repoService.listRepos().map(repo => ({
+    const [cliTargets] = await Promise.all([
+      this.cliDetectionService.detectAll()
+    ])
+    const repos = this.repoService.listRepos().map((repo) => ({
       ...repo,
       skillCount: 0
     }))
     const scannedItems = await this.skillScanner.scanMany([
       { rootPath: this.paths.skillsDir, repoId: null },
-      ...repos.map(repo => ({
+      ...repos.map((repo) => ({
         rootPath: repo.localPath,
         repoId: repo.id
       }))
@@ -97,11 +103,14 @@ class ManagerService extends EventEmitter {
 
     for (const scannedItem of scannedItems) {
       try {
-        const parsed = await this.metadataParser.parse(scannedItem.skillRoot, scannedItem.repoId)
+        const parsed = await this.metadataParser.parse(
+          scannedItem.skillRoot,
+          scannedItem.repoId
+        )
 
         if (usedNames.has(parsed.name)) {
           diagnostics.push({
-            type: 'duplicate-skill-name',
+            type: "duplicate-skill-name",
             message: `发现重复 Skill 名称：${parsed.name}`,
             sourcePath: parsed.sourcePath
           })
@@ -112,15 +121,19 @@ class ManagerService extends EventEmitter {
         parsedSkills.push(parsed)
       } catch (error) {
         diagnostics.push({
-          type: 'metadata-error',
+          type: "metadata-error",
           message: error.message,
           sourcePath: scannedItem.skillRoot
         })
       }
     }
 
-    const previousSkillMap = new Map(previousSkills.map(item => [item.name, item]))
-    const scannedSkillMap = new Map(parsedSkills.map(item => [item.name, item]))
+    const previousSkillMap = new Map(
+      previousSkills.map((item) => [item.name, item])
+    )
+    const scannedSkillMap = new Map(
+      parsedSkills.map((item) => [item.name, item])
+    )
 
     for (const [skillName, targetIds] of Object.entries(installIndex)) {
       if (!targetIds?.length || scannedSkillMap.has(skillName)) {
@@ -132,7 +145,7 @@ class ManagerService extends EventEmitter {
           await this.linkManager.uninstallSkill(skillName, targetId)
         } catch (error) {
           diagnostics.push({
-            type: 'cleanup-error',
+            type: "cleanup-error",
             message: `清理失效链接失败：${error.message}`,
             sourcePath: `${skillName} -> ${targetId}`
           })
@@ -141,13 +154,13 @@ class ManagerService extends EventEmitter {
 
       delete normalizedInstallIndex[skillName]
       diagnostics.push({
-        type: 'orphan-skill-cleaned',
+        type: "orphan-skill-cleaned",
         message: `Skill 源目录已删除，已自动清理挂载：${skillName}`,
         sourcePath: previousSkillMap.get(skillName)?.sourcePath || skillName
       })
     }
 
-    const repoMap = new Map(repos.map(item => [item.id, item]))
+    const repoMap = new Map(repos.map((item) => [item.id, item]))
     const skills = []
 
     for (const skill of sortByName(parsedSkills)) {
@@ -158,7 +171,7 @@ class ManagerService extends EventEmitter {
         const state = await this.linkManager.getInstallState(skill, cliTarget)
         installStates[cliTarget.id] = state
 
-        if (['installed', 'broken-link'].includes(state.state)) {
+        if (["installed", "broken-link"].includes(state.state)) {
           installedTargets.push(cliTarget.id)
         }
       }
@@ -172,9 +185,10 @@ class ManagerService extends EventEmitter {
         installedTargets,
         installStates,
         status: this.resolveSkillStatus(installStates),
-        repoName: skill.repoId && repoMap.has(skill.repoId)
-          ? repoMap.get(skill.repoId).name
-          : 'Managed'
+        repoName:
+          skill.repoId && repoMap.has(skill.repoId)
+            ? repoMap.get(skill.repoId).name
+            : "Managed"
       })
     }
 
@@ -190,28 +204,28 @@ class ManagerService extends EventEmitter {
     }
 
     if (emit) {
-      this.emit('state-changed', this.state)
+      this.emit("state-changed", this.state)
     }
 
     return this.state
   }
 
   resolveSkillStatus(installStates) {
-    const states = Object.values(installStates).map(item => item.state)
+    const states = Object.values(installStates).map((item) => item.state)
 
-    if (states.includes('broken-link')) {
-      return 'broken-link'
+    if (states.includes("broken-link")) {
+      return "broken-link"
     }
 
-    if (states.includes('installed')) {
-      return 'installed'
+    if (states.includes("installed")) {
+      return "installed"
     }
 
-    if (states.every(item => item === 'disabled')) {
-      return 'disabled'
+    if (states.every((item) => item === "disabled")) {
+      return "disabled"
     }
 
-    return 'not-installed'
+    return "not-installed"
   }
 
   async persistSkills(skills, cliTargets, installIndex) {
@@ -225,16 +239,16 @@ class ManagerService extends EventEmitter {
       }
     }
 
-    this.storage.scheduleWrite('skills', skills)
-    this.storage.scheduleWrite('cliTargets', cliTargets)
-    this.storage.scheduleWrite('installs', normalizedInstallIndex)
+    this.storage.scheduleWrite("skills", skills)
+    this.storage.scheduleWrite("cliTargets", cliTargets)
+    this.storage.scheduleWrite("installs", normalizedInstallIndex)
   }
 
   async installSkill(skillName, targetId) {
-    const skill = this.state.skills.find(item => item.name === skillName)
+    const skill = this.state.skills.find((item) => item.name === skillName)
 
     if (!skill) {
-      throw new Error('Skill 不存在')
+      throw new Error("Skill 不存在")
     }
 
     await this.linkManager.installSkill(skill, targetId)
@@ -247,14 +261,14 @@ class ManagerService extends EventEmitter {
   }
 
   async repairSkill(skillName, targetId) {
-    const skill = this.state.skills.find(item => item.name === skillName)
+    const skill = this.state.skills.find((item) => item.name === skillName)
 
     if (!skill) {
-      throw new Error('Skill 不存在')
+      throw new Error("Skill 不存在")
     }
 
     if (!(await pathExists(skill.sourcePath))) {
-      throw new Error('Skill 源目录不存在，当前无法修复')
+      throw new Error("Skill 源目录不存在，当前无法修复")
     }
 
     await this.linkManager.repairSkill(skill, targetId)
@@ -262,13 +276,13 @@ class ManagerService extends EventEmitter {
   }
 
   async createSkill(input) {
-    const skillName = String(input.name || '').trim()
+    const skillName = String(input.name || "").trim()
 
     if (!skillName) {
-      throw new Error('Skill 名称不能为空')
+      throw new Error("Skill 名称不能为空")
     }
 
-    if (this.state.skills.find(item => item.name === skillName)) {
+    if (this.state.skills.find((item) => item.name === skillName)) {
       throw new Error(`Skill 名称已存在：${skillName}`)
     }
 
@@ -276,33 +290,143 @@ class ManagerService extends EventEmitter {
     const skillRoot = path.join(this.paths.skillsDir, directoryName)
 
     if (await pathExists(skillRoot)) {
-      throw new Error('同名目录已存在，请修改 Skill 名称')
+      throw new Error("同名目录已存在，请修改 Skill 名称")
     }
 
     const tags = Array.isArray(input.tags) ? input.tags.filter(Boolean) : []
-    const toYamlScalar = value => JSON.stringify(String(value))
+    const toYamlScalar = (value) => JSON.stringify(String(value))
     const frontmatterLines = [
-      '---',
+      "---",
       `name: ${toYamlScalar(skillName)}`,
-      input.description ? `description: ${toYamlScalar(input.description)}` : null,
+      input.description
+        ? `description: ${toYamlScalar(input.description)}`
+        : null,
       input.author ? `author: ${toYamlScalar(input.author)}` : null,
-      tags.length ? 'tags:' : null,
-      ...tags.map(item => `  - ${toYamlScalar(item)}`),
-      'entry: prompt.md',
-      '---',
-      '',
+      tags.length ? "tags:" : null,
+      ...tags.map((item) => `  - ${toYamlScalar(item)}`),
+      "entry: prompt.md",
+      "---",
+      "",
       `# ${skillName}`,
-      '',
-      '这个 Skill 由 AI Manager 创建。'
-    ].filter(item => item !== null)
+      "",
+      "这个 Skill 由 AI Manager 创建。"
+    ].filter((item) => item !== null)
 
     await fs.mkdir(skillRoot, { recursive: true })
-    await fs.writeFile(path.join(skillRoot, 'SKILL.md'), `${frontmatterLines.join('\n')}\n`, 'utf8')
     await fs.writeFile(
-      path.join(skillRoot, 'prompt.md'),
-      `# ${skillName}\n\n在这里补充你的 Skill 提示词。\n`,
-      'utf8'
+      path.join(skillRoot, "SKILL.md"),
+      `${frontmatterLines.join("\n")}\n`,
+      "utf8"
     )
+    await fs.writeFile(
+      path.join(skillRoot, "prompt.md"),
+      `# ${skillName}\n\n在这里补充你的 Skill 提示词。\n`,
+      "utf8"
+    )
+
+    await this.refreshAll()
+  }
+
+  async importSkillsFromCli(targetId) {
+    const detectedTargets = targetId
+      ? [await this.cliDetectionService.getAdapter(targetId).detect()]
+      : await this.cliDetectionService.detectAll()
+    const cliTargets = detectedTargets.filter(
+      (item) => item.installed && item.skillsPath
+    )
+    const managedPaths = new Map(
+      this.state.skills.map((item) => [item.name, item.sourcePath])
+    )
+    const imports = []
+    const mounts = []
+
+    for (const cliTarget of cliTargets) {
+      const skillsPathStat = await fs
+        .lstat(cliTarget.skillsPath)
+        .catch((error) => {
+          if (error.code === "ENOENT") {
+            return null
+          }
+
+          throw error
+        })
+
+      if (!skillsPathStat?.isDirectory()) {
+        continue
+      }
+
+      const entries = await fs.readdir(cliTarget.skillsPath, {
+        withFileTypes: true
+      })
+
+      for (const entry of entries) {
+        if (!entry.isDirectory()) {
+          continue
+        }
+
+        const sourcePath = path.join(cliTarget.skillsPath, entry.name)
+        const sourceStat = await fs.lstat(sourcePath)
+
+        if (sourceStat.isSymbolicLink()) {
+          continue
+        }
+
+        if (!(await pathExists(path.join(sourcePath, "SKILL.md")))) {
+          continue
+        }
+
+        const parsed = await this.metadataParser.parse(sourcePath)
+        const directoryName = slugifyName(parsed.name) || entry.name
+        const managedPath =
+          managedPaths.get(parsed.name) ||
+          path.join(this.paths.skillsDir, directoryName)
+        const mountedPath = path.join(cliTarget.skillsPath, parsed.name)
+
+        if (
+          path.resolve(sourcePath) !== path.resolve(mountedPath) &&
+          (await pathExists(mountedPath))
+        ) {
+          throw new Error(`目标 CLI 路径已被占用：${mountedPath}`)
+        }
+
+        if (managedPaths.has(parsed.name)) {
+          mounts.push({
+            name: parsed.name,
+            sourcePath,
+            managedPath,
+            mountedPath
+          })
+          continue
+        }
+
+        if (await pathExists(managedPath)) {
+          throw new Error(`集中目录已存在同名目录：${managedPath}`)
+        }
+
+        managedPaths.set(parsed.name, managedPath)
+        imports.push({
+          name: parsed.name,
+          sourcePath,
+          managedPath,
+          mountedPath
+        })
+      }
+    }
+
+    if (!imports.length && !mounts.length) {
+      throw new Error("所有 CLI 中没有可导入的真实 Skill 目录")
+    }
+
+    for (const candidate of imports) {
+      await fs.cp(candidate.sourcePath, candidate.managedPath, {
+        recursive: true
+      })
+    }
+
+    for (const candidate of [...imports, ...mounts]) {
+      await fs.rm(candidate.sourcePath, { recursive: true, force: true })
+      await fs.symlink(candidate.managedPath, candidate.mountedPath, "junction")
+    }
 
     await this.refreshAll()
   }
@@ -327,13 +451,15 @@ class ManagerService extends EventEmitter {
   }
 
   async removeRepo(repoId) {
-    const repo = this.repoService.listRepos().find(item => item.id === repoId)
+    const repo = this.repoService.listRepos().find((item) => item.id === repoId)
 
     if (!repo) {
       return
     }
 
-    const repoSkills = this.state.skills.filter(item => item.repoId === repoId)
+    const repoSkills = this.state.skills.filter(
+      (item) => item.repoId === repoId
+    )
 
     for (const skill of repoSkills) {
       for (const targetId of skill.installedTargets) {

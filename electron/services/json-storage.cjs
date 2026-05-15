@@ -1,4 +1,4 @@
-const fs = require('node:fs/promises')
+const fs = require("node:fs/promises")
 
 class JsonStorage {
   constructor(storageFiles, delay = 300) {
@@ -16,10 +16,10 @@ class JsonStorage {
     }
 
     try {
-      const content = await fs.readFile(filePath, 'utf8')
+      const content = await fs.readFile(filePath, "utf8")
       return JSON.parse(content)
     } catch (error) {
-      if (error.code === 'ENOENT') {
+      if (error.code === "ENOENT") {
         return fallback
       }
 
@@ -35,7 +35,7 @@ class JsonStorage {
     }
 
     const content = JSON.stringify(payload, null, 2)
-    await fs.writeFile(filePath, `${content}\n`, 'utf8')
+    await fs.writeFile(filePath, `${content}\n`, "utf8")
   }
 
   scheduleWrite(key, payload) {
