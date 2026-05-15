@@ -376,3 +376,296 @@ test('ManagerService hides unsupported detected defaults until installed', async
 
   await service.dispose()
 })
+
+test('ManagerService indexes sessions and loads messages on demand', async () => {
+  const root = await createTempDir('ai-manager-session-')
+  const userDataPath = path.join(root, 'data')
+  const sessionsPath = path.join(root, 'claude', 'projects')
+  const rawPath = path.join(sessionsPath, 'demo.jsonl')
+  const service = new ManagerService(userDataPath)
+
+  service.cliDetectionService = {
+    detectAll: async () => [
+      {
+        id: 'claude',
+        type: 'claude',
+        name: 'Claude',
+        icon: 'claude.svg',
+        installed: true,
+        configPath: path.join(root, 'claude'),
+        skillsPath: path.join(root, 'claude', 'skills'),
+        sessionsPath,
+        sessionPaths: [sessionsPath],
+        detectedAt: Date.now()
+      }
+    ],
+    getAdapter: targetId => ({
+      detect: async () => service.state.cliTargets.find(
+        item => item.id === targetId
+      )
+    })
+  }
+
+  await fs.mkdir(sessionsPath, { recursive: true })
+  await fs.writeFile(
+    rawPath,
+    [
+      JSON.stringify({
+        type: 'user',
+        cwd: root,
+        model: 'demo-model',
+        message: { role: 'user', content: 'Find session root cause' }
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: 'Use filesystem aggregation'
+        },
+        files: ['README.md']
+      })
+    ].join('\n'),
+    'utf8'
+  )
+
+  await service.init()
+
+  const session = service.getState().sessions[0]
+  const messages = await service.loadSessionMessages(session.id)
+  const searchResults = await service.searchSessions('filesystem aggregation')
+
+  assert.equal(session.title, 'Find session root cause')
+  assert.equal(session.messages, undefined)
+  assert.equal(messages.length, 2)
+  assert.equal(searchResults[0].id, session.id)
+
+  await service.deleteSession(session.id)
+
+  const recycledSessions = await service.listRecycledSessions()
+
+  assert.equal(service.getState().sessions.length, 0)
+  assert.equal(recycledSessions.length, 1)
+  assert.equal(recycledSessions[0].originalPath, rawPath)
+  await assert.rejects(fs.readFile(rawPath, 'utf8'), {
+    code: 'ENOENT'
+  })
+  assert.equal(
+    await fs.readFile(recycledSessions[0].recycledPath, 'utf8'),
+    [
+      JSON.stringify({
+        type: 'user',
+        cwd: root,
+        model: 'demo-model',
+        message: { role: 'user', content: 'Find session root cause' }
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: 'Use filesystem aggregation'
+        },
+        files: ['README.md']
+      })
+    ].join('\n')
+  )
+
+  await service.restoreSession(session.id)
+
+  assert.equal(service.getState().sessions.length, 1)
+  assert.deepEqual(await service.listRecycledSessions(), [])
+  assert.equal(
+    await fs.readFile(rawPath, 'utf8'),
+    [
+      JSON.stringify({
+        type: 'user',
+        cwd: root,
+        model: 'demo-model',
+        message: { role: 'user', content: 'Find session root cause' }
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: 'Use filesystem aggregation'
+        },
+        files: ['README.md']
+      })
+    ].join('\n')
+  )
+
+  await service.deleteSession(session.id)
+  await service.purgeSession(session.id)
+
+  assert.deepEqual(await service.listRecycledSessions(), [])
+  await assert.rejects(fs.readFile(rawPath, 'utf8'), {
+    code: 'ENOENT'
+  })
+
+  await service.dispose()
+})
+
+test('ManagerService scans Gemini sessions from tmp session and checkpoint files', async () => {
+  const root = await createTempDir('ai-manager-gemini-session-')
+  const userDataPath = path.join(root, 'data')
+  const sessionsPath = path.join(root, 'gemini', 'tmp')
+  const hashPath = path.join(sessionsPath, '83a1ab23')
+  const chatsPath = path.join(hashPath, 'chats')
+  const rawPath = path.join(chatsPath, 'session-001.jsonl')
+  const ignoredPath = path.join(hashPath, 'other.json')
+  const service = new ManagerService(userDataPath)
+
+  service.cliDetectionService = {
+    detectAll: async () => [
+      {
+        id: 'gemini',
+        type: 'gemini',
+        name: 'Gemini',
+        icon: 'geminicli.svg',
+        installed: true,
+        configPath: path.join(root, 'gemini'),
+        skillsPath: path.join(root, 'gemini', 'skills'),
+        sessionsPath,
+        sessionPaths: [sessionsPath],
+        sessionScanRules: {
+          extensions: ['.json', '.jsonl'],
+          names: ['session', 'checkpoint']
+        },
+        detectedAt: Date.now()
+      }
+    ],
+    getAdapter: targetId => ({
+      detect: async () => service.state.cliTargets.find(
+        item => item.id === targetId
+      )
+    })
+  }
+
+  await fs.mkdir(chatsPath, { recursive: true })
+  await fs.writeFile(path.join(hashPath, '.project_root'), root, 'utf8')
+  await fs.writeFile(
+    rawPath,
+    [
+      JSON.stringify({
+        sessionId: 'gemini-session',
+        projectHash: '83a1ab23',
+        startTime: '2026-05-15T01:00:00.000Z'
+      }),
+      JSON.stringify({
+        id: 'message-1',
+        timestamp: '2026-05-15T01:00:01.000Z',
+        type: 'user',
+        content: [{ text: 'Gemini tmp session' }]
+      }),
+      JSON.stringify({
+        id: 'message-2',
+        timestamp: '2026-05-15T01:00:02.000Z',
+        type: 'assistant',
+        content: [{ text: 'Hash project cache' }]
+      })
+    ].join('\n'),
+    'utf8'
+  )
+  await fs.writeFile(
+    ignoredPath,
+    JSON.stringify({
+      messages: [{ role: 'user', content: 'Should not be indexed' }]
+    }),
+    'utf8'
+  )
+
+  await service.init()
+
+  assert.deepEqual(
+    service.getState().sessions.map(item => [
+      item.title,
+      item.projectPath
+    ]),
+    [['Gemini tmp session', root]]
+  )
+
+  await service.dispose()
+})
+
+test('ManagerService scans Codex rollout jsonl sessions', async () => {
+  const root = await createTempDir('ai-manager-codex-session-')
+  const userDataPath = path.join(root, 'data')
+  const sessionsPath = path.join(root, 'codex', 'sessions')
+  const dayPath = path.join(sessionsPath, '2026', '05', '15')
+  const rawPath = path.join(
+    dayPath,
+    'rollout-2026-05-15T10-00-00-demo.jsonl'
+  )
+  const service = new ManagerService(userDataPath)
+
+  service.cliDetectionService = {
+    detectAll: async () => [
+      {
+        id: 'codex',
+        type: 'codex',
+        name: 'Codex',
+        icon: 'codex.svg',
+        installed: true,
+        configPath: path.join(root, 'codex'),
+        skillsPath: path.join(root, 'codex', 'skills'),
+        sessionsPath,
+        sessionPaths: [sessionsPath],
+        sessionScanRules: {
+          extensions: ['.json', '.jsonl', '.transcript'],
+          names: []
+        },
+        detectedAt: Date.now()
+      }
+    ],
+    getAdapter: targetId => ({
+      detect: async () => service.state.cliTargets.find(
+        item => item.id === targetId
+      )
+    })
+  }
+
+  await fs.mkdir(dayPath, { recursive: true })
+  await fs.writeFile(
+    rawPath,
+    [
+      JSON.stringify({
+        timestamp: '2026-05-15T02:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'demo',
+          cwd: root,
+          model: 'gpt-demo'
+        }
+      }),
+      JSON.stringify({
+        timestamp: '2026-05-15T02:00:01.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'Codex session question' }]
+        }
+      }),
+      JSON.stringify({
+        timestamp: '2026-05-15T02:00:02.000Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Codex session answer' }]
+        }
+      })
+    ].join('\n'),
+    'utf8'
+  )
+
+  await service.init()
+
+  const session = service.getState().sessions[0]
+  const messages = await service.loadSessionMessages(session.id)
+
+  assert.equal(session.title, 'Codex session question')
+  assert.equal(session.projectPath, root)
+  assert.equal(messages.length, 2)
+
+  await service.dispose()
+})

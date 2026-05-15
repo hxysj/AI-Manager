@@ -122,6 +122,33 @@ function registerIpc() {
     return managerService.getState()
   })
 
+  ipcMain.handle('session:search', async (_, payload) => {
+    return managerService.searchSessions(payload?.query)
+  })
+
+  ipcMain.handle('session:messages', async (_, payload) => {
+    return managerService.loadSessionMessages(payload?.sessionId)
+  })
+
+  ipcMain.handle('session:delete', async (_, payload) => {
+    await managerService.deleteSession(payload.sessionId)
+    return managerService.getState()
+  })
+
+  ipcMain.handle('session:recycle-list', async () => {
+    return managerService.listRecycledSessions()
+  })
+
+  ipcMain.handle('session:restore', async (_, payload) => {
+    await managerService.restoreSession(payload.sessionId)
+    return managerService.getState()
+  })
+
+  ipcMain.handle('session:purge', async (_, payload) => {
+    await managerService.purgeSession(payload.sessionId)
+    return true
+  })
+
   ipcMain.handle('system:open-path', async (_, payload) => {
     if (!payload?.targetPath) {
       return false
