@@ -129,7 +129,7 @@ function createCliAdapters() {
       id: "claude",
       type: "claude",
       name: "Claude",
-      icon: "claudecode.svg",
+      icon: "claude.svg",
       binaryName: "claude",
       configDirName: ".claude",
       sessionsDirName: "projects"
@@ -154,6 +154,7 @@ function createCliAdapters() {
       id: "opencode",
       type: "opencode",
       name: "OpenCode",
+      icon: "opencode.svg",
       binaryName: "opencode",
       configDirName: ".opencode"
     })

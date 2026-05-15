@@ -35,17 +35,26 @@
         />
         <span v-else>{{ iconLetters(skill.name) }}</span>
       </span> -->
-      <span
+      <button
         v-for="cli in cliTargets"
         :key="cli.id"
         :class="[
           'skill-card__target-pill',
           `skill-card__target-pill--${skill.installStates[cli.id]?.state || 'not-installed'}`
         ]"
+        type="button"
         :title="`${cli.name}：${formatStatusLabel(skill.installStates[cli.id]?.state)}`"
+        :disabled="skill.installStates[cli.id]?.state === 'disabled'"
+        @click.stop="toggleCliSkill(cli)"
       >
-        {{ cli.name.slice(0, 1) }}
-      </span>
+        <AiIcon
+          v-if="cli.icon"
+          class="skill-card__target-icon"
+          :name="cli.icon"
+          :alt="`${cli.name} 图标`"
+        />
+        <span v-else>{{ cli.name.slice(0, 1) }}</span>
+      </button>
       <button
         class="skill-card__action"
         type="button"
@@ -59,15 +68,11 @@
 </template>
 
 <script setup>
-import { FolderOpen } from "lucide-vue-next"
-import {
-  formatDateTime,
-  formatStatusLabel,
-  hashColor,
-  iconLetters
-} from "@/utils/formatters"
+import { FolderOpen } from 'lucide-vue-next'
+import AiIcon from '@/components/AiIcon.vue'
+import { formatDateTime, formatStatusLabel } from '@/utils/formatters'
 
-defineProps({
+const props = defineProps({
   cliTargets: {
     type: Array,
     required: true
@@ -78,10 +83,25 @@ defineProps({
   }
 })
 
-defineEmits(["select", "open-source"])
+const emit = defineEmits(['select', 'open-source', 'install', 'uninstall'])
+
+function toggleCliSkill(cli) {
+  const state = props.skill.installStates[cli.id]?.state
+  const payload = {
+    skillName: props.skill.name,
+    targetId: cli.id
+  }
+
+  if (state === 'installed') {
+    emit('uninstall', payload)
+    return
+  }
+
+  emit('install', payload)
+}
 
 function toFileUrl(value) {
-  return encodeURI(`file:///${String(value).replace(/\\/g, "/")}`)
+  return encodeURI(`file:///${String(value).replace(/\\/g, '/')}`)
 }
 </script>
 
@@ -211,10 +231,17 @@ function toFileUrl(value) {
 
 .skill-card__target-pill {
   background: var(--color-panel);
+  cursor: pointer;
+}
+
+.skill-card__target-icon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
 }
 
 .skill-card__target-pill--installed {
-  border-color: #c8e2d8;
+  border-color: #cbd6e4;
   background: var(--color-success-soft);
   color: var(--color-success);
 }
@@ -231,8 +258,14 @@ function toFileUrl(value) {
 }
 
 .skill-card__target-pill--not-installed {
+  border-color: transparent;
   background: var(--color-panel);
   color: var(--color-text-soft);
+}
+
+.skill-card__target-pill:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .skill-card__action {

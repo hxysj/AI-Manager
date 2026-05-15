@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld("aiManager", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
   refresh: () => ipcRenderer.invoke("app:refresh"),
   createSkill: (payload) => ipcRenderer.invoke("skill:create", payload),
+  previewSkillsFromCli: (payload) =>
+    ipcRenderer.invoke("skill:preview-import-from-cli", payload),
   importSkillsFromCli: (payload) =>
     ipcRenderer.invoke("skill:import-from-cli", payload),
   installSkill: (payload) => ipcRenderer.invoke("skill:install", payload),

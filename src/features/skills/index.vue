@@ -73,6 +73,8 @@
         :skill="skill"
         @select="$emit('select-skill', skill)"
         @open-source="$emit('open-path', skill.sourcePath)"
+        @install="$emit('install-skill', $event)"
+        @uninstall="$emit('uninstall-skill', $event)"
       />
     </div>
 
@@ -109,9 +111,11 @@ const props = defineProps({
 defineEmits([
   'create-skill',
   'import-skills',
+  'install-skill',
   'open-path',
   'refresh',
-  'select-skill'
+  'select-skill',
+  'uninstall-skill'
 ])
 
 const searchQuery = ref('')
@@ -163,7 +167,8 @@ const filteredSkills = computed(() => {
 
 .skills-view__toolbar h1 {
   margin: 0;
-  font-size: 2rem;
+  font-size: 1.58rem;
+  line-height: 1.2;
 }
 
 .skills-view__toolbar-actions {
@@ -181,6 +186,7 @@ const filteredSkills = computed(() => {
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: var(--color-panel);
+  box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
 }
 
 .skills-view__search,
@@ -224,6 +230,7 @@ const filteredSkills = computed(() => {
   border-radius: 8px;
   overflow: hidden;
   background: var(--color-panel);
+  box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
 }
 
 .skills-view__empty {
@@ -254,10 +261,15 @@ const filteredSkills = computed(() => {
   padding: 0 16px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: var(--color-panel);
+  background: #fbfcfd;
   color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
+}
+
+.action-button:hover {
+  border-color: #b9ccda;
+  background: var(--color-primary-soft);
 }
 
 .action-button__icon {
@@ -268,5 +280,10 @@ const filteredSkills = computed(() => {
   border-color: var(--color-primary);
   background: var(--color-primary);
   color: #fff;
+}
+
+.action-button--primary:hover {
+  border-color: #2a4f6f;
+  background: #2a4f6f;
 }
 </style>

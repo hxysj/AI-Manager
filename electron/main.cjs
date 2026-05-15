@@ -55,8 +55,12 @@ function registerIpc() {
     return managerService.getState()
   })
 
+  ipcMain.handle('skill:preview-import-from-cli', async (_, payload) => {
+    return managerService.previewSkillsFromCli(payload?.targetId)
+  })
+
   ipcMain.handle('skill:import-from-cli', async (_, payload) => {
-    await managerService.importSkillsFromCli(payload?.targetId)
+    await managerService.importSkillsFromCli(payload?.targetId, payload?.skillNames)
     return managerService.getState()
   })
 
