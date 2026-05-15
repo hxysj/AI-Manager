@@ -29,11 +29,14 @@ function sortByName(items) {
 }
 
 class ManagerService extends EventEmitter {
-  constructor(userDataPath) {
+  constructor(userDataPath, appSettings = {}) {
     super()
+    this.appSettings = appSettings
     this.paths = resolveAppPaths(userDataPath)
     this.storage = new JsonStorage(this.paths.storageFiles)
-    this.cliDetectionService = new CliDetectionService()
+    this.cliDetectionService = new CliDetectionService(
+      this.appSettings.cliConfigPaths
+    )
     this.metadataParser = new MetadataParser()
     this.skillScanner = new SkillScanner()
     this.linkManager = new LinkManager(this.cliDetectionService)
@@ -48,6 +51,7 @@ class ManagerService extends EventEmitter {
       sessions: [],
       diagnostics: [],
       paths: this.toPublicPaths(),
+      appSettings: this.toPublicSettings(false),
       refreshedAt: 0
     }
   }
@@ -69,6 +73,31 @@ class ManagerService extends EventEmitter {
       sessionRecycleDir: this.paths.sessionRecycleDir,
       storageDir: this.paths.storageDir
     }
+  }
+
+  toPublicSettings(restartRequired) {
+    return {
+      ...this.appSettings,
+      restartRequired: Boolean(restartRequired)
+    }
+  }
+
+  setAppSettings(appSettings, restartRequired = false) {
+    this.appSettings = appSettings
+    this.state = {
+      ...this.state,
+      appSettings: this.toPublicSettings(restartRequired)
+    }
+    this.emit("state-changed", this.state)
+  }
+
+  async updateAppSettings(appSettings) {
+    this.appSettings = appSettings
+    this.cliDetectionService = new CliDetectionService(
+      this.appSettings.cliConfigPaths
+    )
+    this.linkManager = new LinkManager(this.cliDetectionService)
+    await this.refreshAll({ preferDetectedPaths: true })
   }
 
   startWatcher() {
@@ -107,7 +136,7 @@ class ManagerService extends EventEmitter {
     return this.state
   }
 
-  async refreshAll({ emit = true } = {}) {
+  async refreshAll({ emit = true, preferDetectedPaths = false } = {}) {
     const previousSkills = await this.storage.read("skills", [])
     const previousCliTargets = await this.storage.read("cliTargets", [])
     const installIndex = await this.storage.read("installs", {})
@@ -117,7 +146,8 @@ class ManagerService extends EventEmitter {
     ])
     const cliTargets = this.mergeCliTargets(
       previousCliTargets,
-      detectedCliTargets
+      detectedCliTargets,
+      { preferDetectedPaths }
     )
     const { sessions, diagnostics: sessionDiagnostics } =
       await this.sessionService.refresh(cliTargets)
@@ -236,6 +266,7 @@ class ManagerService extends EventEmitter {
       sessions,
       diagnostics: [...diagnostics, ...sessionDiagnostics],
       paths: this.toPublicPaths(),
+      appSettings: this.toPublicSettings(false),
       refreshedAt: Date.now()
     }
 
@@ -248,7 +279,11 @@ class ManagerService extends EventEmitter {
     return this.state
   }
 
-  mergeCliTargets(previousCliTargets, detectedCliTargets) {
+  mergeCliTargets(
+    previousCliTargets,
+    detectedCliTargets,
+    { preferDetectedPaths = false } = {}
+  ) {
     const detectedMap = new Map(
       detectedCliTargets.map((item) => [item.id, item])
     )
@@ -268,7 +303,7 @@ class ManagerService extends EventEmitter {
           return null
         }
 
-        return {
+        const merged = {
           ...detected,
           ...previous,
           installed:
@@ -283,6 +318,17 @@ class ManagerService extends EventEmitter {
           version: detected.version || previous.version,
           detectedAt: detected.detectedAt || previous.detectedAt
         }
+
+        if (preferDetectedPaths) {
+          merged.configPath = detected.configPath || previous.configPath
+          merged.skillsPath = detected.skillsPath || previous.skillsPath
+          merged.sessionsPath = detected.sessionsPath || previous.sessionsPath
+          merged.sessionPaths = detected.sessionPaths || previous.sessionPaths
+          merged.sessionScanRules =
+            detected.sessionScanRules || previous.sessionScanRules
+        }
+
+        return merged
       })
       .filter(Boolean)
   }
