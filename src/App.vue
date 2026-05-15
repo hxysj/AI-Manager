@@ -129,6 +129,8 @@
       @close="showAddRepo = false"
       @submit="addRepo"
     />
+
+    <SelectionTranslator />
   </div>
 </template>
 
@@ -151,6 +153,7 @@ import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
 import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
 import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
 import AddRepoModal from "@/features/repos/components/AddRepoModal.vue"
+import SelectionTranslator from "@/components/SelectionTranslator.vue"
 
 const navItems = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
