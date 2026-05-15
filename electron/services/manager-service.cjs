@@ -81,11 +81,16 @@ class ManagerService extends EventEmitter {
 
   async refreshAll({ emit = true } = {}) {
     const previousSkills = await this.storage.read("skills", [])
+    const previousCliTargets = await this.storage.read("cliTargets", [])
     const installIndex = await this.storage.read("installs", {})
     const normalizedInstallIndex = { ...installIndex }
-    const [cliTargets] = await Promise.all([
+    const [detectedCliTargets] = await Promise.all([
       this.cliDetectionService.detectAll()
     ])
+    const cliTargets = this.mergeCliTargets(
+      previousCliTargets,
+      detectedCliTargets
+    )
     const repos = this.repoService.listRepos().map((repo) => ({
       ...repo,
       skillCount: 0
@@ -210,6 +215,37 @@ class ManagerService extends EventEmitter {
     return this.state
   }
 
+  mergeCliTargets(previousCliTargets, detectedCliTargets) {
+    const detectedMap = new Map(detectedCliTargets.map((item) => [item.id, item]))
+    const previousMap = new Map(previousCliTargets.map((item) => [item.id, item]))
+    const targetIds = [
+      ...new Set([...detectedMap.keys(), ...previousMap.keys()])
+    ]
+
+    return targetIds
+      .map((targetId) => {
+        const detected = detectedMap.get(targetId) || {}
+        const previous = previousMap.get(targetId) || {}
+
+        if (!previous.id && !detected.installed) {
+          return null
+        }
+
+        return {
+          ...detected,
+          ...previous,
+          installed:
+            detected.installed === undefined
+              ? previous.installed
+              : detected.installed,
+          executablePath: detected.executablePath || previous.executablePath,
+          version: detected.version || previous.version,
+          detectedAt: detected.detectedAt || previous.detectedAt
+        }
+      })
+      .filter(Boolean)
+  }
+
   resolveSkillStatus(installStates) {
     const states = Object.values(installStates).map((item) => item.state)
 
@@ -327,7 +363,7 @@ class ManagerService extends EventEmitter {
     await this.refreshAll()
   }
 
-  async importSkillsFromCli(targetId) {
+  async collectCliSkillImports(targetId) {
     const detectedTargets = targetId
       ? [await this.cliDetectionService.getAdapter(targetId).detect()]
       : await this.cliDetectionService.detectAll()
@@ -392,6 +428,9 @@ class ManagerService extends EventEmitter {
         if (managedPaths.has(parsed.name)) {
           mounts.push({
             name: parsed.name,
+            description: parsed.description,
+            cliId: cliTarget.id,
+            cliName: cliTarget.name,
             sourcePath,
             managedPath,
             mountedPath
@@ -406,6 +445,9 @@ class ManagerService extends EventEmitter {
         managedPaths.set(parsed.name, managedPath)
         imports.push({
           name: parsed.name,
+          description: parsed.description,
+          cliId: cliTarget.id,
+          cliName: cliTarget.name,
           sourcePath,
           managedPath,
           mountedPath
@@ -413,17 +455,51 @@ class ManagerService extends EventEmitter {
       }
     }
 
-    if (!imports.length && !mounts.length) {
-      throw new Error("所有 CLI 中没有可导入的真实 Skill 目录")
+    return { imports, mounts }
+  }
+
+  async previewSkillsFromCli(targetId) {
+    const { imports, mounts } = await this.collectCliSkillImports(targetId)
+    const itemMap = new Map()
+
+    for (const candidate of [...imports, ...mounts]) {
+      const item = itemMap.get(candidate.name) || {
+        name: candidate.name,
+        description: candidate.description,
+        cliNames: [],
+        sourcePaths: [],
+        alreadyManaged: !imports.find((entry) => entry.name === candidate.name)
+      }
+
+      item.cliNames.push(candidate.cliName)
+      item.sourcePaths.push(candidate.sourcePath)
+      itemMap.set(candidate.name, item)
     }
 
-    for (const candidate of imports) {
+    return Array.from(itemMap.values()).sort((left, right) =>
+      left.name.localeCompare(right.name)
+    )
+  }
+
+  async importSkillsFromCli(targetId, skillNames) {
+    const { imports, mounts } = await this.collectCliSkillImports(targetId)
+    const allNames = [...imports, ...mounts].map((item) => item.name)
+    const selectedNames = new Set(skillNames || allNames)
+    const selectedImports = imports.filter((item) => selectedNames.has(item.name))
+    const selectedMounts = mounts.filter((item) => selectedNames.has(item.name))
+
+    if (!selectedImports.length && !selectedMounts.length) {
+      await this.refreshAll()
+      return
+    }
+
+    for (const candidate of selectedImports) {
       await fs.cp(candidate.sourcePath, candidate.managedPath, {
         recursive: true
       })
     }
 
-    for (const candidate of [...imports, ...mounts]) {
+    for (const candidate of [...selectedImports, ...selectedMounts]) {
       await fs.rm(candidate.sourcePath, { recursive: true, force: true })
       await fs.symlink(candidate.managedPath, candidate.mountedPath, "junction")
     }

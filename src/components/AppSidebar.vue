@@ -23,7 +23,9 @@
         type="button"
         @click="$emit('select-view', item.id)"
       >
-        <span class="app-sidebar__nav-icon">{{ item.icon }}</span>
+        <span class="app-sidebar__nav-icon">
+          <component :is="item.icon" :size="17" :stroke-width="1.9" />
+        </span>
         <span v-if="!collapsed" class="app-sidebar__nav-label">{{
           item.label
         }}</span>
@@ -44,10 +46,10 @@
           ]"
         >
           <span class="app-sidebar__cli-icon">
-            <img
-              v-if="resolveCliIcon(cli.icon)"
+            <AiIcon
+              v-if="cli.icon"
               class="app-sidebar__cli-icon-image"
-              :src="resolveCliIcon(cli.icon)"
+              :name="cli.icon"
               :alt="`${cli.name} 图标`"
             />
             <span
@@ -74,9 +76,7 @@
 </template>
 
 <script setup>
-import claudeCodeIcon from "@/assets/ai-icons/claudecode.svg"
-import codexIcon from "@/assets/ai-icons/codex.svg"
-import geminiCliIcon from "@/assets/ai-icons/geminicli.svg"
+import AiIcon from '@/components/AiIcon.vue'
 
 defineProps({
   activeView: {
@@ -97,24 +97,14 @@ defineProps({
   }
 })
 
-defineEmits(["toggle", "select-view"])
-
-const iconAssetMap = {
-  "claudecode.svg": claudeCodeIcon,
-  "codex.svg": codexIcon,
-  "geminicli.svg": geminiCliIcon
-}
+defineEmits(['toggle', 'select-view'])
 
 const colorMap = {
-  claude: "#c58f72",
-  codex: "#86b8aa",
-  gemini: "#9fb5d6",
-  ["open" + "code"]: "#aaa3c7",
-  default: "#a8b0bd"
-}
-
-function resolveCliIcon(icon) {
-  return iconAssetMap[icon]
+  claude: '#c58f72',
+  codex: '#7d8aa3',
+  gemini: '#9fb5d6',
+  ['open' + 'code']: '#aaa3c7',
+  default: '#a8b0bd'
 }
 </script>
 
@@ -130,6 +120,55 @@ function resolveCliIcon(icon) {
 
 .app-sidebar--collapsed {
   width: 86px;
+}
+
+.app-sidebar--collapsed .app-sidebar__header {
+  justify-content: center;
+  padding-right: 0;
+  padding-left: 0;
+}
+
+.app-sidebar--collapsed .app-sidebar__nav {
+  align-items: center;
+  padding-right: 8px;
+  padding-left: 8px;
+}
+
+.app-sidebar--collapsed .app-sidebar__nav-item {
+  width: 48px;
+  height: 48px;
+  justify-content: center;
+  padding: 0;
+}
+
+.app-sidebar--collapsed .app-sidebar__nav-item:hover {
+  transform: none;
+}
+
+.app-sidebar--collapsed .app-sidebar__nav-item--active::before {
+  left: -8px;
+}
+
+.app-sidebar--collapsed .app-sidebar__section {
+  padding: 12px 0 14px;
+}
+
+.app-sidebar--collapsed .app-sidebar__cli-list {
+  align-items: center;
+  gap: 10px;
+}
+
+.app-sidebar--collapsed .app-sidebar__cli-card {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 10px;
+  background: transparent;
+}
+
+.app-sidebar--collapsed .app-sidebar__cli-card:hover {
+  background: #f4f6fa;
 }
 
 .app-sidebar__header {
@@ -151,11 +190,12 @@ function resolveCliIcon(icon) {
 .app-sidebar__logo {
   width: 34px;
   height: 34px;
-  background: url("@/assets/ai-manager-logo.svg") center / contain no-repeat;
+  background: url('@/assets/ai-manager-logo.svg') center / contain no-repeat;
 }
 
 .app-sidebar__title {
-  font-size: 1.08rem;
+  color: var(--color-primary);
+  font-size: 1.02rem;
   font-weight: 700;
 }
 
@@ -163,16 +203,16 @@ function resolveCliIcon(icon) {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 6px;
-  padding: 18px 12px;
+  gap: 5px;
+  padding: 16px 12px;
 }
 
 .app-sidebar__nav-item {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 13px 14px;
+  gap: 12px;
+  padding: 12px 14px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -186,35 +226,37 @@ function resolveCliIcon(icon) {
 }
 
 .app-sidebar__nav-item:hover {
-  background: var(--color-panel-soft);
+  background: #f4f6fa;
   transform: translateX(2px);
 }
 
 .app-sidebar__nav-item--active {
-  background: var(--color-primary-soft);
-  color: var(--color-text);
+  background: #edf1f7;
+  color: #263f63;
 }
 
 .app-sidebar__nav-item--active::before {
-  content: "";
+  content: '';
   position: absolute;
   left: -4px;
   top: 9px;
   bottom: 9px;
-  width: 4px;
+  width: 3px;
   border-radius: 999px;
-  background: #8b95a6;
+  background: #506b91;
 }
 
 .app-sidebar__nav-icon {
-  width: 22px;
-  flex: 0 0 22px;
-  font-size: 1rem;
-  text-align: center;
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  color: #6a7890;
+  place-items: center;
 }
 
 .app-sidebar__nav-label {
-  font-size: 0.96rem;
+  font-size: 0.92rem;
   font-weight: 600;
 }
 

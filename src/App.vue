@@ -39,6 +39,12 @@
         <p>{{ errorMessage }}</p>
       </div>
 
+      <div v-if="successMessage" class="app-shell__notice">
+        <strong>操作完成</strong>
+        <p>{{ successMessage }}</p>
+        <button type="button" @click="successMessage = ''">×</button>
+      </div>
+
       <section class="app-shell__content">
         <DashboardView
           v-if="activeView === 'dashboard'"
@@ -59,9 +65,11 @@
           :skills="state.skills"
           @create-skill="showCreateSkill = true"
           @import-skills="importSkillsFromCli"
+          @install-skill="installSkill"
           @open-path="openPath"
           @refresh="refreshState"
           @select-skill="selectSkill"
+          @uninstall-skill="uninstallSkill"
         />
 
         <ReposView
@@ -109,6 +117,13 @@
       @submit="createSkill"
     />
 
+    <ImportSkillsModal
+      v-if="showImportSkills"
+      :candidates="importCandidates"
+      @close="showImportSkills = false"
+      @submit="confirmImportSkills"
+    />
+
     <AddRepoModal
       v-if="showAddRepo"
       @close="showAddRepo = false"
@@ -119,23 +134,32 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue"
+import {
+  Box,
+  Compass,
+  Gauge,
+  LayoutDashboard,
+  Network,
+  Settings,
+  ShieldCheck
+} from "lucide-vue-next"
 import AppSidebar from "@/components/AppSidebar.vue"
 import DashboardView from "@/features/dashboard/index.vue"
 import SkillsView from "@/features/skills/index.vue"
 import ReposView from "@/features/repos/index.vue"
 import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
 import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
+import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
 import AddRepoModal from "@/features/repos/components/AddRepoModal.vue"
 
 const navItems = [
-  { id: "dashboard", label: "Dashboard", icon: "◈" },
-  { id: "skills", label: "Skills", icon: "✦" },
-  { id: "repos", label: "Repos", icon: "▣" },
-  { id: "sessions", label: "Sessions", icon: "◎" },
-  { id: "providers", label: "Providers", icon: "◇" },
-  { id: "rules", label: "Rules", icon: "≋" },
-  { id: "workspace", label: "Workspace", icon: "⌘" },
-  { id: "settings", label: "Settings", icon: "⚙" }
+  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "skills", label: "Skills", icon: ShieldCheck },
+  { id: "sessions", label: "Sessions", icon: Gauge },
+  { id: "providers", label: "Providers", icon: Network },
+  { id: "rules", label: "Rules", icon: Compass },
+  { id: "workspace", label: "Workspace", icon: Box },
+  { id: "settings", label: "Settings", icon: Settings }
 ]
 
 const placeholderMap = {
@@ -188,12 +212,16 @@ const state = reactive({
 const activeView = ref("dashboard")
 const pending = ref(false)
 const errorMessage = ref("")
+const successMessage = ref("")
 const sidebarCollapsed = ref(false)
 const selectedSkillName = ref("")
 const showCreateSkill = ref(false)
+const showImportSkills = ref(false)
 const showAddRepo = ref(false)
+const importCandidates = ref([])
 
 let unsubscribe = null
+let successTimer = null
 
 const selectedSkill = computed(() => {
   return (
@@ -272,6 +300,19 @@ function selectSkill(skill) {
   selectedSkillName.value = skill.name
 }
 
+function showSuccessMessage(message) {
+  successMessage.value = message
+
+  if (successTimer) {
+    clearTimeout(successTimer)
+  }
+
+  successTimer = setTimeout(() => {
+    successMessage.value = ""
+    successTimer = null
+  }, 3600)
+}
+
 async function refreshState() {
   await runAction(() => window.aiManager.refresh())
 }
@@ -286,10 +327,36 @@ async function createSkill(payload) {
 }
 
 async function importSkillsFromCli() {
-  const success = await runAction(() => window.aiManager.importSkillsFromCli())
+  pending.value = true
+  errorMessage.value = ""
+
+  try {
+    const candidates = await window.aiManager.previewSkillsFromCli()
+    importCandidates.value = candidates
+
+    if (!candidates.length) {
+      showSuccessMessage("所有 Skill 已经在 AI Manager 集中管理中。")
+      return
+    }
+
+    showImportSkills.value = true
+  } catch (error) {
+    errorMessage.value = error.message || String(error)
+  } finally {
+    pending.value = false
+  }
+}
+
+async function confirmImportSkills(skillNames) {
+  const success = await runAction(() =>
+    window.aiManager.importSkillsFromCli({ skillNames })
+  )
 
   if (success) {
+    showImportSkills.value = false
+    importCandidates.value = []
     activeView.value = "skills"
+    showSuccessMessage("选中的 Skill 已导入并挂载到对应 CLI。")
   }
 }
 
@@ -359,6 +426,10 @@ onBeforeUnmount(() => {
   if (typeof unsubscribe === "function") {
     unsubscribe()
   }
+
+  if (successTimer) {
+    clearTimeout(successTimer)
+  }
 })
 </script>
 
@@ -389,6 +460,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: var(--color-panel);
+  box-shadow: var(--shadow-panel);
 }
 
 .app-shell__status-left {
@@ -398,6 +470,7 @@ onBeforeUnmount(() => {
 }
 
 .app-shell__status-left strong {
+  color: var(--color-primary);
   font-size: 1rem;
 }
 
@@ -437,6 +510,46 @@ onBeforeUnmount(() => {
   line-height: 1.6;
 }
 
+.app-shell__notice {
+  position: fixed;
+  z-index: 60;
+  top: 26px;
+  left: 50%;
+  min-width: 360px;
+  padding: 14px 44px 14px 16px;
+  border: 1px solid #bfe3d5;
+  border-radius: 8px;
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  box-shadow: var(--shadow-panel);
+  transform: translateX(-50%);
+}
+
+.app-shell__notice strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.app-shell__notice p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.app-shell__notice button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid #bfe3d5;
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--color-success);
+  cursor: pointer;
+}
+
 .app-shell__placeholder {
   display: grid;
   min-height: 520px;
@@ -465,10 +578,15 @@ onBeforeUnmount(() => {
   padding: 0 16px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: var(--color-panel);
+  background: #fbfcfd;
   color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
+}
+
+.status-button:hover {
+  border-color: #b9ccda;
+  background: var(--color-primary-soft);
 }
 
 .status-button:disabled {
