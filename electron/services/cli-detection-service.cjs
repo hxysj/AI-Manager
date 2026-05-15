@@ -1,4 +1,4 @@
-const { createCliAdapters } = require('./cli-adapters.cjs')
+const { createCliAdapters } = require("./cli-adapters.cjs")
 
 class CliDetectionService {
   constructor() {
@@ -6,11 +6,11 @@ class CliDetectionService {
   }
 
   async detectAll() {
-    return Promise.all(this.adapters.map(adapter => adapter.detect()))
+    return Promise.all(this.adapters.map((adapter) => adapter.detect()))
   }
 
   getAdapter(targetId) {
-    const adapter = this.adapters.find(item => item.id === targetId)
+    const adapter = this.adapters.find((item) => item.id === targetId)
 
     if (!adapter) {
       throw new Error(`Unsupported CLI target: ${targetId}`)

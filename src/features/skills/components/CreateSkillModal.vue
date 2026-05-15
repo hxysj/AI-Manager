@@ -5,12 +5,17 @@
     @close="$emit('close')"
   >
     <form class="create-skill-modal" @submit.prevent="submit">
-      <label>
+      <label class="create-skill-modal__field">
         <span>Skill 名称</span>
-        <input v-model.trim="form.name" required type="text" placeholder="例如：prompt-linter" />
+        <input
+          v-model.trim="form.name"
+          required
+          type="text"
+          placeholder="例如：prompt-linter"
+        />
       </label>
 
-      <label>
+      <label class="create-skill-modal__field">
         <span>描述</span>
         <textarea
           v-model.trim="form.description"
@@ -20,52 +25,60 @@
       </label>
 
       <div class="create-skill-modal__grid">
-        <label>
+        <label class="create-skill-modal__field">
           <span>作者</span>
           <input v-model.trim="form.author" type="text" placeholder="可选" />
         </label>
-        <label>
+        <label class="create-skill-modal__field">
           <span>标签</span>
-          <input v-model.trim="form.tags" type="text" placeholder="design, prompt, lint" />
+          <input
+            v-model.trim="form.tags"
+            type="text"
+            placeholder="design, prompt, lint"
+          />
         </label>
       </div>
 
       <div class="create-skill-modal__actions">
-        <button class="action-button" type="button" @click="$emit('close')">取消</button>
-        <button class="action-button action-button--primary" type="submit">创建 Skill</button>
+        <button class="action-button" type="button" @click="$emit('close')">
+          取消
+        </button>
+        <button class="action-button action-button--primary" type="submit">
+          创建 Skill
+        </button>
       </div>
     </form>
   </BaseModal>
 </template>
 
 <script setup>
-import { reactive } from 'vue'
-import BaseModal from '@/components/BaseModal.vue'
+import { reactive } from "vue"
+import BaseModal from "@/components/BaseModal.vue"
 
-const emit = defineEmits(['close', 'submit'])
+const emit = defineEmits(["close", "submit"])
 
 const form = reactive({
-  name: '',
-  description: '',
-  author: '',
-  tags: ''
+  name: "",
+  description: "",
+  author: "",
+  tags: ""
 })
 
 function submit() {
-  emit('submit', {
+  emit("submit", {
     name: form.name,
     description: form.description,
     author: form.author,
     tags: form.tags
-      .split(',')
-      .map(item => item.trim())
+      .split(",")
+      .map((item) => item.trim())
       .filter(Boolean)
   })
 
-  form.name = ''
-  form.description = ''
-  form.author = ''
-  form.tags = ''
+  form.name = ""
+  form.description = ""
+  form.author = ""
+  form.tags = ""
 }
 </script>
 
@@ -76,14 +89,14 @@ function submit() {
   gap: 16px;
 }
 
-.create-skill-modal label {
+.create-skill-modal__field {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
 .create-skill-modal span {
-  color: rgba(43, 57, 84, 0.7);
+  color: var(--color-text-muted);
   font-size: 0.84rem;
   font-weight: 700;
 }
@@ -92,10 +105,10 @@ function submit() {
 .create-skill-modal textarea {
   width: 100%;
   padding: 12px 14px;
-  border: 1px solid rgba(58, 69, 94, 0.14);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.92);
-  color: #1f314f;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-text);
   font: inherit;
   resize: vertical;
 }
@@ -120,23 +133,17 @@ function submit() {
 .action-button {
   height: 40px;
   padding: 0 16px;
-  border: 1px solid rgba(58, 69, 94, 0.14);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #2a4366;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
 }
 
 .action-button--primary {
-  border-color: rgba(38, 92, 183, 0.2);
-  background: linear-gradient(135deg, #1f5ca2, #d66a2c);
+  border-color: var(--color-primary);
+  background: var(--color-primary);
   color: #fff;
-}
-
-@media (max-width: 720px) {
-  .create-skill-modal__grid {
-    grid-template-columns: 1fr;
-  }
 }
 </style>

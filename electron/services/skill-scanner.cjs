@@ -1,7 +1,14 @@
-const fs = require('node:fs/promises')
-const path = require('node:path')
+const fs = require("node:fs/promises")
+const path = require("node:path")
 
-const IGNORE_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.cache', 'temp'])
+const IGNORE_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "dist",
+  "build",
+  ".cache",
+  "temp"
+])
 
 async function isDirectory(targetPath) {
   try {
@@ -38,7 +45,7 @@ class SkillScanner {
         return
       }
 
-      const skillManifest = path.join(currentPath, 'SKILL.md')
+      const skillManifest = path.join(currentPath, "SKILL.md")
 
       try {
         const manifestStat = await fs.lstat(skillManifest)

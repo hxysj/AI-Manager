@@ -1,58 +1,71 @@
 <template>
   <article class="skill-card" @click="$emit('select', skill)">
-    <div class="skill-card__icon" :style="{ background: hashColor(skill.name) }">
-      <span>{{ iconLetters(skill.name) }}</span>
-    </div>
-
     <div class="skill-card__main">
-      <div class="skill-card__header">
-        <div class="skill-card__title-group">
-          <h3>{{ skill.name }}</h3>
-          <span class="skill-card__repo">{{ skill.repoName }}</span>
-          <span :class="['skill-card__status', `skill-card__status--${skill.status}`]">
-            {{ formatStatusLabel(skill.status) }}
-          </span>
-        </div>
-        <div class="skill-card__targets">
-          <span
-            v-for="cli in cliTargets"
-            :key="cli.id"
-            :class="[
-              'skill-card__target-pill',
-              `skill-card__target-pill--${skill.installStates[cli.id]?.state || 'not-installed'}`
-            ]"
-          >
-            {{ cli.name.slice(0, 1) }}
-          </span>
-        </div>
+      <div class="skill-card__title-row">
+        <h3 class="skill-card__title">{{ skill.name }}</h3>
+        <span class="skill-card__repo">{{ skill.repoName }}</span>
+        <span
+          :class="['skill-card__status', `skill-card__status--${skill.status}`]"
+        >
+          {{ formatStatusLabel(skill.status) }}
+        </span>
       </div>
 
       <p class="skill-card__description">
-        {{ skill.description || '未提供描述，点击查看详情或编辑提示词入口。' }}
+        {{ skill.description || "未提供描述，点击查看详情。" }}
       </p>
 
-      <div class="skill-card__footer">
-        <div class="skill-card__tags">
-          <span v-for="tag in skill.tags" :key="tag" class="skill-card__tag">{{ tag }}</span>
-          <span v-if="!skill.tags.length" class="skill-card__tag skill-card__tag--muted">无标签</span>
-        </div>
-        <div class="skill-card__meta">
-          <span>{{ skill.entry }}</span>
-          <span>{{ formatDateTime(skill.updatedAt) }}</span>
-        </div>
+      <div class="skill-card__meta">
+        <span>{{ skill.entry }}</span>
+        <span>{{ formatDateTime(skill.updatedAt) }}</span>
+        <span v-for="tag in skill.tags.slice(0, 2)" :key="tag">{{ tag }}</span>
       </div>
     </div>
 
-    <div class="skill-card__actions">
-      <button class="skill-card__action" type="button" @click.stop="$emit('open-source', skill)">
-        打开源目录
+    <div class="skill-card__indicators">
+      <!-- <span
+        class="skill-card__icon"
+        :style="{ background: skill.icon ? '#ffffff' : hashColor(skill.name) }"
+      >
+        <img
+          v-if="skill.icon"
+          class="skill-card__icon-image"
+          :src="toFileUrl(skill.icon)"
+          :alt="skill.name"
+        />
+        <span v-else>{{ iconLetters(skill.name) }}</span>
+      </span> -->
+      <span
+        v-for="cli in cliTargets"
+        :key="cli.id"
+        :class="[
+          'skill-card__target-pill',
+          `skill-card__target-pill--${skill.installStates[cli.id]?.state || 'not-installed'}`
+        ]"
+        :title="`${cli.name}：${formatStatusLabel(skill.installStates[cli.id]?.state)}`"
+      >
+        {{ cli.name.slice(0, 1) }}
+      </span>
+      <button
+        class="skill-card__action"
+        type="button"
+        title="打开源目录"
+        @click.stop="$emit('open-source', skill)"
+      >
+        <FolderOpen class="skill-card__action-icon" :size="15" />
       </button>
     </div>
   </article>
 </template>
 
 <script setup>
-import { formatDateTime, formatStatusLabel, hashColor, iconLetters } from '@/utils/formatters'
+import { FolderOpen } from "lucide-vue-next"
+import {
+  formatDateTime,
+  formatStatusLabel,
+  hashColor,
+  iconLetters
+} from "@/utils/formatters"
 
 defineProps({
   cliTargets: {
@@ -65,201 +78,169 @@ defineProps({
   }
 })
 
-defineEmits(['select', 'open-source'])
+defineEmits(["select", "open-source"])
+
+function toFileUrl(value) {
+  return encodeURI(`file:///${String(value).replace(/\\/g, "/")}`)
+}
 </script>
 
 <style scoped lang="less">
 .skill-card {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px;
   align-items: center;
-  padding: 18px;
-  border: 1px solid rgba(58, 69, 94, 0.1);
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.9);
+  min-height: 56px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--color-line);
+  background: var(--color-panel);
   cursor: pointer;
-  transition:
-    transform 0.18s ease,
-    box-shadow 0.18s ease,
-    border-color 0.18s ease;
+  transition: background-color 0.18s ease;
 }
 
 .skill-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(35, 74, 133, 0.16);
-  box-shadow: 0 16px 40px rgba(31, 48, 77, 0.08);
-}
-
-.skill-card__icon {
-  display: grid;
-  width: 54px;
-  height: 54px;
-  place-items: center;
-  border-radius: 18px;
-  color: #fff;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  box-shadow: 0 12px 30px rgba(31, 48, 77, 0.14);
+  background: var(--color-panel-soft);
 }
 
 .skill-card__main {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 10px;
+  gap: 3px;
 }
 
-.skill-card__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.skill-card__title-group {
+.skill-card__title-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   flex-wrap: wrap;
 }
 
-.skill-card__title-group h3 {
+.skill-card__title {
   margin: 0;
-  font-size: 1.08rem;
+  color: var(--color-text);
+  font-size: 0.95rem;
+  line-height: 1.2;
 }
 
 .skill-card__repo,
-.skill-card__status,
-.skill-card__tag,
-.skill-card__target-pill {
+.skill-card__status {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 0.76rem;
+  line-height: 1.2;
 }
 
 .skill-card__repo {
-  background: rgba(36, 94, 161, 0.1);
-  color: #245ea1;
+  color: var(--color-text-soft);
+}
+
+.skill-card__status {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 600;
 }
 
 .skill-card__status--installed {
-  background: rgba(14, 148, 104, 0.12);
-  color: #0e7b58;
+  background: var(--color-success-soft);
+  color: var(--color-success);
 }
 
 .skill-card__status--not-installed {
-  background: rgba(59, 130, 246, 0.12);
-  color: #215a9d;
+  background: var(--color-primary-soft);
+  color: var(--color-text-muted);
 }
 
 .skill-card__status--broken-link {
-  background: rgba(220, 38, 38, 0.12);
-  color: #b91c1c;
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 
 .skill-card__status--disabled {
-  background: rgba(148, 163, 184, 0.18);
-  color: #607084;
-}
-
-.skill-card__targets {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.skill-card__target-pill {
-  min-width: 30px;
-  padding: 5px 0;
-}
-
-.skill-card__target-pill--installed {
-  background: rgba(14, 148, 104, 0.12);
-  color: #0e7b58;
-}
-
-.skill-card__target-pill--broken-link {
-  background: rgba(220, 38, 38, 0.12);
-  color: #b91c1c;
-}
-
-.skill-card__target-pill--disabled {
-  background: rgba(148, 163, 184, 0.18);
-  color: #607084;
-}
-
-.skill-card__target-pill--not-installed {
-  background: rgba(36, 94, 161, 0.1);
-  color: #245ea1;
+  background: var(--color-primary-soft);
+  color: var(--color-text-soft);
 }
 
 .skill-card__description {
+  overflow: hidden;
   margin: 0;
-  color: rgba(43, 57, 84, 0.72);
-  line-height: 1.65;
-}
-
-.skill-card__footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.skill-card__tags {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.skill-card__tag {
-  background: rgba(245, 239, 230, 0.82);
-  color: #7b5d33;
-}
-
-.skill-card__tag--muted {
-  color: #7b889b;
+  color: var(--color-text-muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .skill-card__meta {
   display: flex;
-  gap: 12px;
-  color: rgba(43, 57, 84, 0.54);
-  font-size: 0.82rem;
+  gap: 10px;
+  overflow: hidden;
+  color: var(--color-text-soft);
+  font-size: 0.76rem;
+  white-space: nowrap;
 }
 
-.skill-card__actions {
+.skill-card__indicators {
   display: flex;
   align-items: center;
+  gap: 10px;
+}
+
+.skill-card__icon,
+.skill-card__target-pill,
+.skill-card__action {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--color-line);
+  border-radius: 50%;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  overflow: hidden;
+}
+
+.skill-card__icon-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.skill-card__target-pill {
+  background: var(--color-panel);
+}
+
+.skill-card__target-pill--installed {
+  border-color: #c8e2d8;
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.skill-card__target-pill--broken-link {
+  border-color: #ead1d1;
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.skill-card__target-pill--disabled {
+  background: var(--color-primary-soft);
+  color: var(--color-text-soft);
+}
+
+.skill-card__target-pill--not-installed {
+  background: var(--color-panel);
+  color: var(--color-text-soft);
 }
 
 .skill-card__action {
-  height: 36px;
-  padding: 0 14px;
-  border: 1px solid rgba(58, 69, 94, 0.12);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
-  color: #2a4366;
+  background: var(--color-panel);
   cursor: pointer;
-  font-weight: 600;
 }
 
-@media (max-width: 1080px) {
-  .skill-card {
-    grid-template-columns: 1fr;
-  }
-
-  .skill-card__footer,
-  .skill-card__header {
-    flex-direction: column;
-    align-items: flex-start;
-  }
+.skill-card__action-icon {
+  flex: 0 0 auto;
 }
 </style>

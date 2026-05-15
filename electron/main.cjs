@@ -1,9 +1,14 @@
 const path = require('node:path')
+const fs = require('node:fs')
 const { app, BrowserWindow, ipcMain, shell } = require('electron')
 const { ManagerService } = require('./services/manager-service.cjs')
 
 let mainWindow = null
 let managerService = null
+const userDataPath = 'D:\\ai-manager-data'
+
+fs.mkdirSync(userDataPath, { recursive: true })
+app.setPath('userData', userDataPath)
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -11,7 +16,7 @@ async function createWindow() {
     height: 980,
     minWidth: 1200,
     minHeight: 760,
-    backgroundColor: '#f5efe6',
+    backgroundColor: '#ffffff',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     autoHideMenuBar: true,
     webPreferences: {
@@ -29,6 +34,13 @@ async function createWindow() {
     await mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   }
 
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12') {
+      mainWindow.webContents.toggleDevTools()
+      event.preventDefault()
+    }
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -40,6 +52,11 @@ function registerIpc() {
 
   ipcMain.handle('skill:create', async (_, payload) => {
     await managerService.createSkill(payload)
+    return managerService.getState()
+  })
+
+  ipcMain.handle('skill:import-from-cli', async (_, payload) => {
+    await managerService.importSkillsFromCli(payload?.targetId)
     return managerService.getState()
   })
 

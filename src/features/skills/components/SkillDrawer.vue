@@ -4,8 +4,9 @@
     <aside class="skill-drawer__panel">
       <header class="skill-drawer__header">
         <div class="skill-drawer__hero">
-          <div class="skill-drawer__icon" :style="{ background: hashColor(skill.name) }">
-            {{ iconLetters(skill.name) }}
+          <div class="skill-drawer__icon" :style="{ background: skill.icon ? '#ffffff' : hashColor(skill.name) }">
+            <img v-if="skill.icon" class="skill-drawer__icon-image" :src="toFileUrl(skill.icon)" :alt="skill.name" />
+            <span v-else>{{ iconLetters(skill.name) }}</span>
           </div>
           <div class="skill-drawer__title-wrap">
             <p>{{ skill.repoName }}</p>
@@ -163,6 +164,10 @@ watch(
     activeTab.value = 'overview'
   }
 )
+
+function toFileUrl(value) {
+  return encodeURI(`file:///${String(value).replace(/\\/g, '/')}`)
+}
 </script>
 
 <style scoped lang="less">
@@ -175,7 +180,7 @@ watch(
 .skill-drawer__overlay {
   position: absolute;
   inset: 0;
-  background: rgba(19, 24, 36, 0.38);
+  background: rgba(15, 23, 42, 0.2);
 }
 
 .skill-drawer__panel {
@@ -186,11 +191,9 @@ watch(
   display: flex;
   width: min(560px, 100%);
   flex-direction: column;
-  border-left: 1px solid rgba(58, 69, 94, 0.12);
-  background:
-    linear-gradient(180deg, rgba(255, 252, 248, 0.98), rgba(245, 239, 230, 0.98)),
-    #fff;
-  box-shadow: -20px 0 48px rgba(24, 35, 58, 0.16);
+  border-left: 1px solid var(--color-line);
+  background: var(--color-panel);
+  box-shadow: var(--shadow-panel);
 }
 
 .skill-drawer__header {
@@ -199,7 +202,7 @@ watch(
   justify-content: space-between;
   gap: 20px;
   padding: 24px 24px 18px;
-  border-bottom: 1px solid rgba(58, 69, 94, 0.1);
+  border-bottom: 1px solid var(--color-line);
 }
 
 .skill-drawer__hero {
@@ -212,16 +215,24 @@ watch(
   width: 64px;
   height: 64px;
   place-items: center;
-  border-radius: 20px;
-  color: #fff;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  color: var(--color-text-muted);
   font-size: 1.1rem;
   font-weight: 700;
   letter-spacing: 0.08em;
+  overflow: hidden;
+}
+
+.skill-drawer__icon-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .skill-drawer__title-wrap p {
   margin: 0 0 8px;
-  color: rgba(43, 57, 84, 0.58);
+  color: var(--color-text-soft);
   font-size: 0.78rem;
   font-weight: 700;
   letter-spacing: 0.16em;
@@ -230,7 +241,6 @@ watch(
 
 .skill-drawer__title-wrap h2 {
   margin: 0 0 10px;
-  font-family: 'Georgia', 'Times New Roman', serif;
   font-size: 1.8rem;
   line-height: 1.1;
 }
@@ -250,26 +260,26 @@ watch(
 
 .skill-drawer__headline-status--installed,
 .skill-drawer__state-pill--installed {
-  background: rgba(14, 148, 104, 0.12);
-  color: #0e7b58;
+  background: var(--color-success-soft);
+  color: var(--color-success);
 }
 
 .skill-drawer__headline-status--not-installed,
 .skill-drawer__state-pill--not-installed {
-  background: rgba(36, 94, 161, 0.1);
-  color: #245ea1;
+  background: var(--color-primary-soft);
+  color: var(--color-text-muted);
 }
 
 .skill-drawer__headline-status--broken-link,
 .skill-drawer__state-pill--broken-link {
-  background: rgba(220, 38, 38, 0.12);
-  color: #b91c1c;
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 
 .skill-drawer__headline-status--disabled,
 .skill-drawer__state-pill--disabled {
-  background: rgba(148, 163, 184, 0.18);
-  color: #607084;
+  background: var(--color-primary-soft);
+  color: var(--color-text-soft);
 }
 
 .skill-drawer__close {
@@ -277,10 +287,10 @@ watch(
   width: 38px;
   height: 38px;
   place-items: center;
-  border: 1px solid rgba(58, 69, 94, 0.12);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.84);
-  color: #40516e;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-text-muted);
   cursor: pointer;
   font-size: 1.4rem;
   line-height: 1;
@@ -290,7 +300,7 @@ watch(
   display: flex;
   gap: 8px;
   padding: 14px 24px 0;
-  border-bottom: 1px solid rgba(58, 69, 94, 0.1);
+  border-bottom: 1px solid var(--color-line);
 }
 
 .skill-drawer__tab {
@@ -298,13 +308,13 @@ watch(
   padding: 12px 10px;
   border: 0;
   background: transparent;
-  color: rgba(43, 57, 84, 0.58);
+  color: var(--color-text-muted);
   cursor: pointer;
   font-weight: 700;
 }
 
 .skill-drawer__tab--active {
-  color: #1f5ca2;
+  color: var(--color-text);
 }
 
 .skill-drawer__tab--active::after {
@@ -315,7 +325,7 @@ watch(
   bottom: -1px;
   height: 2px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #c65d20, #245ea1);
+  background: var(--color-primary);
 }
 
 .skill-drawer__content {
@@ -335,12 +345,13 @@ watch(
   flex-direction: column;
   gap: 10px;
   padding: 18px;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel-soft);
 }
 
 .skill-drawer__block span {
-  color: rgba(43, 57, 84, 0.58);
+  color: var(--color-text-muted);
   font-size: 0.76rem;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -364,13 +375,13 @@ watch(
   justify-content: center;
   padding: 6px 12px;
   border-radius: 999px;
-  background: rgba(245, 239, 230, 0.82);
-  color: #755934;
+  background: var(--color-primary-soft);
+  color: var(--color-text-muted);
   font-size: 0.8rem;
 }
 
 .skill-drawer__muted-tag {
-  color: #728195;
+  color: var(--color-text-soft);
 }
 
 .skill-drawer__grid {
@@ -382,14 +393,15 @@ watch(
 .skill-drawer__grid article,
 .skill-drawer__target-card {
   padding: 18px;
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel-soft);
 }
 
 .skill-drawer__grid article span {
   display: block;
   margin-bottom: 8px;
-  color: rgba(43, 57, 84, 0.58);
+  color: var(--color-text-muted);
   font-size: 0.76rem;
   font-weight: 700;
   letter-spacing: 0.12em;
@@ -421,7 +433,7 @@ watch(
 
 .skill-drawer__target-head p {
   margin: 0;
-  color: rgba(43, 57, 84, 0.62);
+  color: var(--color-text-muted);
   line-height: 1.6;
   word-break: break-all;
 }
@@ -436,7 +448,7 @@ watch(
   padding: 0;
   border: 0;
   background: transparent;
-  color: #214d86;
+  color: var(--color-primary);
   cursor: pointer;
   line-height: 1.6;
   text-align: left;
@@ -446,24 +458,24 @@ watch(
 .action-button {
   height: 38px;
   padding: 0 14px;
-  border: 1px solid rgba(58, 69, 94, 0.12);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
-  color: #2a4366;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
 }
 
 .action-button--primary {
-  border-color: rgba(38, 92, 183, 0.2);
-  background: linear-gradient(135deg, #1f5ca2, #d66a2c);
+  border-color: var(--color-primary);
+  background: var(--color-primary);
   color: #fff;
 }
 
 .action-button--alert {
-  border-color: rgba(220, 38, 38, 0.2);
-  background: rgba(220, 38, 38, 0.08);
-  color: #b91c1c;
+  border-color: var(--color-danger-soft);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 
 .action-button:disabled {
@@ -471,9 +483,4 @@ watch(
   opacity: 0.46;
 }
 
-@media (max-width: 700px) {
-  .skill-drawer__grid {
-    grid-template-columns: 1fr;
-  }
-}
 </style>

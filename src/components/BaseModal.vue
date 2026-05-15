@@ -7,7 +7,9 @@
           <h2>{{ title }}</h2>
           <p v-if="description">{{ description }}</p>
         </div>
-        <button class="base-modal__close" type="button" @click="$emit('close')">×</button>
+        <button class="base-modal__close" type="button" @click="$emit('close')">
+          ×
+        </button>
       </header>
       <div class="base-modal__content">
         <slot></slot>
@@ -24,11 +26,11 @@ defineProps({
   },
   description: {
     type: String,
-    default: ''
+    default: ""
   }
 })
 
-defineEmits(['close'])
+defineEmits(["close"])
 </script>
 
 <style scoped lang="less">
@@ -44,19 +46,16 @@ defineEmits(['close'])
 .base-modal__backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(19, 24, 36, 0.5);
-  backdrop-filter: blur(8px);
+  background: rgba(15, 23, 42, 0.24);
 }
 
 .base-modal__panel {
   position: relative;
   width: min(560px, 100%);
-  border: 1px solid rgba(61, 73, 99, 0.12);
-  border-radius: 28px;
-  background:
-    linear-gradient(180deg, rgba(255, 252, 247, 0.98), rgba(249, 245, 238, 0.98)),
-    #fff;
-  box-shadow: 0 24px 80px rgba(24, 35, 58, 0.24);
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  box-shadow: var(--shadow-panel);
 }
 
 .base-modal__header {
@@ -69,13 +68,12 @@ defineEmits(['close'])
 
 .base-modal__header h2 {
   margin: 0;
-  font-family: 'Georgia', 'Times New Roman', serif;
   font-size: 1.4rem;
 }
 
 .base-modal__header p {
   margin: 6px 0 0;
-  color: rgba(43, 57, 84, 0.62);
+  color: var(--color-text-muted);
   font-size: 0.92rem;
 }
 
@@ -84,10 +82,10 @@ defineEmits(['close'])
   width: 36px;
   height: 36px;
   place-items: center;
-  border: 1px solid rgba(61, 73, 99, 0.12);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.82);
-  color: #40516e;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-text-muted);
   cursor: pointer;
   font-size: 1.4rem;
   line-height: 1;
