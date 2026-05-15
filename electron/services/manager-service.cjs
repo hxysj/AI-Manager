@@ -14,6 +14,9 @@ const { LinkManager } = require("./link-manager.cjs")
 const { RepoService } = require("./repo-service.cjs")
 const { FileWatcherService } = require("./file-watcher-service.cjs")
 const { SessionService } = require("./session-service.cjs")
+const {
+  RuntimeProviderService
+} = require("./runtime-provider-service.cjs")
 
 async function pathExists(targetPath) {
   try {
@@ -44,11 +47,15 @@ class ManagerService extends EventEmitter {
     this.fileWatcherService = new FileWatcherService()
     this.sessionService = new SessionService(this.paths)
     this.sessionService.bindStorage(this.storage)
+    this.runtimeProviderService = new RuntimeProviderService(this.storage)
     this.state = {
       cliTargets: [],
       skills: [],
       repos: [],
       sessions: [],
+      providers: [],
+      runtimeModels: [],
+      runtimeProfiles: [],
       diagnostics: [],
       paths: this.toPublicPaths(),
       appSettings: this.toPublicSettings(false),
@@ -60,6 +67,7 @@ class ManagerService extends EventEmitter {
     await ensureAppDirectories(this.paths)
     await this.repoService.init()
     await this.sessionService.init()
+    await this.runtimeProviderService.init()
     await this.refreshAll({ emit: false })
     this.startWatcher()
     this.startSessionWatcher()
@@ -155,6 +163,7 @@ class ManagerService extends EventEmitter {
       ...repo,
       skillCount: 0
     }))
+    const runtimeState = this.runtimeProviderService.getState()
     const scannedItems = await this.skillScanner.scanMany([
       { rootPath: this.paths.skillsDir, repoId: null },
       ...repos.map((repo) => ({
@@ -264,6 +273,7 @@ class ManagerService extends EventEmitter {
       skills,
       repos,
       sessions,
+      ...runtimeState,
       diagnostics: [...diagnostics, ...sessionDiagnostics],
       paths: this.toPublicPaths(),
       appSettings: this.toPublicSettings(false),
@@ -684,6 +694,54 @@ class ManagerService extends EventEmitter {
 
   async purgeSession(sessionId) {
     await this.sessionService.purgeFromRecycle(sessionId)
+  }
+
+  async saveProvider(input) {
+    this.runtimeProviderService.saveProvider(input)
+    this.state = {
+      ...this.state,
+      ...this.runtimeProviderService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async deleteProvider(providerId) {
+    this.runtimeProviderService.deleteProvider(providerId)
+    this.state = {
+      ...this.state,
+      ...this.runtimeProviderService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async saveRuntimeModel(input) {
+    this.runtimeProviderService.saveModel(input)
+    this.state = {
+      ...this.state,
+      ...this.runtimeProviderService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async switchRuntime(input) {
+    this.runtimeProviderService.switchRuntime(input)
+    this.state = {
+      ...this.state,
+      ...this.runtimeProviderService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  buildRuntimeEnv(cli) {
+    return this.runtimeProviderService.buildRuntimeEnv(cli)
   }
 
   async dispose() {

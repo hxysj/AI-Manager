@@ -22,7 +22,11 @@ function resolveAppPaths(userDataPath) {
       skills: path.join(storageDir, "skills.json"),
       installs: path.join(storageDir, "installs.json"),
       cliTargets: path.join(storageDir, "cli-targets.json"),
-      sessions: path.join(storageDir, "sessions.json")
+      sessions: path.join(storageDir, "sessions.json"),
+      providers: path.join(storageDir, "providers.json"),
+      runtimeModels: path.join(storageDir, "runtime-models.json"),
+      runtimeProfiles: path.join(storageDir, "runtime-profiles.json"),
+      runtimeProviderKeys: path.join(storageDir, "runtime-provider-keys.json")
     }
   }
 }
