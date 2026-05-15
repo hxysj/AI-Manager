@@ -1,10 +1,12 @@
 const path = require('node:path')
 const fs = require('node:fs')
-const { app, BrowserWindow, ipcMain, shell } = require('electron')
+const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron')
 const { ManagerService } = require('./services/manager-service.cjs')
+const { TranslationService } = require('./services/translation-service.cjs')
 
 let mainWindow = null
 let managerService = null
+let translationService = null
 const userDataPath = 'D:\\ai-manager-data'
 
 fs.mkdirSync(userDataPath, { recursive: true })
@@ -39,6 +41,27 @@ async function createWindow() {
       mainWindow.webContents.toggleDevTools()
       event.preventDefault()
     }
+  })
+
+  mainWindow.webContents.on('context-menu', (_, params) => {
+    const selectedText = params.selectionText.trim()
+
+    if (!selectedText) {
+      return
+    }
+
+    Menu.buildFromTemplate([
+      {
+        label: '翻译选中文本',
+        click: () => {
+          mainWindow.webContents.send('translation:selection-requested', {
+            text: selectedText,
+            x: params.x,
+            y: params.y
+          })
+        }
+      }
+    ]).popup({ window: mainWindow })
   })
 
   mainWindow.on('closed', () => {
@@ -112,10 +135,15 @@ function registerIpc() {
 
     return true
   })
+
+  ipcMain.handle('translation:translate', async (_, payload) => {
+    return translationService.translate(payload?.text)
+  })
 }
 
 app.whenReady().then(async () => {
   managerService = new ManagerService(app.getPath('userData'))
+  translationService = new TranslationService(app.getPath('userData'))
   await managerService.init()
   managerService.on('state-changed', state => {
     if (mainWindow && !mainWindow.isDestroyed()) {

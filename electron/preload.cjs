@@ -16,6 +16,13 @@ contextBridge.exposeInMainWorld("aiManager", {
   syncAllRepos: () => ipcRenderer.invoke("repo:sync-all"),
   removeRepo: (payload) => ipcRenderer.invoke("repo:remove", payload),
   openPath: (payload) => ipcRenderer.invoke("system:open-path", payload),
+  translateText: (payload) => ipcRenderer.invoke("translation:translate", payload),
+  onTranslateSelection: (callback) => {
+    const handler = (_, payload) => callback(payload)
+    ipcRenderer.on("translation:selection-requested", handler)
+    return () =>
+      ipcRenderer.removeListener("translation:selection-requested", handler)
+  },
   onStateChanged: (callback) => {
     const handler = (_, state) => callback(state)
     ipcRenderer.on("state:changed", handler)
