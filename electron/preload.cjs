@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer } = require("electron")
 contextBridge.exposeInMainWorld("aiManager", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
   refresh: () => ipcRenderer.invoke("app:refresh"),
+  saveSettings: (payload) => ipcRenderer.invoke("settings:save", payload),
+  selectDirectory: (payload) =>
+    ipcRenderer.invoke("system:select-directory", payload),
   createSkill: (payload) => ipcRenderer.invoke("skill:create", payload),
   previewSkillsFromCli: (payload) =>
     ipcRenderer.invoke("skill:preview-import-from-cli", payload),

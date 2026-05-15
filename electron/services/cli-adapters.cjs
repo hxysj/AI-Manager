@@ -65,6 +65,7 @@ class BaseCliAdapter {
     icon,
     binaryName,
     configDirName,
+    configPath,
     sessionsDirName,
     sessionScanRules
   }) {
@@ -74,6 +75,7 @@ class BaseCliAdapter {
     this.icon = icon
     this.binaryName = binaryName
     this.configDirName = configDirName
+    this.configPath = configPath
     this.sessionsDirName = sessionsDirName
     this.sessionScanRules = sessionScanRules || {
       extensions: [".json", ".jsonl", ".transcript"],
@@ -82,7 +84,7 @@ class BaseCliAdapter {
   }
 
   getConfigPath() {
-    return path.join(os.homedir(), this.configDirName)
+    return this.configPath || path.join(os.homedir(), this.configDirName)
   }
 
   getSkillsPath() {
@@ -139,7 +141,7 @@ class BaseCliAdapter {
 }
 
 class ClaudeAdapter extends BaseCliAdapter {
-  constructor() {
+  constructor(configPath) {
     super({
       id: "claude",
       type: "claude",
@@ -147,6 +149,7 @@ class ClaudeAdapter extends BaseCliAdapter {
       icon: "claude.svg",
       binaryName: "claude",
       configDirName: ".claude",
+      configPath,
       sessionsDirName: "projects",
       sessionScanRules: {
         extensions: [".jsonl"],
@@ -157,7 +160,7 @@ class ClaudeAdapter extends BaseCliAdapter {
 }
 
 class CodexAdapter extends BaseCliAdapter {
-  constructor() {
+  constructor(configPath) {
     super({
       id: "codex",
       type: "codex",
@@ -165,6 +168,7 @@ class CodexAdapter extends BaseCliAdapter {
       icon: "codex.svg",
       binaryName: "codex",
       configDirName: ".codex",
+      configPath,
       sessionsDirName: "sessions",
       sessionScanRules: {
         extensions: [".json", ".jsonl", ".transcript"],
@@ -175,7 +179,7 @@ class CodexAdapter extends BaseCliAdapter {
 }
 
 class GeminiAdapter extends BaseCliAdapter {
-  constructor() {
+  constructor(configPath) {
     super({
       id: "gemini",
       type: "gemini",
@@ -183,6 +187,7 @@ class GeminiAdapter extends BaseCliAdapter {
       icon: "geminicli.svg",
       binaryName: "gemini",
       configDirName: ".gemini",
+      configPath,
       sessionsDirName: "tmp",
       sessionScanRules: {
         extensions: [".json", ".jsonl"],
@@ -193,7 +198,7 @@ class GeminiAdapter extends BaseCliAdapter {
 }
 
 class OpenCodeAdapter extends BaseCliAdapter {
-  constructor() {
+  constructor(configPath) {
     super({
       id: "opencode",
       type: "opencode",
@@ -201,6 +206,7 @@ class OpenCodeAdapter extends BaseCliAdapter {
       icon: "opencode.svg",
       binaryName: "opencode",
       configDirName: ".opencode",
+      configPath,
       sessionsDirName: "sessions",
       sessionScanRules: {
         extensions: [".json", ".jsonl", ".transcript"],
@@ -210,12 +216,12 @@ class OpenCodeAdapter extends BaseCliAdapter {
   }
 }
 
-function createCliAdapters() {
+function createCliAdapters(cliConfigPaths = {}) {
   return [
-    new ClaudeAdapter(),
-    new CodexAdapter(),
-    new GeminiAdapter(),
-    new OpenCodeAdapter()
+    new ClaudeAdapter(cliConfigPaths.claude),
+    new CodexAdapter(cliConfigPaths.codex),
+    new GeminiAdapter(cliConfigPaths.gemini),
+    new OpenCodeAdapter(cliConfigPaths.opencode)
   ]
 }
 

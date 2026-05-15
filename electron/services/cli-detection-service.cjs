@@ -1,8 +1,8 @@
 const { createCliAdapters } = require("./cli-adapters.cjs")
 
 class CliDetectionService {
-  constructor() {
-    this.adapters = createCliAdapters()
+  constructor(cliConfigPaths = {}) {
+    this.adapters = createCliAdapters(cliConfigPaths)
   }
 
   async detectAll() {

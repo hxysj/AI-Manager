@@ -92,6 +92,15 @@
           @sync-repo="syncRepo"
         />
 
+        <SettingsView
+          v-else-if="activeView === 'settings'"
+          :app-settings="state.appSettings"
+          :cli-targets="state.cliTargets"
+          :pending="pending"
+          @open-path="openPath"
+          @save="saveSettings"
+        />
+
         <section v-else class="app-shell__placeholder">
           <h1>{{ currentPlaceholder.title }}</h1>
           <p>{{ currentPlaceholder.description }}</p>
@@ -159,6 +168,7 @@ import DashboardView from "@/features/dashboard/index.vue"
 import SkillsView from "@/features/skills/index.vue"
 import SessionsView from "@/features/sessions/index.vue"
 import ReposView from "@/features/repos/index.vue"
+import SettingsView from "@/features/settings/index.vue"
 import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
 import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
 import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
@@ -200,9 +210,8 @@ const placeholderMap = {
     backTo: "dashboard"
   },
   settings: {
-    title: "Settings 视图待扩展",
-    description:
-      "后续可把扫描深度、忽略目录、刷新策略和默认 Repo 位置放到设置页。",
+    title: "Settings",
+    description: "设置页已接入。",
     backTo: "dashboard"
   }
 }
@@ -219,6 +228,22 @@ const state = reactive({
     reposDir: "",
     sessionRecycleDir: "",
     storageDir: ""
+  },
+  appSettings: {
+    dataPath: "",
+    defaultDataPath: "",
+    settingsFilePath: "",
+    restartRequired: false,
+    cliConfigPaths: {
+      claude: "",
+      codex: "",
+      gemini: ""
+    },
+    defaultCliConfigPaths: {
+      claude: "",
+      codex: "",
+      gemini: ""
+    }
   },
   refreshedAt: 0
 })
@@ -283,6 +308,7 @@ function updateState(nextState) {
   state.sessions = nextState.sessions || []
   state.diagnostics = nextState.diagnostics || []
   state.paths = nextState.paths || state.paths
+  state.appSettings = nextState.appSettings || state.appSettings
   state.refreshedAt = nextState.refreshedAt || 0
 
   if (
@@ -330,6 +356,18 @@ function showSuccessMessage(message) {
 
 async function refreshState() {
   await runAction(() => window.aiManager.refresh())
+}
+
+async function saveSettings(payload) {
+  const success = await runAction(() => window.aiManager.saveSettings(payload))
+
+  if (success) {
+    showSuccessMessage(
+      state.appSettings.restartRequired
+        ? "设置已保存，Data 目录将在重启后生效。"
+        : "设置已保存并重新刷新。"
+    )
+  }
 }
 
 async function createSkill(payload) {

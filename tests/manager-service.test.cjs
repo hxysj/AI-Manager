@@ -333,6 +333,56 @@ test('ManagerService keeps saved CLI configuration during refresh', async () => 
   await service.dispose()
 })
 
+test('ManagerService prefers detected CLI paths after settings update', async () => {
+  const root = await createTempDir('ai-manager-cli-settings-')
+  const service = new ManagerService(path.join(root, 'data'))
+  const savedCliTarget = {
+    id: 'codex',
+    type: 'codex',
+    name: 'Codex Local',
+    icon: 'custom.svg',
+    installed: true,
+    configPath: path.join(root, 'old-codex'),
+    skillsPath: path.join(root, 'old-codex', 'skills'),
+    sessionsPath: path.join(root, 'old-codex', 'sessions'),
+    sessionPaths: [path.join(root, 'old-codex', 'sessions')],
+    detectedAt: 1
+  }
+  const detectedCliTarget = {
+    id: 'codex',
+    type: 'codex',
+    name: 'Codex',
+    icon: 'codex.svg',
+    installed: true,
+    configPath: path.join(root, 'new-codex'),
+    skillsPath: path.join(root, 'new-codex', 'skills'),
+    sessionsPath: path.join(root, 'new-codex', 'sessions'),
+    sessionPaths: [path.join(root, 'new-codex', 'sessions')],
+    sessionScanRules: {
+      extensions: ['.jsonl'],
+      names: []
+    },
+    detectedAt: 2
+  }
+
+  const cliTarget = service.mergeCliTargets(
+    [savedCliTarget],
+    [detectedCliTarget],
+    { preferDetectedPaths: true }
+  )[0]
+
+  assert.equal(cliTarget.name, 'Codex Local')
+  assert.equal(cliTarget.icon, 'custom.svg')
+  assert.equal(cliTarget.configPath, detectedCliTarget.configPath)
+  assert.equal(cliTarget.skillsPath, detectedCliTarget.skillsPath)
+  assert.equal(cliTarget.sessionsPath, detectedCliTarget.sessionsPath)
+  assert.deepEqual(cliTarget.sessionPaths, detectedCliTarget.sessionPaths)
+  assert.deepEqual(cliTarget.sessionScanRules, detectedCliTarget.sessionScanRules)
+  assert.equal(cliTarget.detectedAt, 2)
+
+  await service.dispose()
+})
+
 test('ManagerService hides unsupported detected defaults until installed', async () => {
   const root = await createTempDir('ai-manager-cli-hidden-')
   const service = new ManagerService(path.join(root, 'data'))

@@ -1,13 +1,62 @@
 const path = require('node:path')
 const fs = require('node:fs')
-const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron')
+const os = require('node:os')
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require('electron')
 const { ManagerService } = require('./services/manager-service.cjs')
 const { TranslationService } = require('./services/translation-service.cjs')
 
 let mainWindow = null
 let managerService = null
 let translationService = null
-const userDataPath = 'D:\\ai-manager-data'
+const defaultUserDataPath = 'D:\\ai-manager-data'
+const settingsFilePath = path.join(defaultUserDataPath, 'app-settings.json')
+const defaultCliConfigPaths = {
+  claude: path.join(os.homedir(), '.claude'),
+  codex: path.join(os.homedir(), '.codex'),
+  gemini: path.join(os.homedir(), '.gemini')
+}
+
+function normalizeAppSettings(input = {}) {
+  return {
+    dataPath: String(input.dataPath || defaultUserDataPath).trim(),
+    defaultDataPath: defaultUserDataPath,
+    settingsFilePath,
+    cliConfigPaths: {
+      claude: String(
+        input.cliConfigPaths?.claude || defaultCliConfigPaths.claude
+      ).trim(),
+      codex: String(
+        input.cliConfigPaths?.codex || defaultCliConfigPaths.codex
+      ).trim(),
+      gemini: String(
+        input.cliConfigPaths?.gemini || defaultCliConfigPaths.gemini
+      ).trim()
+    },
+    defaultCliConfigPaths
+  }
+}
+
+function loadAppSettings() {
+  try {
+    return normalizeAppSettings(
+      JSON.parse(fs.readFileSync(settingsFilePath, 'utf8'))
+    )
+  } catch {
+    return normalizeAppSettings()
+  }
+}
+
+function saveAppSettings(nextSettings) {
+  fs.mkdirSync(path.dirname(settingsFilePath), { recursive: true })
+  fs.writeFileSync(
+    settingsFilePath,
+    `${JSON.stringify(nextSettings, null, 2)}\n`,
+    'utf8'
+  )
+}
+
+let appSettings = loadAppSettings()
+const userDataPath = appSettings.dataPath
 
 fs.mkdirSync(userDataPath, { recursive: true })
 app.setPath('userData', userDataPath)
@@ -72,6 +121,35 @@ async function createWindow() {
 function registerIpc() {
   ipcMain.handle('app:bootstrap', async () => managerService.getState())
   ipcMain.handle('app:refresh', async () => managerService.refreshAll())
+
+  ipcMain.handle('settings:save', async (_, payload) => {
+    const nextSettings = normalizeAppSettings(payload)
+    fs.mkdirSync(nextSettings.dataPath, { recursive: true })
+    saveAppSettings(nextSettings)
+    appSettings = nextSettings
+
+    if (
+      path.resolve(nextSettings.dataPath) !==
+      path.resolve(app.getPath('userData'))
+    ) {
+      await managerService.updateAppSettings(appSettings)
+      managerService.setAppSettings(appSettings, true)
+      return managerService.getState()
+    }
+
+    await managerService.updateAppSettings(appSettings)
+    return managerService.getState()
+  })
+
+  ipcMain.handle('system:select-directory', async (_, payload) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: payload?.title || '选择目录',
+      defaultPath: payload?.defaultPath || app.getPath('home'),
+      properties: ['openDirectory', 'createDirectory']
+    })
+
+    return result.canceled ? '' : result.filePaths[0]
+  })
 
   ipcMain.handle('skill:create', async (_, payload) => {
     await managerService.createSkill(payload)
@@ -169,7 +247,7 @@ function registerIpc() {
 }
 
 app.whenReady().then(async () => {
-  managerService = new ManagerService(app.getPath('userData'))
+  managerService = new ManagerService(app.getPath('userData'), appSettings)
   translationService = new TranslationService(app.getPath('userData'))
   await managerService.init()
   managerService.on('state-changed', state => {
