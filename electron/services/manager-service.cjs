@@ -13,6 +13,7 @@ const { SkillScanner } = require("./skill-scanner.cjs")
 const { LinkManager } = require("./link-manager.cjs")
 const { RepoService } = require("./repo-service.cjs")
 const { FileWatcherService } = require("./file-watcher-service.cjs")
+const { SessionService } = require("./session-service.cjs")
 
 async function pathExists(targetPath) {
   try {
@@ -38,10 +39,13 @@ class ManagerService extends EventEmitter {
     this.linkManager = new LinkManager(this.cliDetectionService)
     this.repoService = new RepoService(this.paths, this.storage)
     this.fileWatcherService = new FileWatcherService()
+    this.sessionService = new SessionService(this.paths)
+    this.sessionService.bindStorage(this.storage)
     this.state = {
       cliTargets: [],
       skills: [],
       repos: [],
+      sessions: [],
       diagnostics: [],
       paths: this.toPublicPaths(),
       refreshedAt: 0
@@ -51,8 +55,10 @@ class ManagerService extends EventEmitter {
   async init() {
     await ensureAppDirectories(this.paths)
     await this.repoService.init()
+    await this.sessionService.init()
     await this.refreshAll({ emit: false })
     this.startWatcher()
+    this.startSessionWatcher()
   }
 
   toPublicPaths() {
@@ -60,6 +66,7 @@ class ManagerService extends EventEmitter {
       workspaceRoot: this.paths.workspaceRoot,
       skillsDir: this.paths.skillsDir,
       reposDir: this.paths.reposDir,
+      sessionRecycleDir: this.paths.sessionRecycleDir,
       storageDir: this.paths.storageDir
     }
   }
@@ -73,6 +80,27 @@ class ManagerService extends EventEmitter {
         await this.refreshAll()
       }
     )
+  }
+
+  startSessionWatcher() {
+    this.sessionService.startWatcher(this.state.cliTargets, async () => {
+      const { sessions, diagnostics } = await this.sessionService.refresh(
+        this.state.cliTargets
+      )
+
+      this.state = {
+        ...this.state,
+        sessions,
+        diagnostics: [
+          ...this.state.diagnostics.filter(
+            (item) => item.type !== "session-parse-error"
+          ),
+          ...diagnostics
+        ],
+        refreshedAt: Date.now()
+      }
+      this.emit("state-changed", this.state)
+    })
   }
 
   getState() {
@@ -91,6 +119,8 @@ class ManagerService extends EventEmitter {
       previousCliTargets,
       detectedCliTargets
     )
+    const { sessions, diagnostics: sessionDiagnostics } =
+      await this.sessionService.refresh(cliTargets)
     const repos = this.repoService.listRepos().map((repo) => ({
       ...repo,
       skillCount: 0
@@ -203,10 +233,13 @@ class ManagerService extends EventEmitter {
       cliTargets,
       skills,
       repos,
-      diagnostics,
+      sessions,
+      diagnostics: [...diagnostics, ...sessionDiagnostics],
       paths: this.toPublicPaths(),
       refreshedAt: Date.now()
     }
+
+    this.startSessionWatcher()
 
     if (emit) {
       this.emit("state-changed", this.state)
@@ -216,8 +249,12 @@ class ManagerService extends EventEmitter {
   }
 
   mergeCliTargets(previousCliTargets, detectedCliTargets) {
-    const detectedMap = new Map(detectedCliTargets.map((item) => [item.id, item]))
-    const previousMap = new Map(previousCliTargets.map((item) => [item.id, item]))
+    const detectedMap = new Map(
+      detectedCliTargets.map((item) => [item.id, item])
+    )
+    const previousMap = new Map(
+      previousCliTargets.map((item) => [item.id, item])
+    )
     const targetIds = [
       ...new Set([...detectedMap.keys(), ...previousMap.keys()])
     ]
@@ -239,6 +276,10 @@ class ManagerService extends EventEmitter {
               ? previous.installed
               : detected.installed,
           executablePath: detected.executablePath || previous.executablePath,
+          sessionsPath: detected.sessionsPath || previous.sessionsPath,
+          sessionPaths: detected.sessionPaths || previous.sessionPaths,
+          sessionScanRules:
+            detected.sessionScanRules || previous.sessionScanRules,
           version: detected.version || previous.version,
           detectedAt: detected.detectedAt || previous.detectedAt
         }
@@ -485,7 +526,9 @@ class ManagerService extends EventEmitter {
     const { imports, mounts } = await this.collectCliSkillImports(targetId)
     const allNames = [...imports, ...mounts].map((item) => item.name)
     const selectedNames = new Set(skillNames || allNames)
-    const selectedImports = imports.filter((item) => selectedNames.has(item.name))
+    const selectedImports = imports.filter((item) =>
+      selectedNames.has(item.name)
+    )
     const selectedMounts = mounts.filter((item) => selectedNames.has(item.name))
 
     if (!selectedImports.length && !selectedMounts.length) {
@@ -552,8 +595,54 @@ class ManagerService extends EventEmitter {
     return folderPath
   }
 
+  async loadSessionMessages(sessionId) {
+    return this.sessionService.loadMessages(sessionId)
+  }
+
+  async searchSessions(query) {
+    return this.sessionService.search(query)
+  }
+
+  async deleteSession(sessionId) {
+    await this.sessionService.moveToRecycle(sessionId)
+    this.state = {
+      ...this.state,
+      sessions: this.sessionService.sessions,
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+  }
+
+  async listRecycledSessions() {
+    return this.sessionService.listRecycle()
+  }
+
+  async restoreSession(sessionId) {
+    await this.sessionService.restoreFromRecycle(sessionId)
+    const { sessions, diagnostics } = await this.sessionService.refresh(
+      this.state.cliTargets
+    )
+    this.state = {
+      ...this.state,
+      sessions,
+      diagnostics: [
+        ...this.state.diagnostics.filter(
+          (item) => item.type !== "session-parse-error"
+        ),
+        ...diagnostics
+      ],
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+  }
+
+  async purgeSession(sessionId) {
+    await this.sessionService.purgeFromRecycle(sessionId)
+  }
+
   async dispose() {
     this.fileWatcherService.stop()
+    await this.sessionService.dispose()
     await this.storage.flush()
   }
 }

@@ -65,7 +65,8 @@ class BaseCliAdapter {
     icon,
     binaryName,
     configDirName,
-    sessionsDirName
+    sessionsDirName,
+    sessionScanRules
   }) {
     this.id = id
     this.type = type
@@ -74,6 +75,10 @@ class BaseCliAdapter {
     this.binaryName = binaryName
     this.configDirName = configDirName
     this.sessionsDirName = sessionsDirName
+    this.sessionScanRules = sessionScanRules || {
+      extensions: [".json", ".jsonl", ".transcript"],
+      names: []
+    }
   }
 
   getConfigPath() {
@@ -92,6 +97,14 @@ class BaseCliAdapter {
     return path.join(this.getConfigPath(), this.sessionsDirName)
   }
 
+  getSessionPaths() {
+    return [this.getSessionsPath()].filter(Boolean)
+  }
+
+  getSessionScanRules() {
+    return this.sessionScanRules
+  }
+
   async detect() {
     const configPath = this.getConfigPath()
     const executablePath = await resolveBinary(this.binaryName)
@@ -108,6 +121,8 @@ class BaseCliAdapter {
       configPath,
       skillsPath: this.getSkillsPath(),
       sessionsPath: this.getSessionsPath(),
+      sessionPaths: this.getSessionPaths(),
+      sessionScanRules: this.getSessionScanRules(),
       version: await detectVersion(executablePath),
       detectedAt: Date.now()
     }
@@ -123,41 +138,84 @@ class BaseCliAdapter {
   }
 }
 
-function createCliAdapters() {
-  return [
-    new BaseCliAdapter({
+class ClaudeAdapter extends BaseCliAdapter {
+  constructor() {
+    super({
       id: "claude",
       type: "claude",
       name: "Claude",
       icon: "claude.svg",
       binaryName: "claude",
       configDirName: ".claude",
-      sessionsDirName: "projects"
-    }),
-    new BaseCliAdapter({
+      sessionsDirName: "projects",
+      sessionScanRules: {
+        extensions: [".jsonl"],
+        names: []
+      }
+    })
+  }
+}
+
+class CodexAdapter extends BaseCliAdapter {
+  constructor() {
+    super({
       id: "codex",
       type: "codex",
       name: "Codex",
       icon: "codex.svg",
       binaryName: "codex",
-      configDirName: ".codex"
-    }),
-    new BaseCliAdapter({
+      configDirName: ".codex",
+      sessionsDirName: "sessions",
+      sessionScanRules: {
+        extensions: [".json", ".jsonl", ".transcript"],
+        names: []
+      }
+    })
+  }
+}
+
+class GeminiAdapter extends BaseCliAdapter {
+  constructor() {
+    super({
       id: "gemini",
       type: "gemini",
       name: "Gemini",
       icon: "geminicli.svg",
       binaryName: "gemini",
-      configDirName: ".gemini"
-    }),
-    new BaseCliAdapter({
+      configDirName: ".gemini",
+      sessionsDirName: "tmp",
+      sessionScanRules: {
+        extensions: [".json", ".jsonl"],
+        names: ["session", "checkpoint"]
+      }
+    })
+  }
+}
+
+class OpenCodeAdapter extends BaseCliAdapter {
+  constructor() {
+    super({
       id: "opencode",
       type: "opencode",
       name: "OpenCode",
       icon: "opencode.svg",
       binaryName: "opencode",
-      configDirName: ".opencode"
+      configDirName: ".opencode",
+      sessionsDirName: "sessions",
+      sessionScanRules: {
+        extensions: [".json", ".jsonl", ".transcript"],
+        names: []
+      }
     })
+  }
+}
+
+function createCliAdapters() {
+  return [
+    new ClaudeAdapter(),
+    new CodexAdapter(),
+    new GeminiAdapter(),
+    new OpenCodeAdapter()
   ]
 }
 

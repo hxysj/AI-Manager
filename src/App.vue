@@ -72,6 +72,15 @@
           @uninstall-skill="uninstallSkill"
         />
 
+        <SessionsView
+          v-else-if="activeView === 'sessions'"
+          :paths="state.paths"
+          :sessions="state.sessions"
+          @delete-session="deleteSession"
+          @open-path="openPath"
+          @refresh="refreshState"
+        />
+
         <ReposView
           v-else-if="activeView === 'repos'"
           :paths="state.paths"
@@ -148,6 +157,7 @@ import {
 import AppSidebar from "@/components/AppSidebar.vue"
 import DashboardView from "@/features/dashboard/index.vue"
 import SkillsView from "@/features/skills/index.vue"
+import SessionsView from "@/features/sessions/index.vue"
 import ReposView from "@/features/repos/index.vue"
 import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
 import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
@@ -167,9 +177,8 @@ const navItems = [
 
 const placeholderMap = {
   sessions: {
-    title: "Session System 预留",
-    description:
-      "文档中该模块当前处于预留阶段，前端保留入口，后续可接入 Claude/Codex Session 聚合。",
+    title: "Session System",
+    description: "当前视图已经接入 Session 聚合，请从侧边栏重新进入。",
     backTo: "dashboard"
   },
   providers: {
@@ -202,11 +211,13 @@ const state = reactive({
   cliTargets: [],
   skills: [],
   repos: [],
+  sessions: [],
   diagnostics: [],
   paths: {
     workspaceRoot: "",
     skillsDir: "",
     reposDir: "",
+    sessionRecycleDir: "",
     storageDir: ""
   },
   refreshedAt: 0
@@ -238,7 +249,7 @@ const currentPlaceholder = computed(() => {
 
 const statusHeadline = computed(() => {
   const onlineCount = state.cliTargets.filter((item) => item.installed).length
-  return `已检测 ${onlineCount} / ${state.cliTargets.length} 个 CLI，索引 ${state.skills.length} 个 Skill`
+  return `已检测 ${onlineCount} / ${state.cliTargets.length} 个 CLI，索引 ${state.skills.length} 个 Skill / ${state.sessions.length} 个 Session`
 })
 
 const statusSummary = computed(() => {
@@ -269,6 +280,7 @@ function updateState(nextState) {
   state.cliTargets = nextState.cliTargets || []
   state.skills = nextState.skills || []
   state.repos = nextState.repos || []
+  state.sessions = nextState.sessions || []
   state.diagnostics = nextState.diagnostics || []
   state.paths = nextState.paths || state.paths
   state.refreshedAt = nextState.refreshedAt || 0
@@ -402,6 +414,10 @@ async function removeRepo(repoId) {
   }
 
   await runAction(() => window.aiManager.removeRepo({ repoId }))
+}
+
+async function deleteSession(sessionId) {
+  await runAction(() => window.aiManager.deleteSession({ sessionId }))
 }
 
 async function openPath(targetPath) {

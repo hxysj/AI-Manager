@@ -15,6 +15,13 @@ contextBridge.exposeInMainWorld("aiManager", {
   syncRepo: (payload) => ipcRenderer.invoke("repo:sync", payload),
   syncAllRepos: () => ipcRenderer.invoke("repo:sync-all"),
   removeRepo: (payload) => ipcRenderer.invoke("repo:remove", payload),
+  searchSessions: (payload) => ipcRenderer.invoke("session:search", payload),
+  loadSessionMessages: (payload) =>
+    ipcRenderer.invoke("session:messages", payload),
+  deleteSession: (payload) => ipcRenderer.invoke("session:delete", payload),
+  listRecycledSessions: () => ipcRenderer.invoke("session:recycle-list"),
+  restoreSession: (payload) => ipcRenderer.invoke("session:restore", payload),
+  purgeSession: (payload) => ipcRenderer.invoke("session:purge", payload),
   openPath: (payload) => ipcRenderer.invoke("system:open-path", payload),
   translateText: (payload) => ipcRenderer.invoke("translation:translate", payload),
   onTranslateSelection: (callback) => {
