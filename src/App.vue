@@ -81,6 +81,19 @@
           @refresh="refreshState"
         />
 
+        <ProvidersView
+          v-else-if="activeView === 'providers'"
+          :cli-targets="state.cliTargets"
+          :pending="pending"
+          :providers="state.providers"
+          :runtime-models="state.runtimeModels"
+          :runtime-profiles="state.runtimeProfiles"
+          @delete-provider="deleteProvider"
+          @save-model="saveRuntimeModel"
+          @save-provider="saveProvider"
+          @switch-runtime="switchRuntime"
+        />
+
         <ReposView
           v-else-if="activeView === 'repos'"
           :paths="state.paths"
@@ -167,6 +180,7 @@ import AppSidebar from "@/components/AppSidebar.vue"
 import DashboardView from "@/features/dashboard/index.vue"
 import SkillsView from "@/features/skills/index.vue"
 import SessionsView from "@/features/sessions/index.vue"
+import ProvidersView from "@/features/providers/index.vue"
 import ReposView from "@/features/repos/index.vue"
 import SettingsView from "@/features/settings/index.vue"
 import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
@@ -190,12 +204,6 @@ const placeholderMap = {
     title: "Session System",
     description: "当前视图已经接入 Session 聚合，请从侧边栏重新进入。",
     backTo: "dashboard"
-  },
-  providers: {
-    title: "Providers 视图待扩展",
-    description:
-      "当前版本聚焦 CLI Detection 与 Skill System，Provider 层尚未写入后端模型。",
-    backTo: "skills"
   },
   rules: {
     title: "Rules 视图待扩展",
@@ -221,6 +229,9 @@ const state = reactive({
   skills: [],
   repos: [],
   sessions: [],
+  providers: [],
+  runtimeModels: [],
+  runtimeProfiles: [],
   diagnostics: [],
   paths: {
     workspaceRoot: "",
@@ -306,6 +317,9 @@ function updateState(nextState) {
   state.skills = nextState.skills || []
   state.repos = nextState.repos || []
   state.sessions = nextState.sessions || []
+  state.providers = nextState.providers || []
+  state.runtimeModels = nextState.runtimeModels || []
+  state.runtimeProfiles = nextState.runtimeProfiles || []
   state.diagnostics = nextState.diagnostics || []
   state.paths = nextState.paths || state.paths
   state.appSettings = nextState.appSettings || state.appSettings
@@ -456,6 +470,40 @@ async function removeRepo(repoId) {
 
 async function deleteSession(sessionId) {
   await runAction(() => window.aiManager.deleteSession({ sessionId }))
+}
+
+async function saveProvider(payload) {
+  const success = await runAction(() => window.aiManager.saveProvider(payload))
+
+  if (success) {
+    showSuccessMessage("Provider 已保存。")
+  }
+}
+
+async function deleteProvider(providerId) {
+  const success = await runAction(() =>
+    window.aiManager.deleteProvider({ providerId })
+  )
+
+  if (success) {
+    showSuccessMessage("Provider 已删除。")
+  }
+}
+
+async function saveRuntimeModel(payload) {
+  const success = await runAction(() => window.aiManager.saveRuntimeModel(payload))
+
+  if (success) {
+    showSuccessMessage("模型已保存。")
+  }
+}
+
+async function switchRuntime(payload) {
+  const success = await runAction(() => window.aiManager.switchRuntime(payload))
+
+  if (success) {
+    showSuccessMessage("Runtime Profile 已切换。")
+  }
 }
 
 async function openPath(targetPath) {

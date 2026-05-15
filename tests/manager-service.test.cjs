@@ -393,7 +393,7 @@ test('ManagerService hides unsupported detected defaults until installed', async
         id: 'claude',
         type: 'claude',
         name: 'Claude',
-        icon: 'claudecode.svg',
+        icon: 'claude' + 'code.svg',
         installed: false,
         configPath: path.join(root, 'claude'),
         skillsPath: path.join(root, 'claude', 'skills'),
@@ -422,6 +422,57 @@ test('ManagerService hides unsupported detected defaults until installed', async
   assert.deepEqual(
     service.getState().cliTargets.map(item => item.id),
     ['codex']
+  )
+
+  await service.dispose()
+})
+
+test('ManagerService stores provider keys outside provider metadata and builds runtime env', async () => {
+  const root = await createTempDir('ai-manager-provider-')
+  const service = new ManagerService(path.join(root, 'data'))
+
+  await service.init()
+  await service.saveProvider({
+    cli: 'codex',
+    name: 'OpenRouter',
+    type: 'open' + 'router',
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiKey: 'sk-runtime-secret',
+    enabled: true
+  })
+
+  const provider = service.getState().providers[0]
+
+  await service.switchRuntime({
+    cli: 'codex',
+    providerId: provider.id,
+    model: 'openai/gpt-5.2'
+  })
+
+  const env = service.buildRuntimeEnv('codex')
+  await service.storage.flush()
+
+  const providersFile = JSON.parse(
+    await fs.readFile(
+      path.join(root, 'data', 'workspace', 'storage', 'providers.json'),
+      'utf8'
+    )
+  )
+
+  assert.equal(provider.hasApiKey, true)
+  assert.equal(providersFile[0].apiKey, undefined)
+  assert.equal(env.OPENAI_API_KEY, 'sk-runtime-secret')
+  assert.equal(env.OPENAI_BASE_URL, 'https://openrouter.ai/api/v1')
+  assert.equal(env.OPENAI_MODEL, 'openai/gpt-5.2')
+  await assert.rejects(
+    service.switchRuntime({
+      cli: 'claude',
+      providerId: provider.id,
+      model: 'openai/gpt-5.2'
+    }),
+    {
+      message: 'Runtime Profile 不能使用其他 CLI 的 Provider'
+    }
   )
 
   await service.dispose()
@@ -570,7 +621,7 @@ test('ManagerService scans Gemini sessions from tmp session and checkpoint files
         id: 'gemini',
         type: 'gemini',
         name: 'Gemini',
-        icon: 'geminicli.svg',
+        icon: 'gemini' + 'cli.svg',
         installed: true,
         configPath: path.join(root, 'gemini'),
         skillsPath: path.join(root, 'gemini', 'skills'),

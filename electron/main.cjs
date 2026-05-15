@@ -227,6 +227,26 @@ function registerIpc() {
     return true
   })
 
+  ipcMain.handle('provider:save', async (_, payload) => {
+    return managerService.saveProvider(payload)
+  })
+
+  ipcMain.handle('provider:delete', async (_, payload) => {
+    return managerService.deleteProvider(payload.providerId)
+  })
+
+  ipcMain.handle('runtime-model:save', async (_, payload) => {
+    return managerService.saveRuntimeModel(payload)
+  })
+
+  ipcMain.handle('runtime:switch', async (_, payload) => {
+    return managerService.switchRuntime(payload)
+  })
+
+  ipcMain.handle('runtime:env', async (_, payload) => {
+    return managerService.buildRuntimeEnv(payload.cli)
+  })
+
   ipcMain.handle('system:open-path', async (_, payload) => {
     if (!payload?.targetPath) {
       return false

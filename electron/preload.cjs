@@ -25,6 +25,12 @@ contextBridge.exposeInMainWorld("aiManager", {
   listRecycledSessions: () => ipcRenderer.invoke("session:recycle-list"),
   restoreSession: (payload) => ipcRenderer.invoke("session:restore", payload),
   purgeSession: (payload) => ipcRenderer.invoke("session:purge", payload),
+  saveProvider: (payload) => ipcRenderer.invoke("provider:save", payload),
+  deleteProvider: (payload) => ipcRenderer.invoke("provider:delete", payload),
+  saveRuntimeModel: (payload) =>
+    ipcRenderer.invoke("runtime-model:save", payload),
+  switchRuntime: (payload) => ipcRenderer.invoke("runtime:switch", payload),
+  getRuntimeEnv: (payload) => ipcRenderer.invoke("runtime:env", payload),
   openPath: (payload) => ipcRenderer.invoke("system:open-path", payload),
   translateText: (payload) => ipcRenderer.invoke("translation:translate", payload),
   onTranslateSelection: (callback) => {
