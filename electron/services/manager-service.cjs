@@ -18,6 +18,7 @@ const { LinkManager } = require("./link-manager.cjs")
 const { RepoService } = require("./repo-service.cjs")
 const { FileWatcherService } = require("./file-watcher-service.cjs")
 const { SessionService } = require("./session-service.cjs")
+const { CodexAccountService } = require("./codex-account-service.cjs")
 const { RuntimeProviderService } = require("./runtime-provider-service.cjs")
 
 const execFileAsync = promisify(execFile)
@@ -113,12 +114,15 @@ class ManagerService extends EventEmitter {
     this.fileWatcherService = new FileWatcherService()
     this.sessionService = new SessionService(this.paths)
     this.sessionService.bindStorage(this.storage)
+    this.codexAccountService = new CodexAccountService(this.storage)
     this.runtimeProviderService = new RuntimeProviderService(this.storage)
     this.state = {
       cliTargets: [],
       skills: [],
       repos: [],
       sessions: [],
+      codexAccounts: [],
+      codexLoginState: null,
       providers: [],
       runtimeConfigSchemas: {},
       runtimeModels: [],
@@ -134,6 +138,23 @@ class ManagerService extends EventEmitter {
     await ensureAppDirectories(this.paths)
     await this.repoService.init()
     await this.sessionService.init()
+    await this.codexAccountService.init()
+    this.codexAccountService.on("changed", (codexAccounts) => {
+      this.state = {
+        ...this.state,
+        codexAccounts,
+        refreshedAt: Date.now()
+      }
+      this.emit("state-changed", this.state)
+    })
+    this.codexAccountService.on("login-state", (codexLoginState) => {
+      this.state = {
+        ...this.state,
+        codexLoginState,
+        refreshedAt: Date.now()
+      }
+      this.emit("state-changed", this.state)
+    })
     await this.runtimeProviderService.init()
     await this.refreshAll({ emit: false })
     this.startWatcher()
@@ -340,6 +361,8 @@ class ManagerService extends EventEmitter {
       skills,
       repos,
       sessions,
+      codexAccounts: this.codexAccountService.getState(),
+      codexLoginState: this.codexAccountService.getLoginState(),
       ...runtimeState,
       diagnostics: [...diagnostics, ...sessionDiagnostics],
       paths: this.toPublicPaths(),
@@ -1019,6 +1042,29 @@ class ManagerService extends EventEmitter {
     this.state = {
       ...this.state,
       ...this.runtimeProviderService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async startCodexOfficialLogin() {
+    const result = await this.codexAccountService.startLogin()
+    this.state = {
+      ...this.state,
+      codexAccounts: this.codexAccountService.getState(),
+      codexLoginState: this.codexAccountService.getLoginState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return result
+  }
+
+  async cancelCodexOfficialLogin() {
+    this.codexAccountService.cancelLogin()
+    this.state = {
+      ...this.state,
+      codexLoginState: this.codexAccountService.getLoginState(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)

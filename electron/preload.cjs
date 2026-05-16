@@ -51,6 +51,8 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("provider:save", toPlainPayload(payload)),
   deleteProvider: (payload) =>
     ipcRenderer.invoke("provider:delete", toPlainPayload(payload)),
+  startCodexOfficialLogin: () => ipcRenderer.invoke("codex-account:login"),
+  cancelCodexOfficialLogin: () => ipcRenderer.invoke("codex-account:cancel"),
   saveRuntimeModel: (payload) =>
     ipcRenderer.invoke("runtime-model:save", toPlainPayload(payload)),
   switchRuntime: (payload) =>
@@ -61,6 +63,8 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("runtime:env", toPlainPayload(payload)),
   openPath: (payload) =>
     ipcRenderer.invoke("system:open-path", toPlainPayload(payload)),
+  openExternal: (payload) =>
+    ipcRenderer.invoke("system:open-external", toPlainPayload(payload)),
   translateText: (payload) =>
     ipcRenderer.invoke("translation:translate", toPlainPayload(payload)),
   onTranslateSelection: (callback) => {

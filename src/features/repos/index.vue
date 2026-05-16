@@ -115,137 +115,137 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
   display: flex;
   flex-direction: column;
   gap: 18px;
-}
 
-.repos-view__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 24px;
-}
+  &__toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+  }
 
-.repos-view__eyebrow {
-  margin: 0 0 8px;
-  color: var(--color-text-soft);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
+  &__eyebrow {
+    margin: 0 0 8px;
+    color: var(--color-text-soft);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+  }
 
-.repos-view__toolbar h1 {
-  margin: 0;
-  font-size: 2rem;
-}
+  &__toolbar h1 {
+    margin: 0;
+    font-size: 2rem;
+  }
 
-.repos-view__toolbar-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
+  &__toolbar-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
 
-.repos-view__list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
 
-.repos-view__card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 18px;
-  padding: 20px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel);
-}
+  &__card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    padding: 20px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+  }
 
-.repos-view__card-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 16px;
-}
+  &__card-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
 
-.repos-view__card-head h2 {
-  margin: 0 0 8px;
-  font-size: 1.14rem;
-}
+  &__card-head h2 {
+    margin: 0 0 8px;
+    font-size: 1.14rem;
+  }
 
-.repos-view__card-head p {
-  margin: 0;
-  color: var(--color-text-muted);
-  line-height: 1.6;
-  word-break: break-all;
-}
+  &__card-head p {
+    margin: 0;
+    color: var(--color-text-muted);
+    line-height: 1.6;
+    word-break: break-all;
+  }
 
-.repos-view__type {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: var(--color-primary-soft);
-  color: var(--color-text-muted);
-  font-size: 0.76rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
+  &__type {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--color-primary-soft);
+    color: var(--color-text-muted);
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
 
-.repos-view__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
 
-.repos-view__grid div {
-  padding: 16px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel-soft);
-}
+  &__grid div {
+    padding: 16px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel-soft);
+  }
 
-.repos-view__grid span {
-  display: block;
-  margin-bottom: 8px;
-  color: var(--color-text-muted);
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-}
+  &__grid span {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
 
-.repos-view__grid strong {
-  line-height: 1.6;
-  word-break: break-all;
-}
+  &__grid strong {
+    line-height: 1.6;
+    word-break: break-all;
+  }
 
-.repos-view__card-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
+  &__card-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
 
-.repos-view__empty {
-  display: grid;
-  min-height: 360px;
-  place-items: center;
-  border: 1px dashed var(--color-line-strong);
-  border-radius: 8px;
-  background: var(--color-panel);
-  text-align: center;
-}
+  &__empty {
+    display: grid;
+    min-height: 360px;
+    place-items: center;
+    border: 1px dashed var(--color-line-strong);
+    border-radius: 8px;
+    background: var(--color-panel);
+    text-align: center;
+  }
 
-.repos-view__empty h2 {
-  margin: 0 0 10px;
-  font-size: 1.5rem;
-}
+  &__empty h2 {
+    margin: 0 0 10px;
+    font-size: 1.5rem;
+  }
 
-.repos-view__empty p {
-  margin: 0;
-  color: var(--color-text-muted);
+  &__empty p {
+    margin: 0;
+    color: var(--color-text-muted);
+  }
 }
 
 .action-button {
@@ -257,17 +257,17 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
   color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
-}
 
-.action-button--primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
-}
+  &--primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #fff;
+  }
 
-.action-button--alert {
-  border-color: var(--color-danger-soft);
-  background: var(--color-danger-soft);
-  color: var(--color-danger);
+  &--alert {
+    border-color: var(--color-danger-soft);
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
 }
 </style>

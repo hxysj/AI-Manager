@@ -251,6 +251,14 @@ function registerIpc() {
     return managerService.deleteProvider(payload.providerId)
   })
 
+  ipcMain.handle("codex-account:login", async () => {
+    return managerService.startCodexOfficialLogin()
+  })
+
+  ipcMain.handle("codex-account:cancel", async () => {
+    return managerService.cancelCodexOfficialLogin()
+  })
+
   ipcMain.handle("runtime-model:save", async (_, payload) => {
     return managerService.saveRuntimeModel(payload)
   })
@@ -278,6 +286,15 @@ function registerIpc() {
       throw new Error(result)
     }
 
+    return true
+  })
+
+  ipcMain.handle("system:open-external", async (_, payload) => {
+    if (!payload?.url) {
+      return false
+    }
+
+    await shell.openExternal(payload.url)
     return true
   })
 

@@ -89,70 +89,70 @@ function closeTranslator() {
   border-radius: 8px;
   background: #ffffff;
   box-shadow: 0 18px 42px rgba(34, 56, 83, 0.18);
-}
 
-.selection-translator__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  border-bottom: 1px solid var(--color-line);
-  background: #f7f9fc;
-}
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--color-line);
+    background: #f7f9fc;
+  }
 
-.selection-translator__header strong {
-  color: var(--color-text);
-  font-size: 0.92rem;
-}
+  &__header strong {
+    color: var(--color-text);
+    font-size: 0.92rem;
+  }
 
-.selection-translator__header button {
-  display: grid;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  border: 1px solid var(--color-line);
-  border-radius: 6px;
-  background: #ffffff;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  line-height: 1;
-}
+  &__header button {
+    display: grid;
+    width: 26px;
+    height: 26px;
+    place-items: center;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background: #ffffff;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    line-height: 1;
+  }
 
-.selection-translator__body {
-  display: flex;
-  max-height: 360px;
-  flex-direction: column;
-  gap: 10px;
-  overflow: auto;
-  padding: 14px;
-}
+  &__body {
+    display: flex;
+    max-height: 360px;
+    flex-direction: column;
+    gap: 10px;
+    overflow: auto;
+    padding: 14px;
+  }
 
-.selection-translator__source {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: 0.82rem;
-  line-height: 1.55;
-}
+  &__source {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+    line-height: 1.55;
+  }
 
-.selection-translator__loading,
-.selection-translator__error,
-.selection-translator__result {
-  margin: 0;
-  padding-top: 10px;
-  border-top: 1px solid var(--color-line);
-  line-height: 1.7;
-}
+  &__loading,
+  &__error,
+  &__result {
+    margin: 0;
+    padding-top: 10px;
+    border-top: 1px solid var(--color-line);
+    line-height: 1.7;
+  }
 
-.selection-translator__loading {
-  color: var(--color-text-soft);
-}
+  &__loading {
+    color: var(--color-text-soft);
+  }
 
-.selection-translator__error {
-  color: var(--color-danger);
-}
+  &__error {
+    color: var(--color-danger);
+  }
 
-.selection-translator__result {
-  color: var(--color-text);
+  &__result {
+    color: var(--color-text);
+  }
 }
 </style>
