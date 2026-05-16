@@ -47,6 +47,11 @@
           :runtime-profiles="state.runtimeProfiles"
           @clear-runtime="clearRuntime"
           @codex-official-login="startCodexOfficialLogin"
+          @codex-auth-json-import="importCodexAuthJson"
+          @codex-account-enable="enableCodexAccount"
+          @codex-account-clear="clearCodexAccount"
+          @codex-account-refresh="refreshCodexAccount"
+          @codex-account-proxy-save="updateCodexAccountProxy"
           @cancel-codex-official-login="cancelCodexOfficialLogin"
           @delete-provider="deleteProvider"
           @save-model="saveRuntimeModel"
@@ -171,8 +176,7 @@ const placeholderMap = {
   },
   workspace: {
     title: "Workspace 视图待扩展",
-    description:
-      "当前工作区路径已经由主进程管理，可在设置页中配置相关目录。",
+    description: "当前工作区路径已经由主进程管理，可在设置页中配置相关目录。",
     backTo: "providers"
   },
   settings: {
@@ -464,8 +468,10 @@ async function deleteProvider(providerId) {
   }
 }
 
-async function startCodexOfficialLogin() {
-  const success = await runAction(() => window.aiManager.startCodexOfficialLogin())
+async function startCodexOfficialLogin(payload) {
+  const success = await runAction(() =>
+    window.aiManager.startCodexOfficialLogin(payload)
+  )
 
   if (success) {
     showWarningMessage("已打开浏览器，请完成 Codex 官方登录。")
@@ -474,6 +480,54 @@ async function startCodexOfficialLogin() {
 
 async function cancelCodexOfficialLogin() {
   await runAction(() => window.aiManager.cancelCodexOfficialLogin())
+}
+
+async function importCodexAuthJson(payload) {
+  const success = await runAction(() =>
+    window.aiManager.importCodexAuthJson(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Codex 登录 JSON 数据已验证并导入。")
+  }
+}
+
+async function enableCodexAccount(payload) {
+  const success = await runAction(() =>
+    window.aiManager.enableCodexAccount(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Codex 官方账号已启用。")
+  }
+}
+
+async function clearCodexAccount() {
+  const success = await runAction(() => window.aiManager.clearCodexAccount())
+
+  if (success) {
+    showSuccessMessage("Codex 官方账号已取消启用。")
+  }
+}
+
+async function refreshCodexAccount(payload) {
+  const success = await runAction(() =>
+    window.aiManager.refreshCodexAccount(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Codex 官方账号额度已刷新。")
+  }
+}
+
+async function updateCodexAccountProxy(payload) {
+  const success = await runAction(() =>
+    window.aiManager.updateCodexAccountProxy(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Codex 官方账号代理已保存。")
+  }
 }
 
 async function saveRuntimeModel(payload) {

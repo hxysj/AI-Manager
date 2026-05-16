@@ -157,6 +157,7 @@ class ManagerService extends EventEmitter {
     })
     await this.runtimeProviderService.init()
     await this.refreshAll({ emit: false })
+    this.codexAccountService.startAutoRefresh()
     this.startWatcher()
     this.startSessionWatcher()
   }
@@ -1048,8 +1049,8 @@ class ManagerService extends EventEmitter {
     return this.state
   }
 
-  async startCodexOfficialLogin() {
-    const result = await this.codexAccountService.startLogin()
+  async startCodexOfficialLogin(input) {
+    const result = await this.codexAccountService.startLogin(input)
     this.state = {
       ...this.state,
       codexAccounts: this.codexAccountService.getState(),
@@ -1065,6 +1066,68 @@ class ManagerService extends EventEmitter {
     this.state = {
       ...this.state,
       codexLoginState: this.codexAccountService.getLoginState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async importCodexAuthJson(input) {
+    await this.codexAccountService.importAuthJson(input)
+    this.state = {
+      ...this.state,
+      codexAccounts: this.codexAccountService.getState(),
+      codexLoginState: this.codexAccountService.getLoginState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async enableCodexAccount(input) {
+    await this.codexAccountService.enableAccount(
+      input.accountId,
+      this.state.cliTargets.find((item) => item.id === "codex")
+    )
+    this.state = {
+      ...this.state,
+      codexAccounts: this.codexAccountService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async clearCodexAccount() {
+    this.codexAccountService.clearActiveAccount()
+    this.state = {
+      ...this.state,
+      codexAccounts: this.codexAccountService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async refreshCodexAccount(input) {
+    await this.codexAccountService.refreshAccountUsage(
+      input.accountId,
+      this.state.cliTargets.find((item) => item.id === "codex")
+    )
+    this.state = {
+      ...this.state,
+      codexAccounts: this.codexAccountService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async updateCodexAccountProxy(input) {
+    this.codexAccountService.updateAccountProxy(input.accountId, input.proxy)
+    this.state = {
+      ...this.state,
+      codexAccounts: this.codexAccountService.getState(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
@@ -1113,6 +1176,7 @@ class ManagerService extends EventEmitter {
   }
 
   async dispose() {
+    this.codexAccountService.stopAutoRefresh()
     this.fileWatcherService.stop()
     await this.sessionService.dispose()
     await this.storage.flush()

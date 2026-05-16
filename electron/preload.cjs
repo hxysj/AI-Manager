@@ -51,8 +51,18 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("provider:save", toPlainPayload(payload)),
   deleteProvider: (payload) =>
     ipcRenderer.invoke("provider:delete", toPlainPayload(payload)),
-  startCodexOfficialLogin: () => ipcRenderer.invoke("codex-account:login"),
+  startCodexOfficialLogin: (payload) =>
+    ipcRenderer.invoke("codex-account:login", toPlainPayload(payload)),
   cancelCodexOfficialLogin: () => ipcRenderer.invoke("codex-account:cancel"),
+  importCodexAuthJson: (payload) =>
+    ipcRenderer.invoke("codex-account:import-auth-json", toPlainPayload(payload)),
+  enableCodexAccount: (payload) =>
+    ipcRenderer.invoke("codex-account:enable", toPlainPayload(payload)),
+  clearCodexAccount: () => ipcRenderer.invoke("codex-account:clear"),
+  refreshCodexAccount: (payload) =>
+    ipcRenderer.invoke("codex-account:refresh", toPlainPayload(payload)),
+  updateCodexAccountProxy: (payload) =>
+    ipcRenderer.invoke("codex-account:update-proxy", toPlainPayload(payload)),
   saveRuntimeModel: (payload) =>
     ipcRenderer.invoke("runtime-model:save", toPlainPayload(payload)),
   switchRuntime: (payload) =>

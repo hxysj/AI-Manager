@@ -251,12 +251,32 @@ function registerIpc() {
     return managerService.deleteProvider(payload.providerId)
   })
 
-  ipcMain.handle("codex-account:login", async () => {
-    return managerService.startCodexOfficialLogin()
+  ipcMain.handle("codex-account:login", async (_, payload) => {
+    return managerService.startCodexOfficialLogin(payload)
   })
 
   ipcMain.handle("codex-account:cancel", async () => {
     return managerService.cancelCodexOfficialLogin()
+  })
+
+  ipcMain.handle("codex-account:import-auth-json", async (_, payload) => {
+    return managerService.importCodexAuthJson(payload)
+  })
+
+  ipcMain.handle("codex-account:enable", async (_, payload) => {
+    return managerService.enableCodexAccount(payload)
+  })
+
+  ipcMain.handle("codex-account:clear", async () => {
+    return managerService.clearCodexAccount()
+  })
+
+  ipcMain.handle("codex-account:refresh", async (_, payload) => {
+    return managerService.refreshCodexAccount(payload)
+  })
+
+  ipcMain.handle("codex-account:update-proxy", async (_, payload) => {
+    return managerService.updateCodexAccountProxy(payload)
   })
 
   ipcMain.handle("runtime-model:save", async (_, payload) => {
