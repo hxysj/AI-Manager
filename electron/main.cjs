@@ -243,6 +243,10 @@ function registerIpc() {
     return managerService.switchRuntime(payload)
   })
 
+  ipcMain.handle('runtime:clear', async (_, payload) => {
+    return managerService.clearRuntime(payload.cli)
+  })
+
   ipcMain.handle('runtime:env', async (_, payload) => {
     return managerService.buildRuntimeEnv(payload.cli)
   })

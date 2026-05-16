@@ -30,6 +30,7 @@ contextBridge.exposeInMainWorld("aiManager", {
   saveRuntimeModel: (payload) =>
     ipcRenderer.invoke("runtime-model:save", payload),
   switchRuntime: (payload) => ipcRenderer.invoke("runtime:switch", payload),
+  clearRuntime: (payload) => ipcRenderer.invoke("runtime:clear", payload),
   getRuntimeEnv: (payload) => ipcRenderer.invoke("runtime:env", payload),
   openPath: (payload) => ipcRenderer.invoke("system:open-path", payload),
   translateText: (payload) => ipcRenderer.invoke("translation:translate", payload),

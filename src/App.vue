@@ -86,8 +86,10 @@
           :cli-targets="state.cliTargets"
           :pending="pending"
           :providers="state.providers"
+          :runtime-config-schemas="state.runtimeConfigSchemas"
           :runtime-models="state.runtimeModels"
           :runtime-profiles="state.runtimeProfiles"
+          @clear-runtime="clearRuntime"
           @delete-provider="deleteProvider"
           @save-model="saveRuntimeModel"
           @save-provider="saveProvider"
@@ -230,6 +232,7 @@ const state = reactive({
   repos: [],
   sessions: [],
   providers: [],
+  runtimeConfigSchemas: {},
   runtimeModels: [],
   runtimeProfiles: [],
   diagnostics: [],
@@ -318,6 +321,7 @@ function updateState(nextState) {
   state.repos = nextState.repos || []
   state.sessions = nextState.sessions || []
   state.providers = nextState.providers || []
+  state.runtimeConfigSchemas = nextState.runtimeConfigSchemas || {}
   state.runtimeModels = nextState.runtimeModels || []
   state.runtimeProfiles = nextState.runtimeProfiles || []
   state.diagnostics = nextState.diagnostics || []
@@ -491,7 +495,9 @@ async function deleteProvider(providerId) {
 }
 
 async function saveRuntimeModel(payload) {
-  const success = await runAction(() => window.aiManager.saveRuntimeModel(payload))
+  const success = await runAction(() =>
+    window.aiManager.saveRuntimeModel(payload)
+  )
 
   if (success) {
     showSuccessMessage("模型已保存。")
@@ -503,6 +509,14 @@ async function switchRuntime(payload) {
 
   if (success) {
     showSuccessMessage("Runtime Profile 已切换。")
+  }
+}
+
+async function clearRuntime(payload) {
+  const success = await runAction(() => window.aiManager.clearRuntime(payload))
+
+  if (success) {
+    showSuccessMessage("Runtime Profile 已取消使用。")
   }
 }
 
