@@ -50,6 +50,7 @@ class MetadataParser {
       description: metadata.description
         ? String(metadata.description).trim()
         : "",
+      content: parsed.content.trim(),
       version: metadata.version ? String(metadata.version).trim() : "",
       author: metadata.author ? String(metadata.author).trim() : "",
       tags: Array.isArray(metadata.tags)

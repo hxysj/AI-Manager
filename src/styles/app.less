@@ -22,12 +22,12 @@
   --color-primary-soft: #edf2f8;
   --color-accent: #496984;
   --color-accent-soft: #eef3f7;
-  --color-success: #4f6280;
-  --color-success-soft: #eef2f7;
-  --color-warning: #7c6a45;
-  --color-warning-soft: #f3f0e7;
-  --color-danger: #9a5151;
-  --color-danger-soft: #f6ecec;
+  --color-success: #17803d;
+  --color-success-soft: #eaf8ef;
+  --color-warning: #9a6500;
+  --color-warning-soft: #fff6df;
+  --color-danger: #b42318;
+  --color-danger-soft: #fff0ee;
   --shadow-panel: 0 14px 36px rgba(34, 56, 83, 0.08);
 }
 
@@ -67,4 +67,57 @@ textarea:focus-visible,
 select:focus-visible {
   outline: 2px solid rgba(47, 70, 104, 0.24);
   outline-offset: 2px;
+}
+
+.app-message {
+  position: fixed;
+  z-index: 1000;
+  top: 24px;
+  left: 50%;
+  display: flex;
+  width: 420px;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+.app-message__item {
+  padding: 11px 14px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  box-shadow: var(--shadow-panel);
+  color: var(--color-text);
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.5;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+
+.app-message__item--success {
+  border-color: #a9e5bd;
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.app-message__item--error {
+  border-color: #ffc7c2;
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.app-message__item--warning {
+  border-color: #ffe0a3;
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+.app-message__item--leaving {
+  opacity: 0;
+  transform: translateY(-8px);
 }

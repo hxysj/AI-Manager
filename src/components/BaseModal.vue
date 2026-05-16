@@ -51,7 +51,10 @@ defineEmits(["close"])
 
 .base-modal__panel {
   position: relative;
-  width: min(560px, 100%);
+  width: 1000px;
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: var(--color-panel);
@@ -92,6 +95,8 @@ defineEmits(["close"])
 }
 
 .base-modal__content {
+  min-height: 0;
+  overflow: auto;
   padding: 0 24px 24px;
 }
 </style>

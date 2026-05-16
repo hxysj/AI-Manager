@@ -6,26 +6,64 @@
   >
     <form class="import-skills-modal" @submit.prevent="submit">
       <div class="import-skills-modal__summary">
-        发现 {{ candidates.length }} 个可导入 Skill
+        <span>可导入 {{ candidateItems.length }} 个</span>
+        <span v-if="conflictItems.length">需确认 {{ conflictItems.length }} 个</span>
       </div>
 
-      <div class="import-skills-modal__list">
-        <label
-          v-for="candidate in candidates"
-          :key="candidate.name"
-          class="import-skills-modal__item"
-        >
-          <input
-            v-model="selectedNames"
-            type="checkbox"
-            :value="candidate.name"
-          />
-          <span class="import-skills-modal__content">
-            <strong>{{ candidate.name }}</strong>
-            <span>{{ candidate.description || '未提供描述' }}</span>
-            <small>{{ candidate.cliNames.join('、') }}</small>
-          </span>
-        </label>
+      <div class="import-skills-modal__body">
+        <section v-if="candidateItems.length" class="import-skills-modal__section">
+          <h3>可导入 Skill</h3>
+          <div class="import-skills-modal__list">
+            <label
+              v-for="candidate in candidateItems"
+              :key="candidate.id"
+              class="import-skills-modal__item"
+            >
+              <input
+                v-model="selectedSources"
+                type="checkbox"
+                :value="candidate.id"
+              />
+              <span class="import-skills-modal__content">
+                <strong>{{ candidate.name }}</strong>
+                <span>{{ candidate.description || '未提供描述' }}</span>
+                <small>{{ candidate.cliNames.join('、') }}</small>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section v-if="conflictItems.length" class="import-skills-modal__section">
+          <h3>同名冲突</h3>
+          <article
+            v-for="conflict in conflictItems"
+            :key="conflict.name"
+            class="import-skills-modal__conflict"
+          >
+            <div class="import-skills-modal__conflict-head">
+              <strong>{{ conflict.name }}</strong>
+              <span>名称相同但内容不同，请选择保留版本</span>
+            </div>
+
+            <label
+              v-for="option in conflict.options"
+              :key="option.id"
+              class="import-skills-modal__item import-skills-modal__item--radio"
+            >
+              <input
+                v-model="selectedConflicts[conflict.name]"
+                type="radio"
+                :name="`skill-conflict-${conflict.name}`"
+                :value="option.id"
+              />
+              <span class="import-skills-modal__content">
+                <strong>{{ option.alreadyManaged ? '保留 Manager 版本' : option.name }}</strong>
+                <span>{{ option.description || '未提供描述' }}</span>
+                <small>{{ option.cliNames.join('、') }}</small>
+              </span>
+            </label>
+          </article>
+        </section>
       </div>
 
       <div class="import-skills-modal__actions">
@@ -35,7 +73,7 @@
         <button
           class="action-button action-button--primary"
           type="submit"
-          :disabled="!selectedNames.length"
+          :disabled="!canSubmit"
         >
           导入选中项
         </button>
@@ -45,50 +83,148 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import BaseModal from '@/components/BaseModal.vue'
 
 const props = defineProps({
   candidates: {
-    type: Array,
+    type: [Array, Object],
     required: true
   }
 })
 
 const emit = defineEmits(['close', 'submit'])
-const selectedNames = ref(props.candidates.map(item => item.name))
+
+const candidateItems = computed(() => {
+  return Array.isArray(props.candidates)
+    ? props.candidates
+    : props.candidates.candidates || []
+})
+const conflictItems = computed(() => {
+  return Array.isArray(props.candidates) ? [] : props.candidates.conflicts || []
+})
+const selectedSources = ref([])
+const selectedConflicts = reactive({})
+const canSubmit = computed(() => {
+  return (
+    selectedSources.value.length ||
+    conflictItems.value.every(item => selectedConflicts[item.name])
+  )
+})
+
+watch(
+  () => props.candidates,
+  () => {
+    selectedSources.value = candidateItems.value.map(item => item.id)
+
+    for (const item of conflictItems.value) {
+      selectedConflicts[item.name] =
+        item.options.find(option => option.alreadyManaged)?.id ||
+        item.options[0]?.id ||
+        ''
+    }
+  },
+  { immediate: true }
+)
 
 function submit() {
-  emit('submit', selectedNames.value)
+  emit('submit', {
+    sourcePaths: candidateItems.value
+      .filter(item => selectedSources.value.includes(item.id))
+      .flatMap(item => [...(item.sourcePaths || [item.id])]),
+    choices: conflictItems.value.map(item => ({
+      name: item.name,
+      id: selectedConflicts[item.name],
+      sourcePaths: [
+        ...(
+          item.options.find(option => option.id === selectedConflicts[item.name])
+            ?.sourcePaths || []
+        )
+      ]
+    }))
+  })
 }
 </script>
 
 <style scoped lang="less">
 .import-skills-modal {
   display: flex;
+  max-height: 620px;
+  min-height: 0;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
 }
 
 .import-skills-modal__summary {
+  display: flex;
+  gap: 8px;
   color: var(--color-text-muted);
-  font-size: 0.88rem;
+  font-size: 0.84rem;
   font-weight: 700;
 }
 
-.import-skills-modal__list {
+.import-skills-modal__summary span {
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--color-primary-soft);
+}
+
+.import-skills-modal__body {
   display: flex;
-  max-height: 360px;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.import-skills-modal__section {
+  display: flex;
   flex-direction: column;
   gap: 8px;
-  overflow: auto;
+}
+
+.import-skills-modal__section h3 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 0.94rem;
+}
+
+.import-skills-modal__list,
+.import-skills-modal__conflict {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.import-skills-modal__conflict {
+  padding: 10px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel-soft);
+}
+
+.import-skills-modal__conflict-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.import-skills-modal__conflict-head strong {
+  color: var(--color-text);
+  font-size: 0.92rem;
+}
+
+.import-skills-modal__conflict-head span {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
 }
 
 .import-skills-modal__item {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 12px;
+  padding: 10px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: var(--color-panel);
@@ -104,6 +240,10 @@ function submit() {
   margin-top: 4px;
 }
 
+.import-skills-modal__item--radio {
+  background: #ffffff;
+}
+
 .import-skills-modal__content {
   display: flex;
   min-width: 0;
@@ -113,22 +253,28 @@ function submit() {
 }
 
 .import-skills-modal__content strong {
+  overflow: hidden;
   color: var(--color-text);
-  font-size: 0.94rem;
+  font-size: 0.9rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .import-skills-modal__content span {
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .import-skills-modal__content small {
+  overflow: hidden;
   color: var(--color-accent);
-  font-size: 0.76rem;
+  font-size: 0.74rem;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .import-skills-modal__actions {
@@ -139,13 +285,14 @@ function submit() {
 }
 
 .action-button {
-  height: 40px;
-  padding: 0 16px;
+  height: 38px;
+  padding: 0 14px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: #fbfcfd;
   color: var(--color-primary);
   cursor: pointer;
+  font-size: 0.88rem;
   font-weight: 600;
 }
 
