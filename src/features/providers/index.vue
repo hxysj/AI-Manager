@@ -37,21 +37,112 @@
           v-if="activeCli === 'codex' && codexAccounts.length"
           class="providers-view__account-panel"
         >
-          <div class="providers-view__section-title">
-            <div>
-              <h2>官方账号</h2>
-              <p>这些账号保存在 AI Manager 内部，不写入系统 Codex 配置。</p>
-            </div>
-          </div>
           <article
             v-for="account in codexAccounts"
             :key="account.id"
             class="providers-view__account-card"
           >
             <ShieldCheck :size="18" />
-            <div>
-              <strong>{{ account.email }}</strong>
-              <span>{{ account.plan || "未识别套餐" }}</span>
+            <div class="providers-view__account-main">
+              <div class="providers-view__account-title">
+                <strong>{{ account.email }}</strong>
+                <span class="providers-view__account-tag">
+                  {{ account.plan || "未识别套餐" }}
+                </span>
+              </div>
+              <div
+                v-if="account.usage?.rate_limit"
+                class="providers-view__account-quota"
+              >
+                <div class="providers-view__quota-header">
+                  <span class="providers-view__quota-label">
+                    <Clock :size="14" />
+                    {{
+                      formatRateWindowName(
+                        account.usage.rate_limit.primary_window
+                          ?.limit_window_seconds
+                      )
+                    }}
+                  </span>
+                  <strong class="providers-view__quota-percent">
+                    {{
+                      formatRatePercent(
+                        account.usage.rate_limit.primary_window?.used_percent
+                      )
+                    }}
+                  </strong>
+                </div>
+                <div class="providers-view__quota-bar">
+                  <span
+                    class="providers-view__quota-fill"
+                    :style="{
+                      width: formatRateWidth(
+                        account.usage.rate_limit.primary_window?.used_percent
+                      )
+                    }"
+                  ></span>
+                </div>
+                <p class="providers-view__quota-meta">
+                  {{
+                    formatResetCountdown(
+                      account.usage.rate_limit.primary_window
+                        ?.reset_after_seconds
+                    )
+                  }}
+                  ({{
+                    formatUnixTime(
+                      account.usage.rate_limit.primary_window?.reset_at
+                    )
+                  }})
+                </p>
+              </div>
+              <label class="providers-view__account-proxy">
+                <span class="providers-view__account-proxy-label">代理</span>
+                <input
+                  class="providers-view__account-proxy-input"
+                  :value="codexAccountProxyDrafts[account.id] || ''"
+                  placeholder="http://127.0.0.1:7890"
+                  @input="updateCodexProxyDraft(account, $event.target.value)"
+                />
+                <button
+                  class="providers-view__icon-button"
+                  type="button"
+                  title="保存代理"
+                  aria-label="保存代理"
+                  @click="saveCodexAccountProxy(account)"
+                >
+                  <Save :size="14" />
+                </button>
+              </label>
+            </div>
+            <div class="providers-view__account-actions">
+              <button
+                class="providers-view__icon-button"
+                type="button"
+                title="刷新额度"
+                aria-label="刷新额度"
+                @click="refreshCodexAccount(account)"
+              >
+                <RefreshCw :size="15" />
+              </button>
+              <button
+                v-if="account.active"
+                class="providers-view__using"
+                type="button"
+                @click="clearCodexAccount"
+              >
+                <X :size="15" />
+                取消启用
+              </button>
+              <button
+                v-else
+                class="providers-view__enable"
+                type="button"
+                @click="enableCodexAccount(account)"
+              >
+                <Play :size="15" />
+                启用
+              </button>
             </div>
           </article>
         </section>
@@ -348,7 +439,7 @@
         <button
           class="providers-view__create-option"
           type="button"
-          @click="startCodexOfficialLogin"
+          @click="openCodexLoginModal"
         >
           <ShieldCheck :size="28" />
           <strong>官方登录</strong>
@@ -370,84 +461,144 @@
     </BaseModal>
 
     <BaseModal
-      v-if="codexLoginState"
+      v-if="showCodexLoginModal"
       class="providers-view__codex-login-modal"
       title="添加 Codex 账号"
-      @close="emit('cancel-codex-official-login')"
+      @close="closeCodexLoginModal"
     >
       <section class="providers-view__login-panel">
         <nav class="providers-view__login-tabs">
           <button
-            class="providers-view__login-tab providers-view__login-tab--active"
+            :class="[
+              'providers-view__login-tab',
+              { 'providers-view__login-tab--active': codexLoginTab === 'oauth' }
+            ]"
             type="button"
+            @click="codexLoginTab = 'oauth'"
           >
             <Globe2 :size="13" />
             OAuth 授权
           </button>
-        </nav>
-        <p class="providers-view__login-intro">
-          点击下方按钮，在浏览器中完成 OpenAI 账号 OAuth 授权。
-        </p>
-        <div
-          v-if="codexLoginState.message"
-          :class="[
-            'providers-view__login-status',
-            `providers-view__login-status--${codexLoginState.status}`
-          ]"
-        >
-          {{ codexLoginState.message }}
-        </div>
-        <label class="providers-view__login-field">
-          <span>授权链接</span>
-          <div class="providers-view__login-copy-row">
-            <input :value="codexLoginState.authUrl" readonly type="text" />
-            <button
-              type="button"
-              title="复制链接"
-              aria-label="复制链接"
-              @click="copyAuthUrl"
-            >
-              <Copy :size="16" />
-            </button>
-          </div>
-        </label>
-        <button
-          class="providers-view__login-primary"
-          type="button"
-          @click="openAuthUrl"
-        >
-          <Globe2 :size="16" />
-          在浏览器中打开
-        </button>
-        <label class="providers-view__login-field">
-          <span>手动输入回调地址</span>
-          <div class="providers-view__login-callback-row">
-            <input
-              v-model.trim="manualCallbackUrl"
-              type="text"
-              placeholder="粘贴完整回调地址，例如：http://localhost..."
-            />
-            <button
-              type="button"
-              :disabled="!manualCallbackUrl"
-              @click="openManualCallbackUrl"
-            >
-              <Check :size="15" />
-              我已授权，继续
-            </button>
-          </div>
-        </label>
-        <div class="providers-view__login-tip">
-          完成授权后，此窗口将自动更新
-        </div>
-        <div
-          v-if="codexLoginState.status === 'pending'"
-          class="providers-view__login-actions"
-        >
-          <button type="button" @click="emit('cancel-codex-official-login')">
-            取消登录
+          <button
+            :class="[
+              'providers-view__login-tab',
+              { 'providers-view__login-tab--active': codexLoginTab === 'auth' }
+            ]"
+            type="button"
+            @click="codexLoginTab = 'auth'"
+          >
+            <ShieldCheck :size="13" />
+            JSON 数据
           </button>
-        </div>
+        </nav>
+
+        <label class="providers-view__login-field">
+          <span>代理地址</span>
+          <input
+            v-model.trim="codexProxyDraft"
+            type="text"
+            placeholder="可选，例如：http://127.0.0.1:7890"
+          />
+        </label>
+
+        <template v-if="codexLoginTab === 'oauth'">
+          <p class="providers-view__login-intro">
+            点击浏览器登录后才会启动本地回调服务并生成授权链接。
+          </p>
+          <div
+            v-if="codexLoginState?.message"
+            :class="[
+              'providers-view__login-status',
+              `providers-view__login-status--${codexLoginState.status}`
+            ]"
+          >
+            {{ codexLoginState.message }}
+          </div>
+          <label
+            v-if="codexLoginState?.authUrl"
+            class="providers-view__login-field"
+          >
+            <span>授权链接</span>
+            <div class="providers-view__login-copy-row">
+              <input :value="codexLoginState.authUrl" readonly type="text" />
+              <button
+                type="button"
+                title="复制链接"
+                aria-label="复制链接"
+                @click="copyAuthUrl"
+              >
+                <Copy :size="16" />
+              </button>
+            </div>
+          </label>
+          <button
+            class="providers-view__login-primary"
+            type="button"
+            :disabled="pending || codexLoginState?.status === 'pending'"
+            @click="startCodexOfficialLogin"
+          >
+            <Globe2 :size="16" />
+            浏览器登录
+          </button>
+          <label
+            v-if="codexLoginState?.authUrl"
+            class="providers-view__login-field"
+          >
+            <span>手动输入回调地址</span>
+            <div class="providers-view__login-callback-row">
+              <input
+                v-model.trim="manualCallbackUrl"
+                type="text"
+                placeholder="粘贴完整回调地址，例如：http://localhost..."
+              />
+              <button
+                type="button"
+                :disabled="!manualCallbackUrl"
+                @click="openManualCallbackUrl"
+              >
+                <Check :size="15" />
+                我已授权，继续
+              </button>
+            </div>
+          </label>
+          <div
+            v-if="codexLoginState?.authUrl"
+            class="providers-view__login-tip"
+          >
+            完成授权后，此窗口将自动更新
+          </div>
+          <div
+            v-if="codexLoginState?.status === 'pending'"
+            class="providers-view__login-actions"
+          >
+            <button type="button" @click="emit('cancel-codex-official-login')">
+              取消登录
+            </button>
+          </div>
+        </template>
+
+        <template v-else>
+          <p class="providers-view__login-intro">
+            粘贴已有 Codex 登录 JSON 数据，AI Manager 会使用 refresh_token
+            刷新并验证账号。
+          </p>
+          <label class="providers-view__login-field">
+            <span>JSON 数据</span>
+            <textarea
+              v-model.trim="codexAuthDataDraft"
+              placeholder='{"access_token":"","account_id":"","id_token":"","refresh_token":""}'
+            />
+          </label>
+          <div class="providers-view__login-actions">
+            <button
+              type="button"
+              :disabled="pending || !codexAuthDataDraft"
+              @click="importCodexAuthData"
+            >
+              解析并验证
+            </button>
+          </div>
+        </template>
       </section>
     </BaseModal>
   </section>
@@ -458,11 +609,13 @@ import { computed, reactive, ref, watch } from "vue"
 import {
   ArrowLeft,
   Check,
+  Clock,
   Copy,
   Globe2,
   GripVertical,
   Play,
   Plus,
+  RefreshCw,
   Save,
   Server,
   ShieldCheck,
@@ -481,7 +634,7 @@ const props = defineProps({
   },
   codexLoginState: {
     type: Object,
-    required: true
+    default: null
   },
   cliTargets: {
     type: Array,
@@ -510,6 +663,11 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
+  "codex-auth-json-import",
+  "codex-account-clear",
+  "codex-account-enable",
+  "codex-account-proxy-save",
+  "codex-account-refresh",
   "codex-official-login",
   "clear-runtime",
   "cancel-codex-official-login",
@@ -569,6 +727,11 @@ const activeCli = ref("")
 const viewMode = ref("list")
 const showIconPicker = ref(false)
 const showCodexCreateOptions = ref(false)
+const showCodexLoginModal = ref(false)
+const codexLoginTab = ref("oauth")
+const codexAuthDataDraft = ref("")
+const codexProxyDraft = ref("")
+const codexAccountProxyDrafts = reactive({})
 const manualCallbackUrl = ref("")
 const iconKeyword = ref("")
 const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
@@ -741,17 +904,24 @@ function startProviderCreate() {
   viewMode.value = "edit"
 }
 
-function startCodexOfficialLogin() {
+function openCodexLoginModal() {
   showCodexCreateOptions.value = false
-  emit("codex-official-login")
+  showCodexLoginModal.value = true
+  codexLoginTab.value = "oauth"
+  manualCallbackUrl.value = ""
+  codexAuthDataDraft.value = ""
+  codexProxyDraft.value = ""
 }
 
-async function openAuthUrl() {
-  try {
-    await window.aiManager.openExternal({ url: props.codexLoginState.authUrl })
-  } catch (error) {
-    createMessage.error(error.message || String(error))
-  }
+function closeCodexLoginModal() {
+  showCodexLoginModal.value = false
+  emit("cancel-codex-official-login")
+}
+
+function startCodexOfficialLogin() {
+  emit("codex-official-login", {
+    proxy: codexProxyDraft.value
+  })
 }
 
 async function copyAuthUrl() {
@@ -769,6 +939,96 @@ async function openManualCallbackUrl() {
   } catch (error) {
     createMessage.error(error.message || String(error))
   }
+}
+
+function importCodexAuthData() {
+  emit("codex-auth-json-import", {
+    content: codexAuthDataDraft.value,
+    proxy: codexProxyDraft.value
+  })
+}
+
+function enableCodexAccount(account) {
+  emit("codex-account-enable", {
+    accountId: account.id
+  })
+}
+
+function clearCodexAccount() {
+  emit("codex-account-clear")
+}
+
+function updateCodexProxyDraft(account, value) {
+  codexAccountProxyDrafts[account.id] = value
+}
+
+function saveCodexAccountProxy(account) {
+  emit("codex-account-proxy-save", {
+    accountId: account.id,
+    proxy: codexAccountProxyDrafts[account.id] || ""
+  })
+}
+
+function formatRateWindowName(value) {
+  const seconds = Number(value || 0)
+
+  if (seconds % 86400 === 0) {
+    return seconds / 86400 === 7 ? "Weekly" : `${seconds / 86400}天`
+  }
+
+  if (seconds % 3600 === 0) {
+    return `${seconds / 3600}小时`
+  }
+
+  return `${seconds}秒`
+}
+
+function formatRatePercent(value) {
+  return `${Number(value || 0)}%`
+}
+
+function formatRateWidth(value) {
+  const percent = Number(value || 0)
+
+  if (percent < 0) {
+    return "0%"
+  }
+
+  if (percent > 100) {
+    return "100%"
+  }
+
+  return `${percent}%`
+}
+
+function formatResetCountdown(value) {
+  const seconds = Number(value || 0)
+  const days = Math.floor(seconds / 86400)
+  const hours = Math.floor((seconds % 86400) / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+
+  return `${days}d ${hours}h ${minutes}m`
+}
+
+function formatUnixTime(value) {
+  const timestamp = Number(value || 0)
+
+  if (!timestamp) {
+    return "重置时间未知"
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(timestamp * 1000))
+}
+
+function refreshCodexAccount(account) {
+  emit("codex-account-refresh", {
+    accountId: account.id
+  })
 }
 
 function clearDraft() {
@@ -892,6 +1152,16 @@ watch(
   () => [visibleCliTargets.value, props.providers],
   () => {
     ensureActiveCli()
+  },
+  { deep: true, immediate: true }
+)
+
+watch(
+  () => props.codexAccounts,
+  (accounts) => {
+    accounts.forEach((account) => {
+      codexAccountProxyDrafts[account.id] = account.proxy || ""
+    })
   },
   { deep: true, immediate: true }
 )
@@ -1070,29 +1340,123 @@ watch(
 
   &__account-card {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 12px;
     padding: 14px 16px;
     border: 1px solid #bfe5ce;
     border-radius: 12px;
-    background: #f0fbf4;
-    color: #17803d;
   }
 
-  &__account-card div {
+  &__account-main {
     display: flex;
     min-width: 0;
+    flex: 1;
     flex-direction: column;
     gap: 5px;
+  }
+
+  &__account-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
 
   &__account-card strong {
     color: #111827;
   }
 
-  &__account-card span {
+  &__account-tag {
+    padding: 2px 8px;
+    border: 1px solid #cdebd7;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #17803d;
+    font-size: 0.76rem;
+    line-height: 1.4;
+  }
+
+  &__account-quota {
+    display: flex;
+    width: 312px;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 4px;
+  }
+
+  &__quota-meta {
+    margin: 0;
     color: #667085;
-    font-size: 0.86rem;
+    font-size: 0.76rem;
+    text-align: right;
+  }
+
+  &__quota-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  &__quota-label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: #667085;
+    font-size: 0.82rem;
+  }
+
+  &__quota-percent {
+    color: #22c55e;
+    font-size: 0.88rem;
+  }
+
+  &__quota-bar {
+    overflow: hidden;
+    height: 6px;
+    border-radius: 999px;
+    background: #dbeee2;
+  }
+
+  &__quota-fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: #22c55e;
+  }
+
+  &__account-proxy {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 5px;
+  }
+
+  &__account-proxy-label {
+    flex: none;
+    color: #667085;
+    font-size: 0.78rem;
+  }
+
+  &__account-proxy-input {
+    width: 250px;
+    height: 30px;
+    padding: 0 9px;
+    border: 1px solid #dfe3e8;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #111827;
+    font-size: 0.82rem;
+    outline: none;
+  }
+
+  &__account-proxy-input:focus {
+    border-color: #1682ff;
+  }
+
+  &__account-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 15px;
   }
 
   &__drag {
@@ -1588,7 +1952,7 @@ watch(
     border-radius: 7px;
     background: transparent;
     color: #526176;
-    cursor: default;
+    cursor: pointer;
     font-size: 0.72rem;
     font-weight: 700;
     white-space: nowrap;
@@ -1626,9 +1990,10 @@ watch(
 
   &__login-copy-row input,
   &__login-callback-row input,
+  &__login-field input,
+  &__login-field textarea,
   &__login-tip {
     min-width: 0;
-    height: 36px;
     padding: 0 12px;
     border: 1px solid #d8e0eb;
     border-radius: 10px;
@@ -1636,6 +2001,20 @@ watch(
     color: #526176;
     font-size: 0.78rem;
     font-weight: 700;
+  }
+
+  &__login-copy-row input,
+  &__login-callback-row input,
+  &__login-field input,
+  &__login-tip {
+    height: 36px;
+  }
+
+  &__login-field textarea {
+    height: 160px;
+    padding: 12px;
+    line-height: 1.55;
+    resize: none;
   }
 
   &__login-copy-row input,
@@ -1676,6 +2055,11 @@ watch(
     font-weight: 800;
   }
 
+  &__login-primary:disabled {
+    cursor: not-allowed;
+    opacity: 0.52;
+  }
+
   &__login-callback-row button {
     flex: none;
     gap: 6px;
@@ -1707,6 +2091,11 @@ watch(
       color: #172033;
       cursor: pointer;
       font-weight: 700;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.52;
     }
   }
 
