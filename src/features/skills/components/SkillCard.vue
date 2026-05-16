@@ -68,9 +68,9 @@
 </template>
 
 <script setup>
-import { FolderOpen } from 'lucide-vue-next'
-import AiIcon from '@/components/AiIcon.vue'
-import { formatDateTime, formatStatusLabel } from '@/utils/formatters'
+import { FolderOpen } from "lucide-vue-next"
+import AiIcon from "@/components/AiIcon.vue"
+import { formatDateTime, formatStatusLabel } from "@/utils/formatters"
 
 const props = defineProps({
   cliTargets: {
@@ -83,7 +83,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['select', 'open-source', 'install', 'uninstall'])
+const emit = defineEmits(["select", "open-source", "install", "uninstall"])
 
 function toggleCliSkill(cli) {
   const state = props.skill.installStates[cli.id]?.state
@@ -92,16 +92,16 @@ function toggleCliSkill(cli) {
     targetId: cli.id
   }
 
-  if (state === 'installed') {
-    emit('uninstall', payload)
+  if (state === "installed") {
+    emit("uninstall", payload)
     return
   }
 
-  emit('install', payload)
+  emit("install", payload)
 }
 
 function toFileUrl(value) {
-  return encodeURI(`file:///${String(value).replace(/\\/g, '/')}`)
+  return encodeURI(`file:///${String(value).replace(/\\/g, "/")}`)
 }
 </script>
 
@@ -109,10 +109,9 @@ function toFileUrl(value) {
 .skill-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 18px;
+  gap: 14px;
   align-items: center;
-  min-height: 56px;
-  padding: 10px 16px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--color-line);
   background: var(--color-panel);
   cursor: pointer;
@@ -133,14 +132,14 @@ function toFileUrl(value) {
 .skill-card__title-row {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 .skill-card__title {
   margin: 0;
   color: var(--color-text);
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   line-height: 1.2;
 }
 
@@ -149,7 +148,7 @@ function toFileUrl(value) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   line-height: 1.2;
 }
 
@@ -187,7 +186,7 @@ function toFileUrl(value) {
   overflow: hidden;
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 0.84rem;
+  font-size: 0.78rem;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -195,30 +194,30 @@ function toFileUrl(value) {
 
 .skill-card__meta {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   overflow: hidden;
   color: var(--color-text-soft);
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   white-space: nowrap;
 }
 
 .skill-card__indicators {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .skill-card__icon,
 .skill-card__target-pill,
 .skill-card__action {
   display: inline-grid;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   place-items: center;
   border: 1px solid var(--color-line);
   border-radius: 50%;
   color: var(--color-text-muted);
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   font-weight: 700;
   overflow: hidden;
 }
@@ -235,8 +234,8 @@ function toFileUrl(value) {
 }
 
 .skill-card__target-icon {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   object-fit: contain;
 }
 

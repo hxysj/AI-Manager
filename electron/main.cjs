@@ -1,19 +1,19 @@
-const path = require('node:path')
-const fs = require('node:fs')
-const os = require('node:os')
-const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require('electron')
-const { ManagerService } = require('./services/manager-service.cjs')
-const { TranslationService } = require('./services/translation-service.cjs')
+const path = require("node:path")
+const fs = require("node:fs")
+const os = require("node:os")
+const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require("electron")
+const { ManagerService } = require("./services/manager-service.cjs")
+const { TranslationService } = require("./services/translation-service.cjs")
 
 let mainWindow = null
 let managerService = null
 let translationService = null
-const defaultUserDataPath = 'D:\\ai-manager-data'
-const settingsFilePath = path.join(defaultUserDataPath, 'app-settings.json')
+const defaultUserDataPath = "D:\\ai-manager-data"
+const settingsFilePath = path.join(defaultUserDataPath, "app-settings.json")
 const defaultCliConfigPaths = {
-  claude: path.join(os.homedir(), '.claude'),
-  codex: path.join(os.homedir(), '.codex'),
-  gemini: path.join(os.homedir(), '.gemini')
+  claude: path.join(os.homedir(), ".claude"),
+  codex: path.join(os.homedir(), ".codex"),
+  gemini: path.join(os.homedir(), ".gemini")
 }
 
 function normalizeAppSettings(input = {}) {
@@ -39,7 +39,7 @@ function normalizeAppSettings(input = {}) {
 function loadAppSettings() {
   try {
     return normalizeAppSettings(
-      JSON.parse(fs.readFileSync(settingsFilePath, 'utf8'))
+      JSON.parse(fs.readFileSync(settingsFilePath, "utf8"))
     )
   } catch {
     return normalizeAppSettings()
@@ -51,7 +51,7 @@ function saveAppSettings(nextSettings) {
   fs.writeFileSync(
     settingsFilePath,
     `${JSON.stringify(nextSettings, null, 2)}\n`,
-    'utf8'
+    "utf8"
   )
 }
 
@@ -59,7 +59,7 @@ let appSettings = loadAppSettings()
 const userDataPath = appSettings.dataPath
 
 fs.mkdirSync(userDataPath, { recursive: true })
-app.setPath('userData', userDataPath)
+app.setPath("userData", userDataPath)
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
@@ -67,11 +67,11 @@ async function createWindow() {
     height: 980,
     minWidth: 1200,
     minHeight: 760,
-    backgroundColor: '#ffffff',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    backgroundColor: "#ffffff",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     autoHideMenuBar: true,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false
     }
@@ -82,17 +82,17 @@ async function createWindow() {
   if (devServerUrl) {
     await mainWindow.loadURL(devServerUrl)
   } else {
-    await mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
+    await mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"))
   }
 
-  mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && input.key === 'F12') {
+  mainWindow.webContents.on("before-input-event", (event, input) => {
+    if (input.type === "keyDown" && input.key === "F12") {
       mainWindow.webContents.toggleDevTools()
       event.preventDefault()
     }
   })
 
-  mainWindow.webContents.on('context-menu', (_, params) => {
+  mainWindow.webContents.on("context-menu", (_, params) => {
     const selectedText = params.selectionText.trim()
 
     if (!selectedText) {
@@ -101,9 +101,9 @@ async function createWindow() {
 
     Menu.buildFromTemplate([
       {
-        label: '翻译选中文本',
+        label: "翻译选中文本",
         click: () => {
-          mainWindow.webContents.send('translation:selection-requested', {
+          mainWindow.webContents.send("translation:selection-requested", {
             text: selectedText,
             x: params.x,
             y: params.y
@@ -113,16 +113,16 @@ async function createWindow() {
     ]).popup({ window: mainWindow })
   })
 
-  mainWindow.on('closed', () => {
+  mainWindow.on("closed", () => {
     mainWindow = null
   })
 }
 
 function registerIpc() {
-  ipcMain.handle('app:bootstrap', async () => managerService.getState())
-  ipcMain.handle('app:refresh', async () => managerService.refreshAll())
+  ipcMain.handle("app:bootstrap", async () => managerService.getState())
+  ipcMain.handle("app:refresh", async () => managerService.refreshAll())
 
-  ipcMain.handle('settings:save', async (_, payload) => {
+  ipcMain.handle("settings:save", async (_, payload) => {
     const nextSettings = normalizeAppSettings(payload)
     fs.mkdirSync(nextSettings.dataPath, { recursive: true })
     saveAppSettings(nextSettings)
@@ -130,7 +130,7 @@ function registerIpc() {
 
     if (
       path.resolve(nextSettings.dataPath) !==
-      path.resolve(app.getPath('userData'))
+      path.resolve(app.getPath("userData"))
     ) {
       await managerService.updateAppSettings(appSettings)
       managerService.setAppSettings(appSettings, true)
@@ -141,117 +141,133 @@ function registerIpc() {
     return managerService.getState()
   })
 
-  ipcMain.handle('system:select-directory', async (_, payload) => {
+  ipcMain.handle("system:select-directory", async (_, payload) => {
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: payload?.title || '选择目录',
-      defaultPath: payload?.defaultPath || app.getPath('home'),
-      properties: ['openDirectory', 'createDirectory']
+      title: payload?.title || "选择目录",
+      defaultPath: payload?.defaultPath || app.getPath("home"),
+      properties: ["openDirectory", "createDirectory"]
     })
 
-    return result.canceled ? '' : result.filePaths[0]
+    return result.canceled ? "" : result.filePaths[0]
   })
 
-  ipcMain.handle('skill:create', async (_, payload) => {
+  ipcMain.handle("system:select-file", async (_, payload) => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: payload?.title || "选择文件",
+      defaultPath: payload?.defaultPath || app.getPath("home"),
+      filters: payload?.filters || [],
+      properties: ["openFile"]
+    })
+
+    return result.canceled ? "" : result.filePaths[0]
+  })
+
+  ipcMain.handle("skill:create", async (_, payload) => {
     await managerService.createSkill(payload)
     return managerService.getState()
   })
 
-  ipcMain.handle('skill:preview-import-from-cli', async (_, payload) => {
+  ipcMain.handle("skill:preview-import-from-cli", async (_, payload) => {
     return managerService.previewSkillsFromCli(payload?.targetId)
   })
 
-  ipcMain.handle('skill:import-from-cli', async (_, payload) => {
-    await managerService.importSkillsFromCli(payload?.targetId, payload?.skillNames)
+  ipcMain.handle("skill:import-from-cli", async (_, payload) => {
+    await managerService.importSkillsFromCli(payload?.targetId, payload)
     return managerService.getState()
   })
 
-  ipcMain.handle('skill:install', async (_, payload) => {
+  ipcMain.handle("skill:import-from-zip", async (_, payload) => {
+    await managerService.importSkillFromZip(payload?.zipPath)
+    return managerService.getState()
+  })
+
+  ipcMain.handle("skill:install", async (_, payload) => {
     await managerService.installSkill(payload.skillName, payload.targetId)
     return managerService.getState()
   })
 
-  ipcMain.handle('skill:uninstall', async (_, payload) => {
+  ipcMain.handle("skill:uninstall", async (_, payload) => {
     await managerService.uninstallSkill(payload.skillName, payload.targetId)
     return managerService.getState()
   })
 
-  ipcMain.handle('skill:repair', async (_, payload) => {
+  ipcMain.handle("skill:repair", async (_, payload) => {
     await managerService.repairSkill(payload.skillName, payload.targetId)
     return managerService.getState()
   })
 
-  ipcMain.handle('repo:add', async (_, payload) => {
+  ipcMain.handle("repo:add", async (_, payload) => {
     await managerService.addRepo(payload)
     return managerService.getState()
   })
 
-  ipcMain.handle('repo:sync', async (_, payload) => {
+  ipcMain.handle("repo:sync", async (_, payload) => {
     await managerService.syncRepo(payload.repoId)
     return managerService.getState()
   })
 
-  ipcMain.handle('repo:sync-all', async () => {
+  ipcMain.handle("repo:sync-all", async () => {
     await managerService.syncAllRepos()
     return managerService.getState()
   })
 
-  ipcMain.handle('repo:remove', async (_, payload) => {
+  ipcMain.handle("repo:remove", async (_, payload) => {
     await managerService.removeRepo(payload.repoId)
     return managerService.getState()
   })
 
-  ipcMain.handle('session:search', async (_, payload) => {
+  ipcMain.handle("session:search", async (_, payload) => {
     return managerService.searchSessions(payload?.query)
   })
 
-  ipcMain.handle('session:messages', async (_, payload) => {
+  ipcMain.handle("session:messages", async (_, payload) => {
     return managerService.loadSessionMessages(payload?.sessionId)
   })
 
-  ipcMain.handle('session:delete', async (_, payload) => {
+  ipcMain.handle("session:delete", async (_, payload) => {
     await managerService.deleteSession(payload.sessionId)
     return managerService.getState()
   })
 
-  ipcMain.handle('session:recycle-list', async () => {
+  ipcMain.handle("session:recycle-list", async () => {
     return managerService.listRecycledSessions()
   })
 
-  ipcMain.handle('session:restore', async (_, payload) => {
+  ipcMain.handle("session:restore", async (_, payload) => {
     await managerService.restoreSession(payload.sessionId)
     return managerService.getState()
   })
 
-  ipcMain.handle('session:purge', async (_, payload) => {
+  ipcMain.handle("session:purge", async (_, payload) => {
     await managerService.purgeSession(payload.sessionId)
     return true
   })
 
-  ipcMain.handle('provider:save', async (_, payload) => {
+  ipcMain.handle("provider:save", async (_, payload) => {
     return managerService.saveProvider(payload)
   })
 
-  ipcMain.handle('provider:delete', async (_, payload) => {
+  ipcMain.handle("provider:delete", async (_, payload) => {
     return managerService.deleteProvider(payload.providerId)
   })
 
-  ipcMain.handle('runtime-model:save', async (_, payload) => {
+  ipcMain.handle("runtime-model:save", async (_, payload) => {
     return managerService.saveRuntimeModel(payload)
   })
 
-  ipcMain.handle('runtime:switch', async (_, payload) => {
+  ipcMain.handle("runtime:switch", async (_, payload) => {
     return managerService.switchRuntime(payload)
   })
 
-  ipcMain.handle('runtime:clear', async (_, payload) => {
+  ipcMain.handle("runtime:clear", async (_, payload) => {
     return managerService.clearRuntime(payload.cli)
   })
 
-  ipcMain.handle('runtime:env', async (_, payload) => {
+  ipcMain.handle("runtime:env", async (_, payload) => {
     return managerService.buildRuntimeEnv(payload.cli)
   })
 
-  ipcMain.handle('system:open-path', async (_, payload) => {
+  ipcMain.handle("system:open-path", async (_, payload) => {
     if (!payload?.targetPath) {
       return false
     }
@@ -265,38 +281,38 @@ function registerIpc() {
     return true
   })
 
-  ipcMain.handle('translation:translate', async (_, payload) => {
+  ipcMain.handle("translation:translate", async (_, payload) => {
     return translationService.translate(payload?.text)
   })
 }
 
 app.whenReady().then(async () => {
-  managerService = new ManagerService(app.getPath('userData'), appSettings)
-  translationService = new TranslationService(app.getPath('userData'))
+  managerService = new ManagerService(app.getPath("userData"), appSettings)
+  translationService = new TranslationService(app.getPath("userData"))
   await managerService.init()
-  managerService.on('state-changed', state => {
+  managerService.on("state-changed", (state) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('state:changed', state)
+      mainWindow.webContents.send("state:changed", state)
     }
   })
 
   registerIpc()
   await createWindow()
 
-  app.on('activate', async () => {
+  app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       await createWindow()
     }
   })
 })
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
     app.quit()
   }
 })
 
-app.on('before-quit', async () => {
+app.on("before-quit", async () => {
   if (managerService) {
     await managerService.dispose()
   }

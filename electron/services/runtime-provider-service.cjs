@@ -56,12 +56,7 @@ const runtimeConfigSchemas = {
       { key: "teammatesMode", label: "Teammates 模式", type: "boolean" },
       { key: "toolSearch", label: "启用 Tool Search", type: "boolean" },
       { key: "maxThinking", label: "最大强度思考", type: "boolean" },
-      { key: "disableUpgrade", label: "禁用自动升级", type: "boolean" },
-      {
-        key: "writeCommonConfig",
-        label: "写入通用配置",
-        type: "boolean"
-      }
+      { key: "disableUpgrade", label: "禁用自动升级", type: "boolean" }
     ],
     configFiles: [
       {
@@ -70,15 +65,29 @@ const runtimeConfigSchemas = {
         description: "Claude settings.json 配置内容",
         template: `{
   "env": {
+{{#hasApiKey}}
     "{{authField}}": "{{apiKey}}",
+{{/hasApiKey}}
+{{#hasBaseUrl}}
     "ANTHROPIC_BASE_URL": "{{baseUrl}}",
+{{/hasBaseUrl}}
+{{#hasMainModel}}
     "ANTHROPIC_MODEL": "{{mainModel}}",
+{{/hasMainModel}}
+{{#hasHaikuModel}}
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{haikuModel}}",
+{{/hasHaikuModel}}
+{{#hasOpusModel}}
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{opusModel}}",
+{{/hasOpusModel}}
+{{#hasSonnetModel}}
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{sonnetModel}}",
-    "ENABLE_TOOL_SEARCH": "{{toolSearchText}}"
+{{/hasSonnetModel}}
+{{#toolSearch}}
+    "ENABLE_TOOL_SEARCH": "{{toolSearchText}}",
+{{/toolSearch}}
 {{#disableUpgrade}}
-    ,"DISABLE_${"AUTO"}UPDATER": "{{disableUpgradeText}}"
+    "DISABLE_${"AUTO"}UPDATER": "{{disableUpgradeText}}",
 {{/disableUpgrade}}
   },
   "enabledPlugins": {},
@@ -88,13 +97,13 @@ const runtimeConfigSchemas = {
   "teammateMode": "{{teammateMode}}",
 {{/teammatesMode}}
   "effortLevel": "{{effortLevel}}"
-{{#writeCommonConfig}}
+{{#hideAiSignature}}
   ,
   "attribution": {
     "commit": "",
     "pr": ""
   }
-{{/writeCommonConfig}}
+{{/hideAiSignature}}
 }`
       }
     ]
@@ -230,10 +239,6 @@ function normalizeRuntimeConfig(value) {
       value.teammatesMode === undefined ? true : Boolean(value.teammatesMode),
     maxThinking:
       value.maxThinking === undefined ? true : Boolean(value.maxThinking),
-    writeCommonConfig:
-      value.writeCommonConfig === undefined
-        ? true
-        : Boolean(value.writeCommonConfig),
     modelContextWindowEnabled: Boolean(value.modelContextWindowEnabled),
     serviceTierFast: Boolean(value.serviceTierFast),
     modelReasoningEffort:
@@ -253,28 +258,41 @@ function applyTemplate(template, values) {
       values[key] ? content : ""
     )
     .replace(/\{\{(\w+)}}/g, (match, key) => values[key] ?? match)
+    .replace(/,(\s*[}\]])/g, "$1")
+    .replace(/^[\t ]*\r?\n/gm, "")
 }
 
 function createTemplateValues(provider, profile, apiKey) {
   const runtimeConfig = provider.runtimeConfig || {}
+  const mainModel =
+    runtimeConfig.mainModel || (provider.cli === "claude" ? "" : profile.model)
+  const haikuModel = runtimeConfig.haikuModel || ""
+  const sonnetModel = runtimeConfig.sonnetModel || ""
+  const opusModel = runtimeConfig.opusModel || ""
 
   return {
     authField: provider.authField || "ANTHROPIC_AUTH_TOKEN",
     apiKey,
+    hasApiKey: Boolean(apiKey),
     baseUrl: profile.baseUrl || provider.baseUrl || "",
-    mainModel: runtimeConfig.mainModel || profile.model,
-    haikuModel: runtimeConfig.haikuModel || profile.model,
-    sonnetModel: runtimeConfig.sonnetModel || profile.model,
-    opusModel: runtimeConfig.opusModel || profile.model,
+    hasBaseUrl: Boolean(profile.baseUrl || provider.baseUrl),
+    mainModel,
+    hasMainModel: Boolean(mainModel),
+    haikuModel,
+    hasHaikuModel: Boolean(haikuModel),
+    sonnetModel,
+    hasSonnetModel: Boolean(sonnetModel),
+    opusModel,
+    hasOpusModel: Boolean(opusModel),
     toolSearch: runtimeConfig.toolSearch,
     toolSearchText: runtimeConfig.toolSearch ? "true" : "false",
     disableUpgrade: runtimeConfig.disableUpgrade,
     disableUpgradeText: runtimeConfig.disableUpgrade ? "1" : "0",
     includeCoAuthoredBy: String(!runtimeConfig.hideAiSignature),
+    hideAiSignature: runtimeConfig.hideAiSignature,
     teammatesMode: runtimeConfig.teammatesMode,
     teammateMode: "tmux",
     effortLevel: runtimeConfig.maxThinking ? "max" : "default",
-    writeCommonConfig: runtimeConfig.writeCommonConfig,
     modelContextWindowEnabled: runtimeConfig.modelContextWindowEnabled,
     serviceTierFast: runtimeConfig.serviceTierFast,
     modelReasoningEffort: runtimeConfig.modelReasoningEffort || "low",

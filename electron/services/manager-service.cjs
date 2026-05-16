@@ -1,6 +1,10 @@
 const fs = require("node:fs/promises")
+const os = require("node:os")
 const path = require("node:path")
+const crypto = require("node:crypto")
+const { execFile } = require("node:child_process")
 const { EventEmitter } = require("node:events")
+const { promisify } = require("node:util")
 const {
   resolveAppPaths,
   ensureAppDirectories,
@@ -14,9 +18,9 @@ const { LinkManager } = require("./link-manager.cjs")
 const { RepoService } = require("./repo-service.cjs")
 const { FileWatcherService } = require("./file-watcher-service.cjs")
 const { SessionService } = require("./session-service.cjs")
-const {
-  RuntimeProviderService
-} = require("./runtime-provider-service.cjs")
+const { RuntimeProviderService } = require("./runtime-provider-service.cjs")
+
+const execFileAsync = promisify(execFile)
 
 async function pathExists(targetPath) {
   try {
@@ -29,6 +33,68 @@ async function pathExists(targetPath) {
 
 function sortByName(items) {
   return [...items].sort((left, right) => left.name.localeCompare(right.name))
+}
+
+async function collectSkillFiles(rootPath) {
+  const files = []
+
+  const visit = async (currentPath) => {
+    const entries = await fs.readdir(currentPath, { withFileTypes: true })
+
+    for (const entry of entries.sort((left, right) =>
+      left.name.localeCompare(right.name)
+    )) {
+      const entryPath = path.join(currentPath, entry.name)
+      const stat = await fs.lstat(entryPath)
+
+      if (stat.isSymbolicLink()) {
+        continue
+      }
+
+      if (stat.isDirectory()) {
+        await visit(entryPath)
+        continue
+      }
+
+      if (stat.isFile()) {
+        const content = await fs.readFile(entryPath)
+
+        files.push({
+          path: path.relative(rootPath, entryPath).replace(/\\/g, "/"),
+          ext: path.extname(entryPath).toLowerCase(),
+          hash: crypto.createHash("sha1").update(content).digest("hex")
+        })
+      }
+    }
+  }
+
+  await visit(rootPath)
+  return files
+}
+
+async function createSkillSignature(skill) {
+  const payload = {
+    name: skill.name,
+    description: skill.description || "",
+    files: await collectSkillFiles(skill.sourcePath)
+  }
+
+  return crypto.createHash("sha1").update(JSON.stringify(payload)).digest("hex")
+}
+
+async function extractZip(zipPath, targetPath) {
+  await execFileAsync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
+      zipPath,
+      targetPath
+    ],
+    { windowsHide: true }
+  )
 }
 
 class ManagerService extends EventEmitter {
@@ -461,6 +527,99 @@ class ManagerService extends EventEmitter {
     await this.refreshAll()
   }
 
+  async importSkillFromZip(zipPath) {
+    const sourceZipPath = String(zipPath || "").trim()
+
+    if (!sourceZipPath) {
+      throw new Error("请选择 Skill zip 压缩包")
+    }
+
+    if (path.extname(sourceZipPath).toLowerCase() !== ".zip") {
+      throw new Error("只能导入 zip 压缩包")
+    }
+
+    if (!(await pathExists(sourceZipPath))) {
+      throw new Error("zip 压缩包不存在")
+    }
+
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-manager-skill-")
+    )
+
+    try {
+      await extractZip(sourceZipPath, tempRoot)
+      const scannedItems = await this.skillScanner.scanRoot(tempRoot)
+
+      if (!scannedItems.length) {
+        throw new Error("zip 压缩包中未找到 SKILL.md")
+      }
+
+      const parsedSkills = []
+      const seenNames = new Set()
+
+      for (const scannedItem of scannedItems) {
+        const parsed = await this.metadataParser.parse(scannedItem.skillRoot)
+
+        if (seenNames.has(parsed.name)) {
+          throw new Error(`zip 压缩包中存在重复 Skill 名称：${parsed.name}`)
+        }
+
+        seenNames.add(parsed.name)
+        parsedSkills.push({
+          ...parsed,
+          sourcePath: scannedItem.skillRoot
+        })
+      }
+
+      const importItems = []
+
+      for (const parsed of parsedSkills) {
+        const directoryName =
+          slugifyName(parsed.name) || path.basename(parsed.sourcePath)
+        const managedPath = path.join(this.paths.skillsDir, directoryName)
+        const existingSkill = this.state.skills.find(
+          (item) => item.name === parsed.name
+        )
+
+        if (existingSkill) {
+          const incomingSignature = await createSkillSignature(parsed)
+          const existingSignature = await createSkillSignature(existingSkill)
+
+          if (incomingSignature === existingSignature) {
+            continue
+          }
+
+          throw new Error(
+            `Skill 名称已存在，请先处理同名 Skill：${parsed.name}`
+          )
+        }
+
+        if (await pathExists(managedPath)) {
+          throw new Error(`集中目录已存在同名目录：${managedPath}`)
+        }
+
+        importItems.push({
+          sourcePath: parsed.sourcePath,
+          managedPath
+        })
+      }
+
+      if (!importItems.length) {
+        throw new Error("zip 压缩包中的 Skill 已存在，无需重复导入")
+      }
+
+      for (const item of importItems) {
+        await fs.cp(item.sourcePath, item.managedPath, {
+          recursive: true
+        })
+      }
+
+      await this.refreshAll()
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true })
+    }
+  }
+
   async collectCliSkillImports(targetId) {
     const detectedTargets = targetId
       ? [await this.cliDetectionService.getAdapter(targetId).detect()]
@@ -516,13 +675,6 @@ class ManagerService extends EventEmitter {
           path.join(this.paths.skillsDir, directoryName)
         const mountedPath = path.join(cliTarget.skillsPath, parsed.name)
 
-        if (
-          path.resolve(sourcePath) !== path.resolve(mountedPath) &&
-          (await pathExists(mountedPath))
-        ) {
-          throw new Error(`目标 CLI 路径已被占用：${mountedPath}`)
-        }
-
         if (managedPaths.has(parsed.name)) {
           mounts.push({
             name: parsed.name,
@@ -531,7 +683,11 @@ class ManagerService extends EventEmitter {
             cliName: cliTarget.name,
             sourcePath,
             managedPath,
-            mountedPath
+            mountedPath,
+            signature: await createSkillSignature({
+              ...parsed,
+              sourcePath
+            })
           })
           continue
         }
@@ -548,7 +704,11 @@ class ManagerService extends EventEmitter {
           cliName: cliTarget.name,
           sourcePath,
           managedPath,
-          mountedPath
+          mountedPath,
+          signature: await createSkillSignature({
+            ...parsed,
+            sourcePath
+          })
         })
       }
     }
@@ -558,39 +718,179 @@ class ManagerService extends EventEmitter {
 
   async previewSkillsFromCli(targetId) {
     const { imports, mounts } = await this.collectCliSkillImports(targetId)
-    const itemMap = new Map()
+    const managedSignatures = new Map()
+    const candidateGroups = new Map()
 
-    for (const candidate of [...imports, ...mounts]) {
-      const item = itemMap.get(candidate.name) || {
-        name: candidate.name,
-        description: candidate.description,
-        cliNames: [],
-        sourcePaths: [],
-        alreadyManaged: !imports.find((entry) => entry.name === candidate.name)
-      }
-
-      item.cliNames.push(candidate.cliName)
-      item.sourcePaths.push(candidate.sourcePath)
-      itemMap.set(candidate.name, item)
+    for (const skill of this.state.skills) {
+      managedSignatures.set(skill.name, await createSkillSignature(skill))
     }
 
-    return Array.from(itemMap.values()).sort((left, right) =>
-      left.name.localeCompare(right.name)
-    )
+    for (const candidate of [...imports, ...mounts]) {
+      const nameGroups = candidateGroups.get(candidate.name) || new Map()
+      const group = nameGroups.get(candidate.signature) || {
+        name: candidate.name,
+        description: candidate.description,
+        signature: candidate.signature,
+        cliNames: [],
+        sourcePaths: [],
+        items: []
+      }
+
+      group.cliNames.push(candidate.cliName)
+      group.sourcePaths.push(candidate.sourcePath)
+      group.items.push(candidate)
+      nameGroups.set(candidate.signature, group)
+      candidateGroups.set(candidate.name, nameGroups)
+    }
+
+    const candidates = []
+    const conflicts = []
+
+    for (const [name, signatureGroups] of candidateGroups) {
+      const groups = Array.from(signatureGroups.values())
+      const managedSignature = managedSignatures.get(name)
+      const managedSkill = this.state.skills.find((item) => item.name === name)
+      const managedGroups = managedSignature
+        ? groups.filter((group) => group.signature === managedSignature)
+        : []
+      const newGroups = managedSignature
+        ? groups.filter((group) => group.signature !== managedSignature)
+        : groups
+
+      for (const group of managedGroups) {
+        candidates.push({
+          ...group,
+          id: group.sourcePaths[0],
+          alreadyManaged: true
+        })
+      }
+
+      if (!newGroups.length) {
+        continue
+      }
+
+      if (managedSkill) {
+        conflicts.push({
+          name,
+          options: [
+            {
+              id: `managed:${managedSkill.sourcePath}`,
+              name: managedSkill.name,
+              description: managedSkill.description,
+              signature: managedSignature,
+              cliNames: ["AI Manager"],
+              sourcePaths: [managedSkill.sourcePath],
+              alreadyManaged: true
+            },
+            ...newGroups.map((group) => ({
+              ...group,
+              id: group.sourcePaths[0],
+              alreadyManaged: true
+            }))
+          ]
+        })
+        continue
+      }
+
+      if (newGroups.length === 1) {
+        candidates.push({
+          ...newGroups[0],
+          id: newGroups[0].sourcePaths[0],
+          alreadyManaged: false
+        })
+        continue
+      }
+
+      conflicts.push({
+        name,
+        options: newGroups.map((group) => ({
+          ...group,
+          id: group.sourcePaths[0],
+          alreadyManaged: managedSignatures.has(name)
+        }))
+      })
+    }
+
+    return {
+      candidates: candidates.sort((left, right) =>
+        left.name.localeCompare(right.name)
+      ),
+      conflicts: conflicts.sort((left, right) =>
+        left.name.localeCompare(right.name)
+      )
+    }
   }
 
-  async importSkillsFromCli(targetId, skillNames) {
+  async importSkillsFromCli(targetId, payload) {
     const { imports, mounts } = await this.collectCliSkillImports(targetId)
-    const allNames = [...imports, ...mounts].map((item) => item.name)
-    const selectedNames = new Set(skillNames || allNames)
+    const allCandidates = [...imports, ...mounts]
+    const selectedSources = new Set()
+    const replacementSources = new Map()
+
+    if (Array.isArray(payload)) {
+      for (const name of payload) {
+        for (const candidate of allCandidates.filter(
+          (item) => item.name === name
+        )) {
+          selectedSources.add(candidate.sourcePath)
+        }
+      }
+    } else if (payload?.sourcePaths) {
+      for (const sourcePath of payload.sourcePaths) {
+        selectedSources.add(sourcePath)
+      }
+
+      for (const choice of payload.choices || []) {
+        if (choice.id.startsWith("managed:")) {
+          for (const candidate of mounts.filter(
+            (item) => item.name === choice.name
+          )) {
+            selectedSources.add(candidate.sourcePath)
+          }
+
+          continue
+        }
+
+        for (const sourcePath of choice.sourcePaths || [choice.id]) {
+          const selected = allCandidates.find(
+            (item) => item.sourcePath === sourcePath
+          )
+
+          if (selected) {
+            selectedSources.add(selected.sourcePath)
+            replacementSources.set(selected.name, selected.sourcePath)
+          }
+        }
+      }
+    } else {
+      for (const candidate of allCandidates) {
+        selectedSources.add(candidate.sourcePath)
+      }
+    }
+
     const selectedImports = imports.filter((item) =>
-      selectedNames.has(item.name)
+      selectedSources.has(item.sourcePath)
     )
-    const selectedMounts = mounts.filter((item) => selectedNames.has(item.name))
+    const selectedMounts = mounts.filter((item) =>
+      selectedSources.has(item.sourcePath)
+    )
 
     if (!selectedImports.length && !selectedMounts.length) {
       await this.refreshAll()
       return
+    }
+
+    for (const [skillName, sourcePath] of replacementSources) {
+      const source = allCandidates.find(
+        (item) => item.sourcePath === sourcePath
+      )
+
+      if (source) {
+        await fs.rm(source.managedPath, { recursive: true, force: true })
+        await fs.cp(source.sourcePath, source.managedPath, {
+          recursive: true
+        })
+      }
     }
 
     for (const candidate of selectedImports) {
@@ -601,6 +901,12 @@ class ManagerService extends EventEmitter {
 
     for (const candidate of [...selectedImports, ...selectedMounts]) {
       await fs.rm(candidate.sourcePath, { recursive: true, force: true })
+      if (
+        path.resolve(candidate.sourcePath) !==
+        path.resolve(candidate.mountedPath)
+      ) {
+        await fs.rm(candidate.mountedPath, { recursive: true, force: true })
+      }
       await fs.symlink(candidate.managedPath, candidate.mountedPath, "junction")
     }
 
@@ -734,7 +1040,7 @@ class ManagerService extends EventEmitter {
     this.runtimeProviderService.switchRuntime(input)
     await this.runtimeProviderService.writeCliConfig(
       input.cli,
-      this.state.cliTargets.find(item => item.id === input.cli)
+      this.state.cliTargets.find((item) => item.id === input.cli)
     )
     this.state = {
       ...this.state,

@@ -21,7 +21,15 @@
           @click="$emit('import-skills')"
         >
           <Download class="action-button__icon" :size="16" />
-          从 CLI 导入
+          导入Skill
+        </button>
+        <button
+          class="action-button"
+          type="button"
+          @click="$emit('import-zip-skill')"
+        >
+          <Archive class="action-button__icon" :size="16" />
+          导入 zip
         </button>
         <button
           class="action-button"
@@ -89,9 +97,9 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
-import { Download, FolderOpen, Plus, RefreshCw } from 'lucide-vue-next'
-import SkillCard from './components/SkillCard.vue'
+import { computed, ref } from "vue"
+import { Archive, Download, FolderOpen, Plus, RefreshCw } from "lucide-vue-next"
+import SkillCard from "./components/SkillCard.vue"
 
 const props = defineProps({
   cliTargets: {
@@ -109,31 +117,32 @@ const props = defineProps({
 })
 
 defineEmits([
-  'create-skill',
-  'import-skills',
-  'install-skill',
-  'open-path',
-  'refresh',
-  'select-skill',
-  'uninstall-skill'
+  "create-skill",
+  "import-skills",
+  "import-zip-skill",
+  "install-skill",
+  "open-path",
+  "refresh",
+  "select-skill",
+  "uninstall-skill"
 ])
 
-const searchQuery = ref('')
-const statusFilter = ref('all')
+const searchQuery = ref("")
+const statusFilter = ref("all")
 
 const filteredSkills = computed(() => {
   const keyword = searchQuery.value.toLowerCase()
 
-  return props.skills.filter(skill => {
+  return props.skills.filter((skill) => {
     const matchStatus =
-      statusFilter.value === 'all' || skill.status === statusFilter.value
+      statusFilter.value === "all" || skill.status === statusFilter.value
     const searchSource = [
       skill.name,
       skill.description,
       skill.repoName,
       ...(skill.tags || [])
     ]
-      .join(' ')
+      .join(" ")
       .toLowerCase()
 
     const matchKeyword = !keyword || searchSource.includes(keyword)
@@ -145,35 +154,38 @@ const filteredSkills = computed(() => {
 <style scoped lang="less">
 .skills-view {
   display: flex;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
-  gap: 14px;
+  gap: 10px;
+  overflow: hidden;
 }
 
 .skills-view__toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: 18px;
 }
 
 .skills-view__eyebrow {
-  margin: 0 0 8px;
+  margin: 0 0 5px;
   color: var(--color-text-soft);
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 700;
-  letter-spacing: 0.18em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
 .skills-view__toolbar h1 {
   margin: 0;
-  font-size: 1.58rem;
+  font-size: 1.38rem;
   line-height: 1.2;
 }
 
 .skills-view__toolbar-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -181,8 +193,8 @@ const filteredSkills = computed(() => {
 .skills-view__filters {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 220px;
-  gap: 12px;
-  padding: 14px;
+  gap: 10px;
+  padding: 10px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: var(--color-panel);
@@ -193,25 +205,26 @@ const filteredSkills = computed(() => {
 .skills-view__select {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .skills-view__search span,
 .skills-view__select span {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: 0.74rem;
   font-weight: 700;
 }
 
 .skills-view__search input,
 .skills-view__select select {
-  height: 46px;
+  height: 38px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: var(--color-panel);
-  padding: 0 14px;
+  padding: 0 11px;
   color: var(--color-text);
   font: inherit;
+  font-size: 0.88rem;
 }
 
 .skills-view__meta {
@@ -220,22 +233,25 @@ const filteredSkills = computed(() => {
   justify-content: space-between;
   gap: 12px;
   color: var(--color-text-muted);
-  font-size: 0.86rem;
+  font-size: 0.8rem;
 }
 
 .skills-view__list {
   display: flex;
+  flex: 1;
+  min-height: 0;
   flex-direction: column;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  overflow: hidden;
+  overflow: auto;
   background: var(--color-panel);
   box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
 }
 
 .skills-view__empty {
   display: grid;
-  min-height: 360px;
+  flex: 1;
+  min-height: 0;
   place-items: center;
   border: 1px dashed var(--color-line-strong);
   border-radius: 8px;
@@ -245,25 +261,27 @@ const filteredSkills = computed(() => {
 
 .skills-view__empty h2 {
   margin: 0 0 10px;
-  font-size: 1.5rem;
+  font-size: 1.28rem;
 }
 
 .skills-view__empty p {
   margin: 0;
   color: var(--color-text-muted);
+  font-size: 0.88rem;
 }
 
 .action-button {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  height: 42px;
-  padding: 0 16px;
+  gap: 6px;
+  height: 36px;
+  padding: 0 12px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: #fbfcfd;
   color: var(--color-primary);
   cursor: pointer;
+  font-size: 0.88rem;
   font-weight: 600;
 }
 

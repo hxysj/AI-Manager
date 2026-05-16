@@ -197,7 +197,6 @@
         <details
           v-if="activeRuntimeSchema.advancedFields.length"
           class="providers-view__advanced"
-          open
         >
           <summary>高级选项</summary>
           <label
@@ -255,10 +254,6 @@
         <section class="providers-view__json">
           <div class="providers-view__json-title">
             <strong>配置 JSON</strong>
-            <label>
-              <input v-model="draft.writeCommonConfig" type="checkbox" />
-              写入通用配置
-            </label>
           </div>
           <div class="providers-view__check-row">
             <label
@@ -292,30 +287,19 @@
               </template>
             </label>
           </div>
-          <article
+          <details
             v-for="file in activeRuntimeSchema.configFiles"
             :key="file.name"
             class="providers-view__config-preview"
+            open
           >
-            <h3>{{ file.name }} ({{ file.format }})</h3>
+            <summary>
+              <span>{{ file.name }} ({{ file.format }})</span>
+            </summary>
             <pre>{{ configPreviewMap[file.name] }}</pre>
             <p>{{ file.description }}</p>
-          </article>
+          </details>
         </section>
-
-        <div class="providers-view__config-card">
-          <FlaskConical :size="18" />
-          <strong>模型测试配置</strong>
-          <span>使用单独配置</span>
-          <ChevronRight :size="18" />
-        </div>
-
-        <div class="providers-view__config-card">
-          <Gauge :size="18" />
-          <strong>计费配置</strong>
-          <span>使用单独配置</span>
-          <ChevronRight :size="18" />
-        </div>
       </section>
 
       <footer class="providers-view__edit-footer">
@@ -337,9 +321,6 @@
 import { computed, reactive, ref, watch } from "vue"
 import {
   ArrowLeft,
-  ChevronRight,
-  FlaskConical,
-  Gauge,
   GripVertical,
   Play,
   Plus,
@@ -413,7 +394,6 @@ const draft = reactive({
   apiKey: "",
   authField: "ANTHROPIC_AUTH_TOKEN",
   enabled: true,
-  writeCommonConfig: true,
   hideAiSignature: false,
   teammatesMode: true,
   toolSearch: false,
@@ -489,27 +469,43 @@ const configPreviewMap = computed(() => {
   return Object.fromEntries(
     activeRuntimeSchema.value.configFiles.map((file) => [
       file.name,
-      applyConfigTemplate(file.template)
+      formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
   )
 })
 
+function formatConfigPreview(file, content) {
+  if (file.format !== "JSON") {
+    return content
+  }
+
+  return JSON.stringify(JSON.parse(content), null, 2)
+}
+
 function applyConfigTemplate(template) {
   const values = {
     authField: draft.authField,
-    apiKey: draft.apiKey || "********",
+    apiKey: draft.apiKey,
+    hasApiKey: Boolean(draft.apiKey),
     baseUrl: draft.baseUrl,
+    hasBaseUrl: Boolean(draft.baseUrl),
     mainModel: modelDrafts.mainModel,
+    hasMainModel: Boolean(modelDrafts.mainModel),
     haikuModel: modelDrafts.haikuModel,
+    hasHaikuModel: Boolean(modelDrafts.haikuModel),
     sonnetModel: modelDrafts.sonnetModel,
+    hasSonnetModel: Boolean(modelDrafts.sonnetModel),
     opusModel: modelDrafts.opusModel,
+    hasOpusModel: Boolean(modelDrafts.opusModel),
+    toolSearch: draft.toolSearch,
     toolSearchText: draft.toolSearch ? "true" : "false",
+    disableUpgrade: draft.disableUpgrade,
     disableUpgradeText: draft.disableUpgrade ? "1" : "0",
     includeCoAuthoredBy: String(!draft.hideAiSignature),
+    hideAiSignature: draft.hideAiSignature,
     teammatesMode: draft.teammatesMode,
     teammateMode: "tmux",
     effortLevel: draft.maxThinking ? "max" : "default",
-    writeCommonConfig: draft.writeCommonConfig,
     modelContextWindowEnabled: draft.modelContextWindowEnabled,
     serviceTierFast: draft.serviceTierFast,
     modelReasoningEffort: draft.modelReasoningEffort,
@@ -523,6 +519,8 @@ function applyConfigTemplate(template) {
     .replace(/\{\{(\w+)}}/g, (match, key) => {
       return values[key] ?? match
     })
+    .replace(/,(\s*[}\]])/g, "$1")
+    .replace(/^[\t ]*\r?\n/gm, "")
 }
 
 function ensureActiveCli() {
@@ -551,20 +549,15 @@ function editProvider(provider) {
   draft.apiKey = ""
   draft.authField = provider.authField || "ANTHROPIC_AUTH_TOKEN"
   draft.enabled = provider.enabled !== false
-  modelDrafts.mainModel =
-    provider.runtimeConfig?.mainModel || firstModelName(provider.id)
-  modelDrafts.haikuModel =
-    provider.runtimeConfig?.haikuModel || firstModelName(provider.id)
-  modelDrafts.sonnetModel =
-    provider.runtimeConfig?.sonnetModel || firstModelName(provider.id)
-  modelDrafts.opusModel =
-    provider.runtimeConfig?.opusModel || firstModelName(provider.id)
+  modelDrafts.mainModel = provider.runtimeConfig?.mainModel || ""
+  modelDrafts.haikuModel = provider.runtimeConfig?.haikuModel || ""
+  modelDrafts.sonnetModel = provider.runtimeConfig?.sonnetModel || ""
+  modelDrafts.opusModel = provider.runtimeConfig?.opusModel || ""
   draft.hideAiSignature = Boolean(provider.runtimeConfig?.hideAiSignature)
   draft.teammatesMode = provider.runtimeConfig?.teammatesMode !== false
   draft.toolSearch = Boolean(provider.runtimeConfig?.toolSearch)
   draft.maxThinking = provider.runtimeConfig?.maxThinking !== false
   draft.disableUpgrade = Boolean(provider.runtimeConfig?.disableUpgrade)
-  draft.writeCommonConfig = provider.runtimeConfig?.writeCommonConfig !== false
   draft.modelContextWindowEnabled = Boolean(
     provider.runtimeConfig?.modelContextWindowEnabled
   )
@@ -602,7 +595,6 @@ function clearDraft() {
   draft.toolSearch = false
   draft.maxThinking = true
   draft.disableUpgrade = false
-  draft.writeCommonConfig = true
   draft.modelContextWindowEnabled = false
   draft.serviceTierFast = false
   draft.modelReasoningEffort = "low"
@@ -654,7 +646,6 @@ function submitProvider() {
       hideAiSignature: draft.hideAiSignature,
       teammatesMode: draft.teammatesMode,
       maxThinking: draft.maxThinking,
-      writeCommonConfig: draft.writeCommonConfig,
       modelContextWindowEnabled: draft.modelContextWindowEnabled,
       serviceTierFast: draft.serviceTierFast,
       modelReasoningEffort: draft.modelReasoningEffort,
@@ -733,8 +724,7 @@ watch(
 .providers-view__provider-actions,
 .providers-view__section-actions,
 .providers-view__json-title,
-.providers-view__check-row,
-.providers-view__config-card {
+.providers-view__check-row {
   display: flex;
   align-items: center;
 }
@@ -1203,29 +1193,46 @@ watch(
   gap: 16px;
 }
 
+.providers-view__config-preview {
+  border: 1px solid #edf0f3;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.providers-view__config-preview summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  color: #111827;
+  font-weight: 700;
+  list-style-position: inside;
+}
+
+.providers-view__config-preview summary span {
+  font-size: 0.95rem;
+}
+
 .providers-view__json pre {
   overflow: auto;
-  min-height: 190px;
+  max-height: 260px;
   margin: 0;
   padding: 16px 18px;
-  background: #f0f7ff;
-  color: #991b1b;
+  border-top: 1px solid #edf0f3;
+  background: #f6f9fc;
+  color: #243447;
   font-size: 0.85rem;
   line-height: 1.55;
 }
 
-.providers-view__config-card {
-  gap: 12px;
-  min-height: 56px;
-  padding: 0 14px;
-  border: 1px solid #edf0f3;
-  border-radius: 12px;
+.providers-view__config-preview p {
+  margin: 0;
+  padding: 10px 14px;
+  border-top: 1px solid #edf0f3;
   color: #667085;
-}
-
-.providers-view__config-card strong {
-  flex: 1;
-  color: #111827;
+  font-size: 0.82rem;
 }
 
 .providers-view__edit-footer {

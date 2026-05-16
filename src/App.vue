@@ -10,61 +10,15 @@
     />
 
     <main class="app-shell__main">
-      <div class="app-shell__status">
-        <div class="app-shell__status-left">
-          <strong>{{ statusHeadline }}</strong>
-          <span>{{ statusSummary }}</span>
-        </div>
-        <div class="app-shell__status-right">
-          <button
-            class="status-button"
-            type="button"
-            @click="openPath(state.paths.workspaceRoot)"
-          >
-            Workspace
-          </button>
-          <button
-            class="status-button"
-            type="button"
-            @click="refreshState"
-            :disabled="pending"
-          >
-            {{ pending ? "处理中..." : "立即刷新" }}
-          </button>
-        </div>
-      </div>
-
-      <div v-if="errorMessage" class="app-shell__error">
-        <strong>操作失败</strong>
-        <p>{{ errorMessage }}</p>
-      </div>
-
-      <div v-if="successMessage" class="app-shell__notice">
-        <strong>操作完成</strong>
-        <p>{{ successMessage }}</p>
-        <button type="button" @click="successMessage = ''">×</button>
-      </div>
-
       <section class="app-shell__content">
-        <DashboardView
-          v-if="activeView === 'dashboard'"
-          :cli-targets="state.cliTargets"
-          :diagnostics="state.diagnostics"
-          :paths="state.paths"
-          :refreshed-at="state.refreshedAt"
-          :repos="state.repos"
-          :skills="state.skills"
-          @refresh="refreshState"
-          @open-path="openPath"
-        />
-
         <SkillsView
-          v-else-if="activeView === 'skills'"
+          v-if="activeView === 'skills'"
           :cli-targets="state.cliTargets"
           :paths="state.paths"
           :skills="state.skills"
           @create-skill="showCreateSkill = true"
           @import-skills="importSkillsFromCli"
+          @import-zip-skill="importSkillFromZip"
           @install-skill="installSkill"
           @open-path="openPath"
           @refresh="refreshState"
@@ -173,13 +127,11 @@ import {
   Box,
   Compass,
   Gauge,
-  LayoutDashboard,
   Network,
   Settings,
   ShieldCheck
 } from "lucide-vue-next"
 import AppSidebar from "@/components/AppSidebar.vue"
-import DashboardView from "@/features/dashboard/index.vue"
 import SkillsView from "@/features/skills/index.vue"
 import SessionsView from "@/features/sessions/index.vue"
 import ProvidersView from "@/features/providers/index.vue"
@@ -190,12 +142,12 @@ import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
 import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
 import AddRepoModal from "@/features/repos/components/AddRepoModal.vue"
 import SelectionTranslator from "@/components/SelectionTranslator.vue"
+import { createMessage } from "@/utils/message"
 
 const navItems = [
-  { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { id: "providers", label: "Providers", icon: Network },
   { id: "skills", label: "Skills", icon: ShieldCheck },
   { id: "sessions", label: "Sessions", icon: Gauge },
-  { id: "providers", label: "Providers", icon: Network },
   { id: "rules", label: "Rules", icon: Compass },
   { id: "workspace", label: "Workspace", icon: Box },
   { id: "settings", label: "Settings", icon: Settings }
@@ -205,7 +157,7 @@ const placeholderMap = {
   sessions: {
     title: "Session System",
     description: "当前视图已经接入 Session 聚合，请从侧边栏重新进入。",
-    backTo: "dashboard"
+    backTo: "providers"
   },
   rules: {
     title: "Rules 视图待扩展",
@@ -216,13 +168,13 @@ const placeholderMap = {
   workspace: {
     title: "Workspace 视图待扩展",
     description:
-      "当前工作区路径已经由主进程管理，可在 Dashboard 中直接打开相关目录。",
-    backTo: "dashboard"
+      "当前工作区路径已经由主进程管理，可在设置页中配置相关目录。",
+    backTo: "providers"
   },
   settings: {
     title: "Settings",
     description: "设置页已接入。",
-    backTo: "dashboard"
+    backTo: "providers"
   }
 }
 
@@ -262,10 +214,8 @@ const state = reactive({
   refreshedAt: 0
 })
 
-const activeView = ref("dashboard")
+const activeView = ref("providers")
 const pending = ref(false)
-const errorMessage = ref("")
-const successMessage = ref("")
 const sidebarCollapsed = ref(false)
 const selectedSkillName = ref("")
 const showCreateSkill = ref(false)
@@ -274,7 +224,6 @@ const showAddRepo = ref(false)
 const importCandidates = ref([])
 
 let unsubscribe = null
-let successTimer = null
 
 const selectedSkill = computed(() => {
   return (
@@ -286,22 +235,8 @@ const currentPlaceholder = computed(() => {
   return placeholderMap[activeView.value] || placeholderMap.sessions
 })
 
-const statusHeadline = computed(() => {
-  const onlineCount = state.cliTargets.filter((item) => item.installed).length
-  return `已检测 ${onlineCount} / ${state.cliTargets.length} 个 CLI，索引 ${state.skills.length} 个 Skill / ${state.sessions.length} 个 Session`
-})
-
-const statusSummary = computed(() => {
-  const brokenCount = state.skills.filter(
-    (item) => item.status === "broken-link"
-  ).length
-  const repoCount = state.repos.length
-  return `Broken Links ${brokenCount} · Repos ${repoCount} · Diagnostics ${state.diagnostics.length}`
-})
-
 async function bootstrap() {
   pending.value = true
-  errorMessage.value = ""
 
   try {
     updateState(await window.aiManager.bootstrap())
@@ -309,7 +244,7 @@ async function bootstrap() {
       updateState(nextState)
     })
   } catch (error) {
-    errorMessage.value = error.message || String(error)
+    showErrorMessage(error)
   } finally {
     pending.value = false
   }
@@ -339,7 +274,6 @@ function updateState(nextState) {
 
 async function runAction(action) {
   pending.value = true
-  errorMessage.value = ""
 
   try {
     const nextState = await action()
@@ -348,7 +282,7 @@ async function runAction(action) {
     }
     return true
   } catch (error) {
-    errorMessage.value = error.message || String(error)
+    showErrorMessage(error)
     return false
   } finally {
     pending.value = false
@@ -359,17 +293,12 @@ function selectSkill(skill) {
   selectedSkillName.value = skill.name
 }
 
+function showErrorMessage(error) {
+  createMessage.error(error.message || String(error))
+}
+
 function showSuccessMessage(message) {
-  successMessage.value = message
-
-  if (successTimer) {
-    clearTimeout(successTimer)
-  }
-
-  successTimer = setTimeout(() => {
-    successMessage.value = ""
-    successTimer = null
-  }, 3600)
+  createMessage.success(message)
 }
 
 async function refreshState() {
@@ -399,28 +328,57 @@ async function createSkill(payload) {
 
 async function importSkillsFromCli() {
   pending.value = true
-  errorMessage.value = ""
 
   try {
-    const candidates = await window.aiManager.previewSkillsFromCli()
-    importCandidates.value = candidates
+    const preview = await window.aiManager.previewSkillsFromCli()
+    const candidates = Array.isArray(preview) ? preview : preview.candidates
+    const conflicts = Array.isArray(preview) ? [] : preview.conflicts
 
-    if (!candidates.length) {
+    importCandidates.value = {
+      candidates,
+      conflicts
+    }
+
+    if (!candidates.length && !conflicts.length) {
       showSuccessMessage("所有 Skill 已经在 AI Manager 集中管理中。")
       return
     }
 
     showImportSkills.value = true
   } catch (error) {
-    errorMessage.value = error.message || String(error)
+    showErrorMessage(error)
   } finally {
     pending.value = false
   }
 }
 
-async function confirmImportSkills(skillNames) {
+async function importSkillFromZip() {
+  try {
+    const zipPath = await window.aiManager.selectFile({
+      title: "选择 Skill zip 压缩包",
+      filters: [{ name: "Zip 压缩包", extensions: ["zip"] }]
+    })
+
+    if (!zipPath) {
+      return
+    }
+
+    const success = await runAction(() =>
+      window.aiManager.importSkillFromZip({ zipPath })
+    )
+
+    if (success) {
+      activeView.value = "skills"
+      showSuccessMessage("Skill zip 已导入。")
+    }
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function confirmImportSkills(payload) {
   const success = await runAction(() =>
-    window.aiManager.importSkillsFromCli({ skillNames })
+    window.aiManager.importSkillsFromCli(payload)
   )
 
   if (success) {
@@ -526,12 +484,11 @@ async function openPath(targetPath) {
   }
 
   pending.value = true
-  errorMessage.value = ""
 
   try {
     await window.aiManager.openPath({ targetPath })
   } catch (error) {
-    errorMessage.value = error.message || String(error)
+    showErrorMessage(error)
   } finally {
     pending.value = false
   }
@@ -544,10 +501,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (typeof unsubscribe === "function") {
     unsubscribe()
-  }
-
-  if (successTimer) {
-    clearTimeout(successTimer)
   }
 })
 </script>
@@ -570,103 +523,11 @@ onBeforeUnmount(() => {
   background: var(--color-page);
 }
 
-.app-shell__status {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  padding: 12px 16px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel);
-  box-shadow: var(--shadow-panel);
-}
-
-.app-shell__status-left {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.app-shell__status-left strong {
-  color: var(--color-primary);
-  font-size: 1rem;
-}
-
-.app-shell__status-left span {
-  color: var(--color-text-muted);
-  font-size: 0.86rem;
-}
-
-.app-shell__status-right {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
 .app-shell__content {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding-right: 6px;
-}
-
-.app-shell__error {
-  padding: 16px 18px;
-  border: 1px solid var(--color-danger-soft);
-  border-radius: 8px;
-  background: var(--color-danger-soft);
-  color: var(--color-danger);
-}
-
-.app-shell__error strong {
-  display: block;
-  margin-bottom: 6px;
-}
-
-.app-shell__error p {
-  margin: 0;
-  line-height: 1.6;
-}
-
-.app-shell__notice {
-  position: fixed;
-  z-index: 60;
-  top: 26px;
-  left: 50%;
-  min-width: 360px;
-  padding: 14px 44px 14px 16px;
-  border: 1px solid #bfe3d5;
-  border-radius: 8px;
-  background: var(--color-success-soft);
-  color: var(--color-success);
-  box-shadow: var(--shadow-panel);
-  transform: translateX(-50%);
-}
-
-.app-shell__notice strong {
-  display: block;
-  margin-bottom: 4px;
-}
-
-.app-shell__notice p {
-  margin: 0;
-  line-height: 1.5;
-}
-
-.app-shell__notice button {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  border: 1px solid #bfe3d5;
-  border-radius: 999px;
-  background: #ffffff;
-  color: var(--color-success);
-  cursor: pointer;
 }
 
 .app-shell__placeholder {

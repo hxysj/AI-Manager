@@ -67,8 +67,18 @@
           class="settings-view__cli-card"
         >
           <div class="settings-view__cli-title">
-            <strong>{{ item.name }}</strong>
-            <small>{{ item.detectedPath || item.defaultPath }}</small>
+            <div>
+              <strong>{{ item.name }}</strong>
+              <small>{{ item.statusText }}</small>
+            </div>
+            <span
+              :class="[
+                'settings-view__cli-status',
+                { 'settings-view__cli-status--offline': !item.installed }
+              ]"
+            >
+              {{ item.installed ? '已检测' : '未检测' }}
+            </span>
           </div>
 
           <label class="settings-view__field">
@@ -94,6 +104,12 @@
               </button>
             </div>
           </label>
+
+          <div class="settings-view__cli-meta">
+            <span>配置目录：{{ item.detectedPath || item.defaultPath }}</span>
+            <span>Skill 目录：{{ item.skillsPath || '未检测' }}</span>
+            <span>版本：{{ item.version || '未检测' }}</span>
+          </div>
         </article>
       </div>
     </section>
@@ -143,7 +159,13 @@ const cliItems = computed(() => {
     return {
       id,
       name,
+      installed: Boolean(detected?.installed),
+      statusText: detected?.installed
+        ? '配置目录或二进制已找到'
+        : '未发现配置目录与可执行文件',
       detectedPath: detected?.configPath || '',
+      skillsPath: detected?.skillsPath || '',
+      version: detected?.version || '',
       defaultPath: props.appSettings.defaultCliConfigPaths?.[id] || ''
     }
   })
@@ -360,6 +382,12 @@ watch(
   gap: 16px;
 }
 
+.settings-view__cli-title div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .settings-view__cli-title strong {
   font-size: 1rem;
 }
@@ -368,6 +396,35 @@ watch(
   color: var(--color-text-soft);
   line-height: 1.5;
   text-align: right;
+  word-break: break-all;
+}
+
+.settings-view__cli-title div small {
+  text-align: left;
+}
+
+.settings-view__cli-status {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #e8f7ef;
+  color: #138449;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.settings-view__cli-status--offline {
+  background: #f3f4f6;
+  color: #667085;
+}
+
+.settings-view__cli-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--color-text-soft);
+  font-size: 0.8rem;
+  line-height: 1.5;
   word-break: break-all;
 }
 </style>
