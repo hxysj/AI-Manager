@@ -84,43 +84,43 @@ function submit() {
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
 
-.add-repo-modal__field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+  &__field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
 
-.add-repo-modal span {
-  color: var(--color-text-muted);
-  font-size: 0.84rem;
-  font-weight: 700;
-}
+  & span {
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    font-weight: 700;
+  }
 
-.add-repo-modal input,
-.add-repo-modal select {
-  width: 100%;
-  height: 46px;
-  padding: 0 14px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel);
-  color: var(--color-text);
-  font: inherit;
-}
+  & input,
+  & select {
+    width: 100%;
+    height: 46px;
+    padding: 0 14px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    color: var(--color-text);
+    font: inherit;
+  }
 
-.add-repo-modal__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
 
-.add-repo-modal__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding-top: 6px;
+  &__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 6px;
+  }
 }
 
 .action-button {
@@ -132,11 +132,11 @@ function submit() {
   color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
-}
 
-.action-button--primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
+  &--primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #fff;
+  }
 }
 </style>

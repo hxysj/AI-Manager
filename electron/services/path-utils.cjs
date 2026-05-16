@@ -26,7 +26,8 @@ function resolveAppPaths(userDataPath) {
       providers: path.join(storageDir, "providers.json"),
       runtimeModels: path.join(storageDir, "runtime-models.json"),
       runtimeProfiles: path.join(storageDir, "runtime-profiles.json"),
-      runtimeProviderKeys: path.join(storageDir, "runtime-provider-keys.json")
+      runtimeProviderKeys: path.join(storageDir, "runtime-provider-keys.json"),
+      codexAccounts: path.join(storageDir, "codex-accounts.json")
     }
   }
 }

@@ -39,11 +39,15 @@
           v-else-if="activeView === 'providers'"
           :cli-targets="state.cliTargets"
           :pending="pending"
+          :codex-accounts="state.codexAccounts"
+          :codex-login-state="state.codexLoginState"
           :providers="state.providers"
           :runtime-config-schemas="state.runtimeConfigSchemas"
           :runtime-models="state.runtimeModels"
           :runtime-profiles="state.runtimeProfiles"
           @clear-runtime="clearRuntime"
+          @codex-official-login="startCodexOfficialLogin"
+          @cancel-codex-official-login="cancelCodexOfficialLogin"
           @delete-provider="deleteProvider"
           @save-model="saveRuntimeModel"
           @save-provider="saveProvider"
@@ -183,6 +187,8 @@ const state = reactive({
   skills: [],
   repos: [],
   sessions: [],
+  codexAccounts: [],
+  codexLoginState: null,
   providers: [],
   runtimeConfigSchemas: {},
   runtimeModels: [],
@@ -255,6 +261,8 @@ function updateState(nextState) {
   state.skills = nextState.skills || []
   state.repos = nextState.repos || []
   state.sessions = nextState.sessions || []
+  state.codexAccounts = nextState.codexAccounts || []
+  state.codexLoginState = nextState.codexLoginState || null
   state.providers = nextState.providers || []
   state.runtimeConfigSchemas = nextState.runtimeConfigSchemas || {}
   state.runtimeModels = nextState.runtimeModels || []
@@ -299,6 +307,10 @@ function showErrorMessage(error) {
 
 function showSuccessMessage(message) {
   createMessage.success(message)
+}
+
+function showWarningMessage(message) {
+  createMessage.warning(message)
 }
 
 async function refreshState() {
@@ -452,6 +464,18 @@ async function deleteProvider(providerId) {
   }
 }
 
+async function startCodexOfficialLogin() {
+  const success = await runAction(() => window.aiManager.startCodexOfficialLogin())
+
+  if (success) {
+    showWarningMessage("已打开浏览器，请完成 Codex 官方登录。")
+  }
+}
+
+async function cancelCodexOfficialLogin() {
+  await runAction(() => window.aiManager.cancelCodexOfficialLogin())
+}
+
 async function saveRuntimeModel(payload) {
   const success = await runAction(() =>
     window.aiManager.saveRuntimeModel(payload)
@@ -511,46 +535,46 @@ onBeforeUnmount(() => {
   grid-template-columns: auto minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
-}
 
-.app-shell__main {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex-direction: column;
-  padding: 18px;
-  gap: 14px;
-  background: var(--color-page);
-}
+  &__main {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    padding: 18px;
+    gap: 14px;
+    background: var(--color-page);
+  }
 
-.app-shell__content {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding-right: 6px;
-}
+  &__content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 6px;
+  }
 
-.app-shell__placeholder {
-  display: grid;
-  min-height: 520px;
-  place-items: center;
-  border: 1px dashed var(--color-line-strong);
-  border-radius: 8px;
-  background: var(--color-panel);
-  padding: 32px;
-  text-align: center;
-}
+  &__placeholder {
+    display: grid;
+    min-height: 520px;
+    place-items: center;
+    border: 1px dashed var(--color-line-strong);
+    border-radius: 8px;
+    background: var(--color-panel);
+    padding: 32px;
+    text-align: center;
+  }
 
-.app-shell__placeholder h1 {
-  margin: 0 0 12px;
-  font-size: 2rem;
-}
+  &__placeholder h1 {
+    margin: 0 0 12px;
+    font-size: 2rem;
+  }
 
-.app-shell__placeholder p {
-  max-width: 680px;
-  margin: 0 0 18px;
-  color: var(--color-text-muted);
-  line-height: 1.7;
+  &__placeholder p {
+    max-width: 680px;
+    margin: 0 0 18px;
+    color: var(--color-text-muted);
+    line-height: 1.7;
+  }
 }
 
 .status-button {
@@ -562,15 +586,15 @@ onBeforeUnmount(() => {
   color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
-}
 
-.status-button:hover {
-  border-color: #b9ccda;
-  background: var(--color-primary-soft);
-}
+  &:hover {
+    border-color: #b9ccda;
+    background: var(--color-primary-soft);
+  }
 
-.status-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.52;
+  }
 }
 </style>

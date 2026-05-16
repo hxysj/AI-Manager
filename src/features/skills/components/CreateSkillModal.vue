@@ -87,47 +87,47 @@ function submit() {
   display: flex;
   flex-direction: column;
   gap: 16px;
-}
 
-.create-skill-modal__field {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+  &__field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
 
-.create-skill-modal span {
-  color: var(--color-text-muted);
-  font-size: 0.84rem;
-  font-weight: 700;
-}
+  & span {
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    font-weight: 700;
+  }
 
-.create-skill-modal input,
-.create-skill-modal textarea {
-  width: 100%;
-  padding: 12px 14px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel);
-  color: var(--color-text);
-  font: inherit;
-  resize: vertical;
-}
+  & input,
+  & textarea {
+    width: 100%;
+    padding: 12px 14px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    color: var(--color-text);
+    font: inherit;
+    resize: vertical;
+  }
 
-.create-skill-modal textarea {
-  min-height: 120px;
-}
+  & textarea {
+    min-height: 120px;
+  }
 
-.create-skill-modal__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
+  &__grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+  }
 
-.create-skill-modal__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  padding-top: 6px;
+  &__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 6px;
+  }
 }
 
 .action-button {
@@ -139,11 +139,11 @@ function submit() {
   color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
-}
 
-.action-button--primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #fff;
+  &--primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #fff;
+  }
 }
 </style>

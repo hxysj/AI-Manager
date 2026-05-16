@@ -41,62 +41,62 @@ defineEmits(["close"])
   display: grid;
   place-items: center;
   padding: 24px;
-}
 
-.base-modal__backdrop {
-  position: absolute;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.24);
-}
+  &__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.24);
+  }
 
-.base-modal__panel {
-  position: relative;
-  width: 1000px;
-  max-height: calc(100vh - 48px);
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel);
-  box-shadow: var(--shadow-panel);
-}
+  &__panel {
+    position: relative;
+    width: 1000px;
+    max-height: calc(100vh - 48px);
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    box-shadow: var(--shadow-panel);
+  }
 
-.base-modal__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 22px 24px 10px;
-}
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 22px 24px 10px;
+  }
 
-.base-modal__header h2 {
-  margin: 0;
-  font-size: 1.4rem;
-}
+  &__header h2 {
+    margin: 0;
+    font-size: 1.4rem;
+  }
 
-.base-modal__header p {
-  margin: 6px 0 0;
-  color: var(--color-text-muted);
-  font-size: 0.92rem;
-}
+  &__header p {
+    margin: 6px 0 0;
+    color: var(--color-text-muted);
+    font-size: 0.92rem;
+  }
 
-.base-modal__close {
-  display: grid;
-  width: 36px;
-  height: 36px;
-  place-items: center;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel);
-  color: var(--color-text-muted);
-  cursor: pointer;
-  font-size: 1.4rem;
-  line-height: 1;
-}
+  &__close {
+    display: grid;
+    width: 36px;
+    height: 36px;
+    place-items: center;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 1.4rem;
+    line-height: 1;
+  }
 
-.base-modal__content {
-  min-height: 0;
-  overflow: auto;
-  padding: 0 24px 24px;
+  &__content {
+    min-height: 0;
+    overflow: auto;
+    padding: 0 24px 24px;
+  }
 }
 </style>
