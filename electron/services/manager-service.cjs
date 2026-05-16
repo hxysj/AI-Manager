@@ -54,6 +54,7 @@ class ManagerService extends EventEmitter {
       repos: [],
       sessions: [],
       providers: [],
+      runtimeConfigSchemas: {},
       runtimeModels: [],
       runtimeProfiles: [],
       diagnostics: [],
@@ -731,6 +732,21 @@ class ManagerService extends EventEmitter {
 
   async switchRuntime(input) {
     this.runtimeProviderService.switchRuntime(input)
+    await this.runtimeProviderService.writeCliConfig(
+      input.cli,
+      this.state.cliTargets.find(item => item.id === input.cli)
+    )
+    this.state = {
+      ...this.state,
+      ...this.runtimeProviderService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async clearRuntime(cli) {
+    this.runtimeProviderService.clearRuntime(cli)
     this.state = {
       ...this.state,
       ...this.runtimeProviderService.getState(),

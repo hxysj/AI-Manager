@@ -1,3 +1,5 @@
+const fs = require("node:fs/promises")
+const path = require("node:path")
 const crypto = require("node:crypto")
 
 const providerTypes = new Set([
@@ -20,6 +22,177 @@ const defaultModels = {
   custom: []
 }
 
+const runtimeConfigSchemas = {
+  claude: {
+    cli: "claude",
+    enabled: true,
+    defaultProviderType: "anthropic",
+    advancedFields: ["type", "authField"],
+    authFields: ["ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    modelFields: [
+      {
+        key: "mainModel",
+        label: "主模型",
+        configKey: "ANTHROPIC_MODEL"
+      },
+      {
+        key: "haikuModel",
+        label: "Haiku 默认模型",
+        configKey: "ANTHROPIC_DEFAULT_HAIKU_MODEL"
+      },
+      {
+        key: "sonnetModel",
+        label: "Sonnet 默认模型",
+        configKey: "ANTHROPIC_DEFAULT_SONNET_MODEL"
+      },
+      {
+        key: "opusModel",
+        label: "Opus 默认模型",
+        configKey: "ANTHROPIC_DEFAULT_OPUS_MODEL"
+      }
+    ],
+    optionFields: [
+      { key: "hideAiSignature", label: "隐藏 AI 署名", type: "boolean" },
+      { key: "teammatesMode", label: "Teammates 模式", type: "boolean" },
+      { key: "toolSearch", label: "启用 Tool Search", type: "boolean" },
+      { key: "maxThinking", label: "最大强度思考", type: "boolean" },
+      { key: "disableUpgrade", label: "禁用自动升级", type: "boolean" },
+      {
+        key: "writeCommonConfig",
+        label: "写入通用配置",
+        type: "boolean"
+      }
+    ],
+    configFiles: [
+      {
+        name: "settings.json",
+        format: "JSON",
+        description: "Claude settings.json 配置内容",
+        template: `{
+  "env": {
+    "{{authField}}": "{{apiKey}}",
+    "ANTHROPIC_BASE_URL": "{{baseUrl}}",
+    "ANTHROPIC_MODEL": "{{mainModel}}",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "{{haikuModel}}",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "{{opusModel}}",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "{{sonnetModel}}",
+    "ENABLE_TOOL_SEARCH": "{{toolSearchText}}"
+{{#disableUpgrade}}
+    ,"DISABLE_${"AUTO"}UPDATER": "{{disableUpgradeText}}"
+{{/disableUpgrade}}
+  },
+  "enabledPlugins": {},
+  "includeCoAuthoredBy": {{includeCoAuthoredBy}},
+  "pluginConfigs": {},
+{{#teammatesMode}}
+  "teammateMode": "{{teammateMode}}",
+{{/teammatesMode}}
+  "effortLevel": "{{effortLevel}}"
+{{#writeCommonConfig}}
+  ,
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  }
+{{/writeCommonConfig}}
+}`
+      }
+    ]
+  },
+  codex: {
+    cli: "codex",
+    enabled: true,
+    defaultProviderType: "openai",
+    advancedFields: [],
+    authFields: ["OPENAI_API_KEY"],
+    modelFields: [
+      {
+        key: "mainModel",
+        label: "模型名称",
+        configKey: "model",
+        description: "指定使用的模型，将自动更新到 config.toml 中"
+      }
+    ],
+    optionFields: [
+      {
+        key: "modelContextWindowEnabled",
+        label: "1M 上下文窗口",
+        type: "boolean"
+      },
+      {
+        key: "modelAutoCompactTokenLimit",
+        label: "压缩阈值",
+        type: "number",
+        dependsOn: "modelContextWindowEnabled"
+      },
+      {
+        key: "serviceTierFast",
+        label: "开启 Fast 模式",
+        type: "boolean"
+      },
+      {
+        key: "modelReasoningEffort",
+        label: "思考强度",
+        type: "select",
+        options: ["low", "medium", "high", "xhigh"]
+      }
+    ],
+    configFiles: [
+      {
+        name: "auth.json",
+        format: "JSON",
+        description: "Codex auth.json 配置内容",
+        template: `{
+  "OPENAI_API_KEY": "{{apiKey}}"
+}`
+      },
+      {
+        name: "config.toml",
+        format: "TOML",
+        description: "Codex config.toml 配置内容",
+        template: `model_provider = "custom"
+model = "{{mainModel}}"
+model_reasoning_effort = "{{modelReasoningEffort}}"
+disable_response_storage = true
+{{#serviceTierFast}}
+service_tier = "fast"
+{{/serviceTierFast}}
+{{#modelContextWindowEnabled}}
+model_context_window = 1000000
+model_auto_compact_token_limit = {{modelAutoCompactTokenLimit}}
+{{/modelContextWindowEnabled}}
+
+[model_providers]
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "{{baseUrl}}"`
+      }
+    ]
+  },
+  gemini: {
+    cli: "gemini",
+    enabled: false,
+    defaultProviderType: "gemini",
+    advancedFields: [],
+    authFields: ["GOOGLE_API_KEY"],
+    modelFields: [],
+    optionFields: [],
+    configFiles: []
+  },
+  ["open" + "code"]: {
+    cli: "open" + "code",
+    enabled: false,
+    defaultProviderType: "openai",
+    advancedFields: [],
+    authFields: ["OPENAI_API_KEY"],
+    modelFields: [],
+    optionFields: [],
+    configFiles: []
+  }
+}
+
 function createId(prefix) {
   return `${prefix}-${crypto.randomUUID()}`
 }
@@ -38,6 +211,76 @@ function normalizeHeaders(value) {
       .map(([key, item]) => [String(key).trim(), String(item).trim()])
       .filter(([key, item]) => key && item)
   )
+}
+
+function normalizeRuntimeConfig(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {}
+  }
+
+  return {
+    mainModel: String(value.mainModel || "").trim() || undefined,
+    haikuModel: String(value.haikuModel || "").trim() || undefined,
+    sonnetModel: String(value.sonnetModel || "").trim() || undefined,
+    opusModel: String(value.opusModel || "").trim() || undefined,
+    toolSearch: Boolean(value.toolSearch),
+    disableUpgrade: Boolean(value.disableUpgrade),
+    hideAiSignature: Boolean(value.hideAiSignature),
+    teammatesMode:
+      value.teammatesMode === undefined ? true : Boolean(value.teammatesMode),
+    maxThinking:
+      value.maxThinking === undefined ? true : Boolean(value.maxThinking),
+    writeCommonConfig:
+      value.writeCommonConfig === undefined
+        ? true
+        : Boolean(value.writeCommonConfig),
+    modelContextWindowEnabled: Boolean(value.modelContextWindowEnabled),
+    serviceTierFast: Boolean(value.serviceTierFast),
+    modelReasoningEffort:
+      String(value.modelReasoningEffort || "low").trim() || "low",
+    modelAutoCompactTokenLimit:
+      Number(value.modelAutoCompactTokenLimit) || 900000
+  }
+}
+
+function toTomlString(value) {
+  return JSON.stringify(String(value || ""))
+}
+
+function applyTemplate(template, values) {
+  return String(template || "")
+    .replace(/\{\{#(\w+)}}([\s\S]*?)\{\{\/\1}}/g, (match, key, content) =>
+      values[key] ? content : ""
+    )
+    .replace(/\{\{(\w+)}}/g, (match, key) => values[key] ?? match)
+}
+
+function createTemplateValues(provider, profile, apiKey) {
+  const runtimeConfig = provider.runtimeConfig || {}
+
+  return {
+    authField: provider.authField || "ANTHROPIC_AUTH_TOKEN",
+    apiKey,
+    baseUrl: profile.baseUrl || provider.baseUrl || "",
+    mainModel: runtimeConfig.mainModel || profile.model,
+    haikuModel: runtimeConfig.haikuModel || profile.model,
+    sonnetModel: runtimeConfig.sonnetModel || profile.model,
+    opusModel: runtimeConfig.opusModel || profile.model,
+    toolSearch: runtimeConfig.toolSearch,
+    toolSearchText: runtimeConfig.toolSearch ? "true" : "false",
+    disableUpgrade: runtimeConfig.disableUpgrade,
+    disableUpgradeText: runtimeConfig.disableUpgrade ? "1" : "0",
+    includeCoAuthoredBy: String(!runtimeConfig.hideAiSignature),
+    teammatesMode: runtimeConfig.teammatesMode,
+    teammateMode: "tmux",
+    effortLevel: runtimeConfig.maxThinking ? "max" : "default",
+    writeCommonConfig: runtimeConfig.writeCommonConfig,
+    modelContextWindowEnabled: runtimeConfig.modelContextWindowEnabled,
+    serviceTierFast: runtimeConfig.serviceTierFast,
+    modelReasoningEffort: runtimeConfig.modelReasoningEffort || "low",
+    modelAutoCompactTokenLimit:
+      runtimeConfig.modelAutoCompactTokenLimit || 900000
+  }
 }
 
 function normalizeProvider(input, previous) {
@@ -60,19 +303,36 @@ function normalizeProvider(input, previous) {
   return {
     id: previous?.id || input.id || createId("provider"),
     cli,
+    icon:
+      "icon" in input
+        ? String(input.icon || "").trim() || undefined
+        : String(previous?.icon || "").trim() || undefined,
     name,
     type,
+    note: String(input.note || previous?.note || "").trim() || undefined,
+    website:
+      String(input.website || previous?.website || "").trim() || undefined,
     baseUrl: String(input.baseUrl || "").trim() || undefined,
     proxy: String(input.proxy || "").trim() || undefined,
+    authField:
+      String(input.authField || previous?.authField || "").trim() || undefined,
+    runtimeConfig: normalizeRuntimeConfig(
+      input.runtimeConfig || previous?.runtimeConfig
+    ),
     headers: normalizeHeaders(input.headers),
-    enabled: input.enabled === undefined ? previous?.enabled !== false : Boolean(input.enabled),
+    enabled:
+      input.enabled === undefined
+        ? previous?.enabled !== false
+        : Boolean(input.enabled),
     createdAt: previous?.createdAt || now(),
     updatedAt: now()
   }
 }
 
 function normalizeModel(input, previous) {
-  const providerId = String(input.providerId || previous?.providerId || "").trim()
+  const providerId = String(
+    input.providerId || previous?.providerId || ""
+  ).trim()
   const name = String(input.name || previous?.name || input.id || "").trim()
 
   if (!providerId) {
@@ -87,17 +347,22 @@ function normalizeModel(input, previous) {
     id: previous?.id || input.id || name,
     providerId,
     name,
-    contextWindow: Number(input.contextWindow || previous?.contextWindow) || undefined,
+    contextWindow:
+      Number(input.contextWindow || previous?.contextWindow) || undefined,
     maxOutput: Number(input.maxOutput || previous?.maxOutput) || undefined,
     supportsTools: Boolean(input.supportsTools || previous?.supportsTools),
     supportsVision: Boolean(input.supportsVision || previous?.supportsVision),
-    supportsReasoning: Boolean(input.supportsReasoning || previous?.supportsReasoning)
+    supportsReasoning: Boolean(
+      input.supportsReasoning || previous?.supportsReasoning
+    )
   }
 }
 
 function normalizeProfile(input, previous) {
   const cli = String(input.cli || previous?.cli || "").trim()
-  const providerId = String(input.providerId || previous?.providerId || "").trim()
+  const providerId = String(
+    input.providerId || previous?.providerId || ""
+  ).trim()
   const model = String(input.model || previous?.model || "").trim()
 
   if (!cliTypes.has(cli)) {
@@ -216,17 +481,20 @@ class RuntimeProviderService {
 
   getState() {
     return {
-      providers: this.providers.map(item => ({
+      runtimeConfigSchemas,
+      providers: this.providers.map((item) => ({
         ...item,
         hasApiKey: this.keyManager.hasProviderKey(item.id)
       })),
       runtimeModels: this.models,
-      runtimeProfiles: this.profiles.map(item => this.toPublicProfile(item))
+      runtimeProfiles: this.profiles.map((item) => this.toPublicProfile(item))
     }
   }
 
   toPublicProfile(profile) {
-    const provider = this.providers.find(item => item.id === profile.providerId)
+    const provider = this.providers.find(
+      (item) => item.id === profile.providerId
+    )
 
     return {
       ...profile,
@@ -243,11 +511,11 @@ class RuntimeProviderService {
   }
 
   saveProvider(input) {
-    const previous = this.providers.find(item => item.id === input.id)
+    const previous = this.providers.find((item) => item.id === input.id)
     const provider = normalizeProvider(input, previous)
 
     if (previous) {
-      this.providers = this.providers.map(item =>
+      this.providers = this.providers.map((item) =>
         item.id === provider.id ? provider : item
       )
     } else {
@@ -259,14 +527,24 @@ class RuntimeProviderService {
       this.keyManager.setProviderKey(provider.id, input.apiKey)
     }
 
+    if (input.model) {
+      this.saveModel({
+        id: `${provider.id}:${input.model}`,
+        providerId: provider.id,
+        name: input.model
+      })
+    }
+
     this.persistMetadata()
     return provider
   }
 
   deleteProvider(providerId) {
-    this.providers = this.providers.filter(item => item.id !== providerId)
-    this.models = this.models.filter(item => item.providerId !== providerId)
-    this.profiles = this.profiles.filter(item => item.providerId !== providerId)
+    this.providers = this.providers.filter((item) => item.id !== providerId)
+    this.models = this.models.filter((item) => item.providerId !== providerId)
+    this.profiles = this.profiles.filter(
+      (item) => item.providerId !== providerId
+    )
     this.keyManager.deleteProviderKey(providerId)
     this.persistMetadata()
   }
@@ -275,24 +553,28 @@ class RuntimeProviderService {
     const models = defaultModels[provider.type] || []
     this.models = [
       ...this.models,
-      ...models.map(model => normalizeModel({
-        id: `${provider.id}:${model}`,
-        providerId: provider.id,
-        name: model
-      }))
+      ...models.map((model) =>
+        normalizeModel({
+          id: `${provider.id}:${model}`,
+          providerId: provider.id,
+          name: model
+        })
+      )
     ]
   }
 
   saveModel(input) {
-    const previous = this.models.find(item => item.id === input.id)
+    const previous = this.models.find((item) => item.id === input.id)
     const model = normalizeModel(input, previous)
 
-    if (!this.providers.find(item => item.id === model.providerId)) {
+    if (!this.providers.find((item) => item.id === model.providerId)) {
       throw new Error("模型关联的 Provider 不存在")
     }
 
     if (previous) {
-      this.models = this.models.map(item => item.id === model.id ? model : item)
+      this.models = this.models.map((item) =>
+        item.id === model.id ? model : item
+      )
     } else {
       this.models = [...this.models, model]
     }
@@ -302,7 +584,7 @@ class RuntimeProviderService {
   }
 
   switchRuntime(input) {
-    const provider = this.providers.find(item => item.id === input.providerId)
+    const provider = this.providers.find((item) => item.id === input.providerId)
 
     if (!provider) {
       throw new Error("Provider 不存在")
@@ -312,11 +594,11 @@ class RuntimeProviderService {
       throw new Error("Runtime Profile 不能使用其他 CLI 的 Provider")
     }
 
-    const previous = this.profiles.find(item => item.cli === input.cli)
+    const previous = this.profiles.find((item) => item.cli === input.cli)
     const profile = normalizeProfile(input, previous)
 
     if (previous) {
-      this.profiles = this.profiles.map(item =>
+      this.profiles = this.profiles.map((item) =>
         item.cli === profile.cli ? profile : item
       )
     } else {
@@ -327,14 +609,81 @@ class RuntimeProviderService {
     return this.toPublicProfile(profile)
   }
 
-  buildRuntimeEnv(cli) {
-    const profile = this.profiles.find(item => item.cli === cli)
+  clearRuntime(cli) {
+    this.profiles = this.profiles.filter((item) => item.cli !== cli)
+    this.storage.scheduleWrite("runtimeProfiles", this.profiles)
+  }
+
+  async writeCliConfig(cli, cliTarget) {
+    const profile = this.profiles.find((item) => item.cli === cli)
 
     if (!profile) {
       throw new Error("Runtime Profile 不存在")
     }
 
-    const provider = this.providers.find(item => item.id === profile.providerId)
+    const provider = this.providers.find(
+      (item) => item.id === profile.providerId
+    )
+
+    if (!provider) {
+      throw new Error("Provider 不存在")
+    }
+
+    if (!cliTarget?.configPath) {
+      throw new Error("CLI 配置目录不存在")
+    }
+
+    await fs.mkdir(cliTarget.configPath, { recursive: true })
+
+    if (cli === "claude") {
+      await this.writeClaudeConfig(cliTarget.configPath, provider, profile)
+    }
+
+    if (cli === "codex") {
+      await this.writeCodexConfig(cliTarget.configPath, provider, profile)
+    }
+  }
+
+  async writeClaudeConfig(configPath, provider, profile) {
+    const apiKey = this.keyManager.getProviderKey(provider.id)
+    const schema = runtimeConfigSchemas.claude.configFiles[0]
+
+    await fs.writeFile(
+      path.join(configPath, "settings.json"),
+      `${applyTemplate(schema.template, createTemplateValues(provider, profile, apiKey))}\n`,
+      "utf8"
+    )
+  }
+
+  async writeCodexConfig(configPath, provider, profile) {
+    const apiKey = this.keyManager.getProviderKey(provider.id)
+    const values = createTemplateValues(provider, profile, apiKey)
+    const authSchema = runtimeConfigSchemas.codex.configFiles[0]
+    const configSchema = runtimeConfigSchemas.codex.configFiles[1]
+
+    await fs.writeFile(
+      path.join(configPath, "auth.json"),
+      `${applyTemplate(authSchema.template, values)}\n`,
+      "utf8"
+    )
+
+    await fs.writeFile(
+      path.join(configPath, "config.toml"),
+      `${applyTemplate(configSchema.template, values)}\n`,
+      "utf8"
+    )
+  }
+
+  buildRuntimeEnv(cli) {
+    const profile = this.profiles.find((item) => item.cli === cli)
+
+    if (!profile) {
+      throw new Error("Runtime Profile 不存在")
+    }
+
+    const provider = this.providers.find(
+      (item) => item.id === profile.providerId
+    )
 
     if (!provider) {
       throw new Error("Provider 不存在")
@@ -348,7 +697,7 @@ class RuntimeProviderService {
     }
 
     if (cli === "claude") {
-      env.ANTHROPIC_API_KEY = apiKey
+      env[provider.authField || "ANTHROPIC_AUTH_TOKEN"] = apiKey
       env.ANTHROPIC_MODEL = profile.model
       if (baseUrl) {
         env.ANTHROPIC_BASE_URL = baseUrl

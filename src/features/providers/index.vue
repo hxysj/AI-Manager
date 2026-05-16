@@ -2,21 +2,9 @@
   <section class="providers-view">
     <template v-if="viewMode === 'list'">
       <header class="providers-view__toolbar">
-        <div class="providers-view__brand">
-          <strong>CC Switch</strong>
-          <button class="providers-view__icon-button" type="button">
-            <Settings :size="16" />
-          </button>
-          <label class="providers-view__toggle">
-            <Radio :size="14" />
-            <input v-model="runtimeEnabled" type="checkbox" />
-            <span></span>
-          </label>
-        </div>
-
         <div class="providers-view__cli-tabs">
           <button
-            v-for="cli in cliTargets"
+            v-for="cli in visibleCliTargets"
             :key="cli.id"
             :class="[
               'providers-view__cli-tab',
@@ -35,27 +23,13 @@
           </button>
         </div>
 
-        <div class="providers-view__tools">
-          <button class="providers-view__icon-button" type="button">
-            <Wrench :size="16" />
-          </button>
-          <button class="providers-view__icon-button" type="button">
-            <PanelRight :size="16" />
-          </button>
-          <button class="providers-view__icon-button" type="button">
-            <History :size="16" />
-          </button>
-          <button class="providers-view__icon-button" type="button">
-            <Paperclip :size="16" />
-          </button>
-          <button
-            class="providers-view__add"
-            type="button"
-            @click="createProvider"
-          >
-            <Plus :size="22" />
-          </button>
-        </div>
+        <button
+          class="providers-view__add"
+          type="button"
+          @click="createProvider"
+        >
+          <Plus :size="22" />
+        </button>
       </header>
 
       <section class="providers-view__list-panel">
@@ -69,21 +43,30 @@
                 profileMap[activeCli]?.providerId === provider.id
             }
           ]"
-          @click="selectProvider(provider)"
         >
           <GripVertical class="providers-view__drag" :size="16" />
-          <span class="providers-view__avatar">{{ provider.name.slice(0, 1) }}</span>
+          <span class="providers-view__avatar">
+            <AiIcon
+              v-if="provider.icon"
+              class="providers-view__avatar-icon"
+              :name="provider.icon"
+              :alt="`${provider.name} 图标`"
+            />
+            <template v-else>{{ provider.name.slice(0, 1) }}</template>
+          </span>
           <div class="providers-view__provider-main">
             <strong>{{ provider.name }}</strong>
-            <span>{{ provider.baseUrl || '未配置官网地址' }}</span>
+            <span>{{ provider.baseUrl || "未配置官网地址" }}</span>
           </div>
           <div class="providers-view__provider-actions">
             <button
               v-if="profileMap[activeCli]?.providerId === provider.id"
               class="providers-view__using"
               type="button"
+              @click.stop="clearRuntime"
             >
-              使用中
+              <X :size="15" />
+              取消使用
             </button>
             <button
               v-else
@@ -100,15 +83,6 @@
               @click.stop="editProvider(provider)"
             >
               <SquarePen :size="16" />
-            </button>
-            <button class="providers-view__icon-button" type="button">
-              <Copy :size="16" />
-            </button>
-            <button class="providers-view__icon-button" type="button">
-              <ChartColumn :size="16" />
-            </button>
-            <button class="providers-view__icon-button" type="button">
-              <Terminal :size="16" />
             </button>
             <button
               class="providers-view__icon-button providers-view__icon-button--danger"
@@ -135,12 +109,56 @@
         >
           <ArrowLeft :size="18" />
         </button>
-        <h1>{{ draft.id ? '编辑供应商' : '新增供应商' }}</h1>
+        <h1>{{ draft.id ? "编辑供应商" : "新增供应商" }}</h1>
       </header>
 
       <section class="providers-view__edit-panel">
-        <div class="providers-view__edit-avatar">
-          {{ draft.name.slice(0, 1) || 'AI' }}
+        <div class="providers-view__avatar-picker">
+          <button
+            class="providers-view__edit-avatar"
+            type="button"
+            @click="showIconPicker = !showIconPicker"
+          >
+            <AiIcon
+              v-if="draft.icon"
+              class="providers-view__edit-avatar-icon"
+              :name="draft.icon"
+              :alt="`${draft.name || 'Provider'} 图标`"
+            />
+            <template v-else>{{ draft.name.slice(0, 1) || "AI" }}</template>
+          </button>
+          <div v-if="draft.icon" class="providers-view__avatar-name">
+            {{ iconLabel(draft.icon) }}
+          </div>
+          <section v-if="showIconPicker" class="providers-view__icon-panel">
+            <label class="providers-view__field providers-view__field--wide">
+              <span>搜索图标</span>
+              <input
+                v-model.trim="iconKeyword"
+                type="text"
+                placeholder="输入图标名称..."
+              />
+            </label>
+            <div class="providers-view__icon-grid">
+              <button
+                v-for="icon in filteredIconOptions"
+                :key="icon"
+                :class="[
+                  'providers-view__icon-option',
+                  { 'providers-view__icon-option--active': draft.icon === icon }
+                ]"
+                type="button"
+                @click="selectIcon(icon)"
+              >
+                <AiIcon
+                  class="providers-view__icon-option-image"
+                  :name="icon"
+                  :alt="`${iconLabel(icon)} 图标`"
+                />
+                <span>{{ iconLabel(icon) }}</span>
+              </button>
+            </div>
+          </section>
         </div>
 
         <div class="providers-view__form-grid">
@@ -161,7 +179,9 @@
             <input
               v-model.trim="draft.apiKey"
               type="password"
-              :placeholder="selectedProvider?.hasApiKey ? '已保存，留空则保持不变' : ''"
+              :placeholder="
+                selectedProvider?.hasApiKey ? '已保存，留空则保持不变' : ''
+              "
             />
           </label>
           <label class="providers-view__field providers-view__field--wide">
@@ -174,9 +194,16 @@
           填写兼容当前 CLI 的服务端点地址，不要以斜杠结尾
         </div>
 
-        <details class="providers-view__advanced" open>
+        <details
+          v-if="activeRuntimeSchema.advancedFields.length"
+          class="providers-view__advanced"
+          open
+        >
           <summary>高级选项</summary>
-          <label class="providers-view__field">
+          <label
+            v-if="activeRuntimeSchema.advancedFields.includes('type')"
+            class="providers-view__field"
+          >
             <span>API 格式</span>
             <select v-model="draft.type">
               <option v-for="item in providerTypes" :key="item" :value="item">
@@ -184,12 +211,19 @@
               </option>
             </select>
           </label>
-          <label class="providers-view__field">
+          <label
+            v-if="activeRuntimeSchema.advancedFields.includes('authField')"
+            class="providers-view__field"
+          >
             <span>认证字段</span>
             <select v-model="draft.authField">
-              <option value="ANTHROPIC_AUTH_TOKEN">ANTHROPIC_AUTH_TOKEN（默认）</option>
-              <option value="OPENAI_API_KEY">OPENAI_API_KEY</option>
-              <option value="GOOGLE_API_KEY">GOOGLE_API_KEY</option>
+              <option
+                v-for="field in activeRuntimeSchema.authFields"
+                :key="field"
+                :value="field"
+              >
+                {{ field }}
+              </option>
             </select>
           </label>
         </details>
@@ -200,28 +234,20 @@
               <h2>模型映射</h2>
               <p>仅在需要将请求映射到不同模型名称时填写。</p>
             </div>
-            <div class="providers-view__section-actions">
-              <button type="button" @click="fillModelDrafts">一键设置</button>
+            <!-- <div class="providers-view__section-actions">
               <button type="button">获取模型列表</button>
-            </div>
+            </div> -->
           </div>
 
           <div class="providers-view__form-grid">
-            <label class="providers-view__field">
-              <span>主模型</span>
-              <input v-model.trim="modelDrafts.main" type="text" />
-            </label>
-            <label class="providers-view__field">
-              <span>Haiku 默认模型</span>
-              <input v-model.trim="modelDrafts.haiku" type="text" />
-            </label>
-            <label class="providers-view__field">
-              <span>Sonnet 默认模型</span>
-              <input v-model.trim="modelDrafts.sonnet" type="text" />
-            </label>
-            <label class="providers-view__field">
-              <span>Opus 默认模型</span>
-              <input v-model.trim="modelDrafts.opus" type="text" />
+            <label
+              v-for="field in activeRuntimeSchema.modelFields"
+              :key="field.key"
+              class="providers-view__field"
+            >
+              <span>{{ field.label }}</span>
+              <input v-model.trim="modelDrafts[field.key]" type="text" />
+              <small v-if="field.description">{{ field.description }}</small>
             </label>
           </div>
         </section>
@@ -235,13 +261,46 @@
             </label>
           </div>
           <div class="providers-view__check-row">
-            <label><input v-model="draft.hideAiSignature" type="checkbox" />隐藏 AI 署名</label>
-            <label><input v-model="draft.teammatesMode" type="checkbox" />Teammates 模式</label>
-            <label><input v-model="draft.toolSearch" type="checkbox" />启用 Tool Search</label>
-            <label><input v-model="draft.maxThinking" type="checkbox" />最大强度思考</label>
-            <label><input v-model="draft.disableUpgrade" type="checkbox" />禁用自动升级</label>
+            <label
+              v-for="field in activeRuntimeSchema.optionFields"
+              :key="field.key"
+              class="providers-view__option-field"
+            >
+              <template v-if="field.type === 'number'">
+                <span>{{ field.label }}</span>
+                <input
+                  v-model.number="draft[field.key]"
+                  type="number"
+                  :disabled="field.dependsOn && !draft[field.dependsOn]"
+                />
+              </template>
+              <template v-else-if="field.type === 'select'">
+                <span>{{ field.label }}</span>
+                <select v-model="draft[field.key]">
+                  <option
+                    v-for="option in field.options"
+                    :key="option"
+                    :value="option"
+                  >
+                    {{ option }}
+                  </option>
+                </select>
+              </template>
+              <template v-else>
+                <input v-model="draft[field.key]" type="checkbox" />
+                {{ field.label }}
+              </template>
+            </label>
           </div>
-          <pre>{{ configPreview }}</pre>
+          <article
+            v-for="file in activeRuntimeSchema.configFiles"
+            :key="file.name"
+            class="providers-view__config-preview"
+          >
+            <h3>{{ file.name }} ({{ file.format }})</h3>
+            <pre>{{ configPreviewMap[file.name] }}</pre>
+            <p>{{ file.description }}</p>
+          </article>
         </section>
 
         <div class="providers-view__config-card">
@@ -275,29 +334,21 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from "vue"
 import {
   ArrowLeft,
-  ChartColumn,
   ChevronRight,
-  Copy,
   FlaskConical,
   Gauge,
   GripVertical,
-  History,
-  PanelRight,
-  Paperclip,
   Play,
   Plus,
-  Radio,
   Save,
-  Settings,
   SquarePen,
-  Terminal,
   Trash2,
-  Wrench
-} from 'lucide-vue-next'
-import AiIcon from '@/components/AiIcon.vue'
+  X
+} from "lucide-vue-next"
+import AiIcon from "@/components/AiIcon.vue"
 
 const props = defineProps({
   cliTargets: {
@@ -312,6 +363,10 @@ const props = defineProps({
     type: Array,
     required: true
   },
+  runtimeConfigSchemas: {
+    type: Object,
+    required: true
+  },
   runtimeModels: {
     type: Array,
     required: true
@@ -323,100 +378,159 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
-  'delete-provider',
-  'save-model',
-  'save-provider',
-  'switch-runtime'
+  "clear-runtime",
+  "delete-provider",
+  "save-provider",
+  "switch-runtime"
 ])
 
 const providerTypes = [
-  'anthropic',
-  'openai',
-  'gemini',
-  'open' + 'router',
-  'deep' + 'seek',
-  'custom'
+  "anthropic",
+  "openai",
+  "gemini",
+  "open" + "router",
+  "deep" + "seek",
+  "custom"
 ]
 
 const providerTypeLabelMap = {
-  anthropic: 'Anthropic Messages（原生）',
-  openai: 'OpenAI Chat Completions（需开启路由）',
-  gemini: 'Gemini Native generateContent（需开启路由）',
-  custom: 'Custom'
+  anthropic: "Anthropic Messages（原生）",
+  openai: "OpenAI Chat Completions（需开启路由）",
+  gemini: "Gemini Native generateContent（需开启路由）",
+  custom: "Custom"
 }
 
 const draft = reactive({
-  id: '',
-  cli: '',
-  name: '',
-  note: '',
-  website: '',
-  type: 'anthropic',
-  baseUrl: '',
-  proxy: '',
-  apiKey: '',
-  authField: 'ANTHROPIC_AUTH_TOKEN',
+  id: "",
+  cli: "",
+  icon: "",
+  name: "",
+  note: "",
+  website: "",
+  type: "anthropic",
+  baseUrl: "",
+  proxy: "",
+  apiKey: "",
+  authField: "ANTHROPIC_AUTH_TOKEN",
   enabled: true,
   writeCommonConfig: true,
   hideAiSignature: false,
   teammatesMode: true,
   toolSearch: false,
   maxThinking: true,
-  disableUpgrade: false
+  disableUpgrade: false,
+  modelContextWindowEnabled: false,
+  serviceTierFast: false,
+  modelReasoningEffort: "low",
+  modelAutoCompactTokenLimit: 900000
 })
 
 const modelDrafts = reactive({
-  main: '',
-  haiku: '',
-  sonnet: '',
-  opus: ''
+  mainModel: "",
+  haikuModel: "",
+  sonnetModel: "",
+  opusModel: ""
 })
 
-const activeCli = ref('')
-const runtimeEnabled = ref(false)
-const viewMode = ref('list')
+const activeCli = ref("")
+const viewMode = ref("list")
+const showIconPicker = ref(false)
+const iconKeyword = ref("")
+const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
+  query: "?url",
+  import: "default"
+})
+const iconOptions = Object.keys(iconModules)
+  .map((item) => item.split("/").pop())
+  .sort((left, right) => left.localeCompare(right))
 
-const selectedProvider = computed(() => {
-  return props.providers.find(item => item.id === draft.id) || null
+const visibleCliTargets = computed(() => {
+  return props.cliTargets.filter((item) => {
+    return props.runtimeConfigSchemas[item.id]?.enabled
+  })
 })
 
-const scopedProviders = computed(() => {
-  return props.providers.filter(item => item.cli === activeCli.value)
-})
-
-const profileMap = computed(() => {
-  return Object.fromEntries(props.runtimeProfiles.map(item => [item.cli, item]))
-})
-
-const configPreview = computed(() => {
-  return JSON.stringify(
-    {
-      env: {
-        [draft.authField]: draft.apiKey || '********',
-        ANTHROPIC_BASE_URL: draft.baseUrl,
-        ANTHROPIC_MODEL: modelDrafts.main,
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: modelDrafts.haiku,
-        ANTHROPIC_DEFAULT_SONNET_MODEL: modelDrafts.sonnet,
-        ANTHROPIC_DEFAULT_OPUS_MODEL: modelDrafts.opus,
-        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: draft.teammatesMode ? '1' : '0'
-      },
-      effortLevel: draft.maxThinking ? 'max' : 'default',
-      enabledPlugins: {},
-      includeCoAuthoredBy: !draft.hideAiSignature,
-      pluginConfigs: {},
-      teammateMode: draft.teammatesMode ? 'tmux' : 'off'
-    },
-    null,
-    2
+const activeRuntimeSchema = computed(() => {
+  return (
+    props.runtimeConfigSchemas[activeCli.value] || {
+      modelFields: [],
+      optionFields: [],
+      advancedFields: [],
+      configFiles: [],
+      authFields: [],
+      defaultProviderType: "custom"
+    }
   )
 })
 
+const selectedProvider = computed(() => {
+  return props.providers.find((item) => item.id === draft.id) || null
+})
+
+const scopedProviders = computed(() => {
+  return props.providers.filter((item) => item.cli === activeCli.value)
+})
+
+const profileMap = computed(() => {
+  return Object.fromEntries(
+    props.runtimeProfiles.map((item) => [item.cli, item])
+  )
+})
+
+const filteredIconOptions = computed(() => {
+  const keyword = iconKeyword.value.toLowerCase()
+
+  return iconOptions.filter((item) =>
+    iconLabel(item).toLowerCase().includes(keyword)
+  )
+})
+
+const configPreviewMap = computed(() => {
+  return Object.fromEntries(
+    activeRuntimeSchema.value.configFiles.map((file) => [
+      file.name,
+      applyConfigTemplate(file.template)
+    ])
+  )
+})
+
+function applyConfigTemplate(template) {
+  const values = {
+    authField: draft.authField,
+    apiKey: draft.apiKey || "********",
+    baseUrl: draft.baseUrl,
+    mainModel: modelDrafts.mainModel,
+    haikuModel: modelDrafts.haikuModel,
+    sonnetModel: modelDrafts.sonnetModel,
+    opusModel: modelDrafts.opusModel,
+    toolSearchText: draft.toolSearch ? "true" : "false",
+    disableUpgradeText: draft.disableUpgrade ? "1" : "0",
+    includeCoAuthoredBy: String(!draft.hideAiSignature),
+    teammatesMode: draft.teammatesMode,
+    teammateMode: "tmux",
+    effortLevel: draft.maxThinking ? "max" : "default",
+    writeCommonConfig: draft.writeCommonConfig,
+    modelContextWindowEnabled: draft.modelContextWindowEnabled,
+    serviceTierFast: draft.serviceTierFast,
+    modelReasoningEffort: draft.modelReasoningEffort,
+    modelAutoCompactTokenLimit: draft.modelAutoCompactTokenLimit || 900000
+  }
+
+  return String(template || "")
+    .replace(/\{\{#(\w+)}}([\s\S]*?)\{\{\/\1}}/g, (match, key, content) =>
+      values[key] ? content : ""
+    )
+    .replace(/\{\{(\w+)}}/g, (match, key) => {
+      return values[key] ?? match
+    })
+}
+
 function ensureActiveCli() {
-  if (props.cliTargets.find(item => item.id === activeCli.value)) {
+  if (visibleCliTargets.value.find((item) => item.id === activeCli.value)) {
     return
   }
 
-  activeCli.value = props.cliTargets[0]?.id || ''
+  activeCli.value = visibleCliTargets.value[0]?.id || ""
 }
 
 function selectCli(cli) {
@@ -424,73 +538,128 @@ function selectCli(cli) {
   clearDraft()
 }
 
-function selectProvider(provider) {
-  editProvider(provider)
-}
-
 function editProvider(provider) {
   draft.id = provider.id
   draft.cli = provider.cli || activeCli.value
+  draft.icon = provider.icon || ""
   draft.name = provider.name
-  draft.note = provider.note || ''
-  draft.website = provider.website || ''
+  draft.note = provider.note || ""
+  draft.website = provider.website || ""
   draft.type = provider.type
-  draft.baseUrl = provider.baseUrl || ''
-  draft.proxy = provider.proxy || ''
-  draft.apiKey = ''
+  draft.baseUrl = provider.baseUrl || ""
+  draft.proxy = provider.proxy || ""
+  draft.apiKey = ""
+  draft.authField = provider.authField || "ANTHROPIC_AUTH_TOKEN"
   draft.enabled = provider.enabled !== false
-  modelDrafts.main = firstModelName(provider.id)
-  modelDrafts.haiku = firstModelName(provider.id)
-  modelDrafts.sonnet = firstModelName(provider.id)
-  modelDrafts.opus = firstModelName(provider.id)
-  viewMode.value = 'edit'
+  modelDrafts.mainModel =
+    provider.runtimeConfig?.mainModel || firstModelName(provider.id)
+  modelDrafts.haikuModel =
+    provider.runtimeConfig?.haikuModel || firstModelName(provider.id)
+  modelDrafts.sonnetModel =
+    provider.runtimeConfig?.sonnetModel || firstModelName(provider.id)
+  modelDrafts.opusModel =
+    provider.runtimeConfig?.opusModel || firstModelName(provider.id)
+  draft.hideAiSignature = Boolean(provider.runtimeConfig?.hideAiSignature)
+  draft.teammatesMode = provider.runtimeConfig?.teammatesMode !== false
+  draft.toolSearch = Boolean(provider.runtimeConfig?.toolSearch)
+  draft.maxThinking = provider.runtimeConfig?.maxThinking !== false
+  draft.disableUpgrade = Boolean(provider.runtimeConfig?.disableUpgrade)
+  draft.writeCommonConfig = provider.runtimeConfig?.writeCommonConfig !== false
+  draft.modelContextWindowEnabled = Boolean(
+    provider.runtimeConfig?.modelContextWindowEnabled
+  )
+  draft.serviceTierFast = Boolean(provider.runtimeConfig?.serviceTierFast)
+  draft.modelReasoningEffort =
+    provider.runtimeConfig?.modelReasoningEffort || "low"
+  draft.modelAutoCompactTokenLimit =
+    provider.runtimeConfig?.modelAutoCompactTokenLimit || 900000
+  showIconPicker.value = false
+  iconKeyword.value = ""
+  viewMode.value = "edit"
 }
 
 function createProvider() {
   clearDraft()
-  viewMode.value = 'edit'
+  viewMode.value = "edit"
 }
 
 function clearDraft() {
-  draft.id = ''
+  draft.id = ""
   draft.cli = activeCli.value
-  draft.name = ''
-  draft.note = ''
-  draft.website = ''
-  draft.type = 'anthropic'
-  draft.baseUrl = ''
-  draft.proxy = ''
-  draft.apiKey = ''
-  draft.authField = 'ANTHROPIC_AUTH_TOKEN'
+  draft.icon = ""
+  draft.name = ""
+  draft.note = ""
+  draft.website = ""
+  draft.type = activeRuntimeSchema.value.defaultProviderType
+  draft.baseUrl = ""
+  draft.proxy = ""
+  draft.apiKey = ""
+  draft.authField =
+    activeRuntimeSchema.value.authFields[0] || "ANTHROPIC_AUTH_TOKEN"
   draft.enabled = true
-  modelDrafts.main = ''
-  modelDrafts.haiku = ''
-  modelDrafts.sonnet = ''
-  modelDrafts.opus = ''
+  draft.hideAiSignature = false
+  draft.teammatesMode = true
+  draft.toolSearch = false
+  draft.maxThinking = true
+  draft.disableUpgrade = false
+  draft.writeCommonConfig = true
+  draft.modelContextWindowEnabled = false
+  draft.serviceTierFast = false
+  draft.modelReasoningEffort = "low"
+  draft.modelAutoCompactTokenLimit = 900000
+  modelDrafts.mainModel = ""
+  modelDrafts.haikuModel = ""
+  modelDrafts.sonnetModel = ""
+  modelDrafts.opusModel = ""
+  showIconPicker.value = false
+  iconKeyword.value = ""
 }
 
 function firstModelName(providerId) {
-  return props.runtimeModels.find(item => item.providerId === providerId)?.name || ''
+  return (
+    props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
+    ""
+  )
 }
 
-function fillModelDrafts() {
-  const model = modelDrafts.main || modelDrafts.haiku || ''
-  modelDrafts.main = model
-  modelDrafts.haiku = model
-  modelDrafts.sonnet = model
-  modelDrafts.opus = model
+function iconLabel(icon) {
+  return String(icon || "").replace(/\.svg$/, "")
+}
+
+function selectIcon(icon) {
+  draft.icon = icon
+  showIconPicker.value = false
 }
 
 function submitProvider() {
   const payload = {
     id: draft.id || undefined,
     cli: draft.cli,
+    icon: draft.icon,
     name: draft.name,
     note: draft.note,
     website: draft.website,
     type: draft.type,
     baseUrl: draft.baseUrl,
     proxy: draft.proxy,
+    authField: draft.authField,
+    model: modelDrafts.mainModel,
+    runtimeConfig: {
+      mainModel: modelDrafts.mainModel,
+      haikuModel: modelDrafts.haikuModel,
+      sonnetModel: modelDrafts.sonnetModel,
+      opusModel: modelDrafts.opusModel,
+      toolSearch: draft.toolSearch,
+      disableUpgrade: draft.disableUpgrade,
+      hideAiSignature: draft.hideAiSignature,
+      teammatesMode: draft.teammatesMode,
+      maxThinking: draft.maxThinking,
+      writeCommonConfig: draft.writeCommonConfig,
+      modelContextWindowEnabled: draft.modelContextWindowEnabled,
+      serviceTierFast: draft.serviceTierFast,
+      modelReasoningEffort: draft.modelReasoningEffort,
+      modelAutoCompactTokenLimit: draft.modelAutoCompactTokenLimit
+    },
     enabled: draft.enabled
   }
 
@@ -498,45 +667,43 @@ function submitProvider() {
     payload.apiKey = draft.apiKey
   }
 
-  emit('save-provider', payload)
+  emit("save-provider", payload)
 
-  if (draft.id && modelDrafts.main) {
-    emit('save-model', {
-      id: `${draft.id}:${modelDrafts.main}`,
-      providerId: draft.id,
-      name: modelDrafts.main
-    })
-  }
-
-  viewMode.value = 'list'
+  viewMode.value = "list"
 }
 
 function enableProvider(provider) {
-  const model = firstModelName(provider.id)
+  const model = provider.runtimeConfig?.mainModel || firstModelName(provider.id)
 
   if (!model) {
     return
   }
 
-  emit('switch-runtime', {
+  emit("switch-runtime", {
     cli: activeCli.value,
     providerId: provider.id,
     model
   })
 }
 
+function clearRuntime() {
+  emit("clear-runtime", {
+    cli: activeCli.value
+  })
+}
+
 function removeProvider(provider) {
   const shouldContinue = window.confirm(
-    '删除 Provider 会同时删除关联模型和 Runtime Profile，是否继续？'
+    "删除 Provider 会同时删除关联模型和 Runtime Profile，是否继续？"
   )
 
   if (shouldContinue) {
-    emit('delete-provider', provider.id)
+    emit("delete-provider", provider.id)
   }
 }
 
 watch(
-  () => [props.cliTargets, props.providers],
+  () => [visibleCliTargets.value, props.providers],
   () => {
     ensureActiveCli()
   },
@@ -553,8 +720,7 @@ watch(
 }
 
 .providers-view__toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
   gap: 12px;
   min-height: 58px;
@@ -563,8 +729,6 @@ watch(
   background: #ffffff;
 }
 
-.providers-view__brand,
-.providers-view__tools,
 .providers-view__cli-tabs,
 .providers-view__provider-actions,
 .providers-view__section-actions,
@@ -575,18 +739,8 @@ watch(
   align-items: center;
 }
 
-.providers-view__brand {
-  gap: 14px;
-}
-
-.providers-view__brand strong {
-  color: #0878ff;
-  font-size: 1.08rem;
-}
-
-.providers-view__tools {
-  justify-content: flex-end;
-  gap: 8px;
+.providers-view__toolbar {
+  justify-content: space-between;
 }
 
 .providers-view__cli-tabs {
@@ -625,8 +779,9 @@ watch(
 .providers-view__icon-button,
 .providers-view__add,
 .providers-view__back {
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   background: transparent;
   color: #667085;
@@ -673,7 +828,7 @@ watch(
 }
 
 .providers-view__toggle span::before {
-  content: '';
+  content: "";
   display: block;
   width: 20px;
   height: 20px;
@@ -699,8 +854,7 @@ watch(
 }
 
 .providers-view__provider-card {
-  display: grid;
-  grid-template-columns: 24px 36px minmax(0, 1fr) auto;
+  display: flex;
   gap: 12px;
   align-items: center;
   min-height: 86px;
@@ -708,7 +862,6 @@ watch(
   border: 1px solid #dfe3e8;
   border-radius: 14px;
   background: #ffffff;
-  cursor: pointer;
 }
 
 .providers-view__provider-card--active {
@@ -717,13 +870,15 @@ watch(
 }
 
 .providers-view__drag {
+  flex: none;
   color: #c0c4cc;
 }
 
 .providers-view__avatar,
 .providers-view__edit-avatar {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   background: #f8fafc;
@@ -736,8 +891,14 @@ watch(
   height: 32px;
 }
 
+.providers-view__avatar-icon {
+  width: 22px;
+  height: 22px;
+}
+
 .providers-view__provider-main {
   display: flex;
+  flex: 1;
   min-width: 0;
   flex-direction: column;
   gap: 7px;
@@ -756,6 +917,7 @@ watch(
 }
 
 .providers-view__provider-actions {
+  flex: none;
   gap: 8px;
 }
 
@@ -787,9 +949,10 @@ watch(
 }
 
 .providers-view__empty {
-  display: grid;
+  display: flex;
   min-height: 220px;
-  place-items: center;
+  align-items: center;
+  justify-content: center;
   border: 1px dashed #d8dde5;
   border-radius: 14px;
   color: #667085;
@@ -833,24 +996,101 @@ watch(
   width: 78px;
   height: 78px;
   align-self: center;
+  padding: 0;
+  cursor: pointer;
   font-size: 1.4rem;
 }
 
-.providers-view__form-grid {
+.providers-view__avatar-picker {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.providers-view__edit-avatar-icon {
+  width: 48px;
+  height: 48px;
+}
+
+.providers-view__avatar-name {
+  color: #667085;
+  font-size: 0.85rem;
+}
+
+.providers-view__icon-panel {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #dfe3e8;
+  border-radius: 12px;
+  background: #fbfcfd;
+}
+
+.providers-view__icon-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  overflow: auto;
+  max-height: 360px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.providers-view__icon-option {
+  display: flex;
+  min-width: 0;
+  height: 86px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #475467;
+  cursor: pointer;
+}
+
+.providers-view__icon-option--active {
+  border-color: #1682ff;
+  background: #eef7ff;
+  color: #111827;
+}
+
+.providers-view__icon-option-image {
+  width: 30px;
+  height: 30px;
+  flex: none;
+}
+
+.providers-view__icon-option span {
+  overflow: hidden;
+  width: 100%;
+  font-size: 0.78rem;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.providers-view__form-grid {
+  display: flex;
+  flex-wrap: wrap;
   gap: 22px 16px;
 }
 
 .providers-view__field {
   display: flex;
   min-width: 0;
+  flex: 1 1 calc(50% - 8px);
   flex-direction: column;
   gap: 9px;
 }
 
 .providers-view__field--wide {
-  grid-column: span 2;
+  flex-basis: 100%;
 }
 
 .providers-view__field span,
@@ -933,11 +1173,29 @@ watch(
 }
 
 .providers-view__json-title label,
-.providers-view__check-row label {
+.providers-view__option-field {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   color: #667085;
+}
+
+.providers-view__option-field input[type="number"] {
+  width: 112px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #dfe3e8;
+  border-radius: 8px;
+  color: #111827;
+}
+
+.providers-view__option-field select {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #dfe3e8;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
 }
 
 .providers-view__check-row {
