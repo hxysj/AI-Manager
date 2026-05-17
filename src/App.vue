@@ -59,6 +59,21 @@
           @switch-runtime="switchRuntime"
         />
 
+        <RulesView
+          v-else-if="activeView === 'rules'"
+          :cli-targets="state.cliTargets"
+          :pending="pending"
+          :rules="state.rules"
+          @delete-rule="deleteRule"
+          @enable-rule="enableRule"
+          @import-rule="importRule"
+          @open-path="openPath"
+          @resolve-import-conflict="resolveRuleImportConflict"
+          @resolve-drift="resolveRuleDrift"
+          @save-rule="saveRule"
+          @toggle-rule="toggleRule"
+        />
+
         <ReposView
           v-else-if="activeView === 'repos'"
           :paths="state.paths"
@@ -89,7 +104,7 @@
           >
             返回
             {{
-              navItems.find((item) => item.id === currentPlaceholder.backTo)
+              navItems.find(item => item.id === currentPlaceholder.backTo)
                 ?.label
             }}
           </button>
@@ -129,13 +144,6 @@
 
     <SelectionTranslator />
     <GlobalLoading />
-
-    <div v-if="false" class="app-shell__loading">
-      <div class="app-shell__loading-card">
-        <span class="app-shell__loading-spinner"></span>
-        <strong>正在处理中...</strong>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -150,19 +158,20 @@ import {
   ShieldCheck
 } from "lucide-vue-next"
 import AppSidebar from "@/components/AppSidebar.vue"
-import SkillsView from "@/features/skills/index.vue"
-import SessionsView from "@/features/sessions/index.vue"
-import ProvidersView from "@/features/providers/index.vue"
-import ReposView from "@/features/repos/index.vue"
-import SettingsView from "@/features/settings/index.vue"
-import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
-import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
-import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
-import AddRepoModal from "@/features/repos/components/AddRepoModal.vue"
 import GlobalLoading from "@/components/GlobalLoading.vue"
 import SelectionTranslator from "@/components/SelectionTranslator.vue"
-import { createMessage } from "@/utils/message"
+import ProvidersView from "@/features/providers/index.vue"
+import ReposView from "@/features/repos/index.vue"
+import AddRepoModal from "@/features/repos/components/AddRepoModal.vue"
+import RulesView from "@/features/rules/index.vue"
+import SessionsView from "@/features/sessions/index.vue"
+import SettingsView from "@/features/settings/index.vue"
+import SkillsView from "@/features/skills/index.vue"
+import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
+import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
+import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
 import { useGlobalLoading } from "@/utils/global-loading"
+import { createMessage } from "@/utils/message"
 
 const navItems = [
   { id: "providers", label: "Providers", icon: Network },
@@ -179,20 +188,14 @@ const placeholderMap = {
     description: "当前视图已经接入 Session 聚合，请从侧边栏重新进入。",
     backTo: "providers"
   },
-  rules: {
-    title: "Rules 视图待扩展",
-    description:
-      "规则系统后续可以直接消费 Registry 与 Skill 元数据，这一版只保留导航骨架。",
-    backTo: "skills"
-  },
   workspace: {
     title: "Workspace 视图待扩展",
-    description: "当前工作区路径已经由主进程管理，可在设置页中配置相关目录。",
+    description: "当前工作区路径已经由主进程管理，可在设置页配置相关目录。",
     backTo: "providers"
   },
   settings: {
     title: "Settings",
-    description: "设置页已接入。",
+    description: "设置页已经接入。",
     backTo: "providers"
   }
 }
@@ -205,6 +208,12 @@ const state = reactive({
   codexAccounts: [],
   codexLoginState: null,
   providers: [],
+  rules: {
+    supportedClis: [],
+    prompts: [],
+    profiles: {},
+    runtimeState: {}
+  },
   runtimeConfigSchemas: {},
   runtimeModels: [],
   runtimeProfiles: [],
@@ -212,6 +221,8 @@ const state = reactive({
   paths: {
     workspaceRoot: "",
     skillsDir: "",
+    promptsDir: "",
+    promptProfilesDir: "",
     reposDir: "",
     sessionRecycleDir: "",
     storageDir: ""
@@ -248,7 +259,7 @@ let unsubscribe = null
 
 const selectedSkill = computed(() => {
   return (
-    state.skills.find((item) => item.name === selectedSkillName.value) || null
+    state.skills.find(item => item.name === selectedSkillName.value) || null
   )
 })
 
@@ -260,7 +271,7 @@ async function bootstrap() {
   await withGlobalLoading(async () => {
     try {
       updateState(await window.aiManager.bootstrap())
-      unsubscribe = window.aiManager.onStateChanged((nextState) => {
+      unsubscribe = window.aiManager.onStateChanged(nextState => {
         updateState(nextState)
       })
     } catch (error) {
@@ -277,6 +288,7 @@ function updateState(nextState) {
   state.codexAccounts = nextState.codexAccounts || []
   state.codexLoginState = nextState.codexLoginState || null
   state.providers = nextState.providers || []
+  state.rules = nextState.rules || state.rules
   state.runtimeConfigSchemas = nextState.runtimeConfigSchemas || {}
   state.runtimeModels = nextState.runtimeModels || []
   state.runtimeProfiles = nextState.runtimeProfiles || []
@@ -287,7 +299,7 @@ function updateState(nextState) {
 
   if (
     selectedSkillName.value &&
-    !state.skills.find((item) => item.name === selectedSkillName.value)
+    !state.skills.find(item => item.name === selectedSkillName.value)
   ) {
     selectedSkillName.value = ""
   }
@@ -297,7 +309,7 @@ async function runAction(action) {
   return withGlobalLoading(async () => {
     try {
       const nextState = await action()
-      if (nextState && typeof nextState === "object" && "skills" in nextState) {
+      if (nextState && typeof nextState === "object") {
         updateState(nextState)
       }
       return true
@@ -334,7 +346,7 @@ async function saveSettings(payload) {
   if (success) {
     showSuccessMessage(
       state.appSettings.restartRequired
-        ? "设置已保存，Data 目录将在重启后生效。"
+        ? "设置已保存，数据目录将在重启后生效。"
         : "设置已保存并重新刷新。"
     )
   }
@@ -362,7 +374,7 @@ async function importSkillsFromCli() {
       }
 
       if (!candidates.length && !conflicts.length) {
-      showSuccessMessage("所有 Skill 已经在 AI Manager 集中管理中。")
+        showSuccessMessage("当前没有可导入的 Skill。")
         return
       }
 
@@ -441,7 +453,7 @@ async function syncAllRepos() {
 
 async function removeRepo(repoId) {
   const shouldContinue = window.confirm(
-    "删除 Repo 会先卸载它挂载到 CLI 的 Skill 链接，是否继续？"
+    "删除 Repo 会先卸载它挂载到 CLI 的 Skill，是否继续？"
   )
 
   if (!shouldContinue) {
@@ -460,6 +472,74 @@ async function saveProvider(payload) {
 
   if (success) {
     showSuccessMessage("Provider 已保存。")
+  }
+}
+
+async function saveRule(payload) {
+  const success = await runAction(() => window.aiManager.saveRule(payload))
+
+  if (success) {
+    showSuccessMessage("Prompt 已保存。")
+  }
+}
+
+async function deleteRule(ruleId) {
+  const success = await runAction(() =>
+    window.aiManager.deleteRule({ ruleId })
+  )
+
+  if (success) {
+    showSuccessMessage("Prompt 已删除。")
+  }
+}
+
+async function enableRule(payload) {
+  const success = await runAction(() => window.aiManager.enableRule(payload))
+
+  if (success) {
+    showSuccessMessage("Prompt 已启用并同步到全局文件。")
+  }
+}
+
+async function toggleRule(payload) {
+  const success = await runAction(() => window.aiManager.toggleRule(payload))
+
+  if (success && payload.enabled === false) {
+    showSuccessMessage("Prompt 已取消启用。")
+  }
+}
+
+async function importRule(payload) {
+  const success = await runAction(() =>
+    window.aiManager.importGlobalRule(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("已导入当前全局 Prompt。")
+  }
+}
+
+async function resolveRuleImportConflict(payload) {
+  const success = await runAction(() =>
+    window.aiManager.resolveRuleImportConflict(payload)
+  )
+
+  if (success) {
+    if (payload.source === "manager") {
+      showSuccessMessage("已保留管理器版本。")
+    } else {
+      showSuccessMessage("已使用全局版本更新相似 Prompt。")
+    }
+  }
+}
+
+async function resolveRuleDrift(payload) {
+  const success = await runAction(() =>
+    window.aiManager.resolveRuleDrift(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Prompt Drift 已处理。")
   }
 }
 
@@ -493,7 +573,7 @@ async function importCodexAuthJson(payload) {
   )
 
   if (success) {
-    showSuccessMessage("Codex 登录 JSON 数据已验证并导入。")
+    showSuccessMessage("Codex 登录 JSON 已导入。")
   }
 }
 
@@ -631,43 +711,6 @@ onBeforeUnmount(() => {
     margin: 0 0 18px;
     color: var(--color-text-muted);
     line-height: 1.7;
-  }
-
-  &__loading {
-    position: fixed;
-    inset: 0;
-    z-index: 90;
-    display: grid;
-    place-items: center;
-    background: rgba(15, 23, 42, 0.18);
-    backdrop-filter: blur(2px);
-  }
-
-  &__loading-card {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 16px 20px;
-    border: 1px solid var(--color-line);
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.96);
-    box-shadow: 0 18px 42px rgba(34, 56, 83, 0.18);
-    color: var(--color-text);
-  }
-
-  &__loading-spinner {
-    width: 18px;
-    height: 18px;
-    border: 2px solid #d7e0ea;
-    border-top-color: var(--color-primary);
-    border-radius: 50%;
-    animation: app-shell-spin 0.8s linear infinite;
-  }
-}
-
-@keyframes app-shell-spin {
-  to {
-    transform: rotate(360deg);
   }
 }
 
