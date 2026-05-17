@@ -2,6 +2,9 @@
   "name": "ai-manager",
   "version": "0.1.0",
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
+  "config": {
+    "electron_mirror": "https://npmmirror.com/mirrors/electron/"
+  },
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
