@@ -20,6 +20,7 @@ const { FileWatcherService } = require("./file-watcher-service.cjs")
 const { SessionService } = require("./session-service.cjs")
 const { CodexAccountService } = require("./codex-account-service.cjs")
 const { RuntimeProviderService } = require("./runtime-provider-service.cjs")
+const { PromptRuntimeService } = require("./prompt-runtime-service.cjs")
 
 const execFileAsync = promisify(execFile)
 
@@ -34,6 +35,53 @@ async function pathExists(targetPath) {
 
 function sortByName(items) {
   return [...items].sort((left, right) => left.name.localeCompare(right.name))
+}
+
+function normalizeRuleTags(value) {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean)
+}
+
+function normalizeRule(input, previous) {
+  const cli = String(input.cli || previous?.cli || "").trim()
+  const name = String(input.name || previous?.name || "").trim()
+  const content = String(input.content || previous?.content || "")
+
+  if (!cli) {
+    throw new Error("Rule 必须选择 CLI")
+  }
+
+  if (!name) {
+    throw new Error("Rule 名称不能为空")
+  }
+
+  if (!content.trim()) {
+    throw new Error("Rule 内容不能为空")
+  }
+
+  return {
+    id: previous?.id || input.id || `rule-${crypto.randomUUID()}`,
+    cli,
+    name,
+    description:
+      String(input.description || previous?.description || "").trim() ||
+      undefined,
+    category:
+      String(input.category || previous?.category || "").trim() || undefined,
+    tags: normalizeRuleTags(input.tags || previous?.tags),
+    content,
+    enabled:
+      input.enabled === undefined
+        ? previous?.enabled !== false
+        : Boolean(input.enabled),
+    createdAt: previous?.createdAt || Date.now(),
+    updatedAt: Date.now()
+  }
 }
 
 async function collectSkillFiles(rootPath) {
@@ -116,6 +164,7 @@ class ManagerService extends EventEmitter {
     this.sessionService.bindStorage(this.storage)
     this.codexAccountService = new CodexAccountService(this.storage)
     this.runtimeProviderService = new RuntimeProviderService(this.storage)
+    this.promptRuntimeService = new PromptRuntimeService(this.paths)
     this.state = {
       cliTargets: [],
       skills: [],
@@ -124,6 +173,7 @@ class ManagerService extends EventEmitter {
       codexAccounts: [],
       codexLoginState: null,
       providers: [],
+      rules: this.promptRuntimeService.getState(),
       runtimeConfigSchemas: {},
       runtimeModels: [],
       runtimeProfiles: [],
@@ -139,6 +189,7 @@ class ManagerService extends EventEmitter {
     await this.repoService.init()
     await this.sessionService.init()
     await this.codexAccountService.init()
+    await this.promptRuntimeService.init()
     this.codexAccountService.on("changed", (codexAccounts) => {
       this.state = {
         ...this.state,
@@ -166,6 +217,8 @@ class ManagerService extends EventEmitter {
     return {
       workspaceRoot: this.paths.workspaceRoot,
       skillsDir: this.paths.skillsDir,
+      promptsDir: this.paths.promptsDir,
+      promptProfilesDir: this.paths.promptProfilesDir,
       reposDir: this.paths.reposDir,
       sessionRecycleDir: this.paths.sessionRecycleDir,
       storageDir: this.paths.storageDir
@@ -194,14 +247,26 @@ class ManagerService extends EventEmitter {
       this.appSettings.cliConfigPaths
     )
     this.linkManager = new LinkManager(this.cliDetectionService)
+    this.promptRuntimeService = new PromptRuntimeService(this.paths)
+    await this.promptRuntimeService.init()
     await this.refreshAll({ preferDetectedPaths: true })
   }
 
   startWatcher() {
     const repoPaths = this.repoService.listRepos().map((item) => item.localPath)
+    const promptRuntimePaths = this.promptRuntimeService.getRuntimeWatchPaths(
+      this.state.cliTargets
+    )
 
     this.fileWatcherService.restart(
-      [this.paths.skillsDir, this.paths.reposDir, ...repoPaths],
+      [
+        this.paths.skillsDir,
+        this.paths.promptsDir,
+        this.paths.promptProfilesDir,
+        this.paths.reposDir,
+        ...repoPaths,
+        ...promptRuntimePaths
+      ],
       async () => {
         await this.refreshAll()
       }
@@ -253,6 +318,8 @@ class ManagerService extends EventEmitter {
       skillCount: 0
     }))
     const runtimeState = this.runtimeProviderService.getState()
+    await this.promptRuntimeService.refreshDrift(cliTargets)
+    const rules = this.promptRuntimeService.getState()
     const scannedItems = await this.skillScanner.scanMany([
       { rootPath: this.paths.skillsDir, repoId: null },
       ...repos.map((repo) => ({
@@ -365,6 +432,7 @@ class ManagerService extends EventEmitter {
       codexAccounts: this.codexAccountService.getState(),
       codexLoginState: this.codexAccountService.getLoginState(),
       ...runtimeState,
+      rules,
       diagnostics: [...diagnostics, ...sessionDiagnostics],
       paths: this.toPublicPaths(),
       appSettings: this.toPublicSettings(false),
@@ -1032,6 +1100,245 @@ class ManagerService extends EventEmitter {
     this.state = {
       ...this.state,
       ...this.runtimeProviderService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  persistRules() {
+    this.storage.scheduleWrite("rules", [])
+  }
+
+  async saveRule(input) {
+    await this.promptRuntimeService.savePrompt(input)
+    await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async deleteRule(ruleId) {
+    const targetId = String(ruleId || "").trim()
+
+    await this.promptRuntimeService.deletePrompt(targetId)
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async toggleRule(input) {
+    const rule = this.rules.find((item) => item.id === input.ruleId)
+
+    if (!rule) {
+      throw new Error("Rule 不存在")
+    }
+
+    return this.saveRule({
+      ...rule,
+      enabled: input.enabled
+    })
+  }
+
+  async moveRule(input) {
+    const ruleId = String(input.ruleId || "").trim()
+    const direction = String(input.direction || "").trim()
+    const currentIndex = this.rules.findIndex((item) => item.id === ruleId)
+
+    if (currentIndex < 0) {
+      throw new Error("Rule 不存在")
+    }
+
+    const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1
+
+    if (nextIndex < 0 || nextIndex >= this.rules.length) {
+      return this.state
+    }
+
+    const nextRules = [...this.rules]
+    const [rule] = nextRules.splice(currentIndex, 1)
+    nextRules.splice(nextIndex, 0, rule)
+    this.rules = nextRules
+    this.persistRules()
+    this.state = {
+      ...this.state,
+      rules: [...this.rules],
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async saveRule(input) {
+    await this.promptRuntimeService.savePrompt(input)
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async deleteRule(ruleId) {
+    await this.promptRuntimeService.deletePrompt(String(ruleId || "").trim())
+    await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async toggleRule(input) {
+    if (input.enabled === false) {
+      throw new Error("全局 Prompt 必须保持单 active，请切换到其他 Prompt")
+    }
+
+    return this.enableRule(input.ruleId)
+  }
+
+  async enableRule(ruleId) {
+    const prompt = this.promptRuntimeService.prompts.find(
+      item => item.id === ruleId
+    )
+
+    if (!prompt) {
+      throw new Error("Prompt 不存在")
+    }
+
+    await this.promptRuntimeService.enablePrompt(
+      prompt.id,
+      this.state.cliTargets.find(item => item.id === prompt.cli)
+    )
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async moveRule() {
+    return this.state
+  }
+
+  async importRule(input) {
+    await this.promptRuntimeService.importGlobalPrompt(
+      input,
+      this.state.cliTargets.find(item => item.id === input.cli)
+    )
+    await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async previewImportRule(input) {
+    return this.promptRuntimeService.previewImportGlobalPrompt(
+      input,
+      this.state.cliTargets.find(item => item.id === input.cli)
+    )
+  }
+
+  async resolveRuleImportConflict(input) {
+    await this.promptRuntimeService.resolveImportConflict(input)
+    await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async compareRule(input) {
+    return this.promptRuntimeService.comparePrompt(
+      input.ruleId,
+      this.state.cliTargets.find(item => item.id === input.cli)
+    )
+  }
+
+  async resolveRuleDrift(input) {
+    await this.promptRuntimeService.resolveDrift(
+      input,
+      this.state.cliTargets.find(item => item.id === input.cli)
+    )
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async saveRule(input) {
+    await this.promptRuntimeService.savePrompt(input)
+    await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async toggleRule(input) {
+    if (input.enabled === false) {
+      await this.promptRuntimeService.disablePrompt(
+        {
+          cli: input.cli,
+          promptId: input.ruleId
+        },
+        this.state.cliTargets.find(item => item.id === input.cli)
+      )
+      await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
+      this.state = {
+        ...this.state,
+        rules: this.promptRuntimeService.getState(),
+        refreshedAt: Date.now()
+      }
+      this.emit("state-changed", this.state)
+      return this.state
+    }
+
+    return this.enableRule(input.ruleId)
+  }
+
+  async enableRule(ruleId) {
+    const prompt = this.promptRuntimeService.prompts.find(
+      item => item.id === ruleId
+    )
+
+    if (!prompt) {
+      throw new Error("Prompt 不存在")
+    }
+
+    await this.promptRuntimeService.enablePrompt(
+      prompt.id,
+      this.state.cliTargets.find(item => item.id === prompt.cli)
+    )
+    this.state = {
+      ...this.state,
+      rules: this.promptRuntimeService.getState(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)

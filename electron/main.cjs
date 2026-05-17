@@ -251,6 +251,46 @@ function registerIpc() {
     return managerService.deleteProvider(payload.providerId)
   })
 
+  ipcMain.handle("rule:save", async (_, payload) => {
+    return managerService.saveRule(payload)
+  })
+
+  ipcMain.handle("rule:delete", async (_, payload) => {
+    return managerService.deleteRule(payload.ruleId)
+  })
+
+  ipcMain.handle("rule:toggle", async (_, payload) => {
+    return managerService.toggleRule(payload)
+  })
+
+  ipcMain.handle("rule:enable", async (_, payload) => {
+    return managerService.enableRule(payload.ruleId)
+  })
+
+  ipcMain.handle("rule:move", async (_, payload) => {
+    return managerService.moveRule(payload)
+  })
+
+  ipcMain.handle("rule:import-global", async (_, payload) => {
+    return managerService.importRule(payload)
+  })
+
+  ipcMain.handle("rule:preview-import-global", async (_, payload) => {
+    return managerService.previewImportRule(payload)
+  })
+
+  ipcMain.handle("rule:resolve-import-conflict", async (_, payload) => {
+    return managerService.resolveRuleImportConflict(payload)
+  })
+
+  ipcMain.handle("rule:compare", async (_, payload) => {
+    return managerService.compareRule(payload)
+  })
+
+  ipcMain.handle("rule:resolve-drift", async (_, payload) => {
+    return managerService.resolveRuleDrift(payload)
+  })
+
   ipcMain.handle("codex-account:login", async (_, payload) => {
     return managerService.startCodexOfficialLogin(payload)
   })
@@ -327,7 +367,7 @@ app.whenReady().then(async () => {
   managerService = new ManagerService(app.getPath("userData"), appSettings)
   translationService = new TranslationService(app.getPath("userData"))
   await managerService.init()
-  managerService.on("state-changed", (state) => {
+  managerService.on("state-changed", state => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("state:changed", state)
     }
