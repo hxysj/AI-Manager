@@ -2,12 +2,16 @@
   <BaseModal
     title="确认导入 Skill"
     description="选择需要从 CLI 真实目录导入到 AI Manager 集中管理的 Skill。"
-    @close="$emit('close')"
+    @close="handleClose"
   >
     <form class="import-skills-modal" @submit.prevent="submit">
       <div class="import-skills-modal__summary">
-        <span>可导入 {{ candidateItems.length }} 个</span>
-        <span v-if="conflictItems.length">需确认 {{ conflictItems.length }} 个</span>
+        <span>可导入 {{ candidateItems.length }} 项</span>
+        <span v-if="conflictItems.length">需确认 {{ conflictItems.length }} 项</span>
+      </div>
+
+      <div v-if="loading" class="import-skills-modal__loading">
+        正在导入 Skill，请稍候...
       </div>
 
       <div class="import-skills-modal__body">
@@ -23,6 +27,7 @@
                 v-model="selectedSources"
                 type="checkbox"
                 :value="candidate.id"
+                :disabled="loading"
               />
               <span class="import-skills-modal__content">
                 <strong>{{ candidate.name }}</strong>
@@ -55,6 +60,7 @@
                 type="radio"
                 :name="`skill-conflict-${conflict.name}`"
                 :value="option.id"
+                :disabled="loading"
               />
               <span class="import-skills-modal__content">
                 <strong>{{ option.alreadyManaged ? '保留 Manager 版本' : option.name }}</strong>
@@ -67,15 +73,20 @@
       </div>
 
       <div class="import-skills-modal__actions">
-        <button class="action-button" type="button" @click="$emit('close')">
+        <button
+          class="action-button"
+          type="button"
+          :disabled="loading"
+          @click="handleClose"
+        >
           取消
         </button>
         <button
           class="action-button action-button--primary"
           type="submit"
-          :disabled="!canSubmit"
+          :disabled="loading || !canSubmit"
         >
-          导入选中项
+          {{ loading ? '导入中...' : '导入选中项' }}
         </button>
       </div>
     </form>
@@ -90,6 +101,10 @@ const props = defineProps({
   candidates: {
     type: [Array, Object],
     required: true
+  },
+  loading: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -100,11 +115,14 @@ const candidateItems = computed(() => {
     ? props.candidates
     : props.candidates.candidates || []
 })
+
 const conflictItems = computed(() => {
   return Array.isArray(props.candidates) ? [] : props.candidates.conflicts || []
 })
+
 const selectedSources = ref([])
 const selectedConflicts = reactive({})
+
 const canSubmit = computed(() => {
   return (
     selectedSources.value.length ||
@@ -128,6 +146,10 @@ watch(
 )
 
 function submit() {
+  if (props.loading) {
+    return
+  }
+
   emit('submit', {
     sourcePaths: candidateItems.value
       .filter(item => selectedSources.value.includes(item.id))
@@ -144,12 +166,20 @@ function submit() {
     }))
   })
 }
+
+function handleClose() {
+  if (props.loading) {
+    return
+  }
+
+  emit('close')
+}
 </script>
 
 <style scoped lang="less">
 .import-skills-modal {
   display: flex;
-  max-height: 620px;
+  height: min(620px, calc(100vh - 180px));
   min-height: 0;
   flex-direction: column;
   gap: 12px;
@@ -168,8 +198,19 @@ function submit() {
     background: var(--color-primary-soft);
   }
 
+  &__loading {
+    padding: 10px 12px;
+    border: 1px solid #d8e2ec;
+    border-radius: 8px;
+    background: #f6f9fc;
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    font-weight: 600;
+  }
+
   &__body {
     display: flex;
+    flex: 1;
     min-height: 0;
     flex-direction: column;
     gap: 12px;
@@ -281,6 +322,10 @@ function submit() {
     justify-content: flex-end;
     gap: 10px;
     padding-top: 6px;
+  }
+
+  :deep(.base-modal__content) {
+    overflow: hidden;
   }
 }
 

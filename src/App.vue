@@ -116,6 +116,7 @@
     <ImportSkillsModal
       v-if="showImportSkills"
       :candidates="importCandidates"
+      :loading="pending"
       @close="showImportSkills = false"
       @submit="confirmImportSkills"
     />
@@ -127,6 +128,14 @@
     />
 
     <SelectionTranslator />
+    <GlobalLoading />
+
+    <div v-if="false" class="app-shell__loading">
+      <div class="app-shell__loading-card">
+        <span class="app-shell__loading-spinner"></span>
+        <strong>正在处理中...</strong>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -150,8 +159,10 @@ import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
 import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
 import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
 import AddRepoModal from "@/features/repos/components/AddRepoModal.vue"
+import GlobalLoading from "@/components/GlobalLoading.vue"
 import SelectionTranslator from "@/components/SelectionTranslator.vue"
 import { createMessage } from "@/utils/message"
+import { useGlobalLoading } from "@/utils/global-loading"
 
 const navItems = [
   { id: "providers", label: "Providers", icon: Network },
@@ -225,13 +236,13 @@ const state = reactive({
 })
 
 const activeView = ref("providers")
-const pending = ref(false)
 const sidebarCollapsed = ref(false)
 const selectedSkillName = ref("")
 const showCreateSkill = ref(false)
 const showImportSkills = ref(false)
 const showAddRepo = ref(false)
 const importCandidates = ref([])
+const { loading: pending, withGlobalLoading } = useGlobalLoading()
 
 let unsubscribe = null
 
@@ -246,18 +257,16 @@ const currentPlaceholder = computed(() => {
 })
 
 async function bootstrap() {
-  pending.value = true
-
-  try {
-    updateState(await window.aiManager.bootstrap())
-    unsubscribe = window.aiManager.onStateChanged((nextState) => {
-      updateState(nextState)
-    })
-  } catch (error) {
-    showErrorMessage(error)
-  } finally {
-    pending.value = false
-  }
+  await withGlobalLoading(async () => {
+    try {
+      updateState(await window.aiManager.bootstrap())
+      unsubscribe = window.aiManager.onStateChanged((nextState) => {
+        updateState(nextState)
+      })
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
 }
 
 function updateState(nextState) {
@@ -285,20 +294,18 @@ function updateState(nextState) {
 }
 
 async function runAction(action) {
-  pending.value = true
-
-  try {
-    const nextState = await action()
-    if (nextState && typeof nextState === "object" && "skills" in nextState) {
-      updateState(nextState)
+  return withGlobalLoading(async () => {
+    try {
+      const nextState = await action()
+      if (nextState && typeof nextState === "object" && "skills" in nextState) {
+        updateState(nextState)
+      }
+      return true
+    } catch (error) {
+      showErrorMessage(error)
+      return false
     }
-    return true
-  } catch (error) {
-    showErrorMessage(error)
-    return false
-  } finally {
-    pending.value = false
-  }
+  })
 }
 
 function selectSkill(skill) {
@@ -343,29 +350,27 @@ async function createSkill(payload) {
 }
 
 async function importSkillsFromCli() {
-  pending.value = true
+  await withGlobalLoading(async () => {
+    try {
+      const preview = await window.aiManager.previewSkillsFromCli()
+      const candidates = Array.isArray(preview) ? preview : preview.candidates
+      const conflicts = Array.isArray(preview) ? [] : preview.conflicts
 
-  try {
-    const preview = await window.aiManager.previewSkillsFromCli()
-    const candidates = Array.isArray(preview) ? preview : preview.candidates
-    const conflicts = Array.isArray(preview) ? [] : preview.conflicts
+      importCandidates.value = {
+        candidates,
+        conflicts
+      }
 
-    importCandidates.value = {
-      candidates,
-      conflicts
-    }
-
-    if (!candidates.length && !conflicts.length) {
+      if (!candidates.length && !conflicts.length) {
       showSuccessMessage("所有 Skill 已经在 AI Manager 集中管理中。")
-      return
-    }
+        return
+      }
 
-    showImportSkills.value = true
-  } catch (error) {
-    showErrorMessage(error)
-  } finally {
-    pending.value = false
-  }
+      showImportSkills.value = true
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
 }
 
 async function importSkillFromZip() {
@@ -561,15 +566,13 @@ async function openPath(targetPath) {
     return
   }
 
-  pending.value = true
-
-  try {
-    await window.aiManager.openPath({ targetPath })
-  } catch (error) {
-    showErrorMessage(error)
-  } finally {
-    pending.value = false
-  }
+  await withGlobalLoading(async () => {
+    try {
+      await window.aiManager.openPath({ targetPath })
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
 }
 
 onMounted(() => {
@@ -628,6 +631,43 @@ onBeforeUnmount(() => {
     margin: 0 0 18px;
     color: var(--color-text-muted);
     line-height: 1.7;
+  }
+
+  &__loading {
+    position: fixed;
+    inset: 0;
+    z-index: 90;
+    display: grid;
+    place-items: center;
+    background: rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(2px);
+  }
+
+  &__loading-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border: 1px solid var(--color-line);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.96);
+    box-shadow: 0 18px 42px rgba(34, 56, 83, 0.18);
+    color: var(--color-text);
+  }
+
+  &__loading-spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #d7e0ea;
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: app-shell-spin 0.8s linear infinite;
+  }
+}
+
+@keyframes app-shell-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
