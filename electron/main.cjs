@@ -16,6 +16,25 @@ const defaultCliConfigPaths = {
   codex: path.join(os.homedir(), ".codex"),
   gemini: path.join(os.homedir(), ".gemini")
 }
+const defaultCloudSyncSettings = {
+  provider: "jianguoyun",
+  webdavUrl: "https://dav.jianguoyun.com/dav/AI-Manager",
+  username: "",
+  password: "",
+  fileName: "ai-manager.aimbackup"
+}
+
+function normalizeCloudSyncSettings(input = {}) {
+  return {
+    provider: "jianguoyun",
+    webdavUrl: String(
+      input.webdavUrl || defaultCloudSyncSettings.webdavUrl
+    ).trim(),
+    username: String(input.username || "").trim(),
+    password: String(input.password || ""),
+    fileName: String(input.fileName || defaultCloudSyncSettings.fileName).trim()
+  }
+}
 
 function normalizeAppSettings(input = {}) {
   return {
@@ -33,8 +52,81 @@ function normalizeAppSettings(input = {}) {
         input.cliConfigPaths?.gemini || defaultCliConfigPaths.gemini
       ).trim()
     },
-    defaultCliConfigPaths
+    defaultCliConfigPaths,
+    cloudSync: normalizeCloudSyncSettings(input.cloudSync)
   }
+}
+
+function encodeWebDavPath(value) {
+  return String(value || "")
+    .split("/")
+    .filter(Boolean)
+    .map((item) => encodeURIComponent(item))
+    .join("/")
+}
+
+function buildWebDavFileUrl(config) {
+  const rootUrl = config.webdavUrl.endsWith("/")
+    ? config.webdavUrl
+    : `${config.webdavUrl}/`
+
+  return new URL(encodeWebDavPath(config.fileName), rootUrl).toString()
+}
+
+function buildWebDavAuthHeader(config) {
+  return `Basic ${Buffer.from(
+    `${config.username}:${config.password}`,
+    "utf8"
+  ).toString("base64")}`
+}
+
+async function ensureWebDavDirectory(config) {
+  const response = await fetch(config.webdavUrl, {
+    method: "MKCOL",
+    headers: {
+      Authorization: buildWebDavAuthHeader(config)
+    }
+  })
+
+  if (![201, 405].includes(response.status)) {
+    throw new Error(`坚果云目录创建失败：${response.status}`)
+  }
+}
+
+async function uploadWebDavBackup(config, content) {
+  await ensureWebDavDirectory(config)
+
+  const response = await fetch(buildWebDavFileUrl(config), {
+    method: "PUT",
+    headers: {
+      Authorization: buildWebDavAuthHeader(config),
+      "Content-Type": "application/octet-stream"
+    },
+    body: content
+  })
+
+  if (![200, 201, 204].includes(response.status)) {
+    throw new Error(`坚果云上传失败：${response.status}`)
+  }
+}
+
+async function downloadWebDavBackup(config) {
+  const response = await fetch(buildWebDavFileUrl(config), {
+    method: "GET",
+    headers: {
+      Authorization: buildWebDavAuthHeader(config)
+    }
+  })
+
+  if (response.status === 404) {
+    throw new Error("坚果云上未找到配置备份")
+  }
+
+  if (response.status !== 200) {
+    throw new Error(`坚果云下载失败：${response.status}`)
+  }
+
+  return response.text()
 }
 
 function loadAppSettings() {
@@ -210,6 +302,43 @@ function registerIpc() {
 
     return {
       canceled: false,
+      state: await restartManagerService(appSettings)
+    }
+  })
+
+  ipcMain.handle("data:cloud-push", async (_, payload) => {
+    const cloudSync = normalizeCloudSyncSettings(payload)
+    await uploadWebDavBackup(
+      cloudSync,
+      await managerService.createDataBackup()
+    )
+    appSettings = normalizeAppSettings({
+      ...appSettings,
+      cloudSync
+    })
+    saveAppSettings(appSettings)
+    managerService.setAppSettings(appSettings)
+
+    return {
+      uploadedAt: Date.now(),
+      fileName: cloudSync.fileName
+    }
+  })
+
+  ipcMain.handle("data:cloud-pull", async (_, payload) => {
+    const cloudSync = normalizeCloudSyncSettings(payload)
+    const restoreResult = await managerService.restoreDataBackup(
+      await downloadWebDavBackup(cloudSync)
+    )
+    appSettings = normalizeAppSettings({
+      ...restoreResult.appSettings,
+      cloudSync
+    })
+    saveAppSettings(appSettings)
+
+    return {
+      downloadedAt: Date.now(),
+      fileName: cloudSync.fileName,
       state: await restartManagerService(appSettings)
     }
   })

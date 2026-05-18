@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("settings:save", toPlainPayload(payload)),
   exportDataBackup: () => ipcRenderer.invoke("data:export"),
   restoreDataBackup: () => ipcRenderer.invoke("data:restore"),
+  pushCloudBackup: payload =>
+    ipcRenderer.invoke("data:cloud-push", toPlainPayload(payload)),
+  pullCloudBackup: payload =>
+    ipcRenderer.invoke("data:cloud-pull", toPlainPayload(payload)),
   selectDirectory: payload =>
     ipcRenderer.invoke("system:select-directory", toPlainPayload(payload)),
   selectFile: payload =>

@@ -94,6 +94,8 @@
           :cli-targets="state.cliTargets"
           :pending="pending"
           @export-data="exportDataBackup"
+          @pull-cloud-data="pullCloudBackup"
+          @push-cloud-data="pushCloudBackup"
           @open-path="openPath"
           @restore-data="restoreDataBackup"
           @save="saveSettings"
@@ -247,6 +249,13 @@ const state = reactive({
       claude: "",
       codex: "",
       gemini: ""
+    },
+    cloudSync: {
+      provider: "jianguoyun",
+      webdavUrl: "",
+      username: "",
+      password: "",
+      fileName: ""
     }
   },
   refreshedAt: 0
@@ -394,6 +403,37 @@ async function restoreDataBackup() {
 
       updateState(result.state)
       showSuccessMessage("配置数据已恢复。")
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
+}
+
+async function pushCloudBackup(payload) {
+  await withGlobalLoading(async () => {
+    try {
+      await window.aiManager.pushCloudBackup(payload)
+      showSuccessMessage("配置数据已推送到坚果云。")
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
+}
+
+async function pullCloudBackup(payload) {
+  const shouldContinue = window.confirm(
+    "从坚果云恢复配置会覆盖当前配置数据，是否继续？"
+  )
+
+  if (!shouldContinue) {
+    return
+  }
+
+  await withGlobalLoading(async () => {
+    try {
+      const result = await window.aiManager.pullCloudBackup(payload)
+      updateState(result.state)
+      showSuccessMessage("已从坚果云恢复配置数据。")
     } catch (error) {
       showErrorMessage(error)
     }
