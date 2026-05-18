@@ -85,12 +85,18 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("codex-account:update-proxy", toPlainPayload(payload)),
   getCodexAccountDetail: payload =>
     ipcRenderer.invoke("codex-account:detail", toPlainPayload(payload)),
+  deleteCodexAccount: payload =>
+    ipcRenderer.invoke("codex-account:delete", toPlainPayload(payload)),
   saveRuntimeModel: payload =>
     ipcRenderer.invoke("runtime-model:save", toPlainPayload(payload)),
   switchRuntime: payload =>
     ipcRenderer.invoke("runtime:switch", toPlainPayload(payload)),
   clearRuntime: payload =>
     ipcRenderer.invoke("runtime:clear", toPlainPayload(payload)),
+  compareRuntime: payload =>
+    ipcRenderer.invoke("runtime:compare", toPlainPayload(payload)),
+  resolveRuntimeDrift: payload =>
+    ipcRenderer.invoke("runtime:resolve-drift", toPlainPayload(payload)),
   getRuntimeEnv: payload =>
     ipcRenderer.invoke("runtime:env", toPlainPayload(payload)),
   openPath: payload =>

@@ -22,6 +22,160 @@ const defaultModels = {
   custom: []
 }
 
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function sha256(content) {
+  return crypto.createHash("sha256").update(content).digest("hex")
+}
+
+function parseBooleanText(value) {
+  return String(value || "").trim() === "true"
+}
+
+function parseDisableUpgradeText(value) {
+  return String(value || "").trim() === "1"
+}
+
+function parseTomlValue(value) {
+  const text = String(value || "").trim()
+
+  if (/^".*"$/.test(text)) {
+    return JSON.parse(text)
+  }
+
+  if (/^\d+$/.test(text)) {
+    return Number(text)
+  }
+
+  if (text === "true" || text === "false") {
+    return text === "true"
+  }
+
+  return text
+}
+
+function parseSimpleToml(content) {
+  const root = {}
+  const sections = {}
+  let current = root
+
+  for (const line of String(content || "").split(/\r?\n/)) {
+    const text = line.trim()
+
+    if (!text || text.startsWith("#")) {
+      continue
+    }
+
+    const sectionMatch = text.match(/^\[(.+)]$/)
+
+    if (sectionMatch) {
+      current = sections[sectionMatch[1]] || {}
+      sections[sectionMatch[1]] = current
+      continue
+    }
+
+    const equalIndex = text.indexOf("=")
+
+    if (equalIndex <= 0) {
+      continue
+    }
+
+    current[text.slice(0, equalIndex).trim()] = parseTomlValue(
+      text.slice(equalIndex + 1)
+    )
+  }
+
+  return {
+    root,
+    sections
+  }
+}
+
+function combineConfigContents(files) {
+  return files
+    .map(file => `### ${file.name}\n${file.content || ""}`)
+    .join("\n\n")
+}
+
+function combineManagedConfigContents(cli, files) {
+  if (cli !== "codex") {
+    return combineConfigContents(files)
+  }
+
+  return combineConfigContents(
+    files.map(file => {
+      if (file.name === "auth.json") {
+        const auth = file.content.trim() ? JSON.parse(file.content) : {}
+
+        return {
+          name: file.name,
+          content: `${JSON.stringify(
+            {
+              OPENAI_API_KEY: String(auth.OPENAI_API_KEY || "")
+            },
+            null,
+            2
+          )}\n`
+        }
+      }
+
+      if (file.name !== "config.toml") {
+        return file
+      }
+
+      const config = parseSimpleToml(file.content)
+      const customProvider = config.sections["model_providers.custom"] || {}
+      const content = [
+        `model_provider = ${toTomlString(config.root.model_provider || "custom")}`,
+        `model = ${toTomlString(config.root.model || "")}`,
+        `model_reasoning_effort = ${toTomlString(
+          config.root.model_reasoning_effort || "low"
+        )}`,
+        `disable_response_storage = ${
+          config.root.disable_response_storage === false ? "false" : "true"
+        }`
+      ]
+
+      if (config.root.service_tier === "fast") {
+        content.push('service_tier = "fast"')
+      }
+
+      if (config.root.model_context_window) {
+        content.push(
+          `model_context_window = ${Number(config.root.model_context_window)}`,
+          `model_auto_compact_token_limit = ${
+            Number(config.root.model_auto_compact_token_limit) || 900000
+          }`
+        )
+      }
+
+      content.push(
+        "",
+        "[model_providers]",
+        "[model_providers.custom]",
+        `name = ${toTomlString(customProvider.name || "custom")}`,
+        `wire_api = ${toTomlString(customProvider.wire_api || "responses")}`,
+        `requires_openai_auth = ${
+          customProvider.requires_openai_auth === false ? "false" : "true"
+        }`,
+        `base_url = ${toTomlString(customProvider.base_url || "")}`
+      )
+
+      return {
+        name: file.name,
+        content: `${content.join("\n")}\n`
+      }
+    })
+  )
+}
+
 const runtimeConfigSchemas = {
   claude: {
     cli: "claude",
@@ -488,6 +642,7 @@ class RuntimeProviderService {
     this.providers = []
     this.models = []
     this.profiles = []
+    this.runtimeState = {}
   }
 
   async init() {
@@ -495,6 +650,7 @@ class RuntimeProviderService {
     this.providers = await this.storage.read("providers", [])
     this.models = await this.storage.read("runtimeModels", [])
     this.profiles = await this.storage.read("runtimeProfiles", [])
+    this.runtimeState = await this.storage.read("runtimeProviderState", {})
   }
 
   getState() {
@@ -502,10 +658,12 @@ class RuntimeProviderService {
       runtimeConfigSchemas,
       providers: this.providers.map((item) => ({
         ...item,
+        apiKey: this.keyManager.getProviderKey(item.id),
         hasApiKey: this.keyManager.hasProviderKey(item.id)
       })),
       runtimeModels: this.models,
-      runtimeProfiles: this.profiles.map((item) => this.toPublicProfile(item))
+      runtimeProfiles: this.profiles.map((item) => this.toPublicProfile(item)),
+      runtimeProviderState: this.runtimeState
     }
   }
 
@@ -526,6 +684,10 @@ class RuntimeProviderService {
     this.storage.scheduleWrite("providers", this.providers)
     this.storage.scheduleWrite("runtimeModels", this.models)
     this.storage.scheduleWrite("runtimeProfiles", this.profiles)
+  }
+
+  saveRuntimeState() {
+    this.storage.scheduleWrite("runtimeProviderState", this.runtimeState)
   }
 
   saveProvider(input) {
@@ -652,44 +814,345 @@ class RuntimeProviderService {
     }
 
     await fs.mkdir(cliTarget.configPath, { recursive: true })
+    const files = this.buildCliConfigFiles(cli, provider, profile)
 
+    await Promise.all(
+      files.map(file =>
+        fs.writeFile(
+          path.join(cliTarget.configPath, file.name),
+          file.content,
+          "utf8"
+        )
+      )
+    )
+    this.runtimeState[cli] = {
+      activeProviderId: provider.id,
+      runtimeHash: sha256(combineManagedConfigContents(cli, files)),
+      lastSyncAt: now(),
+      runtimePath: this.formatRuntimePath(cliTarget.configPath, files),
+      status: "SYNCED"
+    }
+    this.saveRuntimeState()
+  }
+
+  buildCliConfigFiles(cli, provider, profile) {
     if (cli === "claude") {
-      await this.writeClaudeConfig(cliTarget.configPath, provider, profile)
+      return this.buildClaudeConfigFiles(provider, profile)
     }
 
     if (cli === "codex") {
-      await this.writeCodexConfig(cliTarget.configPath, provider, profile)
+      return this.buildCodexConfigFiles(provider, profile)
     }
+
+    return []
   }
 
-  async writeClaudeConfig(configPath, provider, profile) {
+  buildClaudeConfigFiles(provider, profile) {
     const apiKey = this.keyManager.getProviderKey(provider.id)
     const schema = runtimeConfigSchemas.claude.configFiles[0]
 
-    await fs.writeFile(
-      path.join(configPath, "settings.json"),
-      `${applyTemplate(schema.template, createTemplateValues(provider, profile, apiKey))}\n`,
-      "utf8"
-    )
+    return [
+      {
+        name: "settings.json",
+        content: `${applyTemplate(schema.template, createTemplateValues(provider, profile, apiKey))}\n`
+      }
+    ]
   }
 
-  async writeCodexConfig(configPath, provider, profile) {
+  buildCodexConfigFiles(provider, profile) {
     const apiKey = this.keyManager.getProviderKey(provider.id)
     const values = createTemplateValues(provider, profile, apiKey)
     const authSchema = runtimeConfigSchemas.codex.configFiles[0]
     const configSchema = runtimeConfigSchemas.codex.configFiles[1]
 
-    await fs.writeFile(
-      path.join(configPath, "auth.json"),
-      `${applyTemplate(authSchema.template, values)}\n`,
-      "utf8"
-    )
+    return [
+      {
+        name: "auth.json",
+        content: `${applyTemplate(authSchema.template, values)}\n`
+      },
+      {
+        name: "config.toml",
+        content: `${applyTemplate(configSchema.template, values)}\n`
+      }
+    ]
+  }
 
-    await fs.writeFile(
-      path.join(configPath, "config.toml"),
-      `${applyTemplate(configSchema.template, values)}\n`,
-      "utf8"
-    )
+  formatRuntimePath(configPath, files) {
+    return files.map(file => path.join(configPath, file.name)).join("\n")
+  }
+
+  async readRuntimeConfigFiles(cli, cliTarget) {
+    const schema = runtimeConfigSchemas[cli]
+
+    if (!schema?.configFiles?.length || !cliTarget?.configPath) {
+      return []
+    }
+
+    const files = []
+
+    for (const file of schema.configFiles) {
+      const filePath = path.join(cliTarget.configPath, file.name)
+      files.push({
+        name: file.name,
+        content: (await pathExists(filePath))
+          ? await fs.readFile(filePath, "utf8")
+          : ""
+      })
+    }
+
+    return files
+  }
+
+  async compareRuntime(cli, cliTarget) {
+    const profile = this.profiles.find(item => item.cli === cli)
+
+    if (!profile) {
+      throw new Error("Runtime Profile 不存在")
+    }
+
+    const provider = this.providers.find(item => item.id === profile.providerId)
+
+    if (!provider) {
+      throw new Error("Provider 不存在")
+    }
+
+    if (!cliTarget?.configPath) {
+      throw new Error("CLI 配置目录不存在")
+    }
+
+    const managerFiles = this.buildCliConfigFiles(cli, provider, profile)
+    const runtimeFiles = await this.readRuntimeConfigFiles(cli, cliTarget)
+
+    return {
+      provider,
+      profile: this.toPublicProfile(profile),
+      managerContent: combineConfigContents(managerFiles),
+      runtimeContent: combineConfigContents(runtimeFiles),
+      runtimePath: this.formatRuntimePath(cliTarget.configPath, managerFiles)
+    }
+  }
+
+  async refreshDrift(cliTargets) {
+    for (const cli of Object.keys(runtimeConfigSchemas)) {
+      const schema = runtimeConfigSchemas[cli]
+
+      if (!schema.enabled || !schema.configFiles.length) {
+        continue
+      }
+
+      const cliTarget = cliTargets.find(item => item.id === cli)
+      const profile = this.profiles.find(item => item.cli === cli)
+      const previousState = this.runtimeState[cli] || {}
+
+      if (!profile) {
+        this.runtimeState[cli] = {
+          ...previousState,
+          activeProviderId: "",
+          runtimePath: cliTarget?.configPath || "",
+          status: "NO_ACTIVE"
+        }
+        continue
+      }
+
+      const provider = this.providers.find(item => item.id === profile.providerId)
+
+      if (!provider) {
+        this.runtimeState[cli] = {
+          ...previousState,
+          activeProviderId: profile.providerId,
+          runtimePath: cliTarget?.configPath || "",
+          status: "NO_ACTIVE"
+        }
+        continue
+      }
+
+      const managerFiles = this.buildCliConfigFiles(cli, provider, profile)
+      const runtimePath = cliTarget?.configPath
+        ? this.formatRuntimePath(cliTarget.configPath, managerFiles)
+        : ""
+
+      if (!cliTarget?.configPath) {
+        this.runtimeState[cli] = {
+          ...previousState,
+          activeProviderId: provider.id,
+          runtimePath,
+          status: "DIRTY_MANAGER"
+        }
+        continue
+      }
+
+      const runtimeFiles = await this.readRuntimeConfigFiles(cli, cliTarget)
+      const managerHash = sha256(combineManagedConfigContents(cli, managerFiles))
+      const runtimeHash = sha256(combineManagedConfigContents(cli, runtimeFiles))
+      let status = "SYNCED"
+
+      if (runtimeHash !== managerHash) {
+        if (!previousState.runtimeHash) {
+          status = "MODIFIED_EXTERNALLY"
+        } else if (
+          runtimeHash !== previousState.runtimeHash &&
+          managerHash !== previousState.runtimeHash
+        ) {
+          status = "CONFLICT"
+        } else if (managerHash !== previousState.runtimeHash) {
+          status = "DIRTY_MANAGER"
+        } else {
+          status = "MODIFIED_EXTERNALLY"
+        }
+      }
+
+      this.runtimeState[cli] = {
+        ...previousState,
+        activeProviderId: provider.id,
+        runtimeHash:
+          status === "SYNCED" ? runtimeHash : previousState.runtimeHash,
+        runtimePath,
+        status
+      }
+    }
+
+    this.saveRuntimeState()
+  }
+
+  getRuntimeWatchPaths(cliTargets) {
+    return Object.values(runtimeConfigSchemas)
+      .filter(schema => schema.enabled)
+      .flatMap(schema => {
+        const cliTarget = cliTargets.find(item => item.id === schema.cli)
+
+        if (!cliTarget?.configPath) {
+          return []
+        }
+
+        return schema.configFiles.map(file =>
+          path.join(cliTarget.configPath, file.name)
+        )
+      })
+  }
+
+  async syncRuntimeConfigToManager(cli, cliTarget) {
+    const profile = this.profiles.find(item => item.cli === cli)
+
+    if (!profile) {
+      throw new Error("Runtime Profile 不存在")
+    }
+
+    const provider = this.providers.find(item => item.id === profile.providerId)
+
+    if (!provider) {
+      throw new Error("Provider 不存在")
+    }
+
+    if (!cliTarget?.configPath) {
+      throw new Error("CLI 配置目录不存在")
+    }
+
+    if (cli === "claude") {
+      await this.syncClaudeRuntimeToManager(cliTarget, provider, profile)
+    }
+
+    if (cli === "codex") {
+      await this.syncCodexRuntimeToManager(cliTarget, provider, profile)
+    }
+  }
+
+  async syncClaudeRuntimeToManager(cliTarget, provider, profile) {
+    const settingsPath = path.join(cliTarget.configPath, "settings.json")
+    const settings = JSON.parse(await fs.readFile(settingsPath, "utf8"))
+    const env = settings.env || {}
+    const authField = env.ANTHROPIC_API_KEY
+      ? "ANTHROPIC_API_KEY"
+      : provider.authField || "ANTHROPIC_AUTH_TOKEN"
+    const mainModel = String(env.ANTHROPIC_MODEL || profile.model || "").trim()
+
+    this.saveProvider({
+      ...provider,
+      baseUrl: String(env.ANTHROPIC_BASE_URL || "").trim(),
+      authField,
+      apiKey: String(env[authField] || "").trim(),
+      runtimeConfig: {
+        ...provider.runtimeConfig,
+        mainModel,
+        haikuModel: String(env.ANTHROPIC_DEFAULT_HAIKU_MODEL || "").trim(),
+        sonnetModel: String(env.ANTHROPIC_DEFAULT_SONNET_MODEL || "").trim(),
+        opusModel: String(env.ANTHROPIC_DEFAULT_OPUS_MODEL || "").trim(),
+        toolSearch: parseBooleanText(env.ENABLE_TOOL_SEARCH),
+        disableUpgrade: parseDisableUpgradeText(env["DISABLE_AUTOUPDATER"]),
+        hideAiSignature: settings.includeCoAuthoredBy === false,
+        teammatesMode: settings.teammateMode === "tmux",
+        maxThinking: settings.effortLevel === "max"
+      }
+    })
+
+    if (mainModel) {
+      this.saveModel({
+        id: `${provider.id}:${mainModel}`,
+        providerId: provider.id,
+        name: mainModel
+      })
+      this.switchRuntime({
+        ...profile,
+        model: mainModel,
+        baseUrl: String(env.ANTHROPIC_BASE_URL || "").trim()
+      })
+    }
+  }
+
+  async syncCodexRuntimeToManager(cliTarget, provider, profile) {
+    const authPath = path.join(cliTarget.configPath, "auth.json")
+    const configPath = path.join(cliTarget.configPath, "config.toml")
+    const auth = JSON.parse(await fs.readFile(authPath, "utf8"))
+    const config = parseSimpleToml(await fs.readFile(configPath, "utf8"))
+    const customProvider = config.sections["model_providers.custom"] || {}
+    const model = String(config.root.model || profile.model || "").trim()
+
+    if (!auth.OPENAI_API_KEY) {
+      throw new Error("Codex auth.json 缺少 OPENAI_API_KEY，无法同步到 Provider")
+    }
+
+    this.saveProvider({
+      ...provider,
+      baseUrl: String(customProvider.base_url || "").trim(),
+      apiKey: String(auth.OPENAI_API_KEY || "").trim(),
+      runtimeConfig: {
+        ...provider.runtimeConfig,
+        mainModel: model,
+        modelReasoningEffort:
+          String(config.root.model_reasoning_effort || "low").trim() || "low",
+        serviceTierFast: config.root.service_tier === "fast",
+        modelContextWindowEnabled: Boolean(config.root.model_context_window),
+        modelAutoCompactTokenLimit:
+          Number(config.root.model_auto_compact_token_limit) || 900000
+      }
+    })
+
+    if (model) {
+      this.saveModel({
+        id: `${provider.id}:${model}`,
+        providerId: provider.id,
+        name: model
+      })
+      this.switchRuntime({
+        ...profile,
+        model,
+        baseUrl: String(customProvider.base_url || "").trim()
+      })
+    }
+  }
+
+  async resolveDrift(input, cliTarget) {
+    const cli = String(input.cli || "").trim()
+
+    if (input.source === "runtime") {
+      await this.syncRuntimeConfigToManager(cli, cliTarget)
+      return
+    }
+
+    if (input.source !== "manager") {
+      throw new Error("请选择 Runtime 配置同步方向")
+    }
+
+    await this.writeCliConfig(cli, cliTarget)
   }
 
   buildRuntimeEnv(cli) {

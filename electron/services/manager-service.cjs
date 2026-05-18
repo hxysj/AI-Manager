@@ -177,6 +177,7 @@ class ManagerService extends EventEmitter {
       runtimeConfigSchemas: {},
       runtimeModels: [],
       runtimeProfiles: [],
+      runtimeProviderState: {},
       diagnostics: [],
       paths: this.toPublicPaths(),
       appSettings: this.toPublicSettings(false),
@@ -257,6 +258,9 @@ class ManagerService extends EventEmitter {
     const promptRuntimePaths = this.promptRuntimeService.getRuntimeWatchPaths(
       this.state.cliTargets
     )
+    const runtimeProviderPaths = this.runtimeProviderService.getRuntimeWatchPaths(
+      this.state.cliTargets
+    )
 
     this.fileWatcherService.restart(
       [
@@ -265,7 +269,8 @@ class ManagerService extends EventEmitter {
         this.paths.promptProfilesDir,
         this.paths.reposDir,
         ...repoPaths,
-        ...promptRuntimePaths
+        ...promptRuntimePaths,
+        ...runtimeProviderPaths
       ],
       async () => {
         await this.refreshAll()
@@ -317,6 +322,7 @@ class ManagerService extends EventEmitter {
       ...repo,
       skillCount: 0
     }))
+    await this.runtimeProviderService.refreshDrift(cliTargets)
     const runtimeState = this.runtimeProviderService.getState()
     await this.promptRuntimeService.refreshDrift(cliTargets)
     const rules = this.promptRuntimeService.getState()
@@ -1097,6 +1103,7 @@ class ManagerService extends EventEmitter {
 
   async saveProvider(input) {
     this.runtimeProviderService.saveProvider(input)
+    await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
     this.state = {
       ...this.state,
       ...this.runtimeProviderService.getState(),
@@ -1347,6 +1354,7 @@ class ManagerService extends EventEmitter {
 
   async deleteProvider(providerId) {
     this.runtimeProviderService.deleteProvider(providerId)
+    await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
     this.state = {
       ...this.state,
       ...this.runtimeProviderService.getState(),
@@ -1441,6 +1449,20 @@ class ManagerService extends EventEmitter {
     return this.state
   }
 
+  async deleteCodexAccount(input) {
+    await this.codexAccountService.deleteAccount(
+      input.accountId,
+      this.state.cliTargets.find((item) => item.id === "codex")
+    )
+    this.state = {
+      ...this.state,
+      codexAccounts: this.codexAccountService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
   async getCodexAccountDetail(input) {
     const account = await this.codexAccountService.getAccountDetail(
       input.accountId,
@@ -1471,6 +1493,7 @@ class ManagerService extends EventEmitter {
       input.cli,
       this.state.cliTargets.find((item) => item.id === input.cli)
     )
+    await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
     this.state = {
       ...this.state,
       ...this.runtimeProviderService.getState(),
@@ -1482,6 +1505,7 @@ class ManagerService extends EventEmitter {
 
   async clearRuntime(cli) {
     this.runtimeProviderService.clearRuntime(cli)
+    await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
     this.state = {
       ...this.state,
       ...this.runtimeProviderService.getState(),
@@ -1493,6 +1517,28 @@ class ManagerService extends EventEmitter {
 
   buildRuntimeEnv(cli) {
     return this.runtimeProviderService.buildRuntimeEnv(cli)
+  }
+
+  async compareRuntime(input) {
+    return this.runtimeProviderService.compareRuntime(
+      input.cli,
+      this.state.cliTargets.find(item => item.id === input.cli)
+    )
+  }
+
+  async resolveRuntimeDrift(input) {
+    await this.runtimeProviderService.resolveDrift(
+      input,
+      this.state.cliTargets.find(item => item.id === input.cli)
+    )
+    await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
+    this.state = {
+      ...this.state,
+      ...this.runtimeProviderService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
   }
 
   async dispose() {

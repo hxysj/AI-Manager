@@ -323,6 +323,10 @@ function registerIpc() {
     return managerService.getCodexAccountDetail(payload)
   })
 
+  ipcMain.handle("codex-account:delete", async (_, payload) => {
+    return managerService.deleteCodexAccount(payload)
+  })
+
   ipcMain.handle("runtime-model:save", async (_, payload) => {
     return managerService.saveRuntimeModel(payload)
   })
@@ -333,6 +337,14 @@ function registerIpc() {
 
   ipcMain.handle("runtime:clear", async (_, payload) => {
     return managerService.clearRuntime(payload.cli)
+  })
+
+  ipcMain.handle("runtime:compare", async (_, payload) => {
+    return managerService.compareRuntime(payload)
+  })
+
+  ipcMain.handle("runtime:resolve-drift", async (_, payload) => {
+    return managerService.resolveRuntimeDrift(payload)
   })
 
   ipcMain.handle("runtime:env", async (_, payload) => {
