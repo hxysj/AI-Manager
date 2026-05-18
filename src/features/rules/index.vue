@@ -1071,14 +1071,21 @@ onBeforeUnmount(() => {
 
   &__editor {
     display: flex;
+    min-height: 0;
+    flex: 1;
     flex-direction: column;
     gap: 18px;
+    overflow: hidden;
   }
 
   &__form-grid {
     display: flex;
+    flex: 1;
     flex-wrap: wrap;
+    min-height: 0;
+    overflow: auto;
     gap: 16px;
+    padding-right: 4px;
   }
 
   &__field {
@@ -1123,8 +1130,11 @@ onBeforeUnmount(() => {
 
   &__editor-footer {
     display: flex;
+    flex: none;
     justify-content: flex-end;
     gap: 10px;
+    padding-top: 4px;
+    background: #ffffff;
   }
 
   &__editor-footer button {
@@ -1175,10 +1185,12 @@ onBeforeUnmount(() => {
 
   &__diff-footer {
     display: flex;
+    flex: none;
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
     padding-top: 12px;
+    background: #ffffff;
   }
 
   &__diff-button {

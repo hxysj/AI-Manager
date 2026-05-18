@@ -54,6 +54,7 @@ defineEmits(["close"])
     max-height: calc(100vh - 48px);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 8px;
     background: var(--color-panel);
@@ -94,8 +95,11 @@ defineEmits(["close"])
   }
 
   &__content {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
     min-height: 0;
-    overflow: auto;
+    overflow: hidden;
     padding: 0 24px 24px;
   }
 }

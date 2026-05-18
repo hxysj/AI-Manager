@@ -23,6 +23,10 @@ const { RuntimeProviderService } = require("./runtime-provider-service.cjs")
 const { PromptRuntimeService } = require("./prompt-runtime-service.cjs")
 
 const execFileAsync = promisify(execFile)
+const BACKUP_SECRET = crypto
+  .createHash("sha256")
+  .update("ai-manager-data-backup-v1")
+  .digest()
 
 async function pathExists(targetPath) {
   try {
@@ -42,9 +46,7 @@ function normalizeRuleTags(value) {
     return []
   }
 
-  return value
-    .map((item) => String(item || "").trim())
-    .filter(Boolean)
+  return value.map((item) => String(item || "").trim()).filter(Boolean)
 }
 
 function normalizeRule(input, previous) {
@@ -144,6 +146,159 @@ async function extractZip(zipPath, targetPath) {
     ],
     { windowsHide: true }
   )
+}
+
+async function collectDirectoryEntries(rootPath) {
+  const entries = []
+
+  const visit = async (currentPath) => {
+    const children = await fs.readdir(currentPath, { withFileTypes: true })
+
+    for (const child of children.sort((left, right) =>
+      left.name.localeCompare(right.name)
+    )) {
+      const childPath = path.join(currentPath, child.name)
+      const relativePath = path
+        .relative(rootPath, childPath)
+        .replace(/\\/g, "/")
+      const stat = await fs.lstat(childPath)
+
+      if (stat.isSymbolicLink()) {
+        entries.push({
+          path: relativePath,
+          type: "symlink",
+          target: await fs.readlink(childPath)
+        })
+        continue
+      }
+
+      if (stat.isDirectory()) {
+        entries.push({
+          path: relativePath,
+          type: "dir"
+        })
+        await visit(childPath)
+        continue
+      }
+
+      if (stat.isFile()) {
+        entries.push({
+          path: relativePath,
+          type: "file",
+          content: (await fs.readFile(childPath)).toString("base64")
+        })
+      }
+    }
+  }
+
+  if (await pathExists(rootPath)) {
+    await visit(rootPath)
+  }
+
+  return entries
+}
+
+async function collectBackupEntries(paths) {
+  const sources = [
+    paths.storageDir,
+    paths.skillsDir,
+    paths.promptsDir,
+    paths.promptProfilesDir
+  ]
+  const entries = []
+
+  for (const sourcePath of sources) {
+    const sourceEntries = await collectDirectoryEntries(sourcePath)
+    const rootName = path
+      .relative(paths.workspaceRoot, sourcePath)
+      .replace(/\\/g, "/")
+
+    entries.push({
+      path: rootName,
+      type: "dir"
+    })
+    entries.push(
+      ...sourceEntries.map((entry) => ({
+        ...entry,
+        path: `${rootName}/${entry.path}`
+      }))
+    )
+  }
+
+  return entries
+}
+
+function encryptBackupPayload(payload) {
+  const iv = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv("aes-256-gcm", BACKUP_SECRET, iv)
+  const content = Buffer.concat([
+    cipher.update(JSON.stringify(payload), "utf8"),
+    cipher.final()
+  ])
+
+  return JSON.stringify(
+    {
+      version: 1,
+      algorithm: "aes-256-gcm",
+      iv: iv.toString("base64"),
+      tag: cipher.getAuthTag().toString("base64"),
+      content: content.toString("base64")
+    },
+    null,
+    2
+  )
+}
+
+function decryptBackupPayload(content) {
+  const payload = JSON.parse(content)
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    BACKUP_SECRET,
+    Buffer.from(payload.iv, "base64")
+  )
+  decipher.setAuthTag(Buffer.from(payload.tag, "base64"))
+
+  return JSON.parse(
+    Buffer.concat([
+      decipher.update(Buffer.from(payload.content, "base64")),
+      decipher.final()
+    ]).toString("utf8")
+  )
+}
+
+function assertBackupPath(rootPath, targetPath) {
+  const relativePath = path.relative(rootPath, targetPath)
+
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error("备份路径非法")
+  }
+}
+
+async function restoreDirectoryEntries(rootPath, entries) {
+  await fs.mkdir(rootPath, { recursive: true })
+
+  for (const entry of entries.filter((item) => item.type === "dir")) {
+    const targetPath = path.resolve(rootPath, entry.path)
+
+    assertBackupPath(rootPath, targetPath)
+    await fs.mkdir(targetPath, { recursive: true })
+  }
+
+  for (const entry of entries.filter((item) => item.type === "file")) {
+    const targetPath = path.resolve(rootPath, entry.path)
+
+    assertBackupPath(rootPath, targetPath)
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.writeFile(targetPath, Buffer.from(entry.content, "base64"))
+  }
+
+  for (const entry of entries.filter((item) => item.type === "symlink")) {
+    const targetPath = path.resolve(rootPath, entry.path)
+
+    assertBackupPath(rootPath, targetPath)
+    await fs.mkdir(path.dirname(targetPath), { recursive: true })
+    await fs.symlink(entry.target, targetPath)
+  }
 }
 
 class ManagerService extends EventEmitter {
@@ -253,14 +408,61 @@ class ManagerService extends EventEmitter {
     await this.refreshAll({ preferDetectedPaths: true })
   }
 
+  async createDataBackup() {
+    await this.storage.flush()
+
+    return encryptBackupPayload({
+      version: 1,
+      createdAt: Date.now(),
+      appSettings: this.appSettings,
+      workspaceEntries: await collectBackupEntries(this.paths)
+    })
+  }
+
+  async restoreDataBackup(content) {
+    const backup = decryptBackupPayload(String(content || ""))
+
+    if (backup.version !== 1) {
+      throw new Error("备份版本不支持")
+    }
+
+    if (!Array.isArray(backup.workspaceEntries)) {
+      throw new Error("备份数据不完整")
+    }
+
+    this.codexAccountService.stopAutoRefresh()
+    this.fileWatcherService.stop()
+    await this.sessionService.dispose()
+    await this.storage.flush()
+
+    await Promise.all([
+      fs.rm(this.paths.storageDir, { recursive: true, force: true }),
+      fs.rm(this.paths.skillsDir, { recursive: true, force: true }),
+      fs.rm(this.paths.promptsDir, { recursive: true, force: true }),
+      fs.rm(this.paths.promptProfilesDir, { recursive: true, force: true })
+    ])
+    await ensureAppDirectories(this.paths)
+    await restoreDirectoryEntries(
+      this.paths.workspaceRoot,
+      backup.workspaceEntries
+    )
+
+    return {
+      appSettings: {
+        ...this.appSettings,
+        cliConfigPaths:
+          backup.appSettings?.cliConfigPaths || this.appSettings.cliConfigPaths
+      }
+    }
+  }
+
   startWatcher() {
     const repoPaths = this.repoService.listRepos().map((item) => item.localPath)
     const promptRuntimePaths = this.promptRuntimeService.getRuntimeWatchPaths(
       this.state.cliTargets
     )
-    const runtimeProviderPaths = this.runtimeProviderService.getRuntimeWatchPaths(
-      this.state.cliTargets
-    )
+    const runtimeProviderPaths =
+      this.runtimeProviderService.getRuntimeWatchPaths(this.state.cliTargets)
 
     this.fileWatcherService.restart(
       [
@@ -1217,7 +1419,7 @@ class ManagerService extends EventEmitter {
 
   async enableRule(ruleId) {
     const prompt = this.promptRuntimeService.prompts.find(
-      item => item.id === ruleId
+      (item) => item.id === ruleId
     )
 
     if (!prompt) {
@@ -1226,7 +1428,7 @@ class ManagerService extends EventEmitter {
 
     await this.promptRuntimeService.enablePrompt(
       prompt.id,
-      this.state.cliTargets.find(item => item.id === prompt.cli)
+      this.state.cliTargets.find((item) => item.id === prompt.cli)
     )
     this.state = {
       ...this.state,
@@ -1244,7 +1446,7 @@ class ManagerService extends EventEmitter {
   async importRule(input) {
     await this.promptRuntimeService.importGlobalPrompt(
       input,
-      this.state.cliTargets.find(item => item.id === input.cli)
+      this.state.cliTargets.find((item) => item.id === input.cli)
     )
     await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
     this.state = {
@@ -1259,7 +1461,7 @@ class ManagerService extends EventEmitter {
   async previewImportRule(input) {
     return this.promptRuntimeService.previewImportGlobalPrompt(
       input,
-      this.state.cliTargets.find(item => item.id === input.cli)
+      this.state.cliTargets.find((item) => item.id === input.cli)
     )
   }
 
@@ -1278,14 +1480,14 @@ class ManagerService extends EventEmitter {
   async compareRule(input) {
     return this.promptRuntimeService.comparePrompt(
       input.ruleId,
-      this.state.cliTargets.find(item => item.id === input.cli)
+      this.state.cliTargets.find((item) => item.id === input.cli)
     )
   }
 
   async resolveRuleDrift(input) {
     await this.promptRuntimeService.resolveDrift(
       input,
-      this.state.cliTargets.find(item => item.id === input.cli)
+      this.state.cliTargets.find((item) => item.id === input.cli)
     )
     this.state = {
       ...this.state,
@@ -1315,7 +1517,7 @@ class ManagerService extends EventEmitter {
           cli: input.cli,
           promptId: input.ruleId
         },
-        this.state.cliTargets.find(item => item.id === input.cli)
+        this.state.cliTargets.find((item) => item.id === input.cli)
       )
       await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
       this.state = {
@@ -1332,7 +1534,7 @@ class ManagerService extends EventEmitter {
 
   async enableRule(ruleId) {
     const prompt = this.promptRuntimeService.prompts.find(
-      item => item.id === ruleId
+      (item) => item.id === ruleId
     )
 
     if (!prompt) {
@@ -1341,7 +1543,7 @@ class ManagerService extends EventEmitter {
 
     await this.promptRuntimeService.enablePrompt(
       prompt.id,
-      this.state.cliTargets.find(item => item.id === prompt.cli)
+      this.state.cliTargets.find((item) => item.id === prompt.cli)
     )
     this.state = {
       ...this.state,
@@ -1522,14 +1724,14 @@ class ManagerService extends EventEmitter {
   async compareRuntime(input) {
     return this.runtimeProviderService.compareRuntime(
       input.cli,
-      this.state.cliTargets.find(item => item.id === input.cli)
+      this.state.cliTargets.find((item) => item.id === input.cli)
     )
   }
 
   async resolveRuntimeDrift(input) {
     await this.runtimeProviderService.resolveDrift(
       input,
-      this.state.cliTargets.find(item => item.id === input.cli)
+      this.state.cliTargets.find((item) => item.id === input.cli)
     )
     await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
     this.state = {

@@ -1,6 +1,7 @@
 const path = require("node:path")
 const fs = require("node:fs")
 const os = require("node:os")
+const fsp = require("node:fs/promises")
 const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require("electron")
 const { ManagerService } = require("./services/manager-service.cjs")
 const { TranslationService } = require("./services/translation-service.cjs")
@@ -53,6 +54,23 @@ function saveAppSettings(nextSettings) {
     `${JSON.stringify(nextSettings, null, 2)}\n`,
     "utf8"
   )
+}
+
+async function restartManagerService(nextSettings = appSettings) {
+  if (managerService) {
+    managerService.removeAllListeners()
+    await managerService.dispose()
+  }
+
+  managerService = new ManagerService(app.getPath("userData"), nextSettings)
+  await managerService.init()
+  managerService.on("state-changed", (state) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("state:changed", state)
+    }
+  })
+
+  return managerService.getState()
 }
 
 let appSettings = loadAppSettings()
@@ -140,6 +158,60 @@ function registerIpc() {
 
     await managerService.updateAppSettings(appSettings)
     return managerService.getState()
+  })
+
+  ipcMain.handle("data:export", async () => {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "导出配置数据",
+      defaultPath: path.join(
+        app.getPath("desktop"),
+        `ai-manager-${new Date().toISOString().slice(0, 10)}.aimbackup`
+      ),
+      filters: [{ name: "AI Manager 备份", extensions: ["aimbackup"] }]
+    })
+
+    if (result.canceled || !result.filePath) {
+      return {
+        canceled: true
+      }
+    }
+
+    await fsp.writeFile(
+      result.filePath,
+      await managerService.createDataBackup(),
+      "utf8"
+    )
+
+    return {
+      canceled: false,
+      filePath: result.filePath
+    }
+  })
+
+  ipcMain.handle("data:restore", async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "恢复配置数据",
+      defaultPath: app.getPath("desktop"),
+      filters: [{ name: "AI Manager 备份", extensions: ["aimbackup"] }],
+      properties: ["openFile"]
+    })
+
+    if (result.canceled || !result.filePaths[0]) {
+      return {
+        canceled: true
+      }
+    }
+
+    const restoreResult = await managerService.restoreDataBackup(
+      await fsp.readFile(result.filePaths[0], "utf8")
+    )
+    appSettings = normalizeAppSettings(restoreResult.appSettings)
+    saveAppSettings(appSettings)
+
+    return {
+      canceled: false,
+      state: await restartManagerService(appSettings)
+    }
   })
 
   ipcMain.handle("system:select-directory", async (_, payload) => {

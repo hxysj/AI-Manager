@@ -93,7 +93,9 @@
           :app-settings="state.appSettings"
           :cli-targets="state.cliTargets"
           :pending="pending"
+          @export-data="exportDataBackup"
           @open-path="openPath"
+          @restore-data="restoreDataBackup"
           @save="saveSettings"
         />
 
@@ -107,7 +109,7 @@
           >
             返回
             {{
-              navItems.find(item => item.id === currentPlaceholder.backTo)
+              navItems.find((item) => item.id === currentPlaceholder.backTo)
                 ?.label
             }}
           </button>
@@ -263,7 +265,7 @@ let unsubscribe = null
 
 const selectedSkill = computed(() => {
   return (
-    state.skills.find(item => item.name === selectedSkillName.value) || null
+    state.skills.find((item) => item.name === selectedSkillName.value) || null
   )
 })
 
@@ -275,7 +277,7 @@ async function bootstrap() {
   await withGlobalLoading(async () => {
     try {
       updateState(await window.aiManager.bootstrap())
-      unsubscribe = window.aiManager.onStateChanged(nextState => {
+      unsubscribe = window.aiManager.onStateChanged((nextState) => {
         updateState(nextState)
       })
     } catch (error) {
@@ -304,7 +306,7 @@ function updateState(nextState) {
 
   if (
     selectedSkillName.value &&
-    !state.skills.find(item => item.name === selectedSkillName.value)
+    !state.skills.find((item) => item.name === selectedSkillName.value)
   ) {
     selectedSkillName.value = ""
   }
@@ -355,6 +357,47 @@ async function saveSettings(payload) {
         : "设置已保存并重新刷新。"
     )
   }
+}
+
+async function exportDataBackup() {
+  await withGlobalLoading(async () => {
+    try {
+      const result = await window.aiManager.exportDataBackup()
+
+      if (result?.canceled) {
+        return
+      }
+
+      showSuccessMessage("配置数据已加密导出。")
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
+}
+
+async function restoreDataBackup() {
+  const shouldContinue = window.confirm(
+    "恢复配置会覆盖当前配置数据，是否继续？"
+  )
+
+  if (!shouldContinue) {
+    return
+  }
+
+  await withGlobalLoading(async () => {
+    try {
+      const result = await window.aiManager.restoreDataBackup()
+
+      if (result?.canceled) {
+        return
+      }
+
+      updateState(result.state)
+      showSuccessMessage("配置数据已恢复。")
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
 }
 
 async function createSkill(payload) {
@@ -489,9 +532,7 @@ async function saveRule(payload) {
 }
 
 async function deleteRule(ruleId) {
-  const success = await runAction(() =>
-    window.aiManager.deleteRule({ ruleId })
-  )
+  const success = await runAction(() => window.aiManager.deleteRule({ ruleId }))
 
   if (success) {
     showSuccessMessage("Prompt 已删除。")

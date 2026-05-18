@@ -2657,6 +2657,8 @@ watch(
     padding: 16px 0 0;
     border-top: 1px solid #edf0f3;
     background: #ffffff;
+    position: sticky;
+    bottom: 0;
   }
 
   &__codex-login-modal {
@@ -2753,9 +2755,13 @@ watch(
   }
 
   &__diff-footer {
+    flex: none;
     justify-content: flex-end;
     gap: 8px;
     padding-top: 12px;
+    background: #ffffff;
+    position: sticky;
+    bottom: 0;
   }
 
   &__diff-button {

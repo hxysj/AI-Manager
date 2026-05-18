@@ -7,7 +7,9 @@
     <form class="import-skills-modal" @submit.prevent="submit">
       <div class="import-skills-modal__summary">
         <span>可导入 {{ candidateItems.length }} 项</span>
-        <span v-if="conflictItems.length">需确认 {{ conflictItems.length }} 项</span>
+        <span v-if="conflictItems.length"
+          >需确认 {{ conflictItems.length }} 项</span
+        >
       </div>
 
       <div v-if="loading" class="import-skills-modal__loading">
@@ -15,7 +17,10 @@
       </div>
 
       <div class="import-skills-modal__body">
-        <section v-if="candidateItems.length" class="import-skills-modal__section">
+        <section
+          v-if="candidateItems.length"
+          class="import-skills-modal__section"
+        >
           <h3>可导入 Skill</h3>
           <div class="import-skills-modal__list">
             <label
@@ -31,14 +36,17 @@
               />
               <span class="import-skills-modal__content">
                 <strong>{{ candidate.name }}</strong>
-                <span>{{ candidate.description || '未提供描述' }}</span>
-                <small>{{ candidate.cliNames.join('、') }}</small>
+                <span>{{ candidate.description || "未提供描述" }}</span>
+                <small>{{ candidate.cliNames.join("、") }}</small>
               </span>
             </label>
           </div>
         </section>
 
-        <section v-if="conflictItems.length" class="import-skills-modal__section">
+        <section
+          v-if="conflictItems.length"
+          class="import-skills-modal__section"
+        >
           <h3>同名冲突</h3>
           <article
             v-for="conflict in conflictItems"
@@ -63,9 +71,11 @@
                 :disabled="loading"
               />
               <span class="import-skills-modal__content">
-                <strong>{{ option.alreadyManaged ? '保留 Manager 版本' : option.name }}</strong>
-                <span>{{ option.description || '未提供描述' }}</span>
-                <small>{{ option.cliNames.join('、') }}</small>
+                <strong>{{
+                  option.alreadyManaged ? "保留 Manager 版本" : option.name
+                }}</strong>
+                <span>{{ option.description || "未提供描述" }}</span>
+                <small>{{ option.cliNames.join("、") }}</small>
               </span>
             </label>
           </article>
@@ -86,7 +96,7 @@
           type="submit"
           :disabled="loading || !canSubmit"
         >
-          {{ loading ? '导入中...' : '导入选中项' }}
+          {{ loading ? "导入中..." : "导入选中项" }}
         </button>
       </div>
     </form>
@@ -94,8 +104,8 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
-import BaseModal from '@/components/BaseModal.vue'
+import { computed, reactive, ref, watch } from "vue"
+import BaseModal from "@/components/BaseModal.vue"
 
 const props = defineProps({
   candidates: {
@@ -108,7 +118,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['close', 'submit'])
+const emit = defineEmits(["close", "submit"])
 
 const candidateItems = computed(() => {
   return Array.isArray(props.candidates)
@@ -126,20 +136,20 @@ const selectedConflicts = reactive({})
 const canSubmit = computed(() => {
   return (
     selectedSources.value.length ||
-    conflictItems.value.every(item => selectedConflicts[item.name])
+    conflictItems.value.every((item) => selectedConflicts[item.name])
   )
 })
 
 watch(
   () => props.candidates,
   () => {
-    selectedSources.value = candidateItems.value.map(item => item.id)
+    selectedSources.value = candidateItems.value.map((item) => item.id)
 
     for (const item of conflictItems.value) {
       selectedConflicts[item.name] =
-        item.options.find(option => option.alreadyManaged)?.id ||
+        item.options.find((option) => option.alreadyManaged)?.id ||
         item.options[0]?.id ||
-        ''
+        ""
     }
   },
   { immediate: true }
@@ -150,18 +160,17 @@ function submit() {
     return
   }
 
-  emit('submit', {
+  emit("submit", {
     sourcePaths: candidateItems.value
-      .filter(item => selectedSources.value.includes(item.id))
-      .flatMap(item => [...(item.sourcePaths || [item.id])]),
-    choices: conflictItems.value.map(item => ({
+      .filter((item) => selectedSources.value.includes(item.id))
+      .flatMap((item) => [...(item.sourcePaths || [item.id])]),
+    choices: conflictItems.value.map((item) => ({
       name: item.name,
       id: selectedConflicts[item.name],
       sourcePaths: [
-        ...(
-          item.options.find(option => option.id === selectedConflicts[item.name])
-            ?.sourcePaths || []
-        )
+        ...(item.options.find(
+          (option) => option.id === selectedConflicts[item.name]
+        )?.sourcePaths || [])
       ]
     }))
   })
@@ -172,7 +181,7 @@ function handleClose() {
     return
   }
 
-  emit('close')
+  emit("close")
 }
 </script>
 
@@ -326,6 +335,12 @@ function handleClose() {
 
   :deep(.base-modal__content) {
     overflow: hidden;
+  }
+
+  &__actions {
+    flex: none;
+    padding-top: 6px;
+    background: var(--color-panel);
   }
 }
 
