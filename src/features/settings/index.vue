@@ -6,7 +6,6 @@
         <h1>设置</h1>
       </div>
       <button
-        v-if="activeTab === 'directories'"
         class="settings-view__save"
         type="button"
         :disabled="pending"
@@ -151,7 +150,9 @@
         <article class="settings-view__data-card">
           <div class="settings-view__data-copy">
             <strong>导出配置</strong>
-            <span>备份当前 Skills、Prompts、Providers、Runtime 和存储数据。</span>
+            <span
+              >备份当前 Skills、Prompts、Providers、Runtime 和存储数据。</span
+            >
           </div>
           <button type="button" @click="$emit('export-data')">
             <Download :size="16" />
@@ -170,13 +171,68 @@
           </button>
         </article>
       </div>
+
+      <section class="settings-view__cloud">
+        <div class="settings-view__cloud-header">
+          <div>
+            <strong>坚果云同步</strong>
+            <span>通过坚果云 WebDAV 同步加密备份文件。</span>
+          </div>
+        </div>
+
+        <div class="settings-view__cloud-grid">
+          <label class="settings-view__field">
+            <span>WebDAV 地址</span>
+            <input v-model.trim="draft.cloudSync.webdavUrl" type="text" />
+          </label>
+          <label class="settings-view__field">
+            <span>备份文件名</span>
+            <input v-model.trim="draft.cloudSync.fileName" type="text" />
+          </label>
+          <label class="settings-view__field">
+            <span>坚果云账号</span>
+            <input v-model.trim="draft.cloudSync.username" type="text" />
+          </label>
+          <label class="settings-view__field">
+            <span>应用密码</span>
+            <el-input
+              v-model="draft.cloudSync.password"
+              type="password"
+              show-password
+            />
+          </label>
+        </div>
+
+        <div class="settings-view__cloud-actions">
+          <button type="button" :disabled="pending" @click="submitSettings">
+            <Save :size="16" />
+            保存配置
+          </button>
+          <button type="button" @click="pushCloudData">
+            <UploadCloud :size="16" />
+            推送到坚果云
+          </button>
+          <button type="button" @click="pullCloudData">
+            <DownloadCloud :size="16" />
+            从坚果云恢复
+          </button>
+        </div>
+      </section>
     </section>
   </section>
 </template>
 
 <script setup>
 import { computed, reactive, ref, watch } from "vue"
-import { Download, FolderOpen, RotateCcw, Save, Upload } from "lucide-vue-next"
+import {
+  Download,
+  DownloadCloud,
+  FolderOpen,
+  RotateCcw,
+  Save,
+  Upload,
+  UploadCloud
+} from "lucide-vue-next"
 
 const props = defineProps({
   appSettings: {
@@ -193,7 +249,14 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(["save", "open-path", "export-data", "restore-data"])
+const emit = defineEmits([
+  "save",
+  "open-path",
+  "export-data",
+  "restore-data",
+  "push-cloud-data",
+  "pull-cloud-data"
+])
 
 const activeTab = ref("directories")
 
@@ -203,6 +266,13 @@ const draft = reactive({
     claude: "",
     codex: "",
     gemini: ""
+  },
+  cloudSync: {
+    provider: "jianguoyun",
+    webdavUrl: "",
+    username: "",
+    password: "",
+    fileName: ""
   }
 })
 
@@ -249,6 +319,14 @@ function syncDraft() {
   draft.cliConfigPaths.claude = props.appSettings.cliConfigPaths?.claude || ""
   draft.cliConfigPaths.codex = props.appSettings.cliConfigPaths?.codex || ""
   draft.cliConfigPaths.gemini = props.appSettings.cliConfigPaths?.gemini || ""
+  draft.cloudSync.provider = "jianguoyun"
+  draft.cloudSync.webdavUrl =
+    props.appSettings.cloudSync?.webdavUrl ||
+    "https://dav.jianguoyun.com/dav/AI-Manager"
+  draft.cloudSync.username = props.appSettings.cloudSync?.username || ""
+  draft.cloudSync.password = props.appSettings.cloudSync?.password || ""
+  draft.cloudSync.fileName =
+    props.appSettings.cloudSync?.fileName || "ai-manager.aimbackup"
 }
 
 async function selectDirectory(key, currentPath) {
@@ -281,8 +359,43 @@ function submitSettings() {
       claude: draft.cliConfigPaths.claude,
       codex: draft.cliConfigPaths.codex,
       gemini: draft.cliConfigPaths.gemini
+    },
+    cloudSync: {
+      provider: draft.cloudSync.provider,
+      webdavUrl: draft.cloudSync.webdavUrl,
+      username: draft.cloudSync.username,
+      password: draft.cloudSync.password,
+      fileName: draft.cloudSync.fileName
     }
   })
+}
+
+function emitCloudSync(eventName) {
+  if (
+    !draft.cloudSync.webdavUrl ||
+    !draft.cloudSync.username ||
+    !draft.cloudSync.password ||
+    !draft.cloudSync.fileName
+  ) {
+    window.alert("请先填写坚果云 WebDAV 地址、账号、应用密码和文件名")
+    return
+  }
+
+  emit(eventName, {
+    provider: draft.cloudSync.provider,
+    webdavUrl: draft.cloudSync.webdavUrl,
+    username: draft.cloudSync.username,
+    password: draft.cloudSync.password,
+    fileName: draft.cloudSync.fileName
+  })
+}
+
+function pushCloudData() {
+  emitCloudSync("push-cloud-data")
+}
+
+function pullCloudData() {
+  emitCloudSync("pull-cloud-data")
 }
 
 watch(
@@ -364,7 +477,8 @@ watch(
   &__save,
   &__panel-header button,
   &__input-row button,
-  &__data-card button {
+  &__data-card button,
+  &__cloud-actions button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -387,6 +501,11 @@ watch(
   }
 
   &__save:disabled {
+    cursor: not-allowed;
+    opacity: 0.56;
+  }
+
+  &__cloud-actions button:disabled {
     cursor: not-allowed;
     opacity: 0.56;
   }
@@ -446,6 +565,17 @@ watch(
   }
 
   &__input-row input {
+    min-width: 0;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: #ffffff;
+    color: var(--color-text);
+    font-size: 0.8rem;
+  }
+
+  &__field input {
     min-width: 0;
     height: 32px;
     padding: 0 10px;
@@ -561,6 +691,52 @@ watch(
     border: 1px solid var(--color-line);
     border-radius: 8px;
     background: var(--color-panel-soft);
+  }
+
+  &__cloud {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 13px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel-soft);
+  }
+
+  &__cloud-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+
+  &__cloud-header div {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__cloud-header strong {
+    font-size: 0.9rem;
+    line-height: 1.35;
+  }
+
+  &__cloud-header span {
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+  }
+
+  &__cloud-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  &__cloud-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
   }
 
   &__data-copy {

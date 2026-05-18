@@ -1,6 +1,6 @@
 {
   "name": "ai-manager",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
   "config": {
     "electron_mirror": "https://npmmirror.com/mirrors/electron/"
@@ -11,7 +11,7 @@
     "dev:renderer": "vite",
     "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "build": "vite build",
-    "dist:win": "npm run build && electron-builder --win nsis",
+    "dist:win": "npm run build && electron-builder --win nsis --publish never",
     "start": "electron .",
     "preview": "vite preview",
     "test": "node --test tests/manager-service.test.cjs"
