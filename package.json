@@ -1,6 +1,6 @@
 {
   "name": "ai-manager",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
   "config": {
     "electron_mirror": "https://npmmirror.com/mirrors/electron/"
