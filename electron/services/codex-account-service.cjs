@@ -11,7 +11,7 @@ const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback"
 const OAUTH_SCOPE =
-  "openid profile email offline_access model.request model.read organization.write"
+  "openid profile email offline_access"
 const AUTO_REFRESH_INTERVAL = 30 * 60 * 1000
 const REFRESH_THRESHOLD = 10 * 60 * 1000
 const DETAIL_REFRESH_THRESHOLD = 24 * 60 * 60 * 1000
@@ -405,10 +405,9 @@ class CodexAccountService extends EventEmitter {
       updatedAt: Date.now()
     }
 
-    this.accounts = [
-      ...this.accounts.filter((account) => account.id !== accountId),
-      nextAccount
-    ]
+    this.accounts = currentAccount
+      ? this.accounts.map(account => (account.id === accountId ? nextAccount : account))
+      : [...this.accounts, nextAccount]
     this.storage.scheduleWrite("codexAccounts", this.accounts)
     this.emit("changed", this.getState())
     return nextAccount
@@ -515,6 +514,27 @@ class CodexAccountService extends EventEmitter {
   clearActiveAccount() {
     this.activeAccountId = ""
     this.storage.scheduleWrite("codexActiveAccountId", this.activeAccountId)
+    this.emit("changed", this.getState())
+  }
+
+  async deleteAccount(accountId, cliTarget) {
+    const account = this.accounts.find((item) => item.id === accountId)
+
+    if (!account) {
+      throw new Error("Codex 官方账号不存在")
+    }
+
+    this.accounts = this.accounts.filter((item) => item.id !== accountId)
+
+    if (account.id === this.activeAccountId) {
+      this.activeAccountId = ""
+      this.storage.scheduleWrite("codexActiveAccountId", this.activeAccountId)
+      await fs.rm(path.join(cliTarget.configPath, "auth.json"), {
+        force: true
+      })
+    }
+
+    this.storage.scheduleWrite("codexAccounts", this.accounts)
     this.emit("changed", this.getState())
   }
 
@@ -769,6 +789,7 @@ class CodexAccountService extends EventEmitter {
     const accountId = extractAccountId(claims)
     const headers = {
       "content-type": "application/json",
+      "cache-control": "no-cache",
       authorization: `Bearer ${accessToken}`,
       "user-agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"

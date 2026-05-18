@@ -44,18 +44,21 @@
           :providers="state.providers"
           :runtime-config-schemas="state.runtimeConfigSchemas"
           :runtime-models="state.runtimeModels"
+          :runtime-provider-state="state.runtimeProviderState"
           :runtime-profiles="state.runtimeProfiles"
           @clear-runtime="clearRuntime"
           @codex-official-login="startCodexOfficialLogin"
           @codex-auth-json-import="importCodexAuthJson"
           @codex-account-enable="enableCodexAccount"
           @codex-account-clear="clearCodexAccount"
+          @codex-account-delete="deleteCodexAccount"
           @codex-account-refresh="refreshCodexAccount"
           @codex-account-proxy-save="updateCodexAccountProxy"
           @cancel-codex-official-login="cancelCodexOfficialLogin"
           @delete-provider="deleteProvider"
           @save-model="saveRuntimeModel"
           @save-provider="saveProvider"
+          @resolve-runtime-drift="resolveRuntimeDrift"
           @switch-runtime="switchRuntime"
         />
 
@@ -216,6 +219,7 @@ const state = reactive({
   },
   runtimeConfigSchemas: {},
   runtimeModels: [],
+  runtimeProviderState: {},
   runtimeProfiles: [],
   diagnostics: [],
   paths: {
@@ -291,6 +295,7 @@ function updateState(nextState) {
   state.rules = nextState.rules || state.rules
   state.runtimeConfigSchemas = nextState.runtimeConfigSchemas || {}
   state.runtimeModels = nextState.runtimeModels || []
+  state.runtimeProviderState = nextState.runtimeProviderState || {}
   state.runtimeProfiles = nextState.runtimeProfiles || []
   state.diagnostics = nextState.diagnostics || []
   state.paths = nextState.paths || state.paths
@@ -595,6 +600,16 @@ async function clearCodexAccount() {
   }
 }
 
+async function deleteCodexAccount(payload) {
+  const success = await runAction(() =>
+    window.aiManager.deleteCodexAccount(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Codex 官方账号已删除。")
+  }
+}
+
 async function refreshCodexAccount(payload) {
   const success = await runAction(() =>
     window.aiManager.refreshCodexAccount(payload)
@@ -638,6 +653,16 @@ async function clearRuntime(payload) {
 
   if (success) {
     showSuccessMessage("Runtime Profile 已取消使用。")
+  }
+}
+
+async function resolveRuntimeDrift(payload) {
+  const success = await runAction(() =>
+    window.aiManager.resolveRuntimeDrift(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Runtime 配置差异已处理。")
   }
 }
 

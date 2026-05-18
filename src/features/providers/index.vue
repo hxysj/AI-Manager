@@ -32,26 +32,40 @@
         </button>
       </header>
 
-      <section class="providers-view__list-panel">
-        <section
-          v-if="activeCli === 'codex' && codexAccounts.length"
-          class="providers-view__account-panel"
+      <section v-if="showRuntimeWarning" class="providers-view__runtime">
+        <div>
+          <strong>{{ activeCliName }} Runtime 配置不一致</strong>
+          <span>{{
+            runtimeState.runtimePath || "尚未发现 CLI 配置文件路径"
+          }}</span>
+        </div>
+        <button
+          class="providers-view__compare-button"
+          type="button"
+          :disabled="pending"
+          @click="openRuntimeCompareDialog"
         >
-          <article
-            v-for="account in codexAccounts"
-            :key="account.id"
-            class="providers-view__account-card"
-          >
+          对比
+        </button>
+      </section>
+
+      <section class="providers-view__list-panel">
+        <article
+          v-for="item in mixedItems"
+          :key="item.key"
+          :class="item.className"
+        >
+          <template v-if="item.type === 'account'">
             <ShieldCheck :size="18" />
             <div class="providers-view__account-main">
               <div class="providers-view__account-title">
-                <strong>{{ account.email }}</strong>
+                <strong>{{ item.account.email }}</strong>
                 <span class="providers-view__account-tag">
-                  {{ account.plan || "未识别套餐" }}
+                  {{ item.account.plan || "未识别套餐" }}
                 </span>
               </div>
               <div
-                v-if="account.usage?.rate_limit"
+                v-if="item.account.usage?.rate_limit"
                 class="providers-view__account-quota"
               >
                 <div class="providers-view__quota-header">
@@ -59,7 +73,7 @@
                     <Clock :size="14" />
                     {{
                       formatRateWindowName(
-                        account.usage.rate_limit.primary_window
+                        item.account.usage.rate_limit.primary_window
                           ?.limit_window_seconds
                       )
                     }}
@@ -67,7 +81,7 @@
                   <strong class="providers-view__quota-percent">
                     {{
                       formatRatePercent(
-                        account.usage.rate_limit.primary_window?.used_percent
+                        item.account.usage.rate_limit.primary_window?.used_percent
                       )
                     }}
                   </strong>
@@ -77,7 +91,7 @@
                     class="providers-view__quota-fill"
                     :style="{
                       width: formatRateWidth(
-                        account.usage.rate_limit.primary_window?.used_percent
+                        item.account.usage.rate_limit.primary_window?.used_percent
                       )
                     }"
                   ></span>
@@ -85,12 +99,12 @@
                 <p class="providers-view__quota-meta">
                   {{
                     formatResetCountdown(
-                      account.usage.rate_limit.primary_window?.reset_at
+                      item.account.usage.rate_limit.primary_window?.reset_at
                     )
                   }}
                   ({{
                     formatUnixTime(
-                      account.usage.rate_limit.primary_window?.reset_at
+                      item.account.usage.rate_limit.primary_window?.reset_at
                     )
                   }})
                 </p>
@@ -98,34 +112,7 @@
             </div>
             <div class="providers-view__account-actions">
               <button
-                class="providers-view__icon-button"
-                type="button"
-                title="刷新额度"
-                aria-label="刷新额度"
-                @click="refreshCodexAccount(account)"
-              >
-                <RefreshCw :size="15" />
-              </button>
-              <button
-                class="providers-view__icon-button"
-                type="button"
-                title="查看详情"
-                aria-label="查看详情"
-                @click="openCodexAccountDetail(account)"
-              >
-                <Eye :size="15" />
-              </button>
-              <button
-                class="providers-view__icon-button"
-                type="button"
-                title="编辑代理"
-                aria-label="编辑代理"
-                @click="openCodexAccountProxy(account)"
-              >
-                <SquarePen :size="15" />
-              </button>
-              <button
-                v-if="account.active"
+                v-if="item.account.active"
                 class="providers-view__using"
                 type="button"
                 @click="clearCodexAccount"
@@ -137,77 +124,123 @@
                 v-else
                 class="providers-view__enable"
                 type="button"
-                @click="enableCodexAccount(account)"
+                @click="enableCodexAccount(item.account)"
               >
                 <Play :size="15" />
                 启用
               </button>
+              <button
+                class="providers-view__icon-button"
+                type="button"
+                title="刷新额度"
+                aria-label="刷新额度"
+                @click="refreshCodexAccount(item.account)"
+              >
+                <RefreshCw :size="15" />
+              </button>
+              <button
+                class="providers-view__icon-button"
+                type="button"
+                title="查看详情"
+                aria-label="查看详情"
+                @click="openCodexAccountDetail(item.account)"
+              >
+                <Eye :size="15" />
+              </button>
+              <button
+                class="providers-view__icon-button"
+                type="button"
+                title="编辑代理"
+                aria-label="编辑代理"
+                @click="openCodexAccountProxy(item.account)"
+              >
+                <SquarePen :size="15" />
+              </button>
+              <button
+                class="providers-view__icon-button providers-view__icon-button--danger"
+                type="button"
+                title="删除账号"
+                aria-label="删除账号"
+                @click="deleteCodexAccount(item.account)"
+              >
+                <Trash2 :size="15" />
+              </button>
             </div>
-          </article>
-        </section>
-
-        <article
-          v-for="provider in scopedProviders"
-          :key="provider.id"
-          :class="[
-            'providers-view__provider-card',
-            {
-              'providers-view__provider-card--active':
-                profileMap[activeCli]?.providerId === provider.id
-            }
-          ]"
-        >
-          <GripVertical class="providers-view__drag" :size="16" />
-          <span class="providers-view__avatar">
-            <AiIcon
-              v-if="provider.icon"
-              class="providers-view__avatar-icon"
-              :name="provider.icon"
-              :alt="`${provider.name} 图标`"
-            />
-            <template v-else>{{ provider.name.slice(0, 1) }}</template>
-          </span>
-          <div class="providers-view__provider-main">
-            <strong>{{ provider.name }}</strong>
-            <span>{{ provider.baseUrl || "未配置官网地址" }}</span>
-          </div>
-          <div class="providers-view__provider-actions">
-            <button
-              v-if="profileMap[activeCli]?.providerId === provider.id"
-              class="providers-view__using"
-              type="button"
-              @click.stop="clearRuntime"
-            >
-              <X :size="15" />
-              取消使用
-            </button>
-            <button
-              v-else
-              class="providers-view__enable"
-              type="button"
-              @click.stop="enableProvider(provider)"
-            >
-              <Play :size="15" />
-              启用
-            </button>
-            <button
-              class="providers-view__icon-button"
-              type="button"
-              @click.stop="editProvider(provider)"
-            >
-              <SquarePen :size="16" />
-            </button>
-            <button
-              class="providers-view__icon-button providers-view__icon-button--danger"
-              type="button"
-              @click.stop="removeProvider(provider)"
-            >
-              <Trash2 :size="16" />
-            </button>
-          </div>
+          </template>
+          <template v-else>
+            <!-- <GripVertical class="providers-view__drag" :size="16" /> -->
+            <span class="providers-view__avatar">
+              <AiIcon
+                v-if="item.provider.icon"
+                class="providers-view__avatar-icon"
+                :name="item.provider.icon"
+                :alt="`${item.provider.name} 图标`"
+              />
+              <template v-else>{{ item.provider.name.slice(0, 1) }}</template>
+            </span>
+            <div class="providers-view__provider-main">
+              <strong>{{ item.provider.name }}</strong>
+              <span>{{ item.provider.baseUrl || "未配置官网地址" }}</span>
+            </div>
+            <div class="providers-view__provider-actions">
+              <button
+                v-if="
+                  showRuntimeWarning &&
+                  profileMap[activeCli]?.providerId === item.provider.id
+                "
+                class="providers-view__compare-button"
+                type="button"
+                :disabled="pending"
+                @click.stop="openRuntimeCompareDialog"
+              >
+                对比
+              </button>
+              <button
+                v-if="profileMap[activeCli]?.providerId === item.provider.id"
+                class="providers-view__using"
+                type="button"
+                @click.stop="clearRuntime"
+              >
+                <X :size="15" />
+                取消使用
+              </button>
+              <button
+                v-else
+                class="providers-view__enable"
+                type="button"
+                @click.stop="enableProvider(item.provider)"
+              >
+                <Play :size="15" />
+                启用
+              </button>
+              <button
+                class="providers-view__icon-button"
+                type="button"
+                title="查看详情"
+                aria-label="查看详情"
+                @click.stop="openProviderDetail(item.provider)"
+              >
+                <Eye :size="16" />
+              </button>
+              <button
+                class="providers-view__icon-button"
+                type="button"
+                @click.stop="editProvider(item.provider)"
+              >
+                <SquarePen :size="16" />
+              </button>
+              <button
+                class="providers-view__icon-button providers-view__icon-button--danger"
+                type="button"
+                @click.stop="removeProvider(item.provider)"
+              >
+                <Trash2 :size="16" />
+              </button>
+            </div>
+          </template>
         </article>
 
-        <div v-if="!scopedProviders.length" class="providers-view__empty">
+        <div v-if="!mixedItems.length" class="providers-view__empty">
           当前 CLI 还没有 Provider。
         </div>
       </section>
@@ -289,9 +322,10 @@
           </label>
           <label class="providers-view__field providers-view__field--wide">
             <span>API Key</span>
-            <input
-              v-model.trim="draft.apiKey"
+            <el-input
+              v-model="draft.apiKey"
               type="password"
+              show-password
               :placeholder="
                 selectedProvider?.hasApiKey ? '已保存，留空则保持不变' : ''
               "
@@ -683,11 +717,106 @@
         </div>
       </aside>
     </div>
+
+    <div v-if="showProviderDrawer" class="providers-view__drawer">
+      <div
+        class="providers-view__drawer-backdrop"
+        @click="closeProviderDetail"
+      ></div>
+      <aside class="providers-view__drawer-panel">
+        <header class="providers-view__drawer-header">
+          <div>
+            <h2>Provider 详情</h2>
+            <p>{{ providerDetail?.name || "未加载" }}</p>
+          </div>
+          <button
+            class="providers-view__drawer-close"
+            type="button"
+            @click="closeProviderDetail"
+          >
+            ×
+          </button>
+        </header>
+        <div class="providers-view__drawer-content">
+          <template v-if="providerDetail">
+            <section class="providers-view__drawer-section">
+              <h3>基础信息</h3>
+              <pre class="providers-view__drawer-json">{{
+                formatJson({
+                  id: providerDetail.id,
+                  cli: providerDetail.cli,
+                  name: providerDetail.name,
+                  type: providerDetail.type,
+                  baseUrl: providerDetail.baseUrl,
+                  proxy: providerDetail.proxy,
+                  apiKey: providerDetail.apiKey,
+                  authField: providerDetail.authField,
+                  enabled: providerDetail.enabled,
+                  website: providerDetail.website,
+                  note: providerDetail.note
+                })
+              }}</pre>
+            </section>
+            <section class="providers-view__drawer-section">
+              <h3>Runtime 配置</h3>
+              <pre class="providers-view__drawer-json">{{
+                formatJson(providerDetail.runtimeConfig)
+              }}</pre>
+            </section>
+          </template>
+        </div>
+      </aside>
+    </div>
+
+    <BaseModal
+      v-if="showRuntimeDiff"
+      class="providers-view__diff-modal"
+      title="Runtime Diff"
+      :description="runtimeDiffDescription"
+      @close="closeRuntimeDiffDialog"
+    >
+      <div ref="runtimeDiffEditorRef" class="providers-view__diff-editor"></div>
+      <footer class="providers-view__diff-footer">
+        <button
+          class="providers-view__diff-button"
+          type="button"
+          :disabled="pending"
+          @click="resolveRuntimeDiff('cancel')"
+        >
+          取消启用
+        </button>
+        <button
+          class="providers-view__diff-button"
+          type="button"
+          :disabled="pending"
+          @click="resolveRuntimeDiff('runtime')"
+        >
+          用 CLI 配置更新管理器
+        </button>
+        <button
+          class="providers-view__diff-button providers-view__diff-button--primary"
+          type="button"
+          :disabled="pending"
+          @click="resolveRuntimeDiff('manager')"
+        >
+          用管理器配置覆盖 CLI
+        </button>
+      </footer>
+    </BaseModal>
   </section>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch
+} from "vue"
+import * as monaco from "monaco-editor"
 import {
   ArrowLeft,
   Check,
@@ -739,6 +868,10 @@ const props = defineProps({
     type: Array,
     required: true
   },
+  runtimeProviderState: {
+    type: Object,
+    required: true
+  },
   runtimeProfiles: {
     type: Array,
     required: true
@@ -749,12 +882,14 @@ const emit = defineEmits([
   "codex-auth-json-import",
   "codex-account-clear",
   "codex-account-enable",
+  "codex-account-delete",
   "codex-account-proxy-save",
   "codex-account-refresh",
   "codex-official-login",
   "clear-runtime",
   "cancel-codex-official-login",
   "delete-provider",
+  "resolve-runtime-drift",
   "save-provider",
   "switch-runtime"
 ])
@@ -813,6 +948,10 @@ const showCodexCreateOptions = ref(false)
 const showCodexLoginModal = ref(false)
 const showCodexProxyModal = ref(false)
 const showCodexAccountDrawer = ref(false)
+const showProviderDrawer = ref(false)
+const showRuntimeDiff = ref(false)
+const runtimeDiffEditorRef = ref(null)
+const runtimeDiffPath = ref("")
 const codexLoginTab = ref("oauth")
 const codexAuthDataDraft = ref("")
 const codexProxyDraft = ref("")
@@ -821,6 +960,7 @@ const editingCodexAccountId = ref("")
 const editingCodexProxy = ref("")
 const codexAccountDetail = ref(null)
 const codexAccountDetailLoading = ref(false)
+const providerDetail = ref(null)
 const manualCallbackUrl = ref("")
 const countdownNow = ref(Date.now())
 let countdownTimer = null
@@ -832,6 +972,7 @@ const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
 const iconOptions = Object.keys(iconModules)
   .map((item) => item.split("/").pop())
   .sort((left, right) => left.localeCompare(right))
+let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
   return props.cliTargets.filter((item) => {
@@ -852,6 +993,14 @@ const activeRuntimeSchema = computed(() => {
   )
 })
 
+const activeCliName = computed(() => {
+  return (
+    visibleCliTargets.value.find((item) => item.id === activeCli.value)?.name ||
+    activeCli.value ||
+    "Runtime"
+  )
+})
+
 const selectedProvider = computed(() => {
   return props.providers.find((item) => item.id === draft.id) || null
 })
@@ -860,10 +1009,57 @@ const scopedProviders = computed(() => {
   return props.providers.filter((item) => item.cli === activeCli.value)
 })
 
+const mixedItems = computed(() => {
+  const providerItems = scopedProviders.value.map((provider) => ({
+    type: "provider",
+    provider,
+    key: `provider:${provider.id}`,
+    className: [
+      "providers-view__provider-card",
+      {
+        "providers-view__provider-card--active":
+          profileMap.value[activeCli.value]?.providerId === provider.id
+      }
+    ],
+    createdAt: provider.createdAt || 0
+  }))
+  const accountItems = activeCli.value === "codex"
+    ? props.codexAccounts.map((account) => ({
+        type: "account",
+        account,
+        key: `account:${account.id}`,
+        className: "providers-view__account-card",
+        createdAt: account.createdAt || account.updatedAt || 0
+      }))
+    : []
+
+  return [...providerItems, ...accountItems].sort(
+    (left, right) => right.createdAt - left.createdAt
+  )
+})
+
 const profileMap = computed(() => {
   return Object.fromEntries(
     props.runtimeProfiles.map((item) => [item.cli, item])
   )
+})
+
+const runtimeState = computed(() => {
+  return props.runtimeProviderState[activeCli.value] || {}
+})
+
+const runtimeStatus = computed(() => {
+  return runtimeState.value.status || "NO_ACTIVE"
+})
+
+const showRuntimeWarning = computed(() => {
+  return ["MODIFIED_EXTERNALLY", "DIRTY_MANAGER", "CONFLICT"].includes(
+    runtimeStatus.value
+  )
+})
+
+const runtimeDiffDescription = computed(() => {
+  return runtimeDiffPath.value || "当前没有 CLI 配置文件路径"
 })
 
 const filteredIconOptions = computed(() => {
@@ -891,6 +1087,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.clearInterval(countdownTimer)
+
+  if (runtimeDiffEditor) {
+    runtimeDiffEditor.dispose()
+  }
 })
 
 function formatConfigPreview(file, content) {
@@ -953,11 +1153,13 @@ function ensureActiveCli() {
 function selectCli(cli) {
   activeCli.value = cli
   closeCodexAccountDetail()
+  closeProviderDetail()
   clearDraft()
 }
 
 function editProvider(provider) {
   closeCodexAccountDetail()
+  closeProviderDetail()
   draft.id = provider.id
   draft.cli = provider.cli || activeCli.value
   draft.icon = provider.icon || ""
@@ -967,7 +1169,7 @@ function editProvider(provider) {
   draft.type = provider.type
   draft.baseUrl = provider.baseUrl || ""
   draft.proxy = provider.proxy || ""
-  draft.apiKey = ""
+  draft.apiKey = provider.apiKey || ""
   draft.authField = provider.authField || "ANTHROPIC_AUTH_TOKEN"
   draft.enabled = provider.enabled !== false
   modelDrafts.mainModel = provider.runtimeConfig?.mainModel || ""
@@ -1004,6 +1206,7 @@ function createProvider() {
 function startProviderCreate() {
   showCodexCreateOptions.value = false
   closeCodexAccountDetail()
+  closeProviderDetail()
   clearDraft()
   viewMode.value = "edit"
 }
@@ -1012,6 +1215,7 @@ function openCodexLoginModal() {
   showCodexCreateOptions.value = false
   showCodexLoginModal.value = true
   closeCodexAccountDetail()
+  closeProviderDetail()
   codexLoginTab.value = "oauth"
   manualCallbackUrl.value = ""
   codexAuthDataDraft.value = ""
@@ -1021,6 +1225,7 @@ function openCodexLoginModal() {
 function closeCodexLoginModal() {
   showCodexLoginModal.value = false
   closeCodexAccountDetail()
+  closeProviderDetail()
   emit("cancel-codex-official-login")
 }
 
@@ -1064,6 +1269,20 @@ function clearCodexAccount() {
   emit("codex-account-clear")
 }
 
+function deleteCodexAccount(account) {
+  const shouldContinue = window.confirm(
+    "删除官方账号后会清除本地 auth.json，是否继续？"
+  )
+
+  if (!shouldContinue) {
+    return
+  }
+
+  emit("codex-account-delete", {
+    accountId: account.id
+  })
+}
+
 function openCodexAccountProxy(account) {
   editingCodexAccountId.value = account.id
   editingCodexProxy.value =
@@ -1087,6 +1306,7 @@ function saveCodexAccountProxy() {
 }
 
 async function openCodexAccountDetail(account) {
+  closeProviderDetail()
   showCodexAccountDrawer.value = true
   codexAccountDetailLoading.value = true
   codexAccountDetail.value = null
@@ -1109,6 +1329,17 @@ function closeCodexAccountDetail() {
   showCodexAccountDrawer.value = false
   codexAccountDetail.value = null
   codexAccountDetailLoading.value = false
+}
+
+function openProviderDetail(provider) {
+  closeCodexAccountDetail()
+  providerDetail.value = provider
+  showProviderDrawer.value = true
+}
+
+function closeProviderDetail() {
+  showProviderDrawer.value = false
+  providerDetail.value = null
 }
 
 function formatRateWindowName(value) {
@@ -1292,6 +1523,70 @@ function clearRuntime() {
   })
 }
 
+async function openRuntimeCompareDialog() {
+  try {
+    const result = await window.aiManager.compareRuntime({
+      cli: activeCli.value
+    })
+
+    showRuntimeDiff.value = true
+    runtimeDiffPath.value = result.runtimePath || ""
+    await nextTick()
+    renderRuntimeDiff(result.managerContent || "", result.runtimeContent || "")
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  }
+}
+
+function renderRuntimeDiff(managerContent, runtimeContent) {
+  if (!runtimeDiffEditorRef.value) {
+    return
+  }
+
+  if (runtimeDiffEditor) {
+    runtimeDiffEditor.dispose()
+  }
+
+  runtimeDiffEditor = monaco.editor.createDiffEditor(
+    runtimeDiffEditorRef.value,
+    {
+      automaticLayout: true,
+      minimap: { enabled: false },
+      readOnly: true,
+      renderSideBySide: true,
+      scrollBeyondLastLine: false
+    }
+  )
+  runtimeDiffEditor.setModel({
+    original: monaco.editor.createModel(managerContent, "plaintext"),
+    modified: monaco.editor.createModel(runtimeContent, "plaintext")
+  })
+}
+
+function closeRuntimeDiffDialog() {
+  showRuntimeDiff.value = false
+  runtimeDiffPath.value = ""
+
+  if (runtimeDiffEditor) {
+    runtimeDiffEditor.dispose()
+    runtimeDiffEditor = null
+  }
+}
+
+function resolveRuntimeDiff(source) {
+  if (source === "cancel") {
+    clearRuntime()
+    closeRuntimeDiffDialog()
+    return
+  }
+
+  emit("resolve-runtime-drift", {
+    cli: activeCli.value,
+    source
+  })
+  closeRuntimeDiffDialog()
+}
+
 function removeProvider(provider) {
   const shouldContinue = window.confirm(
     "删除 Provider 会同时删除关联模型和 Runtime Profile，是否继续？"
@@ -1326,6 +1621,32 @@ watch(
     manualCallbackUrl.value = ""
   }
 )
+
+watch(
+  () => props.codexAccounts,
+  (accounts) => {
+    if (
+      codexAccountDetail.value &&
+      !accounts.find((item) => item.id === codexAccountDetail.value.id)
+    ) {
+      closeCodexAccountDetail()
+    }
+  },
+  { deep: true }
+)
+
+watch(
+  () => props.providers,
+  (providers) => {
+    if (
+      providerDetail.value &&
+      !providers.find((item) => item.id === providerDetail.value.id)
+    ) {
+      closeProviderDetail()
+    }
+  },
+  { deep: true }
+)
 </script>
 
 <style scoped lang="less">
@@ -1349,7 +1670,9 @@ watch(
   &__provider-actions,
   &__section-actions,
   &__json-title,
-  &__check-row {
+  &__check-row,
+  &__runtime,
+  &__diff-footer {
     display: flex;
     align-items: center;
   }
@@ -1468,6 +1791,33 @@ watch(
     background: #ffffff;
   }
 
+  &__runtime {
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 16px;
+    border-bottom: 1px solid #ffd56a;
+    background: #fff9e8;
+  }
+
+  &__runtime div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  &__runtime strong {
+    color: #111827;
+  }
+
+  &__runtime span {
+    overflow: hidden;
+    color: #c25a00;
+    font-size: 0.84rem;
+    text-overflow: ellipsis;
+    white-space: pre-line;
+  }
+
   &__provider-card {
     display: flex;
     gap: 12px;
@@ -1512,6 +1862,7 @@ watch(
     display: flex;
     align-items: center;
     gap: 8px;
+    min-width: 260px;
   }
 
   &__account-card strong {
@@ -1573,7 +1924,7 @@ watch(
     display: block;
     height: 100%;
     border-radius: inherit;
-    background: #22c55e;
+    background: #f97316;
   }
 
   &__account-actions {
@@ -1638,6 +1989,7 @@ watch(
   &__enable,
   &__using,
   &__primary,
+  &__compare-button,
   &__section-actions button {
     display: inline-flex;
     align-items: center;
@@ -1660,6 +2012,12 @@ watch(
   &__using {
     background: #edf0f4;
     color: #98a2b3;
+  }
+
+  &__compare-button {
+    border: 1px solid #d92d20;
+    background: #ffffff;
+    color: #b42318;
   }
 
   &__empty {
@@ -2080,6 +2438,63 @@ watch(
     :deep(.base-modal__content) {
       padding: 18px 26px 24px;
     }
+  }
+
+  &__diff-modal {
+    :deep(.base-modal__panel) {
+      width: 1180px;
+    }
+
+    :deep(.base-modal__header) {
+      padding: 18px 22px 10px;
+    }
+
+    :deep(.base-modal__header h2) {
+      color: #1f2937;
+      font-size: 1.05rem;
+      line-height: 1.35;
+    }
+
+    :deep(.base-modal__header p) {
+      font-size: 0.86rem;
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+  }
+
+  &__diff-editor {
+    height: 560px;
+    border: 1px solid #dfe3e8;
+  }
+
+  &__diff-footer {
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 12px;
+  }
+
+  &__diff-button {
+    min-width: 168px;
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid #d0d5dd;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #475467;
+    cursor: pointer;
+    font-size: 0.86rem;
+    font-weight: 600;
+  }
+
+  &__diff-button--primary {
+    border-color: #1570ef;
+    background: #1570ef;
+    color: #ffffff;
+  }
+
+  &__diff-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
   }
 
   &__drawer {

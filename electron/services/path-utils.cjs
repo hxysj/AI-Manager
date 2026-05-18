@@ -32,6 +32,7 @@ function resolveAppPaths(userDataPath) {
       promptRuntimeState: path.join(storageDir, "prompt-runtime-state.json"),
       runtimeModels: path.join(storageDir, "runtime-models.json"),
       runtimeProfiles: path.join(storageDir, "runtime-profiles.json"),
+      runtimeProviderState: path.join(storageDir, "runtime-provider-state.json"),
       runtimeProviderKeys: path.join(storageDir, "runtime-provider-keys.json"),
       codexAccounts: path.join(storageDir, "codex-accounts.json"),
       codexActiveAccountId: path.join(
