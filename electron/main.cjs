@@ -63,8 +63,8 @@ app.setPath("userData", userDataPath)
 
 async function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1480,
-    height: 980,
+    width: 1200,
+    height: 760,
     minWidth: 1200,
     minHeight: 760,
     backgroundColor: "#ffffff",
@@ -73,7 +73,8 @@ async function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      devTools: Boolean(process.env.VITE_DEV_SERVER_URL)
     }
   })
 
@@ -86,7 +87,7 @@ async function createWindow() {
   }
 
   mainWindow.webContents.on("before-input-event", (event, input) => {
-    if (input.type === "keyDown" && input.key === "F12") {
+    if (devServerUrl && input.type === "keyDown" && input.key === "F12") {
       mainWindow.webContents.toggleDevTools()
       event.preventDefault()
     }
@@ -383,7 +384,7 @@ app.whenReady().then(async () => {
   managerService = new ManagerService(app.getPath("userData"), appSettings)
   translationService = new TranslationService(app.getPath("userData"))
   await managerService.init()
-  managerService.on("state-changed", state => {
+  managerService.on("state-changed", (state) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("state:changed", state)
     }
