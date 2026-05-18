@@ -127,6 +127,9 @@ function submit() {
     justify-content: flex-end;
     gap: 10px;
     padding-top: 6px;
+    position: sticky;
+    bottom: 0;
+    background: var(--color-panel);
   }
 }
 

@@ -1,0 +1,51 @@
+name: 发布 Windows 安装包
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 检查发布说明
+        shell: pwsh
+        run: |
+          $notes = Get-Content build/release-notes.md -Raw
+          if ($notes -match '请在发布前删除此行') {
+            throw '请先更新 build/release-notes.md，再创建 tag 发布。'
+          }
+
+      - name: 打包 Windows 安装程序
+        run: npm run dist:win
+
+      - name: 上传 GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          body_path: build/release-notes.md
+          files: |
+            release/*.exe
+            release/*.yml
+            release/*.blockmap
