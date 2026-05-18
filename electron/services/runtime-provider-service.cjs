@@ -12,6 +12,14 @@ const providerTypes = new Set([
 ])
 
 const cliTypes = new Set(["claude", "codex", "gemini", "open" + "code"])
+const runtimeProviderSecret = crypto
+  .createHash("sha256")
+  .update("ai-manager-runtime-provider|v2|fixed")
+  .digest()
+const legacyRuntimeProviderSecret = crypto
+  .createHash("sha256")
+  .update(`${process.env.USERPROFILE || ""}|ai-manager-runtime-provider`)
+  .digest()
 
 const defaultModels = {
   openai: ["gpt-5.2", "gpt-5.1"],
@@ -565,14 +573,28 @@ class RuntimeKeyManager {
   constructor(storage) {
     this.storage = storage
     this.keys = {}
-    this.secret = crypto
-      .createHash("sha256")
-      .update(`${process.env.USERPROFILE || ""}|ai-manager-runtime-provider`)
-      .digest()
+    this.secret = runtimeProviderSecret
+    this.legacySecret = legacyRuntimeProviderSecret
   }
 
   async init() {
-    this.keys = await this.storage.read("runtimeProviderKeys", {})
+    const storedKeys = await this.storage.read("runtimeProviderKeys", {})
+    this.keys = {}
+
+    for (const [providerId, value] of Object.entries(storedKeys || {})) {
+      if (!value) {
+        continue
+      }
+
+      try {
+        this.keys[providerId] = this.encrypt(this.decrypt(value))
+      } catch {
+      }
+    }
+
+    if (Object.keys(this.keys).length !== Object.keys(storedKeys || {}).length) {
+      await this.storage.writeNow("runtimeProviderKeys", this.keys)
+    }
   }
 
   encrypt(value) {
@@ -591,10 +613,18 @@ class RuntimeKeyManager {
   }
 
   decrypt(value) {
+    try {
+      return this.decryptWithSecret(value, this.secret)
+    } catch {
+      return this.decryptWithSecret(value, this.legacySecret)
+    }
+  }
+
+  decryptWithSecret(value, secret) {
     const [ivText, tagText, encryptedText] = String(value).split(".")
     const decipher = crypto.createDecipheriv(
       "aes-256-gcm",
-      this.secret,
+      secret,
       Buffer.from(ivText, "base64")
     )
     decipher.setAuthTag(Buffer.from(tagText, "base64"))
@@ -651,6 +681,29 @@ class RuntimeProviderService {
     this.models = await this.storage.read("runtimeModels", [])
     this.profiles = await this.storage.read("runtimeProfiles", [])
     this.runtimeState = await this.storage.read("runtimeProviderState", {})
+  }
+
+  exportProviderKeys() {
+    return Object.fromEntries(
+      this.providers
+        .map((item) => [item.id, this.keyManager.getProviderKey(item.id)])
+        .filter(([, apiKey]) => Boolean(apiKey))
+    )
+  }
+
+  async importProviderKeys(apiKeys) {
+    const nextKeys = {}
+
+    for (const [providerId, apiKey] of Object.entries(apiKeys || {})) {
+      const key = String(apiKey || "").trim()
+
+      if (key) {
+        nextKeys[providerId] = this.keyManager.encrypt(key)
+      }
+    }
+
+    this.keyManager.keys = nextKeys
+    await this.storage.writeNow("runtimeProviderKeys", nextKeys)
   }
 
   getState() {

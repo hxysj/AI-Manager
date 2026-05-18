@@ -4,6 +4,10 @@ const os = require("node:os")
 const fsp = require("node:fs/promises")
 const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require("electron")
 const { ManagerService } = require("./services/manager-service.cjs")
+const {
+  resolvePortablePath,
+  serializeAppSettingsPaths
+} = require("./services/path-utils.cjs")
 const { TranslationService } = require("./services/translation-service.cjs")
 
 let mainWindow = null
@@ -11,10 +15,11 @@ let managerService = null
 let translationService = null
 const defaultUserDataPath = "D:\\ai-manager-data"
 const settingsFilePath = path.join(defaultUserDataPath, "app-settings.json")
+const portableHomePrefix = path.join(path.dirname(os.homedir()), "%USERNAME%")
 const defaultCliConfigPaths = {
-  claude: path.join(os.homedir(), ".claude"),
-  codex: path.join(os.homedir(), ".codex"),
-  gemini: path.join(os.homedir(), ".gemini")
+  claude: path.join(portableHomePrefix, ".claude"),
+  codex: path.join(portableHomePrefix, ".codex"),
+  gemini: path.join(portableHomePrefix, ".gemini")
 }
 const defaultCloudSyncSettings = {
   provider: "jianguoyun",
@@ -37,20 +42,23 @@ function normalizeCloudSyncSettings(input = {}) {
 }
 
 function normalizeAppSettings(input = {}) {
+  const cliConfigPaths = input.cliConfigPaths || {}
   return {
-    dataPath: String(input.dataPath || defaultUserDataPath).trim(),
+    dataPath: resolvePortablePath(
+      String(input.dataPath || defaultUserDataPath).trim()
+    ),
     defaultDataPath: defaultUserDataPath,
     settingsFilePath,
     cliConfigPaths: {
-      claude: String(
-        input.cliConfigPaths?.claude || defaultCliConfigPaths.claude
-      ).trim(),
-      codex: String(
-        input.cliConfigPaths?.codex || defaultCliConfigPaths.codex
-      ).trim(),
-      gemini: String(
-        input.cliConfigPaths?.gemini || defaultCliConfigPaths.gemini
-      ).trim()
+      claude: resolvePortablePath(
+        String(cliConfigPaths.claude || defaultCliConfigPaths.claude).trim()
+      ),
+      codex: resolvePortablePath(
+        String(cliConfigPaths.codex || defaultCliConfigPaths.codex).trim()
+      ),
+      gemini: resolvePortablePath(
+        String(cliConfigPaths.gemini || defaultCliConfigPaths.gemini).trim()
+      )
     },
     defaultCliConfigPaths,
     cloudSync: normalizeCloudSyncSettings(input.cloudSync)
@@ -143,7 +151,7 @@ function saveAppSettings(nextSettings) {
   fs.mkdirSync(path.dirname(settingsFilePath), { recursive: true })
   fs.writeFileSync(
     settingsFilePath,
-    `${JSON.stringify(nextSettings, null, 2)}\n`,
+    `${JSON.stringify(serializeAppSettingsPaths(nextSettings), null, 2)}\n`,
     "utf8"
   )
 }

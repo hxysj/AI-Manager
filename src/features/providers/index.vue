@@ -1961,7 +1961,7 @@ watch(
     width: 38px;
     height: 38px;
     border-radius: 12px;
-    background: #ff6a00;
+    background: var(--color-primary);
     color: #ffffff;
   }
 

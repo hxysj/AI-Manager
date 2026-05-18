@@ -8,7 +8,9 @@ const { promisify } = require("node:util")
 const {
   resolveAppPaths,
   ensureAppDirectories,
-  slugifyName
+  slugifyName,
+  resolvePortablePath,
+  serializeAppSettingsPaths
 } = require("./path-utils.cjs")
 const { JsonStorage } = require("./json-storage.cjs")
 const { CliDetectionService } = require("./cli-detection-service.cjs")
@@ -208,7 +210,9 @@ async function collectBackupEntries(paths) {
   const entries = []
 
   for (const sourcePath of sources) {
-    const sourceEntries = await collectDirectoryEntries(sourcePath)
+    const sourceEntries = (await collectDirectoryEntries(sourcePath)).filter(
+      (entry) => entry.path !== "runtime-provider-keys.json"
+    )
     const rootName = path
       .relative(paths.workspaceRoot, sourcePath)
       .replace(/\\/g, "/")
@@ -226,6 +230,40 @@ async function collectBackupEntries(paths) {
   }
 
   return entries
+}
+
+function encryptBackupData(value) {
+  const iv = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv("aes-256-gcm", BACKUP_SECRET, iv)
+  const content = Buffer.concat([
+    cipher.update(`AI_MANAGER::RUNTIME_KEYS::${JSON.stringify(value)}`, "utf8"),
+    cipher.final()
+  ])
+
+  return [
+    iv.toString("base64"),
+    cipher.getAuthTag().toString("base64"),
+    content.toString("base64")
+  ].join(".")
+}
+
+function decryptBackupData(value) {
+  const [ivText, tagText, contentText] = String(value || "").split(".")
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    BACKUP_SECRET,
+    Buffer.from(ivText, "base64")
+  )
+  decipher.setAuthTag(Buffer.from(tagText, "base64"))
+
+  return JSON.parse(
+    Buffer.concat([
+      decipher.update(Buffer.from(contentText, "base64")),
+      decipher.final()
+    ])
+      .toString("utf8")
+      .replace(/^AI_MANAGER::RUNTIME_KEYS::/, "")
+  )
 }
 
 function encryptBackupPayload(payload) {
@@ -414,8 +452,11 @@ class ManagerService extends EventEmitter {
     return encryptBackupPayload({
       version: 1,
       createdAt: Date.now(),
-      appSettings: this.appSettings,
-      workspaceEntries: await collectBackupEntries(this.paths)
+      appSettings: serializeAppSettingsPaths(this.appSettings),
+      workspaceEntries: await collectBackupEntries(this.paths),
+      runtimeProviderKeys: encryptBackupData(
+        this.runtimeProviderService.exportProviderKeys()
+      )
     })
   }
 
@@ -446,12 +487,32 @@ class ManagerService extends EventEmitter {
       this.paths.workspaceRoot,
       backup.workspaceEntries
     )
+    if (backup.runtimeProviderKeys) {
+      await this.runtimeProviderService.importProviderKeys(
+        decryptBackupData(backup.runtimeProviderKeys)
+      )
+    }
 
     return {
       appSettings: {
         ...this.appSettings,
-        cliConfigPaths:
-          backup.appSettings?.cliConfigPaths || this.appSettings.cliConfigPaths
+        dataPath: resolvePortablePath(
+          backup.appSettings?.dataPath || this.appSettings.dataPath
+        ),
+        cliConfigPaths: {
+          claude: resolvePortablePath(
+            backup.appSettings?.cliConfigPaths?.claude ||
+              this.appSettings.cliConfigPaths.claude
+          ),
+          codex: resolvePortablePath(
+            backup.appSettings?.cliConfigPaths?.codex ||
+              this.appSettings.cliConfigPaths.codex
+          ),
+          gemini: resolvePortablePath(
+            backup.appSettings?.cliConfigPaths?.gemini ||
+              this.appSettings.cliConfigPaths.gemini
+          )
+        }
       }
     }
   }

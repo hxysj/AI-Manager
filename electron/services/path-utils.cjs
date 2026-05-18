@@ -1,5 +1,87 @@
 const fs = require("node:fs/promises")
+const os = require("node:os")
 const path = require("node:path")
+const usernamePlaceholder = "%USERNAME%"
+
+function getPortableHomePrefix() {
+  return path.join(path.dirname(os.homedir()), usernamePlaceholder)
+}
+
+function normalizeForCompare(value) {
+  return process.platform === "win32" ? value.toLowerCase() : value
+}
+
+function serializePortablePath(value) {
+  const text = String(value || "").trim()
+
+  if (!text) {
+    return ""
+  }
+
+  const actualPrefix = path.normalize(os.homedir())
+  const portablePrefix = path.normalize(getPortableHomePrefix())
+  const normalizedText = path.normalize(text)
+
+  if (normalizeForCompare(normalizedText) === normalizeForCompare(actualPrefix)) {
+    return portablePrefix
+  }
+
+  if (
+    normalizeForCompare(normalizedText).startsWith(
+      `${normalizeForCompare(actualPrefix)}${path.sep}`
+    )
+  ) {
+    return path.join(portablePrefix, normalizedText.slice(actualPrefix.length + 1))
+  }
+
+  return text
+}
+
+function resolvePortablePath(value) {
+  const text = String(value || "").trim()
+
+  if (!text) {
+    return ""
+  }
+
+  const actualPrefix = path.normalize(os.homedir())
+  const portablePrefix = path.normalize(getPortableHomePrefix())
+  const normalizedText = path.normalize(text)
+
+  if (
+    normalizeForCompare(normalizedText) ===
+    normalizeForCompare(portablePrefix)
+  ) {
+    return actualPrefix
+  }
+
+  if (
+    normalizeForCompare(normalizedText).startsWith(
+      `${normalizeForCompare(portablePrefix)}${path.sep}`
+    )
+  ) {
+    return path.join(actualPrefix, normalizedText.slice(portablePrefix.length + 1))
+  }
+
+  return text
+}
+
+function serializeAppSettingsPaths(input = {}) {
+  return {
+    ...input,
+    dataPath: serializePortablePath(input.dataPath),
+    cliConfigPaths: {
+      claude: serializePortablePath(input.cliConfigPaths?.claude),
+      codex: serializePortablePath(input.cliConfigPaths?.codex),
+      gemini: serializePortablePath(input.cliConfigPaths?.gemini)
+    },
+    defaultCliConfigPaths: {
+      claude: serializePortablePath(input.defaultCliConfigPaths?.claude),
+      codex: serializePortablePath(input.defaultCliConfigPaths?.codex),
+      gemini: serializePortablePath(input.defaultCliConfigPaths?.gemini)
+    }
+  }
+}
 
 function resolveAppPaths(userDataPath) {
   const workspaceRoot = path.join(userDataPath, "workspace")
@@ -68,6 +150,9 @@ function slugifyName(value) {
 
 module.exports = {
   ensureAppDirectories,
+  resolvePortablePath,
   resolveAppPaths,
+  serializeAppSettingsPaths,
+  serializePortablePath,
   slugifyName
 }
