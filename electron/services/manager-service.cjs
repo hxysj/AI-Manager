@@ -1441,6 +1441,19 @@ class ManagerService extends EventEmitter {
     return this.state
   }
 
+  async getCodexAccountDetail(input) {
+    const account = await this.codexAccountService.getAccountDetail(
+      input.accountId,
+      this.state.cliTargets.find((item) => item.id === "codex")
+    )
+
+    return {
+      status: "ok",
+      data: account,
+      message: ""
+    }
+  }
+
   async saveRuntimeModel(input) {
     this.runtimeProviderService.saveModel(input)
     this.state = {

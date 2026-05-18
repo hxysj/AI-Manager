@@ -319,6 +319,10 @@ function registerIpc() {
     return managerService.updateCodexAccountProxy(payload)
   })
 
+  ipcMain.handle("codex-account:detail", async (_, payload) => {
+    return managerService.getCodexAccountDetail(payload)
+  })
+
   ipcMain.handle("runtime-model:save", async (_, payload) => {
     return managerService.saveRuntimeModel(payload)
   })

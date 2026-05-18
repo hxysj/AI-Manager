@@ -85,8 +85,7 @@
                 <p class="providers-view__quota-meta">
                   {{
                     formatResetCountdown(
-                      account.usage.rate_limit.primary_window
-                        ?.reset_after_seconds
+                      account.usage.rate_limit.primary_window?.reset_at
                     )
                   }}
                   ({{
@@ -96,24 +95,6 @@
                   }})
                 </p>
               </div>
-              <label class="providers-view__account-proxy">
-                <span class="providers-view__account-proxy-label">代理</span>
-                <input
-                  class="providers-view__account-proxy-input"
-                  :value="codexAccountProxyDrafts[account.id] || ''"
-                  placeholder="http://127.0.0.1:7890"
-                  @input="updateCodexProxyDraft(account, $event.target.value)"
-                />
-                <button
-                  class="providers-view__icon-button"
-                  type="button"
-                  title="保存代理"
-                  aria-label="保存代理"
-                  @click="saveCodexAccountProxy(account)"
-                >
-                  <Save :size="14" />
-                </button>
-              </label>
             </div>
             <div class="providers-view__account-actions">
               <button
@@ -124,6 +105,24 @@
                 @click="refreshCodexAccount(account)"
               >
                 <RefreshCw :size="15" />
+              </button>
+              <button
+                class="providers-view__icon-button"
+                type="button"
+                title="查看详情"
+                aria-label="查看详情"
+                @click="openCodexAccountDetail(account)"
+              >
+                <Eye :size="15" />
+              </button>
+              <button
+                class="providers-view__icon-button"
+                type="button"
+                title="编辑代理"
+                aria-label="编辑代理"
+                @click="openCodexAccountProxy(account)"
+              >
+                <SquarePen :size="15" />
               </button>
               <button
                 v-if="account.active"
@@ -601,11 +600,94 @@
         </template>
       </section>
     </BaseModal>
+
+    <BaseModal
+      v-if="showCodexProxyModal"
+      class="providers-view__codex-proxy-modal"
+      title="编辑代理"
+      @close="closeCodexAccountProxy"
+    >
+      <section class="providers-view__login-panel">
+        <p class="providers-view__login-intro">
+          这个代理只绑定当前 Codex 官方账号，后续刷新额度和 token
+          时会继续使用它。
+        </p>
+        <label class="providers-view__login-field">
+          <span>代理地址</span>
+          <input
+            v-model.trim="editingCodexProxy"
+            type="text"
+            placeholder="可选，例如：http://127.0.0.1:7890"
+          />
+        </label>
+        <div class="providers-view__login-actions">
+          <button type="button" @click="closeCodexAccountProxy">取消</button>
+          <button
+            type="button"
+            :disabled="pending"
+            @click="saveCodexAccountProxy"
+          >
+            保存
+          </button>
+        </div>
+      </section>
+    </BaseModal>
+
+    <div v-if="showCodexAccountDrawer" class="providers-view__drawer">
+      <div
+        class="providers-view__drawer-backdrop"
+        @click="closeCodexAccountDetail"
+      ></div>
+      <aside class="providers-view__drawer-panel">
+        <header class="providers-view__drawer-header">
+          <div>
+            <h2>账户详情</h2>
+            <p>{{ codexAccountDetail?.email || "未加载" }}</p>
+          </div>
+          <button
+            class="providers-view__drawer-close"
+            type="button"
+            @click="closeCodexAccountDetail"
+          >
+            ×
+          </button>
+        </header>
+        <div class="providers-view__drawer-content">
+          <div
+            v-if="codexAccountDetailLoading"
+            class="providers-view__drawer-empty"
+          >
+            加载中...
+          </div>
+          <template v-else-if="codexAccountDetail">
+            <section class="providers-view__drawer-section">
+              <h3>auth</h3>
+              <pre class="providers-view__drawer-json">{{
+                formatJson(codexAccountDetail.auth)
+              }}</pre>
+            </section>
+            <section class="providers-view__drawer-section">
+              <h3>基础信息</h3>
+              <pre class="providers-view__drawer-json">{{
+                formatJson({
+                  accountId: codexAccountDetail.accountId,
+                  email: codexAccountDetail.email,
+                  plan: codexAccountDetail.plan,
+                  proxy: codexAccountDetail.proxy,
+                  expired: codexAccountDetail.expired,
+                  last_refresh: codexAccountDetail.last_refresh
+                })
+              }}</pre>
+            </section>
+          </template>
+        </div>
+      </aside>
+    </div>
   </section>
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from "vue"
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import {
   ArrowLeft,
   Check,
@@ -613,6 +695,7 @@ import {
   Copy,
   Globe2,
   GripVertical,
+  Eye,
   Play,
   Plus,
   RefreshCw,
@@ -728,11 +811,19 @@ const viewMode = ref("list")
 const showIconPicker = ref(false)
 const showCodexCreateOptions = ref(false)
 const showCodexLoginModal = ref(false)
+const showCodexProxyModal = ref(false)
+const showCodexAccountDrawer = ref(false)
 const codexLoginTab = ref("oauth")
 const codexAuthDataDraft = ref("")
 const codexProxyDraft = ref("")
 const codexAccountProxyDrafts = reactive({})
+const editingCodexAccountId = ref("")
+const editingCodexProxy = ref("")
+const codexAccountDetail = ref(null)
+const codexAccountDetailLoading = ref(false)
 const manualCallbackUrl = ref("")
+const countdownNow = ref(Date.now())
+let countdownTimer = null
 const iconKeyword = ref("")
 const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
   query: "?url",
@@ -790,6 +881,16 @@ const configPreviewMap = computed(() => {
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
   )
+})
+
+onMounted(() => {
+  countdownTimer = window.setInterval(() => {
+    countdownNow.value = Date.now()
+  }, 1000)
+})
+
+onBeforeUnmount(() => {
+  window.clearInterval(countdownTimer)
 })
 
 function formatConfigPreview(file, content) {
@@ -851,10 +952,12 @@ function ensureActiveCli() {
 
 function selectCli(cli) {
   activeCli.value = cli
+  closeCodexAccountDetail()
   clearDraft()
 }
 
 function editProvider(provider) {
+  closeCodexAccountDetail()
   draft.id = provider.id
   draft.cli = provider.cli || activeCli.value
   draft.icon = provider.icon || ""
@@ -900,6 +1003,7 @@ function createProvider() {
 
 function startProviderCreate() {
   showCodexCreateOptions.value = false
+  closeCodexAccountDetail()
   clearDraft()
   viewMode.value = "edit"
 }
@@ -907,6 +1011,7 @@ function startProviderCreate() {
 function openCodexLoginModal() {
   showCodexCreateOptions.value = false
   showCodexLoginModal.value = true
+  closeCodexAccountDetail()
   codexLoginTab.value = "oauth"
   manualCallbackUrl.value = ""
   codexAuthDataDraft.value = ""
@@ -915,6 +1020,7 @@ function openCodexLoginModal() {
 
 function closeCodexLoginModal() {
   showCodexLoginModal.value = false
+  closeCodexAccountDetail()
   emit("cancel-codex-official-login")
 }
 
@@ -958,15 +1064,51 @@ function clearCodexAccount() {
   emit("codex-account-clear")
 }
 
-function updateCodexProxyDraft(account, value) {
-  codexAccountProxyDrafts[account.id] = value
+function openCodexAccountProxy(account) {
+  editingCodexAccountId.value = account.id
+  editingCodexProxy.value =
+    codexAccountProxyDrafts[account.id] ?? account.proxy ?? ""
+  showCodexProxyModal.value = true
 }
 
-function saveCodexAccountProxy(account) {
+function closeCodexAccountProxy() {
+  showCodexProxyModal.value = false
+  editingCodexAccountId.value = ""
+  editingCodexProxy.value = ""
+}
+
+function saveCodexAccountProxy() {
+  codexAccountProxyDrafts[editingCodexAccountId.value] = editingCodexProxy.value
   emit("codex-account-proxy-save", {
-    accountId: account.id,
-    proxy: codexAccountProxyDrafts[account.id] || ""
+    accountId: editingCodexAccountId.value,
+    proxy: editingCodexProxy.value
   })
+  closeCodexAccountProxy()
+}
+
+async function openCodexAccountDetail(account) {
+  showCodexAccountDrawer.value = true
+  codexAccountDetailLoading.value = true
+  codexAccountDetail.value = null
+
+  try {
+    const result = await window.aiManager.getCodexAccountDetail({
+      accountId: account.id
+    })
+
+    codexAccountDetail.value = result?.data || null
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+    closeCodexAccountDetail()
+  } finally {
+    codexAccountDetailLoading.value = false
+  }
+}
+
+function closeCodexAccountDetail() {
+  showCodexAccountDrawer.value = false
+  codexAccountDetail.value = null
+  codexAccountDetailLoading.value = false
 }
 
 function formatRateWindowName(value) {
@@ -1002,7 +1144,14 @@ function formatRateWidth(value) {
 }
 
 function formatResetCountdown(value) {
-  const seconds = Number(value || 0)
+  const timestamp = Number(value || 0)
+  const seconds = Math.max(
+    0,
+    Math.floor(
+      ((timestamp > 1e12 ? timestamp : timestamp * 1000) - countdownNow.value) /
+        1000
+    )
+  )
   const days = Math.floor(seconds / 86400)
   const hours = Math.floor((seconds % 86400) / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
@@ -1012,6 +1161,7 @@ function formatResetCountdown(value) {
 
 function formatUnixTime(value) {
   const timestamp = Number(value || 0)
+  const normalizedTimestamp = timestamp > 1e12 ? timestamp : timestamp * 1000
 
   if (!timestamp) {
     return "重置时间未知"
@@ -1022,7 +1172,11 @@ function formatUnixTime(value) {
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit"
-  }).format(new Date(timestamp * 1000))
+  }).format(new Date(normalizedTimestamp))
+}
+
+function formatJson(value) {
+  return JSON.stringify(value || {}, null, 2)
 }
 
 function refreshCodexAccount(account) {
@@ -1340,7 +1494,7 @@ watch(
 
   &__account-card {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 12px;
     padding: 14px 16px;
     border: 1px solid #bfe5ce;
@@ -1351,8 +1505,7 @@ watch(
     display: flex;
     min-width: 0;
     flex: 1;
-    flex-direction: column;
-    gap: 5px;
+    gap: 35px;
   }
 
   &__account-title {
@@ -1423,40 +1576,11 @@ watch(
     background: #22c55e;
   }
 
-  &__account-proxy {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding-top: 5px;
-  }
-
-  &__account-proxy-label {
-    flex: none;
-    color: #667085;
-    font-size: 0.78rem;
-  }
-
-  &__account-proxy-input {
-    width: 250px;
-    height: 30px;
-    padding: 0 9px;
-    border: 1px solid #dfe3e8;
-    border-radius: 7px;
-    background: #ffffff;
-    color: #111827;
-    font-size: 0.82rem;
-    outline: none;
-  }
-
-  &__account-proxy-input:focus {
-    border-color: #1682ff;
-  }
-
   &__account-actions {
     display: flex;
     flex: none;
     align-items: center;
-    gap: 15px;
+    gap: 8px;
   }
 
   &__drag {
@@ -1923,6 +2047,136 @@ watch(
     :deep(.base-modal__content) {
       padding: 18px 26px 24px;
     }
+  }
+
+  &__codex-proxy-modal {
+    :deep(.base-modal__panel) {
+      width: 440px;
+      border: 1px solid #d8e0eb;
+      border-radius: 16px;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
+    }
+
+    :deep(.base-modal__header) {
+      align-items: center;
+      padding: 22px 26px 20px;
+      border-bottom: 1px solid #edf1f6;
+    }
+
+    :deep(.base-modal__header h2) {
+      color: #172033;
+      font-size: 1.18rem;
+    }
+
+    :deep(.base-modal__close) {
+      width: 28px;
+      height: 28px;
+      border: 0;
+      background: transparent;
+      color: #667085;
+      font-size: 1.3rem;
+    }
+
+    :deep(.base-modal__content) {
+      padding: 18px 26px 24px;
+    }
+  }
+
+  &__drawer {
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  &__drawer-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.24);
+  }
+
+  &__drawer-panel {
+    position: relative;
+    display: flex;
+    width: 520px;
+    flex-direction: column;
+    border-left: 1px solid #d8e0eb;
+    background: #ffffff;
+    box-shadow: -24px 0 70px rgba(15, 23, 42, 0.18);
+  }
+
+  &__drawer-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 22px 24px 18px;
+    border-bottom: 1px solid #edf1f6;
+
+    h2 {
+      margin: 0;
+      color: #172033;
+      font-size: 1.18rem;
+    }
+
+    p {
+      margin: 6px 0 0;
+      color: #697789;
+      font-size: 0.86rem;
+    }
+  }
+
+  &__drawer-close {
+    width: 28px;
+    height: 28px;
+    border: 0;
+    background: transparent;
+    color: #667085;
+    cursor: pointer;
+    font-size: 1.4rem;
+    line-height: 1;
+  }
+
+  &__drawer-content {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 14px;
+    overflow: auto;
+    padding: 18px 24px 24px;
+  }
+
+  &__drawer-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  &__drawer-section h3 {
+    margin: 0;
+    color: #172033;
+    font-size: 0.92rem;
+  }
+
+  &__drawer-json {
+    overflow: auto;
+    margin: 0;
+    padding: 14px 16px;
+    border: 1px solid #d8e0eb;
+    border-radius: 10px;
+    background: #f7fafc;
+    color: #243447;
+    font-size: 0.8rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  &__drawer-empty {
+    color: #697789;
+    font-size: 0.88rem;
   }
 
   &__login-panel {

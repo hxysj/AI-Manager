@@ -14,6 +14,7 @@ const OAUTH_SCOPE =
   "openid profile email offline_access model.request model.read organization.write"
 const AUTO_REFRESH_INTERVAL = 30 * 60 * 1000
 const REFRESH_THRESHOLD = 10 * 60 * 1000
+const DETAIL_REFRESH_THRESHOLD = 24 * 60 * 60 * 1000
 
 function createPkce() {
   const verifier = crypto.randomBytes(32).toString("base64url")
@@ -700,6 +701,68 @@ class CodexAccountService extends EventEmitter {
     }
 
     this.saveAccount(tokens, profile, claims, usage, account.proxy)
+  }
+
+  async getAccountDetail(accountId, cliTarget) {
+    const account = this.accounts.find((item) => item.id === accountId)
+
+    if (!account) {
+      throw new Error("Codex 官方账号不存在")
+    }
+
+    const expiresAt =
+      account.auth?.expiresAt || Date.parse(account.expired) || 0
+    const shouldRefresh =
+      expiresAt && expiresAt - Date.now() <= DETAIL_REFRESH_THRESHOLD
+
+    if (shouldRefresh) {
+      const tokens = await this.refreshToken(
+        account.auth.refreshToken,
+        account.proxy
+      )
+      const claims = decodeJwtPayload(tokens.idToken || tokens.accessToken)
+      claims.account_id = account.account_id || claims.account_id
+      const usage = await this.fetchUsageInfo(
+        tokens.accessToken,
+        claims,
+        account.proxy
+      )
+      const nextAccount = this.saveAccount(
+        tokens,
+        {
+          email: extractEmail(claims) || account.email,
+          sub: claims.sub || account.accountId
+        },
+        claims,
+        usage,
+        account.proxy
+      )
+
+      if (nextAccount.id === this.activeAccountId) {
+        await this.writeAccountAuth(nextAccount, cliTarget)
+      }
+    }
+
+    const nextAccount = this.accounts.find((item) => item.id === accountId)
+
+    return {
+      id: nextAccount.id,
+      provider: nextAccount.provider,
+      accountId: nextAccount.accountId,
+      account_id: nextAccount.account_id,
+      email: nextAccount.email,
+      plan: nextAccount.plan,
+      usage: nextAccount.usage,
+      proxy: nextAccount.proxy,
+      autoRefresh: nextAccount.autoRefresh,
+      createdAt: nextAccount.createdAt,
+      updatedAt: nextAccount.updatedAt,
+      last_refresh: nextAccount.last_refresh,
+      expired: nextAccount.expired,
+      type: nextAccount.type,
+      active: nextAccount.id === this.activeAccountId,
+      auth: nextAccount.auth
+    }
   }
 
   async fetchUsageInfo(accessToken, claims, proxy = "") {

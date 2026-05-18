@@ -83,6 +83,8 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("codex-account:refresh", toPlainPayload(payload)),
   updateCodexAccountProxy: payload =>
     ipcRenderer.invoke("codex-account:update-proxy", toPlainPayload(payload)),
+  getCodexAccountDetail: payload =>
+    ipcRenderer.invoke("codex-account:detail", toPlainPayload(payload)),
   saveRuntimeModel: payload =>
     ipcRenderer.invoke("runtime-model:save", toPlainPayload(payload)),
   switchRuntime: payload =>
