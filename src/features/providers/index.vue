@@ -81,7 +81,8 @@
                   <strong class="providers-view__quota-percent">
                     {{
                       formatRatePercent(
-                        item.account.usage.rate_limit.primary_window?.used_percent
+                        item.account.usage.rate_limit.primary_window
+                          ?.used_percent
                       )
                     }}
                   </strong>
@@ -91,7 +92,8 @@
                     class="providers-view__quota-fill"
                     :style="{
                       width: formatRateWidth(
-                        item.account.usage.rate_limit.primary_window?.used_percent
+                        item.account.usage.rate_limit.primary_window
+                          ?.used_percent
                       )
                     }"
                   ></span>
@@ -463,8 +465,218 @@
     </template>
 
     <BaseModal
+      v-if="showProviderCreateModal"
+      class="providers-view__provider-create-modal"
+      :title="draft.id ? '编辑供应商' : '新增供应商'"
+      @close="closeProviderCreateModal"
+    >
+      <section class="providers-view__create-form">
+        <div class="providers-view__avatar-picker">
+          <button
+            class="providers-view__edit-avatar"
+            type="button"
+            @click="showIconPicker = !showIconPicker"
+          >
+            <AiIcon
+              v-if="draft.icon"
+              class="providers-view__edit-avatar-icon"
+              :name="draft.icon"
+              :alt="`${draft.name || 'Provider'} 图标`"
+            />
+            <template v-else>{{ draft.name.slice(0, 1) || "AI" }}</template>
+          </button>
+          <div v-if="draft.icon" class="providers-view__avatar-name">
+            {{ iconLabel(draft.icon) }}
+          </div>
+          <section v-if="showIconPicker" class="providers-view__icon-panel">
+            <label class="providers-view__field providers-view__field--wide">
+              <span>搜索图标</span>
+              <input
+                v-model.trim="iconKeyword"
+                type="text"
+                placeholder="输入图标名称..."
+              />
+            </label>
+            <div class="providers-view__icon-grid">
+              <button
+                v-for="icon in filteredIconOptions"
+                :key="icon"
+                :class="[
+                  'providers-view__icon-option',
+                  { 'providers-view__icon-option--active': draft.icon === icon }
+                ]"
+                type="button"
+                @click="selectIcon(icon)"
+              >
+                <AiIcon
+                  class="providers-view__icon-option-image"
+                  :name="icon"
+                  :alt="`${iconLabel(icon)} 图标`"
+                />
+                <span>{{ iconLabel(icon) }}</span>
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <div class="providers-view__form-grid">
+          <label class="providers-view__field">
+            <span>供应商名称</span>
+            <input v-model.trim="draft.name" type="text" />
+          </label>
+          <label class="providers-view__field">
+            <span>备注</span>
+            <input v-model.trim="draft.note" type="text" />
+          </label>
+          <label class="providers-view__field providers-view__field--wide">
+            <span>官网链接</span>
+            <input v-model.trim="draft.website" type="text" />
+          </label>
+          <label class="providers-view__field providers-view__field--wide">
+            <span>API Key</span>
+            <el-input
+              v-model="draft.apiKey"
+              type="password"
+              show-password
+              :placeholder="
+                selectedProvider?.hasApiKey ? '已保存，留空则保持不变' : ''
+              "
+            />
+          </label>
+          <label class="providers-view__field providers-view__field--wide">
+            <span>请求地址</span>
+            <input v-model.trim="draft.baseUrl" type="text" />
+          </label>
+        </div>
+
+        <div class="providers-view__warning">
+          填写兼容当前 CLI 的服务端点地址，不要以斜杠结尾
+        </div>
+
+        <details
+          v-if="activeRuntimeSchema.advancedFields.length"
+          class="providers-view__advanced"
+        >
+          <summary>高级选项</summary>
+          <label
+            v-if="activeRuntimeSchema.advancedFields.includes('type')"
+            class="providers-view__field"
+          >
+            <span>API 格式</span>
+            <select v-model="draft.type">
+              <option v-for="item in providerTypes" :key="item" :value="item">
+                {{ providerTypeLabelMap[item] || item }}
+              </option>
+            </select>
+          </label>
+          <label
+            v-if="activeRuntimeSchema.advancedFields.includes('authField')"
+            class="providers-view__field"
+          >
+            <span>认证字段</span>
+            <select v-model="draft.authField">
+              <option
+                v-for="field in activeRuntimeSchema.authFields"
+                :key="field"
+                :value="field"
+              >
+                {{ field }}
+              </option>
+            </select>
+          </label>
+        </details>
+
+        <section class="providers-view__models">
+          <div class="providers-view__section-title">
+            <div>
+              <h2>模型映射</h2>
+              <p>仅在需要将请求映射到不同模型名称时填写。</p>
+            </div>
+            <!-- <div class="providers-view__section-actions">
+              <button type="button">获取模型列表</button>
+            </div> -->
+          </div>
+
+          <div class="providers-view__form-grid">
+            <label
+              v-for="field in activeRuntimeSchema.modelFields"
+              :key="field.key"
+              class="providers-view__field"
+            >
+              <span>{{ field.label }}</span>
+              <input v-model.trim="modelDrafts[field.key]" type="text" />
+              <small v-if="field.description">{{ field.description }}</small>
+            </label>
+          </div>
+        </section>
+
+        <section class="providers-view__json">
+          <div class="providers-view__json-title">
+            <strong>配置 JSON</strong>
+          </div>
+          <div class="providers-view__check-row">
+            <label
+              v-for="field in activeRuntimeSchema.optionFields"
+              :key="field.key"
+              class="providers-view__option-field"
+            >
+              <template v-if="field.type === 'number'">
+                <span>{{ field.label }}</span>
+                <input
+                  v-model.number="draft[field.key]"
+                  type="number"
+                  :disabled="field.dependsOn && !draft[field.dependsOn]"
+                />
+              </template>
+              <template v-else-if="field.type === 'select'">
+                <span>{{ field.label }}</span>
+                <select v-model="draft[field.key]">
+                  <option
+                    v-for="option in field.options"
+                    :key="option"
+                    :value="option"
+                  >
+                    {{ option }}
+                  </option>
+                </select>
+              </template>
+              <template v-else>
+                <input v-model="draft[field.key]" type="checkbox" />
+                {{ field.label }}
+              </template>
+            </label>
+          </div>
+          <details
+            v-for="file in activeRuntimeSchema.configFiles"
+            :key="file.name"
+            class="providers-view__config-preview"
+            open
+          >
+            <summary>
+              <span>{{ file.name }} ({{ file.format }})</span>
+            </summary>
+            <pre>{{ configPreviewMap[file.name] }}</pre>
+            <p>{{ file.description }}</p>
+          </details>
+        </section>
+      </section>
+
+      <footer class="providers-view__create-footer">
+        <button
+          class="providers-view__primary"
+          type="button"
+          :disabled="pending"
+          @click="submitProvider"
+        >
+          <Save :size="16" />
+          保存
+        </button>
+      </footer>
+    </BaseModal>
+
+    <BaseModal
       v-if="showCodexCreateOptions"
-      title="新增 Codex Provider"
+      title="新增供应商"
       description="选择官方账号登录，或者继续使用兼容供应商配置。"
       @close="showCodexCreateOptions = false"
     >
@@ -945,6 +1157,7 @@ const activeCli = ref("")
 const viewMode = ref("list")
 const showIconPicker = ref(false)
 const showCodexCreateOptions = ref(false)
+const showProviderCreateModal = ref(false)
 const showCodexLoginModal = ref(false)
 const showCodexProxyModal = ref(false)
 const showCodexAccountDrawer = ref(false)
@@ -1023,15 +1236,16 @@ const mixedItems = computed(() => {
     ],
     createdAt: provider.createdAt || 0
   }))
-  const accountItems = activeCli.value === "codex"
-    ? props.codexAccounts.map((account) => ({
-        type: "account",
-        account,
-        key: `account:${account.id}`,
-        className: "providers-view__account-card",
-        createdAt: account.createdAt || account.updatedAt || 0
-      }))
-    : []
+  const accountItems =
+    activeCli.value === "codex"
+      ? props.codexAccounts.map((account) => ({
+          type: "account",
+          account,
+          key: `account:${account.id}`,
+          className: "providers-view__account-card",
+          createdAt: account.createdAt || account.updatedAt || 0
+        }))
+      : []
 
   return [...providerItems, ...accountItems].sort(
     (left, right) => right.createdAt - left.createdAt
@@ -1154,6 +1368,7 @@ function selectCli(cli) {
   activeCli.value = cli
   closeCodexAccountDetail()
   closeProviderDetail()
+  closeProviderCreateModal()
   clearDraft()
 }
 
@@ -1191,7 +1406,7 @@ function editProvider(provider) {
     provider.runtimeConfig?.modelAutoCompactTokenLimit || 900000
   showIconPicker.value = false
   iconKeyword.value = ""
-  viewMode.value = "edit"
+  showProviderCreateModal.value = true
 }
 
 function createProvider() {
@@ -1208,7 +1423,13 @@ function startProviderCreate() {
   closeCodexAccountDetail()
   closeProviderDetail()
   clearDraft()
-  viewMode.value = "edit"
+  showProviderCreateModal.value = true
+}
+
+function closeProviderCreateModal() {
+  showProviderCreateModal.value = false
+  showIconPicker.value = false
+  iconKeyword.value = ""
 }
 
 function openCodexLoginModal() {
@@ -1501,6 +1722,7 @@ function submitProvider() {
   emit("save-provider", payload)
 
   viewMode.value = "list"
+  closeProviderCreateModal()
 }
 
 function enableProvider(provider) {
@@ -2009,6 +2231,13 @@ watch(
     color: #ffffff;
   }
 
+  &__enable,
+  &__using {
+    align-self: center;
+    font-size: 14px;
+    line-height: 36px;
+  }
+
   &__using {
     background: #edf0f4;
     color: #98a2b3;
@@ -2372,6 +2601,62 @@ watch(
     color: #667085;
     font-size: 0.9rem;
     line-height: 1.6;
+  }
+
+  &__provider-create-modal {
+    :deep(.base-modal__panel) {
+      width: 920px;
+      border: 1px solid #d8e0eb;
+      border-radius: 16px;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
+    }
+
+    :deep(.base-modal__header) {
+      align-items: center;
+      padding: 22px 26px 20px;
+      border-bottom: 1px solid #edf1f6;
+    }
+
+    :deep(.base-modal__header h2) {
+      color: #172033;
+      font-size: 1.18rem;
+    }
+
+    :deep(.base-modal__close) {
+      width: 28px;
+      height: 28px;
+      border: 0;
+      background: transparent;
+      color: #667085;
+      font-size: 1.3rem;
+    }
+
+    :deep(.base-modal__content) {
+      display: flex;
+      min-height: 0;
+      flex: 1;
+      flex-direction: column;
+      padding: 18px 26px 24px;
+    }
+  }
+
+  &__create-form {
+    display: flex;
+    overflow: auto;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 24px;
+    padding: 6px 2px 20px;
+  }
+
+  &__create-footer {
+    display: flex;
+    flex: none;
+    justify-content: flex-end;
+    padding: 16px 0 0;
+    border-top: 1px solid #edf0f3;
+    background: #ffffff;
   }
 
   &__codex-login-modal {
