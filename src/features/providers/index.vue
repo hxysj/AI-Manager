@@ -88,29 +88,25 @@
                   :key="quota.key"
                   class="providers-view__account-quota"
                 >
-                  <div class="providers-view__quota-header">
-                    <span class="providers-view__quota-label">
-                      <Clock :size="14" />
-                      {{
-                        formatRateWindowName(quota.window.limit_window_seconds)
-                      }}
-                    </span>
-                    <strong class="providers-view__quota-percent">
-                      {{ formatRatePercent(quota.window.used_percent) }}
-                    </strong>
-                  </div>
-                  <div class="providers-view__quota-bar">
+                  <div
+                    class="providers-view__quota-bar"
+                    :title="formatUnixTime(quota.window.reset_at)"
+                  >
                     <span
                       class="providers-view__quota-fill"
                       :style="{
                         width: formatRateWidth(quota.window.used_percent)
                       }"
                     ></span>
+                    <strong class="providers-view__quota-text">
+                      {{
+                        formatRateWindowName(quota.window.limit_window_seconds)
+                      }}
+                      · 剩余
+                      {{ 100 - (quota.window.used_percent || 0) }}% ·
+                      {{ formatResetCountdown(quota.window.reset_at) }}后重置
+                    </strong>
                   </div>
-                  <p class="providers-view__quota-meta">
-                    {{ formatResetCountdown(quota.window.reset_at) }}
-                    ({{ formatUnixTime(quota.window.reset_at) }})
-                  </p>
                 </div>
               </div>
             </div>
@@ -1038,7 +1034,6 @@ import * as monaco from "monaco-editor"
 import {
   ArrowLeft,
   Check,
-  Clock,
   Copy,
   Globe2,
   GripVertical,
@@ -1190,12 +1185,12 @@ const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
   import: "default"
 })
 const iconOptions = Object.keys(iconModules)
-  .map((item) => item.split("/").pop())
+  .map(item => item.split("/").pop())
   .sort((left, right) => left.localeCompare(right))
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
-  return props.cliTargets.filter((item) => {
+  return props.cliTargets.filter(item => {
     return props.runtimeConfigSchemas[item.id]?.enabled
   })
 })
@@ -1215,22 +1210,22 @@ const activeRuntimeSchema = computed(() => {
 
 const activeCliName = computed(() => {
   return (
-    visibleCliTargets.value.find((item) => item.id === activeCli.value)?.name ||
+    visibleCliTargets.value.find(item => item.id === activeCli.value)?.name ||
     activeCli.value ||
     "Runtime"
   )
 })
 
 const selectedProvider = computed(() => {
-  return props.providers.find((item) => item.id === draft.id) || null
+  return props.providers.find(item => item.id === draft.id) || null
 })
 
 const scopedProviders = computed(() => {
-  return props.providers.filter((item) => item.cli === activeCli.value)
+  return props.providers.filter(item => item.cli === activeCli.value)
 })
 
 const mixedItems = computed(() => {
-  const providerItems = scopedProviders.value.map((provider) => ({
+  const providerItems = scopedProviders.value.map(provider => ({
     type: "provider",
     provider,
     key: `provider:${provider.id}`,
@@ -1245,7 +1240,7 @@ const mixedItems = computed(() => {
   }))
   const accountItems =
     activeCli.value === "codex"
-      ? props.codexAccounts.map((account) => ({
+      ? props.codexAccounts.map(account => ({
           type: "account",
           account,
           key: `account:${account.id}`,
@@ -1260,9 +1255,7 @@ const mixedItems = computed(() => {
 })
 
 const profileMap = computed(() => {
-  return Object.fromEntries(
-    props.runtimeProfiles.map((item) => [item.cli, item])
-  )
+  return Object.fromEntries(props.runtimeProfiles.map(item => [item.cli, item]))
 })
 
 const runtimeState = computed(() => {
@@ -1286,14 +1279,14 @@ const runtimeDiffDescription = computed(() => {
 const filteredIconOptions = computed(() => {
   const keyword = iconKeyword.value.toLowerCase()
 
-  return iconOptions.filter((item) =>
+  return iconOptions.filter(item =>
     iconLabel(item).toLowerCase().includes(keyword)
   )
 })
 
 const configPreviewMap = computed(() => {
   return Object.fromEntries(
-    activeRuntimeSchema.value.configFiles.map((file) => [
+    activeRuntimeSchema.value.configFiles.map(file => [
       file.name,
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
@@ -1364,7 +1357,7 @@ function applyConfigTemplate(template) {
 }
 
 function ensureActiveCli() {
-  if (visibleCliTargets.value.find((item) => item.id === activeCli.value)) {
+  if (visibleCliTargets.value.find(item => item.id === activeCli.value)) {
     return
   }
 
@@ -1579,7 +1572,7 @@ function rateLimitWindows(rateLimit) {
   return [
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
-  ].filter((item) => item.window)
+  ].filter(item => item.window)
 }
 
 function formatPlanName(value) {
@@ -1616,10 +1609,6 @@ function formatRateWindowName(value) {
   return `${seconds}秒额度`
 }
 
-function formatRatePercent(value) {
-  return `${Number(value || 0)}%`
-}
-
 function formatRateWidth(value) {
   const percent = Number(value || 0)
 
@@ -1647,7 +1636,7 @@ function formatResetCountdown(value) {
   const hours = Math.floor((seconds % 86400) / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
 
-  return `${days}d ${hours}h ${minutes}m`
+  return days ? `${days}d ${hours}h ${minutes}m` : `${hours}h ${minutes}m`
 }
 
 function formatUnixTime(value) {
@@ -1709,8 +1698,7 @@ function clearDraft() {
 
 function firstModelName(providerId) {
   return (
-    props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
-    ""
+    props.runtimeModels.find(item => item.providerId === providerId)?.name || ""
   )
 }
 
@@ -1868,8 +1856,8 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  (accounts) => {
-    accounts.forEach((account) => {
+  accounts => {
+    accounts.forEach(account => {
       codexAccountProxyDrafts[account.id] = account.proxy || ""
     })
   },
@@ -1885,10 +1873,10 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  (accounts) => {
+  accounts => {
     if (
       codexAccountDetail.value &&
-      !accounts.find((item) => item.id === codexAccountDetail.value.id)
+      !accounts.find(item => item.id === codexAccountDetail.value.id)
     ) {
       closeCodexAccountDetail()
     }
@@ -1898,10 +1886,10 @@ watch(
 
 watch(
   () => props.providers,
-  (providers) => {
+  providers => {
     if (
       providerDetail.value &&
-      !providers.find((item) => item.id === providerDetail.value.id)
+      !providers.find(item => item.id === providerDetail.value.id)
     ) {
       closeProviderDetail()
     }
@@ -2172,47 +2160,40 @@ watch(
     flex: 1;
     min-width: 200px;
     flex-direction: column;
-    gap: 6px;
-  }
-
-  &__quota-meta {
-    margin: 0;
-    color: #667085;
-    font-size: 0.76rem;
-    text-align: right;
-  }
-
-  &__quota-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  &__quota-label {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    color: #667085;
-    font-size: 0.82rem;
-  }
-
-  &__quota-percent {
-    color: #22c55e;
-    font-size: 0.88rem;
   }
 
   &__quota-bar {
+    position: relative;
+    display: flex;
+    align-items: center;
     overflow: hidden;
-    height: 6px;
+    height: 24px;
     border-radius: 999px;
     background: #dbeee2;
   }
 
   &__quota-fill {
+    position: absolute;
+    top: 0;
+    left: 0;
     display: block;
     height: 100%;
     border-radius: inherit;
     background: #f97316;
+  }
+
+  &__quota-text {
+    position: relative;
+    z-index: 1;
+    overflow: hidden;
+    width: 100%;
+    padding: 0 10px;
+    color: #344054;
+    font-size: 0.76rem;
+    line-height: 24px;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   &__account-actions {
@@ -2985,6 +2966,7 @@ watch(
     color: #526176;
     cursor: pointer;
     font-size: 0.72rem;
+    line-height: 0.72rem;
     font-weight: 700;
     white-space: nowrap;
   }
