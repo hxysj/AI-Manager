@@ -13,8 +13,12 @@ const { TranslationService } = require("./services/translation-service.cjs")
 let mainWindow = null
 let managerService = null
 let translationService = null
+let managerReadyPromise = null
 const defaultUserDataPath = "D:\\ai-manager-data"
 const settingsFilePath = path.join(defaultUserDataPath, "app-settings.json")
+const appIconPath = app.isPackaged
+  ? path.join(process.resourcesPath, "assets", "icon.png")
+  : path.join(__dirname, "..", "build", "icon.png")
 const portableHomePrefix = path.join(path.dirname(os.homedir()), "%USERNAME%")
 const defaultCliConfigPaths = {
   claude: path.join(portableHomePrefix, ".claude"),
@@ -163,7 +167,8 @@ async function restartManagerService(nextSettings = appSettings) {
   }
 
   managerService = new ManagerService(app.getPath("userData"), nextSettings)
-  await managerService.init()
+  managerReadyPromise = managerService.init()
+  await managerReadyPromise
   managerService.on("state-changed", (state) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("state:changed", state)
@@ -185,6 +190,7 @@ async function createWindow() {
     height: 760,
     minWidth: 1200,
     minHeight: 760,
+    icon: appIconPath,
     backgroundColor: "#ffffff",
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     autoHideMenuBar: true,
@@ -238,7 +244,10 @@ async function createWindow() {
 }
 
 function registerIpc() {
-  ipcMain.handle("app:bootstrap", async () => managerService.getState())
+  ipcMain.handle("app:bootstrap", async () => {
+    await managerReadyPromise
+    return managerService.getState()
+  })
   ipcMain.handle("app:refresh", async () => managerService.refreshAll())
 
   ipcMain.handle("settings:save", async (_, payload) => {
@@ -592,7 +601,7 @@ function registerIpc() {
 app.whenReady().then(async () => {
   managerService = new ManagerService(app.getPath("userData"), appSettings)
   translationService = new TranslationService(app.getPath("userData"))
-  await managerService.init()
+  managerReadyPromise = managerService.init()
   managerService.on("state-changed", (state) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("state:changed", state)
