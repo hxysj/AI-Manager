@@ -1,6 +1,6 @@
 {
   "name": "ai-manager",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
   "config": {
     "electron_mirror": "https://npmmirror.com/mirrors/electron/"
@@ -39,7 +39,8 @@
   "build": {
     "appId": "com.aimanager.desktop",
     "productName": "AI-Manager",
-    "icon": "build/icon.png",
+    "artifactName": "${productName}-windows-setup.${ext}",
+    "icon": "build/icon.ico",
     "directories": {
       "output": "release"
     },
@@ -61,7 +62,7 @@
       }
     ],
     "win": {
-      "signAndEditExecutable": false,
+      "icon": "build/icon.ico",
       "target": [
         {
           "target": "nsis",
@@ -76,7 +77,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AI Manager"
+      "shortcutName": "AI Manager",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico"
     }
   }
 }

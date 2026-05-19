@@ -686,8 +686,10 @@
           type="button"
           @click="openCodexLoginModal"
         >
-          <ShieldCheck :size="28" />
-          <strong>官方登录</strong>
+          <div class="option-logo">
+            <ShieldCheck :size="28" />
+            <strong>官方登录</strong>
+          </div>
           <span
             >通过 OAuth 管理 Codex 账号，后续使用独立
             Runtime，不写入系统配置。</span
@@ -698,8 +700,10 @@
           type="button"
           @click="startProviderCreate"
         >
-          <Server :size="28" />
-          <strong>供应商</strong>
+          <div class="option-logo">
+            <Server :size="28" />
+            <strong>供应商</strong>
+          </div>
           <span>使用当前 API Key、Base URL 和模型映射方案。</span>
         </button>
       </section>
@@ -2583,7 +2587,11 @@ watch(
     cursor: pointer;
     text-align: left;
   }
-
+  .option-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
   &__create-option:hover {
     border-color: #1682ff;
     background: #eef7ff;
