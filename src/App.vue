@@ -53,6 +53,7 @@
           @codex-account-clear="clearCodexAccount"
           @codex-account-delete="deleteCodexAccount"
           @codex-account-refresh="refreshCodexAccount"
+          @codex-accounts-refresh="refreshCodexAccounts"
           @codex-account-proxy-save="updateCodexAccountProxy"
           @cancel-codex-official-login="cancelCodexOfficialLogin"
           @delete-provider="deleteProvider"
@@ -412,7 +413,12 @@ async function restoreDataBackup() {
 async function pushCloudBackup(payload) {
   await withGlobalLoading(async () => {
     try {
-      await window.aiManager.pushCloudBackup(payload)
+      const result = await window.aiManager.pushCloudBackup(payload)
+
+      if (result?.state) {
+        updateState(result.state)
+      }
+
       showSuccessMessage("配置数据已推送到坚果云。")
     } catch (error) {
       showErrorMessage(error)
@@ -699,6 +705,26 @@ async function refreshCodexAccount(payload) {
   if (success) {
     showSuccessMessage("Codex 官方账号额度已刷新。")
   }
+}
+
+async function refreshCodexAccounts() {
+  if (!state.codexAccounts.length) {
+    return
+  }
+
+  await withGlobalLoading(async () => {
+    try {
+      for (const account of state.codexAccounts) {
+        updateState(
+          await window.aiManager.refreshCodexAccount({
+            accountId: account.id
+          })
+        )
+      }
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
 }
 
 async function updateCodexAccountProxy(payload) {

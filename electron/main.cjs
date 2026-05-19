@@ -2,7 +2,15 @@ const path = require("node:path")
 const fs = require("node:fs")
 const os = require("node:os")
 const fsp = require("node:fs/promises")
-const { app, BrowserWindow, Menu, ipcMain, shell, dialog } = require("electron")
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  ipcMain,
+  shell,
+  dialog
+} = require("electron")
 const { ManagerService } = require("./services/manager-service.cjs")
 const {
   resolvePortablePath,
@@ -11,9 +19,11 @@ const {
 const { TranslationService } = require("./services/translation-service.cjs")
 
 let mainWindow = null
+let tray = null
 let managerService = null
 let translationService = null
 let managerReadyPromise = null
+let isQuitting = false
 const defaultUserDataPath = "D:\\ai-manager-data"
 const settingsFilePath = path.join(defaultUserDataPath, "app-settings.json")
 const appIconPath = app.isPackaged
@@ -31,7 +41,8 @@ const defaultCloudSyncSettings = {
   webdavUrl: "https://dav.jianguoyun.com/dav/AI-Manager",
   username: "",
   password: "",
-  fileName: "ai-manager.aimbackup"
+  fileName: "ai-manager.aimbackup",
+  lastUpdatedAt: 0
 }
 
 function normalizeCloudSyncSettings(input = {}) {
@@ -42,7 +53,8 @@ function normalizeCloudSyncSettings(input = {}) {
     ).trim(),
     username: String(input.username || "").trim(),
     password: String(input.password || ""),
-    fileName: String(input.fileName || defaultCloudSyncSettings.fileName).trim()
+    fileName: String(input.fileName || defaultCloudSyncSettings.fileName).trim(),
+    lastUpdatedAt: Number(input.lastUpdatedAt || 0)
   }
 }
 
@@ -179,6 +191,48 @@ async function restartManagerService(nextSettings = appSettings) {
   return managerService.getState()
 }
 
+async function showMainPanel() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    await createWindow()
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
+
+  mainWindow.show()
+  mainWindow.focus()
+}
+
+function createTray() {
+  if (tray) {
+    return
+  }
+
+  tray = new Tray(appIconPath)
+  tray.setToolTip("AI Manager")
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      {
+        label: "打开主面板",
+        click: async () => {
+          await showMainPanel()
+        }
+      },
+      {
+        label: "退出",
+        click: () => {
+          isQuitting = true
+          app.quit()
+        }
+      }
+    ])
+  )
+  tray.on("double-click", async () => {
+    await showMainPanel()
+  })
+}
+
 let appSettings = loadAppSettings()
 const userDataPath = appSettings.dataPath
 
@@ -237,6 +291,15 @@ async function createWindow() {
         }
       }
     ]).popup({ window: mainWindow })
+  })
+
+  mainWindow.on("close", (event) => {
+    if (isQuitting) {
+      return
+    }
+
+    event.preventDefault()
+    mainWindow.hide()
   })
 
   mainWindow.on("closed", () => {
@@ -326,36 +389,45 @@ function registerIpc() {
 
   ipcMain.handle("data:cloud-push", async (_, payload) => {
     const cloudSync = normalizeCloudSyncSettings(payload)
+    const lastUpdatedAt = Date.now()
     await uploadWebDavBackup(
       cloudSync,
       await managerService.createDataBackup()
     )
     appSettings = normalizeAppSettings({
       ...appSettings,
-      cloudSync
+      cloudSync: {
+        ...cloudSync,
+        lastUpdatedAt
+      }
     })
     saveAppSettings(appSettings)
     managerService.setAppSettings(appSettings)
 
     return {
-      uploadedAt: Date.now(),
-      fileName: cloudSync.fileName
+      uploadedAt: lastUpdatedAt,
+      fileName: cloudSync.fileName,
+      state: managerService.getState()
     }
   })
 
   ipcMain.handle("data:cloud-pull", async (_, payload) => {
     const cloudSync = normalizeCloudSyncSettings(payload)
+    const lastUpdatedAt = Date.now()
     const restoreResult = await managerService.restoreDataBackup(
       await downloadWebDavBackup(cloudSync)
     )
     appSettings = normalizeAppSettings({
       ...restoreResult.appSettings,
-      cloudSync
+      cloudSync: {
+        ...cloudSync,
+        lastUpdatedAt
+      }
     })
     saveAppSettings(appSettings)
 
     return {
-      downloadedAt: Date.now(),
+      downloadedAt: lastUpdatedAt,
       fileName: cloudSync.fileName,
       state: await restartManagerService(appSettings)
     }
@@ -610,22 +682,32 @@ app.whenReady().then(async () => {
   })
 
   registerIpc()
+  createTray()
   await createWindow()
 
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       await createWindow()
+      return
     }
+
+    await showMainPanel()
   })
 })
 
 app.on("window-all-closed", () => {
+  if (!isQuitting) {
+    return
+  }
+
   if (process.platform !== "darwin") {
     app.quit()
   }
 })
 
 app.on("before-quit", async () => {
+  isQuitting = true
+
   if (managerService) {
     await managerService.dispose()
   }
