@@ -2105,7 +2105,7 @@ watch(
 
   &__account-card {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 12px;
     padding: 14px 16px;
     border: 1px solid #bfe5ce;
@@ -2116,14 +2116,14 @@ watch(
     display: flex;
     min-width: 0;
     flex: 1;
-    gap: 24px;
+    flex-direction: column;
+    gap: 12px;
   }
 
   &__account-title {
     display: flex;
     align-items: center;
     gap: 8px;
-    width: 292px;
     min-width: 0;
   }
 
@@ -2162,18 +2162,17 @@ watch(
 
   &__quota-list {
     display: flex;
-    flex: 1;
-    flex-direction: column;
-    gap: 10px;
+    flex-direction: row;
+    gap: 16px;
     min-width: 0;
   }
 
   &__account-quota {
     display: flex;
-    width: 220px;
+    flex: 1;
+    min-width: 200px;
     flex-direction: column;
     gap: 6px;
-    padding-top: 4px;
   }
 
   &__quota-meta {
@@ -2219,8 +2218,9 @@ watch(
   &__account-actions {
     display: flex;
     flex: none;
-    align-items: center;
+    align-items: flex-start;
     gap: 8px;
+    margin-top: 2px;
   }
 
   &__drag {
