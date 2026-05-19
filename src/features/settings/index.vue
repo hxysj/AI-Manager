@@ -178,6 +178,9 @@
             <strong>坚果云同步</strong>
             <span>通过坚果云 WebDAV 同步加密备份文件。</span>
           </div>
+          <span class="settings-view__cloud-time">
+            上次同步：{{ formatCloudSyncTime(draft.cloudSync.lastUpdatedAt) }}
+          </span>
         </div>
 
         <div class="settings-view__cloud-grid">
@@ -272,7 +275,8 @@ const draft = reactive({
     webdavUrl: "",
     username: "",
     password: "",
-    fileName: ""
+    fileName: "",
+    lastUpdatedAt: 0
   }
 })
 
@@ -327,6 +331,8 @@ function syncDraft() {
   draft.cloudSync.password = props.appSettings.cloudSync?.password || ""
   draft.cloudSync.fileName =
     props.appSettings.cloudSync?.fileName || "ai-manager.aimbackup"
+  draft.cloudSync.lastUpdatedAt =
+    Number(props.appSettings.cloudSync?.lastUpdatedAt || 0)
 }
 
 async function selectDirectory(key, currentPath) {
@@ -365,7 +371,8 @@ function submitSettings() {
       webdavUrl: draft.cloudSync.webdavUrl,
       username: draft.cloudSync.username,
       password: draft.cloudSync.password,
-      fileName: draft.cloudSync.fileName
+      fileName: draft.cloudSync.fileName,
+      lastUpdatedAt: draft.cloudSync.lastUpdatedAt
     }
   })
 }
@@ -386,7 +393,8 @@ function emitCloudSync(eventName) {
     webdavUrl: draft.cloudSync.webdavUrl,
     username: draft.cloudSync.username,
     password: draft.cloudSync.password,
-    fileName: draft.cloudSync.fileName
+    fileName: draft.cloudSync.fileName,
+    lastUpdatedAt: draft.cloudSync.lastUpdatedAt
   })
 }
 
@@ -396,6 +404,22 @@ function pushCloudData() {
 
 function pullCloudData() {
   emitCloudSync("pull-cloud-data")
+}
+
+function formatCloudSyncTime(value) {
+  const timestamp = Number(value || 0)
+
+  if (!timestamp) {
+    return "尚未同步"
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(timestamp))
 }
 
 watch(
@@ -730,6 +754,13 @@ watch(
     color: var(--color-text-muted);
     font-size: 0.78rem;
     line-height: 1.5;
+  }
+
+  &__cloud-time {
+    flex: none;
+    padding-top: 1px;
+    color: var(--color-text-soft);
+    font-size: 0.76rem;
   }
 
   &__cloud-grid {

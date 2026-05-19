@@ -1103,6 +1103,7 @@ const emit = defineEmits([
   "codex-account-delete",
   "codex-account-proxy-save",
   "codex-account-refresh",
+  "codex-accounts-refresh",
   "codex-official-login",
   "clear-runtime",
   "cancel-codex-official-login",
@@ -1371,11 +1372,16 @@ function ensureActiveCli() {
 }
 
 function selectCli(cli) {
+  const previousCli = activeCli.value
   activeCli.value = cli
   closeCodexAccountDetail()
   closeProviderDetail()
   closeProviderCreateModal()
   clearDraft()
+
+  if (cli === "codex" && previousCli !== "codex") {
+    emit("codex-accounts-refresh")
+  }
 }
 
 function editProvider(provider) {
