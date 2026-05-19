@@ -60,7 +60,8 @@ async function readJson(response) {
 
 async function fetchWithProxy(url, options, proxy) {
   if (!proxy) {
-    return fetch(url, options)
+    await session.defaultSession.setProxy({ mode: "system" })
+    return session.defaultSession.fetch(url, options)
   }
 
   const partition = crypto

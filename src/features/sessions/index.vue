@@ -44,13 +44,17 @@
       <span
         >{{ filteredSessions.length }} / {{ sessions.length }} 个 Session</span
       >
-      <span>Filesystem Aggregation + 按需加载 Messages</span>
+      <span v-if="filteredSessions.length"
+        >第 {{ currentPage }} / {{ pageCount }} 页 · 当前
+        {{ pageStart }}-{{ pageEnd }}</span
+      >
+      <span v-else>Filesystem Aggregation + 按需加载 Messages</span>
     </div>
 
     <div v-if="filteredSessions.length" class="sessions-view__layout">
       <div class="sessions-view__list">
         <article
-          v-for="session in filteredSessions"
+          v-for="session in pagedSessions"
           :key="session.id"
           class="sessions-view__card"
           @click="selectSession(session)"
@@ -95,6 +99,39 @@
         @close="selectedSession = null"
         @open-path="$emit('open-path', $event)"
       />
+    </div>
+
+    <div v-if="filteredSessions.length" class="sessions-view__pagination">
+      <label class="sessions-view__page-size">
+        <span>每页</span>
+        <select v-model.number="pageSize">
+          <option v-for="item in pageSizeOptions" :key="item" :value="item">
+            {{ item }}
+          </option>
+        </select>
+      </label>
+
+      <div class="sessions-view__page-actions">
+        <button
+          class="icon-button"
+          type="button"
+          title="上一页"
+          :disabled="currentPage === 1"
+          @click="currentPage -= 1"
+        >
+          <ChevronLeft :size="15" />
+        </button>
+        <span>{{ currentPage }} / {{ pageCount }}</span>
+        <button
+          class="icon-button"
+          type="button"
+          title="下一页"
+          :disabled="currentPage === pageCount"
+          @click="currentPage += 1"
+        >
+          <ChevronRight :size="15" />
+        </button>
+      </div>
     </div>
 
     <div v-else class="sessions-view__empty">
@@ -192,7 +229,13 @@
 <script setup>
 import Fuse from "fuse.js"
 import { computed, ref, watch } from "vue"
-import { RefreshCw, RotateCcw, Trash2 } from "lucide-vue-next"
+import {
+  ChevronLeft,
+  ChevronRight,
+  RefreshCw,
+  RotateCcw,
+  Trash2
+} from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import { formatDateTime } from "@/utils/formatters"
 import SessionDrawer from "./components/SessionDrawer.vue"
@@ -226,6 +269,9 @@ const detailPending = ref(false)
 const showRecycle = ref(false)
 const recyclePending = ref(false)
 const recycledSessions = ref([])
+const currentPage = ref(1)
+const pageSize = ref(20)
+const pageSizeOptions = [10, 20, 50, 100]
 
 const cliOptions = computed(() => {
   return Array.from(
@@ -267,8 +313,32 @@ const filteredSessions = computed(() => {
   })
 })
 
+const pageCount = computed(() => {
+  return Math.max(1, Math.ceil(filteredSessions.value.length / pageSize.value))
+})
+
+const pageStart = computed(() => {
+  if (!filteredSessions.value.length) {
+    return 0
+  }
+
+  return (currentPage.value - 1) * pageSize.value + 1
+})
+
+const pageEnd = computed(() => {
+  return Math.min(
+    currentPage.value * pageSize.value,
+    filteredSessions.value.length
+  )
+})
+
+const pagedSessions = computed(() => {
+  return filteredSessions.value.slice(pageStart.value - 1, pageEnd.value)
+})
+
 watch(searchQuery, (value) => {
   remoteSessions.value = null
+  currentPage.value = 1
 
   if (!value) {
     return
@@ -279,6 +349,23 @@ watch(searchQuery, (value) => {
     searchRemoteSessions()
   }, 360)
 })
+
+watch(cliFilter, () => {
+  currentPage.value = 1
+})
+
+watch(pageSize, () => {
+  currentPage.value = 1
+})
+
+watch(
+  () => filteredSessions.value.length,
+  () => {
+    if (currentPage.value > pageCount.value) {
+      currentPage.value = pageCount.value
+    }
+  }
+)
 
 watch(
   () => props.sessions,
@@ -304,6 +391,7 @@ async function searchRemoteSessions() {
   remoteSessions.value = await window.aiManager.searchSessions({
     query: searchQuery.value
   })
+  currentPage.value = 1
 }
 
 async function selectSession(session) {
@@ -538,6 +626,41 @@ async function purgeRecycledSession(session) {
     gap: 6px;
   }
 
+  &__pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+  }
+
+  &__page-size,
+  &__page-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+  }
+
+  &__page-size span,
+  &__page-actions span {
+    font-weight: 700;
+  }
+
+  &__page-size select {
+    height: 30px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    padding: 0 8px;
+    color: var(--color-text);
+    font: inherit;
+  }
+
   &__modal {
     position: fixed;
     inset: 0;
@@ -683,8 +806,13 @@ async function purgeRecycledSession(session) {
   }
 }
 
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .action-button:hover,
-.icon-button:hover {
+.icon-button:not(:disabled):hover {
   border-color: #b9ccda;
   background: var(--color-primary-soft);
 }
