@@ -59,57 +59,59 @@
             <ShieldCheck :size="18" />
             <div class="providers-view__account-main">
               <div class="providers-view__account-title">
-                <strong>{{ item.account.email }}</strong>
-                <span class="providers-view__account-tag">
-                  {{ item.account.plan || "未识别套餐" }}
+                <strong :title="item.account.email">
+                  {{ item.account.email }}
+                </strong>
+                <span
+                  :class="[
+                    'providers-view__account-tag',
+                    {
+                      'providers-view__account-tag--pro':
+                        item.account.plan === 'pro',
+                      'providers-view__account-tag--plus':
+                        item.account.plan === 'plus'
+                    }
+                  ]"
+                  :title="formatPlanName(item.account.plan)"
+                >
+                  {{ formatPlanName(item.account.plan) }}
                 </span>
               </div>
               <div
                 v-if="item.account.usage?.rate_limit"
-                class="providers-view__account-quota"
+                class="providers-view__quota-list"
               >
-                <div class="providers-view__quota-header">
-                  <span class="providers-view__quota-label">
-                    <Clock :size="14" />
-                    {{
-                      formatRateWindowName(
-                        item.account.usage.rate_limit.primary_window
-                          ?.limit_window_seconds
-                      )
-                    }}
-                  </span>
-                  <strong class="providers-view__quota-percent">
-                    {{
-                      formatRatePercent(
-                        item.account.usage.rate_limit.primary_window
-                          ?.used_percent
-                      )
-                    }}
-                  </strong>
+                <div
+                  v-for="quota in rateLimitWindows(
+                    item.account.usage.rate_limit
+                  )"
+                  :key="quota.key"
+                  class="providers-view__account-quota"
+                >
+                  <div class="providers-view__quota-header">
+                    <span class="providers-view__quota-label">
+                      <Clock :size="14" />
+                      {{
+                        formatRateWindowName(quota.window.limit_window_seconds)
+                      }}
+                    </span>
+                    <strong class="providers-view__quota-percent">
+                      {{ formatRatePercent(quota.window.used_percent) }}
+                    </strong>
+                  </div>
+                  <div class="providers-view__quota-bar">
+                    <span
+                      class="providers-view__quota-fill"
+                      :style="{
+                        width: formatRateWidth(quota.window.used_percent)
+                      }"
+                    ></span>
+                  </div>
+                  <p class="providers-view__quota-meta">
+                    {{ formatResetCountdown(quota.window.reset_at) }}
+                    ({{ formatUnixTime(quota.window.reset_at) }})
+                  </p>
                 </div>
-                <div class="providers-view__quota-bar">
-                  <span
-                    class="providers-view__quota-fill"
-                    :style="{
-                      width: formatRateWidth(
-                        item.account.usage.rate_limit.primary_window
-                          ?.used_percent
-                      )
-                    }"
-                  ></span>
-                </div>
-                <p class="providers-view__quota-meta">
-                  {{
-                    formatResetCountdown(
-                      item.account.usage.rate_limit.primary_window?.reset_at
-                    )
-                  }}
-                  ({{
-                    formatUnixTime(
-                      item.account.usage.rate_limit.primary_window?.reset_at
-                    )
-                  }})
-                </p>
               </div>
             </div>
             <div class="providers-view__account-actions">
@@ -1567,18 +1569,45 @@ function closeProviderDetail() {
   providerDetail.value = null
 }
 
+function rateLimitWindows(rateLimit) {
+  return [
+    { key: "primary", window: rateLimit.primary_window },
+    { key: "secondary", window: rateLimit.secondary_window }
+  ].filter((item) => item.window)
+}
+
+function formatPlanName(value) {
+  if (value === "pro") {
+    return "Pro"
+  }
+
+  if (value === "plus") {
+    return "Plus"
+  }
+
+  return value || "未识别套餐"
+}
+
 function formatRateWindowName(value) {
   const seconds = Number(value || 0)
 
+  if (seconds === 18000) {
+    return "五小时额度"
+  }
+
+  if (seconds === 604800) {
+    return "周额度"
+  }
+
   if (seconds % 86400 === 0) {
-    return seconds / 86400 === 7 ? "Weekly" : `${seconds / 86400}天`
+    return `${seconds / 86400}天额度`
   }
 
   if (seconds % 3600 === 0) {
-    return `${seconds / 3600}小时`
+    return `${seconds / 3600}小时额度`
   }
 
-  return `${seconds}秒`
+  return `${seconds}秒额度`
 }
 
 function formatRatePercent(value) {
@@ -2081,21 +2110,27 @@ watch(
     display: flex;
     min-width: 0;
     flex: 1;
-    gap: 35px;
+    gap: 24px;
   }
 
   &__account-title {
     display: flex;
     align-items: center;
     gap: 8px;
-    min-width: 260px;
+    width: 292px;
+    min-width: 0;
   }
 
   &__account-card strong {
+    overflow: hidden;
+    min-width: 0;
     color: #111827;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   &__account-tag {
+    flex: none;
     padding: 2px 8px;
     border: 1px solid #cdebd7;
     border-radius: 999px;
@@ -2105,9 +2140,31 @@ watch(
     line-height: 1.4;
   }
 
+  &__account-tag--pro {
+    border-color: #8b5cf6;
+    background: #f4f0ff;
+    color: #6d28d9;
+    font-weight: 800;
+  }
+
+  &__account-tag--plus {
+    border-color: #1570ef;
+    background: #eef7ff;
+    color: #175cd3;
+    font-weight: 800;
+  }
+
+  &__quota-list {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+  }
+
   &__account-quota {
     display: flex;
-    width: 312px;
+    width: 220px;
     flex-direction: column;
     gap: 6px;
     padding-top: 4px;
