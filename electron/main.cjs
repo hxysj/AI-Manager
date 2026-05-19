@@ -19,6 +19,7 @@ const settingsFilePath = path.join(defaultUserDataPath, "app-settings.json")
 const appIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "assets", "icon.png")
   : path.join(__dirname, "..", "build", "icon.png")
+app.setAppUserModelId("com.aimanager.desktop")
 const portableHomePrefix = path.join(path.dirname(os.homedir()), "%USERNAME%")
 const defaultCliConfigPaths = {
   claude: path.join(portableHomePrefix, ".claude"),
