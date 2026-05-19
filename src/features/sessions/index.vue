@@ -322,7 +322,7 @@ async function selectSession(session) {
 
 function deleteSession(session) {
   const shouldContinue = window.confirm(
-    "删除后会将 CLI 原始 Session 移动到 AI Manager 回收站，是否继续？"
+    "删除后会将 CLI 原始 Session 移动到 Monkey Thief 回收站，是否继续？"
   )
 
   if (shouldContinue) {

@@ -1,7 +1,7 @@
 <template>
   <BaseModal
     title="添加 Repo"
-    description="支持 GitHub、通用 Git 仓库与本地目录。远程仓库会 clone 到 AI Manager 的 repos 工作区。"
+    description="支持 GitHub、通用 Git 仓库与本地目录。远程仓库会 clone 到 Monkey Thief 的 repos 工作区。"
     @close="$emit('close')"
   >
     <form class="add-repo-modal" @submit.prevent="submit">

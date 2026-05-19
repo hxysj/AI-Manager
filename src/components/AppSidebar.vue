@@ -7,9 +7,9 @@
         :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
         @click="$emit('toggle')"
       >
-        <img class="app-sidebar__logo" :src="logoUrl" alt="AI Manager 图标" />
+        <img class="app-sidebar__logo" :src="logoUrl" alt="Monkey Thief 图标" />
       </button>
-      <span v-if="!collapsed" class="app-sidebar__title">AI Manager</span>
+      <span v-if="!collapsed" class="app-sidebar__title">Monkey Thief</span>
     </div>
 
     <nav class="app-sidebar__nav">

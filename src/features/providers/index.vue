@@ -830,7 +830,7 @@
 
         <template v-else>
           <p class="providers-view__login-intro">
-            粘贴已有 Codex 登录 JSON 数据，AI Manager 会使用 refresh_token
+            粘贴已有 Codex 登录 JSON 数据，Monkey Thief 会使用 refresh_token
             刷新并验证账号。
           </p>
           <label class="providers-view__login-field">

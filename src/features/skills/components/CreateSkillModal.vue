@@ -1,7 +1,7 @@
 <template>
   <BaseModal
     title="新建 Skill"
-    description="AI Manager 会在集中式 skills 目录中创建真实 Skill Source，并用 junction 挂载到目标 CLI。"
+    description="Monkey Thief 会在集中式 skills 目录中创建真实 Skill Source，并用 junction 挂载到目标 CLI。"
     @close="$emit('close')"
   >
     <form class="create-skill-modal" @submit.prevent="submit">
