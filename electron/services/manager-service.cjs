@@ -1754,7 +1754,10 @@ class ManagerService extends EventEmitter {
   async refreshCodexAccount(input) {
     await this.codexAccountService.refreshAccountUsage(
       input.accountId,
-      this.state.cliTargets.find((item) => item.id === "codex")
+      this.state.cliTargets.find((item) => item.id === "codex"),
+      {
+        syncAuth: input.syncAuth !== false
+      }
     )
     this.state = {
       ...this.state,

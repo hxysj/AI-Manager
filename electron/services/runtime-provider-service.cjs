@@ -1158,15 +1158,17 @@ class RuntimeProviderService {
     const config = parseSimpleToml(await fs.readFile(configPath, "utf8"))
     const customProvider = config.sections["model_providers.custom"] || {}
     const model = String(config.root.model || profile.model || "").trim()
-
-    if (!auth.OPENAI_API_KEY) {
-      throw new Error("Codex auth.json 缺少 OPENAI_API_KEY，无法同步到 Provider")
-    }
+    const apiKey = String(
+      auth.OPENAI_API_KEY ||
+        auth.tokens?.access_token ||
+        provider.apiKey ||
+        ""
+    ).trim()
 
     this.saveProvider({
       ...provider,
       baseUrl: String(customProvider.base_url || "").trim(),
-      apiKey: String(auth.OPENAI_API_KEY || "").trim(),
+      apiKey,
       runtimeConfig: {
         ...provider.runtimeConfig,
         mainModel: model,

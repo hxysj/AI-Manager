@@ -427,7 +427,7 @@ class CodexAccountService extends EventEmitter {
     this.emit("changed", this.getState())
   }
 
-  async refreshAccountUsage(accountId, cliTarget) {
+  async refreshAccountUsage(accountId, cliTarget, options = {}) {
     const account = this.accounts.find((item) => item.id === accountId)
 
     if (!account) {
@@ -478,7 +478,7 @@ class CodexAccountService extends EventEmitter {
       account.proxy
     )
 
-    if (nextAccount.id === this.activeAccountId) {
+    if (options.syncAuth !== false && nextAccount.id === this.activeAccountId) {
       await this.writeAccountAuth(nextAccount, cliTarget)
     }
 
@@ -495,14 +495,14 @@ class CodexAccountService extends EventEmitter {
       path.join(cliTarget.configPath, "auth.json"),
       `${JSON.stringify(
         {
-          id_token: account.id_token,
-          access_token: account.access_token,
-          refresh_token: account.refresh_token,
-          account_id: account.account_id,
+          OPENAI_API_KEY: null,
           last_refresh: account.last_refresh,
-          email: account.email,
-          type: "codex",
-          expired: account.expired
+          tokens: {
+            access_token: account.access_token,
+            account_id: account.account_id,
+            id_token: account.id_token,
+            refresh_token: account.refresh_token
+          }
         },
         null,
         2

@@ -717,7 +717,8 @@ async function refreshCodexAccounts() {
       for (const account of state.codexAccounts) {
         updateState(
           await window.aiManager.refreshCodexAccount({
-            accountId: account.id
+            accountId: account.id,
+            syncAuth: false
           })
         )
       }
