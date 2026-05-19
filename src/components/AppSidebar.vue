@@ -7,7 +7,7 @@
         :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
         @click="$emit('toggle')"
       >
-        <span class="app-sidebar__logo"></span>
+        <img class="app-sidebar__logo" :src="logoUrl" alt="AI Manager 图标" />
       </button>
       <span v-if="!collapsed" class="app-sidebar__title">AI Manager</span>
     </div>
@@ -77,6 +77,7 @@
 
 <script setup>
 import AiIcon from '@/components/AiIcon.vue'
+import logoUrl from '@/assets/ai-manager-logo.svg?url'
 
 defineProps({
   activeView: {
@@ -189,7 +190,7 @@ const colorMap = {
   &__logo {
     width: 34px;
     height: 34px;
-    background: url('@/assets/ai-manager-logo.svg') center / contain no-repeat;
+    object-fit: contain;
   }
 
   &__title {

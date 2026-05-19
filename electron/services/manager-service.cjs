@@ -201,19 +201,54 @@ async function collectDirectoryEntries(rootPath) {
   return entries
 }
 
+async function collectFileEntry(sourcePath, relativePath) {
+  if (!(await pathExists(sourcePath))) {
+    return null
+  }
+
+  return {
+    path: relativePath,
+    type: "file",
+    content: (await fs.readFile(sourcePath)).toString("base64")
+  }
+}
+
 async function collectBackupEntries(paths) {
-  const sources = [
-    paths.storageDir,
-    paths.skillsDir,
-    paths.promptsDir,
-    paths.promptProfilesDir
+  const storageFiles = [
+    [paths.storageFiles.skills, "storage/skills.json"],
+    [paths.storageFiles.installs, "storage/installs.json"],
+    [paths.storageFiles.providers, "storage/providers.json"],
+    [paths.storageFiles.runtimeModels, "storage/runtime-models.json"],
+    [paths.storageFiles.runtimeProfiles, "storage/runtime-profiles.json"],
+    [paths.storageFiles.runtimeProviderState, "storage/runtime-provider-state.json"],
+    [paths.storageFiles.runtimeProviderKeys, "storage/runtime-provider-keys.json"],
+    [paths.storageFiles.codexAccounts, "storage/codex-accounts.json"],
+    [
+      paths.storageFiles.codexActiveAccountId,
+      "storage/codex-active-account-id.json"
+    ],
+    [paths.storageFiles.rules, "storage/rules.json"],
+    [
+      paths.storageFiles.promptRuntimeState,
+      "storage/prompt-runtime-state.json"
+    ]
   ]
   const entries = []
 
-  for (const sourcePath of sources) {
-    const sourceEntries = (await collectDirectoryEntries(sourcePath)).filter(
-      (entry) => entry.path !== "runtime-provider-keys.json"
-    )
+  for (const [sourcePath, relativePath] of storageFiles) {
+    const entry = await collectFileEntry(sourcePath, relativePath)
+
+    if (entry) {
+      entries.push(entry)
+    }
+  }
+
+  for (const sourcePath of [
+    paths.skillsDir,
+    paths.promptsDir,
+    paths.promptProfilesDir
+  ]) {
+    const sourceEntries = await collectDirectoryEntries(sourcePath)
     const rootName = path
       .relative(paths.workspaceRoot, sourcePath)
       .replace(/\\/g, "/")
@@ -478,7 +513,15 @@ class ManagerService extends EventEmitter {
     await this.storage.flush()
 
     await Promise.all([
-      fs.rm(this.paths.storageDir, { recursive: true, force: true }),
+      fs.rm(this.paths.storageFiles.providers, { force: true }),
+      fs.rm(this.paths.storageFiles.runtimeModels, { force: true }),
+      fs.rm(this.paths.storageFiles.runtimeProfiles, { force: true }),
+      fs.rm(this.paths.storageFiles.runtimeProviderState, { force: true }),
+      fs.rm(this.paths.storageFiles.runtimeProviderKeys, { force: true }),
+      fs.rm(this.paths.storageFiles.codexAccounts, { force: true }),
+      fs.rm(this.paths.storageFiles.codexActiveAccountId, { force: true }),
+      fs.rm(this.paths.storageFiles.rules, { force: true }),
+      fs.rm(this.paths.storageFiles.promptRuntimeState, { force: true }),
       fs.rm(this.paths.skillsDir, { recursive: true, force: true }),
       fs.rm(this.paths.promptsDir, { recursive: true, force: true }),
       fs.rm(this.paths.promptProfilesDir, { recursive: true, force: true })

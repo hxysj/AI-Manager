@@ -28,7 +28,7 @@
         @click="activeTab = tab.id"
       >
         <component :is="tab.icon" :size="15" />
-        <span>{{ tab.label }}</span>
+        <span class="tab-label">{{ tab.label }}</span>
       </button>
     </nav>
 
@@ -447,11 +447,16 @@ watch(
 
   &__tabs {
     display: flex;
+    align-items: center;
     gap: 6px;
     padding: 4px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
     background: var(--color-panel);
+    .tab-label {
+      font-size: 12px;
+      line-height: 12px;
+    }
   }
 
   &__tab {
