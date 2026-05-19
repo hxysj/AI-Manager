@@ -1,4 +1,4 @@
-# AI Manager 全模块详细规则文档（V1 架构规范）
+# Monkey Thief 全模块详细规则文档（V1 架构规范）
 
 技术栈：
 
@@ -35,7 +35,7 @@ Skill System
 # 一、系统模块总览
 
 ```text id="4z0r1q"
-AI Manager
+Monkey Thief
 │
 ├── CLI Detection
 ├── Skill System
@@ -285,7 +285,7 @@ interface Skill {
 规则：
 
 ```text id="erlwmk"
-AI Manager 永远持有真实 Skill
+Monkey Thief 永远持有真实 Skill
 ```
 
 CLI：

@@ -1,5 +1,5 @@
 {
-  "name": "ai-manager",
+  "name": "monkey-thief",
   "version": "1.0.4",
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
   "config": {
@@ -38,7 +38,7 @@
   },
   "build": {
     "appId": "com.aimanager.desktop",
-    "productName": "AI-Manager",
+    "productName": "Monkey Thief",
     "artifactName": "${productName}-windows-setup.${ext}",
     "icon": "build/icon.ico",
     "directories": {
@@ -77,7 +77,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "AI Manager",
+      "shortcutName": "Monkey Thief",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico"
     }

@@ -1,7 +1,7 @@
 <template>
   <BaseModal
     title="确认导入 Skill"
-    description="选择需要从 CLI 真实目录导入到 AI Manager 集中管理的 Skill。"
+    description="选择需要从 CLI 真实目录导入到 Monkey Thief 集中管理的 Skill。"
     @close="handleClose"
   >
     <form class="import-skills-modal" @submit.prevent="submit">

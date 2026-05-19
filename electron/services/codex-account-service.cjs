@@ -292,7 +292,7 @@ class CodexAccountService extends EventEmitter {
           response.writeHead(200, {
             "content-type": "text/html; charset=utf-8"
           })
-          response.end("Codex 登录已完成，可以返回 AI Manager。")
+          response.end("Codex 登录已完成，可以返回 Monkey Thief。")
         } catch (error) {
           this.failLogin(error)
           response.writeHead(500, {

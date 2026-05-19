@@ -934,7 +934,7 @@ class ManagerService extends EventEmitter {
       "",
       `# ${skillName}`,
       "",
-      "这个 Skill 由 AI Manager 创建。"
+      "这个 Skill 由 Monkey Thief 创建。"
     ].filter((item) => item !== null)
 
     await fs.mkdir(skillRoot, { recursive: true })
@@ -968,7 +968,7 @@ class ManagerService extends EventEmitter {
     }
 
     const tempRoot = await fs.mkdtemp(
-      path.join(os.tmpdir(), "ai-manager-skill-")
+      path.join(os.tmpdir(), "monkey-thief-skill-")
     )
 
     try {
@@ -1203,7 +1203,7 @@ class ManagerService extends EventEmitter {
               name: managedSkill.name,
               description: managedSkill.description,
               signature: managedSignature,
-              cliNames: ["AI Manager"],
+              cliNames: ["Monkey Thief"],
               sourcePaths: [managedSkill.sourcePath],
               alreadyManaged: true
             },

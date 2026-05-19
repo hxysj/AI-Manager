@@ -29,7 +29,7 @@ const settingsFilePath = path.join(defaultUserDataPath, "app-settings.json")
 const appIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "assets", "icon.png")
   : path.join(__dirname, "..", "build", "icon.png")
-app.setAppUserModelId("com.aimanager.desktop")
+app.setAppUserModelId("com.monkeythief.desktop")
 const portableHomePrefix = path.join(path.dirname(os.homedir()), "%USERNAME%")
 const defaultCliConfigPaths = {
   claude: path.join(portableHomePrefix, ".claude"),
@@ -210,7 +210,7 @@ function createTray() {
   }
 
   tray = new Tray(appIconPath)
-  tray.setToolTip("AI Manager")
+  tray.setToolTip("Monkey Thief")
   tray.setContextMenu(
     Menu.buildFromTemplate([
       {
@@ -338,9 +338,9 @@ function registerIpc() {
       title: "导出配置数据",
       defaultPath: path.join(
         app.getPath("desktop"),
-        `ai-manager-${new Date().toISOString().slice(0, 10)}.aimbackup`
+        `monkey-thief-${new Date().toISOString().slice(0, 10)}.aimbackup`
       ),
-      filters: [{ name: "AI Manager 备份", extensions: ["aimbackup"] }]
+      filters: [{ name: "Monkey Thief 备份", extensions: ["aimbackup"] }]
     })
 
     if (result.canceled || !result.filePath) {
@@ -365,7 +365,7 @@ function registerIpc() {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "恢复配置数据",
       defaultPath: app.getPath("desktop"),
-      filters: [{ name: "AI Manager 备份", extensions: ["aimbackup"] }],
+      filters: [{ name: "Monkey Thief 备份", extensions: ["aimbackup"] }],
       properties: ["openFile"]
     })
 

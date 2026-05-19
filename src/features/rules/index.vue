@@ -177,7 +177,7 @@
     <BaseModal
       v-if="showImport"
       title="导入全局 Prompt"
-      :description="`读取 ${activeCliName} 当前全局文件，并保存为 AI Manager Prompt 资产。导入后不会自动启用。`"
+      :description="`读取 ${activeCliName} 当前全局文件，并保存为 Monkey Thief Prompt 资产。导入后不会自动启用。`"
       @close="showImport = false"
     >
       <form class="rules-view__editor" @submit.prevent="submitImport">
