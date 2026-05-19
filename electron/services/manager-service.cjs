@@ -10,7 +10,8 @@ const {
   ensureAppDirectories,
   slugifyName,
   resolvePortablePath,
-  serializeAppSettingsPaths
+  serializeAppSettingsPaths,
+  serializePortablePath
 } = require("./path-utils.cjs")
 const { JsonStorage } = require("./json-storage.cjs")
 const { CliDetectionService } = require("./cli-detection-service.cjs")
@@ -487,6 +488,7 @@ class ManagerService extends EventEmitter {
       this.paths.workspaceRoot,
       backup.workspaceEntries
     )
+    await this.storage.writeNow("cliTargets", [])
     if (backup.runtimeProviderKeys) {
       await this.runtimeProviderService.importProviderKeys(
         decryptBackupData(backup.runtimeProviderKeys)
@@ -568,7 +570,17 @@ class ManagerService extends EventEmitter {
 
   async refreshAll({ emit = true, preferDetectedPaths = false } = {}) {
     const previousSkills = await this.storage.read("skills", [])
-    const previousCliTargets = await this.storage.read("cliTargets", [])
+    const previousCliTargets = (await this.storage.read("cliTargets", [])).map(
+      (item) => ({
+        ...item,
+        configPath: resolvePortablePath(item.configPath),
+        skillsPath: resolvePortablePath(item.skillsPath),
+        sessionsPath: resolvePortablePath(item.sessionsPath),
+        sessionPaths: Array.isArray(item.sessionPaths)
+          ? item.sessionPaths.map((value) => resolvePortablePath(value))
+          : item.sessionPaths
+      })
+    )
     const installIndex = await this.storage.read("installs", {})
     const normalizedInstallIndex = { ...installIndex }
     const [detectedCliTargets] = await Promise.all([
@@ -791,6 +803,15 @@ class ManagerService extends EventEmitter {
 
   async persistSkills(skills, cliTargets, installIndex) {
     const normalizedInstallIndex = { ...installIndex }
+    const serializedCliTargets = cliTargets.map((item) => ({
+      ...item,
+      configPath: serializePortablePath(item.configPath),
+      skillsPath: serializePortablePath(item.skillsPath),
+      sessionsPath: serializePortablePath(item.sessionsPath),
+      sessionPaths: Array.isArray(item.sessionPaths)
+        ? item.sessionPaths.map((value) => serializePortablePath(value))
+        : item.sessionPaths
+    }))
 
     for (const skill of skills) {
       if (skill.installedTargets.length) {
@@ -801,7 +822,7 @@ class ManagerService extends EventEmitter {
     }
 
     this.storage.scheduleWrite("skills", skills)
-    this.storage.scheduleWrite("cliTargets", cliTargets)
+    this.storage.scheduleWrite("cliTargets", serializedCliTargets)
     this.storage.scheduleWrite("installs", normalizedInstallIndex)
   }
 
