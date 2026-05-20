@@ -1,5 +1,137 @@
 <template>
-  <div class="app-shell">
+  <section
+    v-if="isQuickSwitchPanel"
+    :class="[
+      'quick-switch-panel',
+      { 'quick-switch-panel--collapsed': quickCollapsed }
+    ]"
+  >
+    <header class="quick-switch-panel__header" @dblclick="showMainPanel">
+      <button
+        v-if="quickCollapsed"
+        class="quick-switch-panel__logo-button"
+        type="button"
+        title="展开快速切换"
+        @click="handleQuickLogoClick"
+        @pointerdown="startQuickLogoDrag"
+      >
+        <img
+          class="quick-switch-panel__logo-image"
+          :src="logoUrl"
+          alt="AI Manager"
+        />
+      </button>
+      <template v-else>
+        <div class="quick-switch-panel__title">
+          <span class="quick-switch-panel__dot"></span>
+          <strong>{{ quickActiveCli?.name || "未选择" }}</strong>
+          <small>{{ quickActiveName }}</small>
+        </div>
+        <div class="quick-switch-panel__actions">
+          <button
+            class="quick-switch-panel__icon-button"
+            type="button"
+            title="打开主界面"
+            @click="showMainPanel"
+          >
+            <ExternalLink :size="14" />
+          </button>
+          <button
+            class="quick-switch-panel__icon-button"
+            type="button"
+            title="收起"
+            @click="toggleQuickCollapsed"
+          >
+            <ChevronDown :size="15" />
+          </button>
+        </div>
+      </template>
+    </header>
+
+    <template v-if="!quickCollapsed">
+      <nav class="quick-switch-panel__cli-tabs">
+        <button
+          v-for="cli in quickCliTargets"
+          :key="cli.id"
+          :class="[
+            'quick-switch-panel__cli-tab',
+            { 'quick-switch-panel__cli-tab--active': cli.id === quickActiveCli?.id }
+          ]"
+          type="button"
+          @click="quickSelectedCli = cli.id"
+        >
+          {{ cli.name }}
+        </button>
+      </nav>
+
+      <section class="quick-switch-panel__list">
+        <article
+          v-for="item in quickItems"
+          :key="item.key"
+          :class="[
+            'quick-switch-panel__item',
+            {
+              'quick-switch-panel__item--active': item.active,
+              'quick-switch-panel__item--account': item.type === 'account'
+            }
+          ]"
+        >
+          <span class="quick-switch-panel__item-copy">
+            <strong>{{ item.label }}</strong>
+            <small>{{ item.description }}</small>
+            <span
+              v-if="item.type === 'account' && item.quotas.length"
+              class="quick-switch-panel__quota-list"
+            >
+              <span
+                v-for="quota in item.quotas"
+                :key="quota.key"
+                class="quick-switch-panel__quota-item"
+                :title="quota.reset"
+              >
+                <span>{{ quota.label }}</span>
+                <strong>{{ quota.remaining }}%</strong>
+              </span>
+            </span>
+          </span>
+          <span class="quick-switch-panel__item-actions">
+            <button
+              v-if="item.type === 'account'"
+              class="quick-switch-panel__item-icon-button"
+              type="button"
+              title="刷新额度"
+              aria-label="刷新额度"
+              @click.stop="refreshQuickCodexAccount(item)"
+            >
+              <RefreshCw :size="14" />
+            </button>
+            <button
+              class="quick-switch-panel__item-action"
+              type="button"
+              :disabled="item.active || item.disabled"
+              @click.stop="selectQuickItem(item)"
+            >
+              启用
+            </button>
+            <button
+              class="quick-switch-panel__item-action quick-switch-panel__item-action--danger"
+              type="button"
+              :disabled="!item.active"
+              @click.stop="clearQuickActive"
+            >
+              取消启用
+            </button>
+          </span>
+        </article>
+
+        <div v-if="!quickItems.length" class="quick-switch-panel__empty">
+          暂无可切换项
+        </div>
+      </section>
+    </template>
+  </section>
+
+  <div v-else class="app-shell">
     <AppSidebar
       :active-view="activeView"
       :cli-targets="state.cliTargets"
@@ -150,6 +282,68 @@
       @submit="addRepo"
     />
 
+    <div v-if="showCloseConfirm" class="close-confirm">
+      <div class="close-confirm__overlay"></div>
+      <section class="close-confirm__panel" role="dialog" aria-modal="true">
+        <header class="close-confirm__header">
+          <div>
+            <span>窗口操作</span>
+            <h2>关闭应用</h2>
+          </div>
+          <button
+            class="close-confirm__icon-button"
+            type="button"
+            aria-label="取消关闭"
+            @click="submitCloseAction('cancel')"
+          >
+            <X :size="17" />
+          </button>
+        </header>
+
+        <div class="close-confirm__body">
+          <div class="close-confirm__mark">
+            <Info :size="22" />
+          </div>
+          <div class="close-confirm__copy">
+            <strong>关闭按钮要执行什么操作？</strong>
+            <span>可以最小化到托盘继续运行，也可以直接关闭软件。</span>
+          </div>
+        </div>
+
+        <footer class="close-confirm__footer">
+          <label class="close-confirm__remember">
+            <input v-model="closeRemember" type="checkbox" />
+            <span>记住我的选择</span>
+          </label>
+          <div class="close-confirm__actions">
+            <button
+              class="close-confirm__button close-confirm__button--primary"
+              type="button"
+              @click="submitCloseAction('minimize')"
+            >
+              <Minus :size="15" />
+              最小化到托盘
+            </button>
+            <button
+              class="close-confirm__button"
+              type="button"
+              @click="submitCloseAction('quit')"
+            >
+              <Power :size="15" />
+              直接关闭
+            </button>
+            <button
+              class="close-confirm__button"
+              type="button"
+              @click="submitCloseAction('cancel')"
+            >
+              取消
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>
+
     <SelectionTranslator />
     <GlobalLoading />
   </div>
@@ -159,11 +353,18 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue"
 import {
   Box,
+  ChevronDown,
   Compass,
+  ExternalLink,
   Gauge,
+  Info,
+  Minus,
   Network,
+  Power,
+  RefreshCw,
   Settings,
-  ShieldCheck
+  ShieldCheck,
+  X
 } from "lucide-vue-next"
 import AppSidebar from "@/components/AppSidebar.vue"
 import GlobalLoading from "@/components/GlobalLoading.vue"
@@ -178,6 +379,7 @@ import SkillsView from "@/features/skills/index.vue"
 import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
 import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
 import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
+import logoUrl from "@/assets/ai-manager-logo.svg?url"
 import { useGlobalLoading } from "@/utils/global-loading"
 import { createMessage } from "@/utils/message"
 
@@ -189,6 +391,10 @@ const navItems = [
   { id: "workspace", label: "Workspace", icon: Box },
   { id: "settings", label: "Settings", icon: Settings }
 ]
+
+const isQuickSwitchPanel = new URLSearchParams(window.location.search).get(
+  "panel"
+) === "quick-switch"
 
 const placeholderMap = {
   sessions: {
@@ -257,21 +463,38 @@ const state = reactive({
       username: "",
       password: "",
       fileName: ""
+    },
+    system: {
+      closeAction: "ask",
+      quickSwitchVisible: true
     }
   },
   refreshedAt: 0
 })
 
 const activeView = ref("providers")
+const quickSelectedCli = ref("")
+const quickCollapsed = ref(false)
+const quickLogoDrag = {
+  active: false,
+  moved: false,
+  lastX: 0,
+  lastY: 0,
+  totalX: 0,
+  totalY: 0
+}
 const sidebarCollapsed = ref(false)
 const selectedSkillName = ref("")
 const showCreateSkill = ref(false)
 const showImportSkills = ref(false)
 const showAddRepo = ref(false)
+const showCloseConfirm = ref(false)
+const closeRemember = ref(false)
 const importCandidates = ref([])
 const { loading: pending, withGlobalLoading } = useGlobalLoading()
 
 let unsubscribe = null
+let unsubscribeClose = null
 
 const selectedSkill = computed(() => {
   return (
@@ -281,6 +504,100 @@ const selectedSkill = computed(() => {
 
 const currentPlaceholder = computed(() => {
   return placeholderMap[activeView.value] || placeholderMap.sessions
+})
+
+const quickCliTargets = computed(() => {
+  return state.cliTargets.filter(item => {
+    return state.runtimeConfigSchemas[item.id]?.enabled
+  })
+})
+
+const quickActiveCli = computed(() => {
+  return (
+    quickCliTargets.value.find(item => item.id === quickSelectedCli.value) ||
+    quickCliTargets.value[0] ||
+    null
+  )
+})
+
+const quickActiveProfile = computed(() => {
+  return (
+    state.runtimeProfiles.find(item => item.cli === quickActiveCli.value?.id) ||
+    null
+  )
+})
+
+const quickActiveProvider = computed(() => {
+  return (
+    state.providers.find(
+      item => item.id === quickActiveProfile.value?.providerId
+    ) || null
+  )
+})
+
+const quickActiveAccount = computed(() => {
+  if (quickActiveCli.value?.id !== "codex") {
+    return null
+  }
+
+  return state.codexAccounts.find(item => item.active) || null
+})
+
+const quickActiveName = computed(() => {
+  if (quickActiveAccount.value) {
+    return (
+      quickActiveAccount.value.email ||
+      quickActiveAccount.value.accountId ||
+      "Codex 官方账号"
+    )
+  }
+
+  return quickActiveProvider.value?.name || "未启用"
+})
+
+const quickItems = computed(() => {
+  if (!quickActiveCli.value) {
+    return []
+  }
+
+  const providerItems = state.providers
+    .filter(item => {
+      return item.cli === quickActiveCli.value.id && item.enabled !== false
+    })
+    .map(provider => {
+      const model = firstQuickModelName(provider)
+
+      return {
+        key: `provider:${provider.id}`,
+        type: "provider",
+        provider,
+        model,
+        label: provider.name,
+        description: model || "缺少模型",
+        active:
+          !quickActiveAccount.value &&
+          quickActiveProvider.value?.id === provider.id,
+        disabled: !model
+      }
+    })
+
+  if (quickActiveCli.value.id !== "codex") {
+    return providerItems
+  }
+
+  return [
+    ...providerItems,
+    ...state.codexAccounts.map(account => ({
+      key: `account:${account.id}`,
+      type: "account",
+      account,
+      label: account.email || account.accountId || "Codex 官方账号",
+      description: formatQuickAccountDescription(account),
+      quotas: formatQuickAccountQuotas(account),
+      active: account.active,
+      disabled: false
+    }))
+  ]
 })
 
 async function bootstrap() {
@@ -313,6 +630,7 @@ function updateState(nextState) {
   state.paths = nextState.paths || state.paths
   state.appSettings = nextState.appSettings || state.appSettings
   state.refreshedAt = nextState.refreshedAt || 0
+  ensureQuickSelectedCli()
 
   if (
     selectedSkillName.value &&
@@ -320,6 +638,17 @@ function updateState(nextState) {
   ) {
     selectedSkillName.value = ""
   }
+}
+
+function ensureQuickSelectedCli() {
+  if (
+    quickSelectedCli.value &&
+    quickCliTargets.value.find(item => item.id === quickSelectedCli.value)
+  ) {
+    return
+  }
+
+  quickSelectedCli.value = quickCliTargets.value[0]?.id || ""
 }
 
 async function runAction(action) {
@@ -351,6 +680,190 @@ function showSuccessMessage(message) {
 
 function showWarningMessage(message) {
   createMessage.warning(message)
+}
+
+function firstQuickModelName(provider) {
+  return (
+    provider.runtimeConfig?.mainModel ||
+    state.runtimeModels.find(item => item.providerId === provider.id)?.name ||
+    ""
+  )
+}
+
+function formatQuickAccountDescription(account) {
+  const rateLimit = account.usage?.rate_limit
+  const primaryWindow = rateLimit?.primary_window
+  const remaining = primaryWindow
+    ? `${Math.max(0, 100 - Number(primaryWindow.used_percent || 0))}%`
+    : "额度未知"
+
+  return `${account.plan || "free"} · ${remaining}`
+}
+
+function formatQuickAccountQuotas(account) {
+  const rateLimit = account.usage?.rate_limit
+
+  if (!rateLimit) {
+    return []
+  }
+
+  return [
+    { key: "primary", window: rateLimit.primary_window },
+    { key: "secondary", window: rateLimit.secondary_window }
+  ]
+    .filter(item => item.window)
+    .map(item => {
+      return {
+        key: item.key,
+        label: formatQuickRateWindowName(item.key, item.window),
+        remaining: Math.max(0, 100 - Number(item.window.used_percent || 0)),
+        reset: formatQuickResetText(item.window.reset_at)
+      }
+    })
+}
+
+function formatQuickRateWindowName(key, window) {
+  const seconds = Number(window.limit_window_seconds || 0)
+
+  if (seconds === 604800) {
+    return key === "secondary" ? "7天额度" : "周额度"
+  }
+
+  if (seconds % 86400 === 0) {
+    return `${seconds / 86400}天额度`
+  }
+
+  if (seconds % 3600 === 0) {
+    return `${seconds / 3600}小时额度`
+  }
+
+  return `${seconds}秒额度`
+}
+
+function formatQuickResetText(value) {
+  const timestamp = Number(value || 0)
+
+  if (!timestamp) {
+    return "重置时间未知"
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(timestamp > 1e12 ? timestamp : timestamp * 1000))
+}
+
+async function showMainPanel() {
+  await window.aiManager.showMainPanel()
+}
+
+async function toggleQuickCollapsed() {
+  quickCollapsed.value = !quickCollapsed.value
+  await window.aiManager.setQuickSwitchCollapsed({
+    collapsed: quickCollapsed.value
+  })
+}
+
+function startQuickLogoDrag(event) {
+  if (event.button !== 0) {
+    return
+  }
+
+  event.preventDefault()
+  quickLogoDrag.active = true
+  quickLogoDrag.moved = false
+  quickLogoDrag.lastX = event.screenX
+  quickLogoDrag.lastY = event.screenY
+  quickLogoDrag.totalX = 0
+  quickLogoDrag.totalY = 0
+  window.addEventListener("pointermove", moveQuickLogoDrag)
+  window.addEventListener("pointerup", stopQuickLogoDrag)
+  window.addEventListener("pointercancel", stopQuickLogoDrag)
+}
+
+function moveQuickLogoDrag(event) {
+  if (!quickLogoDrag.active) {
+    return
+  }
+
+  const x = event.screenX - quickLogoDrag.lastX
+  const y = event.screenY - quickLogoDrag.lastY
+  quickLogoDrag.lastX = event.screenX
+  quickLogoDrag.lastY = event.screenY
+  quickLogoDrag.totalX += Math.abs(x)
+  quickLogoDrag.totalY += Math.abs(y)
+
+  if (quickLogoDrag.totalX + quickLogoDrag.totalY > 3) {
+    quickLogoDrag.moved = true
+  }
+
+  if (x || y) {
+    window.aiManager.moveQuickSwitchBy({ x, y })
+  }
+}
+
+function stopQuickLogoDrag() {
+  quickLogoDrag.active = false
+  window.removeEventListener("pointermove", moveQuickLogoDrag)
+  window.removeEventListener("pointerup", stopQuickLogoDrag)
+  window.removeEventListener("pointercancel", stopQuickLogoDrag)
+}
+
+async function handleQuickLogoClick() {
+  if (quickLogoDrag.moved) {
+    return
+  }
+
+  await toggleQuickCollapsed()
+}
+
+async function refreshQuickCodexAccount(item) {
+  await runAction(() =>
+    window.aiManager.refreshCodexAccount({
+      accountId: item.account.id,
+      syncAuth: false
+    })
+  )
+}
+
+async function selectQuickItem(item) {
+  if (item.type === "provider") {
+    await runAction(async () => {
+      if (quickActiveCli.value?.id === "codex") {
+        await window.aiManager.clearCodexAccount()
+      }
+
+      return window.aiManager.switchRuntime({
+        cli: quickActiveCli.value.id,
+        providerId: item.provider.id,
+        model: item.model
+      })
+    })
+    return
+  }
+
+  await runAction(async () => {
+    await window.aiManager.clearRuntime({
+      cli: quickActiveCli.value.id
+    })
+    return window.aiManager.enableCodexAccount({
+      accountId: item.account.id
+    })
+  })
+}
+
+async function clearQuickActive() {
+  await runAction(async () => {
+    if (quickActiveCli.value?.id === "codex") {
+      await window.aiManager.clearCodexAccount()
+    }
+
+    return window.aiManager.clearRuntime({
+      cli: quickActiveCli.value.id
+    })
+  })
 }
 
 async function refreshState() {
@@ -788,18 +1301,418 @@ async function openPath(targetPath) {
   })
 }
 
+async function submitCloseAction(action) {
+  showCloseConfirm.value = false
+
+  try {
+    await window.aiManager.handleCloseAction({
+      action,
+      remember: closeRemember.value
+    })
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
 onMounted(() => {
+  if (isQuickSwitchPanel) {
+    document.documentElement.classList.add("quick-switch-html")
+    document.body.classList.add("quick-switch-body")
+  }
+
   bootstrap()
+  unsubscribeClose = window.aiManager.onCloseRequested(() => {
+    closeRemember.value = false
+    showCloseConfirm.value = true
+  })
 })
 
 onBeforeUnmount(() => {
+  stopQuickLogoDrag()
+
   if (typeof unsubscribe === "function") {
     unsubscribe()
+  }
+
+  if (typeof unsubscribeClose === "function") {
+    unsubscribeClose()
+  }
+
+  if (isQuickSwitchPanel) {
+    document.documentElement.classList.remove("quick-switch-html")
+    document.body.classList.remove("quick-switch-body")
   }
 })
 </script>
 
 <style scoped lang="less">
+:global(html.quick-switch-html),
+:global(html.quick-switch-html body),
+:global(html.quick-switch-html #app) {
+  background: transparent;
+}
+
+:global(html.quick-switch-html .app-message) {
+  top: 34px;
+  right: 8px;
+  left: 8px;
+  width: auto;
+  gap: 5px;
+  transform: none;
+}
+
+:global(html.quick-switch-html .app-message__item) {
+  padding: 6px 8px;
+  border-radius: 6px;
+  box-shadow: 0 6px 14px rgba(34, 56, 83, 0.12);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.quick-switch-panel {
+  display: flex;
+  height: 100vh;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #c9d7e8;
+  background: #f6f8fb;
+  color: #101828;
+
+  &__header {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    height: 36px;
+    padding: 0 8px 0 10px;
+    border-bottom: 1px solid #dce5f0;
+    background: #ffffff;
+    -webkit-app-region: drag;
+  }
+
+  &__title {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: 7px;
+  }
+
+  &__dot {
+    width: 7px;
+    height: 7px;
+    flex: none;
+    border-radius: 999px;
+    background: #18a058;
+    box-shadow: 0 0 0 3px #e3f5ec;
+  }
+
+  &__title strong {
+    flex: none;
+    font-size: 13px;
+    line-height: 1;
+  }
+
+  &__title small {
+    overflow: hidden;
+    min-width: 0;
+    color: #667085;
+    font-size: 12px;
+    line-height: 1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+    -webkit-app-region: no-drag;
+  }
+
+  &__icon-button {
+    display: inline-flex;
+    width: 26px;
+    height: 26px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: #2d6cdf;
+    cursor: pointer;
+  }
+
+  &__icon-button:hover {
+    border-color: #bdd6f7;
+    background: #eef6ff;
+  }
+
+  &__logo-button {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    background: transparent;
+    cursor: grab;
+    touch-action: none;
+    -webkit-app-region: no-drag;
+  }
+
+  &__logo-button:active {
+    cursor: grabbing;
+  }
+
+  &__logo-image {
+    width: 30px;
+    height: 30px;
+    animation: quick-switch-monkey-roam 2.4s ease-in-out infinite;
+    object-fit: contain;
+    transform-origin: 50% 78%;
+  }
+
+  &__cli-tabs {
+    display: flex;
+    flex: none;
+    gap: 6px;
+    padding: 7px 8px;
+    border-bottom: 1px solid #dce5f0;
+    background: #ffffff;
+  }
+
+  &__cli-tab {
+    height: 26px;
+    flex: 1;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: #edf1f6;
+    color: #596579;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &__cli-tab--active {
+    border-color: #93c5fd;
+    background: #e8f3ff;
+    color: #1677ff;
+  }
+
+  &__list {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 6px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 7px 8px 8px;
+  }
+
+  &__item {
+    display: flex;
+    min-height: 50px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 9px;
+    border: 1px solid #dfe8f3;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #101828;
+    text-align: left;
+    transition:
+      border-color 0.18s ease,
+      background 0.18s ease,
+      box-shadow 0.18s ease,
+      transform 0.18s ease;
+  }
+
+  &__item:hover {
+    border-color: #9dc9ff;
+    background: #fbfdff;
+    box-shadow: 0 7px 18px rgba(22, 119, 255, 0.12);
+    transform: translateY(-1px);
+  }
+
+  &__item--active {
+    border-color: #56a7ff;
+    background: #eef7ff;
+    box-shadow: inset 3px 0 0 #1677ff;
+  }
+
+  &__item--account {
+    min-height: 68px;
+  }
+
+  &__item-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 5px;
+  }
+
+  &__item-icon-button {
+    display: inline-flex;
+    width: 26px;
+    height: 26px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #d8e7f7;
+    border-radius: 6px;
+    background: #ffffff;
+    color: #2d6cdf;
+    cursor: pointer;
+  }
+
+  &__item-icon-button:hover {
+    border-color: #9dc9ff;
+    background: #eef6ff;
+  }
+
+  &__item-action {
+    display: inline-flex;
+    height: 26px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    border: 1px solid #9dc9ff;
+    border-radius: 6px;
+    background: #f0f7ff;
+    color: #1677ff;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &__item-action:hover {
+    border-color: #56a7ff;
+    background: #e4f1ff;
+  }
+
+  &__item-action:disabled {
+    border-color: #d0d5dd;
+    background: #f3f4f6;
+    color: #98a2b3;
+    cursor: not-allowed;
+  }
+
+  &__item-action--danger {
+    border-color: #ffc7be;
+    background: #fff6f4;
+    color: #b42318;
+  }
+
+  &__item-action--danger:hover {
+    border-color: #ffafa3;
+    background: #fff0ee;
+  }
+
+  &__item-copy {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  &__item-copy strong,
+  &__item-copy small {
+    overflow: hidden;
+    max-width: 230px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__item-copy strong {
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  &__item-copy small {
+    color: #667085;
+    font-size: 12px;
+  }
+
+  &__quota-list {
+    display: flex;
+    min-width: 0;
+    gap: 5px;
+    margin-top: 1px;
+  }
+
+  &__quota-item {
+    display: inline-flex;
+    height: 18px;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px;
+    border: 1px solid #d8e7f7;
+    border-radius: 5px;
+    background: #f7fbff;
+    color: #49627d;
+    font-size: 11px;
+    line-height: 18px;
+    white-space: nowrap;
+  }
+
+  &__quota-item strong {
+    color: #1677ff;
+    font-size: 11px;
+    line-height: 18px;
+  }
+
+  &__empty {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    color: #667085;
+  }
+
+  &--collapsed {
+    border: 0;
+    background: transparent;
+  }
+
+  &--collapsed &__header {
+    height: 100vh;
+    justify-content: center;
+    padding: 0;
+    border-bottom: 0;
+    background: transparent;
+  }
+}
+
+@keyframes quick-switch-monkey-roam {
+  0% {
+    transform: translate(0, 0) rotate(-4deg);
+  }
+
+  25% {
+    transform: translate(4px, -3px) rotate(6deg);
+  }
+
+  50% {
+    transform: translate(0, 2px) rotate(-2deg);
+  }
+
+  75% {
+    transform: translate(-4px, -2px) rotate(5deg);
+  }
+
+  100% {
+    transform: translate(0, 0) rotate(-4deg);
+  }
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -865,6 +1778,179 @@ onBeforeUnmount(() => {
   &:disabled {
     cursor: not-allowed;
     opacity: 0.52;
+  }
+}
+
+.close-confirm {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+
+  &__overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.28);
+    backdrop-filter: blur(2px);
+  }
+
+  &__panel {
+    position: relative;
+    width: 520px;
+    overflow: hidden;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.2);
+  }
+
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 18px 18px 12px;
+    border-bottom: 1px solid var(--color-line);
+  }
+
+  &__header span {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--color-text-soft);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  &__header h2 {
+    margin: 0;
+    color: var(--color-text);
+    font-size: 1.05rem;
+    line-height: 1.25;
+  }
+
+  &__icon-button {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: #ffffff;
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+
+  &__icon-button:hover {
+    border-color: #c8d2df;
+    background: #f7f9fc;
+    color: var(--color-text);
+  }
+
+  &__body {
+    display: flex;
+    gap: 14px;
+    padding: 18px;
+  }
+
+  &__mark {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 1px solid #b7d9f6;
+    border-radius: 8px;
+    background: #e8f4ff;
+    color: #0b78d0;
+  }
+
+  &__copy {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    padding-top: 2px;
+  }
+
+  &__copy strong {
+    color: var(--color-primary);
+    font-size: 1rem;
+    line-height: 1.35;
+  }
+
+  &__copy span {
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    line-height: 1.6;
+  }
+
+  &__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 12px 18px;
+    border-top: 1px solid var(--color-line);
+    background: var(--color-panel-soft);
+  }
+
+  &__remember {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 600;
+  }
+
+  &__remember input {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--color-primary);
+  }
+
+  &__actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  &__button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: #ffffff;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 700;
+  }
+
+  &__button:hover {
+    border-color: #b9ccda;
+    background: #f7f9fc;
+  }
+
+  &__button--primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #ffffff;
+  }
+
+  &__button--primary:hover {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
   }
 }
 </style>

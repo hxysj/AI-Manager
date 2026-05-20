@@ -138,7 +138,7 @@
       </section>
     </div>
 
-    <section v-else class="settings-view__panel">
+    <section v-else-if="activeTab === 'data'" class="settings-view__panel">
       <div class="settings-view__panel-header">
         <div>
           <h2>数据管理</h2>
@@ -222,6 +222,89 @@
         </div>
       </section>
     </section>
+
+    <section v-else class="settings-view__panel">
+      <div class="settings-view__panel-header">
+        <div>
+          <h2>系统设置</h2>
+          <span>控制桌面端窗口关闭按钮的默认行为。</span>
+        </div>
+      </div>
+
+      <div class="settings-view__system-list">
+        <article class="settings-view__system-card">
+          <div class="settings-view__data-copy">
+            <strong>关闭按钮行为</strong>
+            <span
+              >点击窗口关闭按钮时，选择询问、最小化到托盘或直接关闭软件。</span
+            >
+          </div>
+          <div class="settings-view__choice-group">
+            <label
+              v-for="item in closeActionItems"
+              :key="item.value"
+              :class="[
+                'settings-view__choice',
+                {
+                  'settings-view__choice--active':
+                    draft.system.closeAction === item.value
+                }
+              ]"
+            >
+              <input
+                v-model="draft.system.closeAction"
+                type="radio"
+                name="close-action"
+                :value="item.value"
+              />
+              <span>{{ item.label }}</span>
+            </label>
+          </div>
+        </article>
+        <article class="settings-view__system-card">
+          <div class="settings-view__data-copy">
+            <strong>悬浮快速切换窗</strong>
+            <span>开启后，主界面最小化时显示 Provider 快速切换悬浮窗。</span>
+          </div>
+          <div class="settings-view__choice-group">
+            <label
+              :class="[
+                'settings-view__choice',
+                {
+                  'settings-view__choice--active':
+                    draft.system.quickSwitchVisible
+                }
+              ]"
+            >
+              <input
+                v-model="draft.system.quickSwitchVisible"
+                type="radio"
+                name="quick-switch-visible"
+                :value="true"
+              />
+              <span>显示</span>
+            </label>
+            <label
+              :class="[
+                'settings-view__choice',
+                {
+                  'settings-view__choice--active':
+                    !draft.system.quickSwitchVisible
+                }
+              ]"
+            >
+              <input
+                v-model="draft.system.quickSwitchVisible"
+                type="radio"
+                name="quick-switch-visible"
+                :value="false"
+              />
+              <span>隐藏</span>
+            </label>
+          </div>
+        </article>
+      </div>
+    </section>
   </section>
 </template>
 
@@ -233,6 +316,7 @@ import {
   FolderOpen,
   RotateCcw,
   Save,
+  Settings,
   Upload,
   UploadCloud
 } from "lucide-vue-next"
@@ -277,6 +361,10 @@ const draft = reactive({
     password: "",
     fileName: "",
     lastUpdatedAt: 0
+  },
+  system: {
+    closeAction: "ask",
+    quickSwitchVisible: true
   }
 })
 
@@ -296,12 +384,32 @@ const tabs = [
     id: "data",
     label: "数据管理",
     icon: Download
+  },
+  {
+    id: "system",
+    label: "系统设置",
+    icon: Settings
+  }
+]
+
+const closeActionItems = [
+  {
+    value: "ask",
+    label: "每次询问"
+  },
+  {
+    value: "minimize",
+    label: "最小化到托盘"
+  },
+  {
+    value: "quit",
+    label: "直接关闭"
   }
 ]
 
 const cliItems = computed(() => {
   return Object.entries(cliNames).map(([id, name]) => {
-    const detected = props.cliTargets.find((item) => item.id === id)
+    const detected = props.cliTargets.find(item => item.id === id)
 
     return {
       id,
@@ -331,8 +439,12 @@ function syncDraft() {
   draft.cloudSync.password = props.appSettings.cloudSync?.password || ""
   draft.cloudSync.fileName =
     props.appSettings.cloudSync?.fileName || "ai-manager.aimbackup"
-  draft.cloudSync.lastUpdatedAt =
-    Number(props.appSettings.cloudSync?.lastUpdatedAt || 0)
+  draft.cloudSync.lastUpdatedAt = Number(
+    props.appSettings.cloudSync?.lastUpdatedAt || 0
+  )
+  draft.system.closeAction = props.appSettings.system?.closeAction || "ask"
+  draft.system.quickSwitchVisible =
+    props.appSettings.system?.quickSwitchVisible !== false
 }
 
 async function selectDirectory(key, currentPath) {
@@ -373,6 +485,10 @@ function submitSettings() {
       password: draft.cloudSync.password,
       fileName: draft.cloudSync.fileName,
       lastUpdatedAt: draft.cloudSync.lastUpdatedAt
+    },
+    system: {
+      closeAction: draft.system.closeAction,
+      quickSwitchVisible: draft.system.quickSwitchVisible
     }
   })
 }
@@ -646,6 +762,12 @@ watch(
     gap: 10px;
   }
 
+  &__system-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
   &__cli-card {
     display: flex;
     flex-direction: column;
@@ -720,6 +842,51 @@ watch(
     border: 1px solid var(--color-line);
     border-radius: 8px;
     background: var(--color-panel-soft);
+  }
+
+  &__system-card {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 13px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel-soft);
+  }
+
+  &__choice-group {
+    display: flex;
+    flex: none;
+    gap: 6px;
+    padding: 4px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  &__choice {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 6px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+
+  &__choice input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  &__choice--active {
+    background: #edf1f7;
+    color: var(--color-primary);
   }
 
   &__cloud {

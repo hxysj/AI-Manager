@@ -1,6 +1,6 @@
 <template>
   <section class="providers-view">
-    <template v-if="viewMode === 'list'">
+    <div v-if="viewMode === 'list'" class="providers-view__list-shell">
       <header class="providers-view__toolbar">
         <div class="providers-view__cli-tabs">
           <button
@@ -291,7 +291,7 @@
           当前 CLI 还没有 Provider。
         </div>
       </section>
-    </template>
+    </div>
 
     <template v-else>
       <header class="providers-view__edit-header">
@@ -1040,7 +1040,8 @@
         <pre
           v-if="runtimeConfigContent"
           class="providers-view__drawer-json providers-view__runtime-config-json"
-        >{{ runtimeConfigContent }}</pre>
+          >{{ runtimeConfigContent }}</pre
+        >
         <p v-else class="providers-view__drawer-empty">当前系统配置为空</p>
       </section>
     </BaseModal>
@@ -1251,12 +1252,12 @@ const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
   import: "default"
 })
 const iconOptions = Object.keys(iconModules)
-  .map((item) => item.split("/").pop())
+  .map(item => item.split("/").pop())
   .sort((left, right) => left.localeCompare(right))
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
-  return props.cliTargets.filter((item) => {
+  return props.cliTargets.filter(item => {
     return props.runtimeConfigSchemas[item.id]?.enabled
   })
 })
@@ -1276,22 +1277,22 @@ const activeRuntimeSchema = computed(() => {
 
 const activeCliName = computed(() => {
   return (
-    visibleCliTargets.value.find((item) => item.id === activeCli.value)?.name ||
+    visibleCliTargets.value.find(item => item.id === activeCli.value)?.name ||
     activeCli.value ||
     "Runtime"
   )
 })
 
 const selectedProvider = computed(() => {
-  return props.providers.find((item) => item.id === draft.id) || null
+  return props.providers.find(item => item.id === draft.id) || null
 })
 
 const scopedProviders = computed(() => {
-  return props.providers.filter((item) => item.cli === activeCli.value)
+  return props.providers.filter(item => item.cli === activeCli.value)
 })
 
 const mixedItems = computed(() => {
-  const providerItems = scopedProviders.value.map((provider) => ({
+  const providerItems = scopedProviders.value.map(provider => ({
     type: "provider",
     provider,
     key: `provider:${provider.id}`,
@@ -1306,11 +1307,16 @@ const mixedItems = computed(() => {
   }))
   const accountItems =
     activeCli.value === "codex"
-      ? props.codexAccounts.map((account) => ({
+      ? props.codexAccounts.map(account => ({
           type: "account",
           account,
           key: `account:${account.id}`,
-          className: "providers-view__account-card",
+          className: [
+            "providers-view__account-card",
+            {
+              "providers-view__account-card--active": account.active
+            }
+          ],
           createdAt: account.createdAt || account.updatedAt || 0
         }))
       : []
@@ -1321,9 +1327,7 @@ const mixedItems = computed(() => {
 })
 
 const profileMap = computed(() => {
-  return Object.fromEntries(
-    props.runtimeProfiles.map((item) => [item.cli, item])
-  )
+  return Object.fromEntries(props.runtimeProfiles.map(item => [item.cli, item]))
 })
 
 const runtimeState = computed(() => {
@@ -1351,14 +1355,14 @@ const runtimeConfigDescription = computed(() => {
 const filteredIconOptions = computed(() => {
   const keyword = iconKeyword.value.toLowerCase()
 
-  return iconOptions.filter((item) =>
+  return iconOptions.filter(item =>
     iconLabel(item).toLowerCase().includes(keyword)
   )
 })
 
 const configPreviewMap = computed(() => {
   return Object.fromEntries(
-    activeRuntimeSchema.value.configFiles.map((file) => [
+    activeRuntimeSchema.value.configFiles.map(file => [
       file.name,
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
@@ -1429,7 +1433,7 @@ function applyConfigTemplate(template) {
 }
 
 function ensureActiveCli() {
-  if (visibleCliTargets.value.find((item) => item.id === activeCli.value)) {
+  if (visibleCliTargets.value.find(item => item.id === activeCli.value)) {
     return
   }
 
@@ -1644,7 +1648,7 @@ function rateLimitWindows(rateLimit) {
   return [
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
-  ].filter((item) => item.window)
+  ].filter(item => item.window)
 }
 
 function formatPlanName(value) {
@@ -1784,8 +1788,7 @@ function clearDraft() {
 
 function firstModelName(providerId) {
   return (
-    props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
-    ""
+    props.runtimeModels.find(item => item.providerId === providerId)?.name || ""
   )
 }
 
@@ -1963,8 +1966,8 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  (accounts) => {
-    accounts.forEach((account) => {
+  accounts => {
+    accounts.forEach(account => {
       codexAccountProxyDrafts[account.id] = account.proxy || ""
     })
   },
@@ -1980,10 +1983,10 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  (accounts) => {
+  accounts => {
     if (
       codexAccountDetail.value &&
-      !accounts.find((item) => item.id === codexAccountDetail.value.id)
+      !accounts.find(item => item.id === codexAccountDetail.value.id)
     ) {
       closeCodexAccountDetail()
     }
@@ -1993,10 +1996,10 @@ watch(
 
 watch(
   () => props.providers,
-  (providers) => {
+  providers => {
     if (
       providerDetail.value &&
-      !providers.find((item) => item.id === providerDetail.value.id)
+      !providers.find(item => item.id === providerDetail.value.id)
     ) {
       closeProviderDetail()
     }
@@ -2008,7 +2011,6 @@ watch(
 <style scoped lang="less">
 .providers-view {
   display: flex;
-  height: 100%;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
@@ -2023,6 +2025,15 @@ watch(
     padding: 0 14px;
     border-bottom: 1px solid #edf0f3;
     background: #ffffff;
+  }
+
+  &__list-shell {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
   }
 
   &__cli-tabs,
@@ -2091,6 +2102,10 @@ watch(
     background: transparent;
     color: #667085;
     cursor: pointer;
+    transition:
+      background 0.18s ease,
+      color 0.18s ease,
+      transform 0.18s ease;
   }
 
   &__system-config {
@@ -2109,10 +2124,22 @@ watch(
   &__icon-button {
     width: 30px;
     height: 30px;
+    border-radius: 8px;
+  }
+
+  &__icon-button:hover {
+    background: #f3f7fb;
+    color: #1682ff;
+    transform: translateY(-1px);
   }
 
   &__icon-button--danger {
     color: #98a2b3;
+  }
+
+  &__icon-button--danger:hover {
+    background: #fff1f0;
+    color: #d92d20;
   }
 
   &__add {
@@ -2161,8 +2188,10 @@ watch(
 
   &__list-panel {
     display: flex;
-    overflow: auto;
-    flex: 1;
+    height: calc(100vh - 98px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    flex: 1 1 auto;
     min-height: 0;
     flex-direction: column;
     gap: 10px;
@@ -2205,17 +2234,42 @@ watch(
     display: flex;
     align-items: center;
     gap: 14px;
-    min-height: 92px;
     padding: 18px 18px 16px 12px;
     border: 1px solid #edf1f6;
     border-radius: 12px;
     background: #ffffff;
     box-shadow: 0 3px 12px rgba(15, 23, 42, 0.06);
+    transition:
+      border-color 0.18s ease,
+      background 0.18s ease,
+      box-shadow 0.18s ease,
+      transform 0.18s ease;
   }
 
-  &__provider-card--active {
+  &__provider-card--active,
+  &__account-card--active {
+    border-color: #9fd1ff;
+    background: #f7fbff;
+    box-shadow:
+      0 8px 22px rgba(22, 130, 255, 0.12),
+      inset 4px 0 0 #1682ff;
+  }
+
+  &__provider-card:hover,
+  &__account-card:hover {
     border-color: #d8ecff;
-    background: #ffffff;
+    background: #fbfdff;
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
+    transform: translateY(-2px);
+  }
+
+  &__provider-card--active:hover,
+  &__account-card--active:hover {
+    border-color: #9fd1ff;
+    background: #f7fbff;
+    box-shadow:
+      0 12px 26px rgba(22, 130, 255, 0.16),
+      inset 4px 0 0 #1682ff;
   }
 
   &__account-panel {
@@ -2418,6 +2472,10 @@ watch(
     background: #f8fafc;
     color: #ff6a00;
     font-weight: 700;
+    transition:
+      border-color 0.18s ease,
+      background 0.18s ease,
+      transform 0.18s ease;
   }
 
   &__shield,
@@ -2434,6 +2492,24 @@ watch(
   &__avatar-icon {
     width: 22px;
     height: 22px;
+  }
+
+  &__provider-card:hover &__shield,
+  &__provider-card:hover &__avatar,
+  &__account-card:hover &__shield,
+  &__account-card:hover &__avatar {
+    border-color: #cfe6ff;
+    background: #eef7ff;
+    transform: scale(1.06);
+  }
+
+  &__provider-card--active &__shield,
+  &__provider-card--active &__avatar,
+  &__account-card--active &__shield,
+  &__account-card--active &__avatar {
+    border-color: #b7dcff;
+    background: #eaf5ff;
+    color: #1682ff;
   }
 
   &__provider-main {
