@@ -7,6 +7,13 @@ function toPlainPayload(payload) {
 contextBridge.exposeInMainWorld("aiManager", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
   refresh: () => ipcRenderer.invoke("app:refresh"),
+  showMainPanel: () => ipcRenderer.invoke("quick-switch:show-main"),
+  setQuickSwitchCollapsed: payload =>
+    ipcRenderer.invoke("quick-switch:set-collapsed", toPlainPayload(payload)),
+  moveQuickSwitchBy: payload =>
+    ipcRenderer.invoke("quick-switch:move-by", toPlainPayload(payload)),
+  handleCloseAction: payload =>
+    ipcRenderer.invoke("app:close-action", toPlainPayload(payload)),
   saveSettings: payload =>
     ipcRenderer.invoke("settings:save", toPlainPayload(payload)),
   exportDataBackup: () => ipcRenderer.invoke("data:export"),
@@ -123,5 +130,10 @@ contextBridge.exposeInMainWorld("aiManager", {
     const handler = (_, state) => callback(state)
     ipcRenderer.on("state:changed", handler)
     return () => ipcRenderer.removeListener("state:changed", handler)
+  },
+  onCloseRequested: callback => {
+    const handler = () => callback()
+    ipcRenderer.on("app:close-requested", handler)
+    return () => ipcRenderer.removeListener("app:close-requested", handler)
   }
 })
