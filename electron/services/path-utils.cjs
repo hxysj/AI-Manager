@@ -73,12 +73,18 @@ function serializeAppSettingsPaths(input = {}) {
     cliConfigPaths: {
       claude: serializePortablePath(input.cliConfigPaths?.claude),
       codex: serializePortablePath(input.cliConfigPaths?.codex),
-      gemini: serializePortablePath(input.cliConfigPaths?.gemini)
+      gemini: serializePortablePath(input.cliConfigPaths?.gemini),
+      trae: serializePortablePath(input.cliConfigPaths?.trae),
+      "trae-cn": serializePortablePath(input.cliConfigPaths?.["trae-cn"])
     },
     defaultCliConfigPaths: {
       claude: serializePortablePath(input.defaultCliConfigPaths?.claude),
       codex: serializePortablePath(input.defaultCliConfigPaths?.codex),
-      gemini: serializePortablePath(input.defaultCliConfigPaths?.gemini)
+      gemini: serializePortablePath(input.defaultCliConfigPaths?.gemini),
+      trae: serializePortablePath(input.defaultCliConfigPaths?.trae),
+      "trae-cn": serializePortablePath(
+        input.defaultCliConfigPaths?.["trae-cn"]
+      )
     }
   }
 }

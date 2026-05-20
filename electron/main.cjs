@@ -34,7 +34,9 @@ const portableHomePrefix = path.join(path.dirname(os.homedir()), "%USERNAME%")
 const defaultCliConfigPaths = {
   claude: path.join(portableHomePrefix, ".claude"),
   codex: path.join(portableHomePrefix, ".codex"),
-  gemini: path.join(portableHomePrefix, ".gemini")
+  gemini: path.join(portableHomePrefix, ".gemini"),
+  trae: path.join(portableHomePrefix, ".trae"),
+  "trae-cn": path.join(portableHomePrefix, ".trae-cn")
 }
 const defaultCloudSyncSettings = {
   provider: "jianguoyun",
@@ -75,6 +77,14 @@ function normalizeAppSettings(input = {}) {
       ),
       gemini: resolvePortablePath(
         String(cliConfigPaths.gemini || defaultCliConfigPaths.gemini).trim()
+      ),
+      trae: resolvePortablePath(
+        String(cliConfigPaths.trae || defaultCliConfigPaths.trae).trim()
+      ),
+      "trae-cn": resolvePortablePath(
+        String(
+          cliConfigPaths["trae-cn"] || defaultCliConfigPaths["trae-cn"]
+        ).trim()
       )
     },
     defaultCliConfigPaths,

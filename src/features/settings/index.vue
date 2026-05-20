@@ -131,6 +131,7 @@
             <div class="settings-view__cli-meta">
               <span>配置目录：{{ item.detectedPath || item.defaultPath }}</span>
               <span>Skill 目录：{{ item.skillsPath || "未检测" }}</span>
+              <span v-if="item.editionText">版本类型：{{ item.editionText }}</span>
               <span>版本：{{ item.version || "未检测" }}</span>
             </div>
           </article>
@@ -268,7 +269,9 @@ const draft = reactive({
   cliConfigPaths: {
     claude: "",
     codex: "",
-    gemini: ""
+    gemini: "",
+    trae: "",
+    "trae-cn": ""
   },
   cloudSync: {
     provider: "jianguoyun",
@@ -283,7 +286,9 @@ const draft = reactive({
 const cliNames = {
   claude: "Claude",
   codex: "Codex",
-  gemini: "Gemini"
+  gemini: "Gemini",
+  trae: "Trae",
+  "trae-cn": "Trae CN"
 }
 
 const tabs = [
@@ -312,17 +317,31 @@ const cliItems = computed(() => {
         : "未发现配置目录与可执行文件",
       detectedPath: detected?.configPath || "",
       skillsPath: detected?.skillsPath || "",
+      editionText: formatCliEdition(detected?.edition),
       version: detected?.version || "",
       defaultPath: props.appSettings.defaultCliConfigPaths?.[id] || ""
     }
   })
 })
 
+function formatCliEdition(edition) {
+  const editionMap = {
+    cn: "国内版",
+    intl: "国际版",
+    unknown: "未识别"
+  }
+
+  return editionMap[edition] || ""
+}
+
 function syncDraft() {
   draft.dataPath = props.appSettings.dataPath || ""
   draft.cliConfigPaths.claude = props.appSettings.cliConfigPaths?.claude || ""
   draft.cliConfigPaths.codex = props.appSettings.cliConfigPaths?.codex || ""
   draft.cliConfigPaths.gemini = props.appSettings.cliConfigPaths?.gemini || ""
+  draft.cliConfigPaths.trae = props.appSettings.cliConfigPaths?.trae || ""
+  draft.cliConfigPaths["trae-cn"] =
+    props.appSettings.cliConfigPaths?.["trae-cn"] || ""
   draft.cloudSync.provider = "jianguoyun"
   draft.cloudSync.webdavUrl =
     props.appSettings.cloudSync?.webdavUrl ||
@@ -364,7 +383,9 @@ function submitSettings() {
     cliConfigPaths: {
       claude: draft.cliConfigPaths.claude,
       codex: draft.cliConfigPaths.codex,
-      gemini: draft.cliConfigPaths.gemini
+      gemini: draft.cliConfigPaths.gemini,
+      trae: draft.cliConfigPaths.trae,
+      "trae-cn": draft.cliConfigPaths["trae-cn"]
     },
     cloudSync: {
       provider: draft.cloudSync.provider,
