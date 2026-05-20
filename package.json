@@ -1,6 +1,6 @@
 {
   "name": "monkey-thief",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
   "config": {
     "electron_mirror": "https://npmmirror.com/mirrors/electron/"

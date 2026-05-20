@@ -985,6 +985,19 @@ class RuntimeProviderService {
     }
   }
 
+  async getRuntimeConfig(cli, cliTarget) {
+    if (!cliTarget?.configPath) {
+      throw new Error("CLI 配置目录不存在")
+    }
+
+    const runtimeFiles = await this.readRuntimeConfigFiles(cli, cliTarget)
+
+    return {
+      runtimeContent: combineConfigContents(runtimeFiles),
+      runtimePath: this.formatRuntimePath(cliTarget.configPath, runtimeFiles)
+    }
+  }
+
   async refreshDrift(cliTargets) {
     for (const cli of Object.keys(runtimeConfigSchemas)) {
       const schema = runtimeConfigSchemas[cli]
