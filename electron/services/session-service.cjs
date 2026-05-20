@@ -1,6 +1,8 @@
 const crypto = require("node:crypto")
+const nodeFs = require("node:fs")
 const fs = require("node:fs/promises")
 const path = require("node:path")
+const readline = require("node:readline")
 const chokidar = require("chokidar")
 
 const ignoredDirectories = new Set(["node_modules", ".git", "dist", "build"])
@@ -125,6 +127,22 @@ function normalizeMessage(record) {
   }
 }
 
+function collectMetadataItem(metadata, item) {
+  const payload = item.payload || item
+  metadata.title = metadata.title || payload.title || payload.metadata?.title
+  metadata.cwd = metadata.cwd || payload.cwd || payload.metadata?.cwd
+  metadata.workspace =
+    metadata.workspace || payload.workspace || payload.metadata?.workspace
+  metadata.projectPath =
+    metadata.projectPath ||
+    payload.projectPath ||
+    payload.metadata?.projectPath
+  metadata.model = metadata.model || payload.model || payload.message?.model
+  metadata.tokenCount =
+    metadata.tokenCount || payload.tokenCount || payload.usage?.total_tokens
+  return metadata
+}
+
 class BaseSessionParser {
   parse(content, extension) {
     if (extension === ".json") {
@@ -164,21 +182,49 @@ class BaseSessionParser {
 
   collectMetadata(records) {
     return records.reduce((metadata, item) => {
-      const payload = item.payload || item
-      return {
-        title: metadata.title || payload.title || payload.metadata?.title,
-        cwd: metadata.cwd || payload.cwd || payload.metadata?.cwd,
-        workspace:
-          metadata.workspace || payload.workspace || payload.metadata?.workspace,
-        projectPath:
-          metadata.projectPath ||
-          payload.projectPath ||
-          payload.metadata?.projectPath,
-        model: metadata.model || payload.model || payload.message?.model,
-        tokenCount:
-          metadata.tokenCount || payload.tokenCount || payload.usage?.total_tokens
-      }
+      return collectMetadataItem(metadata, item)
     }, {})
+  }
+
+  createMetadataState() {
+    return {
+      metadata: {},
+      firstUserContent: "",
+      firstAssistantContent: "",
+      messageCount: 0,
+      hasMessageRole: false
+    }
+  }
+
+  collectMetadataRecord(state, record) {
+    collectMetadataItem(state.metadata, record)
+    const message = normalizeMessage(record)
+
+    if (!this.includeMetadataMessage(record, message)) {
+      return
+    }
+
+    state.messageCount += 1
+
+    if (!state.firstUserContent && message.role === "user") {
+      state.firstUserContent = message.content
+    }
+
+    if (!state.firstAssistantContent && message.role === "assistant") {
+      state.firstAssistantContent = message.content
+    }
+
+    if (["user", "assistant", "tool"].includes(message.role)) {
+      state.hasMessageRole = true
+    }
+  }
+
+  includeMetadataMessage(_, message) {
+    return Boolean(message.content)
+  }
+
+  isValidMetadata(state) {
+    return state.messageCount > 0
   }
 
   isValidSession(parsed) {
@@ -187,6 +233,15 @@ class BaseSessionParser {
 }
 
 class ClaudeSessionParser extends BaseSessionParser {
+  collectMetadataRecord(state, record, line) {
+    state.hasClaudeSignal =
+      state.hasClaudeSignal ||
+      line.includes("messages") ||
+      line.includes("role") ||
+      line.includes("assistant")
+    super.collectMetadataRecord(state, record, line)
+  }
+
   isValidSession(parsed, content) {
     const hasMessageRole = parsed.messages.some((item) =>
       ["user", "assistant", "tool"].includes(item.role)
@@ -197,6 +252,10 @@ class ClaudeSessionParser extends BaseSessionParser {
       content.includes("assistant")
 
     return parsed.messages.length > 0 && hasMessageRole && hasClaudeSignal
+  }
+
+  isValidMetadata(state) {
+    return state.messageCount > 0 && state.hasMessageRole && state.hasClaudeSignal
   }
 }
 
@@ -225,6 +284,20 @@ class CodexSessionParser extends BaseSessionParser {
       ["user", "assistant", "tool"].includes(item.role)
     )
   }
+
+  includeMetadataMessage(record, message) {
+    const payload = record.payload || record
+
+    if (payload.type !== "message" && payload.type !== "function_call") {
+      return false
+    }
+
+    return Boolean(message.content || message.toolCalls.length)
+  }
+
+  isValidMetadata(state) {
+    return state.hasMessageRole
+  }
 }
 
 class GeminiSessionParser extends BaseSessionParser {
@@ -238,6 +311,10 @@ class OpenCodeSessionParser extends BaseSessionParser {
     return parsed.messages.some((item) =>
       ["user", "assistant", "tool"].includes(item.role)
     )
+  }
+
+  isValidMetadata(state) {
+    return state.hasMessageRole
   }
 }
 
@@ -374,7 +451,7 @@ class SessionService {
 
         for (const filePath of files) {
           try {
-            const parsed = await this.parseSession(cliTarget, filePath)
+            const parsed = await this.parseSessionMetadata(cliTarget, filePath)
 
             if (!parsed) {
               continue
@@ -458,6 +535,81 @@ class SessionService {
       archived: false,
       deleted: false,
       messages: parsed.messages
+    }
+  }
+
+  async parseSessionMetadata(cliTarget, rawPath) {
+    const extension = path.extname(rawPath)
+    const stat = await fs.stat(rawPath)
+    const parser = this.parsers[getCliType(cliTarget)] || this.parsers.default
+    let parsed = null
+
+    if (extension === ".json") {
+      const content = await fs.readFile(rawPath, "utf8")
+      const fullParsed = parser.parse(content, extension)
+
+      if (!parser.isValidSession(fullParsed, content)) {
+        return null
+      }
+
+      parsed = {
+        metadata: fullParsed.metadata,
+        firstUserContent:
+          fullParsed.messages.find((item) => item.role === "user")?.content || "",
+        firstAssistantContent:
+          fullParsed.messages.find((item) => item.role === "assistant")?.content || "",
+        messageCount: fullParsed.messages.length
+      }
+    } else {
+      const state = parser.createMetadataState()
+      const lines = readline.createInterface({
+        input: nodeFs.createReadStream(rawPath, { encoding: "utf8" }),
+        crlfDelay: Infinity
+      })
+
+      for await (const line of lines) {
+        const text = line.trim()
+
+        if (!text) {
+          continue
+        }
+
+        parser.collectMetadataRecord(state, JSON.parse(text), text)
+      }
+
+      if (!parser.isValidMetadata(state)) {
+        return null
+      }
+
+      parsed = state
+    }
+
+    const id = createSessionId(rawPath)
+    const projectPath = await this.resolveProjectPath(
+      cliTarget,
+      rawPath,
+      parsed.metadata
+    )
+    const title =
+      parsed.metadata.title || truncateText(parsed.firstUserContent, 50)
+
+    return {
+      id,
+      cli: getCliType(cliTarget),
+      cliName: cliTarget.name || cliTarget.cliName,
+      title: title || path.basename(rawPath),
+      summary: truncateText(parsed.firstAssistantContent, 120),
+      projectPath,
+      projectName: projectPath ? path.basename(projectPath) : undefined,
+      model: parsed.metadata.model,
+      rawPath,
+      createdAt: stat.birthtimeMs,
+      updatedAt: stat.mtimeMs,
+      messageCount: parsed.messageCount,
+      tokenCount: parsed.metadata.tokenCount,
+      pinned: false,
+      archived: false,
+      deleted: false
     }
   }
 
