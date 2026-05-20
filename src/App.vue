@@ -244,12 +244,16 @@ const state = reactive({
     cliConfigPaths: {
       claude: "",
       codex: "",
-      gemini: ""
+      gemini: "",
+      trae: "",
+      "trae-cn": ""
     },
     defaultCliConfigPaths: {
       claude: "",
       codex: "",
-      gemini: ""
+      gemini: "",
+      trae: "",
+      "trae-cn": ""
     },
     cloudSync: {
       provider: "jianguoyun",

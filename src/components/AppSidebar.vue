@@ -104,6 +104,8 @@ const colorMap = {
   claude: '#c58f72',
   codex: '#7d8aa3',
   gemini: '#9fb5d6',
+  trae: '#4d8dff',
+  'trae-cn': '#2fbea2',
   ['open' + 'code']: '#aaa3c7',
   default: '#a8b0bd'
 }
@@ -113,6 +115,7 @@ const colorMap = {
 .app-sidebar {
   display: flex;
   width: 260px;
+  min-height: 0;
   flex-direction: column;
   border-right: 1px solid var(--color-line);
   background: var(--color-panel);
@@ -261,6 +264,11 @@ const colorMap = {
   }
 
   &__section {
+    display: flex;
+    max-height: 42%;
+    min-height: 0;
+    flex: 0 1 auto;
+    flex-direction: column;
     padding: 0 12px 14px;
     border-top: 1px solid var(--color-line);
   }
@@ -276,8 +284,11 @@ const colorMap = {
 
   &__cli-list {
     display: flex;
+    overflow-y: auto;
+    min-height: 0;
     flex-direction: column;
     gap: 8px;
+    padding-right: 2px;
   }
 
   &__cli-card {

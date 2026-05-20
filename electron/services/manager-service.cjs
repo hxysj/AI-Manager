@@ -556,6 +556,14 @@ class ManagerService extends EventEmitter {
           gemini: resolvePortablePath(
             backup.appSettings?.cliConfigPaths?.gemini ||
               this.appSettings.cliConfigPaths.gemini
+          ),
+          trae: resolvePortablePath(
+            backup.appSettings?.cliConfigPaths?.trae ||
+              this.appSettings.cliConfigPaths.trae
+          ),
+          "trae-cn": resolvePortablePath(
+            backup.appSettings?.cliConfigPaths?.["trae-cn"] ||
+              this.appSettings.cliConfigPaths["trae-cn"]
           )
         }
       }
@@ -619,6 +627,18 @@ class ManagerService extends EventEmitter {
         configPath: resolvePortablePath(item.configPath),
         skillsPath: resolvePortablePath(item.skillsPath),
         sessionsPath: resolvePortablePath(item.sessionsPath),
+        dataRoot: resolvePortablePath(item.dataRoot),
+        dataRoots: Array.isArray(item.dataRoots)
+          ? item.dataRoots.map((value) => resolvePortablePath(value))
+          : item.dataRoots,
+        profile: item.profile
+          ? Object.fromEntries(
+              Object.entries(item.profile).map(([key, value]) => [
+                key,
+                resolvePortablePath(value)
+              ])
+            )
+          : item.profile,
         sessionPaths: Array.isArray(item.sessionPaths)
           ? item.sessionPaths.map((value) => resolvePortablePath(value))
           : item.sessionPaths
@@ -808,11 +828,34 @@ class ManagerService extends EventEmitter {
           sessionPaths: detected.sessionPaths || previous.sessionPaths,
           sessionScanRules:
             detected.sessionScanRules || previous.sessionScanRules,
+          dataRoot:
+            "dataRoot" in detected ? detected.dataRoot : previous.dataRoot,
+          dataRoots:
+            "dataRoots" in detected ? detected.dataRoots : previous.dataRoots,
+          edition: "edition" in detected ? detected.edition : previous.edition,
+          profile: "profile" in detected ? detected.profile : previous.profile,
           version: detected.version || previous.version,
           detectedAt: detected.detectedAt || previous.detectedAt
         }
 
         if (preferDetectedPaths) {
+          merged.configPath = detected.configPath || previous.configPath
+          merged.skillsPath = detected.skillsPath || previous.skillsPath
+          merged.sessionsPath = detected.sessionsPath || previous.sessionsPath
+          merged.dataRoot =
+            "dataRoot" in detected ? detected.dataRoot : previous.dataRoot
+          merged.dataRoots =
+            "dataRoots" in detected ? detected.dataRoots : previous.dataRoots
+          merged.edition =
+            "edition" in detected ? detected.edition : previous.edition
+          merged.profile =
+            "profile" in detected ? detected.profile : previous.profile
+          merged.sessionPaths = detected.sessionPaths || previous.sessionPaths
+          merged.sessionScanRules =
+            detected.sessionScanRules || previous.sessionScanRules
+        }
+
+        if (detected.type === "trae") {
           merged.configPath = detected.configPath || previous.configPath
           merged.skillsPath = detected.skillsPath || previous.skillsPath
           merged.sessionsPath = detected.sessionsPath || previous.sessionsPath
@@ -851,6 +894,18 @@ class ManagerService extends EventEmitter {
       configPath: serializePortablePath(item.configPath),
       skillsPath: serializePortablePath(item.skillsPath),
       sessionsPath: serializePortablePath(item.sessionsPath),
+      dataRoot: serializePortablePath(item.dataRoot),
+      dataRoots: Array.isArray(item.dataRoots)
+        ? item.dataRoots.map((value) => serializePortablePath(value))
+        : item.dataRoots,
+      profile: item.profile
+        ? Object.fromEntries(
+            Object.entries(item.profile).map(([key, value]) => [
+              key,
+              serializePortablePath(value)
+            ])
+          )
+        : item.profile,
       sessionPaths: Array.isArray(item.sessionPaths)
         ? item.sessionPaths.map((value) => serializePortablePath(value))
         : item.sessionPaths
