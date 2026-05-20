@@ -1856,6 +1856,13 @@ class ManagerService extends EventEmitter {
     )
   }
 
+  async getRuntimeConfig(input) {
+    return this.runtimeProviderService.getRuntimeConfig(
+      input.cli,
+      this.state.cliTargets.find((item) => item.id === input.cli)
+    )
+  }
+
   async resolveRuntimeDrift(input) {
     await this.runtimeProviderService.resolveDrift(
       input,

@@ -635,6 +635,10 @@ function registerIpc() {
     return managerService.compareRuntime(payload)
   })
 
+  ipcMain.handle("runtime:config", async (_, payload) => {
+    return managerService.getRuntimeConfig(payload)
+  })
+
   ipcMain.handle("runtime:resolve-drift", async (_, payload) => {
     return managerService.resolveRuntimeDrift(payload)
   })

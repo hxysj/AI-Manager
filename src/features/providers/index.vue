@@ -23,13 +23,25 @@
           </button>
         </div>
 
-        <button
-          class="providers-view__add"
-          type="button"
-          @click="createProvider"
-        >
-          <Plus :size="22" />
-        </button>
+        <div class="providers-view__toolbar-actions">
+          <button
+            class="providers-view__system-config"
+            type="button"
+            title="查看当前系统配置"
+            aria-label="查看当前系统配置"
+            :disabled="pending"
+            @click="openRuntimeConfigDialog"
+          >
+            <Server :size="18" />
+          </button>
+          <button
+            class="providers-view__add"
+            type="button"
+            @click="createProvider"
+          >
+            <Plus :size="22" />
+          </button>
+        </div>
       </header>
 
       <section v-if="showRuntimeWarning" class="providers-view__runtime">
@@ -56,7 +68,9 @@
           :class="item.className"
         >
           <template v-if="item.type === 'account'">
-            <ShieldCheck :size="18" />
+            <span class="providers-view__shield">
+              <ShieldCheck :size="18" />
+            </span>
             <div class="providers-view__account-main">
               <div class="providers-view__account-title">
                 <strong :title="item.account.email">
@@ -86,85 +100,107 @@
                     item.account.usage.rate_limit
                   )"
                   :key="quota.key"
-                  class="providers-view__account-quota"
+                  :class="[
+                    'providers-view__account-quota',
+                    quotaLevelClass(quota.window)
+                  ]"
                 >
                   <div
                     class="providers-view__quota-bar"
                     :title="formatUnixTime(quota.window.reset_at)"
                   >
+                    <div class="providers-view__quota-title">
+                      <span class="providers-view__quota-icon"></span>
+                      <span class="providers-view__quota-name">{{
+                        formatRateWindowName(quota.window.limit_window_seconds)
+                      }}</span>
+                    </div>
                     <span
                       class="providers-view__quota-fill"
                       :style="{
-                        width: formatRateWidth(quota.window.used_percent)
+                        width: formatRateWidth(
+                          100 - (quota.window.used_percent || 0)
+                        )
                       }"
                     ></span>
-                    <strong class="providers-view__quota-text">
-                      {{
-                        formatRateWindowName(quota.window.limit_window_seconds)
-                      }}
-                      · 剩余
-                      {{ 100 - (quota.window.used_percent || 0) }}% ·
-                      {{ formatResetCountdown(quota.window.reset_at) }}后重置
-                    </strong>
+                    <div class="providers-view__quota-meta">
+                      <strong class="providers-view__quota-value">
+                        {{ 100 - (quota.window.used_percent || 0) }}% ·
+                      </strong>
+                      <span class="providers-view__quota-reset">
+                        {{ formatResetCountdown(quota.window.reset_at) }}后重置
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
             <div class="providers-view__account-actions">
-              <button
-                v-if="item.account.active"
-                class="providers-view__using"
-                type="button"
-                @click="clearCodexAccount"
-              >
-                <X :size="15" />
-                取消启用
-              </button>
-              <button
-                v-else
-                class="providers-view__enable"
-                type="button"
-                @click="enableCodexAccount(item.account)"
-              >
-                <Play :size="15" />
-                启用
-              </button>
-              <button
-                class="providers-view__icon-button"
-                type="button"
-                title="刷新额度"
-                aria-label="刷新额度"
-                @click="refreshCodexAccount(item.account)"
-              >
-                <RefreshCw :size="15" />
-              </button>
-              <button
-                class="providers-view__icon-button"
-                type="button"
-                title="查看详情"
-                aria-label="查看详情"
-                @click="openCodexAccountDetail(item.account)"
-              >
-                <Eye :size="15" />
-              </button>
-              <button
-                class="providers-view__icon-button"
-                type="button"
-                title="编辑代理"
-                aria-label="编辑代理"
-                @click="openCodexAccountProxy(item.account)"
-              >
-                <SquarePen :size="15" />
-              </button>
-              <button
-                class="providers-view__icon-button providers-view__icon-button--danger"
-                type="button"
-                title="删除账号"
-                aria-label="删除账号"
-                @click="deleteCodexAccount(item.account)"
-              >
-                <Trash2 :size="15" />
-              </button>
+              <div class="providers-view__action-main">
+                <span
+                  v-if="item.account.active"
+                  class="providers-view__state-pill"
+                >
+                  <span class="providers-view__state-dot"></span>
+                  已启用
+                </span>
+                <button
+                  v-if="item.account.active"
+                  class="providers-view__using"
+                  type="button"
+                  @click="clearCodexAccount"
+                >
+                  <X :size="15" />
+                  取消启用
+                </button>
+                <button
+                  v-else
+                  class="providers-view__enable"
+                  type="button"
+                  @click="enableCodexAccount(item.account)"
+                >
+                  <Play :size="15" />
+                  启用
+                </button>
+              </div>
+              <div class="providers-view__icon-actions">
+                <button
+                  class="providers-view__icon-button"
+                  type="button"
+                  title="刷新额度"
+                  aria-label="刷新额度"
+                  @click="refreshCodexAccount(item.account)"
+                >
+                  <RefreshCw :size="15" />
+                </button>
+                <button
+                  class="providers-view__icon-button"
+                  type="button"
+                  title="查看详情"
+                  aria-label="查看详情"
+                  @click="openCodexAccountDetail(item.account)"
+                >
+                  <Eye :size="15" />
+                </button>
+                <button
+                  class="providers-view__icon-button"
+                  type="button"
+                  title="编辑代理"
+                  aria-label="编辑代理"
+                  @click="openCodexAccountProxy(item.account)"
+                >
+                  <SquarePen :size="15" />
+                </button>
+                <button
+                  class="providers-view__icon-button providers-view__icon-button--danger"
+                  type="button"
+                  title="删除账号"
+                  aria-label="删除账号"
+                  @click="deleteCodexAccount(item.account)"
+                >
+                  <Trash2 :size="15" />
+                </button>
+              </div>
             </div>
           </template>
           <template v-else>
@@ -183,59 +219,70 @@
               <span>{{ item.provider.baseUrl || "未配置官网地址" }}</span>
             </div>
             <div class="providers-view__provider-actions">
-              <button
-                v-if="
-                  showRuntimeWarning &&
-                  profileMap[activeCli]?.providerId === item.provider.id
-                "
-                class="providers-view__compare-button"
-                type="button"
-                :disabled="pending"
-                @click.stop="openRuntimeCompareDialog"
-              >
-                对比
-              </button>
-              <button
-                v-if="profileMap[activeCli]?.providerId === item.provider.id"
-                class="providers-view__using"
-                type="button"
-                @click.stop="clearRuntime"
-              >
-                <X :size="15" />
-                取消使用
-              </button>
-              <button
-                v-else
-                class="providers-view__enable"
-                type="button"
-                @click.stop="enableProvider(item.provider)"
-              >
-                <Play :size="15" />
-                启用
-              </button>
-              <button
-                class="providers-view__icon-button"
-                type="button"
-                title="查看详情"
-                aria-label="查看详情"
-                @click.stop="openProviderDetail(item.provider)"
-              >
-                <Eye :size="16" />
-              </button>
-              <button
-                class="providers-view__icon-button"
-                type="button"
-                @click.stop="editProvider(item.provider)"
-              >
-                <SquarePen :size="16" />
-              </button>
-              <button
-                class="providers-view__icon-button providers-view__icon-button--danger"
-                type="button"
-                @click.stop="removeProvider(item.provider)"
-              >
-                <Trash2 :size="16" />
-              </button>
+              <div class="providers-view__action-main">
+                <span
+                  v-if="profileMap[activeCli]?.providerId === item.provider.id"
+                  class="providers-view__state-pill"
+                >
+                  <span class="providers-view__state-dot"></span>
+                  已启用
+                </span>
+                <button
+                  v-if="
+                    showRuntimeWarning &&
+                    profileMap[activeCli]?.providerId === item.provider.id
+                  "
+                  class="providers-view__compare-button"
+                  type="button"
+                  :disabled="pending"
+                  @click.stop="openRuntimeCompareDialog"
+                >
+                  对比
+                </button>
+                <button
+                  v-if="profileMap[activeCli]?.providerId === item.provider.id"
+                  class="providers-view__using"
+                  type="button"
+                  @click.stop="clearRuntime"
+                >
+                  <X :size="15" />
+                  取消使用
+                </button>
+                <button
+                  v-else
+                  class="providers-view__enable"
+                  type="button"
+                  @click.stop="enableProvider(item.provider)"
+                >
+                  <Play :size="15" />
+                  启用
+                </button>
+              </div>
+              <div class="providers-view__icon-actions">
+                <button
+                  class="providers-view__icon-button"
+                  type="button"
+                  title="查看详情"
+                  aria-label="查看详情"
+                  @click.stop="openProviderDetail(item.provider)"
+                >
+                  <Eye :size="16" />
+                </button>
+                <button
+                  class="providers-view__icon-button"
+                  type="button"
+                  @click.stop="editProvider(item.provider)"
+                >
+                  <SquarePen :size="16" />
+                </button>
+                <button
+                  class="providers-view__icon-button providers-view__icon-button--danger"
+                  type="button"
+                  @click.stop="removeProvider(item.provider)"
+                >
+                  <Trash2 :size="16" />
+                </button>
+              </div>
             </div>
           </template>
         </article>
@@ -983,6 +1030,22 @@
     </div>
 
     <BaseModal
+      v-if="showRuntimeConfig"
+      class="providers-view__runtime-config-modal"
+      title="当前系统配置"
+      :description="runtimeConfigDescription"
+      @close="closeRuntimeConfigDialog"
+    >
+      <section class="providers-view__runtime-config-panel">
+        <pre
+          v-if="runtimeConfigContent"
+          class="providers-view__drawer-json providers-view__runtime-config-json"
+        >{{ runtimeConfigContent }}</pre>
+        <p v-else class="providers-view__drawer-empty">当前系统配置为空</p>
+      </section>
+    </BaseModal>
+
+    <BaseModal
       v-if="showRuntimeDiff"
       class="providers-view__diff-modal"
       title="Runtime Diff"
@@ -1164,8 +1227,11 @@ const showCodexLoginModal = ref(false)
 const showCodexProxyModal = ref(false)
 const showCodexAccountDrawer = ref(false)
 const showProviderDrawer = ref(false)
+const showRuntimeConfig = ref(false)
 const showRuntimeDiff = ref(false)
 const runtimeDiffEditorRef = ref(null)
+const runtimeConfigContent = ref("")
+const runtimeConfigPath = ref("")
 const runtimeDiffPath = ref("")
 const codexLoginTab = ref("oauth")
 const codexAuthDataDraft = ref("")
@@ -1185,12 +1251,12 @@ const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
   import: "default"
 })
 const iconOptions = Object.keys(iconModules)
-  .map(item => item.split("/").pop())
+  .map((item) => item.split("/").pop())
   .sort((left, right) => left.localeCompare(right))
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
-  return props.cliTargets.filter(item => {
+  return props.cliTargets.filter((item) => {
     return props.runtimeConfigSchemas[item.id]?.enabled
   })
 })
@@ -1210,22 +1276,22 @@ const activeRuntimeSchema = computed(() => {
 
 const activeCliName = computed(() => {
   return (
-    visibleCliTargets.value.find(item => item.id === activeCli.value)?.name ||
+    visibleCliTargets.value.find((item) => item.id === activeCli.value)?.name ||
     activeCli.value ||
     "Runtime"
   )
 })
 
 const selectedProvider = computed(() => {
-  return props.providers.find(item => item.id === draft.id) || null
+  return props.providers.find((item) => item.id === draft.id) || null
 })
 
 const scopedProviders = computed(() => {
-  return props.providers.filter(item => item.cli === activeCli.value)
+  return props.providers.filter((item) => item.cli === activeCli.value)
 })
 
 const mixedItems = computed(() => {
-  const providerItems = scopedProviders.value.map(provider => ({
+  const providerItems = scopedProviders.value.map((provider) => ({
     type: "provider",
     provider,
     key: `provider:${provider.id}`,
@@ -1240,7 +1306,7 @@ const mixedItems = computed(() => {
   }))
   const accountItems =
     activeCli.value === "codex"
-      ? props.codexAccounts.map(account => ({
+      ? props.codexAccounts.map((account) => ({
           type: "account",
           account,
           key: `account:${account.id}`,
@@ -1255,7 +1321,9 @@ const mixedItems = computed(() => {
 })
 
 const profileMap = computed(() => {
-  return Object.fromEntries(props.runtimeProfiles.map(item => [item.cli, item]))
+  return Object.fromEntries(
+    props.runtimeProfiles.map((item) => [item.cli, item])
+  )
 })
 
 const runtimeState = computed(() => {
@@ -1276,17 +1344,21 @@ const runtimeDiffDescription = computed(() => {
   return runtimeDiffPath.value || "当前没有 CLI 配置文件路径"
 })
 
+const runtimeConfigDescription = computed(() => {
+  return runtimeConfigPath.value || "当前没有 CLI 配置文件路径"
+})
+
 const filteredIconOptions = computed(() => {
   const keyword = iconKeyword.value.toLowerCase()
 
-  return iconOptions.filter(item =>
+  return iconOptions.filter((item) =>
     iconLabel(item).toLowerCase().includes(keyword)
   )
 })
 
 const configPreviewMap = computed(() => {
   return Object.fromEntries(
-    activeRuntimeSchema.value.configFiles.map(file => [
+    activeRuntimeSchema.value.configFiles.map((file) => [
       file.name,
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
@@ -1357,7 +1429,7 @@ function applyConfigTemplate(template) {
 }
 
 function ensureActiveCli() {
-  if (visibleCliTargets.value.find(item => item.id === activeCli.value)) {
+  if (visibleCliTargets.value.find((item) => item.id === activeCli.value)) {
     return
   }
 
@@ -1572,7 +1644,7 @@ function rateLimitWindows(rateLimit) {
   return [
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
-  ].filter(item => item.window)
+  ].filter((item) => item.window)
 }
 
 function formatPlanName(value) {
@@ -1621,6 +1693,20 @@ function formatRateWidth(value) {
   }
 
   return `${percent}%`
+}
+
+function quotaLevelClass(window) {
+  const remaining = 100 - (window.used_percent || 0)
+
+  if (remaining < 10) {
+    return "providers-view__account-quota--danger"
+  }
+
+  if (remaining < 30) {
+    return "providers-view__account-quota--warning"
+  }
+
+  return ""
 }
 
 function formatResetCountdown(value) {
@@ -1698,7 +1784,8 @@ function clearDraft() {
 
 function firstModelName(providerId) {
   return (
-    props.runtimeModels.find(item => item.providerId === providerId)?.name || ""
+    props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
+    ""
   )
 }
 
@@ -1787,6 +1874,26 @@ async function openRuntimeCompareDialog() {
   }
 }
 
+async function openRuntimeConfigDialog() {
+  try {
+    const result = await window.aiManager.getRuntimeConfig({
+      cli: activeCli.value
+    })
+
+    runtimeConfigPath.value = result.runtimePath || ""
+    runtimeConfigContent.value = result.runtimeContent || ""
+    showRuntimeConfig.value = true
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  }
+}
+
+function closeRuntimeConfigDialog() {
+  showRuntimeConfig.value = false
+  runtimeConfigContent.value = ""
+  runtimeConfigPath.value = ""
+}
+
 function renderRuntimeDiff(managerContent, runtimeContent) {
   if (!runtimeDiffEditorRef.value) {
     return
@@ -1856,8 +1963,8 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  accounts => {
-    accounts.forEach(account => {
+  (accounts) => {
+    accounts.forEach((account) => {
       codexAccountProxyDrafts[account.id] = account.proxy || ""
     })
   },
@@ -1873,10 +1980,10 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  accounts => {
+  (accounts) => {
     if (
       codexAccountDetail.value &&
-      !accounts.find(item => item.id === codexAccountDetail.value.id)
+      !accounts.find((item) => item.id === codexAccountDetail.value.id)
     ) {
       closeCodexAccountDetail()
     }
@@ -1886,10 +1993,10 @@ watch(
 
 watch(
   () => props.providers,
-  providers => {
+  (providers) => {
     if (
       providerDetail.value &&
-      !providers.find(item => item.id === providerDetail.value.id)
+      !providers.find((item) => item.id === providerDetail.value.id)
     ) {
       closeProviderDetail()
     }
@@ -1901,12 +2008,15 @@ watch(
 <style scoped lang="less">
 .providers-view {
   display: flex;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
+  overflow: hidden;
   background: #ffffff;
 
   &__toolbar {
     display: flex;
+    flex: none;
     align-items: center;
     gap: 12px;
     min-height: 58px;
@@ -1958,12 +2068,20 @@ watch(
     box-shadow: 0 1px 5px rgba(15, 23, 42, 0.08);
   }
 
+  &__toolbar-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+  }
+
   &__cli-icon {
     width: 18px;
     height: 18px;
   }
 
   &__icon-button,
+  &__system-config,
   &__add,
   &__back {
     display: inline-flex;
@@ -1973,6 +2091,19 @@ watch(
     background: transparent;
     color: #667085;
     cursor: pointer;
+  }
+
+  &__system-config {
+    width: 38px;
+    height: 38px;
+    border: 1px solid #d8e0eb;
+    border-radius: 12px;
+    background: #ffffff;
+  }
+
+  &__system-config:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
   }
 
   &__icon-button {
@@ -2032,15 +2163,17 @@ watch(
     display: flex;
     overflow: auto;
     flex: 1;
+    min-height: 0;
     flex-direction: column;
-    gap: 12px;
-    padding: 16px;
-    border: 1px solid #e5e7eb;
+    gap: 10px;
+    padding: 14px 16px;
+    border: 0;
     border-radius: 0;
-    background: #ffffff;
+    background: #f8fafc;
   }
 
   &__runtime {
+    flex: none;
     justify-content: space-between;
     gap: 14px;
     padding: 14px 16px;
@@ -2067,20 +2200,22 @@ watch(
     white-space: pre-line;
   }
 
-  &__provider-card {
+  &__provider-card,
+  &__account-card {
     display: flex;
-    gap: 12px;
     align-items: center;
-    min-height: 86px;
-    padding: 16px 18px;
-    border: 1px solid #dfe3e8;
-    border-radius: 14px;
+    gap: 14px;
+    min-height: 92px;
+    padding: 18px 18px 16px 12px;
+    border: 1px solid #edf1f6;
+    border-radius: 12px;
     background: #ffffff;
+    box-shadow: 0 3px 12px rgba(15, 23, 42, 0.06);
   }
 
   &__provider-card--active {
-    border-color: #1682ff;
-    background: #eef7ff;
+    border-color: #d8ecff;
+    background: #ffffff;
   }
 
   &__account-panel {
@@ -2091,21 +2226,12 @@ watch(
     border-bottom: 1px solid #edf0f3;
   }
 
-  &__account-card {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 14px 16px;
-    border: 1px solid #bfe5ce;
-    border-radius: 12px;
-  }
-
   &__account-main {
     display: flex;
     min-width: 0;
     flex: 1;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
   }
 
   &__account-title {
@@ -2115,22 +2241,23 @@ watch(
     min-width: 0;
   }
 
-  &__account-card strong {
+  &__account-title strong {
     overflow: hidden;
     min-width: 0;
     color: #111827;
+    font-size: 0.98rem;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   &__account-tag {
     flex: none;
-    padding: 2px 8px;
-    border: 1px solid #cdebd7;
+    padding: 1px 8px;
+    border: 1px solid #bdebd8;
     border-radius: 999px;
-    background: #ffffff;
-    color: #17803d;
-    font-size: 0.76rem;
+    background: #f0fffa;
+    color: #0d9f72;
+    font-size: 0.72rem;
     line-height: 1.4;
   }
 
@@ -2151,57 +2278,128 @@ watch(
   &__quota-list {
     display: flex;
     flex-direction: row;
-    gap: 16px;
+    gap: 12px;
     min-width: 0;
   }
 
   &__account-quota {
+    --quota-color: #12b981;
+    --quota-bg: #f6fffb;
+    --quota-icon-bg: #ecfdf3;
+
     display: flex;
-    flex: 1;
-    min-width: 200px;
+    width: 212px;
+    min-width: 0;
     flex-direction: column;
+    padding: 8px 10px 10px;
+    border: 1px solid #edf1f6;
+    border-radius: 7px;
+    background: var(--quota-bg);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+  }
+
+  &__account-quota--warning {
+    --quota-color: #f59e0b;
+    --quota-bg: #fffbeb;
+    --quota-icon-bg: #fff7d6;
+  }
+
+  &__account-quota--danger {
+    --quota-color: #ef4444;
+    --quota-bg: #fff5f5;
+    --quota-icon-bg: #ffe4e6;
   }
 
   &__quota-bar {
     position: relative;
     display: flex;
-    align-items: center;
+    min-width: 0;
+    flex-direction: column;
+    gap: 7px;
     overflow: hidden;
-    height: 24px;
-    border-radius: 999px;
-    background: #dbeee2;
   }
 
-  &__quota-fill {
-    position: absolute;
-    top: 0;
-    left: 0;
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-    background: #f97316;
-  }
-
-  &__quota-text {
+  &__quota-title,
+  &__quota-meta {
     position: relative;
     z-index: 1;
-    overflow: hidden;
-    width: 100%;
-    padding: 0 10px;
-    color: #344054;
+    display: flex;
+    min-width: 0;
+    align-items: center;
+  }
+
+  &__quota-title {
+    gap: 7px;
+    color: #475467;
     font-size: 0.76rem;
-    line-height: 24px;
-    text-align: center;
+    font-weight: 700;
+  }
+
+  &__quota-name {
+    overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  &__account-actions {
+  &__quota-icon {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    border: 4px solid var(--quota-color);
+    border-radius: 999px;
+    background: var(--quota-icon-bg);
+  }
+
+  &__quota-bar::before {
+    content: "";
+    display: block;
+    width: 100%;
+    height: 7px;
+    border-radius: 999px;
+    background: #dbeee2;
+    order: 2;
+  }
+
+  &__quota-fill {
+    position: absolute;
+    top: 25px;
+    left: 0;
+    display: block;
+    height: 7px;
+    max-width: 100%;
+    border-radius: 999px;
+    background: var(--quota-color);
+  }
+
+  &__quota-meta {
+    order: 3;
+    gap: 8px;
+    justify-content: flex-end;
+    color: #667085;
+    font-size: 0.74rem;
+  }
+
+  &__quota-value {
+    color: var(--quota-color);
+    font-size: 1rem;
+    line-height: 1;
+  }
+
+  &__quota-reset {
+    overflow: hidden;
+    min-width: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__account-actions,
+  &__provider-actions {
     display: flex;
     flex: none;
-    align-items: flex-start;
-    gap: 8px;
-    margin-top: 2px;
+    width: 272px;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 12px;
   }
 
   &__drag {
@@ -2209,6 +2407,7 @@ watch(
     color: #c0c4cc;
   }
 
+  &__shield,
   &__avatar,
   &__edit-avatar {
     display: flex;
@@ -2221,9 +2420,15 @@ watch(
     font-weight: 700;
   }
 
+  &__shield,
   &__avatar {
     width: 32px;
     height: 32px;
+    flex: none;
+  }
+
+  &__shield {
+    color: #344054;
   }
 
   &__avatar-icon {
@@ -2236,11 +2441,12 @@ watch(
     flex: 1;
     min-width: 0;
     flex-direction: column;
-    gap: 7px;
+    gap: 8px;
   }
 
   &__provider-main strong {
     color: #111827;
+    font-size: 1rem;
   }
 
   &__provider-main span {
@@ -2251,9 +2457,42 @@ watch(
     white-space: nowrap;
   }
 
-  &__provider-actions {
-    flex: none;
-    gap: 8px;
+  &__action-main,
+  &__icon-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+  }
+
+  &__action-main {
+    width: 100%;
+    gap: 12px;
+    min-height: 36px;
+  }
+
+  &__icon-actions {
+    gap: 18px;
+    padding-right: 3px;
+  }
+
+  &__state-pill {
+    display: inline-flex;
+    height: 24px;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: #dff8ee;
+    color: #07966f;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &__state-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 999px;
+    background: #00b981;
   }
 
   &__enable,
@@ -2282,13 +2521,15 @@ watch(
   &__enable,
   &__using {
     align-self: center;
+    min-width: 134px;
+    border-radius: 6px;
     font-size: 14px;
     line-height: 36px;
   }
 
   &__using {
-    background: #edf0f4;
-    color: #98a2b3;
+    background: #edf2f8;
+    color: #7f8da3;
   }
 
   &__compare-button {
@@ -2379,16 +2620,17 @@ watch(
   }
 
   &__icon-grid {
-    display: grid;
+    display: flex;
     overflow: auto;
     max-height: 360px;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    flex-wrap: wrap;
     gap: 10px;
     padding-right: 4px;
   }
 
   &__icon-option {
     display: flex;
+    flex: 0 0 132px;
     min-width: 0;
     height: 86px;
     align-items: center;
@@ -2799,6 +3041,38 @@ watch(
       line-height: 1.5;
       white-space: pre-line;
     }
+  }
+
+  &__runtime-config-modal {
+    :deep(.base-modal__panel) {
+      width: 880px;
+    }
+
+    :deep(.base-modal__header) {
+      padding: 18px 22px 10px;
+    }
+
+    :deep(.base-modal__header h2) {
+      color: #1f2937;
+      font-size: 1.05rem;
+      line-height: 1.35;
+    }
+
+    :deep(.base-modal__header p) {
+      font-size: 0.86rem;
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+  }
+
+  &__runtime-config-panel {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  &__runtime-config-json {
+    max-height: 560px;
   }
 
   &__diff-editor {

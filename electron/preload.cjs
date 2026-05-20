@@ -101,6 +101,8 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("runtime:clear", toPlainPayload(payload)),
   compareRuntime: payload =>
     ipcRenderer.invoke("runtime:compare", toPlainPayload(payload)),
+  getRuntimeConfig: payload =>
+    ipcRenderer.invoke("runtime:config", toPlainPayload(payload)),
   resolveRuntimeDrift: payload =>
     ipcRenderer.invoke("runtime:resolve-drift", toPlainPayload(payload)),
   getRuntimeEnv: payload =>
