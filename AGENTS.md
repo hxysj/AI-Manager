@@ -21,6 +21,7 @@
 - 无论如何都不能自动取消暂存区内容，禁止自动执行 `git restore --staged`、`git reset` 或其他会改变 staged 状态的命令；只有用户明确要求时才能改动暂存区。
 - commit message 必须使用 `feat:`、`fix:`、`chore:` 等规范前缀开头，并使用中文描述。
 - 用户要求提交当前内容时，提交信息要记录本次修改的所有主要内容，更新或修复的内容，不要过于冗余。
+- 提交信息的 `-m` 内容不要写版本号信息，版本号只体现在 `package.json`、`package-lock.json`、`build/release-notes.md` 和 tag 中。
 - 多内容提交必须使用多段 `-m`，例如：
 
 ```powershell
@@ -28,7 +29,9 @@ git commit -m "feat: 中文摘要" -m "- 修改内容一。" -m "- 修改内容�
 ```
 
 - 用户要求“改一个版本”时，需要同步更新 `package.json`、`package-lock.json` 和 `build/release-notes.md`。
+- `build/release-notes.md` 需要写清楚具体变更和带来的作用，不要只简单罗列功能名称。
 - 用户要求打 tag 时，tag 使用版本号格式，例如 `v0.1.2`。
+- 打 tag 后必须用 `git tag --points-at HEAD` 或 `git show-ref --tags <tag>` 确认 tag 已创建并指向当前提交。
 - 用户要求推送时，需要推送当前分支和对应 tag。
 
 ## Electron 桌面端规则

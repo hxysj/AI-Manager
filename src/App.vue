@@ -242,6 +242,7 @@
           @local-backups-refresh="refreshLocalBackups"
           @pull-cloud-data="pullCloudBackup"
           @push-cloud-data="pushCloudBackup"
+          @check-update="checkForAppUpdates"
           @open-path="openPath"
           @restore-data="restoreDataBackup"
           @save="saveSettings"
@@ -1144,6 +1145,10 @@ async function saveSettings(payload) {
         : "设置已保存并重新刷新。"
     )
   }
+}
+
+async function checkForAppUpdates() {
+  await runAction(() => window.aiManager.checkForUpdates())
 }
 
 async function exportDataBackup() {

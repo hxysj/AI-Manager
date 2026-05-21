@@ -37,6 +37,8 @@ jobs:
           }
 
       - name: 打包 Windows 安装程序
+        env:
+          AI_MANAGER_GITHUB_TOKEN: ${{ secrets.AI_MANAGER_GITHUB_TOKEN }}
         run: npm run dist:win
 
       - name: 上传 GitHub Release
