@@ -38,6 +38,43 @@
           </option>
         </select>
       </label>
+
+      <div
+        class="sessions-view__project-filter"
+        @click.stop
+      >
+        <span>项目</span>
+        <button
+          class="sessions-view__project-button"
+          type="button"
+          @click="projectDropdownOpen = !projectDropdownOpen"
+        >
+          {{ selectedProjectOption.label }}
+        </button>
+        <div
+          v-if="projectDropdownOpen"
+          class="sessions-view__project-menu"
+        >
+          <button
+            class="sessions-view__project-item"
+            type="button"
+            @click="selectProjectFilter('all')"
+          >
+            <strong>全部项目</strong>
+            <span>显示当前范围内的全部 Session</span>
+          </button>
+          <button
+            v-for="item in projectOptions"
+            :key="item.value"
+            class="sessions-view__project-item"
+            type="button"
+            @click="selectProjectFilter(item.value)"
+          >
+            <strong>{{ item.name }}</strong>
+            <span>{{ item.path }}</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <div class="sessions-view__meta">
@@ -229,7 +266,7 @@
 
 <script setup>
 import Fuse from "fuse.js"
-import { computed, ref, watch } from "vue"
+import { computed, onBeforeUnmount, ref, watch } from "vue"
 import {
   ChevronLeft,
   ChevronRight,
@@ -263,6 +300,8 @@ const iconMap = {
 
 const searchQuery = ref("")
 const cliFilter = ref("all")
+const projectFilter = ref("all")
+const projectDropdownOpen = ref(false)
 const remoteSessions = ref(null)
 const selectedSession = ref(null)
 const selectedMessages = ref([])
@@ -304,13 +343,55 @@ const searchedSessions = computed(() => {
     .map((item) => item.item)
 })
 
-const filteredSessions = computed(() => {
+const cliFilteredSessions = computed(() => {
   return searchedSessions.value.filter((item) => {
     if (cliFilter.value === "all") {
       return true
     }
 
     return (item.cliName || item.cli) === cliFilter.value
+  })
+})
+
+const projectOptions = computed(() => {
+  const options = new Map()
+
+  for (const session of cliFilteredSessions.value) {
+    const value = getProjectFilterValue(session)
+
+    if (!options.has(value)) {
+      options.set(value, {
+        value,
+        name: resolveProjectName(session.projectPath),
+        path: value === "__unknown__" ? "未识别项目路径" : value
+      })
+    }
+  }
+
+  return Array.from(options.values()).sort((left, right) =>
+    left.name.localeCompare(right.name, "zh-Hans-CN")
+  )
+})
+
+const selectedProjectOption = computed(() => {
+  if (projectFilter.value === "all") {
+    return { label: "全部项目" }
+  }
+
+  const option = projectOptions.value.find(
+    item => item.value === projectFilter.value
+  )
+
+  return { label: option?.name || "全部项目" }
+})
+
+const filteredSessions = computed(() => {
+  return cliFilteredSessions.value.filter((item) => {
+    if (projectFilter.value === "all") {
+      return true
+    }
+
+    return getProjectFilterValue(item) === projectFilter.value
   })
 })
 
@@ -351,8 +432,22 @@ watch(searchQuery, (value) => {
   }, 360)
 })
 
-watch(cliFilter, () => {
+watch([cliFilter, projectFilter], () => {
   currentPage.value = 1
+})
+
+watch(cliFilter, () => {
+  projectDropdownOpen.value = false
+})
+
+watch(projectOptions, (options) => {
+  if (projectFilter.value === "all") {
+    return
+  }
+
+  if (!options.some((item) => item.value === projectFilter.value)) {
+    projectFilter.value = "all"
+  }
 })
 
 watch(pageSize, () => {
@@ -393,6 +488,29 @@ async function searchRemoteSessions() {
     query: searchQuery.value
   })
   currentPage.value = 1
+}
+
+function normalizeProjectPath(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "")
+}
+
+function getProjectFilterValue(session) {
+  return normalizeProjectPath(session.projectPath) || "__unknown__"
+}
+
+function resolveProjectName(projectPath) {
+  const text = normalizeProjectPath(projectPath)
+  const parts = text.split("/").filter(Boolean)
+
+  return parts[parts.length - 1] || "未识别项目"
+}
+
+function selectProjectFilter(value) {
+  projectFilter.value = value
+  projectDropdownOpen.value = false
 }
 
 async function selectSession(session) {
@@ -450,6 +568,16 @@ async function purgeRecycledSession(session) {
   await window.aiManager.purgeSession({ sessionId: session.id })
   await loadRecycle()
 }
+
+function closeProjectDropdown() {
+  projectDropdownOpen.value = false
+}
+
+document.addEventListener("click", closeProjectDropdown)
+
+onBeforeUnmount(() => {
+  document.removeEventListener("click", closeProjectDropdown)
+})
 </script>
 
 <style scoped lang="less">
@@ -492,7 +620,7 @@ async function purgeRecycledSession(session) {
 
   &__filters {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 220px;
+    grid-template-columns: minmax(0, 1fr) 180px 280px;
     gap: 10px;
     padding: 10px;
     border: 1px solid var(--color-line);
@@ -502,21 +630,25 @@ async function purgeRecycledSession(session) {
   }
 
   &__search,
-  &__select {
+  &__select,
+  &__project-filter {
     display: flex;
+    position: relative;
     flex-direction: column;
     gap: 6px;
   }
 
   &__search span,
-  &__select span {
+  &__select span,
+  &__project-filter > span {
     color: var(--color-text-muted);
     font-size: 0.74rem;
     font-weight: 700;
   }
 
   &__search input,
-  &__select select {
+  &__select select,
+  &__project-button {
     height: 38px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
@@ -525,6 +657,65 @@ async function purgeRecycledSession(session) {
     color: var(--color-text);
     font: inherit;
     font-size: 0.88rem;
+  }
+
+  &__project-button {
+    overflow: hidden;
+    cursor: pointer;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__project-menu {
+    position: absolute;
+    top: 64px;
+    right: 0;
+    z-index: 20;
+    display: flex;
+    width: 420px;
+    max-height: 320px;
+    flex-direction: column;
+    overflow: auto;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    box-shadow: var(--shadow-panel);
+  }
+
+  &__project-item {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px 12px;
+    border: 0;
+    border-bottom: 1px solid var(--color-line);
+    background: transparent;
+    color: var(--color-text);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  &__project-item:last-child {
+    border-bottom: 0;
+  }
+
+  &__project-item:hover {
+    background: var(--color-panel-soft);
+  }
+
+  &__project-item strong {
+    font-size: 0.86rem;
+    line-height: 1.3;
+  }
+
+  &__project-item span {
+    color: var(--color-text-muted);
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 0.76rem;
+    line-height: 1.45;
+    white-space: normal;
+    word-break: break-all;
   }
 
   &__meta {

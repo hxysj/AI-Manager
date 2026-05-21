@@ -1,5 +1,15 @@
 !include nsDialogs.nsh
 
+!macro customUnInstall
+  IfSilent aiManagerSkipUserDataCleanup
+  MessageBox MB_YESNO|MB_ICONQUESTION "是否同时清空用户数据？$\r$\n$\r$\n选择“是”会删除当前 Data 存放位置下的 workspace 内容。$\r$\n选择“否”仅卸载软件并保留用户数据。" IDYES aiManagerRemoveUserData IDNO aiManagerSkipUserDataCleanup
+
+  aiManagerRemoveUserData:
+    ExecWait `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$settingsPath = 'D:\ai-manager-data\app-settings.json'; if (Test-Path -LiteralPath $$settingsPath) { $$settings = Get-Content -LiteralPath $$settingsPath -Raw | ConvertFrom-Json; $$dataPath = [Environment]::ExpandEnvironmentVariables([string]$$settings.dataPath); if ($$dataPath) { $$workspacePath = Join-Path $$dataPath 'workspace'; if (Test-Path -LiteralPath $$workspacePath) { Remove-Item -LiteralPath $$workspacePath -Recurse -Force } } }"`
+
+  aiManagerSkipUserDataCleanup:
+!macroend
+
 !macro customInit
   ReadRegStr $0 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
   ReadRegStr $1 HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation

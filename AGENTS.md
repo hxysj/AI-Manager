@@ -30,6 +30,7 @@ git commit -m "feat: 中文摘要" -m "- 修改内容一。" -m "- 修改内容�
 
 - 用户要求“改一个版本”时，需要同步更新 `package.json`、`package-lock.json` 和 `build/release-notes.md`。
 - `build/release-notes.md` 需要写清楚具体变更和带来的作用，不要只简单罗列功能名称。
+- `build/release-notes.md` 只保留最新版本更新说明，格式固定为 `## 变更说明` 开头，后续内容使用 `- 标题。` 加下一行两个空格缩进详细内容的列表格式。
 - 用户要求打 tag 时，tag 使用版本号格式，例如 `v0.1.2`。
 - 打 tag 后必须用 `git tag --points-at HEAD` 或 `git show-ref --tags <tag>` 确认 tag 已创建并指向当前提交。
 - 用户要求推送时，需要推送当前分支和对应 tag。

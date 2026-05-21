@@ -1467,6 +1467,9 @@ async function createWindow() {
       devTools: Boolean(process.env.VITE_DEV_SERVER_URL)
     }
   })
+  mainWindow.webContents.once("did-finish-load", () =>
+    setTimeout(checkForAppUpdates, 8000)
+  )
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL
 
@@ -2085,7 +2088,6 @@ app.whenReady().then(async () => {
   await createWindow()
   await syncQuickSwitchWindow()
   setupAutoUpdater()
-  setTimeout(checkForAppUpdates, 3000)
 
   screen.on("display-metrics-changed", positionQuickSwitchWindow)
   screen.on("display-added", positionQuickSwitchWindow)
