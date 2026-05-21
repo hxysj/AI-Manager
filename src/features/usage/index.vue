@@ -210,6 +210,8 @@
             <span>时间</span>
             <span>应用</span>
             <span>Provider</span>
+            <span>来源</span>
+            <span>Session</span>
             <span>模型</span>
             <span>输入</span>
             <span>输出</span>
@@ -225,6 +227,10 @@
             <span>{{ formatDateTime(item.createdAt) }}</span>
             <span>{{ formatAppName(item.appType) }}</span>
             <span :title="item.providerName">{{ item.providerName }}</span>
+            <span>{{ formatDataSource(item.dataSource) }}</span>
+            <span :title="item.sessionId || item.sessionTitle">
+              {{ formatSessionLabel(item) }}
+            </span>
             <span :title="item.model">{{ item.model || "未识别模型" }}</span>
             <span>{{ formatNumber(normalizeInput(item)) }}</span>
             <span>{{ formatNumber(item.outputTokens) }}</span>
@@ -1151,6 +1157,21 @@ function formatAppName(value) {
 
   return names[value] || value || "未知"
 }
+
+function formatDataSource(value) {
+  const names = {
+    proxy: "代理",
+    session_log: "Claude 日志",
+    codex_session: "Codex 日志",
+    gemini_session: "Gemini 日志"
+  }
+
+  return names[value] || "旧数据"
+}
+
+function formatSessionLabel(item) {
+  return item.sessionTitle || item.sessionId || "-"
+}
 </script>
 
 <style scoped lang="less">
@@ -1451,9 +1472,9 @@ function formatAppName(value) {
   &__table-row {
     display: grid;
     grid-template-columns:
-      100px 72px 150px minmax(160px, 1fr)
+      100px 72px 150px 92px 130px minmax(160px, 1fr)
       86px 86px 86px 92px 92px;
-    min-width: 1024px;
+    min-width: 1260px;
     gap: 10px;
     align-items: center;
     min-height: 34px;
