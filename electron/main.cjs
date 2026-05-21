@@ -3,6 +3,7 @@ const fs = require("node:fs")
 const os = require("node:os")
 const crypto = require("node:crypto")
 const fsp = require("node:fs/promises")
+const { AsyncLocalStorage } = require("node:async_hooks")
 const {
   app,
   BrowserWindow,
@@ -38,6 +39,10 @@ let updateChecking = false
 let updateDownloading = false
 let updatePromptOpen = false
 let updateManualCheck = false
+let appCallLogs = []
+let appCallLogWriteTimer = null
+const appCallTraceStorage = new AsyncLocalStorage()
+const instrumentedServices = new WeakSet()
 const restoreBackupDrafts = new Map()
 const defaultUserDataPath = "D:\\ai-manager-data"
 const settingsFilePath = path.join(defaultUserDataPath, "app-settings.json")
@@ -266,10 +271,320 @@ function saveAppSettings(nextSettings) {
   )
 }
 
+function getAppCallLogPath() {
+  return path.join(
+    app.getPath("userData"),
+    "workspace",
+    "storage",
+    "app-call-logs.json"
+  )
+}
+
+function sanitizeLogValue(value) {
+  if (value === undefined) {
+    return undefined
+  }
+
+  try {
+    return JSON.parse(
+      JSON.stringify(value, (key, item) =>
+        /password|token|key|secret/i.test(key) ? item ? "***" : item : item
+      )
+    )
+  } catch (error) {
+    return {
+      uncloneable: true,
+      message: error.message
+    }
+  }
+}
+
+function summarizeLogValue(value) {
+  const draft = sanitizeLogValue(value)
+
+  if (Array.isArray(draft)) {
+    return {
+      type: "array",
+      length: draft.length
+    }
+  }
+
+  if (draft && typeof draft === "object") {
+    return {
+      type: "object",
+      keys: Object.keys(draft).slice(0, 30)
+    }
+  }
+
+  return draft
+}
+
+function splitIpcTraceArgs(args) {
+  const lastArg = args[args.length - 1]
+
+  if (lastArg?.__traceMeta === true) {
+    return {
+      traceMeta: lastArg,
+      businessArgs: args.slice(0, -1)
+    }
+  }
+
+  return {
+    traceMeta: {},
+    businessArgs: args
+  }
+}
+
+async function initAppCallLogs() {
+  try {
+    appCallLogs = JSON.parse(await fsp.readFile(getAppCallLogPath(), "utf8"))
+  } catch {
+    appCallLogs = []
+  }
+}
+
+function scheduleAppCallLogWrite() {
+  if (appCallLogWriteTimer) {
+    clearTimeout(appCallLogWriteTimer)
+  }
+
+  appCallLogWriteTimer = setTimeout(async () => {
+    appCallLogWriteTimer = null
+    await fsp.mkdir(path.dirname(getAppCallLogPath()), { recursive: true })
+    await fsp.writeFile(
+      getAppCallLogPath(),
+      `${JSON.stringify(appCallLogs, null, 2)}\n`,
+      "utf8"
+    )
+  }, 200)
+}
+
+function appendAppCallLog(input = {}) {
+  const trace = appCallTraceStorage.getStore() || {}
+
+  appCallLogs.unshift({
+    id: crypto.randomUUID(),
+    traceId: String(input.traceId || trace.traceId || crypto.randomUUID()),
+    scope: String(input.scope || "backend"),
+    service: String(input.service || trace.service || ""),
+    method: String(input.method || trace.method || input.channel || ""),
+    channel: String(input.channel || ""),
+    action: String(input.action || ""),
+    status: String(input.status || ""),
+    durationMs: Number(input.durationMs || 0),
+    message: String(input.message || ""),
+    payload: sanitizeLogValue(input.payload),
+    result: summarizeLogValue(input.result),
+    createdAt: Date.now()
+  })
+  appCallLogs = appCallLogs.slice(0, 1000)
+  scheduleAppCallLogWrite()
+}
+
+function assertIpcResultCloneable(channel, traceId, result) {
+  try {
+    structuredClone(result)
+  } catch (error) {
+    appendAppCallLog({
+      traceId,
+      scope: "backend",
+      service: "IpcMain",
+      method: channel,
+      channel,
+      action: "clone",
+      status: "error",
+      message: error.message
+    })
+    throw new Error(`IPC 返回值无法克隆：${channel}，${error.message}`)
+  }
+}
+
+function registerLoggedIpc(channel, handler) {
+  if (channel.startsWith("app-log:")) {
+    ipcMain.handle(channel, handler)
+    return
+  }
+
+  ipcMain.handle(channel, async (event, ...args) => {
+    const { traceMeta, businessArgs } = splitIpcTraceArgs(args)
+    const trace = {
+      traceId: traceMeta.traceId || crypto.randomUUID(),
+      channel,
+      service: "IpcMain",
+      method: channel
+    }
+    const startedAt = Date.now()
+
+    appendAppCallLog({
+      traceId: trace.traceId,
+      scope: "backend",
+      service: "IpcMain",
+      method: channel,
+      channel,
+      action: "start",
+      status: "pending",
+      payload: businessArgs[0]
+    })
+
+    try {
+      const result = await appCallTraceStorage.run(trace, () =>
+        handler(event, ...businessArgs)
+      )
+
+      assertIpcResultCloneable(channel, trace.traceId, result)
+      appendAppCallLog({
+        traceId: trace.traceId,
+        scope: "backend",
+        service: "IpcMain",
+        method: channel,
+        channel,
+        action: "finish",
+        status: "success",
+        durationMs: Date.now() - startedAt,
+        result
+      })
+
+      return result
+    } catch (error) {
+      appendAppCallLog({
+        traceId: trace.traceId,
+        scope: "backend",
+        service: "IpcMain",
+        method: channel,
+        channel,
+        action: "finish",
+        status: "error",
+        durationMs: Date.now() - startedAt,
+        message: error.message
+      })
+      throw error
+    }
+  })
+}
+
+function instrumentBackendService(serviceName, service) {
+  if (!service || instrumentedServices.has(service)) {
+    return
+  }
+
+  instrumentedServices.add(service)
+
+  for (const methodName of Object.getOwnPropertyNames(
+    Object.getPrototypeOf(service)
+  )) {
+    if (methodName === "constructor") {
+      continue
+    }
+
+    const original = service[methodName]
+
+    if (typeof original !== "function") {
+      continue
+    }
+
+    service[methodName] = function (...args) {
+      const parentTrace = appCallTraceStorage.getStore()
+      const trace = parentTrace || {
+        traceId: crypto.randomUUID(),
+        service: serviceName,
+        method: methodName
+      }
+      const startedAt = Date.now()
+
+      appendAppCallLog({
+        traceId: trace.traceId,
+        scope: "backend",
+        service: serviceName,
+        method: methodName,
+        channel: trace.channel || "",
+        action: "start",
+        status: "pending",
+        payload: args[0]
+      })
+
+      return appCallTraceStorage.run(trace, () => {
+        try {
+          const result = original.apply(this, args)
+
+          if (result && typeof result.then === "function") {
+            return result
+              .then((value) => {
+                appendAppCallLog({
+                  traceId: trace.traceId,
+                  scope: "backend",
+                  service: serviceName,
+                  method: methodName,
+                  channel: trace.channel || "",
+                  action: "finish",
+                  status: "success",
+                  durationMs: Date.now() - startedAt,
+                  result: value
+                })
+                return value
+              })
+              .catch((error) => {
+                appendAppCallLog({
+                  traceId: trace.traceId,
+                  scope: "backend",
+                  service: serviceName,
+                  method: methodName,
+                  channel: trace.channel || "",
+                  action: "finish",
+                  status: "error",
+                  durationMs: Date.now() - startedAt,
+                  message: error.message
+                })
+                throw error
+              })
+          }
+
+          appendAppCallLog({
+            traceId: trace.traceId,
+            scope: "backend",
+            service: serviceName,
+            method: methodName,
+            channel: trace.channel || "",
+            action: "finish",
+            status: "success",
+            durationMs: Date.now() - startedAt,
+            result
+          })
+          return result
+        } catch (error) {
+          appendAppCallLog({
+            traceId: trace.traceId,
+            scope: "backend",
+            service: serviceName,
+            method: methodName,
+            channel: trace.channel || "",
+            action: "finish",
+            status: "error",
+            durationMs: Date.now() - startedAt,
+            message: error.message
+          })
+          throw error
+        }
+      })
+    }
+  }
+}
+
+function instrumentBackendServices(service) {
+  instrumentBackendService("ManagerService", service)
+
+  for (const childService of Object.values(service)) {
+    if (/Service$/.test(childService?.constructor?.name || "")) {
+      instrumentBackendService(childService.constructor.name, childService)
+    }
+  }
+}
+
 function sendStateChanged(state) {
+  const payload = JSON.parse(JSON.stringify(state))
+
   for (const targetWindow of [mainWindow, quickSwitchWindow]) {
     if (targetWindow && !targetWindow.isDestroyed()) {
-      targetWindow.webContents.send("state:changed", state)
+      targetWindow.webContents.send("state:changed", payload)
     }
   }
 }
@@ -281,6 +596,7 @@ async function restartManagerService(nextSettings = appSettings) {
   }
 
   managerService = new ManagerService(app.getPath("userData"), nextSettings)
+  instrumentBackendServices(managerService)
   managerReadyPromise = managerService.init()
   await managerReadyPromise
   managerService.on("state-changed", state => {
@@ -288,7 +604,7 @@ async function restartManagerService(nextSettings = appSettings) {
     updateTrayMenu(state)
   })
 
-  return managerService.getState()
+  return JSON.parse(JSON.stringify(managerService.getState()))
 }
 
 function getLocalBackupDirectory() {
@@ -1598,30 +1914,47 @@ async function createQuickSwitchWindow() {
 }
 
 function registerIpc() {
-  ipcMain.handle("app:bootstrap", async () => {
+  registerLoggedIpc("app-log:append", async (_, payload) => {
+    appendAppCallLog(payload)
+    return true
+  })
+  registerLoggedIpc("app-log:list", async () => ({
+    logs: appCallLogs,
+    filePath: getAppCallLogPath()
+  }))
+  registerLoggedIpc("app-log:clear", async () => {
+    appCallLogs = []
+    scheduleAppCallLogWrite()
+    return {
+      logs: appCallLogs,
+      filePath: getAppCallLogPath()
+    }
+  })
+
+  registerLoggedIpc("app:bootstrap", async () => {
     await managerReadyPromise
     return managerService.getState()
   })
-  ipcMain.handle("app:refresh", async () => managerService.refreshAll())
-  ipcMain.handle("app:check-updates", async () => checkForAppUpdates(true))
-  ipcMain.handle("app:close-action", async (_, payload) => {
+  registerLoggedIpc("app:refresh", async () => managerService.refreshAll())
+  registerLoggedIpc("app:check-updates", async () => checkForAppUpdates(true))
+  registerLoggedIpc("app:close-action", async (_, payload) => {
     handleCloseAction(payload)
     return true
   })
-  ipcMain.handle("quick-switch:show-main", async () => {
+  registerLoggedIpc("quick-switch:show-main", async () => {
     await showMainPanel()
     return true
   })
-  ipcMain.handle("quick-switch:set-collapsed", async (_, payload) => {
+  registerLoggedIpc("quick-switch:set-collapsed", async (_, payload) => {
     setQuickSwitchCollapsed(payload?.collapsed)
     return true
   })
-  ipcMain.handle("quick-switch:move-by", async (_, payload) => {
+  registerLoggedIpc("quick-switch:move-by", async (_, payload) => {
     moveQuickSwitchWindowBy(payload)
     return true
   })
 
-  ipcMain.handle("settings:save", async (_, payload) => {
+  registerLoggedIpc("settings:save", async (_, payload) => {
     const nextSettings = normalizeAppSettings(payload)
     fs.mkdirSync(nextSettings.dataPath, { recursive: true })
     saveAppSettings(nextSettings)
@@ -1645,7 +1978,7 @@ function registerIpc() {
     return managerService.getState()
   })
 
-  ipcMain.handle("data:export", async () => {
+  registerLoggedIpc("data:export", async () => {
     const result = await dialog.showSaveDialog(mainWindow, {
       title: "导出配置数据",
       defaultPath: path.join(
@@ -1673,7 +2006,7 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle("data:preview-restore", async () => {
+  registerLoggedIpc("data:preview-restore", async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "恢复配置数据",
       defaultPath: app.getPath("desktop"),
@@ -1701,7 +2034,7 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle("data:restore", async (_, payload = {}) => {
+  registerLoggedIpc("data:restore", async (_, payload = {}) => {
     const draft = getRestoreBackupDraft(payload.restoreId)
 
     await managerService.restoreDataBackup(draft.content, {
@@ -1715,9 +2048,9 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle("data:local-backups", async () => getLocalBackupsPayload())
+  registerLoggedIpc("data:local-backups", async () => getLocalBackupsPayload())
 
-  ipcMain.handle("data:local-backup-now", async () => {
+  registerLoggedIpc("data:local-backup-now", async () => {
     const backup = await createLocalBackup()
 
     if (!backup) {
@@ -1731,7 +2064,7 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle("data:local-backup-preview", async (_, payload = {}) => {
+  registerLoggedIpc("data:local-backup-preview", async (_, payload = {}) => {
     const filePath = getLocalBackupPath(payload.backupId)
     const content = await fsp.readFile(filePath, "utf8")
     const restoreId = cacheRestoreBackup(content, {
@@ -1748,7 +2081,7 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle("data:local-backup-restore", async (_, payload = {}) => {
+  registerLoggedIpc("data:local-backup-restore", async (_, payload = {}) => {
     const draft = getRestoreBackupDraft(payload.restoreId)
 
     await managerService.restoreDataBackup(draft.content, {
@@ -1763,7 +2096,7 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle("data:cloud-push", async (_, payload) => {
+  registerLoggedIpc("data:cloud-push", async (_, payload) => {
     const cloudSync = normalizeCloudSyncSettings(payload)
     const lastUpdatedAt = Date.now()
     await uploadWebDavBackup(cloudSync, await managerService.createDataBackup())
@@ -1784,7 +2117,7 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle("data:cloud-preview", async (_, payload) => {
+  registerLoggedIpc("data:cloud-preview", async (_, payload) => {
     const cloudSync = normalizeCloudSyncSettings(payload)
     const content = await downloadWebDavBackup(cloudSync)
     const restoreId = cacheRestoreBackup(content, {
@@ -1792,14 +2125,14 @@ function registerIpc() {
       cloudSync
     })
 
-    return {
+    return JSON.parse(JSON.stringify({
       restoreId,
       fileName: cloudSync.fileName,
       preview: await managerService.previewDataBackupRestore(content)
-    }
+    }))
   })
 
-  ipcMain.handle("data:cloud-pull", async (_, payload) => {
+  registerLoggedIpc("data:cloud-pull", async (_, payload) => {
     const draft = getRestoreBackupDraft(payload.restoreId)
     const cloudSync = normalizeCloudSyncSettings(
       payload.cloudSync || draft.source.cloudSync
@@ -1819,14 +2152,14 @@ function registerIpc() {
     })
     saveAppSettings(appSettings)
 
-    return {
+    return JSON.parse(JSON.stringify({
       downloadedAt: lastUpdatedAt,
       fileName: cloudSync.fileName,
       state: await restartManagerService(appSettings)
-    }
+    }))
   })
 
-  ipcMain.handle("system:select-directory", async (_, payload) => {
+  registerLoggedIpc("system:select-directory", async (_, payload) => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: payload?.title || "选择目录",
       defaultPath: payload?.defaultPath || app.getPath("home"),
@@ -1836,7 +2169,7 @@ function registerIpc() {
     return result.canceled ? "" : result.filePaths[0]
   })
 
-  ipcMain.handle("system:select-file", async (_, payload) => {
+  registerLoggedIpc("system:select-file", async (_, payload) => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: payload?.title || "选择文件",
       defaultPath: payload?.defaultPath || app.getPath("home"),
@@ -1847,216 +2180,216 @@ function registerIpc() {
     return result.canceled ? "" : result.filePaths[0]
   })
 
-  ipcMain.handle("skill:create", async (_, payload) => {
+  registerLoggedIpc("skill:create", async (_, payload) => {
     await managerService.createSkill(payload)
     return managerService.getState()
   })
 
-  ipcMain.handle("skill:preview-import-from-cli", async (_, payload) => {
+  registerLoggedIpc("skill:preview-import-from-cli", async (_, payload) => {
     return managerService.previewSkillsFromCli(payload?.targetId)
   })
 
-  ipcMain.handle("skill:import-from-cli", async (_, payload) => {
+  registerLoggedIpc("skill:import-from-cli", async (_, payload) => {
     await managerService.importSkillsFromCli(payload?.targetId, payload)
     return managerService.getState()
   })
 
-  ipcMain.handle("skill:import-from-zip", async (_, payload) => {
+  registerLoggedIpc("skill:import-from-zip", async (_, payload) => {
     await managerService.importSkillFromZip(payload?.zipPath)
     return managerService.getState()
   })
 
-  ipcMain.handle("skill:install", async (_, payload) => {
+  registerLoggedIpc("skill:install", async (_, payload) => {
     await managerService.installSkill(payload.skillName, payload.targetId)
     return managerService.getState()
   })
 
-  ipcMain.handle("skill:uninstall", async (_, payload) => {
+  registerLoggedIpc("skill:uninstall", async (_, payload) => {
     await managerService.uninstallSkill(payload.skillName, payload.targetId)
     return managerService.getState()
   })
 
-  ipcMain.handle("skill:repair", async (_, payload) => {
+  registerLoggedIpc("skill:repair", async (_, payload) => {
     await managerService.repairSkill(payload.skillName, payload.targetId)
     return managerService.getState()
   })
 
-  ipcMain.handle("repo:add", async (_, payload) => {
+  registerLoggedIpc("repo:add", async (_, payload) => {
     await managerService.addRepo(payload)
     return managerService.getState()
   })
 
-  ipcMain.handle("repo:sync", async (_, payload) => {
+  registerLoggedIpc("repo:sync", async (_, payload) => {
     await managerService.syncRepo(payload.repoId)
     return managerService.getState()
   })
 
-  ipcMain.handle("repo:sync-all", async () => {
+  registerLoggedIpc("repo:sync-all", async () => {
     await managerService.syncAllRepos()
     return managerService.getState()
   })
 
-  ipcMain.handle("repo:remove", async (_, payload) => {
+  registerLoggedIpc("repo:remove", async (_, payload) => {
     await managerService.removeRepo(payload.repoId)
     return managerService.getState()
   })
 
-  ipcMain.handle("session:search", async (_, payload) => {
+  registerLoggedIpc("session:search", async (_, payload) => {
     return managerService.searchSessions(payload?.query)
   })
 
-  ipcMain.handle("session:messages", async (_, payload) => {
+  registerLoggedIpc("session:messages", async (_, payload) => {
     return managerService.loadSessionMessages(payload?.sessionId)
   })
 
-  ipcMain.handle("usage:stats", async (_, payload) => {
+  registerLoggedIpc("usage:stats", async (_, payload) => {
     return managerService.getUsageStats(payload || {})
   })
 
-  ipcMain.handle("usage:pricing", async () => {
+  registerLoggedIpc("usage:pricing", async () => {
     return managerService.getUsagePricing()
   })
 
-  ipcMain.handle("usage:save-pricing", async (_, payload) => {
+  registerLoggedIpc("usage:save-pricing", async (_, payload) => {
     return managerService.saveUsagePricing(payload || {})
   })
 
-  ipcMain.handle("usage:sync", async () => {
+  registerLoggedIpc("usage:sync", async () => {
     return managerService.syncUsage()
   })
 
-  ipcMain.handle("session:delete", async (_, payload) => {
+  registerLoggedIpc("session:delete", async (_, payload) => {
     await managerService.deleteSession(payload.sessionId)
     return managerService.getState()
   })
 
-  ipcMain.handle("session:recycle-list", async () => {
+  registerLoggedIpc("session:recycle-list", async () => {
     return managerService.listRecycledSessions()
   })
 
-  ipcMain.handle("session:restore", async (_, payload) => {
+  registerLoggedIpc("session:restore", async (_, payload) => {
     await managerService.restoreSession(payload.sessionId)
     return managerService.getState()
   })
 
-  ipcMain.handle("session:purge", async (_, payload) => {
+  registerLoggedIpc("session:purge", async (_, payload) => {
     await managerService.purgeSession(payload.sessionId)
     return true
   })
 
-  ipcMain.handle("provider:save", async (_, payload) => {
+  registerLoggedIpc("provider:save", async (_, payload) => {
     return managerService.saveProvider(payload)
   })
 
-  ipcMain.handle("provider:delete", async (_, payload) => {
+  registerLoggedIpc("provider:delete", async (_, payload) => {
     return managerService.deleteProvider(payload.providerId)
   })
 
-  ipcMain.handle("rule:save", async (_, payload) => {
+  registerLoggedIpc("rule:save", async (_, payload) => {
     return managerService.saveRule(payload)
   })
 
-  ipcMain.handle("rule:delete", async (_, payload) => {
+  registerLoggedIpc("rule:delete", async (_, payload) => {
     return managerService.deleteRule(payload.ruleId)
   })
 
-  ipcMain.handle("rule:toggle", async (_, payload) => {
+  registerLoggedIpc("rule:toggle", async (_, payload) => {
     return managerService.toggleRule(payload)
   })
 
-  ipcMain.handle("rule:enable", async (_, payload) => {
+  registerLoggedIpc("rule:enable", async (_, payload) => {
     return managerService.enableRule(payload.ruleId)
   })
 
-  ipcMain.handle("rule:move", async (_, payload) => {
+  registerLoggedIpc("rule:move", async (_, payload) => {
     return managerService.moveRule(payload)
   })
 
-  ipcMain.handle("rule:import-global", async (_, payload) => {
+  registerLoggedIpc("rule:import-global", async (_, payload) => {
     return managerService.importRule(payload)
   })
 
-  ipcMain.handle("rule:preview-import-global", async (_, payload) => {
+  registerLoggedIpc("rule:preview-import-global", async (_, payload) => {
     return managerService.previewImportRule(payload)
   })
 
-  ipcMain.handle("rule:resolve-import-conflict", async (_, payload) => {
+  registerLoggedIpc("rule:resolve-import-conflict", async (_, payload) => {
     return managerService.resolveRuleImportConflict(payload)
   })
 
-  ipcMain.handle("rule:compare", async (_, payload) => {
+  registerLoggedIpc("rule:compare", async (_, payload) => {
     return managerService.compareRule(payload)
   })
 
-  ipcMain.handle("rule:resolve-drift", async (_, payload) => {
+  registerLoggedIpc("rule:resolve-drift", async (_, payload) => {
     return managerService.resolveRuleDrift(payload)
   })
 
-  ipcMain.handle("codex-account:login", async (_, payload) => {
+  registerLoggedIpc("codex-account:login", async (_, payload) => {
     return managerService.startCodexOfficialLogin(payload)
   })
 
-  ipcMain.handle("codex-account:cancel", async () => {
+  registerLoggedIpc("codex-account:cancel", async () => {
     return managerService.cancelCodexOfficialLogin()
   })
 
-  ipcMain.handle("codex-account:import-auth-json", async (_, payload) => {
+  registerLoggedIpc("codex-account:import-auth-json", async (_, payload) => {
     return managerService.importCodexAuthJson(payload)
   })
 
-  ipcMain.handle("codex-account:enable", async (_, payload) => {
+  registerLoggedIpc("codex-account:enable", async (_, payload) => {
     return managerService.enableCodexAccount(payload)
   })
 
-  ipcMain.handle("codex-account:clear", async () => {
+  registerLoggedIpc("codex-account:clear", async () => {
     return managerService.clearCodexAccount()
   })
 
-  ipcMain.handle("codex-account:refresh", async (_, payload) => {
+  registerLoggedIpc("codex-account:refresh", async (_, payload) => {
     return managerService.refreshCodexAccount(payload)
   })
 
-  ipcMain.handle("codex-account:update-proxy", async (_, payload) => {
+  registerLoggedIpc("codex-account:update-proxy", async (_, payload) => {
     return managerService.updateCodexAccountProxy(payload)
   })
 
-  ipcMain.handle("codex-account:detail", async (_, payload) => {
+  registerLoggedIpc("codex-account:detail", async (_, payload) => {
     return managerService.getCodexAccountDetail(payload)
   })
 
-  ipcMain.handle("codex-account:delete", async (_, payload) => {
+  registerLoggedIpc("codex-account:delete", async (_, payload) => {
     return managerService.deleteCodexAccount(payload)
   })
 
-  ipcMain.handle("runtime-model:save", async (_, payload) => {
+  registerLoggedIpc("runtime-model:save", async (_, payload) => {
     return managerService.saveRuntimeModel(payload)
   })
 
-  ipcMain.handle("runtime:switch", async (_, payload) => {
+  registerLoggedIpc("runtime:switch", async (_, payload) => {
     return managerService.switchRuntime(payload)
   })
 
-  ipcMain.handle("runtime:clear", async (_, payload) => {
+  registerLoggedIpc("runtime:clear", async (_, payload) => {
     return managerService.clearRuntime(payload.cli)
   })
 
-  ipcMain.handle("runtime:compare", async (_, payload) => {
+  registerLoggedIpc("runtime:compare", async (_, payload) => {
     return managerService.compareRuntime(payload)
   })
 
-  ipcMain.handle("runtime:config", async (_, payload) => {
+  registerLoggedIpc("runtime:config", async (_, payload) => {
     return managerService.getRuntimeConfig(payload)
   })
 
-  ipcMain.handle("runtime:resolve-drift", async (_, payload) => {
+  registerLoggedIpc("runtime:resolve-drift", async (_, payload) => {
     return managerService.resolveRuntimeDrift(payload)
   })
 
-  ipcMain.handle("runtime:env", async (_, payload) => {
+  registerLoggedIpc("runtime:env", async (_, payload) => {
     return managerService.buildRuntimeEnv(payload.cli)
   })
 
-  ipcMain.handle("system:open-path", async (_, payload) => {
+  registerLoggedIpc("system:open-path", async (_, payload) => {
     if (!payload?.targetPath) {
       return false
     }
@@ -2070,7 +2403,7 @@ function registerIpc() {
     return true
   })
 
-  ipcMain.handle("system:open-external", async (_, payload) => {
+  registerLoggedIpc("system:open-external", async (_, payload) => {
     if (!payload?.url) {
       return false
     }
@@ -2079,14 +2412,17 @@ function registerIpc() {
     return true
   })
 
-  ipcMain.handle("translation:translate", async (_, payload) => {
+  registerLoggedIpc("translation:translate", async (_, payload) => {
     return translationService.translate(payload?.text)
   })
 }
 
 app.whenReady().then(async () => {
+  await initAppCallLogs()
   managerService = new ManagerService(app.getPath("userData"), appSettings)
+  instrumentBackendServices(managerService)
   translationService = new TranslationService(app.getPath("userData"))
+  instrumentBackendService("TranslationService", translationService)
   managerReadyPromise = managerService.init()
   managerService.on("state-changed", state => {
     sendStateChanged(state)
@@ -2141,3 +2477,4 @@ app.on("before-quit", async () => {
     await managerService.dispose()
   }
 })
+

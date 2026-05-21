@@ -9,7 +9,13 @@
       >
         <img class="app-sidebar__logo" :src="logoUrl" alt="Monkey Thief 图标" />
       </button>
-      <span v-if="!collapsed" class="app-sidebar__title">Monkey Thief</span>
+      <span
+        v-if="!collapsed"
+        class="app-sidebar__title"
+        @click="$emit('title-click')"
+      >
+        Monkey Thief
+      </span>
     </div>
 
     <nav class="app-sidebar__nav">
@@ -98,7 +104,7 @@ defineProps({
   }
 })
 
-defineEmits(['toggle', 'select-view'])
+defineEmits(['toggle', 'select-view', 'title-click'])
 
 const colorMap = {
   claude: '#c58f72',
@@ -195,6 +201,7 @@ const colorMap = {
 
   &__title {
     color: var(--color-primary);
+    cursor: pointer;
     font-size: 1.02rem;
     font-weight: 700;
   }

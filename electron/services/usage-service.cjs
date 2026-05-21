@@ -24,11 +24,43 @@ function createHashId(parts) {
 }
 
 function normalizeAppType(value) {
-  return String(value || "").trim().toLowerCase()
+  return String(value || "")
+    .trim()
+    .toLowerCase()
 }
 
 function normalizeCurrency(value) {
   return String(value || "").toUpperCase() === "CNY" ? "CNY" : "USD"
+}
+
+function inferModelCategory(modelId) {
+  const value = String(modelId || "").toLowerCase()
+
+  if (value.includes("claude")) {
+    return "claude"
+  }
+
+  if (value.includes("qwen")) {
+    return "qwen"
+  }
+
+  if (value.includes("doubao")) {
+    return "doubao"
+  }
+
+  if (value.includes("deepseek")) {
+    return "deepseek"
+  }
+
+  return "gpt"
+}
+
+function normalizeModelCategory(value, modelId) {
+  const category = String(value || inferModelCategory(modelId)).toLowerCase()
+
+  return ["gpt", "claude", "qwen", "doubao", "deepseek"].includes(category)
+    ? category
+    : inferModelCategory(modelId)
 }
 
 function formatAppProviderName(cli) {
@@ -51,6 +83,10 @@ function normalizePricingItem(input) {
   return {
     id: input.id || `pricing-${crypto.randomUUID()}`,
     modelId,
+    modelCategory: normalizeModelCategory(
+      input.modelCategory || input.category,
+      modelId
+    ),
     currency: normalizeCurrency(input.currency),
     inputCostPerMillion: toPriceNumber(input.inputCostPerMillion),
     outputCostPerMillion: toPriceNumber(input.outputCostPerMillion),
@@ -62,7 +98,9 @@ function normalizePricingItem(input) {
 }
 
 function normalizePricingConfig(input = {}) {
-  const exchangeRate = toPriceNumber(input.exchangeRate || DEFAULT_EXCHANGE_RATE)
+  const exchangeRate = toPriceNumber(
+    input.exchangeRate || DEFAULT_EXCHANGE_RATE
+  )
 
   if (exchangeRate <= 0) {
     throw new Error("汇率必须大于 0")
@@ -105,7 +143,11 @@ function toActualTokens(log) {
 
 function findModelPricing(log, pricingConfig) {
   const modelKeys = [log.model, log.requestModel]
-    .map((item) => String(item || "").trim().toLowerCase())
+    .map((item) =>
+      String(item || "")
+        .trim()
+        .toLowerCase()
+    )
     .filter(Boolean)
 
   return pricingConfig.items.find((item) =>
@@ -131,36 +173,36 @@ function calculateCostUsd(log, pricingConfig) {
   }
 
   const inputCostUsd =
-    normalizeBillableInput(log) *
-    priceToUsd(
-      pricing.inputCostPerMillion,
-      pricing.currency,
-      pricingConfig.exchangeRate
-    ) /
+    (normalizeBillableInput(log) *
+      priceToUsd(
+        pricing.inputCostPerMillion,
+        pricing.currency,
+        pricingConfig.exchangeRate
+      )) /
     1000000
   const outputCostUsd =
-    log.outputTokens *
-    priceToUsd(
-      pricing.outputCostPerMillion,
-      pricing.currency,
-      pricingConfig.exchangeRate
-    ) /
+    (log.outputTokens *
+      priceToUsd(
+        pricing.outputCostPerMillion,
+        pricing.currency,
+        pricingConfig.exchangeRate
+      )) /
     1000000
   const cacheReadCostUsd =
-    log.cacheReadTokens *
-    priceToUsd(
-      pricing.cacheReadCostPerMillion,
-      pricing.currency,
-      pricingConfig.exchangeRate
-    ) /
+    (log.cacheReadTokens *
+      priceToUsd(
+        pricing.cacheReadCostPerMillion,
+        pricing.currency,
+        pricingConfig.exchangeRate
+      )) /
     1000000
   const cacheCreationCostUsd =
-    log.cacheCreationTokens *
-    priceToUsd(
-      pricing.cacheCreationCostPerMillion,
-      pricing.currency,
-      pricingConfig.exchangeRate
-    ) /
+    (log.cacheCreationTokens *
+      priceToUsd(
+        pricing.cacheCreationCostPerMillion,
+        pricing.currency,
+        pricingConfig.exchangeRate
+      )) /
     1000000
 
   return {
@@ -319,11 +361,13 @@ function subtractTokenUsage(current, previous) {
   }
 
   return {
-    input_tokens: toNumber(current.input_tokens) - toNumber(previous.input_tokens),
+    input_tokens:
+      toNumber(current.input_tokens) - toNumber(previous.input_tokens),
     cached_input_tokens:
       toNumber(current.cached_input_tokens) -
       toNumber(previous.cached_input_tokens),
-    output_tokens: toNumber(current.output_tokens) - toNumber(previous.output_tokens)
+    output_tokens:
+      toNumber(current.output_tokens) - toNumber(previous.output_tokens)
   }
 }
 
@@ -472,11 +516,19 @@ function extractGeminiLogs(session, content, providerInfo) {
 }
 
 function inRange(log, filters) {
-  if (filters.appType && filters.appType !== "all" && log.appType !== filters.appType) {
+  if (
+    filters.appType &&
+    filters.appType !== "all" &&
+    log.appType !== filters.appType
+  ) {
     return false
   }
 
-  if (filters.providerId && filters.providerId !== "all" && log.providerId !== filters.providerId) {
+  if (
+    filters.providerId &&
+    filters.providerId !== "all" &&
+    log.providerId !== filters.providerId
+  ) {
     return false
   }
 
@@ -582,7 +634,10 @@ class UsageService {
     for (const session of input.sessions || []) {
       const appType = normalizeAppType(session.cli)
 
-      if (!["claude", "codex", "gemini"].includes(appType) || !session.rawPath) {
+      if (
+        !["claude", "codex", "gemini"].includes(appType) ||
+        !session.rawPath
+      ) {
         continue
       }
 
@@ -630,13 +685,15 @@ class UsageService {
     const logs = this.logs
       .filter((item) => inRange(item, filters))
       .map((item) => enrichUsageLog(item, this.pricingConfig))
-    const optionLogs = this.logs.filter((item) =>
-      inRange(item, {
-        ...filters,
-        providerId: "all",
-        model: "all"
-      })
-    ).map((item) => enrichUsageLog(item, this.pricingConfig))
+    const optionLogs = this.logs
+      .filter((item) =>
+        inRange(item, {
+          ...filters,
+          providerId: "all",
+          model: "all"
+        })
+      )
+      .map((item) => enrichUsageLog(item, this.pricingConfig))
     const summary = logs.reduce((result, log) => {
       appendSummary(result, log)
       return result
@@ -677,7 +734,9 @@ class UsageService {
               providerType: log.providerType
             })
           ),
-          models: Array.from(new Set(optionLogs.map((item) => item.model).filter(Boolean)))
+          models: Array.from(
+            new Set(optionLogs.map((item) => item.model).filter(Boolean))
+          )
         },
         pricingConfig: this.getPricingConfig()
       },

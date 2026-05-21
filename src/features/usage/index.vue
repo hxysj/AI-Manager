@@ -284,6 +284,19 @@
               type="number"
             />
           </label>
+          <label class="usage-view__field">
+            <span>类型筛选</span>
+            <select v-model="pricingCategoryFilter">
+              <option value="all">全部类型</option>
+              <option
+                v-for="option in pricingCategoryOptions"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </option>
+            </select>
+          </label>
           <button type="button" @click="addPricingItem">
             <Plus :size="16" />
             新增模型费用
@@ -293,6 +306,7 @@
         <section class="usage-view__pricing-list">
           <div class="usage-view__pricing-head">
             <span>模型</span>
+            <span>类别</span>
             <span>单位</span>
             <span>输入/百万</span>
             <span>输出/百万</span>
@@ -301,50 +315,166 @@
             <span></span>
           </div>
           <div
-            v-for="item in pricingDraft.items"
+            v-for="item in pagedPricingItems"
             :key="item.id"
             class="usage-view__pricing-row"
           >
-            <input
-              v-model.trim="item.modelId"
-              placeholder="如 claude-sonnet-4"
-            />
-            <select v-model="item.currency">
-              <option value="USD">$</option>
-              <option value="CNY">￥</option>
-            </select>
-            <input
-              v-model.number="item.inputCostPerMillion"
-              min="0"
-              step="0.000001"
-              type="number"
-            />
-            <input
-              v-model.number="item.outputCostPerMillion"
-              min="0"
-              step="0.000001"
-              type="number"
-            />
-            <input
-              v-model.number="item.cacheReadCostPerMillion"
-              min="0"
-              step="0.000001"
-              type="number"
-            />
-            <input
-              v-model.number="item.cacheCreationCostPerMillion"
-              min="0"
-              step="0.000001"
-              type="number"
-            />
-            <button type="button" @click="removePricingItem(item.id)">
-              <Trash2 :size="15" />
-            </button>
+            <template v-if="pricingEditingId === item.id">
+              <input
+                v-model.trim="item.modelId"
+                placeholder="如 claude-sonnet-4"
+              />
+              <select v-model="item.modelCategory">
+                <option
+                  v-for="option in pricingCategoryOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+              <select v-model="item.currency">
+                <option value="USD">$</option>
+                <option value="CNY">￥</option>
+              </select>
+              <input
+                v-model.number="item.inputCostPerMillion"
+                min="0"
+                step="0.000001"
+                type="number"
+              />
+              <input
+                v-model.number="item.outputCostPerMillion"
+                min="0"
+                step="0.000001"
+                type="number"
+              />
+              <input
+                v-model.number="item.cacheReadCostPerMillion"
+                min="0"
+                step="0.000001"
+                type="number"
+              />
+              <input
+                v-model.number="item.cacheCreationCostPerMillion"
+                min="0"
+                step="0.000001"
+                type="number"
+              />
+            </template>
+            <template v-else>
+              <span class="usage-view__pricing-value" :title="item.modelId">
+                {{ item.modelId || "未填写" }}
+              </span>
+              <span
+                :class="[
+                  'usage-view__pricing-category',
+                  `usage-view__pricing-category--${item.modelCategory}`
+                ]"
+              >
+                {{ formatModelCategory(item.modelCategory) }}
+              </span>
+              <span class="usage-view__pricing-value">
+                {{ item.currency === "CNY" ? "￥" : "$" }}
+              </span>
+              <span class="usage-view__pricing-value">
+                {{ formatPricingAmount(item.inputCostPerMillion) }}
+              </span>
+              <span class="usage-view__pricing-value">
+                {{ formatPricingAmount(item.outputCostPerMillion) }}
+              </span>
+              <span class="usage-view__pricing-value">
+                {{ formatPricingAmount(item.cacheReadCostPerMillion) }}
+              </span>
+              <span class="usage-view__pricing-value">
+                {{ formatPricingAmount(item.cacheCreationCostPerMillion) }}
+              </span>
+            </template>
+            <div class="usage-view__pricing-actions">
+              <template v-if="pricingEditingId === item.id">
+                <button
+                  class="usage-view__pricing-save"
+                  type="button"
+                  :disabled="pricingSaving"
+                  @click="savePricingItem(item)"
+                >
+                  <Save :size="15" />
+                  保存
+                </button>
+                <button
+                  type="button"
+                  title="取消"
+                  :disabled="pricingSaving"
+                  @click="cancelPricingItem(item.id)"
+                >
+                  <X :size="15" />
+                </button>
+              </template>
+              <template v-else>
+                <button
+                  type="button"
+                  title="编辑"
+                  @click="editPricingItem(item.id)"
+                >
+                  <Pencil :size="15" />
+                </button>
+                <button
+                  type="button"
+                  title="删除"
+                  @click="removePricingItem(item.id)"
+                >
+                  <Trash2 :size="15" />
+                </button>
+              </template>
+            </div>
           </div>
           <div v-if="!pricingDraft.items.length" class="usage-view__empty">
             暂无模型费用，点击新增后填写模型名和每百万 Token 单价。
           </div>
+          <div
+            v-else-if="!filteredPricingItems.length"
+            class="usage-view__empty"
+          >
+            当前类型暂无模型费用。
+          </div>
         </section>
+
+        <div
+          v-if="pricingDraft.items.length && filteredPricingItems.length"
+          class="usage-view__pricing-pagination"
+        >
+          <span>
+            第 {{ pricingPage }} / {{ pricingPageCount }} 页 ·
+            {{ pricingPageStart }}-{{ pricingPageEnd }} /
+            {{ filteredPricingItems.length }}
+          </span>
+          <label>
+            <span>每页</span>
+            <select v-model.number="pricingPageSize">
+              <option
+                v-for="item in pricingPageSizeOptions"
+                :key="item"
+                :value="item"
+              >
+                {{ item }}
+              </option>
+            </select>
+          </label>
+          <button
+            type="button"
+            :disabled="pricingPage <= 1"
+            @click="prevPricingPage"
+          >
+            <ChevronLeft :size="15" />
+          </button>
+          <button
+            type="button"
+            :disabled="pricingPage >= pricingPageCount"
+            @click="nextPricingPage"
+          >
+            <ChevronRight :size="15" />
+          </button>
+        </div>
 
         <p v-if="pricingError" class="usage-view__error">{{ pricingError }}</p>
 
@@ -369,9 +499,11 @@ import {
   Database,
   Layers,
   Network,
+  Pencil,
   PieChart,
   Plus,
   RefreshCw,
+  Save,
   Settings,
   Trash2,
   X
@@ -397,10 +529,22 @@ const logPageSize = ref(20)
 const pricingDialogOpen = ref(false)
 const pricingError = ref("")
 const pricingDraft = ref(createEmptyPricingConfig())
+const pricingEditingId = ref("")
+const pricingCategoryFilter = ref("all")
+const pricingPage = ref(1)
+const pricingPageSize = ref(8)
 const trendChartRef = ref(null)
 const providerPieRef = ref(null)
 let trendChart = null
 let providerPie = null
+const pricingPageSizeOptions = [8, 12, 20, 50]
+const pricingCategoryOptions = [
+  { value: "gpt", label: "GPT" },
+  { value: "claude", label: "Claude" },
+  { value: "qwen", label: "Qwen" },
+  { value: "doubao", label: "Doubao" },
+  { value: "deepseek", label: "DeepSeek" }
+]
 
 const summary = computed(() => stats.value.summary || createEmptySummary())
 const pricingConfig = computed(
@@ -434,6 +578,44 @@ const paginatedLogs = computed(() =>
 const appOptions = computed(() => stats.value.filters?.appTypes || [])
 const providerOptions = computed(() => stats.value.filters?.providers || [])
 const modelOptions = computed(() => stats.value.filters?.models || [])
+const filteredPricingItems = computed(() =>
+  pricingDraft.value.items.filter((item) => {
+    return (
+      pricingCategoryFilter.value === "all" ||
+      item.modelCategory === pricingCategoryFilter.value ||
+      item.id === pricingEditingId.value
+    )
+  })
+)
+const pricingPageCount = computed(() =>
+  Math.max(
+    1,
+    Math.ceil(filteredPricingItems.value.length / pricingPageSize.value)
+  )
+)
+const pricingPageStart = computed(() => {
+  if (!filteredPricingItems.value.length) {
+    return 0
+  }
+
+  return (pricingPage.value - 1) * pricingPageSize.value + 1
+})
+const pricingPageEnd = computed(() =>
+  Math.min(
+    pricingPage.value * pricingPageSize.value,
+    filteredPricingItems.value.length
+  )
+)
+const pagedPricingItems = computed(() => {
+  if (!filteredPricingItems.value.length) {
+    return []
+  }
+
+  return filteredPricingItems.value.slice(
+    pricingPageStart.value - 1,
+    pricingPageEnd.value
+  )
+})
 
 watch([rangeType, appType, providerId, model], () => {
   logPage.value = 1
@@ -443,6 +625,23 @@ watch([rangeType, appType, providerId, model], () => {
 watch(logPageSize, () => {
   logPage.value = 1
 })
+
+watch(pricingPageSize, () => {
+  pricingPage.value = 1
+})
+
+watch(pricingCategoryFilter, () => {
+  pricingPage.value = 1
+})
+
+watch(
+  () => filteredPricingItems.value.length,
+  () => {
+    if (pricingPage.value > pricingPageCount.value) {
+      pricingPage.value = pricingPageCount.value
+    }
+  }
+)
 
 onMounted(() => {
   loadStats()
@@ -481,6 +680,10 @@ function createPricingItem(input = {}) {
       input.id ||
       `pricing-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     modelId: input.modelId || "",
+    modelCategory: normalizeModelCategory(
+      input.modelCategory || input.category,
+      input.modelId || ""
+    ),
     currency: input.currency === "CNY" ? "CNY" : "USD",
     inputCostPerMillion: Number(input.inputCostPerMillion || 0),
     outputCostPerMillion: Number(input.outputCostPerMillion || 0),
@@ -523,6 +726,36 @@ function resetScopedFilters() {
   model.value = "all"
 }
 
+function inferModelCategory(modelId) {
+  const value = String(modelId || "").toLowerCase()
+
+  if (value.includes("claude")) {
+    return "claude"
+  }
+
+  if (value.includes("qwen")) {
+    return "qwen"
+  }
+
+  if (value.includes("doubao")) {
+    return "doubao"
+  }
+
+  if (value.includes("deepseek")) {
+    return "deepseek"
+  }
+
+  return "gpt"
+}
+
+function normalizeModelCategory(value, modelId) {
+  const category = String(value || inferModelCategory(modelId)).toLowerCase()
+
+  return pricingCategoryOptions.some((item) => item.value === category)
+    ? category
+    : inferModelCategory(modelId)
+}
+
 function prevLogPage() {
   logPage.value = Math.max(1, logPage.value - 1)
 }
@@ -535,28 +768,85 @@ function clampLogPage() {
   logPage.value = Math.min(logPage.value, totalLogPages.value)
 }
 
+function prevPricingPage() {
+  pricingPage.value = Math.max(1, pricingPage.value - 1)
+}
+
+function nextPricingPage() {
+  pricingPage.value = Math.min(pricingPageCount.value, pricingPage.value + 1)
+}
+
 function openPricingDialog() {
   pricingDraft.value = clonePricingConfig(pricingConfig.value)
+  pricingEditingId.value = ""
+  pricingCategoryFilter.value = "all"
+  pricingPage.value = 1
   pricingError.value = ""
   pricingDialogOpen.value = true
 }
 
 function closePricingDialog() {
   pricingDialogOpen.value = false
+  pricingEditingId.value = ""
   pricingError.value = ""
 }
 
 function addPricingItem() {
-  pricingDraft.value.items.push(createPricingItem())
+  const item = createPricingItem({
+    modelCategory:
+      pricingCategoryFilter.value === "all"
+        ? "gpt"
+        : pricingCategoryFilter.value
+  })
+
+  pricingDraft.value.items.push(item)
+  pricingEditingId.value = item.id
+  pricingPage.value = pricingPageCount.value
 }
 
-function removePricingItem(id) {
+function editPricingItem(id) {
+  pricingEditingId.value = id
+  pricingError.value = ""
+}
+
+function cancelPricingItem(id) {
+  const savedItem = pricingConfig.value.items.find((item) => item.id === id)
+
+  if (savedItem) {
+    const index = pricingDraft.value.items.findIndex((item) => item.id === id)
+    pricingDraft.value.items.splice(index, 1, createPricingItem(savedItem))
+  } else {
+    pricingDraft.value.items = pricingDraft.value.items.filter(
+      (item) => item.id !== id
+    )
+  }
+
+  pricingEditingId.value = ""
+  pricingError.value = ""
+}
+
+async function removePricingItem(id) {
   pricingDraft.value.items = pricingDraft.value.items.filter(
     (item) => item.id !== id
   )
+
+  if (pricingEditingId.value === id) {
+    pricingEditingId.value = ""
+  }
+
+  await savePricing({ closeDialog: false })
 }
 
-async function savePricing() {
+async function savePricingItem(item) {
+  pricingEditingId.value = item.id
+
+  if (await savePricing({ closeDialog: false })) {
+    pricingEditingId.value = ""
+  }
+}
+
+async function savePricing(options = {}) {
+  const closeDialog = options.closeDialog !== false
   const exchangeRateValue = Number(pricingDraft.value.exchangeRate || 0)
   const modelNames = new Set()
 
@@ -564,7 +854,7 @@ async function savePricing() {
 
   if (exchangeRateValue <= 0) {
     pricingError.value = "汇率必须大于 0"
-    return
+    return false
   }
 
   for (const item of pricingDraft.value.items) {
@@ -572,12 +862,12 @@ async function savePricing() {
 
     if (!modelId) {
       pricingError.value = "模型名称不能为空"
-      return
+      return false
     }
 
     if (modelNames.has(modelId.toLowerCase())) {
       pricingError.value = `模型 ${modelId} 已重复配置`
-      return
+      return false
     }
 
     modelNames.add(modelId.toLowerCase())
@@ -591,6 +881,7 @@ async function savePricing() {
       items: pricingDraft.value.items.map((item) => ({
         id: item.id,
         modelId: item.modelId.trim(),
+        modelCategory: item.modelCategory,
         currency: item.currency,
         inputCostPerMillion: Number(item.inputCostPerMillion || 0),
         outputCostPerMillion: Number(item.outputCostPerMillion || 0),
@@ -600,13 +891,22 @@ async function savePricing() {
         )
       }))
     })
-    pricingDialogOpen.value = false
+    if (closeDialog) {
+      pricingDialogOpen.value = false
+    }
     await loadStats()
   } catch (error) {
     pricingError.value = error.message
+    return false
   } finally {
     pricingSaving.value = false
   }
+
+  if (!closeDialog) {
+    pricingDraft.value = clonePricingConfig(pricingConfig.value)
+  }
+
+  return true
 }
 
 async function loadStats() {
@@ -799,6 +1099,18 @@ function formatCost(value) {
   return `${symbol}${cost >= 1 ? cost.toFixed(2) : cost.toFixed(6)}`
 }
 
+function formatPricingAmount(value) {
+  return Number(value || 0).toLocaleString("zh-CN", {
+    maximumFractionDigits: 6
+  })
+}
+
+function formatModelCategory(value) {
+  return (
+    pricingCategoryOptions.find((item) => item.value === value)?.label || "GPT"
+  )
+}
+
 function formatExchangeRate(value) {
   return `1 $ = ￥${Number(value || 0).toFixed(4)}`
 }
@@ -854,11 +1166,18 @@ function formatAppName(value) {
   color: var(--color-text);
 
   &__toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 5;
     display: flex;
     flex: none;
     align-items: center;
     justify-content: space-between;
     gap: 18px;
+    margin-right: -4px;
+    padding: 0 0 10px;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-page);
   }
 
   &__eyebrow {
@@ -888,7 +1207,8 @@ function formatAppName(value) {
   &__field input,
   &__field select,
   &__pricing-row input,
-  &__pricing-row select {
+  &__pricing-row select,
+  &__pricing-pagination select {
     height: 36px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
@@ -1133,6 +1453,7 @@ function formatAppName(value) {
     grid-template-columns:
       100px 72px 150px minmax(160px, 1fr)
       86px 86px 86px 92px 92px;
+    min-width: 1024px;
     gap: 10px;
     align-items: center;
     min-height: 34px;
@@ -1239,7 +1560,7 @@ function formatAppName(value) {
 
   &__dialog {
     display: flex;
-    width: 880px;
+    width: 1040px;
     max-height: 680px;
     flex-direction: column;
     gap: 14px;
@@ -1268,7 +1589,8 @@ function formatAppName(value) {
   &__dialog-header button,
   &__pricing-toolbar button,
   &__dialog-actions button,
-  &__pricing-row button {
+  &__pricing-row button,
+  &__pricing-pagination button {
     display: inline-flex;
     height: 34px;
     align-items: center;
@@ -1284,7 +1606,8 @@ function formatAppName(value) {
   }
 
   &__dialog-header button,
-  &__pricing-row button {
+  &__pricing-row button,
+  &__pricing-pagination button {
     width: 34px;
     padding: 0;
   }
@@ -1309,29 +1632,126 @@ function formatAppName(value) {
     display: flex;
     min-height: 0;
     flex-direction: column;
-    gap: 8px;
     overflow: auto;
-    padding-right: 4px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #ffffff;
   }
 
   &__pricing-head,
   &__pricing-row {
     display: grid;
-    grid-template-columns: 180px 78px 112px 112px 112px 112px 34px;
+    grid-template-columns: 190px 96px 70px 108px 108px 108px 108px 120px;
     gap: 8px;
     align-items: center;
   }
 
   &__pricing-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    min-height: 36px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--color-line);
+    background: #edf2f8;
     color: var(--color-text-muted);
     font-size: 0.72rem;
     font-weight: 700;
+  }
+
+  &__pricing-row {
+    min-height: 42px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--color-line);
+    background: #ffffff;
+  }
+
+  &__pricing-row:last-child {
+    border-bottom: 0;
   }
 
   &__pricing-row input,
   &__pricing-row select {
     min-width: 0;
     padding: 0 9px;
+    color: var(--color-text);
+  }
+
+  &__pricing-value {
+    overflow: hidden;
+    min-width: 0;
+    padding: 0 2px;
+    color: var(--color-text);
+    font-size: 0.82rem;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__pricing-category {
+    display: inline-flex;
+    width: fit-content;
+    max-width: 100%;
+    height: 24px;
+    align-items: center;
+    padding: 0 9px;
+    border-radius: 7px;
+    background: #e8eef6;
+    color: #28415f;
+    font-size: 0.74rem;
+    font-weight: 800;
+  }
+
+  &__pricing-category--claude {
+    background: #fff0e8;
+    color: #9a4a16;
+  }
+
+  &__pricing-category--qwen {
+    background: #e8f3ff;
+    color: #17569b;
+  }
+
+  &__pricing-category--doubao {
+    background: #eaf7ef;
+    color: #197447;
+  }
+
+  &__pricing-category--deepseek {
+    background: #f0ecff;
+    color: #5740a8;
+  }
+
+  &__pricing-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+  }
+
+  &__pricing-row &__pricing-save {
+    width: 72px;
+  }
+
+  &__pricing-pagination {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &__pricing-pagination label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__pricing-pagination select {
+    height: 32px;
+    padding: 0 8px;
     color: var(--color-text);
   }
 
