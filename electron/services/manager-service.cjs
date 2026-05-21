@@ -226,6 +226,22 @@ const ignoredRuntimeBackupPaths = new Set([
   "storage/codex-active-account-id.json"
 ])
 
+function isIgnoredBackupPath(entryPath) {
+  const normalizedPath = String(entryPath || "").toLowerCase()
+  const fileName = path.basename(normalizedPath)
+  return (
+    ignoredRuntimeBackupPaths.has(entryPath) ||
+    normalizedPath === "logs" ||
+    normalizedPath.startsWith("logs/") ||
+    normalizedPath.includes("/logs/") ||
+    fileName.endsWith(".log") ||
+    fileName.endsWith(".logs") ||
+    fileName.endsWith("-logs.json") ||
+    fileName.endsWith("_logs.json") ||
+    fileName === "logs.json"
+  )
+}
+
 const restoreStorageNames = {
   "storage/skills.json": "Skill 索引",
   "storage/installs.json": "Skill 挂载",
@@ -299,9 +315,7 @@ function serializePromptRuntimeBackupPaths(entry) {
 
 function sanitizeRuntimeBackupEntries(entries) {
   return entries
-    .filter(
-      (entry) => !ignoredRuntimeBackupPaths.has(entry.path)
-    )
+    .filter((entry) => !isIgnoredBackupPath(entry.path))
     .map((entry) =>
       serializePromptRuntimeBackupPaths(
         serializeSkillBackupPaths(stripProviderEnabled(entry))

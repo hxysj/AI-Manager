@@ -303,10 +303,27 @@
               </option>
             </select>
           </label>
-          <button type="button" @click="addPricingItem">
-            <Plus :size="16" />
-            新增模型费用
-          </button>
+          <div class="usage-view__pricing-toolbar-actions">
+            <label class="usage-view__pricing-export">
+              <span>导出格式</span>
+              <select v-model="pricingExportFormat">
+                <option value="json">JSON</option>
+                <option value="csv">CSV</option>
+              </select>
+            </label>
+            <button type="button" @click="exportPricingFile">
+              <Download :size="16" />
+              导出模型费用
+            </button>
+            <button type="button" @click="openPricingImportDialog">
+              <Upload :size="16" />
+              导入模型费用
+            </button>
+            <button type="button" @click="addPricingItem">
+              <Plus :size="16" />
+              新增模型费用
+            </button>
+          </div>
         </section>
 
         <section class="usage-view__pricing-list">
@@ -492,6 +509,61 @@
         </footer>
       </section>
     </div>
+
+    <div
+      v-if="pricingImportOpen"
+      class="usage-view__modal usage-view__modal--stack"
+    >
+      <section class="usage-view__import-dialog">
+        <header class="usage-view__dialog-header">
+          <div>
+            <p class="usage-view__eyebrow">Pricing Import</p>
+            <h2>批量导入模型费用</h2>
+          </div>
+          <button type="button" @click="closePricingImportDialog">
+            <X :size="18" />
+          </button>
+        </header>
+
+        <p class="usage-view__import-tip">
+          支持导入 JSON / CSV 文件，也可以直接粘贴
+          JSON；同名模型会自动覆盖去重。
+        </p>
+        <input
+          ref="pricingImportFileRef"
+          class="usage-view__file-input"
+          type="file"
+          accept=".json,.csv,application/json,text/csv"
+          @change="importPricingFile"
+        />
+        <div class="usage-view__import-file">
+          <button type="button" @click="selectPricingImportFile">
+            <Upload :size="15" />
+            选择 JSON/CSV 文件
+          </button>
+          <span>CSV 使用导出的表头即可再次导入。</span>
+        </div>
+        <textarea
+          v-model="pricingImportText"
+          class="usage-view__import-textarea"
+          :placeholder="pricingImportPlaceholder"
+          spellcheck="false"
+        ></textarea>
+        <p v-if="pricingImportMessage" class="usage-view__import-success">
+          {{ pricingImportMessage }}
+        </p>
+        <p v-if="pricingError" class="usage-view__error">{{ pricingError }}</p>
+
+        <footer class="usage-view__dialog-actions">
+          <button type="button" @click="clearPricingImport">清空</button>
+          <button type="button" @click="closePricingImportDialog">取消</button>
+          <button type="button" @click="importPricingJson">
+            <Upload :size="15" />
+            导入粘贴 JSON
+          </button>
+        </footer>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -503,6 +575,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Database,
+  Download,
   Layers,
   Network,
   Pencil,
@@ -512,6 +585,7 @@ import {
   Save,
   Settings,
   Trash2,
+  Upload,
   X
 } from "lucide-vue-next"
 
@@ -537,6 +611,11 @@ const pricingError = ref("")
 const pricingDraft = ref(createEmptyPricingConfig())
 const pricingEditingId = ref("")
 const pricingCategoryFilter = ref("all")
+const pricingImportOpen = ref(false)
+const pricingImportText = ref("")
+const pricingImportMessage = ref("")
+const pricingExportFormat = ref("json")
+const pricingImportFileRef = ref(null)
 const pricingPage = ref(1)
 const pricingPageSize = ref(8)
 const trendChartRef = ref(null)
@@ -544,6 +623,26 @@ const providerPieRef = ref(null)
 let trendChart = null
 let providerPie = null
 const pricingPageSizeOptions = [8, 12, 20, 50]
+const pricingImportPlaceholder = `[
+  {
+    "modelId": "gpt-5.5",
+    "modelCategory": "gpt",
+    "currency": "USD",
+    "inputCostPerMillion": 5,
+    "outputCostPerMillion": 30,
+    "cacheReadCostPerMillion": 0.5,
+    "cacheCreationCostPerMillion": 0
+  }
+]`
+const pricingCsvHeaders = [
+  "modelId",
+  "modelCategory",
+  "currency",
+  "inputCostPerMillion",
+  "outputCostPerMillion",
+  "cacheReadCostPerMillion",
+  "cacheCreationCostPerMillion"
+]
 const pricingCategoryOptions = [
   { value: "gpt", label: "GPT" },
   { value: "claude", label: "Claude" },
@@ -690,7 +789,7 @@ function createPricingItem(input = {}) {
       input.modelCategory || input.category,
       input.modelId || ""
     ),
-    currency: input.currency === "CNY" ? "CNY" : "USD",
+    currency: normalizePricingCurrency(input.currency),
     inputCostPerMillion: Number(input.inputCostPerMillion || 0),
     outputCostPerMillion: Number(input.outputCostPerMillion || 0),
     cacheReadCostPerMillion: Number(input.cacheReadCostPerMillion || 0),
@@ -762,6 +861,16 @@ function normalizeModelCategory(value, modelId) {
     : inferModelCategory(modelId)
 }
 
+function normalizePricingCurrency(value) {
+  const currency = String(value || "")
+    .trim()
+    .toUpperCase()
+
+  return currency === "CNY" || currency === "RMB" || currency === "￥"
+    ? "CNY"
+    : "USD"
+}
+
 function prevLogPage() {
   logPage.value = Math.max(1, logPage.value - 1)
 }
@@ -786,6 +895,9 @@ function openPricingDialog() {
   pricingDraft.value = clonePricingConfig(pricingConfig.value)
   pricingEditingId.value = ""
   pricingCategoryFilter.value = "all"
+  pricingImportOpen.value = false
+  pricingImportText.value = ""
+  pricingImportMessage.value = ""
   pricingPage.value = 1
   pricingError.value = ""
   pricingDialogOpen.value = true
@@ -794,6 +906,33 @@ function openPricingDialog() {
 function closePricingDialog() {
   pricingDialogOpen.value = false
   pricingEditingId.value = ""
+  pricingError.value = ""
+  pricingImportOpen.value = false
+  pricingImportText.value = ""
+  pricingImportMessage.value = ""
+}
+
+function selectPricingImportFile() {
+  pricingImportFileRef.value?.click()
+}
+
+function openPricingImportDialog() {
+  pricingImportOpen.value = true
+  pricingImportText.value = ""
+  pricingImportMessage.value = ""
+  pricingError.value = ""
+}
+
+function closePricingImportDialog() {
+  pricingImportOpen.value = false
+  pricingImportText.value = ""
+  pricingImportMessage.value = ""
+  pricingError.value = ""
+}
+
+function clearPricingImport() {
+  pricingImportText.value = ""
+  pricingImportMessage.value = ""
   pricingError.value = ""
 }
 
@@ -841,6 +980,384 @@ async function removePricingItem(id) {
   }
 
   await savePricing({ closeDialog: false })
+}
+
+function normalizePricingHeader(value) {
+  return String(value || "")
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .replace(/\s+/g, "")
+    .toLowerCase()
+}
+
+function pickPricingImportValue(input, keys) {
+  for (const key of keys) {
+    if (input?.[key] !== undefined) {
+      return input[key]
+    }
+  }
+
+  return 0
+}
+
+function createPricingImportItem(input = {}) {
+  return createPricingItem({
+    modelId:
+      input.modelId || input.model_id || input.model || input.modelName || "",
+    modelCategory:
+      input.modelCategory || input.model_category || input.category,
+    currency: input.currency || input.unit,
+    inputCostPerMillion: pickPricingImportValue(input, [
+      "inputCostPerMillion",
+      "input_cost_per_million",
+      "input"
+    ]),
+    outputCostPerMillion: pickPricingImportValue(input, [
+      "outputCostPerMillion",
+      "output_cost_per_million",
+      "output"
+    ]),
+    cacheReadCostPerMillion: pickPricingImportValue(input, [
+      "cacheReadCostPerMillion",
+      "cache_read_cost_per_million",
+      "cacheRead"
+    ]),
+    cacheCreationCostPerMillion: pickPricingImportValue(input, [
+      "cacheCreationCostPerMillion",
+      "cache_creation_cost_per_million",
+      "cacheCreation"
+    ])
+  })
+}
+
+function parsePricingJsonText(text) {
+  const payload = JSON.parse(text)
+  const rawItems = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.items)
+      ? payload.items
+      : []
+
+  return {
+    exchangeRate: Number(payload?.exchangeRate || 0),
+    items: rawItems
+  }
+}
+
+function parseCsvRows(text) {
+  const rows = []
+  let row = []
+  let cell = ""
+  let quoted = false
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]
+    const nextChar = text[index + 1]
+
+    if (char === '"' && quoted && nextChar === '"') {
+      cell += '"'
+      index += 1
+      continue
+    }
+
+    if (char === '"') {
+      quoted = !quoted
+      continue
+    }
+
+    if (char === "," && !quoted) {
+      row.push(cell)
+      cell = ""
+      continue
+    }
+
+    if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && nextChar === "\n") {
+        index += 1
+      }
+
+      row.push(cell)
+      rows.push(row)
+      row = []
+      cell = ""
+      continue
+    }
+
+    cell += char
+  }
+
+  row.push(cell)
+  rows.push(row)
+
+  return rows.filter((item) => item.some((value) => String(value || "").trim()))
+}
+
+function readPricingCsvValue(row, headers, aliases) {
+  for (const alias of aliases) {
+    const index = headers.indexOf(normalizePricingHeader(alias))
+
+    if (index >= 0 && row[index] !== undefined) {
+      return row[index]
+    }
+  }
+
+  return ""
+}
+
+function parsePricingCsvText(text) {
+  const rows = parseCsvRows(text)
+
+  if (rows.length < 2) {
+    throw new Error("CSV 至少需要表头和一条模型费用")
+  }
+
+  const headers = rows[0].map((item) => normalizePricingHeader(item))
+
+  return rows.slice(1).map((row) => ({
+    modelId: readPricingCsvValue(row, headers, [
+      "modelId",
+      "model_id",
+      "modelName",
+      "model",
+      "模型"
+    ]),
+    modelCategory: readPricingCsvValue(row, headers, [
+      "modelCategory",
+      "model_category",
+      "category",
+      "类别"
+    ]),
+    currency: readPricingCsvValue(row, headers, ["currency", "unit", "单位"]),
+    inputCostPerMillion: readPricingCsvValue(row, headers, [
+      "inputCostPerMillion",
+      "input_cost_per_million",
+      "input",
+      "输入/百万",
+      "输入"
+    ]),
+    outputCostPerMillion: readPricingCsvValue(row, headers, [
+      "outputCostPerMillion",
+      "output_cost_per_million",
+      "output",
+      "输出/百万",
+      "输出"
+    ]),
+    cacheReadCostPerMillion: readPricingCsvValue(row, headers, [
+      "cacheReadCostPerMillion",
+      "cache_read_cost_per_million",
+      "cacheRead",
+      "缓存读/百万",
+      "缓存读"
+    ]),
+    cacheCreationCostPerMillion: readPricingCsvValue(row, headers, [
+      "cacheCreationCostPerMillion",
+      "cache_creation_cost_per_million",
+      "cacheCreation",
+      "缓存写/百万",
+      "缓存写"
+    ])
+  }))
+}
+
+function mergePricingItems(rawItems, sourceLabel, exchangeRateValue = 0) {
+  if (!rawItems.length) {
+    pricingError.value = "没有可导入的模型费用"
+    return
+  }
+
+  pricingError.value = ""
+  pricingImportMessage.value = ""
+
+  if (exchangeRateValue > 0) {
+    pricingDraft.value.exchangeRate = exchangeRateValue
+  }
+
+  const currentItems = new Map()
+  const importItems = new Map()
+  let duplicateCount = 0
+
+  for (const item of pricingDraft.value.items) {
+    const key = item.modelId.trim().toLowerCase()
+
+    if (key) {
+      currentItems.set(key, createPricingItem(item))
+    }
+  }
+
+  for (const rawItem of rawItems) {
+    const item = createPricingImportItem(rawItem)
+    const key = item.modelId.trim().toLowerCase()
+
+    if (!key) {
+      pricingError.value = "导入数据中存在未填写模型名称的项目"
+      return
+    }
+
+    if (importItems.has(key)) {
+      duplicateCount += 1
+    }
+
+    importItems.set(key, item)
+  }
+
+  let replaceCount = 0
+
+  for (const [key, item] of importItems) {
+    if (currentItems.has(key)) {
+      replaceCount += 1
+    }
+
+    currentItems.set(key, item)
+  }
+
+  pricingDraft.value.items = Array.from(currentItems.values())
+  pricingCategoryFilter.value = "all"
+  pricingEditingId.value = ""
+  pricingPage.value = Math.max(
+    1,
+    Math.ceil(pricingDraft.value.items.length / pricingPageSize.value)
+  )
+  pricingImportText.value = ""
+  pricingImportMessage.value = `${sourceLabel}已导入 ${importItems.size} 个模型，覆盖 ${replaceCount} 个，去重 ${duplicateCount} 个。`
+}
+
+function importPricingJson() {
+  const text = pricingImportText.value.trim()
+
+  pricingError.value = ""
+  pricingImportMessage.value = ""
+
+  if (!text) {
+    pricingError.value = "请先粘贴模型费用 JSON"
+    return
+  }
+
+  try {
+    const payload = parsePricingJsonText(text)
+
+    if (!payload.items.length) {
+      pricingError.value = "JSON 必须是模型数组，或包含 items 数组"
+      return
+    }
+
+    mergePricingItems(payload.items, "粘贴 JSON ", payload.exchangeRate)
+  } catch (error) {
+    pricingError.value =
+      error instanceof SyntaxError
+        ? "JSON 格式不正确"
+        : error.message || "JSON 导入失败"
+  }
+}
+
+async function importPricingFile(event) {
+  const file = event.target.files?.[0]
+
+  pricingError.value = ""
+  pricingImportMessage.value = ""
+
+  if (!file) {
+    return
+  }
+
+  try {
+    const text = await file.text()
+    const fileName = file.name.toLowerCase()
+
+    if (fileName.endsWith(".csv")) {
+      mergePricingItems(parsePricingCsvText(text), "CSV 文件 ")
+    } else {
+      const payload = parsePricingJsonText(text)
+
+      if (!payload.items.length) {
+        pricingError.value = "JSON 文件必须是模型数组，或包含 items 数组"
+        return
+      }
+
+      mergePricingItems(payload.items, "JSON 文件 ", payload.exchangeRate)
+    }
+  } catch (error) {
+    pricingError.value =
+      error instanceof SyntaxError
+        ? "JSON 文件格式不正确"
+        : error.message || "文件导入失败"
+  } finally {
+    event.target.value = ""
+  }
+}
+
+function createPricingExportItem(item) {
+  return {
+    modelId: item.modelId.trim(),
+    modelCategory: item.modelCategory,
+    currency: item.currency,
+    inputCostPerMillion: Number(item.inputCostPerMillion || 0),
+    outputCostPerMillion: Number(item.outputCostPerMillion || 0),
+    cacheReadCostPerMillion: Number(item.cacheReadCostPerMillion || 0),
+    cacheCreationCostPerMillion: Number(item.cacheCreationCostPerMillion || 0)
+  }
+}
+
+function createCsvCell(value) {
+  const text = String(value ?? "")
+
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+function createPricingCsvText(items) {
+  return [
+    pricingCsvHeaders.join(","),
+    ...items.map((item) =>
+      pricingCsvHeaders.map((key) => createCsvCell(item[key])).join(",")
+    )
+  ].join("\n")
+}
+
+function downloadPricingFile(fileName, content, type) {
+  const blob = new Blob([content], { type })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+
+  link.href = url
+  link.download = fileName
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+function exportPricingFile() {
+  const items = pricingDraft.value.items
+    .filter((item) => item.modelId.trim())
+    .map((item) => createPricingExportItem(item))
+
+  if (!items.length) {
+    pricingError.value = "没有可导出的模型费用"
+    return
+  }
+
+  pricingError.value = ""
+
+  if (pricingExportFormat.value === "csv") {
+    downloadPricingFile(
+      "model-pricing.csv",
+      `\uFEFF${createPricingCsvText(items)}`,
+      "text/csv;charset=utf-8"
+    )
+    return
+  }
+
+  downloadPricingFile(
+    "model-pricing.json",
+    `${JSON.stringify(
+      {
+        exchangeRate: Number(pricingDraft.value.exchangeRate || 7.2),
+        items
+      },
+      null,
+      2
+    )}\n`,
+    "application/json;charset=utf-8"
+  )
 }
 
 async function savePricingItem(item) {
@@ -1227,6 +1744,7 @@ function formatSessionLabel(item) {
   &__currency select,
   &__field input,
   &__field select,
+  &__pricing-export select,
   &__pricing-row input,
   &__pricing-row select,
   &__pricing-pagination select {
@@ -1579,10 +2097,27 @@ function formatSessionLabel(item) {
     background: rgba(15, 28, 46, 0.34);
   }
 
+  &__modal--stack {
+    z-index: 32;
+  }
+
   &__dialog {
     display: flex;
     width: 1040px;
     max-height: 680px;
+    flex-direction: column;
+    gap: 14px;
+    padding: 18px;
+    border: 1px solid var(--color-line);
+    border-radius: 10px;
+    background: var(--color-panel);
+    box-shadow: 0 24px 70px rgba(15, 28, 46, 0.24);
+  }
+
+  &__import-dialog {
+    display: flex;
+    width: 720px;
+    max-height: 620px;
     flex-direction: column;
     gap: 14px;
     padding: 18px;
@@ -1644,9 +2179,90 @@ function formatSessionLabel(item) {
     width: 180px;
   }
 
+  &__pricing-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__pricing-export {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text-muted);
+    font-size: 0.76rem;
+    font-weight: 700;
+  }
+
+  &__pricing-export select {
+    width: 76px;
+    padding: 0 8px;
+    color: var(--color-text);
+  }
+
   &__pricing-toolbar button,
+  &__import-file button,
   &__dialog-actions button {
     padding: 0 12px;
+  }
+
+  &__file-input {
+    display: none;
+  }
+
+  &__import-file {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &__import-file button {
+    display: inline-flex;
+    height: 34px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #fbfcfd;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  &__import-file span {
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &__import-tip {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  &__import-textarea {
+    height: 280px;
+    min-height: 280px;
+    resize: vertical;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #ffffff;
+    color: var(--color-text);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    padding: 10px;
+  }
+
+  &__import-success {
+    margin: 0;
+    color: #197447;
+    font-size: 0.82rem;
+    font-weight: 800;
   }
 
   &__pricing-list {
