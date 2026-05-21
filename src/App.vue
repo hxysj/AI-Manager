@@ -203,6 +203,11 @@
           @switch-runtime="switchRuntime"
         />
 
+        <UsageView
+          v-else-if="activeView === 'usage'"
+          :usage="state.usage"
+        />
+
         <RulesView
           v-else-if="activeView === 'rules'"
           :cli-targets="state.cliTargets"
@@ -545,6 +550,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue"
 import {
+  BarChart3,
   Box,
   ChevronDown,
   Compass,
@@ -570,6 +576,7 @@ import RulesView from "@/features/rules/index.vue"
 import SessionsView from "@/features/sessions/index.vue"
 import SettingsView from "@/features/settings/index.vue"
 import SkillsView from "@/features/skills/index.vue"
+import UsageView from "@/features/usage/index.vue"
 import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
 import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
 import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
@@ -579,6 +586,7 @@ import { createMessage } from "@/utils/message"
 
 const navItems = [
   { id: "providers", label: "Providers", icon: Network },
+  { id: "usage", label: "Usage", icon: BarChart3 },
   { id: "skills", label: "Skills", icon: ShieldCheck },
   { id: "sessions", label: "Sessions", icon: Gauge },
   { id: "rules", label: "Rules", icon: Compass },
@@ -612,6 +620,7 @@ const state = reactive({
   skills: [],
   repos: [],
   sessions: [],
+  usage: {},
   codexAccounts: [],
   codexLoginState: null,
   providers: [],
@@ -882,6 +891,7 @@ function updateState(nextState) {
   state.skills = nextState.skills || []
   state.repos = nextState.repos || []
   state.sessions = nextState.sessions || []
+  state.usage = nextState.usage || {}
   state.codexAccounts = nextState.codexAccounts || []
   state.codexLoginState = nextState.codexLoginState || null
   state.providers = nextState.providers || []

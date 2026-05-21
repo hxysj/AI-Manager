@@ -21,6 +21,7 @@ const { LinkManager } = require("./link-manager.cjs")
 const { RepoService } = require("./repo-service.cjs")
 const { FileWatcherService } = require("./file-watcher-service.cjs")
 const { SessionService } = require("./session-service.cjs")
+const { UsageService } = require("./usage-service.cjs")
 const { CodexAccountService } = require("./codex-account-service.cjs")
 const { RuntimeProviderService } = require("./runtime-provider-service.cjs")
 const { PromptRuntimeService } = require("./prompt-runtime-service.cjs")
@@ -228,6 +229,7 @@ const ignoredRuntimeBackupPaths = new Set([
 const restoreStorageNames = {
   "storage/skills.json": "Skill 索引",
   "storage/installs.json": "Skill 挂载",
+  "storage/usage-logs.json": "用量日志",
   "storage/providers.json": "Provider",
   "storage/runtime-models.json": "模型",
   "storage/codex-accounts.json": "Codex 官方账号",
@@ -583,6 +585,7 @@ async function collectBackupEntries(paths) {
   const storageFiles = [
     [paths.storageFiles.skills, "storage/skills.json"],
     [paths.storageFiles.installs, "storage/installs.json"],
+    [paths.storageFiles.usageLogs, "storage/usage-logs.json"],
     [paths.storageFiles.providers, "storage/providers.json"],
     [paths.storageFiles.runtimeModels, "storage/runtime-models.json"],
     [paths.storageFiles.runtimeProfiles, "storage/runtime-profiles.json"],
@@ -962,6 +965,8 @@ class ManagerService extends EventEmitter {
     this.fileWatcherService = new FileWatcherService()
     this.sessionService = new SessionService(this.paths)
     this.sessionService.bindStorage(this.storage)
+    this.usageService = new UsageService()
+    this.usageService.bindStorage(this.storage)
     this.codexAccountService = new CodexAccountService(this.storage)
     this.runtimeProviderService = new RuntimeProviderService(this.storage)
     this.promptRuntimeService = new PromptRuntimeService(this.paths)
@@ -970,6 +975,7 @@ class ManagerService extends EventEmitter {
       skills: [],
       repos: [],
       sessions: [],
+      usage: this.usageService.getStats().data,
       codexAccounts: [],
       codexLoginState: null,
       providers: [],
@@ -989,6 +995,7 @@ class ManagerService extends EventEmitter {
     await ensureAppDirectories(this.paths)
     await this.repoService.init()
     await this.sessionService.init()
+    await this.usageService.init()
     await this.codexAccountService.init()
     await this.promptRuntimeService.init()
     this.codexAccountService.on("changed", (codexAccounts) => {
@@ -1191,6 +1198,14 @@ class ManagerService extends EventEmitter {
     }))
     await this.runtimeProviderService.refreshDrift(cliTargets)
     const runtimeState = this.runtimeProviderService.getState()
+    const codexAccounts = this.codexAccountService.getState()
+    const { diagnostics: usageDiagnostics } = await this.usageService.refresh({
+      sessions,
+      providers: runtimeState.providers,
+      runtimeProfiles: runtimeState.runtimeProfiles,
+      runtimeProviderState: runtimeState.runtimeProviderState,
+      codexAccounts
+    })
     await this.promptRuntimeService.refreshDrift(cliTargets)
     const rules = this.promptRuntimeService.getState()
     const scannedItems = await this.skillScanner.scanMany([
@@ -1302,11 +1317,12 @@ class ManagerService extends EventEmitter {
       skills,
       repos,
       sessions,
-      codexAccounts: this.codexAccountService.getState(),
+      usage: this.usageService.getStats().data,
+      codexAccounts,
       codexLoginState: this.codexAccountService.getLoginState(),
       ...runtimeState,
       rules,
-      diagnostics: [...diagnostics, ...sessionDiagnostics],
+      diagnostics: [...diagnostics, ...sessionDiagnostics, ...usageDiagnostics],
       paths: this.toPublicPaths(),
       appSettings: this.toPublicSettings(false),
       refreshedAt: Date.now()
@@ -1938,6 +1954,61 @@ class ManagerService extends EventEmitter {
 
   async searchSessions(query) {
     return this.sessionService.search(query)
+  }
+
+  getUsageStats(input) {
+    return this.usageService.getStats(input)
+  }
+
+  getUsagePricing() {
+    return {
+      status: "ok",
+      data: this.usageService.getPricingConfig(),
+      message: ""
+    }
+  }
+
+  saveUsagePricing(input) {
+    const pricingConfig = this.usageService.savePricingConfig(input)
+
+    this.state = {
+      ...this.state,
+      usage: this.usageService.getStats().data,
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+
+    return {
+      status: "ok",
+      data: pricingConfig,
+      message: ""
+    }
+  }
+
+  async syncUsage() {
+    const runtimeState = this.runtimeProviderService.getState()
+    const codexAccounts = this.codexAccountService.getState()
+    const { diagnostics: usageDiagnostics } = await this.usageService.refresh({
+      sessions: this.state.sessions,
+      providers: runtimeState.providers,
+      runtimeProfiles: runtimeState.runtimeProfiles,
+      runtimeProviderState: runtimeState.runtimeProviderState,
+      codexAccounts
+    })
+
+    this.state = {
+      ...this.state,
+      usage: this.usageService.getStats().data,
+      diagnostics: [
+        ...this.state.diagnostics.filter(
+          (item) => item.type !== "usage-parse-error"
+        ),
+        ...usageDiagnostics
+      ],
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.usageService.getStats()
   }
 
   async deleteSession(sessionId) {

@@ -1909,6 +1909,22 @@ function registerIpc() {
     return managerService.loadSessionMessages(payload?.sessionId)
   })
 
+  ipcMain.handle("usage:stats", async (_, payload) => {
+    return managerService.getUsageStats(payload || {})
+  })
+
+  ipcMain.handle("usage:pricing", async () => {
+    return managerService.getUsagePricing()
+  })
+
+  ipcMain.handle("usage:save-pricing", async (_, payload) => {
+    return managerService.saveUsagePricing(payload || {})
+  })
+
+  ipcMain.handle("usage:sync", async () => {
+    return managerService.syncUsage()
+  })
+
   ipcMain.handle("session:delete", async (_, payload) => {
     await managerService.deleteSession(payload.sessionId)
     return managerService.getState()
