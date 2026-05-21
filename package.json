@@ -1,6 +1,6 @@
 {
   "name": "monkey-thief",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
   "config": {
     "electron_mirror": "https://npmmirror.com/mirrors/electron/"
@@ -11,7 +11,8 @@
     "dev:renderer": "vite",
     "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "build": "vite build",
-    "dist:win": "npm run build && electron-builder --win nsis --publish never",
+    "build:update-config": "node scripts/generate-update-config.cjs",
+    "dist:win": "npm run build:update-config && npm run build && electron-builder --win nsis --publish never",
     "start": "electron .",
     "preview": "vite preview",
     "test": "node --test tests/manager-service.test.cjs"
@@ -19,6 +20,7 @@
   "dependencies": {
     "@xenova/transformers": "^2.17.2",
     "chokidar": "^4.0.3",
+    "electron-updater": "^6.8.3",
     "element-plus": "^2.14.0",
     "fuse.js": "^7.1.0",
     "gray-matter": "^4.0.3",
@@ -80,6 +82,14 @@
       "shortcutName": "Monkey Thief",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "hxysj",
+        "repo": "AI-Manager",
+        "private": true
+      }
+    ]
   }
 }

@@ -20,6 +20,7 @@ const {
   serializeAppSettingsPaths
 } = require("./services/path-utils.cjs")
 const { TranslationService } = require("./services/translation-service.cjs")
+const { autoUpdater } = require("electron-updater")
 
 let mainWindow = null
 let quickSwitchWindow = null
@@ -32,9 +33,15 @@ let closeDialogOpen = false
 let quickSwitchCollapsed = false
 let localBackupTimer = null
 let localBackupRunning = false
+let updateConfigured = false
+let updateChecking = false
+let updateDownloading = false
+let updatePromptOpen = false
+let updateManualCheck = false
 const restoreBackupDrafts = new Map()
 const defaultUserDataPath = "D:\\ai-manager-data"
 const settingsFilePath = path.join(defaultUserDataPath, "app-settings.json")
+const updateConfigPath = path.join(__dirname, "update-config.generated.cjs")
 const appIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "assets", "icon.png")
   : path.join(__dirname, "..", "build", "icon.png")
@@ -642,6 +649,172 @@ function showTrayError(error) {
   dialog.showErrorBox("操作失败", message)
 }
 
+function loadUpdateConfig() {
+  if (!app.isPackaged || !fs.existsSync(updateConfigPath)) {
+    return {
+      githubToken: ""
+    }
+  }
+
+  return require(updateConfigPath)
+}
+
+function formatUpdateReleaseNotes(value) {
+  if (Array.isArray(value)) {
+    return value.map(item => item.note || "").filter(Boolean).join("\n\n")
+  }
+
+  return String(value || "").trim()
+}
+
+function setupAutoUpdater() {
+  const updateConfig = loadUpdateConfig()
+  const githubToken = String(updateConfig.githubToken || "").trim()
+
+  if (!githubToken) {
+    return
+  }
+
+  process.env.GH_TOKEN = githubToken
+  updateConfigured = true
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.addAuthHeader(`Bearer ${githubToken}`)
+
+  autoUpdater.on("checking-for-update", () => {
+    updateChecking = true
+  })
+
+  autoUpdater.on("update-not-available", () => {
+    updateChecking = false
+    if (updateManualCheck) {
+      updateManualCheck = false
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "检查更新",
+        message: "当前已是最新版本。"
+      })
+    }
+  })
+
+  autoUpdater.on("error", error => {
+    updateChecking = false
+    updateDownloading = false
+    updateManualCheck = false
+    showTrayError(error)
+  })
+
+  autoUpdater.on("update-available", info => {
+    updateChecking = false
+    updateManualCheck = false
+
+    if (updatePromptOpen || updateDownloading) {
+      return
+    }
+
+    updatePromptOpen = true
+    const releaseNotes = formatUpdateReleaseNotes(info.releaseNotes)
+    dialog
+      .showMessageBox(mainWindow, {
+        type: "info",
+        buttons: ["立即下载", "稍后"],
+        defaultId: 0,
+        cancelId: 1,
+        title: "发现新版本",
+        message: `发现新版本 ${info.version}`,
+        detail: releaseNotes || "是否现在下载并安装更新？"
+      })
+      .then(result => {
+        updatePromptOpen = false
+
+        if (result.response !== 0) {
+          return
+        }
+
+        updateDownloading = true
+        return autoUpdater.downloadUpdate()
+      })
+      .catch(error => {
+        updatePromptOpen = false
+        updateDownloading = false
+        showTrayError(error)
+      })
+  })
+
+  autoUpdater.on("update-downloaded", info => {
+    updateDownloading = false
+
+    dialog
+      .showMessageBox(mainWindow, {
+        type: "info",
+        buttons: ["重启安装", "稍后"],
+        defaultId: 0,
+        cancelId: 1,
+        title: "更新已下载",
+        message: `新版本 ${info.version} 已下载完成`,
+        detail: "重启应用后会安装更新。"
+      })
+      .then(result => {
+        if (result.response !== 0) {
+          return
+        }
+
+        isQuitting = true
+        autoUpdater.quitAndInstall()
+      })
+      .catch(showTrayError)
+  })
+}
+
+function checkForAppUpdates(manual = false) {
+  if (!app.isPackaged) {
+    if (manual) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "检查更新",
+        message: "开发模式不检查更新。",
+        detail: "打包后的应用会使用内置 GitHub token 检查 Release。"
+      })
+    }
+    return true
+  }
+
+  if (!updateConfigured) {
+    if (manual) {
+      dialog.showMessageBox(mainWindow, {
+        type: "warning",
+        title: "检查更新",
+        message: "当前安装包未包含更新配置。"
+      })
+    }
+    return true
+  }
+
+  if (updateChecking || updateDownloading || updatePromptOpen) {
+    if (manual) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "检查更新",
+        message: updateDownloading
+          ? "更新正在下载中。"
+          : updatePromptOpen
+            ? "已有更新提示待处理。"
+            : "正在检查更新。"
+      })
+    }
+    return true
+  }
+
+  updateManualCheck = Boolean(manual)
+  updateChecking = true
+  autoUpdater.checkForUpdates().catch(error => {
+    updateChecking = false
+    updateManualCheck = false
+    showTrayError(error)
+  })
+  return true
+}
+
 async function runTrayAction(action) {
   try {
     await managerReadyPromise
@@ -1192,12 +1365,16 @@ function createTrayStatusImage(state) {
   )
 }
 
+function createTrayIconImage() {
+  return nativeImage.createFromPath(appIconPath)
+}
+
 function updateTrayMenu(state = managerService?.getState()) {
   if (!tray || !state) {
     return
   }
 
-  tray.setImage(createTrayStatusImage(state))
+  tray.setImage(createTrayIconImage())
   tray.setToolTip(buildUnifiedTrayTooltip(state))
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -1211,6 +1388,13 @@ function updateTrayMenu(state = managerService?.getState()) {
       {
         label: "Provider 快速切换",
         submenu: buildUnifiedQuickSwitchTrayItems(state)
+      },
+      { type: "separator" },
+      {
+        label: "检查更新",
+        click: () => {
+          checkForAppUpdates(true)
+        }
       },
       { type: "separator" },
       {
@@ -1229,7 +1413,7 @@ function createTray() {
     return
   }
 
-  tray = new Tray(appIconPath)
+  tray = new Tray(createTrayIconImage())
   tray.setToolTip("Monkey Thief")
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -1237,6 +1421,12 @@ function createTray() {
         label: "打开主面板",
         click: async () => {
           await showMainPanel()
+        }
+      },
+      {
+        label: "检查更新",
+        click: () => {
+          checkForAppUpdates(true)
         }
       },
       {
@@ -1410,6 +1600,7 @@ function registerIpc() {
     return managerService.getState()
   })
   ipcMain.handle("app:refresh", async () => managerService.refreshAll())
+  ipcMain.handle("app:check-updates", async () => checkForAppUpdates(true))
   ipcMain.handle("app:close-action", async (_, payload) => {
     handleCloseAction(payload)
     return true
@@ -1893,6 +2084,8 @@ app.whenReady().then(async () => {
     .catch(showTrayError)
   await createWindow()
   await syncQuickSwitchWindow()
+  setupAutoUpdater()
+  setTimeout(checkForAppUpdates, 3000)
 
   screen.on("display-metrics-changed", positionQuickSwitchWindow)
   screen.on("display-added", positionQuickSwitchWindow)

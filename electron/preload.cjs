@@ -7,6 +7,7 @@ function toPlainPayload(payload) {
 contextBridge.exposeInMainWorld("aiManager", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
   refresh: () => ipcRenderer.invoke("app:refresh"),
+  checkForUpdates: () => ipcRenderer.invoke("app:check-updates"),
   showMainPanel: () => ipcRenderer.invoke("quick-switch:show-main"),
   setQuickSwitchCollapsed: payload =>
     ipcRenderer.invoke("quick-switch:set-collapsed", toPlainPayload(payload)),
