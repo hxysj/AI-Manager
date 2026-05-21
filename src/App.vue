@@ -1701,7 +1701,7 @@ async function confirmRestore() {
           ? await window.aiManager.pullCloudBackup({
               restoreId: source.restoreId,
               choices: { ...restoreChoices },
-              cloudSync: source.cloudSync
+              cloudSync: { ...source.cloudSync }
             })
           : source.type === "local"
             ? await window.aiManager.restoreLocalBackup(payload)
