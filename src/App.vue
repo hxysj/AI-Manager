@@ -142,6 +142,7 @@
       :nav-items="navItems"
       @toggle="sidebarCollapsed = !sidebarCollapsed"
       @select-view="activeView = $event"
+      @title-click="handleSidebarTitleClick"
     />
 
     <main class="app-shell__main">
@@ -203,10 +204,7 @@
           @switch-runtime="switchRuntime"
         />
 
-        <UsageView
-          v-else-if="activeView === 'usage'"
-          :usage="state.usage"
-        />
+        <UsageView v-else-if="activeView === 'usage'" :usage="state.usage" />
 
         <RulesView
           v-else-if="activeView === 'rules'"
@@ -252,6 +250,119 @@
           @restore-data="restoreDataBackup"
           @save="saveSettings"
         />
+
+        <section v-else-if="activeView === 'logs'" class="app-logs">
+          <header class="app-logs__header">
+            <div>
+              <span>调用日志</span>
+              <h1>调用日志</h1>
+              <p>{{ appLogPath || "记录所有后端服务调用过程。" }}</p>
+            </div>
+            <div class="app-logs__actions">
+              <button type="button" @click="loadAppLogs">
+                <RefreshCw :size="15" />
+                刷新
+              </button>
+              <button type="button" @click="clearAppLogs">清空</button>
+            </div>
+          </header>
+
+          <div class="app-logs__filters">
+            <label>
+              <span>分类</span>
+              <select v-model="appLogScopeFilter">
+                <option value="all">全部</option>
+                <option
+                  v-for="scope in appLogScopeOptions"
+                  :key="scope"
+                  :value="scope"
+                >
+                  {{ formatLogScope(scope) }}
+                </option>
+              </select>
+            </label>
+            <label>
+              <span>服务</span>
+              <select v-model="appLogServiceFilter">
+                <option value="all">全部</option>
+                <option
+                  v-for="service in appLogServiceOptions"
+                  :key="service"
+                  :value="service"
+                >
+                  {{ service }}
+                </option>
+              </select>
+            </label>
+            <label>
+              <span>状态</span>
+              <select v-model="appLogStatusFilter">
+                <option value="all">全部</option>
+                <option value="success">成功</option>
+                <option value="error">失败</option>
+                <option value="pending">进行中</option>
+              </select>
+            </label>
+            <strong>{{ filteredAppLogs.length }} 条</strong>
+          </div>
+
+          <div v-if="filteredAppLogs.length" class="app-logs__list">
+            <article
+              v-for="item in pagedAppLogs"
+              :key="item.id"
+              :class="[
+                'app-logs__item',
+                { 'app-logs__item--error': item.status === 'error' }
+              ]"
+            >
+              <div class="app-logs__item-head">
+                <strong>{{ formatLogTitle(item) }}</strong>
+                <span>{{ formatLogStatus(item.status) }}</span>
+              </div>
+              <p v-if="item.message">{{ item.message }}</p>
+              <div class="app-logs__meta">
+                <span>{{ formatLogTime(item.createdAt) }}</span>
+                <span>{{ formatLogScope(item.scope) }}</span>
+                <span>{{ item.service || "未知服务" }}</span>
+                <span>{{ item.method || item.channel }}</span>
+                <span>{{ item.action }}</span>
+                <span>{{ item.durationMs || 0 }}ms</span>
+                <span>{{ item.traceId }}</span>
+              </div>
+              <pre v-if="item.payload">{{
+                formatLogPayload(item.payload)
+              }}</pre>
+              <pre v-if="item.result">{{ formatLogPayload(item.result) }}</pre>
+            </article>
+          </div>
+          <div v-if="filteredAppLogs.length" class="app-logs__pagination">
+            <span>
+              {{ appLogPageStart }}-{{ appLogPageEnd }} /
+              {{ filteredAppLogs.length }}
+            </span>
+            <select v-model.number="appLogPageSize">
+              <option :value="20">20 条/页</option>
+              <option :value="50">50 条/页</option>
+              <option :value="100">100 条/页</option>
+            </select>
+            <button
+              type="button"
+              :disabled="currentAppLogPage <= 1"
+              @click="goAppLogPage(currentAppLogPage - 1)"
+            >
+              上一页
+            </button>
+            <strong>{{ currentAppLogPage }} / {{ appLogPageCount }}</strong>
+            <button
+              type="button"
+              :disabled="currentAppLogPage >= appLogPageCount"
+              @click="goAppLogPage(currentAppLogPage + 1)"
+            >
+              下一页
+            </button>
+          </div>
+          <div v-else class="app-logs__empty">暂无调用日志。</div>
+        </section>
 
         <section v-else class="app-shell__placeholder">
           <h1>{{ currentPlaceholder.title }}</h1>
@@ -548,10 +659,9 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue"
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import {
   BarChart3,
-  Box,
   ChevronDown,
   Compass,
   ExternalLink,
@@ -584,13 +694,12 @@ import logoUrl from "@/assets/ai-manager-logo.svg?url"
 import { useGlobalLoading } from "@/utils/global-loading"
 import { createMessage } from "@/utils/message"
 
-const navItems = [
+const baseNavItems = [
   { id: "providers", label: "Providers", icon: Network },
   { id: "usage", label: "Usage", icon: BarChart3 },
   { id: "skills", label: "Skills", icon: ShieldCheck },
   { id: "sessions", label: "Sessions", icon: Gauge },
   { id: "rules", label: "Rules", icon: Compass },
-  { id: "workspace", label: "Workspace", icon: Box },
   { id: "settings", label: "Settings", icon: Settings }
 ]
 
@@ -681,6 +790,15 @@ const state = reactive({
 })
 
 const activeView = ref("providers")
+const showLogsTab = ref(false)
+const sidebarTitleClickCount = ref(0)
+const appLogs = ref([])
+const appLogPath = ref("")
+const appLogScopeFilter = ref("all")
+const appLogServiceFilter = ref("all")
+const appLogStatusFilter = ref("all")
+const appLogPage = ref(1)
+const appLogPageSize = ref(20)
 const quickSelectedCli = ref("")
 const quickCollapsed = ref(false)
 const quickLogoDrag = {
@@ -709,6 +827,74 @@ const { loading: pending, withGlobalLoading } = useGlobalLoading()
 
 let unsubscribe = null
 let unsubscribeClose = null
+
+const navItems = computed(() =>
+  showLogsTab.value
+    ? [...baseNavItems, { id: "logs", label: "日志", icon: Info }]
+    : baseNavItems
+)
+
+const appLogScopeOptions = computed(() =>
+  [...new Set(appLogs.value.map((item) => item.scope || "backend"))].sort()
+)
+
+const appLogServiceOptions = computed(() =>
+  [
+    ...new Set(
+      appLogs.value.map((item) => item.service || "未知服务").filter(Boolean)
+    )
+  ].sort()
+)
+
+const filteredAppLogs = computed(() =>
+  appLogs.value.filter((item) => {
+    const scope = item.scope || "backend"
+    const service = item.service || "未知服务"
+
+    return (
+      (appLogScopeFilter.value === "all" ||
+        appLogScopeFilter.value === scope) &&
+      (appLogServiceFilter.value === "all" ||
+        appLogServiceFilter.value === service) &&
+      (appLogStatusFilter.value === "all" ||
+        appLogStatusFilter.value === item.status)
+    )
+  })
+)
+
+const appLogPageCount = computed(() =>
+  Math.max(1, Math.ceil(filteredAppLogs.value.length / appLogPageSize.value))
+)
+
+const currentAppLogPage = computed(() =>
+  Math.min(appLogPage.value, appLogPageCount.value)
+)
+
+const appLogPageStart = computed(() => {
+  if (!filteredAppLogs.value.length) {
+    return 0
+  }
+
+  return (currentAppLogPage.value - 1) * appLogPageSize.value + 1
+})
+
+const appLogPageEnd = computed(() =>
+  Math.min(
+    currentAppLogPage.value * appLogPageSize.value,
+    filteredAppLogs.value.length
+  )
+)
+
+const pagedAppLogs = computed(() =>
+  filteredAppLogs.value.slice(appLogPageStart.value - 1, appLogPageEnd.value)
+)
+
+watch(
+  [appLogScopeFilter, appLogServiceFilter, appLogStatusFilter, appLogPageSize],
+  () => {
+    appLogPage.value = 1
+  }
+)
 
 const selectedSkill = computed(() => {
   return (
@@ -923,6 +1109,85 @@ function ensureQuickSelectedCli() {
   }
 
   quickSelectedCli.value = quickCliTargets.value[0]?.id || ""
+}
+
+async function handleSidebarTitleClick() {
+  sidebarTitleClickCount.value += 1
+
+  if (sidebarTitleClickCount.value < 10) {
+    return
+  }
+
+  showLogsTab.value = true
+  activeView.value = "logs"
+  sidebarTitleClickCount.value = 0
+  await loadAppLogs()
+}
+
+async function loadAppLogs() {
+  const result = await window.aiManager.getAppLogs()
+
+  appLogs.value = result.logs || []
+  appLogPath.value = result.filePath || ""
+  appLogPage.value = 1
+}
+
+async function clearAppLogs() {
+  const result = await window.aiManager.clearAppLogs()
+
+  appLogs.value = result.logs || []
+  appLogPath.value = result.filePath || ""
+  appLogPage.value = 1
+}
+
+function formatLogTime(value) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(new Date(Number(value || 0)))
+}
+
+function formatLogPayload(value) {
+  return JSON.stringify(value, null, 2)
+}
+
+function formatLogScope(value) {
+  if (value === "backend") {
+    return "后端"
+  }
+
+  if (value === "renderer") {
+    return "渲染进程"
+  }
+
+  return value || "未知"
+}
+
+function formatLogStatus(value) {
+  if (value === "success") {
+    return "成功"
+  }
+
+  if (value === "error") {
+    return "失败"
+  }
+
+  if (value === "pending") {
+    return "进行中"
+  }
+
+  return value || "未知"
+}
+
+function formatLogTitle(item) {
+  return [item.service, item.method || item.channel].filter(Boolean).join(".")
+}
+
+function goAppLogPage(page) {
+  appLogPage.value = Math.min(Math.max(page, 1), appLogPageCount.value)
 }
 
 async function runAction(action) {
@@ -2265,6 +2530,204 @@ onBeforeUnmount(() => {
     margin: 0 0 18px;
     color: var(--color-text-muted);
     line-height: 1.7;
+  }
+}
+
+.app-logs {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: 14px;
+
+  &__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 18px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+  }
+
+  &__header span {
+    color: var(--color-text-soft);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+  }
+
+  &__header h1 {
+    margin: 4px 0;
+    color: var(--color-primary);
+    font-size: 1.35rem;
+  }
+
+  &__header p {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 0.86rem;
+  }
+
+  &__actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  &__actions button {
+    display: inline-flex;
+    height: 36px;
+    align-items: center;
+    gap: 6px;
+    padding: 0 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #fbfcfd;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  &__filters {
+    display: flex;
+    align-items: end;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+  }
+
+  &__filters label {
+    display: grid;
+    gap: 6px;
+  }
+
+  &__filters label span {
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &__filters select {
+    width: 180px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #fbfcfd;
+    color: var(--color-primary);
+    font-weight: 700;
+  }
+
+  &__filters strong {
+    margin-left: auto;
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+  }
+
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  &__item {
+    padding: 14px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+  }
+
+  &__item--error {
+    border-color: #f3b7b7;
+    background: #fff7f7;
+  }
+
+  &__item-head,
+  &__meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  &__item-head strong {
+    color: var(--color-primary);
+    font-size: 0.95rem;
+  }
+
+  &__item-head span {
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  &__item p {
+    margin: 8px 0 0;
+    color: #b42318;
+    font-size: 0.86rem;
+  }
+
+  &__meta {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    color: var(--color-text-soft);
+    font-size: 0.78rem;
+  }
+
+  &__item pre {
+    overflow: auto;
+    max-height: 220px;
+    margin: 10px 0 0;
+    padding: 10px;
+    border-radius: 8px;
+    background: #f5f7fa;
+    color: #2c3b4f;
+    font-size: 0.78rem;
+    line-height: 1.55;
+  }
+
+  &__pagination {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 12px 14px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    font-weight: 700;
+  }
+
+  &__pagination select,
+  &__pagination button {
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #fbfcfd;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  &__pagination button:disabled {
+    cursor: not-allowed;
+    opacity: 0.48;
+  }
+
+  &__empty {
+    display: grid;
+    min-height: 300px;
+    place-items: center;
+    border: 1px dashed var(--color-line-strong);
+    border-radius: 8px;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
   }
 }
 

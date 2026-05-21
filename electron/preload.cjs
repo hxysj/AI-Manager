@@ -1,7 +1,77 @@
 const { contextBridge, ipcRenderer } = require("electron")
 
+const rawInvoke = ipcRenderer.invoke.bind(ipcRenderer)
+
 function toPlainPayload(payload) {
-  return payload === undefined ? undefined : JSON.parse(JSON.stringify(payload))
+  try {
+    return payload === undefined ? undefined : JSON.parse(JSON.stringify(payload))
+  } catch (error) {
+    rawInvoke("app-log:append", {
+      channel: "preload:toPlainPayload",
+      action: "error",
+      status: "error",
+      message: error.message
+    }).catch(() => {})
+    throw error
+  }
+}
+
+function appendCallLog(input) {
+  rawInvoke("app-log:append", toPlainPayload(input)).catch(() => {})
+}
+
+ipcRenderer.invoke = async (channel, ...args) => {
+  if (String(channel).startsWith("app-log:")) {
+    return rawInvoke(channel, ...args)
+  }
+
+  const traceId =
+    `trace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+  const startedAt = Date.now()
+
+  appendCallLog({
+    traceId,
+    scope: "renderer",
+    service: "Preload",
+    method: String(channel),
+    channel,
+    action: "start",
+    status: "pending",
+    payload: args[0]
+  })
+
+  try {
+    const result = await rawInvoke(channel, ...args, {
+      __traceMeta: true,
+      traceId
+    })
+
+    appendCallLog({
+      traceId,
+      scope: "renderer",
+      service: "Preload",
+      method: String(channel),
+      channel,
+      action: "finish",
+      status: "success",
+      durationMs: Date.now() - startedAt
+    })
+
+    return result
+  } catch (error) {
+    appendCallLog({
+      traceId,
+      scope: "renderer",
+      service: "Preload",
+      method: String(channel),
+      channel,
+      action: "finish",
+      status: "error",
+      durationMs: Date.now() - startedAt,
+      message: error.message
+    })
+    throw error
+  }
 }
 
 contextBridge.exposeInMainWorld("aiManager", {
@@ -69,6 +139,8 @@ contextBridge.exposeInMainWorld("aiManager", {
   saveUsagePricing: payload =>
     ipcRenderer.invoke("usage:save-pricing", toPlainPayload(payload)),
   syncUsage: () => ipcRenderer.invoke("usage:sync"),
+  getAppLogs: () => ipcRenderer.invoke("app-log:list"),
+  clearAppLogs: () => ipcRenderer.invoke("app-log:clear"),
   deleteSession: payload =>
     ipcRenderer.invoke("session:delete", toPlainPayload(payload)),
   listRecycledSessions: () => ipcRenderer.invoke("session:recycle-list"),
