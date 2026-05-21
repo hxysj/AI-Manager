@@ -55,7 +55,10 @@
           :key="cli.id"
           :class="[
             'quick-switch-panel__cli-tab',
-            { 'quick-switch-panel__cli-tab--active': cli.id === quickActiveCli?.id }
+            {
+              'quick-switch-panel__cli-tab--active':
+                cli.id === quickActiveCli?.id
+            }
           ]"
           type="button"
           @click="quickSelectedCli = cli.id"
@@ -390,13 +393,54 @@
                 v-if="restoreCompareKey === item.key"
                 class="restore-preview-modal__compare"
               >
+                <div class="restore-preview-modal__compare-summary">
+                  已标记 {{ restoreCompareChangedCount }} 处不同
+                </div>
                 <section class="restore-preview-modal__compare-panel">
                   <strong>当前内容</strong>
-                  <pre>{{ formatRestoreCompareContent(item.currentContent) }}</pre>
+                  <div class="restore-preview-modal__compare-code">
+                    <div
+                      v-for="row in restoreCompareRows"
+                      :key="`current-${row.index}`"
+                      :class="[
+                        'restore-preview-modal__compare-line',
+                        `restore-preview-modal__compare-line--${row.currentStatus}`
+                      ]"
+                    >
+                      <span class="restore-preview-modal__compare-number">{{
+                        row.currentLineNumber
+                      }}</span>
+                      <span class="restore-preview-modal__compare-marker">{{
+                        row.currentMarker
+                      }}</span>
+                      <span class="restore-preview-modal__compare-text">{{
+                        row.currentText
+                      }}</span>
+                    </div>
+                  </div>
                 </section>
                 <section class="restore-preview-modal__compare-panel">
                   <strong>备份内容</strong>
-                  <pre>{{ formatRestoreCompareContent(item.backupContent) }}</pre>
+                  <div class="restore-preview-modal__compare-code">
+                    <div
+                      v-for="row in restoreCompareRows"
+                      :key="`backup-${row.index}`"
+                      :class="[
+                        'restore-preview-modal__compare-line',
+                        `restore-preview-modal__compare-line--${row.backupStatus}`
+                      ]"
+                    >
+                      <span class="restore-preview-modal__compare-number">{{
+                        row.backupLineNumber
+                      }}</span>
+                      <span class="restore-preview-modal__compare-marker">{{
+                        row.backupMarker
+                      }}</span>
+                      <span class="restore-preview-modal__compare-text">{{
+                        row.backupText
+                      }}</span>
+                    </div>
+                  </div>
                 </section>
               </div>
             </article>
@@ -541,9 +585,8 @@ const navItems = [
   { id: "settings", label: "Settings", icon: Settings }
 ]
 
-const isQuickSwitchPanel = new URLSearchParams(window.location.search).get(
-  "panel"
-) === "quick-switch"
+const isQuickSwitchPanel =
+  new URLSearchParams(window.location.search).get("panel") === "quick-switch"
 
 const placeholderMap = {
   sessions: {
@@ -675,6 +718,30 @@ const restoreConflictItems = computed(() => {
   return restorePreview.value?.conflicts || []
 })
 
+const restoreCompareItem = computed(() => {
+  return (
+    restoreConflictItems.value.find(
+      (item) => item.key === restoreCompareKey.value
+    ) || null
+  )
+})
+
+const restoreCompareRows = computed(() => {
+  if (!restoreCompareItem.value) {
+    return []
+  }
+
+  return createRestoreCompareRows(
+    restoreCompareItem.value.currentContent,
+    restoreCompareItem.value.backupContent
+  )
+})
+
+const restoreCompareChangedCount = computed(() => {
+  return restoreCompareRows.value.filter((item) => item.status !== "same")
+    .length
+})
+
 const restorePreviewDescription = computed(() => {
   const sourceName =
     restoreSource.value?.type === "cloud"
@@ -693,14 +760,14 @@ const restoreCanSubmit = computed(() => {
 })
 
 const quickCliTargets = computed(() => {
-  return state.cliTargets.filter(item => {
+  return state.cliTargets.filter((item) => {
     return state.runtimeConfigSchemas[item.id]?.enabled
   })
 })
 
 const quickActiveCli = computed(() => {
   return (
-    quickCliTargets.value.find(item => item.id === quickSelectedCli.value) ||
+    quickCliTargets.value.find((item) => item.id === quickSelectedCli.value) ||
     quickCliTargets.value[0] ||
     null
   )
@@ -708,15 +775,16 @@ const quickActiveCli = computed(() => {
 
 const quickActiveProfile = computed(() => {
   return (
-    state.runtimeProfiles.find(item => item.cli === quickActiveCli.value?.id) ||
-    null
+    state.runtimeProfiles.find(
+      (item) => item.cli === quickActiveCli.value?.id
+    ) || null
   )
 })
 
 const quickActiveProvider = computed(() => {
   return (
     state.providers.find(
-      item => item.id === quickActiveProfile.value?.providerId
+      (item) => item.id === quickActiveProfile.value?.providerId
     ) || null
   )
 })
@@ -726,7 +794,7 @@ const quickActiveAccount = computed(() => {
     return null
   }
 
-  return state.codexAccounts.find(item => item.active) || null
+  return state.codexAccounts.find((item) => item.active) || null
 })
 
 const quickActiveName = computed(() => {
@@ -747,10 +815,10 @@ const quickItems = computed(() => {
   }
 
   const providerItems = state.providers
-    .filter(item => {
+    .filter((item) => {
       return item.cli === quickActiveCli.value.id && item.enabled !== false
     })
-    .map(provider => {
+    .map((provider) => {
       const model = firstQuickModelName(provider)
 
       return {
@@ -773,7 +841,7 @@ const quickItems = computed(() => {
 
   return [
     ...providerItems,
-    ...state.codexAccounts.map(account => ({
+    ...state.codexAccounts.map((account) => ({
       key: `account:${account.id}`,
       type: "account",
       account,
@@ -795,7 +863,8 @@ async function bootstrap() {
         const previousLocalBackupAt =
           state.appSettings.localBackup?.lastBackupAt || 0
         updateState(nextState)
-        const nextLocalBackupAt = state.appSettings.localBackup?.lastBackupAt || 0
+        const nextLocalBackupAt =
+          state.appSettings.localBackup?.lastBackupAt || 0
 
         if (nextLocalBackupAt !== previousLocalBackupAt) {
           refreshLocalBackups(false)
@@ -837,7 +906,7 @@ function updateState(nextState) {
 function ensureQuickSelectedCli() {
   if (
     quickSelectedCli.value &&
-    quickCliTargets.value.find(item => item.id === quickSelectedCli.value)
+    quickCliTargets.value.find((item) => item.id === quickSelectedCli.value)
   ) {
     return
   }
@@ -879,7 +948,7 @@ function showWarningMessage(message) {
 function firstQuickModelName(provider) {
   return (
     provider.runtimeConfig?.mainModel ||
-    state.runtimeModels.find(item => item.providerId === provider.id)?.name ||
+    state.runtimeModels.find((item) => item.providerId === provider.id)?.name ||
     ""
   )
 }
@@ -905,8 +974,8 @@ function formatQuickAccountQuotas(account) {
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
   ]
-    .filter(item => item.window)
-    .map(item => {
+    .filter((item) => item.window)
+    .map((item) => {
       return {
         key: item.key,
         label: formatQuickRateWindowName(item.key, item.window),
@@ -1128,7 +1197,8 @@ async function createLocalBackup() {
     try {
       const result = await window.aiManager.createLocalBackup()
       localBackups.value = result.backups || []
-      localBackupDirectory.value = result.directory || localBackupDirectory.value
+      localBackupDirectory.value =
+        result.directory || localBackupDirectory.value
 
       if (result.state) {
         updateState(result.state)
@@ -1221,6 +1291,104 @@ function formatRestoreCompareContent(value) {
   return String(value)
 }
 
+function createRestoreCompareRows(currentContent, backupContent) {
+  const currentLines =
+    formatRestoreCompareContent(currentContent).split(/\r?\n/)
+  const backupLines = formatRestoreCompareContent(backupContent).split(/\r?\n/)
+  const table = Array.from({ length: currentLines.length + 1 }, () =>
+    Array(backupLines.length + 1).fill(0)
+  )
+
+  for (
+    let currentIndex = currentLines.length - 1;
+    currentIndex >= 0;
+    currentIndex -= 1
+  ) {
+    for (
+      let backupIndex = backupLines.length - 1;
+      backupIndex >= 0;
+      backupIndex -= 1
+    ) {
+      table[currentIndex][backupIndex] =
+        currentLines[currentIndex] === backupLines[backupIndex]
+          ? table[currentIndex + 1][backupIndex + 1] + 1
+          : Math.max(
+              table[currentIndex + 1][backupIndex],
+              table[currentIndex][backupIndex + 1]
+            )
+    }
+  }
+
+  const rows = []
+  let currentIndex = 0
+  let backupIndex = 0
+
+  while (
+    currentIndex < currentLines.length ||
+    backupIndex < backupLines.length
+  ) {
+    if (
+      currentIndex < currentLines.length &&
+      backupIndex < backupLines.length &&
+      currentLines[currentIndex] === backupLines[backupIndex]
+    ) {
+      rows.push({
+        index: rows.length,
+        status: "same",
+        currentStatus: "same",
+        backupStatus: "same",
+        currentLineNumber: currentIndex + 1,
+        backupLineNumber: backupIndex + 1,
+        currentMarker: "",
+        backupMarker: "",
+        currentText: currentLines[currentIndex],
+        backupText: backupLines[backupIndex]
+      })
+      currentIndex += 1
+      backupIndex += 1
+      continue
+    }
+
+    if (
+      currentIndex < currentLines.length &&
+      (backupIndex >= backupLines.length ||
+        table[currentIndex + 1][backupIndex] >=
+          table[currentIndex][backupIndex + 1])
+    ) {
+      rows.push({
+        index: rows.length,
+        status: "current-only",
+        currentStatus: "current-only",
+        backupStatus: "empty",
+        currentLineNumber: currentIndex + 1,
+        backupLineNumber: "",
+        currentMarker: "仅当前",
+        backupMarker: "缺少",
+        currentText: currentLines[currentIndex],
+        backupText: ""
+      })
+      currentIndex += 1
+      continue
+    }
+
+    rows.push({
+      index: rows.length,
+      status: "backup-only",
+      currentStatus: "empty",
+      backupStatus: "backup-only",
+      currentLineNumber: "",
+      backupLineNumber: backupIndex + 1,
+      currentMarker: "缺少",
+      backupMarker: "仅备份",
+      currentText: "",
+      backupText: backupLines[backupIndex]
+    })
+    backupIndex += 1
+  }
+
+  return rows
+}
+
 function closeRestorePreview(force = false) {
   if (pending.value && !force) {
     return
@@ -1272,7 +1440,7 @@ async function confirmRestore() {
           ? "已从坚果云兼容恢复配置数据。"
           : source.type === "local"
             ? "已从本地备份兼容恢复配置数据。"
-          : "配置数据已兼容恢复。"
+            : "配置数据已兼容恢复。"
       )
     } catch (error) {
       showErrorMessage(error)
@@ -2262,11 +2430,16 @@ onBeforeUnmount(() => {
     font-size: 0.78rem;
   }
 
-  &__compare-panel pre {
+  &__compare-summary {
+    grid-column: 1 / -1;
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &__compare-code {
     max-height: 260px;
-    margin: 0;
     overflow: auto;
-    padding: 10px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
     background: #ffffff;
@@ -2274,8 +2447,45 @@ onBeforeUnmount(() => {
     font-family: "JetBrains Mono", "Consolas", monospace;
     font-size: 0.74rem;
     line-height: 1.55;
+  }
+
+  &__compare-line {
+    display: grid;
+    grid-template-columns: 38px 54px minmax(0, 1fr);
+    gap: 6px;
+    min-height: 22px;
+    padding: 2px 8px;
     white-space: pre-wrap;
     word-break: break-all;
+  }
+
+  &__compare-line--current-only {
+    background: #fff2f0;
+  }
+
+  &__compare-line--backup-only {
+    background: #eff8ff;
+  }
+
+  &__compare-line--empty {
+    background: #f8fafc;
+    color: var(--color-text-soft);
+  }
+
+  &__compare-number {
+    color: var(--color-text-soft);
+    text-align: right;
+    user-select: none;
+  }
+
+  &__compare-marker {
+    color: var(--color-text-muted);
+    font-weight: 700;
+    user-select: none;
+  }
+
+  &__compare-text {
+    min-width: 0;
   }
 
   &__empty {

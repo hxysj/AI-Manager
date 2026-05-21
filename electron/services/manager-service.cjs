@@ -218,6 +218,7 @@ async function collectFileEntry(sourcePath, relativePath) {
 }
 
 const ignoredRuntimeBackupPaths = new Set([
+  "storage/installs.json",
   "storage/runtime-profiles.json",
   "storage/runtime-provider-state.json",
   "storage/runtime-provider-keys.json",
@@ -243,18 +244,53 @@ function createBackupJsonEntry(entry, value) {
   }
 }
 
+function mapBackupJsonEntry(entry, mapValue) {
+  if (entry.type !== "file") {
+    return entry
+  }
+
+  return createBackupJsonEntry(entry, mapValue(readBackupEntryJson(entry)))
+}
+
 function stripProviderEnabled(entry) {
   if (entry.path !== "storage/providers.json" || entry.type !== "file") {
     return entry
   }
 
-  const providers = JSON.parse(
-    Buffer.from(entry.content, "base64").toString("utf8")
-  )
-
-  return createBackupJsonEntry(
-    entry,
+  return mapBackupJsonEntry(entry, (providers) =>
     providers.map(({ enabled, ...provider }) => provider)
+  )
+}
+
+function serializeSkillBackupPaths(entry) {
+  if (entry.path !== "storage/skills.json") {
+    return entry
+  }
+
+  return mapBackupJsonEntry(entry, (skills) =>
+    skills.map(({ installedTargets, installStates, status, ...skill }) => ({
+      ...skill,
+      sourcePath: serializePortablePath(skill.sourcePath),
+      entryPath: serializePortablePath(skill.entryPath)
+    }))
+  )
+}
+
+function serializePromptRuntimeBackupPaths(entry) {
+  if (entry.path !== "storage/prompt-runtime-state.json") {
+    return entry
+  }
+
+  return mapBackupJsonEntry(entry, (runtimeState) =>
+    Object.fromEntries(
+      Object.entries(runtimeState || {}).map(([cli, state]) => [
+        cli,
+        {
+          ...state,
+          runtimePath: serializePortablePath(state?.runtimePath)
+        }
+      ])
+    )
   )
 }
 
@@ -263,7 +299,11 @@ function sanitizeRuntimeBackupEntries(entries) {
     .filter(
       (entry) => !ignoredRuntimeBackupPaths.has(entry.path)
     )
-    .map((entry) => stripProviderEnabled(entry))
+    .map((entry) =>
+      serializePromptRuntimeBackupPaths(
+        serializeSkillBackupPaths(stripProviderEnabled(entry))
+      )
+    )
 }
 
 function parseBackup(content) {
@@ -303,6 +343,24 @@ function isStorageJsonPath(entryPath) {
   return entryPath.startsWith("storage/") && entryPath.endsWith(".json")
 }
 
+function normalizeSkillRestoreValue(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value
+  }
+
+  const { installedTargets, installStates, status, ...nextValue } = value
+  return nextValue
+}
+
+function normalizePromptRuntimeRestoreValue(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value
+  }
+
+  const { lastSyncAt, runtimePath, ...state } = value
+  return state
+}
+
 function normalizeRestoreValue(entryPath, value) {
   if (
     entryPath === "storage/providers.json" &&
@@ -312,6 +370,14 @@ function normalizeRestoreValue(entryPath, value) {
   ) {
     const { enabled, ...provider } = value
     return JSON.stringify(provider, null, 2)
+  }
+
+  if (entryPath === "storage/skills.json") {
+    return JSON.stringify(normalizeSkillRestoreValue(value), null, 2)
+  }
+
+  if (entryPath === "storage/prompt-runtime-state.json") {
+    return JSON.stringify(normalizePromptRuntimeRestoreValue(value), null, 2)
   }
 
   return JSON.stringify(value, null, 2)
@@ -479,6 +545,38 @@ function appendJsonRestorePreview(entryPath, currentValue, backupValue, preview)
       )
     )
   }
+}
+
+function mergeSkillRestoreValue(currentValue, backupValue) {
+  const { installedTargets, installStates, status, ...nextBackupValue } =
+    backupValue || {}
+
+  return {
+    ...nextBackupValue,
+    installedTargets: currentValue?.installedTargets || [],
+    installStates: currentValue?.installStates || {},
+    status: currentValue?.status || "not-installed"
+  }
+}
+
+function mergePromptRuntimeRestoreValue(currentValue, backupValue) {
+  return {
+    ...backupValue,
+    lastSyncAt: currentValue?.lastSyncAt || backupValue?.lastSyncAt,
+    runtimePath: currentValue?.runtimePath || backupValue?.runtimePath
+  }
+}
+
+function mergeRestoreValue(entryPath, currentValue, backupValue) {
+  if (entryPath === "storage/skills.json") {
+    return mergeSkillRestoreValue(currentValue, backupValue)
+  }
+
+  if (entryPath === "storage/prompt-runtime-state.json") {
+    return mergePromptRuntimeRestoreValue(currentValue, backupValue)
+  }
+
+  return backupValue
 }
 
 async function collectBackupEntries(paths) {
@@ -726,7 +824,11 @@ function mergeJsonBackupValue(entryPath, currentValue, backupValue, choices) {
       }
 
       if (choices[createRestoreChoiceKey(entryPath, itemKey)] === "backup") {
-        nextItems[nextIndex] = item
+        nextItems[nextIndex] = mergeRestoreValue(
+          entryPath,
+          nextItems[nextIndex],
+          item
+        )
       }
     })
 
@@ -744,7 +846,11 @@ function mergeJsonBackupValue(entryPath, currentValue, backupValue, choices) {
         !(itemKey in nextValue) ||
         choices[createRestoreChoiceKey(entryPath, itemKey)] === "backup"
       ) {
-        nextValue[itemKey] = value
+        nextValue[itemKey] = mergeRestoreValue(
+          entryPath,
+          nextValue[itemKey],
+          value
+        )
       }
     }
 
