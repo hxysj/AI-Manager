@@ -1,6 +1,7 @@
 const path = require("node:path")
 const fs = require("node:fs")
 const os = require("node:os")
+const crypto = require("node:crypto")
 const fsp = require("node:fs/promises")
 const {
   app,
@@ -29,6 +30,9 @@ let managerReadyPromise = null
 let isQuitting = false
 let closeDialogOpen = false
 let quickSwitchCollapsed = false
+let localBackupTimer = null
+let localBackupRunning = false
+const restoreBackupDrafts = new Map()
 const defaultUserDataPath = "D:\\ai-manager-data"
 const settingsFilePath = path.join(defaultUserDataPath, "app-settings.json")
 const appIconPath = app.isPackaged
@@ -50,6 +54,12 @@ const defaultCloudSyncSettings = {
   password: "",
   fileName: "ai-manager.aimbackup",
   lastUpdatedAt: 0
+}
+const defaultLocalBackupSettings = {
+  enabled: true,
+  intervalMinutes: 60,
+  maxCount: 20,
+  lastBackupAt: 0
 }
 const defaultSystemSettings = {
   closeAction: "ask",
@@ -87,6 +97,29 @@ function normalizeCloudSyncSettings(input = {}) {
   }
 }
 
+function normalizeLocalBackupSettings(input = {}) {
+  const intervalMinutes = Math.floor(
+    Number(input.intervalMinutes || defaultLocalBackupSettings.intervalMinutes)
+  )
+  const maxCount = Math.floor(
+    Number(input.maxCount || defaultLocalBackupSettings.maxCount)
+  )
+
+  return {
+    enabled:
+      input.enabled === undefined
+        ? defaultLocalBackupSettings.enabled
+        : Boolean(input.enabled),
+    intervalMinutes: Number.isFinite(intervalMinutes)
+      ? Math.max(1, intervalMinutes)
+      : defaultLocalBackupSettings.intervalMinutes,
+    maxCount: Number.isFinite(maxCount)
+      ? Math.max(1, maxCount)
+      : defaultLocalBackupSettings.maxCount,
+    lastBackupAt: Number(input.lastBackupAt || 0)
+  }
+}
+
 function normalizeAppSettings(input = {}) {
   const cliConfigPaths = input.cliConfigPaths || {}
   return {
@@ -108,6 +141,7 @@ function normalizeAppSettings(input = {}) {
     },
     defaultCliConfigPaths,
     cloudSync: normalizeCloudSyncSettings(input.cloudSync),
+    localBackup: normalizeLocalBackupSettings(input.localBackup),
     system: normalizeSystemSettings(input.system)
   }
 }
@@ -184,6 +218,28 @@ async function downloadWebDavBackup(config) {
   return response.text()
 }
 
+function cacheRestoreBackup(content, source = {}) {
+  const restoreId = crypto.randomUUID()
+
+  restoreBackupDrafts.set(restoreId, {
+    content,
+    source,
+    createdAt: Date.now()
+  })
+
+  return restoreId
+}
+
+function getRestoreBackupDraft(restoreId) {
+  const draft = restoreBackupDrafts.get(String(restoreId || ""))
+
+  if (!draft) {
+    throw new Error("恢复预览已失效，请重新选择备份")
+  }
+
+  return draft
+}
+
 function loadAppSettings() {
   try {
     return normalizeAppSettings(
@@ -226,6 +282,149 @@ async function restartManagerService(nextSettings = appSettings) {
   })
 
   return managerService.getState()
+}
+
+function getLocalBackupDirectory() {
+  return path.join(app.getPath("userData"), "local-backups")
+}
+
+function getLocalBackupPath(backupId) {
+  const fileName = path.basename(String(backupId || ""))
+
+  if (!fileName.endsWith(".aimbackup")) {
+    throw new Error("本地备份文件无效")
+  }
+
+  return path.join(getLocalBackupDirectory(), fileName)
+}
+
+async function listLocalBackupFiles() {
+  const backupDir = getLocalBackupDirectory()
+  let children = []
+
+  try {
+    children = await fsp.readdir(backupDir, { withFileTypes: true })
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return []
+    }
+
+    throw error
+  }
+
+  const backups = []
+
+  for (const child of children) {
+    if (!child.isFile() || !child.name.endsWith(".aimbackup")) {
+      continue
+    }
+
+    const filePath = path.join(backupDir, child.name)
+    const stat = await fsp.stat(filePath)
+    backups.push({
+      id: child.name,
+      fileName: child.name,
+      filePath,
+      createdAt: stat.mtimeMs,
+      size: stat.size
+    })
+  }
+
+  return backups.sort((left, right) => right.createdAt - left.createdAt)
+}
+
+async function getLocalBackupsPayload() {
+  return {
+    directory: getLocalBackupDirectory(),
+    backups: await listLocalBackupFiles()
+  }
+}
+
+async function pruneLocalBackups() {
+  const backups = await listLocalBackupFiles()
+  const expiredBackups = backups.slice(appSettings.localBackup.maxCount)
+
+  for (const backup of expiredBackups) {
+    await fsp.rm(backup.filePath, { force: true })
+  }
+}
+
+async function createLocalBackup() {
+  if (localBackupRunning) {
+    return null
+  }
+
+  localBackupRunning = true
+
+  try {
+    await managerReadyPromise
+
+    const backupDir = getLocalBackupDirectory()
+    const createdAt = Date.now()
+    const fileName = `monkey-thief-auto-${new Date(createdAt)
+      .toISOString()
+      .replace(/[:.]/g, "-")}.aimbackup`
+    const filePath = path.join(backupDir, fileName)
+
+    await fsp.mkdir(backupDir, { recursive: true })
+    await fsp.writeFile(filePath, await managerService.createDataBackup(), "utf8")
+    await pruneLocalBackups()
+
+    appSettings = normalizeAppSettings({
+      ...appSettings,
+      localBackup: {
+        ...appSettings.localBackup,
+        lastBackupAt: createdAt
+      }
+    })
+    saveAppSettings(appSettings)
+    managerService.setAppSettings(appSettings)
+
+    const stat = await fsp.stat(filePath)
+
+    return {
+      id: fileName,
+      fileName,
+      filePath,
+      createdAt: stat.mtimeMs,
+      size: stat.size
+    }
+  } finally {
+    localBackupRunning = false
+  }
+}
+
+async function createLocalBackupIfDue() {
+  if (!appSettings.localBackup.enabled) {
+    return
+  }
+
+  const intervalMs = appSettings.localBackup.intervalMinutes * 60 * 1000
+
+  if (Date.now() - appSettings.localBackup.lastBackupAt < intervalMs) {
+    return
+  }
+
+  await createLocalBackup()
+}
+
+function restartLocalBackupTimer() {
+  if (localBackupTimer) {
+    clearInterval(localBackupTimer)
+    localBackupTimer = null
+  }
+
+  if (!appSettings.localBackup.enabled) {
+    return
+  }
+
+  const intervalMs = appSettings.localBackup.intervalMinutes * 60 * 1000
+
+  localBackupTimer = setInterval(() => {
+    createLocalBackupIfDue().catch(showTrayError)
+  }, intervalMs)
+
+  createLocalBackupIfDue().catch(showTrayError)
 }
 
 async function showMainPanel() {
@@ -1241,10 +1440,14 @@ function registerIpc() {
     ) {
       await managerService.updateAppSettings(appSettings)
       managerService.setAppSettings(appSettings, true)
+      await pruneLocalBackups()
+      restartLocalBackupTimer()
       return managerService.getState()
     }
 
     await managerService.updateAppSettings(appSettings)
+    await pruneLocalBackups()
+    restartLocalBackupTimer()
     return managerService.getState()
   })
 
@@ -1276,7 +1479,7 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle("data:restore", async () => {
+  ipcMain.handle("data:preview-restore", async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: "恢复配置数据",
       defaultPath: app.getPath("desktop"),
@@ -1290,14 +1493,78 @@ function registerIpc() {
       }
     }
 
-    const restoreResult = await managerService.restoreDataBackup(
-      await fsp.readFile(result.filePaths[0], "utf8")
-    )
-    appSettings = normalizeAppSettings(restoreResult.appSettings)
-    saveAppSettings(appSettings)
+    const content = await fsp.readFile(result.filePaths[0], "utf8")
+    const restoreId = cacheRestoreBackup(content, {
+      type: "file",
+      filePath: result.filePaths[0]
+    })
 
     return {
       canceled: false,
+      restoreId,
+      filePath: result.filePaths[0],
+      preview: await managerService.previewDataBackupRestore(content)
+    }
+  })
+
+  ipcMain.handle("data:restore", async (_, payload = {}) => {
+    const draft = getRestoreBackupDraft(payload.restoreId)
+
+    await managerService.restoreDataBackup(draft.content, {
+      choices: payload.choices || {}
+    })
+    restoreBackupDrafts.delete(payload.restoreId)
+
+    return {
+      canceled: false,
+      state: await restartManagerService(appSettings)
+    }
+  })
+
+  ipcMain.handle("data:local-backups", async () => getLocalBackupsPayload())
+
+  ipcMain.handle("data:local-backup-now", async () => {
+    const backup = await createLocalBackup()
+
+    if (!backup) {
+      throw new Error("本地自动备份正在进行，请稍后再试")
+    }
+
+    return {
+      backup,
+      ...(await getLocalBackupsPayload()),
+      state: managerService.getState()
+    }
+  })
+
+  ipcMain.handle("data:local-backup-preview", async (_, payload = {}) => {
+    const filePath = getLocalBackupPath(payload.backupId)
+    const content = await fsp.readFile(filePath, "utf8")
+    const restoreId = cacheRestoreBackup(content, {
+      type: "local",
+      backupId: payload.backupId,
+      filePath
+    })
+
+    return {
+      restoreId,
+      fileName: path.basename(filePath),
+      filePath,
+      preview: await managerService.previewDataBackupRestore(content)
+    }
+  })
+
+  ipcMain.handle("data:local-backup-restore", async (_, payload = {}) => {
+    const draft = getRestoreBackupDraft(payload.restoreId)
+
+    await managerService.restoreDataBackup(draft.content, {
+      choices: payload.choices || {}
+    })
+    restoreBackupDrafts.delete(payload.restoreId)
+
+    return {
+      canceled: false,
+      ...(await getLocalBackupsPayload()),
       state: await restartManagerService(appSettings)
     }
   })
@@ -1323,14 +1590,34 @@ function registerIpc() {
     }
   })
 
-  ipcMain.handle("data:cloud-pull", async (_, payload) => {
+  ipcMain.handle("data:cloud-preview", async (_, payload) => {
     const cloudSync = normalizeCloudSyncSettings(payload)
-    const lastUpdatedAt = Date.now()
-    const restoreResult = await managerService.restoreDataBackup(
-      await downloadWebDavBackup(cloudSync)
+    const content = await downloadWebDavBackup(cloudSync)
+    const restoreId = cacheRestoreBackup(content, {
+      type: "cloud",
+      cloudSync
+    })
+
+    return {
+      restoreId,
+      fileName: cloudSync.fileName,
+      preview: await managerService.previewDataBackupRestore(content)
+    }
+  })
+
+  ipcMain.handle("data:cloud-pull", async (_, payload) => {
+    const draft = getRestoreBackupDraft(payload.restoreId)
+    const cloudSync = normalizeCloudSyncSettings(
+      payload.cloudSync || draft.source.cloudSync
     )
+    const lastUpdatedAt = Date.now()
+
+    await managerService.restoreDataBackup(draft.content, {
+      choices: payload.choices || {}
+    })
+    restoreBackupDrafts.delete(payload.restoreId)
     appSettings = normalizeAppSettings({
-      ...restoreResult.appSettings,
+      ...appSettings,
       cloudSync: {
         ...cloudSync,
         lastUpdatedAt
@@ -1598,6 +1885,7 @@ app.whenReady().then(async () => {
 
   registerIpc()
   createTray()
+  restartLocalBackupTimer()
   managerReadyPromise
     .then(() => {
       updateTrayMenu()
@@ -1632,6 +1920,11 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", async () => {
   isQuitting = true
+
+  if (localBackupTimer) {
+    clearInterval(localBackupTimer)
+    localBackupTimer = null
+  }
 
   if (managerService) {
     await managerService.dispose()

@@ -706,6 +706,30 @@ class RuntimeProviderService {
     await this.storage.writeNow("runtimeProviderKeys", nextKeys)
   }
 
+  async mergeProviderKeys(apiKeys, choices = {}) {
+    const nextKeys = { ...this.keyManager.keys }
+
+    for (const [providerId, apiKey] of Object.entries(apiKeys || {})) {
+      const key = String(apiKey || "").trim()
+
+      if (!key) {
+        continue
+      }
+
+      if (
+        nextKeys[providerId] &&
+        choices[`json:storage/providers.json:${providerId}`] !== "backup"
+      ) {
+        continue
+      }
+
+      nextKeys[providerId] = this.keyManager.encrypt(key)
+    }
+
+    this.keyManager.keys = nextKeys
+    await this.storage.writeNow("runtimeProviderKeys", nextKeys)
+  }
+
   getState() {
     return {
       runtimeConfigSchemas,

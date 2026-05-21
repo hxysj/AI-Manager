@@ -44,6 +44,10 @@ function sortByName(items) {
   return [...items].sort((left, right) => left.name.localeCompare(right.name))
 }
 
+function sha256(content) {
+  return crypto.createHash("sha256").update(content).digest("hex")
+}
+
 function normalizeRuleTags(value) {
   if (!Array.isArray(value)) {
     return []
@@ -213,6 +217,270 @@ async function collectFileEntry(sourcePath, relativePath) {
   }
 }
 
+const ignoredRuntimeBackupPaths = new Set([
+  "storage/runtime-profiles.json",
+  "storage/runtime-provider-state.json",
+  "storage/runtime-provider-keys.json",
+  "storage/codex-active-account-id.json"
+])
+
+const restoreStorageNames = {
+  "storage/skills.json": "Skill 索引",
+  "storage/installs.json": "Skill 挂载",
+  "storage/providers.json": "Provider",
+  "storage/runtime-models.json": "模型",
+  "storage/codex-accounts.json": "Codex 官方账号",
+  "storage/rules.json": "Prompt 索引",
+  "storage/prompt-runtime-state.json": "Prompt Runtime 状态"
+}
+
+function createBackupJsonEntry(entry, value) {
+  return {
+    ...entry,
+    content: Buffer.from(`${JSON.stringify(value, null, 2)}\n`).toString(
+      "base64"
+    )
+  }
+}
+
+function stripProviderEnabled(entry) {
+  if (entry.path !== "storage/providers.json" || entry.type !== "file") {
+    return entry
+  }
+
+  const providers = JSON.parse(
+    Buffer.from(entry.content, "base64").toString("utf8")
+  )
+
+  return createBackupJsonEntry(
+    entry,
+    providers.map(({ enabled, ...provider }) => provider)
+  )
+}
+
+function sanitizeRuntimeBackupEntries(entries) {
+  return entries
+    .filter(
+      (entry) => !ignoredRuntimeBackupPaths.has(entry.path)
+    )
+    .map((entry) => stripProviderEnabled(entry))
+}
+
+function parseBackup(content) {
+  const backup = decryptBackupPayload(String(content || ""))
+
+  if (backup.version !== 1) {
+    throw new Error("备份版本不支持")
+  }
+
+  if (!Array.isArray(backup.workspaceEntries)) {
+    throw new Error("备份数据不完整")
+  }
+
+  return {
+    ...backup,
+    workspaceEntries: sanitizeRuntimeBackupEntries(backup.workspaceEntries)
+  }
+}
+
+function readBackupEntryText(entry) {
+  return Buffer.from(entry.content, "base64").toString("utf8")
+}
+
+function readBackupEntryJson(entry) {
+  return JSON.parse(readBackupEntryText(entry))
+}
+
+function createRestoreChoiceKey(entryPath, itemKey) {
+  return `json:${entryPath}:${itemKey}`
+}
+
+function createRestoreFileKey(entryPath) {
+  return `file:${entryPath}`
+}
+
+function isStorageJsonPath(entryPath) {
+  return entryPath.startsWith("storage/") && entryPath.endsWith(".json")
+}
+
+function normalizeRestoreValue(entryPath, value) {
+  if (
+    entryPath === "storage/providers.json" &&
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  ) {
+    const { enabled, ...provider } = value
+    return JSON.stringify(provider, null, 2)
+  }
+
+  return JSON.stringify(value, null, 2)
+}
+
+function createRestoreContentHash(entryPath, value) {
+  return sha256(normalizeRestoreValue(entryPath, value))
+}
+
+function getRestoreItemKey(entryPath, item, index) {
+  if (item && typeof item === "object" && !Array.isArray(item)) {
+    if (item.id) {
+      return String(item.id)
+    }
+
+    if (item.providerId && item.name) {
+      return `${item.providerId}:${item.name}`
+    }
+
+    return String(item.name || item.accountId || item.account_id || index)
+  }
+
+  return String(index)
+}
+
+function getRestoreItemName(entryPath, itemKey, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return itemKey
+  }
+
+  if (entryPath === "storage/codex-accounts.json") {
+    return value.email || value.accountId || value.account_id || itemKey
+  }
+
+  return value.name || value.id || itemKey
+}
+
+function createRestorePreviewItem(
+  entryPath,
+  itemKey,
+  value,
+  status,
+  currentValue = null
+) {
+  const type = restoreStorageNames[entryPath] || "配置项"
+
+  return {
+    key: createRestoreChoiceKey(entryPath, itemKey),
+    type,
+    name: getRestoreItemName(entryPath, itemKey, value),
+    path: entryPath,
+    status,
+    currentContent:
+      status === "conflict" ? normalizeRestoreValue(entryPath, currentValue) : "",
+    backupContent:
+      status === "conflict" ? normalizeRestoreValue(entryPath, value) : ""
+  }
+}
+
+function createRestoreFilePreviewItem(
+  entryPath,
+  status,
+  currentContent = "",
+  backupContent = ""
+) {
+  return {
+    key: createRestoreFileKey(entryPath),
+    type: entryPath.startsWith("skills/")
+      ? "Skill 文件"
+      : entryPath.startsWith("prompts/")
+        ? "Prompt 文件"
+        : entryPath.startsWith("profiles/")
+          ? "Prompt 配置"
+          : "文件",
+    name: path.basename(entryPath),
+    path: entryPath,
+    status,
+    currentContent,
+    backupContent
+  }
+}
+
+function appendJsonRestorePreview(entryPath, currentValue, backupValue, preview) {
+  if (Array.isArray(backupValue)) {
+    const currentItems = Array.isArray(currentValue) ? currentValue : []
+    const currentMap = new Map(
+      currentItems.map((item, index) => [
+        getRestoreItemKey(entryPath, item, index),
+        item
+      ])
+    )
+
+    backupValue.forEach((item, index) => {
+      const itemKey = getRestoreItemKey(entryPath, item, index)
+      const currentItem = currentMap.get(itemKey)
+
+      if (!currentItem) {
+        preview.added.push(
+          createRestorePreviewItem(entryPath, itemKey, item, "added")
+        )
+        return
+      }
+
+      if (
+        createRestoreContentHash(entryPath, currentItem) !==
+        createRestoreContentHash(entryPath, item)
+      ) {
+        preview.conflicts.push(
+          createRestorePreviewItem(
+            entryPath,
+            itemKey,
+            item,
+            "conflict",
+            currentItem
+          )
+        )
+      }
+    })
+    return
+  }
+
+  if (backupValue && typeof backupValue === "object") {
+    const currentObject =
+      currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)
+        ? currentValue
+        : {}
+
+    for (const [itemKey, value] of Object.entries(backupValue)) {
+      if (!(itemKey in currentObject)) {
+        preview.added.push(
+          createRestorePreviewItem(entryPath, itemKey, value, "added")
+        )
+        continue
+      }
+
+      if (
+        createRestoreContentHash(entryPath, currentObject[itemKey]) !==
+        createRestoreContentHash(entryPath, value)
+      ) {
+        preview.conflicts.push(
+          createRestorePreviewItem(
+            entryPath,
+            itemKey,
+            value,
+            "conflict",
+            currentObject[itemKey]
+          )
+        )
+      }
+    }
+    return
+  }
+
+  if (
+    createRestoreContentHash(entryPath, currentValue) !==
+    createRestoreContentHash(entryPath, backupValue)
+  ) {
+    preview.conflicts.push(
+      createRestorePreviewItem(
+        entryPath,
+        entryPath,
+        backupValue,
+        "conflict",
+        currentValue
+      )
+    )
+  }
+}
+
 async function collectBackupEntries(paths) {
   const storageFiles = [
     [paths.storageFiles.skills, "storage/skills.json"],
@@ -265,7 +533,7 @@ async function collectBackupEntries(paths) {
     )
   }
 
-  return entries
+  return sanitizeRuntimeBackupEntries(entries)
 }
 
 function encryptBackupData(value) {
@@ -348,7 +616,170 @@ function assertBackupPath(rootPath, targetPath) {
   }
 }
 
-async function restoreDirectoryEntries(rootPath, entries) {
+async function readCurrentFile(rootPath, entryPath) {
+  const targetPath = path.resolve(rootPath, entryPath)
+
+  assertBackupPath(rootPath, targetPath)
+
+  if (!(await pathExists(targetPath))) {
+    return null
+  }
+
+  return fs.readFile(targetPath)
+}
+
+async function createRestorePreview(rootPath, entries) {
+  const preview = {
+    added: [],
+    conflicts: []
+  }
+
+  for (const entry of entries.filter((item) => item.type === "file")) {
+    const currentContent = await readCurrentFile(rootPath, entry.path)
+
+    if (isStorageJsonPath(entry.path)) {
+      appendJsonRestorePreview(
+        entry.path,
+        currentContent
+          ? JSON.parse(currentContent.toString("utf8"))
+          : Array.isArray(readBackupEntryJson(entry))
+            ? []
+            : {},
+        readBackupEntryJson(entry),
+        preview
+      )
+      continue
+    }
+
+    if (!currentContent) {
+      preview.added.push(createRestoreFilePreviewItem(entry.path, "added"))
+      continue
+    }
+
+    if (
+      sha256(currentContent) !==
+      sha256(Buffer.from(entry.content, "base64"))
+    ) {
+      preview.conflicts.push(
+        createRestoreFilePreviewItem(
+          entry.path,
+          "conflict",
+          currentContent.toString("utf8"),
+          Buffer.from(entry.content, "base64").toString("utf8")
+        )
+      )
+    }
+  }
+
+  for (const entry of entries.filter((item) => item.type === "symlink")) {
+    const targetPath = path.resolve(rootPath, entry.path)
+
+    assertBackupPath(rootPath, targetPath)
+
+    if (!(await pathExists(targetPath))) {
+      preview.added.push(createRestoreFilePreviewItem(entry.path, "added"))
+      continue
+    }
+
+    const stat = await fs.lstat(targetPath)
+    const currentTarget = stat.isSymbolicLink()
+      ? await fs.readlink(targetPath)
+      : ""
+
+    if (currentTarget !== entry.target) {
+      preview.conflicts.push(
+        createRestoreFilePreviewItem(
+          entry.path,
+          "conflict",
+          currentTarget,
+          entry.target
+        )
+      )
+    }
+  }
+
+  return {
+    ...preview,
+    addedCount: preview.added.length,
+    conflictCount: preview.conflicts.length
+  }
+}
+
+function mergeJsonBackupValue(entryPath, currentValue, backupValue, choices) {
+  if (Array.isArray(backupValue)) {
+    const nextItems = Array.isArray(currentValue) ? [...currentValue] : []
+    const nextIndexMap = new Map(
+      nextItems.map((item, index) => [
+        getRestoreItemKey(entryPath, item, index),
+        index
+      ])
+    )
+
+    backupValue.forEach((item, index) => {
+      const itemKey = getRestoreItemKey(entryPath, item, index)
+      const nextIndex = nextIndexMap.get(itemKey)
+
+      if (nextIndex === undefined) {
+        nextIndexMap.set(itemKey, nextItems.length)
+        nextItems.push(item)
+        return
+      }
+
+      if (choices[createRestoreChoiceKey(entryPath, itemKey)] === "backup") {
+        nextItems[nextIndex] = item
+      }
+    })
+
+    return nextItems
+  }
+
+  if (backupValue && typeof backupValue === "object") {
+    const nextValue =
+      currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)
+        ? { ...currentValue }
+        : {}
+
+    for (const [itemKey, value] of Object.entries(backupValue)) {
+      if (
+        !(itemKey in nextValue) ||
+        choices[createRestoreChoiceKey(entryPath, itemKey)] === "backup"
+      ) {
+        nextValue[itemKey] = value
+      }
+    }
+
+    return nextValue
+  }
+
+  return choices[createRestoreChoiceKey(entryPath, entryPath)] === "backup"
+    ? backupValue
+    : currentValue
+}
+
+async function restoreJsonEntry(rootPath, entry, choices) {
+  const targetPath = path.resolve(rootPath, entry.path)
+  const currentContent = await readCurrentFile(rootPath, entry.path)
+  const backupValue = readBackupEntryJson(entry)
+  const currentValue = currentContent
+    ? JSON.parse(currentContent.toString("utf8"))
+    : Array.isArray(backupValue)
+      ? []
+      : {}
+
+  assertBackupPath(rootPath, targetPath)
+  await fs.mkdir(path.dirname(targetPath), { recursive: true })
+  await fs.writeFile(
+    targetPath,
+    `${JSON.stringify(
+      mergeJsonBackupValue(entry.path, currentValue, backupValue, choices),
+      null,
+      2
+    )}\n`,
+    "utf8"
+  )
+}
+
+async function restoreDirectoryEntries(rootPath, entries, choices = {}) {
   await fs.mkdir(rootPath, { recursive: true })
 
   for (const entry of entries.filter((item) => item.type === "dir")) {
@@ -362,14 +793,48 @@ async function restoreDirectoryEntries(rootPath, entries) {
     const targetPath = path.resolve(rootPath, entry.path)
 
     assertBackupPath(rootPath, targetPath)
+
+    if (isStorageJsonPath(entry.path)) {
+      await restoreJsonEntry(rootPath, entry, choices)
+      continue
+    }
+
+    const currentContent = await readCurrentFile(rootPath, entry.path)
+    const backupContent = Buffer.from(entry.content, "base64")
+
+    if (
+      currentContent &&
+      sha256(currentContent) !== sha256(backupContent) &&
+      choices[createRestoreFileKey(entry.path)] !== "backup"
+    ) {
+      continue
+    }
+
     await fs.mkdir(path.dirname(targetPath), { recursive: true })
-    await fs.writeFile(targetPath, Buffer.from(entry.content, "base64"))
+    await fs.writeFile(targetPath, backupContent)
   }
 
   for (const entry of entries.filter((item) => item.type === "symlink")) {
     const targetPath = path.resolve(rootPath, entry.path)
 
     assertBackupPath(rootPath, targetPath)
+
+    if (await pathExists(targetPath)) {
+      const stat = await fs.lstat(targetPath)
+      const currentTarget = stat.isSymbolicLink()
+        ? await fs.readlink(targetPath)
+        : ""
+
+      if (
+        currentTarget !== entry.target &&
+        choices[createRestoreFileKey(entry.path)] !== "backup"
+      ) {
+        continue
+      }
+
+      await fs.rm(targetPath, { recursive: true, force: true })
+    }
+
     await fs.mkdir(path.dirname(targetPath), { recursive: true })
     await fs.symlink(entry.target, targetPath)
   }
@@ -498,69 +963,45 @@ class ManagerService extends EventEmitter {
     })
   }
 
-  async restoreDataBackup(content) {
-    const backup = decryptBackupPayload(String(content || ""))
+  async previewDataBackupRestore(content) {
+    const backup = parseBackup(content)
 
-    if (backup.version !== 1) {
-      throw new Error("备份版本不支持")
+    return {
+      createdAt: backup.createdAt || 0,
+      ...(await createRestorePreview(
+        this.paths.workspaceRoot,
+        backup.workspaceEntries
+      ))
     }
+  }
 
-    if (!Array.isArray(backup.workspaceEntries)) {
-      throw new Error("备份数据不完整")
-    }
+  async restoreDataBackup(content, options = {}) {
+    const backup = parseBackup(content)
+    const choices = options.choices || {}
 
     this.codexAccountService.stopAutoRefresh()
     this.fileWatcherService.stop()
     await this.sessionService.dispose()
     await this.storage.flush()
 
-    await Promise.all([
-      fs.rm(this.paths.storageFiles.providers, { force: true }),
-      fs.rm(this.paths.storageFiles.runtimeModels, { force: true }),
-      fs.rm(this.paths.storageFiles.runtimeProfiles, { force: true }),
-      fs.rm(this.paths.storageFiles.runtimeProviderState, { force: true }),
-      fs.rm(this.paths.storageFiles.runtimeProviderKeys, { force: true }),
-      fs.rm(this.paths.storageFiles.codexAccounts, { force: true }),
-      fs.rm(this.paths.storageFiles.codexActiveAccountId, { force: true }),
-      fs.rm(this.paths.storageFiles.rules, { force: true }),
-      fs.rm(this.paths.storageFiles.promptRuntimeState, { force: true }),
-      fs.rm(this.paths.skillsDir, { recursive: true, force: true }),
-      fs.rm(this.paths.promptsDir, { recursive: true, force: true }),
-      fs.rm(this.paths.promptProfilesDir, { recursive: true, force: true })
-    ])
     await ensureAppDirectories(this.paths)
     await restoreDirectoryEntries(
       this.paths.workspaceRoot,
-      backup.workspaceEntries
+      backup.workspaceEntries,
+      choices
     )
     await this.storage.writeNow("cliTargets", [])
+    await this.storage.writeNow("runtimeProfiles", [])
+    await this.storage.writeNow("runtimeProviderState", {})
     if (backup.runtimeProviderKeys) {
-      await this.runtimeProviderService.importProviderKeys(
-        decryptBackupData(backup.runtimeProviderKeys)
+      await this.runtimeProviderService.mergeProviderKeys(
+        decryptBackupData(backup.runtimeProviderKeys),
+        choices
       )
     }
 
     return {
-      appSettings: {
-        ...this.appSettings,
-        dataPath: resolvePortablePath(
-          backup.appSettings?.dataPath || this.appSettings.dataPath
-        ),
-        cliConfigPaths: {
-          claude: resolvePortablePath(
-            backup.appSettings?.cliConfigPaths?.claude ||
-              this.appSettings.cliConfigPaths.claude
-          ),
-          codex: resolvePortablePath(
-            backup.appSettings?.cliConfigPaths?.codex ||
-              this.appSettings.cliConfigPaths.codex
-          ),
-          gemini: resolvePortablePath(
-            backup.appSettings?.cliConfigPaths?.gemini ||
-              this.appSettings.cliConfigPaths.gemini
-          )
-        }
-      }
+      appSettings: this.appSettings
     }
   }
 

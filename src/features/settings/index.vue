@@ -32,18 +32,19 @@
       </button>
     </nav>
 
-    <div v-if="activeTab === 'directories'" class="settings-view__tab-panel">
-      <section class="settings-view__panel">
-        <div class="settings-view__panel-header">
-          <div>
-            <h2>Data 目录</h2>
-            <span>当前运行目录：{{ appSettings.dataPath }}</span>
+    <div class="settings-view__content">
+      <div v-if="activeTab === 'directories'" class="settings-view__tab-panel">
+        <section class="settings-view__panel">
+          <div class="settings-view__panel-header">
+            <div>
+              <h2>Data 目录</h2>
+              <span>当前运行目录：{{ appSettings.dataPath }}</span>
+            </div>
+            <button type="button" @click="$emit('open-path', draft.dataPath)">
+              <FolderOpen :size="16" />
+              打开
+            </button>
           </div>
-          <button type="button" @click="$emit('open-path', draft.dataPath)">
-            <FolderOpen :size="16" />
-            打开
-          </button>
-        </div>
 
         <label class="settings-view__field">
           <span>Data 存放位置</span>
@@ -70,15 +71,15 @@
         <p class="settings-view__hint">
           启动配置保存于：{{ appSettings.settingsFilePath }}
         </p>
-      </section>
+        </section>
 
-      <section class="settings-view__panel">
-        <div class="settings-view__panel-header">
-          <div>
-            <h2>CLI 配置目录</h2>
-            <span>保存后会重新检测 CLI、Skill 挂载和 Session 索引。</span>
+        <section class="settings-view__panel">
+          <div class="settings-view__panel-header">
+            <div>
+              <h2>CLI 配置目录</h2>
+              <span>保存后会重新检测 CLI、Skill 挂载和 Session 索引。</span>
+            </div>
           </div>
-        </div>
 
         <div class="settings-view__cli-list">
           <article
@@ -135,16 +136,16 @@
             </div>
           </article>
         </div>
-      </section>
-    </div>
-
-    <section v-else-if="activeTab === 'data'" class="settings-view__panel">
-      <div class="settings-view__panel-header">
-        <div>
-          <h2>数据管理</h2>
-          <span>导出会加密打包当前配置，恢复会覆盖现有配置并刷新状态。</span>
-        </div>
+        </section>
       </div>
+
+      <section v-else-if="activeTab === 'data'" class="settings-view__panel">
+        <div class="settings-view__panel-header">
+          <div>
+            <h2>数据管理</h2>
+            <span>导出会加密打包当前配置，恢复会兼容合并并刷新状态。</span>
+          </div>
+        </div>
 
       <div class="settings-view__data-list">
         <article class="settings-view__data-card">
@@ -163,7 +164,7 @@
         <article class="settings-view__data-card">
           <div class="settings-view__data-copy">
             <strong>恢复配置</strong>
-            <span>从加密备份中恢复配置，恢复后会立即重新加载。</span>
+            <span>从加密备份中合并配置，冲突内容恢复前确认。</span>
           </div>
           <button type="button" @click="$emit('restore-data')">
             <Upload :size="16" />
@@ -171,6 +172,133 @@
           </button>
         </article>
       </div>
+
+      <section class="settings-view__cloud">
+        <div class="settings-view__cloud-header">
+          <div>
+            <strong>本地自动备份</strong>
+            <span>按固定间隔生成本地加密备份，超过保留数量后删除最久的备份。</span>
+          </div>
+          <span class="settings-view__cloud-time">
+            上次备份：{{ formatBackupTime(draft.localBackup.lastBackupAt) }}
+          </span>
+        </div>
+
+        <div class="settings-view__local-toggle">
+          <div class="settings-view__choice-group">
+            <label
+              :class="[
+                'settings-view__choice',
+                { 'settings-view__choice--active': draft.localBackup.enabled }
+              ]"
+            >
+              <input
+                v-model="draft.localBackup.enabled"
+                type="radio"
+                name="local-backup-enabled"
+                :value="true"
+              />
+              <span>启用</span>
+            </label>
+            <label
+              :class="[
+                'settings-view__choice',
+                { 'settings-view__choice--active': !draft.localBackup.enabled }
+              ]"
+            >
+              <input
+                v-model="draft.localBackup.enabled"
+                type="radio"
+                name="local-backup-enabled"
+                :value="false"
+              />
+              <span>暂停</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="settings-view__cloud-grid">
+          <label class="settings-view__field">
+            <span>备份间隔（分钟）</span>
+            <input
+              v-model.number="draft.localBackup.intervalMinutes"
+              type="number"
+              min="1"
+              step="1"
+            />
+          </label>
+          <label class="settings-view__field">
+            <span>最多保留（份）</span>
+            <input
+              v-model.number="draft.localBackup.maxCount"
+              type="number"
+              min="1"
+              step="1"
+            />
+          </label>
+        </div>
+
+        <div class="settings-view__backup-directory">
+          <span>{{ localBackupDirectory || "尚未创建本地备份目录" }}</span>
+          <button
+            type="button"
+            :disabled="!localBackupDirectory"
+            @click="$emit('open-path', localBackupDirectory)"
+          >
+            <FolderOpen :size="16" />
+            打开目录
+          </button>
+        </div>
+
+        <div class="settings-view__cloud-actions">
+          <button type="button" :disabled="pending" @click="submitSettings">
+            <Save :size="16" />
+            保存配置
+          </button>
+          <button type="button" :disabled="pending" @click="$emit('local-backup-now')">
+            <Download :size="16" />
+            立即备份
+          </button>
+          <button
+            type="button"
+            :disabled="pending"
+            @click="$emit('local-backups-refresh')"
+          >
+            <RotateCcw :size="16" />
+            刷新列表
+          </button>
+        </div>
+
+        <div class="settings-view__backup-list">
+          <article
+            v-if="!localBackups.length"
+            class="settings-view__backup-empty"
+          >
+            暂无本地备份。
+          </article>
+          <article
+            v-for="backup in localBackups"
+            :key="backup.id"
+            class="settings-view__backup-item"
+          >
+            <div>
+              <strong>{{ backup.fileName }}</strong>
+              <span
+                >{{ formatBackupTime(backup.createdAt) }} ·
+                {{ formatBackupSize(backup.size) }}</span
+              >
+            </div>
+            <button
+              type="button"
+              :disabled="pending"
+              @click="$emit('local-backup-restore', backup)"
+            >
+              <Upload :size="16" />
+              恢复
+            </button>
+          </article>
+        </div>
+      </section>
 
       <section class="settings-view__cloud">
         <div class="settings-view__cloud-header">
@@ -221,15 +349,15 @@
           </button>
         </div>
       </section>
-    </section>
+      </section>
 
-    <section v-else class="settings-view__panel">
-      <div class="settings-view__panel-header">
-        <div>
-          <h2>系统设置</h2>
-          <span>控制桌面端窗口关闭按钮的默认行为。</span>
+      <section v-else class="settings-view__panel">
+        <div class="settings-view__panel-header">
+          <div>
+            <h2>系统设置</h2>
+            <span>控制桌面端窗口关闭按钮的默认行为。</span>
+          </div>
         </div>
-      </div>
 
       <div class="settings-view__system-list">
         <article class="settings-view__system-card">
@@ -304,7 +432,8 @@
           </div>
         </article>
       </div>
-    </section>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -330,6 +459,14 @@ const props = defineProps({
     type: Array,
     required: true
   },
+  localBackups: {
+    type: Array,
+    default: () => []
+  },
+  localBackupDirectory: {
+    type: String,
+    default: ""
+  },
   pending: {
     type: Boolean,
     required: true
@@ -341,6 +478,9 @@ const emit = defineEmits([
   "open-path",
   "export-data",
   "restore-data",
+  "local-backup-now",
+  "local-backups-refresh",
+  "local-backup-restore",
   "push-cloud-data",
   "pull-cloud-data"
 ])
@@ -361,6 +501,12 @@ const draft = reactive({
     password: "",
     fileName: "",
     lastUpdatedAt: 0
+  },
+  localBackup: {
+    enabled: true,
+    intervalMinutes: 60,
+    maxCount: 20,
+    lastBackupAt: 0
   },
   system: {
     closeAction: "ask",
@@ -442,6 +588,16 @@ function syncDraft() {
   draft.cloudSync.lastUpdatedAt = Number(
     props.appSettings.cloudSync?.lastUpdatedAt || 0
   )
+  draft.localBackup.enabled = props.appSettings.localBackup?.enabled !== false
+  draft.localBackup.intervalMinutes = Number(
+    props.appSettings.localBackup?.intervalMinutes || 60
+  )
+  draft.localBackup.maxCount = Number(
+    props.appSettings.localBackup?.maxCount || 20
+  )
+  draft.localBackup.lastBackupAt = Number(
+    props.appSettings.localBackup?.lastBackupAt || 0
+  )
   draft.system.closeAction = props.appSettings.system?.closeAction || "ask"
   draft.system.quickSwitchVisible =
     props.appSettings.system?.quickSwitchVisible !== false
@@ -485,6 +641,12 @@ function submitSettings() {
       password: draft.cloudSync.password,
       fileName: draft.cloudSync.fileName,
       lastUpdatedAt: draft.cloudSync.lastUpdatedAt
+    },
+    localBackup: {
+      enabled: draft.localBackup.enabled,
+      intervalMinutes: Number(draft.localBackup.intervalMinutes || 60),
+      maxCount: Number(draft.localBackup.maxCount || 20),
+      lastBackupAt: draft.localBackup.lastBackupAt
     },
     system: {
       closeAction: draft.system.closeAction,
@@ -538,6 +700,36 @@ function formatCloudSyncTime(value) {
   }).format(new Date(timestamp))
 }
 
+function formatBackupTime(value) {
+  const timestamp = Number(value || 0)
+
+  if (!timestamp) {
+    return "尚未备份"
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(timestamp))
+}
+
+function formatBackupSize(value) {
+  const size = Number(value || 0)
+
+  if (size < 1024) {
+    return `${size} B`
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`
+  }
+
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
 watch(
   () => props.appSettings,
   () => {
@@ -550,8 +742,11 @@ watch(
 <style scoped lang="less">
 .settings-view {
   display: flex;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
   gap: 12px;
+  overflow: hidden;
   color: var(--color-text);
   font-size: 0.86rem;
 
@@ -564,6 +759,7 @@ watch(
 
   &__header {
     display: flex;
+    flex: none;
     align-items: center;
     justify-content: space-between;
     gap: 16px;
@@ -587,6 +783,7 @@ watch(
 
   &__tabs {
     display: flex;
+    flex: none;
     align-items: center;
     gap: 6px;
     padding: 4px;
@@ -623,6 +820,8 @@ watch(
   &__panel-header button,
   &__input-row button,
   &__data-card button,
+  &__backup-directory button,
+  &__backup-item button,
   &__cloud-actions button {
     display: inline-flex;
     align-items: center;
@@ -650,7 +849,9 @@ watch(
     opacity: 0.56;
   }
 
-  &__cloud-actions button:disabled {
+  &__cloud-actions button:disabled,
+  &__backup-directory button:disabled,
+  &__backup-item button:disabled {
     cursor: not-allowed;
     opacity: 0.56;
   }
@@ -660,6 +861,17 @@ watch(
     flex-direction: column;
     gap: 14px;
     padding: 16px;
+  }
+
+  &__content {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 12px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding-right: 4px;
   }
 
   &__tab-panel {
@@ -940,6 +1152,83 @@ watch(
     display: flex;
     justify-content: flex-end;
     gap: 8px;
+  }
+
+  &__local-toggle {
+    display: flex;
+    justify-content: flex-start;
+  }
+
+  &__backup-directory {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  &__backup-directory span {
+    min-width: 0;
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.5;
+    word-break: break-all;
+  }
+
+  &__backup-directory button,
+  &__backup-item button {
+    flex: none;
+    padding: 0 10px;
+  }
+
+  &__backup-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__backup-empty {
+    padding: 10px;
+    border: 1px dashed var(--color-line);
+    border-radius: 8px;
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    text-align: center;
+  }
+
+  &__backup-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  &__backup-item div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__backup-item strong {
+    overflow: hidden;
+    font-size: 0.82rem;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__backup-item span {
+    color: var(--color-text-muted);
+    font-size: 0.76rem;
+    line-height: 1.45;
   }
 
   &__data-copy {

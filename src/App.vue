@@ -142,7 +142,12 @@
     />
 
     <main class="app-shell__main">
-      <section class="app-shell__content">
+      <section
+        :class="[
+          'app-shell__content',
+          { 'app-shell__content--locked': activeView === 'settings' }
+        ]"
+      >
         <SkillsView
           v-if="activeView === 'skills'"
           :cli-targets="state.cliTargets"
@@ -225,8 +230,13 @@
           v-else-if="activeView === 'settings'"
           :app-settings="state.appSettings"
           :cli-targets="state.cliTargets"
+          :local-backup-directory="localBackupDirectory"
+          :local-backups="localBackups"
           :pending="pending"
           @export-data="exportDataBackup"
+          @local-backup-now="createLocalBackup"
+          @local-backup-restore="previewLocalBackupRestore"
+          @local-backups-refresh="refreshLocalBackups"
           @pull-cloud-data="pullCloudBackup"
           @push-cloud-data="pushCloudBackup"
           @open-path="openPath"
@@ -281,6 +291,144 @@
       @close="showAddRepo = false"
       @submit="addRepo"
     />
+
+    <BaseModal
+      v-if="restorePreview"
+      title="确认恢复配置"
+      :description="restorePreviewDescription"
+      @close="closeRestorePreview"
+    >
+      <form class="restore-preview-modal" @submit.prevent="confirmRestore">
+        <div class="restore-preview-modal__summary">
+          <span class="restore-preview-modal__summary-pill"
+            >新增 {{ restoreAddedItems.length }} 项</span
+          >
+          <span class="restore-preview-modal__summary-pill"
+            >冲突 {{ restoreConflictItems.length }} 项</span
+          >
+        </div>
+
+        <p class="restore-preview-modal__notice">
+          新增项会合并到当前数据；Provider 和 Runtime Profile 恢复后保持未启用。
+        </p>
+
+        <div class="restore-preview-modal__body">
+          <section
+            v-if="restoreAddedItems.length"
+            class="restore-preview-modal__section"
+          >
+            <h3 class="restore-preview-modal__section-title">将新增</h3>
+            <div class="restore-preview-modal__list">
+              <article
+                v-for="item in restoreAddedItems"
+                :key="item.key"
+                class="restore-preview-modal__item"
+              >
+                <strong class="restore-preview-modal__item-name"
+                  >{{ item.type }}：{{ item.name }}</strong
+                >
+                <span class="restore-preview-modal__item-path">{{
+                  item.path
+                }}</span>
+              </article>
+            </div>
+          </section>
+
+          <section
+            v-if="restoreConflictItems.length"
+            class="restore-preview-modal__section"
+          >
+            <h3 class="restore-preview-modal__section-title">需要选择</h3>
+            <article
+              v-for="item in restoreConflictItems"
+              :key="item.key"
+              class="restore-preview-modal__conflict"
+            >
+              <div class="restore-preview-modal__conflict-head">
+                <div>
+                  <strong class="restore-preview-modal__item-name"
+                    >{{ item.type }}：{{ item.name }}</strong
+                  >
+                  <span class="restore-preview-modal__item-path">{{
+                    item.path
+                  }}</span>
+                </div>
+                <button
+                  class="restore-preview-modal__compare-button"
+                  type="button"
+                  :disabled="pending"
+                  @click="toggleRestoreCompare(item)"
+                >
+                  {{ restoreCompareKey === item.key ? "收起" : "对比" }}
+                </button>
+              </div>
+              <label class="restore-preview-modal__choice">
+                <input
+                  v-model="restoreChoices[item.key]"
+                  type="radio"
+                  :name="`restore-${item.key}`"
+                  value="current"
+                  :disabled="pending"
+                />
+                <span class="restore-preview-modal__choice-text"
+                  >保留当前版本</span
+                >
+              </label>
+              <label class="restore-preview-modal__choice">
+                <input
+                  v-model="restoreChoices[item.key]"
+                  type="radio"
+                  :name="`restore-${item.key}`"
+                  value="backup"
+                  :disabled="pending"
+                />
+                <span class="restore-preview-modal__choice-text"
+                  >使用备份版本</span
+                >
+              </label>
+              <div
+                v-if="restoreCompareKey === item.key"
+                class="restore-preview-modal__compare"
+              >
+                <section class="restore-preview-modal__compare-panel">
+                  <strong>当前内容</strong>
+                  <pre>{{ formatRestoreCompareContent(item.currentContent) }}</pre>
+                </section>
+                <section class="restore-preview-modal__compare-panel">
+                  <strong>备份内容</strong>
+                  <pre>{{ formatRestoreCompareContent(item.backupContent) }}</pre>
+                </section>
+              </div>
+            </article>
+          </section>
+
+          <div
+            v-if="!restoreAddedItems.length && !restoreConflictItems.length"
+            class="restore-preview-modal__empty"
+          >
+            当前数据和备份没有差异。
+          </div>
+        </div>
+
+        <div class="restore-preview-modal__actions">
+          <button
+            class="status-button"
+            type="button"
+            :disabled="pending"
+            @click="closeRestorePreview"
+          >
+            取消
+          </button>
+          <button
+            class="status-button restore-preview-modal__primary"
+            type="submit"
+            :disabled="pending || !restoreCanSubmit"
+          >
+            {{ pending ? "恢复中..." : "确认恢复" }}
+          </button>
+        </div>
+      </form>
+    </BaseModal>
 
     <div v-if="showCloseConfirm" class="close-confirm">
       <div class="close-confirm__overlay"></div>
@@ -367,6 +515,7 @@ import {
   X
 } from "lucide-vue-next"
 import AppSidebar from "@/components/AppSidebar.vue"
+import BaseModal from "@/components/BaseModal.vue"
 import GlobalLoading from "@/components/GlobalLoading.vue"
 import SelectionTranslator from "@/components/SelectionTranslator.vue"
 import ProvidersView from "@/features/providers/index.vue"
@@ -464,6 +613,12 @@ const state = reactive({
       password: "",
       fileName: ""
     },
+    localBackup: {
+      enabled: true,
+      intervalMinutes: 60,
+      maxCount: 20,
+      lastBackupAt: 0
+    },
     system: {
       closeAction: "ask",
       quickSwitchVisible: true
@@ -491,6 +646,12 @@ const showAddRepo = ref(false)
 const showCloseConfirm = ref(false)
 const closeRemember = ref(false)
 const importCandidates = ref([])
+const localBackups = ref([])
+const localBackupDirectory = ref("")
+const restorePreview = ref(null)
+const restoreSource = ref(null)
+const restoreCompareKey = ref("")
+const restoreChoices = reactive({})
 const { loading: pending, withGlobalLoading } = useGlobalLoading()
 
 let unsubscribe = null
@@ -504,6 +665,31 @@ const selectedSkill = computed(() => {
 
 const currentPlaceholder = computed(() => {
   return placeholderMap[activeView.value] || placeholderMap.sessions
+})
+
+const restoreAddedItems = computed(() => {
+  return restorePreview.value?.added || []
+})
+
+const restoreConflictItems = computed(() => {
+  return restorePreview.value?.conflicts || []
+})
+
+const restorePreviewDescription = computed(() => {
+  const sourceName =
+    restoreSource.value?.type === "cloud"
+      ? restoreSource.value.fileName
+      : restoreSource.value?.type === "local"
+        ? restoreSource.value.fileName || "本地自动备份"
+        : restoreSource.value?.filePath || "本地备份"
+
+  return `从 ${sourceName} 兼容合并配置数据。`
+})
+
+const restoreCanSubmit = computed(() => {
+  return Boolean(
+    restoreAddedItems.value.length || restoreConflictItems.value.length
+  )
 })
 
 const quickCliTargets = computed(() => {
@@ -604,8 +790,16 @@ async function bootstrap() {
   await withGlobalLoading(async () => {
     try {
       updateState(await window.aiManager.bootstrap())
+      await refreshLocalBackups(false)
       unsubscribe = window.aiManager.onStateChanged((nextState) => {
+        const previousLocalBackupAt =
+          state.appSettings.localBackup?.lastBackupAt || 0
         updateState(nextState)
+        const nextLocalBackupAt = state.appSettings.localBackup?.lastBackupAt || 0
+
+        if (nextLocalBackupAt !== previousLocalBackupAt) {
+          refreshLocalBackups(false)
+        }
       })
     } catch (error) {
       showErrorMessage(error)
@@ -874,6 +1068,7 @@ async function saveSettings(payload) {
   const success = await runAction(() => window.aiManager.saveSettings(payload))
 
   if (success) {
+    await refreshLocalBackups(false)
     showSuccessMessage(
       state.appSettings.restartRequired
         ? "设置已保存，数据目录将在重启后生效。"
@@ -899,24 +1094,60 @@ async function exportDataBackup() {
 }
 
 async function restoreDataBackup() {
-  const shouldContinue = window.confirm(
-    "恢复配置会覆盖当前配置数据，是否继续？"
-  )
-
-  if (!shouldContinue) {
-    return
-  }
-
   await withGlobalLoading(async () => {
     try {
-      const result = await window.aiManager.restoreDataBackup()
+      const result = await window.aiManager.previewDataBackupRestore()
 
       if (result?.canceled) {
         return
       }
 
-      updateState(result.state)
-      showSuccessMessage("配置数据已恢复。")
+      openRestorePreview(result, "file")
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
+}
+
+async function refreshLocalBackups(showMessage = true) {
+  try {
+    const result = await window.aiManager.listLocalBackups()
+    localBackups.value = result.backups || []
+    localBackupDirectory.value = result.directory || ""
+
+    if (showMessage) {
+      showSuccessMessage("本地备份列表已刷新。")
+    }
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function createLocalBackup() {
+  await withGlobalLoading(async () => {
+    try {
+      const result = await window.aiManager.createLocalBackup()
+      localBackups.value = result.backups || []
+      localBackupDirectory.value = result.directory || localBackupDirectory.value
+
+      if (result.state) {
+        updateState(result.state)
+      }
+
+      showSuccessMessage("本地备份已创建。")
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
+}
+
+async function previewLocalBackupRestore(backup) {
+  await withGlobalLoading(async () => {
+    try {
+      const result = await window.aiManager.previewLocalBackupRestore({
+        backupId: backup.id
+      })
+      openRestorePreview(result, "local")
     } catch (error) {
       showErrorMessage(error)
     }
@@ -940,19 +1171,109 @@ async function pushCloudBackup(payload) {
 }
 
 async function pullCloudBackup(payload) {
-  const shouldContinue = window.confirm(
-    "从坚果云恢复配置会覆盖当前配置数据，是否继续？"
-  )
+  await withGlobalLoading(async () => {
+    try {
+      const result = await window.aiManager.previewCloudBackupRestore(payload)
+      openRestorePreview(
+        {
+          ...result,
+          cloudSync: payload
+        },
+        "cloud"
+      )
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
+}
 
-  if (!shouldContinue) {
+function openRestorePreview(result, type) {
+  restorePreview.value = result.preview
+  restoreSource.value = {
+    type,
+    restoreId: result.restoreId,
+    filePath: result.filePath || "",
+    fileName: result.fileName || "",
+    backupId: result.backupId || "",
+    cloudSync: result.cloudSync || null
+  }
+
+  for (const key of Object.keys(restoreChoices)) {
+    delete restoreChoices[key]
+  }
+
+  restoreCompareKey.value = ""
+
+  for (const item of result.preview?.conflicts || []) {
+    restoreChoices[item.key] = "current"
+  }
+}
+
+function toggleRestoreCompare(item) {
+  restoreCompareKey.value = restoreCompareKey.value === item.key ? "" : item.key
+}
+
+function formatRestoreCompareContent(value) {
+  if (value === undefined || value === null || value === "") {
+    return "空内容"
+  }
+
+  return String(value)
+}
+
+function closeRestorePreview(force = false) {
+  if (pending.value && !force) {
+    return
+  }
+
+  restorePreview.value = null
+  restoreSource.value = null
+  restoreCompareKey.value = ""
+
+  for (const key of Object.keys(restoreChoices)) {
+    delete restoreChoices[key]
+  }
+}
+
+async function confirmRestore() {
+  const source = restoreSource.value
+
+  if (!source) {
     return
   }
 
   await withGlobalLoading(async () => {
     try {
-      const result = await window.aiManager.pullCloudBackup(payload)
+      const payload = {
+        restoreId: source.restoreId,
+        choices: { ...restoreChoices }
+      }
+      const result =
+        source.type === "cloud"
+          ? await window.aiManager.pullCloudBackup({
+              restoreId: source.restoreId,
+              choices: { ...restoreChoices },
+              cloudSync: source.cloudSync
+            })
+          : source.type === "local"
+            ? await window.aiManager.restoreLocalBackup(payload)
+            : await window.aiManager.restoreDataBackup(payload)
+
       updateState(result.state)
-      showSuccessMessage("已从坚果云恢复配置数据。")
+      if (result.backups) {
+        localBackups.value = result.backups
+      }
+      if (result.directory) {
+        localBackupDirectory.value = result.directory
+      }
+      closeRestorePreview(true)
+      showSuccessMessage(
+        source.type === "cloud"
+          ? "已从坚果云兼容恢复配置数据。"
+          : source.type === "local"
+            ? "已从本地备份兼容恢复配置数据。"
+          : "配置数据已兼容恢复。"
+      )
     } catch (error) {
       showErrorMessage(error)
     }
@@ -1736,6 +2057,10 @@ onBeforeUnmount(() => {
     padding-right: 6px;
   }
 
+  &__content--locked {
+    overflow: hidden;
+  }
+
   &__placeholder {
     display: grid;
     min-height: 520px;
@@ -1778,6 +2103,209 @@ onBeforeUnmount(() => {
   &:disabled {
     cursor: not-allowed;
     opacity: 0.52;
+  }
+}
+
+.restore-preview-modal {
+  display: flex;
+  height: min(640px, calc(100vh - 180px));
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+
+  &__summary {
+    display: flex;
+    gap: 8px;
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    font-weight: 700;
+  }
+
+  &__summary-pill {
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: var(--color-primary-soft);
+  }
+
+  &__notice {
+    margin: 0;
+    padding: 10px 12px;
+    border: 1px solid #d8e2ec;
+    border-radius: 8px;
+    background: #f6f9fc;
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    line-height: 1.6;
+  }
+
+  &__body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 12px;
+    overflow: auto;
+    padding-right: 4px;
+  }
+
+  &__section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__section-title {
+    margin: 0;
+    color: var(--color-text);
+    font-size: 0.94rem;
+  }
+
+  &__list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__item,
+  &__conflict {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel-soft);
+  }
+
+  &__item-name {
+    color: var(--color-text);
+    font-size: 0.88rem;
+  }
+
+  &__item-path {
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    word-break: break-all;
+  }
+
+  &__conflict-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 4px;
+  }
+
+  &__conflict-head div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  &__compare-button {
+    flex: none;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: #ffffff;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &__compare-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.52;
+  }
+
+  &__choice {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  &__choice input {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    accent-color: var(--color-primary);
+  }
+
+  &__choice-text {
+    line-height: 1.35;
+  }
+
+  &__compare {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  &__compare-panel {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &__compare-panel strong {
+    color: var(--color-text);
+    font-size: 0.78rem;
+  }
+
+  &__compare-panel pre {
+    max-height: 260px;
+    margin: 0;
+    overflow: auto;
+    padding: 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #ffffff;
+    color: var(--color-text);
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.74rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  &__empty {
+    display: grid;
+    min-height: 120px;
+    place-items: center;
+    border: 1px dashed var(--color-line);
+    border-radius: 8px;
+    color: var(--color-text-muted);
+    font-size: 0.9rem;
+    font-weight: 700;
+  }
+
+  &__actions {
+    display: flex;
+    flex: none;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 4px;
+  }
+
+  &__primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #ffffff;
+  }
+
+  &__primary:hover {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
   }
 }
 

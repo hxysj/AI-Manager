@@ -17,9 +17,19 @@ contextBridge.exposeInMainWorld("aiManager", {
   saveSettings: payload =>
     ipcRenderer.invoke("settings:save", toPlainPayload(payload)),
   exportDataBackup: () => ipcRenderer.invoke("data:export"),
-  restoreDataBackup: () => ipcRenderer.invoke("data:restore"),
+  previewDataBackupRestore: () => ipcRenderer.invoke("data:preview-restore"),
+  restoreDataBackup: payload =>
+    ipcRenderer.invoke("data:restore", toPlainPayload(payload)),
+  listLocalBackups: () => ipcRenderer.invoke("data:local-backups"),
+  createLocalBackup: () => ipcRenderer.invoke("data:local-backup-now"),
+  previewLocalBackupRestore: payload =>
+    ipcRenderer.invoke("data:local-backup-preview", toPlainPayload(payload)),
+  restoreLocalBackup: payload =>
+    ipcRenderer.invoke("data:local-backup-restore", toPlainPayload(payload)),
   pushCloudBackup: payload =>
     ipcRenderer.invoke("data:cloud-push", toPlainPayload(payload)),
+  previewCloudBackupRestore: payload =>
+    ipcRenderer.invoke("data:cloud-preview", toPlainPayload(payload)),
   pullCloudBackup: payload =>
     ipcRenderer.invoke("data:cloud-pull", toPlainPayload(payload)),
   selectDirectory: payload =>

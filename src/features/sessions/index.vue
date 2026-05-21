@@ -45,8 +45,9 @@
         >{{ filteredSessions.length }} / {{ sessions.length }} 个 Session</span
       >
       <span v-if="filteredSessions.length"
-        >第 {{ currentPage }} / {{ pageCount }} 页 · 当前
-        {{ pageStart }}-{{ pageEnd }}</span
+        >第 {{ currentPage }} / {{ pageCount }} 页 · 当前 {{ pageStart }}-{{
+          pageEnd
+        }}</span
       >
       <span v-else>Filesystem Aggregation + 按需加载 Messages</span>
     </div>
