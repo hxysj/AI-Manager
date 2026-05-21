@@ -14,7 +14,13 @@ const OAUTH_SCOPE =
   "openid profile email offline_access"
 const AUTO_REFRESH_INTERVAL = 30 * 60 * 1000
 const REFRESH_THRESHOLD = 10 * 60 * 1000
-const DETAIL_REFRESH_THRESHOLD = 24 * 60 * 60 * 1000
+const missingRefreshTokenReason = "missing_refresh_token"
+const reauthRefreshErrors = new Set([
+  "refresh_token_reused",
+  "refresh_token_expired",
+  "refresh_token_invalidated",
+  "invalid_grant"
+])
 
 function createPkce() {
   const verifier = crypto.randomBytes(32).toString("base64url")
@@ -35,6 +41,15 @@ function createId(prefix) {
 
 function formatRfc3339(timestamp) {
   return new Date(timestamp).toISOString().replace(".000Z", "Z")
+}
+
+async function pathExists(targetPath) {
+  try {
+    await fs.access(targetPath)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function normalizeProxyRules(proxy) {
@@ -108,6 +123,130 @@ function extractEmail(claims) {
   return profileClaims.email || claims.email || ""
 }
 
+function parseTimestamp(value) {
+  const timestamp = Date.parse(String(value || ""))
+
+  return Number.isNaN(timestamp) ? 0 : timestamp
+}
+
+function createTokensFromAuthData(authData) {
+  const tokenSource = authData.tokens || authData
+  const accessToken = tokenSource.access_token || tokenSource.accessToken || ""
+  const idToken =
+    tokenSource.id_token || tokenSource.idToken || tokenSource.id_otkne || ""
+  const claims = decodeJwtPayload(idToken || accessToken)
+  const expiresAt =
+    Number(tokenSource.expiresAt || authData.expiresAt || 0) ||
+    parseTimestamp(tokenSource.expired || authData.expired) ||
+    Number(claims.exp || 0) * 1000
+
+  claims.sub = tokenSource.account_id || claims.sub
+  claims.account_id = tokenSource.account_id || claims.account_id
+
+  return {
+    claims,
+    tokens: {
+      accessToken,
+      refreshToken: tokenSource.refresh_token || tokenSource.refreshToken || "",
+      idToken,
+      expiresAt,
+      access_token: accessToken,
+      refresh_token: tokenSource.refresh_token || tokenSource.refreshToken || "",
+      id_token: idToken,
+      last_refresh: tokenSource.last_refresh || authData.last_refresh || "",
+      expired:
+        tokenSource.expired ||
+        authData.expired ||
+        (expiresAt ? formatRfc3339(expiresAt) : ""),
+      token_updated_at:
+        Number(tokenSource.token_updated_at || authData.token_updated_at || 0) ||
+        parseTimestamp(tokenSource.last_refresh || authData.last_refresh)
+    }
+  }
+}
+
+function accountExpiresAt(account) {
+  return account.auth?.expiresAt || parseTimestamp(account.expired)
+}
+
+function accountAccessToken(account) {
+  return account.auth?.accessToken || account.access_token || ""
+}
+
+function accountRefreshToken(account) {
+  return account.auth?.refreshToken || account.refresh_token || ""
+}
+
+function accountAccessTokenExpired(account) {
+  const expiresAt = accountExpiresAt(account)
+
+  return !accountAccessToken(account) || !expiresAt || expiresAt <= Date.now()
+}
+
+function tokensAccessTokenExpired(tokens) {
+  return (
+    !tokens.accessToken ||
+    !tokens.expiresAt ||
+    tokens.expiresAt <= Date.now()
+  )
+}
+
+function removeTomlSections(content, sectionNames) {
+  const lines = String(content || "").split(/\r?\n/)
+  const nextLines = []
+  let skipping = false
+
+  for (const line of lines) {
+    const section = line.trim().match(/^\[(.+)]$/)
+
+    if (section) {
+      skipping = sectionNames.has(section[1])
+
+      if (skipping) {
+        continue
+      }
+    }
+
+    if (!skipping) {
+      nextLines.push(line)
+    }
+  }
+
+  return nextLines.join("\n")
+}
+
+function removeTomlRootKeys(content, keys) {
+  const lines = String(content || "").split(/\r?\n/)
+  const nextLines = []
+  let inSection = false
+
+  for (const line of lines) {
+    if (/^\s*\[.+]\s*$/.test(line)) {
+      inSection = true
+    }
+
+    const key = line.match(/^\s*([A-Za-z0-9_-]+)\s*=/)?.[1]
+
+    if (!inSection && key && keys.has(key)) {
+      continue
+    }
+
+    nextLines.push(line)
+  }
+
+  return nextLines.join("\n").replace(/\n{3,}/g, "\n\n").trim()
+}
+
+function shouldMarkReauth(error) {
+  const text = [
+    error.oauthError,
+    error.oauthErrorDescription,
+    error.message
+  ].join(" ")
+
+  return [...reauthRefreshErrors].some(item => text.includes(item))
+}
+
 class CodexAccountService extends EventEmitter {
   constructor(storage) {
     super()
@@ -116,6 +255,7 @@ class CodexAccountService extends EventEmitter {
     this.loginState = null
     this.loginServer = null
     this.autoRefreshTimer = null
+    this.getCodexCliTarget = null
     this.activeAccountId = ""
   }
 
@@ -124,10 +264,12 @@ class CodexAccountService extends EventEmitter {
     this.activeAccountId = await this.storage.read("codexActiveAccountId", "")
   }
 
-  startAutoRefresh() {
+  startAutoRefresh(getCodexCliTarget) {
     if (this.autoRefreshTimer) {
       return
     }
+
+    this.getCodexCliTarget = getCodexCliTarget
 
     this.refreshExpiringAccounts().catch((error) => {
       this.emit("login-state", {
@@ -169,6 +311,11 @@ class CodexAccountService extends EventEmitter {
       last_refresh: account.last_refresh,
       expired: account.expired,
       type: account.type,
+      token_generation: account.token_generation || 0,
+      token_updated_at: account.token_updated_at || 0,
+      requires_reauth: Boolean(account.requires_reauth),
+      reauth_reason: account.reauth_reason || "",
+      reauth_message: account.reauth_message || "",
       active: account.id === this.activeAccountId,
       auth: {
         expiresAt: account.auth?.expiresAt || 0
@@ -230,25 +377,13 @@ class CodexAccountService extends EventEmitter {
 
   async importAuthJson(input) {
     const authData = JSON.parse(String(input?.content || ""))
-    const tokenSource = authData.tokens || authData
-    const refreshToken =
-      tokenSource.refresh_token || tokenSource.refreshToken || ""
+    const { tokens, claims } = createTokensFromAuthData(authData)
 
-    if (!refreshToken) {
-      throw new Error("Codex 登录 JSON 数据缺少 refresh_token")
+    if (!tokens.accessToken) {
+      throw new Error("Codex 登录 JSON 数据缺少 access_token")
     }
 
     const proxy = String(input.proxy || "").trim()
-    const tokens = await this.refreshToken(refreshToken, proxy)
-    const claims = decodeJwtPayload(
-      tokenSource.id_token ||
-        tokenSource.idToken ||
-        tokenSource.id_otkne ||
-        tokens.idToken ||
-        tokens.accessToken
-    )
-    claims.sub = tokenSource.account_id || claims.sub
-    claims.account_id = tokenSource.account_id || claims.account_id
     const accountId = extractAccountId(claims)
 
     if (
@@ -381,6 +516,10 @@ class CodexAccountService extends EventEmitter {
     const email = profile.email || extractEmail(claims) || "未识别账号"
     const currentAccount =
       this.accounts.find((account) => account.id === accountId) || null
+    const tokenUpdatedAt =
+      Number(tokens.token_updated_at || tokens.tokenUpdatedAt || 0) ||
+      parseTimestamp(tokens.last_refresh) ||
+      Date.now()
     const nextAccount = {
       id: accountId,
       provider: "codex",
@@ -401,13 +540,22 @@ class CodexAccountService extends EventEmitter {
       last_refresh: tokens.last_refresh,
       expired: tokens.expired,
       auth: tokens,
+      token_generation:
+        Number(tokens.token_generation || tokens.tokenGeneration || 0) ||
+        Number(currentAccount?.token_generation || 0),
+      token_updated_at: tokenUpdatedAt,
+      requires_reauth: false,
+      reauth_reason: "",
+      reauth_message: "",
       autoRefresh: currentAccount?.autoRefresh !== false,
       createdAt: currentAccount?.createdAt || Date.now(),
       updatedAt: Date.now()
     }
 
     this.accounts = currentAccount
-      ? this.accounts.map(account => (account.id === accountId ? nextAccount : account))
+      ? this.accounts.map(account =>
+          account.id === accountId ? nextAccount : account
+        )
       : [...this.accounts, nextAccount]
     this.storage.scheduleWrite("codexAccounts", this.accounts)
     this.emit("changed", this.getState())
@@ -415,16 +563,188 @@ class CodexAccountService extends EventEmitter {
   }
 
   async enableAccount(accountId, cliTarget) {
-    const account = this.accounts.find((item) => item.id === accountId)
+    const account = await this.prepareAccountForSwitch(accountId, cliTarget)
+
+    await this.writeAccountBundle(account, cliTarget)
+
+    this.activeAccountId = account.id
+    this.storage.scheduleWrite("codexActiveAccountId", this.activeAccountId)
+    this.emit("changed", this.getState())
+  }
+
+  async prepareAccountForSwitch(accountId, cliTarget) {
+    let account = this.accounts.find((item) => item.id === accountId)
 
     if (!account) {
       throw new Error("Codex 官方账号不存在")
     }
 
-    await this.writeAccountAuth(account, cliTarget)
+    if (account.type === "apikey") {
+      return account
+    }
 
-    this.activeAccountId = account.id
-    this.storage.scheduleWrite("codexActiveAccountId", this.activeAccountId)
+    account = await this.syncAccountFromAuthoritySources(account, cliTarget)
+    account = this.clearMissingRefreshTokenReauth(account)
+
+    if (account.requires_reauth) {
+      throw new Error(
+        account.reauth_message ||
+          account.reauth_reason ||
+          "Codex 登录授权需要重新登录"
+      )
+    }
+
+    if (!accountAccessTokenExpired(account)) {
+      return account
+    }
+
+    return this.performManagedTokenRefresh(account, cliTarget)
+  }
+
+  async syncAccountFromAuthoritySources(account, cliTarget) {
+    if (!cliTarget?.configPath) {
+      return account
+    }
+
+    const authPath = path.join(cliTarget.configPath, "auth.json")
+
+    if (!(await pathExists(authPath))) {
+      return account
+    }
+
+    const authData = JSON.parse(await fs.readFile(authPath, "utf8"))
+    const { tokens, claims } = createTokensFromAuthData(authData)
+    const sourceAccountId = extractAccountId(claims)
+
+    const accountId = account.account_id || account.accountId || account.id
+
+    if (!tokens.accessToken || sourceAccountId !== accountId) {
+      return account
+    }
+
+    const sourceUpdatedAt =
+      tokens.token_updated_at || parseTimestamp(authData.last_refresh)
+    const accountUpdatedAt =
+      Number(account.token_updated_at || 0) ||
+      parseTimestamp(account.last_refresh)
+    const shouldUseSource =
+      sourceUpdatedAt >= accountUpdatedAt ||
+      (accountAccessTokenExpired(account) && !tokensAccessTokenExpired(tokens))
+
+    if (!shouldUseSource) {
+      return account
+    }
+
+    return this.saveAccount(
+      {
+        ...tokens,
+        token_generation: account.token_generation || 0,
+        token_updated_at: sourceUpdatedAt || Date.now()
+      },
+      {
+        email: extractEmail(claims) || account.email,
+        sub: claims.sub || account.accountId
+      },
+      claims,
+      account.usage || {},
+      account.proxy
+    )
+  }
+
+  clearMissingRefreshTokenReauth(account) {
+    if (
+      !account.requires_reauth ||
+      account.reauth_reason !== missingRefreshTokenReason ||
+      !accountRefreshToken(account)
+    ) {
+      return account
+    }
+
+    const nextAccount = {
+      ...account,
+      requires_reauth: false,
+      reauth_reason: "",
+      reauth_message: "",
+      updatedAt: Date.now()
+    }
+
+    this.accounts = this.accounts.map(item =>
+      item.id === account.id ? nextAccount : item
+    )
+    this.storage.scheduleWrite("codexAccounts", this.accounts)
+    return nextAccount
+  }
+
+  async performManagedTokenRefresh(account, cliTarget) {
+    if (!accountRefreshToken(account)) {
+      const message =
+        "Codex 登录授权缺少 refresh_token，无法自动续期；当前 access_token 已不可用。"
+      this.markAccountReauth(account.id, missingRefreshTokenReason, message)
+      throw new Error(message)
+    }
+
+    try {
+      const tokens = await this.refreshToken(
+        accountRefreshToken(account),
+        account.proxy
+      )
+      const claims = decodeJwtPayload(tokens.idToken || tokens.accessToken)
+      claims.account_id =
+        account.account_id ||
+        account.accountId ||
+        account.id ||
+        claims.account_id
+      const usage = await this.fetchUsageInfo(
+        tokens.accessToken,
+        claims,
+        account.proxy
+      )
+      const nextAccount = this.saveAccount(
+        {
+          ...tokens,
+          token_generation: Number(account.token_generation || 0) + 1,
+          token_updated_at: Date.now()
+        },
+        {
+          email: extractEmail(claims) || account.email,
+          sub: claims.sub || account.accountId
+        },
+        claims,
+        usage,
+        account.proxy
+      )
+
+      if (nextAccount.id === this.activeAccountId) {
+        await this.writeAccountBundle(nextAccount, cliTarget)
+      }
+
+      return nextAccount
+    } catch (error) {
+      if (shouldMarkReauth(error)) {
+        this.markAccountReauth(
+          account.id,
+          error.oauthError || "invalid_grant",
+          "Codex 登录授权已失效，请重新登录。"
+        )
+      }
+
+      throw error
+    }
+  }
+
+  markAccountReauth(accountId, reason, message) {
+    this.accounts = this.accounts.map(account =>
+      account.id === accountId
+        ? {
+            ...account,
+            requires_reauth: true,
+            reauth_reason: reason,
+            reauth_message: message,
+            updatedAt: Date.now()
+          }
+        : account
+    )
+    this.storage.scheduleWrite("codexAccounts", this.accounts)
     this.emit("changed", this.getState())
   }
 
@@ -435,8 +755,7 @@ class CodexAccountService extends EventEmitter {
       throw new Error("Codex 官方账号不存在")
     }
 
-    const expiresAt =
-      account.auth?.expiresAt || Date.parse(account.expired) || 0
+    const expiresAt = accountExpiresAt(account)
     let tokens = {
       accessToken: account.auth?.accessToken || account.access_token,
       refreshToken: account.auth?.refreshToken || account.refresh_token,
@@ -446,11 +765,11 @@ class CodexAccountService extends EventEmitter {
       refresh_token: account.refresh_token || account.auth?.refreshToken,
       id_token: account.id_token || account.auth?.idToken,
       last_refresh: account.last_refresh,
-      expired: account.expired
-    }
-
-    if (!tokens.refreshToken) {
-      throw new Error("Codex 官方账号缺少 refresh_token")
+      expired: account.expired,
+      token_generation: account.token_generation || 0,
+      token_updated_at:
+        Number(account.token_updated_at || 0) ||
+        parseTimestamp(account.last_refresh)
     }
 
     if (
@@ -458,11 +777,38 @@ class CodexAccountService extends EventEmitter {
       !tokens.expiresAt ||
       tokens.expiresAt <= Date.now()
     ) {
-      tokens = await this.refreshToken(tokens.refreshToken, account.proxy)
+      if (!tokens.refreshToken) {
+        const message =
+          "Codex 登录授权缺少 refresh_token，无法自动续期；当前 access_token 已不可用。"
+        this.markAccountReauth(account.id, missingRefreshTokenReason, message)
+        throw new Error(message)
+      }
+
+      try {
+        tokens = {
+          ...(await this.refreshToken(tokens.refreshToken, account.proxy)),
+          token_generation: Number(account.token_generation || 0) + 1,
+          token_updated_at: Date.now()
+        }
+      } catch (error) {
+        if (shouldMarkReauth(error)) {
+          this.markAccountReauth(
+            account.id,
+            error.oauthError || "invalid_grant",
+            "Codex 登录授权已失效，请重新登录。"
+          )
+        }
+
+        throw error
+      }
     }
 
     const claims = decodeJwtPayload(tokens.idToken || tokens.accessToken)
-    claims.account_id = account.account_id || claims.account_id
+    claims.account_id =
+      account.account_id ||
+      account.accountId ||
+      account.id ||
+      claims.account_id
     const usage = await this.fetchUsageInfo(
       tokens.accessToken,
       claims,
@@ -480,15 +826,26 @@ class CodexAccountService extends EventEmitter {
     )
 
     if (options.syncAuth !== false && nextAccount.id === this.activeAccountId) {
-      await this.writeAccountAuth(nextAccount, cliTarget)
+      await this.writeAccountBundle(nextAccount, cliTarget)
     }
 
     return nextAccount
   }
 
+  async writeAccountBundle(account, cliTarget) {
+    await this.writeAccountAuth(account, cliTarget)
+    await this.writeCodexBuiltinConfig(cliTarget)
+  }
+
   async writeAccountAuth(account, cliTarget) {
     if (!cliTarget?.configPath) {
       throw new Error("Codex CLI 配置目录不存在")
+    }
+
+    const accessToken = accountAccessToken(account)
+
+    if (!accessToken) {
+      throw new Error("OAuth 账号缺少 access_token，无法写入 auth.json")
     }
 
     await fs.mkdir(cliTarget.configPath, { recursive: true })
@@ -497,12 +854,12 @@ class CodexAccountService extends EventEmitter {
       `${JSON.stringify(
         {
           OPENAI_API_KEY: null,
-          last_refresh: account.last_refresh,
+          last_refresh: formatRfc3339(Date.now()),
           tokens: {
-            access_token: account.access_token,
-            account_id: account.account_id,
-            id_token: account.id_token,
-            refresh_token: account.refresh_token
+            access_token: accessToken,
+            account_id: account.account_id || account.accountId || account.id,
+            id_token: account.auth?.idToken || account.id_token,
+            refresh_token: accountRefreshToken(account)
           }
         },
         null,
@@ -510,6 +867,31 @@ class CodexAccountService extends EventEmitter {
       )}\n`,
       "utf8"
     )
+  }
+
+  async writeCodexBuiltinConfig(cliTarget) {
+    const configPath = path.join(cliTarget.configPath, "config.toml")
+
+    if (!(await pathExists(configPath))) {
+      return
+    }
+
+    const content = await fs.readFile(configPath, "utf8")
+    const withoutManagedProviders = removeTomlSections(
+      content,
+      new Set(["model_providers.custom", "model_providers.codex_local_access"])
+    )
+    const nextContent = removeTomlRootKeys(
+      withoutManagedProviders,
+      new Set(["model_provider", "openai_base_url"])
+    )
+
+    if (!nextContent) {
+      await fs.rm(configPath, { force: true })
+      return
+    }
+
+    await fs.writeFile(configPath, `${nextContent}\n`, "utf8")
   }
 
   clearActiveAccount() {
@@ -668,7 +1050,21 @@ class CodexAccountService extends EventEmitter {
       },
       proxy
     )
-    const payload = await readJson(response)
+    const text = await response.text()
+
+    if (!response.ok) {
+      const payload = JSON.parse(text)
+      const error = new Error(
+        `OpenAI 请求失败：${response.status} ${
+          payload.error_description || payload.error || text
+        }`
+      )
+      error.oauthError = payload.error || ""
+      error.oauthErrorDescription = payload.error_description || ""
+      throw error
+    }
+
+    const payload = JSON.parse(text)
     const now = Date.now()
     const expiresAt = now + Number(payload.expires_in || 86400) * 1000
     const nextRefreshToken = payload.refresh_token || refreshToken
@@ -688,9 +1084,14 @@ class CodexAccountService extends EventEmitter {
 
   async refreshExpiringAccounts() {
     const threshold = Date.now() + REFRESH_THRESHOLD
+    const cliTarget =
+      typeof this.getCodexCliTarget === "function"
+        ? this.getCodexCliTarget()
+        : null
     const accounts = this.accounts.filter((account) => {
       return (
         account.autoRefresh !== false &&
+        account.requires_reauth !== true &&
         account.auth?.refreshToken &&
         (!account.auth.expiresAt || account.auth.expiresAt <= threshold)
       )
@@ -700,28 +1101,13 @@ class CodexAccountService extends EventEmitter {
       await Promise.all(
         accounts
           .slice(index, index + 3)
-          .map((account) => this.refreshAccount(account))
+          .map((account) => this.refreshAccount(account, cliTarget))
       )
     }
   }
 
-  async refreshAccount(account) {
-    const tokens = await this.refreshToken(
-      account.auth.refreshToken,
-      account.proxy
-    )
-    const claims = decodeJwtPayload(tokens.idToken || tokens.accessToken)
-    const usage = await this.fetchUsageInfo(
-      tokens.accessToken,
-      claims,
-      account.proxy
-    )
-    const profile = {
-      email: extractEmail(claims),
-      sub: claims.sub
-    }
-
-    this.saveAccount(tokens, profile, claims, usage, account.proxy)
+  async refreshAccount(account, cliTarget) {
+    await this.performManagedTokenRefresh(account, cliTarget)
   }
 
   async getAccountDetail(accountId, cliTarget) {
@@ -729,39 +1115,6 @@ class CodexAccountService extends EventEmitter {
 
     if (!account) {
       throw new Error("Codex 官方账号不存在")
-    }
-
-    const expiresAt =
-      account.auth?.expiresAt || Date.parse(account.expired) || 0
-    const shouldRefresh =
-      expiresAt && expiresAt - Date.now() <= DETAIL_REFRESH_THRESHOLD
-
-    if (shouldRefresh) {
-      const tokens = await this.refreshToken(
-        account.auth.refreshToken,
-        account.proxy
-      )
-      const claims = decodeJwtPayload(tokens.idToken || tokens.accessToken)
-      claims.account_id = account.account_id || claims.account_id
-      const usage = await this.fetchUsageInfo(
-        tokens.accessToken,
-        claims,
-        account.proxy
-      )
-      const nextAccount = this.saveAccount(
-        tokens,
-        {
-          email: extractEmail(claims) || account.email,
-          sub: claims.sub || account.accountId
-        },
-        claims,
-        usage,
-        account.proxy
-      )
-
-      if (nextAccount.id === this.activeAccountId) {
-        await this.writeAccountAuth(nextAccount, cliTarget)
-      }
     }
 
     const nextAccount = this.accounts.find((item) => item.id === accountId)
@@ -781,6 +1134,11 @@ class CodexAccountService extends EventEmitter {
       last_refresh: nextAccount.last_refresh,
       expired: nextAccount.expired,
       type: nextAccount.type,
+      token_generation: nextAccount.token_generation || 0,
+      token_updated_at: nextAccount.token_updated_at || 0,
+      requires_reauth: Boolean(nextAccount.requires_reauth),
+      reauth_reason: nextAccount.reauth_reason || "",
+      reauth_message: nextAccount.reauth_message || "",
       active: nextAccount.id === this.activeAccountId,
       auth: nextAccount.auth
     }

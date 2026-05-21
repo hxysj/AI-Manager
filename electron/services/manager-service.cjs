@@ -438,7 +438,9 @@ class ManagerService extends EventEmitter {
     })
     await this.runtimeProviderService.init()
     await this.refreshAll({ emit: false })
-    this.codexAccountService.startAutoRefresh()
+    this.codexAccountService.startAutoRefresh(() =>
+      this.state.cliTargets.find((item) => item.id === "codex")
+    )
     this.startWatcher()
     this.startSessionWatcher()
   }
@@ -1731,8 +1733,11 @@ class ManagerService extends EventEmitter {
       input.accountId,
       this.state.cliTargets.find((item) => item.id === "codex")
     )
+    this.runtimeProviderService.clearRuntime("codex")
+    await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
     this.state = {
       ...this.state,
+      ...this.runtimeProviderService.getState(),
       codexAccounts: this.codexAccountService.getState(),
       refreshedAt: Date.now()
     }
@@ -1823,10 +1828,12 @@ class ManagerService extends EventEmitter {
       input.cli,
       this.state.cliTargets.find((item) => item.id === input.cli)
     )
+    if (input.cli === "codex") this.codexAccountService.clearActiveAccount()
     await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
     this.state = {
       ...this.state,
       ...this.runtimeProviderService.getState(),
+      codexAccounts: this.codexAccountService.getState(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
