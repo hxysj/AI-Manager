@@ -63,6 +63,12 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("session:search", toPlainPayload(payload)),
   loadSessionMessages: payload =>
     ipcRenderer.invoke("session:messages", toPlainPayload(payload)),
+  getUsageStats: payload =>
+    ipcRenderer.invoke("usage:stats", toPlainPayload(payload)),
+  getUsagePricing: () => ipcRenderer.invoke("usage:pricing"),
+  saveUsagePricing: payload =>
+    ipcRenderer.invoke("usage:save-pricing", toPlainPayload(payload)),
+  syncUsage: () => ipcRenderer.invoke("usage:sync"),
   deleteSession: payload =>
     ipcRenderer.invoke("session:delete", toPlainPayload(payload)),
   listRecycledSessions: () => ipcRenderer.invoke("session:recycle-list"),
