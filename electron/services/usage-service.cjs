@@ -267,7 +267,20 @@ function finalizeSummary(summary) {
   return summary
 }
 
-function resolveProvider(cli) {
+function resolveProvider(cli, input = {}) {
+  const profile = (input.runtimeProfiles || []).find((item) => item.cli === cli)
+  const providerId =
+    profile?.providerId || input.runtimeProviderState?.[cli]?.activeProviderId
+  const provider = (input.providers || []).find((item) => item.id === providerId)
+
+  if (provider) {
+    return {
+      providerId: provider.id,
+      providerName: provider.name,
+      providerType: provider.type
+    }
+  }
+
   return {
     providerId: cli,
     providerName: formatAppProviderName(cli),
@@ -642,7 +655,7 @@ class UsageService {
       }
 
       try {
-        const providerInfo = resolveProvider(appType)
+        const providerInfo = resolveProvider(appType, input)
         const content = await fs.readFile(session.rawPath, "utf8")
         const extension = path.extname(session.rawPath).toLowerCase()
 
