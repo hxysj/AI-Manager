@@ -39,6 +39,20 @@ let updateChecking = false
 let updateDownloading = false
 let updatePromptOpen = false
 let updateManualCheck = false
+let updateStatus = {
+  phase: "idle",
+  manual: false,
+  message: "",
+  version: "",
+  releaseNotes: "",
+  percent: 0,
+  transferred: 0,
+  total: 0,
+  bytesPerSecond: 0,
+  configured: false,
+  isDev: !app.isPackaged,
+  updatedAt: 0
+}
 let appCallLogs = []
 let appCallLogWriteTimer = null
 const appCallTraceStorage = new AsyncLocalStorage()
@@ -589,6 +603,35 @@ function sendStateChanged(state) {
   }
 }
 
+function sendUpdateStatus(patch = {}) {
+  updateStatus = {
+    ...updateStatus,
+    ...patch,
+    configured: updateConfigured,
+    isDev: !app.isPackaged,
+    updatedAt: Date.now()
+  }
+  const payload = JSON.parse(JSON.stringify(updateStatus))
+
+  for (const targetWindow of [mainWindow, quickSwitchWindow]) {
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send("app:update-status", payload)
+    }
+  }
+
+  return payload
+}
+
+function getUpdateStatus() {
+  return JSON.parse(
+    JSON.stringify({
+      ...updateStatus,
+      configured: updateConfigured,
+      isDev: !app.isPackaged
+    })
+  )
+}
+
 async function restartManagerService(nextSettings = appSettings) {
   if (managerService) {
     managerService.removeAllListeners()
@@ -999,25 +1042,46 @@ function setupAutoUpdater() {
 
   autoUpdater.on("checking-for-update", () => {
     updateChecking = true
+    sendUpdateStatus({
+      phase: "checking",
+      message: "正在检查更新...",
+      manual: updateManualCheck,
+      percent: 0,
+      transferred: 0,
+      total: 0,
+      bytesPerSecond: 0
+    })
   })
 
   autoUpdater.on("update-not-available", () => {
     updateChecking = false
     if (updateManualCheck) {
-      updateManualCheck = false
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "检查更新",
-        message: "当前已是最新版本。"
+      sendUpdateStatus({
+        phase: "not-available",
+        message: "当前已是最新版本。",
+        manual: true
       })
+      updateManualCheck = false
+      return
     }
+
+    sendUpdateStatus({
+      phase: "idle",
+      message: "",
+      manual: false
+    })
   })
 
   autoUpdater.on("error", error => {
     updateChecking = false
     updateDownloading = false
+    updatePromptOpen = false
+    sendUpdateStatus({
+      phase: "error",
+      message: error?.message || String(error),
+      manual: updateManualCheck
+    })
     updateManualCheck = false
-    showTrayError(error)
   })
 
   autoUpdater.on("update-available", info => {
@@ -1030,95 +1094,144 @@ function setupAutoUpdater() {
 
     updatePromptOpen = true
     const releaseNotes = formatUpdateReleaseNotes(info.releaseNotes)
-    dialog
-      .showMessageBox(mainWindow, {
-        type: "info",
-        buttons: ["立即下载", "稍后"],
-        defaultId: 0,
-        cancelId: 1,
-        title: "发现新版本",
-        message: `发现新版本 ${info.version}`,
-        detail: releaseNotes || "是否现在下载并安装更新？"
-      })
-      .then(result => {
-        updatePromptOpen = false
+    sendUpdateStatus({
+      phase: "available",
+      message: `发现新版本 ${info.version}`,
+      version: info.version,
+      releaseNotes,
+      manual: true,
+      percent: 0,
+      transferred: 0,
+      total: 0,
+      bytesPerSecond: 0
+    })
+  })
 
-        if (result.response !== 0) {
-          return
-        }
-
-        updateDownloading = true
-        return autoUpdater.downloadUpdate()
-      })
-      .catch(error => {
-        updatePromptOpen = false
-        updateDownloading = false
-        showTrayError(error)
-      })
+  autoUpdater.on("download-progress", progress => {
+    sendUpdateStatus({
+      phase: "downloading",
+      message: `正在下载新版本 ${updateStatus.version || ""}`.trim(),
+      manual: true,
+      percent: Number(progress.percent || 0),
+      transferred: Number(progress.transferred || 0),
+      total: Number(progress.total || 0),
+      bytesPerSecond: Number(progress.bytesPerSecond || 0)
+    })
   })
 
   autoUpdater.on("update-downloaded", info => {
     updateDownloading = false
-
-    dialog
-      .showMessageBox(mainWindow, {
-        type: "info",
-        buttons: ["重启安装", "稍后"],
-        defaultId: 0,
-        cancelId: 1,
-        title: "更新已下载",
-        message: `新版本 ${info.version} 已下载完成`,
-        detail: "重启应用后会安装更新。"
-      })
-      .then(result => {
-        if (result.response !== 0) {
-          return
-        }
-
-        isQuitting = true
-        autoUpdater.quitAndInstall()
-      })
-      .catch(showTrayError)
+    updatePromptOpen = true
+    sendUpdateStatus({
+      phase: "downloaded",
+      message: `新版本 ${info.version} 已下载完成`,
+      version: info.version,
+      manual: true,
+      percent: 100
+    })
   })
 }
 
-function checkForAppUpdates(manual = false) {
+async function downloadAppUpdate() {
+  if (!updateConfigured) {
+    return sendUpdateStatus({
+      phase: "unconfigured",
+      message: "当前安装包未包含更新配置。",
+      manual: true
+    })
+  }
+
+  updatePromptOpen = false
+  updateDownloading = true
+  sendUpdateStatus({
+    phase: "downloading",
+    message: `正在下载新版本 ${updateStatus.version || ""}`.trim(),
+    manual: true,
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    bytesPerSecond: 0
+  })
+
+  try {
+    await autoUpdater.downloadUpdate()
+  } catch (error) {
+    updateDownloading = false
+    return sendUpdateStatus({
+      phase: "error",
+      message: error?.message || String(error),
+      manual: true
+    })
+  }
+
+  return getUpdateStatus()
+}
+
+function installAppUpdate() {
+  sendUpdateStatus({
+    phase: "installing",
+    message: "正在重启并安装更新。",
+    manual: true
+  })
+  isQuitting = true
+  autoUpdater.quitAndInstall()
+  return getUpdateStatus()
+}
+
+function dismissAppUpdate() {
+  updatePromptOpen = false
+
+  if (updateChecking || updateDownloading) {
+    return getUpdateStatus()
+  }
+
+  return sendUpdateStatus({
+    phase: "idle",
+    message: "",
+    manual: false,
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    bytesPerSecond: 0
+  })
+}
+
+async function checkForAppUpdates(manual = false) {
+  if (manual) {
+    await showMainPanel()
+  }
+
   if (!app.isPackaged) {
-    if (manual) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "检查更新",
-        message: "开发模式不检查更新。",
-        detail: "打包后的应用会使用内置 GitHub token 检查 Release。"
-      })
-    }
-    return true
+    return sendUpdateStatus({
+      phase: "dev-disabled",
+      message:
+        "开发模式没有打包后的更新元数据和安装器上下文，无法使用 electron-updater 完整检查并安装更新。请使用打包安装版验证更新流程。",
+      manual: Boolean(manual)
+    })
   }
 
   if (!updateConfigured) {
-    if (manual) {
-      dialog.showMessageBox(mainWindow, {
-        type: "warning",
-        title: "检查更新",
-        message: "当前安装包未包含更新配置。"
-      })
-    }
-    return true
+    return sendUpdateStatus({
+      phase: "unconfigured",
+      message: "当前安装包未包含更新配置。",
+      manual: Boolean(manual)
+    })
   }
 
   if (updateChecking || updateDownloading || updatePromptOpen) {
-    if (manual) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "检查更新",
-        message: updateDownloading
-          ? "更新正在下载中。"
-          : updatePromptOpen
-            ? "已有更新提示待处理。"
-            : "正在检查更新。"
-      })
-    }
-    return true
+    return sendUpdateStatus({
+      phase: updateDownloading
+        ? "downloading"
+        : updatePromptOpen
+          ? updateStatus.phase
+          : "checking",
+      message: updateDownloading
+        ? "更新正在下载中。"
+        : updatePromptOpen
+          ? updateStatus.message
+          : "正在检查更新。",
+      manual: Boolean(manual)
+    })
   }
 
   updateManualCheck = Boolean(manual)
@@ -1126,9 +1239,21 @@ function checkForAppUpdates(manual = false) {
   autoUpdater.checkForUpdates().catch(error => {
     updateChecking = false
     updateManualCheck = false
-    showTrayError(error)
+    sendUpdateStatus({
+      phase: "error",
+      message: error?.message || String(error),
+      manual: Boolean(manual)
+    })
   })
-  return true
+  return sendUpdateStatus({
+    phase: "checking",
+    message: "正在检查更新...",
+    manual: Boolean(manual),
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    bytesPerSecond: 0
+  })
 }
 
 async function runTrayAction(action) {
@@ -1937,6 +2062,10 @@ function registerIpc() {
   })
   registerLoggedIpc("app:refresh", async () => managerService.refreshAll())
   registerLoggedIpc("app:check-updates", async () => checkForAppUpdates(true))
+  registerLoggedIpc("app:update-status", async () => getUpdateStatus())
+  registerLoggedIpc("app:update-download", async () => downloadAppUpdate())
+  registerLoggedIpc("app:update-install", async () => installAppUpdate())
+  registerLoggedIpc("app:update-dismiss", async () => dismissAppUpdate())
   registerLoggedIpc("app:close-action", async (_, payload) => {
     handleCloseAction(payload)
     return true
