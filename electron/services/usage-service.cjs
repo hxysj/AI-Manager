@@ -57,7 +57,9 @@ function normalizePricingItem(input) {
   return {
     id: input.id || `pricing-${crypto.randomUUID()}`,
     modelId,
-    modelCategory: normalizeModelCategory(input.modelCategory ?? input.category),
+    modelCategory: normalizeModelCategory(
+      input.modelCategory ?? input.category
+    ),
     currency: normalizeCurrency(input.currency),
     inputCostPerMillion: toPriceNumber(input.inputCostPerMillion),
     outputCostPerMillion: toPriceNumber(input.outputCostPerMillion),
@@ -187,15 +189,12 @@ function calculateCostUsd(log, pricingConfig) {
 }
 
 function enrichUsageLog(log, pricingConfig) {
-  const sourceLog =
-    log.dataSource === "proxy"
-      ? log
-      : {
-          ...log,
-          providerId: log.appType,
-          providerName: formatAppProviderName(log.appType),
-          providerType: ""
-        }
+  const sourceLog = {
+    ...log,
+    providerId: log.providerId || log.appType,
+    providerName: log.providerName || formatAppProviderName(log.appType),
+    providerType: log.providerType || ""
+  }
 
   return {
     ...sourceLog,
@@ -239,12 +238,29 @@ function finalizeSummary(summary) {
 }
 
 function resolveProvider(cli, input = {}) {
+  const activeCodexAccount = (input.codexAccounts || []).find(
+    (item) => item.active
+  )
+
+  if (cli === "codex" && activeCodexAccount) {
+    return {
+      providerId: `codex-account:${activeCodexAccount.id}`,
+      providerName:
+        activeCodexAccount.email ||
+        activeCodexAccount.accountId ||
+        "Codex 官方账号",
+      providerType: "codex"
+    }
+  }
+
   const profile = (input.runtimeProfiles || []).find((item) => item.cli === cli)
   const providerId =
     profile?.providerId || input.runtimeProviderState?.[cli]?.activeProviderId
-  const provider = (input.providers || []).find((item) => item.id === providerId)
+  const provider = (input.providers || []).find(
+    (item) => item.id === providerId
+  )
 
-  if (provider) {
+  if (provider && provider.cli === cli && provider.enabled !== false) {
     return {
       providerId: provider.id,
       providerName: provider.name,
@@ -290,6 +306,47 @@ function createUsageLog(session, providerInfo, input) {
     rawPath: session.rawPath,
     dataSource: input.dataSource,
     createdAt: input.createdAt
+  }
+}
+
+function createLogProviderInfo(log) {
+  return {
+    providerId: log.providerId || log.appType,
+    providerName: log.providerName || formatAppProviderName(log.appType),
+    providerType: log.providerType || ""
+  }
+}
+
+function createRequestRecord(log, providerInfo) {
+  return {
+    requestId: log.requestId,
+    providerId: providerInfo.providerId,
+    providerName: providerInfo.providerName,
+    providerType: providerInfo.providerType || "",
+    appType: log.appType,
+    model: log.model || "",
+    requestModel: log.requestModel || log.model || "",
+    inputTokens: log.inputTokens,
+    outputTokens: log.outputTokens,
+    cacheReadTokens: log.cacheReadTokens,
+    cacheCreationTokens: log.cacheCreationTokens,
+    actualTokens: toActualTokens(log),
+    dataSource: log.dataSource,
+    sessionId: log.sessionId,
+    sessionTitle: log.sessionTitle || "",
+    projectName: log.projectName || "",
+    rawPath: log.rawPath || "",
+    requestTime: log.createdAt,
+    createdAt: log.createdAt
+  }
+}
+
+function applyRequestRecord(log, record) {
+  return {
+    ...log,
+    providerId: record.providerId,
+    providerName: record.providerName,
+    providerType: record.providerType || ""
   }
 }
 
@@ -597,6 +654,7 @@ class UsageService {
   constructor() {
     this.storage = null
     this.logs = []
+    this.requestRecords = []
     this.pricingConfig = normalizePricingConfig()
   }
 
@@ -606,14 +664,49 @@ class UsageService {
 
   async init() {
     this.logs = await this.storage.read("usageLogs", [])
+    this.requestRecords = await this.storage.read("usageRequestRecords", [])
     this.pricingConfig = normalizePricingConfig(
       await this.storage.read("usagePricing", normalizePricingConfig())
     )
+
+    const recordMap = new Map(
+      this.requestRecords.map((item) => [item.requestId, item])
+    )
+
+    for (const log of this.logs) {
+      if (!recordMap.has(log.requestId)) {
+        recordMap.set(
+          log.requestId,
+          createRequestRecord(log, createLogProviderInfo(log))
+        )
+      }
+    }
+
+    this.logs = this.logs.map((log) =>
+      applyRequestRecord(log, recordMap.get(log.requestId))
+    )
+    this.requestRecords = Array.from(recordMap.values()).sort(
+      (left, right) => right.createdAt - left.createdAt
+    )
+    this.storage.scheduleWrite("usageLogs", this.logs)
+    this.storage.scheduleWrite("usageRequestRecords", this.requestRecords)
   }
 
   async refresh(input) {
     const logs = []
     const diagnostics = []
+    const recordMap = new Map(
+      this.requestRecords.map((item) => [item.requestId, item])
+    )
+
+    for (const log of this.logs) {
+      if (!recordMap.has(log.requestId)) {
+        recordMap.set(
+          log.requestId,
+          createRequestRecord(log, createLogProviderInfo(log))
+        )
+      }
+    }
 
     for (const session of input.sessions || []) {
       const appType = normalizeAppType(session.cli)
@@ -646,10 +739,39 @@ class UsageService {
       }
     }
 
+    const mergedLogs = []
+
+    for (const log of logs) {
+      const record = recordMap.get(log.requestId)
+      const providerInfo = record
+        ? {
+            providerId: record.providerId,
+            providerName:
+              input.providers?.find((item) => item.id === record.providerId)
+                ?.name || record.providerName,
+            providerType:
+              input.providers?.find((item) => item.id === record.providerId)
+                ?.type || record.providerType
+          }
+        : {
+            providerId: log.providerId,
+            providerName: log.providerName,
+            providerType: log.providerType
+          }
+      const requestRecord = createRequestRecord(log, providerInfo)
+
+      recordMap.set(log.requestId, requestRecord)
+      mergedLogs.push(applyRequestRecord(log, requestRecord))
+    }
+
     this.logs = Array.from(
-      new Map(logs.map((item) => [item.requestId, item])).values()
+      new Map(mergedLogs.map((item) => [item.requestId, item])).values()
     ).sort((left, right) => right.createdAt - left.createdAt)
+    this.requestRecords = Array.from(recordMap.values()).sort(
+      (left, right) => right.createdAt - left.createdAt
+    )
     this.storage.scheduleWrite("usageLogs", this.logs)
+    this.storage.scheduleWrite("usageRequestRecords", this.requestRecords)
 
     return {
       logs: this.logs,

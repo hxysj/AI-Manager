@@ -1163,15 +1163,28 @@ class ManagerService extends EventEmitter {
       const { sessions, diagnostics } = await this.sessionService.refresh(
         this.state.cliTargets
       )
+      const runtimeState = this.runtimeProviderService.getState()
+      const codexAccounts = this.codexAccountService.getState()
+      const { diagnostics: usageDiagnostics } = await this.usageService.refresh({
+        sessions,
+        providers: runtimeState.providers,
+        runtimeProfiles: runtimeState.runtimeProfiles,
+        runtimeProviderState: runtimeState.runtimeProviderState,
+        codexAccounts
+      })
 
       this.state = {
         ...this.state,
         sessions,
+        usage: this.usageService.getStats().data,
         diagnostics: [
           ...this.state.diagnostics.filter(
-            (item) => item.type !== "session-parse-error"
+            (item) =>
+              item.type !== "session-parse-error" &&
+              item.type !== "usage-parse-error"
           ),
-          ...diagnostics
+          ...diagnostics,
+          ...usageDiagnostics
         ],
         refreshedAt: Date.now()
       }

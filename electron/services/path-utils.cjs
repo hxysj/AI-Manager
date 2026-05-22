@@ -110,6 +110,7 @@ function resolveAppPaths(userDataPath) {
       cliTargets: path.join(storageDir, "cli-targets.json"),
       sessions: path.join(storageDir, "sessions.json"),
       usageLogs: path.join(storageDir, "usage-logs.json"),
+      usageRequestRecords: path.join(storageDir, "usage-request-records.json"),
       usagePricing: path.join(storageDir, "usage-pricing.json"),
       providers: path.join(storageDir, "providers.json"),
       rules: path.join(storageDir, "rules.json"),
