@@ -802,7 +802,6 @@
             <Info :size="22" />
           </div>
           <div class="update-modal__copy">
-            <strong>{{ updateDialogTitle }}</strong>
             <span>{{ updateDialogMessage }}</span>
           </div>
         </div>
@@ -997,8 +996,9 @@ const baseNavItems = [
   { id: "settings", label: "Settings", icon: Settings }
 ]
 
-const isQuickSwitchPanel =
-  new URLSearchParams(window.location.search).get("panel") === "quick-switch"
+const queryParams = new URLSearchParams(window.location.search)
+const queryView = queryParams.get("view")
+const isQuickSwitchPanel = queryParams.get("panel") === "quick-switch"
 
 const placeholderMap = {
   sessions: {
@@ -1077,13 +1077,16 @@ const state = reactive({
     },
     system: {
       closeAction: "ask",
-      quickSwitchVisible: true
+      quickSwitchVisible: true,
+      autoLaunchEnabled: false
     }
   },
   refreshedAt: 0
 })
 
-const activeView = ref("providers")
+const activeView = ref(
+  baseNavItems.some((item) => item.id === queryView) ? queryView : "providers"
+)
 const showLogsTab = ref(false)
 const sidebarTitleClickCount = ref(0)
 const appLogs = ref([])
