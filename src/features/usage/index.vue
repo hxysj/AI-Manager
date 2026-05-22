@@ -17,6 +17,15 @@
           <Settings :size="16" />
           模型费用
         </button>
+        <button
+          class="usage-view__report-button"
+          type="button"
+          :disabled="pending || reportExporting"
+          @click="exportUsageReport"
+        >
+          <Download :size="16" />
+          {{ reportExporting ? "导出中..." : "导出长图" }}
+        </button>
         <button type="button" :disabled="pending" @click="syncUsage">
           <RefreshCw :size="16" />
           {{ pending ? "同步中..." : "同步会话日志" }}
@@ -202,7 +211,17 @@
           <h2>请求日志</h2>
           <span>{{ logs.length }} 条记录</span>
         </div>
-        <Database :size="18" />
+        <div class="usage-view__section-actions">
+          <button
+            type="button"
+            :disabled="!logs.length"
+            @click="exportUsageLogsCsv"
+          >
+            <Download :size="15" />
+            导出 CSV
+          </button>
+          <Database :size="18" />
+        </div>
       </div>
       <div v-if="logs.length" class="usage-view__log-area">
         <div class="usage-view__table">
@@ -589,6 +608,7 @@ import {
   Upload,
   X
 } from "lucide-vue-next"
+import { createMessage } from "@/utils/message"
 
 const props = defineProps({
   usage: {
@@ -597,14 +617,20 @@ const props = defineProps({
   }
 })
 
+const usageSearchParams = new URLSearchParams(window.location.search)
+const isReportExportWindow =
+  usageSearchParams.get("export") === "usage-report"
 const pending = ref(false)
+const reportExporting = ref(false)
 const pricingSaving = ref(false)
 const stats = ref(props.usage || {})
-const rangeType = ref("today")
-const appType = ref("all")
-const providerId = ref("all")
-const model = ref("all")
-const displayCurrency = ref("USD")
+const rangeType = ref(usageSearchParams.get("rangeType") || "today")
+const appType = ref(usageSearchParams.get("appType") || "all")
+const providerId = ref(usageSearchParams.get("providerId") || "all")
+const model = ref(usageSearchParams.get("model") || "all")
+const displayCurrency = ref(
+  usageSearchParams.get("displayCurrency") || "USD"
+)
 const logPage = ref(1)
 const logPageSize = ref(20)
 const pricingDialogOpen = ref(false)
@@ -644,6 +670,19 @@ const pricingCsvHeaders = [
   "cacheReadCostPerMillion",
   "cacheCreationCostPerMillion"
 ]
+const usageLogCsvColumns = [
+  ["时间", (item) => formatExportDateTime(item.createdAt)],
+  ["应用", (item) => formatAppName(item.appType)],
+  ["Provider", (item) => item.providerName],
+  ["来源", (item) => formatDataSource(item.dataSource)],
+  ["Session", (item) => formatSessionLabel(item)],
+  ["模型", (item) => item.model || "未识别模型"],
+  ["输入", (item) => normalizeInput(item)],
+  ["输出", (item) => item.outputTokens],
+  ["缓存", (item) => item.cacheReadTokens],
+  ["总量", (item) => actualTokens(item)],
+  ["费用", (item) => formatCost(item.totalCostUsd)]
+]
 
 const summary = computed(() => stats.value.summary || createEmptySummary())
 const pricingConfig = computed(
@@ -677,6 +716,32 @@ const paginatedLogs = computed(() =>
 const appOptions = computed(() => stats.value.filters?.appTypes || [])
 const providerOptions = computed(() => stats.value.filters?.providers || [])
 const modelOptions = computed(() => stats.value.filters?.models || [])
+const rangeTypeLabel = computed(() => {
+  const names = {
+    today: "今天",
+    "7d": "最近7天",
+    "30d": "最近30天",
+    all: "全部时间"
+  }
+
+  return names[rangeType.value] || rangeType.value
+})
+const selectedAppLabel = computed(() =>
+  appType.value === "all" ? "全部应用" : formatAppName(appType.value)
+)
+const selectedProviderLabel = computed(() => {
+  if (providerId.value === "all") {
+    return "全部Provider"
+  }
+
+  return (
+    providerOptions.value.find((item) => item.providerId === providerId.value)
+      ?.providerName || providerId.value
+  )
+})
+const selectedModelLabel = computed(() =>
+  model.value === "all" ? "全部模型" : model.value
+)
 const pricingCategoryOptions = computed(() => {
   const categories = new Map()
 
@@ -762,12 +827,20 @@ watch(
 )
 
 onMounted(() => {
+  if (isReportExportWindow) {
+    window.__usageReportReady = false
+    document.body.classList.add("usage-report-exporting")
+  }
+
   loadStats()
   window.addEventListener("resize", resizeCharts)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener("resize", resizeCharts)
+  if (isReportExportWindow) {
+    document.body.classList.remove("usage-report-exporting")
+  }
   trendChart?.dispose()
   providerPie?.dispose()
 })
@@ -1296,7 +1369,32 @@ function createPricingCsvText(items) {
   ].join("\n")
 }
 
-function downloadPricingFile(fileName, content, type) {
+function createUsageLogCsvText(items) {
+  return [
+    usageLogCsvColumns.map(([label]) => createCsvCell(label)).join(","),
+    ...items.map((item) =>
+      usageLogCsvColumns
+        .map(([, getter]) => createCsvCell(getter(item)))
+        .join(",")
+    )
+  ].join("\n")
+}
+
+function createExportTimestamp() {
+  const now = new Date()
+
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0")
+  ].join("") + `-${[
+    String(now.getHours()).padStart(2, "0"),
+    String(now.getMinutes()).padStart(2, "0"),
+    String(now.getSeconds()).padStart(2, "0")
+  ].join("")}`
+}
+
+function downloadUsageFile(fileName, content, type) {
   const blob = new Blob([content], { type })
   const url = URL.createObjectURL(blob)
   const link = document.createElement("a")
@@ -1322,7 +1420,7 @@ function exportPricingFile() {
   pricingError.value = ""
 
   if (pricingExportFormat.value === "csv") {
-    downloadPricingFile(
+    downloadUsageFile(
       "model-pricing.csv",
       `\uFEFF${createPricingCsvText(items)}`,
       "text/csv;charset=utf-8"
@@ -1330,7 +1428,7 @@ function exportPricingFile() {
     return
   }
 
-  downloadPricingFile(
+  downloadUsageFile(
     "model-pricing.json",
     `${JSON.stringify(
       {
@@ -1342,6 +1440,20 @@ function exportPricingFile() {
     )}\n`,
     "application/json;charset=utf-8"
   )
+}
+
+function exportUsageLogsCsv() {
+  if (!logs.value.length) {
+    createMessage.warning("没有可导出的请求日志。")
+    return
+  }
+
+  downloadUsageFile(
+    `usage-request-logs-${createExportTimestamp()}.csv`,
+    `\uFEFF${createUsageLogCsvText(logs.value)}`,
+    "text/csv;charset=utf-8"
+  )
+  createMessage.success(`已导出 ${logs.value.length} 条请求日志。`)
 }
 
 async function savePricingItem(item) {
@@ -1418,6 +1530,9 @@ async function savePricing(options = {}) {
 
 async function loadStats() {
   pending.value = true
+  if (isReportExportWindow) {
+    window.__usageReportReady = false
+  }
 
   try {
     const result = await window.aiManager.getUsageStats(createFilterPayload())
@@ -1427,6 +1542,12 @@ async function loadStats() {
     renderCharts()
   } finally {
     pending.value = false
+    if (isReportExportWindow) {
+      await nextTick()
+      resizeCharts()
+      await waitReportFrame()
+      window.__usageReportReady = true
+    }
   }
 }
 
@@ -1438,6 +1559,40 @@ async function syncUsage() {
     await loadStats()
   } finally {
     pending.value = false
+  }
+}
+
+function waitReportFrame() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve))
+  })
+}
+
+async function exportUsageReport() {
+  reportExporting.value = true
+
+  try {
+    const result = await window.aiManager.exportUsageReportImage({
+      rangeType: rangeType.value,
+      appType: appType.value,
+      providerId: providerId.value,
+      model: model.value,
+      displayCurrency: displayCurrency.value,
+      filters: [
+        rangeTypeLabel.value,
+        selectedAppLabel.value,
+        selectedProviderLabel.value,
+        selectedModelLabel.value
+      ]
+    })
+
+    if (!result?.canceled) {
+      createMessage.success("用量报告长图已导出。")
+    }
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  } finally {
+    reportExporting.value = false
   }
 }
 
@@ -1531,12 +1686,17 @@ function renderProviderPie() {
     legend: {
       orient: "vertical",
       right: 0,
-      top: "middle",
+      top: 0,
       itemWidth: 10,
       itemHeight: 10,
+      formatter: (name) => {
+        return name.length > 24 ? `${name.slice(0, 24)}...` : name
+      },
       textStyle: {
         color: "#5f7087",
-        fontSize: 11
+        fontSize: 11,
+        width: 150,
+        overflow: "truncate"
       }
     },
     series: [
@@ -1647,6 +1807,10 @@ function formatDateTime(value) {
   }).format(new Date(value))
 }
 
+function formatExportDateTime(value) {
+  return value ? new Date(value).toLocaleString("zh-CN") : "未记录"
+}
+
 function formatAppName(value) {
   const names = {
     claude: "Claude",
@@ -1674,6 +1838,57 @@ function formatSessionLabel(item) {
 </script>
 
 <style scoped lang="less">
+:global(body.usage-report-exporting .app-shell) {
+  display: block;
+  height: auto;
+  min-height: 0;
+}
+
+:global(body.usage-report-exporting .app-sidebar) {
+  display: none;
+}
+
+:global(body.usage-report-exporting .app-shell__main),
+:global(body.usage-report-exporting .app-shell__content) {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+}
+
+:global(body.usage-report-exporting .app-shell__content) {
+  padding-right: 0;
+}
+
+:global(body.usage-report-exporting .usage-view) {
+  height: auto;
+  min-height: 0;
+  overflow: visible;
+  padding-right: 0;
+}
+
+:global(body.usage-report-exporting .usage-view__toolbar) {
+  position: static;
+  margin-right: 0;
+}
+
+:global(body.usage-report-exporting .usage-view__report-button) {
+  display: none;
+}
+
+:global(body.usage-report-exporting .usage-view__logs) {
+  display: none;
+}
+
+:global(body.usage-report-exporting .usage-view__grid .usage-view__panel) {
+  overflow: visible;
+}
+
+:global(body.usage-report-exporting .usage-view__stat-list) {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+}
+
 .usage-view {
   display: flex;
   height: 100%;
@@ -1883,6 +2098,33 @@ function formatSessionLabel(item) {
     font-size: 0.76rem;
   }
 
+  &__section-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__section-actions button {
+    display: inline-flex;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #fbfcfd;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &__section-actions button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
   &__grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1903,6 +2145,7 @@ function formatSessionLabel(item) {
   &__stat-list {
     display: flex;
     min-height: 0;
+    max-height: 320px;
     flex-direction: column;
     gap: 8px;
     overflow: auto;

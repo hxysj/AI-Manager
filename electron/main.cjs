@@ -89,7 +89,8 @@ const defaultLocalBackupSettings = {
 }
 const defaultSystemSettings = {
   closeAction: "ask",
-  quickSwitchVisible: true
+  quickSwitchVisible: true,
+  autoLaunchEnabled: false
 }
 
 function normalizeSystemSettings(input = {}) {
@@ -104,8 +105,18 @@ function normalizeSystemSettings(input = {}) {
     quickSwitchVisible:
       input.quickSwitchVisible === undefined
         ? defaultSystemSettings.quickSwitchVisible
-        : Boolean(input.quickSwitchVisible)
+        : Boolean(input.quickSwitchVisible),
+    autoLaunchEnabled:
+      input.autoLaunchEnabled === undefined
+        ? defaultSystemSettings.autoLaunchEnabled
+        : Boolean(input.autoLaunchEnabled)
   }
+}
+
+function applyAutoLaunchSetting(settings = appSettings) {
+  app.setLoginItemSettings({
+    openAtLogin: settings.system.autoLaunchEnabled
+  })
 }
 
 function normalizeCloudSyncSettings(input = {}) {
@@ -2004,6 +2015,7 @@ function registerIpc() {
   registerLoggedIpc("settings:save", async (_, payload) => {
     const nextSettings = normalizeAppSettings(payload)
     fs.mkdirSync(nextSettings.dataPath, { recursive: true })
+    applyAutoLaunchSetting(nextSettings)
     saveAppSettings(nextSettings)
     appSettings = nextSettings
     await syncQuickSwitchWindow()
@@ -2305,6 +2317,152 @@ function registerIpc() {
     return managerService.syncUsage()
   })
 
+  registerLoggedIpc("usage:export-image", async (_, payload = {}) => {
+    const now = new Date()
+    const timestamp = [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0")
+    ].join("") + `-${[
+      String(now.getHours()).padStart(2, "0"),
+      String(now.getMinutes()).padStart(2, "0"),
+      String(now.getSeconds()).padStart(2, "0")
+    ].join("")}`
+    const fileName = [
+      "export",
+      ...(payload.filters || []),
+      timestamp
+    ]
+      .map((item) =>
+        String(item || "")
+          .replace(/[<>:"/\\|?*\x00-\x1F]+/g, "-")
+          .replace(/\s+/g, "")
+          .replace(/^-+|-+$/g, "")
+      )
+      .filter(Boolean)
+      .join("-")
+
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: "导出用量报告长图",
+      defaultPath: path.join(
+        app.getPath("desktop"),
+        `${fileName}.png`
+      ),
+      filters: [{ name: "PNG 长图", extensions: ["png"] }]
+    })
+
+    if (result.canceled || !result.filePath) {
+      return {
+        canceled: true
+      }
+    }
+
+    const reportQuery = new URLSearchParams({
+      view: "usage",
+      export: "usage-report",
+      rangeType: String(payload.rangeType || "today"),
+      appType: String(payload.appType || "all"),
+      providerId: String(payload.providerId || "all"),
+      model: String(payload.model || "all"),
+      displayCurrency: String(payload.displayCurrency || "USD")
+    })
+    const reportWindow = new BrowserWindow({
+      width: 1200,
+      height: 760,
+      show: false,
+      frame: false,
+      skipTaskbar: true,
+      paintWhenInitiallyHidden: true,
+      autoHideMenuBar: true,
+      icon: appIconPath,
+      backgroundColor: "#ffffff",
+      webPreferences: {
+        preload: path.join(__dirname, "preload.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false,
+        devTools: false
+      }
+    })
+    let wasAttached = false
+    let screenshot = null
+
+    try {
+      const devServerUrl = process.env.VITE_DEV_SERVER_URL
+
+      if (devServerUrl) {
+        const reportUrl = new URL(devServerUrl)
+
+        for (const [key, value] of reportQuery) {
+          reportUrl.searchParams.set(key, value)
+        }
+
+        await reportWindow.loadURL(reportUrl.toString())
+      } else {
+        await reportWindow.loadFile(
+          path.join(__dirname, "..", "dist", "index.html"),
+          {
+            query: Object.fromEntries(reportQuery)
+          }
+        )
+      }
+
+      await reportWindow.webContents.executeJavaScript(`
+        new Promise((resolve) => {
+          const waitReady = () => {
+            if (window.__usageReportReady) {
+              resolve(true)
+              return
+            }
+
+            requestAnimationFrame(waitReady)
+          }
+
+          waitReady()
+        })
+      `)
+
+      wasAttached = reportWindow.webContents.debugger.isAttached()
+      if (!wasAttached) {
+        reportWindow.webContents.debugger.attach("1.3")
+      }
+
+      const pageSize = await reportWindow.webContents.executeJavaScript(`({
+        width: Math.ceil(document.documentElement.scrollWidth),
+        height: Math.ceil(document.documentElement.scrollHeight)
+      })`)
+      await reportWindow.webContents.debugger.sendCommand("Page.enable")
+      screenshot = await reportWindow.webContents.debugger.sendCommand(
+        "Page.captureScreenshot",
+        {
+          format: "png",
+          fromSurface: true,
+          captureBeyondViewport: true,
+          clip: {
+            x: 0,
+            y: 0,
+            width: pageSize.width,
+            height: pageSize.height,
+            scale: 1
+          }
+        }
+      )
+    } finally {
+      if (!wasAttached && reportWindow.webContents.debugger.isAttached()) {
+        reportWindow.webContents.debugger.detach()
+      }
+      if (!reportWindow.isDestroyed()) {
+        reportWindow.destroy()
+      }
+    }
+
+    await fsp.writeFile(result.filePath, Buffer.from(screenshot.data, "base64"))
+
+    return {
+      canceled: false,
+      filePath: result.filePath
+    }
+  })
+
   registerLoggedIpc("session:delete", async (_, payload) => {
     await managerService.deleteSession(payload.sessionId)
     return managerService.getState()
@@ -2466,6 +2624,7 @@ function registerIpc() {
 
 app.whenReady().then(async () => {
   await initAppCallLogs()
+  applyAutoLaunchSetting(appSettings)
   managerService = new ManagerService(app.getPath("userData"), appSettings)
   instrumentBackendServices(managerService)
   translationService = new TranslationService(app.getPath("userData"))

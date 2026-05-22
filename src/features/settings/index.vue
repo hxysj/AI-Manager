@@ -375,11 +375,53 @@
         <div class="settings-view__panel-header">
           <div>
             <h2>系统设置</h2>
-            <span>控制桌面端窗口关闭按钮的默认行为。</span>
+            <span>控制桌面端启动、窗口关闭和悬浮窗显示行为。</span>
           </div>
         </div>
 
         <div class="settings-view__system-list">
+          <article class="settings-view__system-card">
+            <div class="settings-view__data-copy">
+              <strong>开机自动启动</strong>
+              <span>开启后登录 Windows 时自动启动软件，可随时关闭。</span>
+            </div>
+            <div class="settings-view__choice-group">
+              <label
+                :class="[
+                  'settings-view__choice',
+                  {
+                    'settings-view__choice--active':
+                      draft.system.autoLaunchEnabled
+                  }
+                ]"
+              >
+                <input
+                  v-model="draft.system.autoLaunchEnabled"
+                  type="radio"
+                  name="auto-launch-enabled"
+                  :value="true"
+                />
+                <span>开启</span>
+              </label>
+              <label
+                :class="[
+                  'settings-view__choice',
+                  {
+                    'settings-view__choice--active':
+                      !draft.system.autoLaunchEnabled
+                  }
+                ]"
+              >
+                <input
+                  v-model="draft.system.autoLaunchEnabled"
+                  type="radio"
+                  name="auto-launch-enabled"
+                  :value="false"
+                />
+                <span>关闭</span>
+              </label>
+            </div>
+          </article>
           <article class="settings-view__system-card">
             <div class="settings-view__data-copy">
               <strong>关闭按钮行为</strong>
@@ -532,7 +574,8 @@ const draft = reactive({
   },
   system: {
     closeAction: "ask",
-    quickSwitchVisible: true
+    quickSwitchVisible: true,
+    autoLaunchEnabled: false
   }
 })
 
@@ -623,6 +666,9 @@ function syncDraft() {
   draft.system.closeAction = props.appSettings.system?.closeAction || "ask"
   draft.system.quickSwitchVisible =
     props.appSettings.system?.quickSwitchVisible !== false
+  draft.system.autoLaunchEnabled = Boolean(
+    props.appSettings.system?.autoLaunchEnabled
+  )
 }
 
 async function selectDirectory(key, currentPath) {
@@ -672,7 +718,8 @@ function submitSettings() {
     },
     system: {
       closeAction: draft.system.closeAction,
-      quickSwitchVisible: draft.system.quickSwitchVisible
+      quickSwitchVisible: draft.system.quickSwitchVisible,
+      autoLaunchEnabled: draft.system.autoLaunchEnabled
     }
   })
 }
