@@ -479,7 +479,7 @@
                   :disabled="pending"
                   @click="toggleRestoreCompare(item)"
                 >
-                  {{ restoreCompareKey === item.key ? "收起" : "对比" }}
+                  对比
                 </button>
               </div>
               <label class="restore-preview-modal__choice">
@@ -506,60 +506,6 @@
                   >使用备份版本</span
                 >
               </label>
-              <div
-                v-if="restoreCompareKey === item.key"
-                class="restore-preview-modal__compare"
-              >
-                <div class="restore-preview-modal__compare-summary">
-                  已标记 {{ restoreCompareChangedCount }} 处不同
-                </div>
-                <section class="restore-preview-modal__compare-panel">
-                  <strong>当前内容</strong>
-                  <div class="restore-preview-modal__compare-code">
-                    <div
-                      v-for="row in restoreCompareRows"
-                      :key="`current-${row.index}`"
-                      :class="[
-                        'restore-preview-modal__compare-line',
-                        `restore-preview-modal__compare-line--${row.currentStatus}`
-                      ]"
-                    >
-                      <span class="restore-preview-modal__compare-number">{{
-                        row.currentLineNumber
-                      }}</span>
-                      <span class="restore-preview-modal__compare-marker">{{
-                        row.currentMarker
-                      }}</span>
-                      <span class="restore-preview-modal__compare-text">{{
-                        row.currentText
-                      }}</span>
-                    </div>
-                  </div>
-                </section>
-                <section class="restore-preview-modal__compare-panel">
-                  <strong>备份内容</strong>
-                  <div class="restore-preview-modal__compare-code">
-                    <div
-                      v-for="row in restoreCompareRows"
-                      :key="`backup-${row.index}`"
-                      :class="[
-                        'restore-preview-modal__compare-line',
-                        `restore-preview-modal__compare-line--${row.backupStatus}`
-                      ]"
-                    >
-                      <span class="restore-preview-modal__compare-number">{{
-                        row.backupLineNumber
-                      }}</span>
-                      <span class="restore-preview-modal__compare-marker">{{
-                        row.backupMarker
-                      }}</span>
-                      <span class="restore-preview-modal__compare-text">{{
-                        row.backupText
-                      }}</span>
-                    </div>
-                  </div>
-                </section>
-              </div>
             </article>
           </section>
 
@@ -589,6 +535,78 @@
           </button>
         </div>
       </form>
+    </BaseModal>
+
+    <BaseModal
+      v-if="restoreCompareItem"
+      title="检查恢复差异"
+      :description="restoreCompareDescription"
+      @close="closeRestoreCompare"
+    >
+      <div class="restore-preview-modal restore-preview-modal--compare">
+        <div class="restore-preview-modal__compare-summary">
+          已标记 {{ restoreCompareChangedCount }} 处不同
+        </div>
+        <div
+          class="restore-preview-modal__compare restore-preview-modal__compare--dialog"
+        >
+          <section class="restore-preview-modal__compare-panel">
+            <strong>当前内容</strong>
+            <div class="restore-preview-modal__compare-code">
+              <div
+                v-for="row in restoreCompareRows"
+                :key="`current-${row.index}`"
+                :class="[
+                  'restore-preview-modal__compare-line',
+                  `restore-preview-modal__compare-line--${row.currentStatus}`
+                ]"
+              >
+                <span class="restore-preview-modal__compare-number">{{
+                  row.currentLineNumber
+                }}</span>
+                <span class="restore-preview-modal__compare-marker">{{
+                  row.currentMarker
+                }}</span>
+                <span class="restore-preview-modal__compare-text">{{
+                  row.currentText
+                }}</span>
+              </div>
+            </div>
+          </section>
+          <section class="restore-preview-modal__compare-panel">
+            <strong>备份内容</strong>
+            <div class="restore-preview-modal__compare-code">
+              <div
+                v-for="row in restoreCompareRows"
+                :key="`backup-${row.index}`"
+                :class="[
+                  'restore-preview-modal__compare-line',
+                  `restore-preview-modal__compare-line--${row.backupStatus}`
+                ]"
+              >
+                <span class="restore-preview-modal__compare-number">{{
+                  row.backupLineNumber
+                }}</span>
+                <span class="restore-preview-modal__compare-marker">{{
+                  row.backupMarker
+                }}</span>
+                <span class="restore-preview-modal__compare-text">{{
+                  row.backupText
+                }}</span>
+              </div>
+            </div>
+          </section>
+        </div>
+        <div class="restore-preview-modal__actions">
+          <button
+            class="status-button restore-preview-modal__primary"
+            type="button"
+            @click="closeRestoreCompare"
+          >
+            确定
+          </button>
+        </div>
+      </div>
     </BaseModal>
 
     <div v-if="updateDialog.open" class="update-modal">
@@ -1102,6 +1120,14 @@ const restoreCompareRows = computed(() => {
 const restoreCompareChangedCount = computed(() => {
   return restoreCompareRows.value.filter((item) => item.status !== "same")
     .length
+})
+
+const restoreCompareDescription = computed(() => {
+  if (!restoreCompareItem.value) {
+    return ""
+  }
+
+  return `${restoreCompareItem.value.type}：${restoreCompareItem.value.name} · ${restoreCompareItem.value.path}`
 })
 
 const restorePreviewDescription = computed(() => {
@@ -1826,7 +1852,11 @@ function openRestorePreview(result, type) {
 }
 
 function toggleRestoreCompare(item) {
-  restoreCompareKey.value = restoreCompareKey.value === item.key ? "" : item.key
+  restoreCompareKey.value = item.key
+}
+
+function closeRestoreCompare() {
+  restoreCompareKey.value = ""
 }
 
 function formatRestoreCompareContent(value) {
@@ -2357,7 +2387,10 @@ onMounted(() => {
 
   bootstrap()
   unsubscribeUpdate = window.aiManager.onUpdateStatus(applyUpdateStatus)
-  window.aiManager.getUpdateStatus().then(applyUpdateStatus).catch(() => {})
+  window.aiManager
+    .getUpdateStatus()
+    .then(applyUpdateStatus)
+    .catch(() => {})
   unsubscribeClose = window.aiManager.onCloseRequested(() => {
     closeRemember.value = false
     showCloseConfirm.value = true
@@ -3031,6 +3064,10 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
 
+  &--compare {
+    height: min(680px, calc(100vh - 180px));
+  }
+
   &__summary {
     display: flex;
     gap: 8px;
@@ -3168,9 +3205,16 @@ onBeforeUnmount(() => {
     margin-top: 4px;
   }
 
+  &__compare--dialog {
+    flex: 1;
+    min-height: 0;
+    margin-top: 0;
+  }
+
   &__compare-panel {
     display: flex;
     min-width: 0;
+    min-height: 0;
     flex-direction: column;
     gap: 6px;
   }
@@ -3188,7 +3232,9 @@ onBeforeUnmount(() => {
   }
 
   &__compare-code {
+    flex: 1;
     max-height: 260px;
+    min-height: 0;
     overflow: auto;
     border: 1px solid var(--color-line);
     border-radius: 8px;
@@ -3197,6 +3243,10 @@ onBeforeUnmount(() => {
     font-family: "JetBrains Mono", "Consolas", monospace;
     font-size: 0.74rem;
     line-height: 1.55;
+  }
+
+  &__compare--dialog &__compare-code {
+    max-height: none;
   }
 
   &__compare-line {
