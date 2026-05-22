@@ -325,6 +325,13 @@
             </button>
           </div>
         </section>
+        <datalist id="usage-pricing-category-options">
+          <option
+            v-for="option in pricingCategoryOptions"
+            :key="option.value"
+            :value="option.value"
+          ></option>
+        </datalist>
 
         <section class="usage-view__pricing-list">
           <div class="usage-view__pricing-head">
@@ -347,15 +354,11 @@
                 v-model.trim="item.modelId"
                 placeholder="如 claude-sonnet-4"
               />
-              <select v-model="item.modelCategory">
-                <option
-                  v-for="option in pricingCategoryOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select>
+              <input
+                v-model.trim="item.modelCategory"
+                list="usage-pricing-category-options"
+                placeholder="输入或选择类别"
+              />
               <select v-model="item.currency">
                 <option value="USD">$</option>
                 <option value="CNY">￥</option>
@@ -390,10 +393,8 @@
                 {{ item.modelId || "未填写" }}
               </span>
               <span
-                :class="[
-                  'usage-view__pricing-category',
-                  `usage-view__pricing-category--${item.modelCategory}`
-                ]"
+                class="usage-view__pricing-category"
+                :title="formatModelCategory(item.modelCategory)"
               >
                 {{ formatModelCategory(item.modelCategory) }}
               </span>
@@ -626,7 +627,7 @@ const pricingPageSizeOptions = [8, 12, 20, 50]
 const pricingImportPlaceholder = `[
   {
     "modelId": "gpt-5.5",
-    "modelCategory": "gpt",
+    "modelCategory": "OpenAI",
     "currency": "USD",
     "inputCostPerMillion": 5,
     "outputCostPerMillion": 30,
@@ -642,13 +643,6 @@ const pricingCsvHeaders = [
   "outputCostPerMillion",
   "cacheReadCostPerMillion",
   "cacheCreationCostPerMillion"
-]
-const pricingCategoryOptions = [
-  { value: "gpt", label: "GPT" },
-  { value: "claude", label: "Claude" },
-  { value: "qwen", label: "Qwen" },
-  { value: "doubao", label: "Doubao" },
-  { value: "deepseek", label: "DeepSeek" }
 ]
 
 const summary = computed(() => stats.value.summary || createEmptySummary())
@@ -683,11 +677,30 @@ const paginatedLogs = computed(() =>
 const appOptions = computed(() => stats.value.filters?.appTypes || [])
 const providerOptions = computed(() => stats.value.filters?.providers || [])
 const modelOptions = computed(() => stats.value.filters?.models || [])
+const pricingCategoryOptions = computed(() => {
+  const categories = new Map()
+
+  for (const item of pricingDraft.value.items) {
+    const category = normalizeModelCategory(item.modelCategory)
+    const key = category.toLowerCase()
+
+    if (category && !categories.has(key)) {
+      categories.set(key, category)
+    }
+  }
+
+  return Array.from(categories.values()).map((category) => ({
+    value: category,
+    label: category
+  }))
+})
 const filteredPricingItems = computed(() =>
   pricingDraft.value.items.filter((item) => {
+    const category = normalizeModelCategory(item.modelCategory)
+
     return (
       pricingCategoryFilter.value === "all" ||
-      item.modelCategory === pricingCategoryFilter.value ||
+      category === pricingCategoryFilter.value ||
       item.id === pricingEditingId.value
     )
   })
@@ -785,10 +798,7 @@ function createPricingItem(input = {}) {
       input.id ||
       `pricing-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     modelId: input.modelId || "",
-    modelCategory: normalizeModelCategory(
-      input.modelCategory || input.category,
-      input.modelId || ""
-    ),
+    modelCategory: normalizeModelCategory(input.modelCategory ?? input.category),
     currency: normalizePricingCurrency(input.currency),
     inputCostPerMillion: Number(input.inputCostPerMillion || 0),
     outputCostPerMillion: Number(input.outputCostPerMillion || 0),
@@ -831,34 +841,8 @@ function resetScopedFilters() {
   model.value = "all"
 }
 
-function inferModelCategory(modelId) {
-  const value = String(modelId || "").toLowerCase()
-
-  if (value.includes("claude")) {
-    return "claude"
-  }
-
-  if (value.includes("qwen")) {
-    return "qwen"
-  }
-
-  if (value.includes("doubao")) {
-    return "doubao"
-  }
-
-  if (value.includes("deepseek")) {
-    return "deepseek"
-  }
-
-  return "gpt"
-}
-
-function normalizeModelCategory(value, modelId) {
-  const category = String(value || inferModelCategory(modelId)).toLowerCase()
-
-  return pricingCategoryOptions.some((item) => item.value === category)
-    ? category
-    : inferModelCategory(modelId)
+function normalizeModelCategory(value) {
+  return String(value || "").trim()
 }
 
 function normalizePricingCurrency(value) {
@@ -940,7 +924,7 @@ function addPricingItem() {
   const item = createPricingItem({
     modelCategory:
       pricingCategoryFilter.value === "all"
-        ? "gpt"
+        ? ""
         : pricingCategoryFilter.value
   })
 
@@ -1005,7 +989,7 @@ function createPricingImportItem(input = {}) {
     modelId:
       input.modelId || input.model_id || input.model || input.modelName || "",
     modelCategory:
-      input.modelCategory || input.model_category || input.category,
+      input.modelCategory ?? input.model_category ?? input.category,
     currency: input.currency || input.unit,
     inputCostPerMillion: pickPricingImportValue(input, [
       "inputCostPerMillion",
@@ -1288,7 +1272,7 @@ async function importPricingFile(event) {
 function createPricingExportItem(item) {
   return {
     modelId: item.modelId.trim(),
-    modelCategory: item.modelCategory,
+    modelCategory: normalizeModelCategory(item.modelCategory),
     currency: item.currency,
     inputCostPerMillion: Number(item.inputCostPerMillion || 0),
     outputCostPerMillion: Number(item.outputCostPerMillion || 0),
@@ -1404,7 +1388,7 @@ async function savePricing(options = {}) {
       items: pricingDraft.value.items.map((item) => ({
         id: item.id,
         modelId: item.modelId.trim(),
-        modelCategory: item.modelCategory,
+        modelCategory: normalizeModelCategory(item.modelCategory),
         currency: item.currency,
         inputCostPerMillion: Number(item.inputCostPerMillion || 0),
         outputCostPerMillion: Number(item.outputCostPerMillion || 0),
@@ -1629,9 +1613,7 @@ function formatPricingAmount(value) {
 }
 
 function formatModelCategory(value) {
-  return (
-    pricingCategoryOptions.find((item) => item.value === value)?.label || "GPT"
-  )
+  return String(value || "").trim() || "未分类"
 }
 
 function formatExchangeRate(value) {
@@ -2327,6 +2309,7 @@ function formatSessionLabel(item) {
 
   &__pricing-category {
     display: inline-flex;
+    overflow: hidden;
     width: fit-content;
     max-width: 100%;
     height: 24px;
@@ -2337,26 +2320,8 @@ function formatSessionLabel(item) {
     color: #28415f;
     font-size: 0.74rem;
     font-weight: 800;
-  }
-
-  &__pricing-category--claude {
-    background: #fff0e8;
-    color: #9a4a16;
-  }
-
-  &__pricing-category--qwen {
-    background: #e8f3ff;
-    color: #17569b;
-  }
-
-  &__pricing-category--doubao {
-    background: #eaf7ef;
-    color: #197447;
-  }
-
-  &__pricing-category--deepseek {
-    background: #f0ecff;
-    color: #5740a8;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   &__pricing-actions {

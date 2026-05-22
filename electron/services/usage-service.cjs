@@ -33,34 +33,8 @@ function normalizeCurrency(value) {
   return String(value || "").toUpperCase() === "CNY" ? "CNY" : "USD"
 }
 
-function inferModelCategory(modelId) {
-  const value = String(modelId || "").toLowerCase()
-
-  if (value.includes("claude")) {
-    return "claude"
-  }
-
-  if (value.includes("qwen")) {
-    return "qwen"
-  }
-
-  if (value.includes("doubao")) {
-    return "doubao"
-  }
-
-  if (value.includes("deepseek")) {
-    return "deepseek"
-  }
-
-  return "gpt"
-}
-
-function normalizeModelCategory(value, modelId) {
-  const category = String(value || inferModelCategory(modelId)).toLowerCase()
-
-  return ["gpt", "claude", "qwen", "doubao", "deepseek"].includes(category)
-    ? category
-    : inferModelCategory(modelId)
+function normalizeModelCategory(value) {
+  return String(value || "").trim()
 }
 
 function formatAppProviderName(cli) {
@@ -83,10 +57,7 @@ function normalizePricingItem(input) {
   return {
     id: input.id || `pricing-${crypto.randomUUID()}`,
     modelId,
-    modelCategory: normalizeModelCategory(
-      input.modelCategory || input.category,
-      modelId
-    ),
+    modelCategory: normalizeModelCategory(input.modelCategory ?? input.category),
     currency: normalizeCurrency(input.currency),
     inputCostPerMillion: toPriceNumber(input.inputCostPerMillion),
     outputCostPerMillion: toPriceNumber(input.outputCostPerMillion),
