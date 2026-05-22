@@ -952,7 +952,15 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
+import {
+  computed,
+  defineAsyncComponent,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch
+} from "vue"
 import {
   BarChart3,
   ChevronDown,
@@ -972,20 +980,37 @@ import AppSidebar from "@/components/AppSidebar.vue"
 import BaseModal from "@/components/BaseModal.vue"
 import GlobalLoading from "@/components/GlobalLoading.vue"
 import SelectionTranslator from "@/components/SelectionTranslator.vue"
-import ProvidersView from "@/features/providers/index.vue"
-import ReposView from "@/features/repos/index.vue"
-import AddRepoModal from "@/features/repos/components/AddRepoModal.vue"
-import RulesView from "@/features/rules/index.vue"
-import SessionsView from "@/features/sessions/index.vue"
-import SettingsView from "@/features/settings/index.vue"
-import SkillsView from "@/features/skills/index.vue"
-import UsageView from "@/features/usage/index.vue"
-import CreateSkillModal from "@/features/skills/components/CreateSkillModal.vue"
-import ImportSkillsModal from "@/features/skills/components/ImportSkillsModal.vue"
-import SkillDrawer from "@/features/skills/components/SkillDrawer.vue"
 import logoUrl from "@/assets/ai-manager-logo.svg?url"
 import { useGlobalLoading } from "@/utils/global-loading"
 import { createMessage } from "@/utils/message"
+
+const ProvidersView = defineAsyncComponent(() =>
+  import("@/features/providers/index.vue")
+)
+const ReposView = defineAsyncComponent(() => import("@/features/repos/index.vue"))
+const AddRepoModal = defineAsyncComponent(() =>
+  import("@/features/repos/components/AddRepoModal.vue")
+)
+const RulesView = defineAsyncComponent(() => import("@/features/rules/index.vue"))
+const SessionsView = defineAsyncComponent(() =>
+  import("@/features/sessions/index.vue")
+)
+const SettingsView = defineAsyncComponent(() =>
+  import("@/features/settings/index.vue")
+)
+const SkillsView = defineAsyncComponent(() =>
+  import("@/features/skills/index.vue")
+)
+const UsageView = defineAsyncComponent(() => import("@/features/usage/index.vue"))
+const CreateSkillModal = defineAsyncComponent(() =>
+  import("@/features/skills/components/CreateSkillModal.vue")
+)
+const ImportSkillsModal = defineAsyncComponent(() =>
+  import("@/features/skills/components/ImportSkillsModal.vue")
+)
+const SkillDrawer = defineAsyncComponent(() =>
+  import("@/features/skills/components/SkillDrawer.vue")
+)
 
 const baseNavItems = [
   { id: "providers", label: "Providers", icon: Network },

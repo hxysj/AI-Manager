@@ -588,7 +588,14 @@
 </template>
 
 <script setup>
-import * as echarts from "echarts"
+import { BarChart, LineChart, PieChart as EchartsPieChart } from "echarts/charts"
+import {
+  GridComponent,
+  LegendComponent,
+  TooltipComponent
+} from "echarts/components"
+import * as echarts from "echarts/core"
+import { CanvasRenderer } from "echarts/renderers"
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   BarChart3,
@@ -609,6 +616,16 @@ import {
   X
 } from "lucide-vue-next"
 import { createMessage } from "@/utils/message"
+
+echarts.use([
+  BarChart,
+  LineChart,
+  EchartsPieChart,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  CanvasRenderer
+])
 
 const props = defineProps({
   usage: {

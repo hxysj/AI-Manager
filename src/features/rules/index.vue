@@ -389,7 +389,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
-import * as monaco from "monaco-editor"
+import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
 import { Eye, FolderOpen, Pencil, Plus, Trash2, X } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
