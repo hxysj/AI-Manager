@@ -380,6 +380,40 @@ function normalizePromptRuntimeRestoreValue(value) {
 
 function normalizeRestoreValue(entryPath, value) {
   if (
+    [
+      "storage/providers.json",
+      "storage/skills.json",
+      "storage/runtime-models.json",
+      "storage/runtime-profiles.json",
+      "storage/runtime-provider-state.json",
+      "storage/codex-accounts.json",
+      "storage/rules.json",
+      "storage/prompt-runtime-state.json"
+    ].includes(entryPath) &&
+    value &&
+    typeof value === "object"
+  )
+    value = JSON.parse(
+      JSON.stringify(value, (key, item) =>
+        [
+          "createdAt",
+          "updatedAt",
+          "lastUpdatedAt",
+          "lastSyncAt",
+          "uploadedAt",
+          "downloadedAt",
+          "lastBackupAt",
+          "created_at",
+          "updated_at",
+          "last_refresh",
+          "token_updated_at"
+        ].includes(key)
+          ? undefined
+          : item
+      )
+    )
+
+  if (
     entryPath === "storage/providers.json" &&
     value &&
     typeof value === "object" &&
@@ -448,7 +482,9 @@ function createRestorePreviewItem(
     path: entryPath,
     status,
     currentContent:
-      status === "conflict" ? normalizeRestoreValue(entryPath, currentValue) : "",
+      status === "conflict"
+        ? normalizeRestoreValue(entryPath, currentValue)
+        : "",
     backupContent:
       status === "conflict" ? normalizeRestoreValue(entryPath, value) : ""
   }
@@ -477,7 +513,12 @@ function createRestoreFilePreviewItem(
   }
 }
 
-function appendJsonRestorePreview(entryPath, currentValue, backupValue, preview) {
+function appendJsonRestorePreview(
+  entryPath,
+  currentValue,
+  backupValue,
+  preview
+) {
   if (Array.isArray(backupValue)) {
     const currentItems = Array.isArray(currentValue) ? currentValue : []
     const currentMap = new Map(
@@ -518,7 +559,9 @@ function appendJsonRestorePreview(entryPath, currentValue, backupValue, preview)
 
   if (backupValue && typeof backupValue === "object") {
     const currentObject =
-      currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)
+      currentValue &&
+      typeof currentValue === "object" &&
+      !Array.isArray(currentValue)
         ? currentValue
         : {}
 
@@ -605,18 +648,21 @@ async function collectBackupEntries(paths) {
     [paths.storageFiles.providers, "storage/providers.json"],
     [paths.storageFiles.runtimeModels, "storage/runtime-models.json"],
     [paths.storageFiles.runtimeProfiles, "storage/runtime-profiles.json"],
-    [paths.storageFiles.runtimeProviderState, "storage/runtime-provider-state.json"],
-    [paths.storageFiles.runtimeProviderKeys, "storage/runtime-provider-keys.json"],
+    [
+      paths.storageFiles.runtimeProviderState,
+      "storage/runtime-provider-state.json"
+    ],
+    [
+      paths.storageFiles.runtimeProviderKeys,
+      "storage/runtime-provider-keys.json"
+    ],
     [paths.storageFiles.codexAccounts, "storage/codex-accounts.json"],
     [
       paths.storageFiles.codexActiveAccountId,
       "storage/codex-active-account-id.json"
     ],
     [paths.storageFiles.rules, "storage/rules.json"],
-    [
-      paths.storageFiles.promptRuntimeState,
-      "storage/prompt-runtime-state.json"
-    ]
+    [paths.storageFiles.promptRuntimeState, "storage/prompt-runtime-state.json"]
   ]
   const entries = []
 
@@ -774,8 +820,7 @@ async function createRestorePreview(rootPath, entries) {
     }
 
     if (
-      sha256(currentContent) !==
-      sha256(Buffer.from(entry.content, "base64"))
+      sha256(currentContent) !== sha256(Buffer.from(entry.content, "base64"))
     ) {
       preview.conflicts.push(
         createRestoreFilePreviewItem(
@@ -856,7 +901,9 @@ function mergeJsonBackupValue(entryPath, currentValue, backupValue, choices) {
 
   if (backupValue && typeof backupValue === "object") {
     const nextValue =
-      currentValue && typeof currentValue === "object" && !Array.isArray(currentValue)
+      currentValue &&
+      typeof currentValue === "object" &&
+      !Array.isArray(currentValue)
         ? { ...currentValue }
         : {}
 
@@ -1165,13 +1212,15 @@ class ManagerService extends EventEmitter {
       )
       const runtimeState = this.runtimeProviderService.getState()
       const codexAccounts = this.codexAccountService.getState()
-      const { diagnostics: usageDiagnostics } = await this.usageService.refresh({
-        sessions,
-        providers: runtimeState.providers,
-        runtimeProfiles: runtimeState.runtimeProfiles,
-        runtimeProviderState: runtimeState.runtimeProviderState,
-        codexAccounts
-      })
+      const { diagnostics: usageDiagnostics } = await this.usageService.refresh(
+        {
+          sessions,
+          providers: runtimeState.providers,
+          runtimeProfiles: runtimeState.runtimeProfiles,
+          runtimeProviderState: runtimeState.runtimeProviderState,
+          codexAccounts
+        }
+      )
 
       this.state = {
         ...this.state,

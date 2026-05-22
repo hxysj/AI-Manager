@@ -1226,6 +1226,9 @@ watch(
     display: flex;
     flex-direction: column;
     gap: 8px;
+    max-height: 260px;
+    overflow-y: auto;
+    padding-right: 4px;
   }
 
   &__backup-empty {
