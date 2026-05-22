@@ -15,11 +15,76 @@
         @click="handleQuickLogoClick"
         @pointerdown="startQuickLogoDrag"
       >
-        <img
-          class="quick-switch-panel__logo-image"
-          :src="logoUrl"
-          alt="AI Manager"
-        />
+        <svg
+          class="quick-switch-panel__logo-scene"
+          viewBox="0 0 44 44"
+          role="img"
+          aria-label="AI Manager"
+        >
+          <defs>
+            <clipPath id="quick-switch-logo-clip">
+              <circle cx="22" cy="21" r="14"></circle>
+            </clipPath>
+            <linearGradient
+              id="quick-switch-logo-ring"
+              x1="8"
+              x2="36"
+              y1="7"
+              y2="36"
+              gradientUnits="userSpaceOnUse"
+            >
+              <stop offset="0" stop-color="#4da3ff"></stop>
+              <stop offset="0.52" stop-color="#18a058"></stop>
+              <stop offset="1" stop-color="#ffb84d"></stop>
+            </linearGradient>
+          </defs>
+          <ellipse
+            class="quick-switch-panel__logo-shadow"
+            cx="22"
+            cy="36"
+            rx="10"
+            ry="3"
+          ></ellipse>
+          <g class="quick-switch-panel__logo-mascot">
+            <circle
+              class="quick-switch-panel__logo-orbit"
+              cx="22"
+              cy="21"
+              r="17"
+            ></circle>
+            <image
+              class="quick-switch-panel__logo-core"
+              :href="logoUrl"
+              x="8"
+              y="7"
+              width="28"
+              height="28"
+              clip-path="url(#quick-switch-logo-clip)"
+              preserveAspectRatio="xMidYMid slice"
+            ></image>
+            <path
+              class="quick-switch-panel__logo-scan"
+              d="M10 22a12 12 0 0 1 24 0"
+            ></path>
+            <circle
+              class="quick-switch-panel__logo-eye quick-switch-panel__logo-eye--left"
+              cx="18"
+              cy="20"
+              r="1.5"
+            ></circle>
+            <circle
+              class="quick-switch-panel__logo-eye quick-switch-panel__logo-eye--right"
+              cx="26"
+              cy="20"
+              r="1.5"
+            ></circle>
+          </g>
+          <g class="quick-switch-panel__logo-sparks">
+            <circle cx="8" cy="15" r="1.3"></circle>
+            <circle cx="35" cy="14" r="1.1"></circle>
+            <circle cx="33" cy="31" r="1.4"></circle>
+          </g>
+        </svg>
       </button>
       <template v-else>
         <div class="quick-switch-panel__title">
@@ -2740,12 +2805,55 @@ onBeforeUnmount(() => {
     cursor: grabbing;
   }
 
-  &__logo-image {
-    width: 30px;
-    height: 30px;
-    animation: quick-switch-monkey-roam 2.4s ease-in-out infinite;
-    object-fit: contain;
-    transform-origin: 50% 78%;
+  &__logo-scene {
+    width: 42px;
+    height: 42px;
+    overflow: visible;
+  }
+
+  &__logo-shadow {
+    animation: quick-switch-logo-shadow 2.4s ease-in-out infinite;
+    fill: rgba(16, 24, 40, 0.2);
+    transform-origin: 22px 36px;
+  }
+
+  &__logo-mascot {
+    animation: quick-switch-logo-float 2.4s ease-in-out infinite;
+    transform-origin: 22px 26px;
+  }
+
+  &__logo-orbit {
+    animation: quick-switch-logo-pulse 2.4s ease-in-out infinite;
+    fill: rgba(255, 255, 255, 0.84);
+    stroke: url("#quick-switch-logo-ring");
+    stroke-width: 1.8;
+    transform-origin: 22px 21px;
+  }
+
+  &__logo-core {
+    animation: quick-switch-logo-breathe 2.4s ease-in-out infinite;
+    transform-origin: 22px 21px;
+  }
+
+  &__logo-scan {
+    animation: quick-switch-logo-scan 1.8s linear infinite;
+    fill: none;
+    stroke: #ffffff;
+    stroke-linecap: round;
+    stroke-width: 2.2;
+    transform-origin: 22px 22px;
+  }
+
+  &__logo-eye {
+    animation: quick-switch-logo-blink 3.6s ease-in-out infinite;
+    fill: #18a058;
+    transform-origin: center;
+  }
+
+  &__logo-sparks {
+    animation: quick-switch-logo-sparkle 2.2s ease-in-out infinite;
+    fill: #ffb84d;
+    transform-origin: 22px 22px;
   }
 
   &__cli-tabs {
@@ -3244,25 +3352,104 @@ onBeforeUnmount(() => {
   }
 }
 
-@keyframes quick-switch-monkey-roam {
+@keyframes quick-switch-logo-float {
   0% {
-    transform: translate(0, 0) rotate(-4deg);
+    transform: translateY(0);
   }
 
   25% {
-    transform: translate(4px, -3px) rotate(6deg);
+    transform: translateY(-3px);
   }
 
   50% {
-    transform: translate(0, 2px) rotate(-2deg);
+    transform: translateY(1px);
   }
 
   75% {
-    transform: translate(-4px, -2px) rotate(5deg);
+    transform: translateY(-2px);
   }
 
   100% {
-    transform: translate(0, 0) rotate(-4deg);
+    transform: translateY(0);
+  }
+}
+
+@keyframes quick-switch-logo-shadow {
+  0%,
+  100% {
+    opacity: 0.42;
+    transform: scaleX(0.86);
+  }
+
+  50% {
+    opacity: 0.22;
+    transform: scaleX(1.08);
+  }
+}
+
+@keyframes quick-switch-logo-pulse {
+  0%,
+  100% {
+    opacity: 0.88;
+    transform: scale(0.95);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.04);
+  }
+}
+
+@keyframes quick-switch-logo-breathe {
+  0%,
+  100% {
+    transform: scale(0.94);
+  }
+
+  50% {
+    transform: scale(1.03);
+  }
+}
+
+@keyframes quick-switch-logo-scan {
+  0% {
+    opacity: 0.2;
+    transform: rotate(0deg);
+  }
+
+  45% {
+    opacity: 0.78;
+  }
+
+  100% {
+    opacity: 0.2;
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes quick-switch-logo-blink {
+  0%,
+  88%,
+  100% {
+    transform: scaleY(1);
+  }
+
+  92%,
+  96% {
+    transform: scaleY(0.18);
+  }
+}
+
+@keyframes quick-switch-logo-sparkle {
+  0%,
+  100% {
+    opacity: 0.28;
+    transform: rotate(0deg) scale(0.9);
+  }
+
+  50% {
+    opacity: 0.95;
+    transform: rotate(18deg) scale(1.08);
   }
 }
 
