@@ -591,6 +591,117 @@
       </form>
     </BaseModal>
 
+    <div v-if="updateDialog.open" class="update-modal">
+      <div class="update-modal__overlay"></div>
+      <section class="update-modal__panel" role="dialog" aria-modal="true">
+        <header class="update-modal__header">
+          <div>
+            <span>应用更新</span>
+            <h2>{{ updateDialogTitle }}</h2>
+          </div>
+          <button
+            class="update-modal__icon-button"
+            type="button"
+            aria-label="关闭更新面板"
+            :disabled="
+              ['checking', 'downloading', 'installing'].includes(
+                updateDialog.phase
+              )
+            "
+            @click="closeUpdateDialog"
+          >
+            <X :size="17" />
+          </button>
+        </header>
+
+        <div class="update-modal__body">
+          <div class="update-modal__mark">
+            <Info :size="22" />
+          </div>
+          <div class="update-modal__copy">
+            <strong>{{ updateDialogTitle }}</strong>
+            <span>{{ updateDialogMessage }}</span>
+          </div>
+        </div>
+
+        <div
+          v-if="updateDialog.phase === 'downloading'"
+          class="update-modal__progress"
+        >
+          <div class="update-modal__progress-head">
+            <span>{{ updateTransferText }}</span>
+            <strong>{{ updateProgressText }}</strong>
+          </div>
+          <div class="update-modal__progress-track">
+            <div
+              class="update-modal__progress-bar"
+              :style="{ width: updateProgressWidth }"
+            ></div>
+          </div>
+        </div>
+
+        <pre v-if="updateDialog.releaseNotes" class="update-modal__notes">{{
+          updateDialog.releaseNotes
+        }}</pre>
+
+        <footer class="update-modal__footer">
+          <button
+            v-if="updateDialog.phase === 'available'"
+            class="update-modal__button"
+            type="button"
+            @click="closeUpdateDialog"
+          >
+            稍后
+          </button>
+          <button
+            v-if="updateDialog.phase === 'available'"
+            class="update-modal__button update-modal__button--primary"
+            type="button"
+            @click="downloadAppUpdate"
+          >
+            <RefreshCw :size="15" />
+            立即下载
+          </button>
+          <button
+            v-else-if="updateDialog.phase === 'downloaded'"
+            class="update-modal__button"
+            type="button"
+            @click="closeUpdateDialog"
+          >
+            稍后
+          </button>
+          <button
+            v-if="updateDialog.phase === 'downloaded'"
+            class="update-modal__button update-modal__button--primary"
+            type="button"
+            @click="installAppUpdate"
+          >
+            重启安装
+          </button>
+          <button
+            v-else-if="updateDialog.phase === 'downloading'"
+            class="update-modal__button"
+            type="button"
+            disabled
+          >
+            下载中...
+          </button>
+          <button
+            v-else-if="
+              !['available', 'downloaded', 'downloading'].includes(
+                updateDialog.phase
+              )
+            "
+            class="update-modal__button update-modal__button--primary"
+            type="button"
+            @click="closeUpdateDialog"
+          >
+            确定
+          </button>
+        </footer>
+      </section>
+    </div>
+
     <div v-if="showCloseConfirm" class="close-confirm">
       <div class="close-confirm__overlay"></div>
       <section class="close-confirm__panel" role="dialog" aria-modal="true">
@@ -816,6 +927,18 @@ const showImportSkills = ref(false)
 const showAddRepo = ref(false)
 const showCloseConfirm = ref(false)
 const closeRemember = ref(false)
+const updateDialog = reactive({
+  open: false,
+  phase: "idle",
+  message: "",
+  version: "",
+  releaseNotes: "",
+  percent: 0,
+  transferred: 0,
+  total: 0,
+  bytesPerSecond: 0,
+  manual: false
+})
 const importCandidates = ref([])
 const localBackups = ref([])
 const localBackupDirectory = ref("")
@@ -827,6 +950,7 @@ const { loading: pending, withGlobalLoading } = useGlobalLoading()
 
 let unsubscribe = null
 let unsubscribeClose = null
+let unsubscribeUpdate = null
 
 const navItems = computed(() =>
   showLogsTab.value
@@ -888,6 +1012,48 @@ const appLogPageEnd = computed(() =>
 const pagedAppLogs = computed(() =>
   filteredAppLogs.value.slice(appLogPageStart.value - 1, appLogPageEnd.value)
 )
+
+const updateDialogTitle = computed(() => {
+  const titleMap = {
+    checking: "正在检查更新",
+    available: "发现新版本",
+    downloading: "正在下载更新",
+    downloaded: "更新已下载",
+    installing: "正在安装更新",
+    "not-available": "当前已是最新版本",
+    unconfigured: "缺少更新配置",
+    "dev-disabled": "开发模式无法完整检查更新",
+    error: "检查更新失败"
+  }
+
+  return titleMap[updateDialog.phase] || "检查更新"
+})
+
+const updateDialogMessage = computed(() => {
+  return updateDialog.message || "正在准备更新状态。"
+})
+
+const updateProgressWidth = computed(() => {
+  const percent = Math.min(100, Math.max(0, Number(updateDialog.percent || 0)))
+
+  return `${percent}%`
+})
+
+const updateProgressText = computed(() => {
+  const percent = Math.min(100, Math.max(0, Number(updateDialog.percent || 0)))
+
+  return `${percent.toFixed(1)}%`
+})
+
+const updateTransferText = computed(() => {
+  if (!updateDialog.total) {
+    return "正在获取下载进度"
+  }
+
+  return `${formatUpdateBytes(updateDialog.transferred)} / ${formatUpdateBytes(
+    updateDialog.total
+  )}`
+})
 
 watch(
   [appLogScopeFilter, appLogServiceFilter, appLogStatusFilter, appLogPageSize],
@@ -1221,6 +1387,43 @@ function showWarningMessage(message) {
   createMessage.warning(message)
 }
 
+function applyUpdateStatus(status = {}) {
+  updateDialog.phase = status.phase || "idle"
+  updateDialog.message = status.message || ""
+  updateDialog.version = status.version || ""
+  updateDialog.releaseNotes = status.releaseNotes || ""
+  updateDialog.percent = Number(status.percent || 0)
+  updateDialog.transferred = Number(status.transferred || 0)
+  updateDialog.total = Number(status.total || 0)
+  updateDialog.bytesPerSecond = Number(status.bytesPerSecond || 0)
+  updateDialog.manual = Boolean(status.manual)
+
+  if (updateDialog.phase === "idle" || isQuickSwitchPanel) {
+    updateDialog.open = false
+    return
+  }
+
+  updateDialog.open =
+    updateDialog.manual ||
+    ["available", "downloading", "downloaded", "error"].includes(
+      updateDialog.phase
+    )
+}
+
+function formatUpdateBytes(value) {
+  const size = Number(value || 0)
+
+  if (size >= 1024 * 1024) {
+    return `${(size / 1024 / 1024).toFixed(1)} MB`
+  }
+
+  if (size >= 1024) {
+    return `${(size / 1024).toFixed(1)} KB`
+  }
+
+  return `${size} B`
+}
+
 function firstQuickModelName(provider) {
   return (
     provider.runtimeConfig?.mainModel ||
@@ -1423,7 +1626,70 @@ async function saveSettings(payload) {
 }
 
 async function checkForAppUpdates() {
-  await runAction(() => window.aiManager.checkForUpdates())
+  applyUpdateStatus({
+    phase: "checking",
+    message: "正在检查更新...",
+    manual: true
+  })
+
+  try {
+    applyUpdateStatus(await window.aiManager.checkForUpdates())
+  } catch (error) {
+    applyUpdateStatus({
+      phase: "error",
+      message: error.message || String(error),
+      manual: true
+    })
+  }
+}
+
+async function downloadAppUpdate() {
+  applyUpdateStatus({
+    ...updateDialog,
+    phase: "downloading",
+    message: `正在下载新版本 ${updateDialog.version || ""}`.trim(),
+    manual: true,
+    percent: 0,
+    transferred: 0,
+    total: 0,
+    bytesPerSecond: 0
+  })
+
+  try {
+    applyUpdateStatus(await window.aiManager.downloadUpdate())
+  } catch (error) {
+    applyUpdateStatus({
+      phase: "error",
+      message: error.message || String(error),
+      manual: true
+    })
+  }
+}
+
+async function installAppUpdate() {
+  try {
+    await window.aiManager.installUpdate()
+  } catch (error) {
+    applyUpdateStatus({
+      phase: "error",
+      message: error.message || String(error),
+      manual: true
+    })
+  }
+}
+
+async function closeUpdateDialog() {
+  if (["checking", "downloading", "installing"].includes(updateDialog.phase)) {
+    return
+  }
+
+  updateDialog.open = false
+
+  try {
+    await window.aiManager.dismissUpdate()
+  } catch (error) {
+    showErrorMessage(error)
+  }
 }
 
 async function exportDataBackup() {
@@ -2090,6 +2356,8 @@ onMounted(() => {
   }
 
   bootstrap()
+  unsubscribeUpdate = window.aiManager.onUpdateStatus(applyUpdateStatus)
+  window.aiManager.getUpdateStatus().then(applyUpdateStatus).catch(() => {})
   unsubscribeClose = window.aiManager.onCloseRequested(() => {
     closeRemember.value = false
     showCloseConfirm.value = true
@@ -2105,6 +2373,10 @@ onBeforeUnmount(() => {
 
   if (typeof unsubscribeClose === "function") {
     unsubscribeClose()
+  }
+
+  if (typeof unsubscribeUpdate === "function") {
+    unsubscribeUpdate()
   }
 
   if (isQuickSwitchPanel) {
@@ -2992,6 +3264,217 @@ onBeforeUnmount(() => {
   }
 
   &__primary:hover {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+  }
+}
+
+.update-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 82;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+
+  &__overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.28);
+    backdrop-filter: blur(2px);
+  }
+
+  &__panel {
+    position: relative;
+    width: 560px;
+    overflow: hidden;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.2);
+  }
+
+  &__header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 18px 18px 12px;
+    border-bottom: 1px solid var(--color-line);
+  }
+
+  &__header span {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--color-text-soft);
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    line-height: 1;
+    text-transform: uppercase;
+  }
+
+  &__header h2 {
+    margin: 0;
+    color: var(--color-text);
+    font-size: 1.05rem;
+    line-height: 1.25;
+  }
+
+  &__icon-button {
+    display: grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: #ffffff;
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+
+  &__icon-button:hover {
+    border-color: #c8d2df;
+    background: #f7f9fc;
+    color: var(--color-text);
+  }
+
+  &__icon-button:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+
+  &__body {
+    display: flex;
+    gap: 14px;
+    padding: 18px;
+  }
+
+  &__mark {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    place-items: center;
+    border: 1px solid #b7d9f6;
+    border-radius: 8px;
+    background: #e8f4ff;
+    color: #0b78d0;
+  }
+
+  &__copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 2px;
+  }
+
+  &__copy strong {
+    color: var(--color-primary);
+    font-size: 1rem;
+    line-height: 1.35;
+  }
+
+  &__copy span {
+    color: var(--color-text-muted);
+    font-size: 0.86rem;
+    line-height: 1.6;
+  }
+
+  &__progress {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0 18px 16px;
+    padding: 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #f8fbff;
+  }
+
+  &__progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+    font-weight: 700;
+  }
+
+  &__progress-head strong {
+    color: var(--color-primary);
+  }
+
+  &__progress-track {
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #e6edf5;
+  }
+
+  &__progress-bar {
+    height: 100%;
+    border-radius: inherit;
+    background: var(--color-primary);
+  }
+
+  &__notes {
+    max-height: 160px;
+    margin: 0 18px 16px;
+    overflow: auto;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #f8fafc;
+    color: var(--color-text);
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.76rem;
+    line-height: 1.55;
+    padding: 12px;
+    white-space: pre-wrap;
+  }
+
+  &__footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 0 18px 18px;
+  }
+
+  &__button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-width: 88px;
+    height: 34px;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: #ffffff;
+    color: var(--color-primary);
+    font-size: 0.86rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  &__button:hover {
+    border-color: var(--color-primary);
+    background: #f7f9fc;
+  }
+
+  &__button:disabled {
+    cursor: default;
+    opacity: 0.68;
+  }
+
+  &__button--primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #ffffff;
+  }
+
+  &__button--primary:hover {
     border-color: var(--color-primary);
     background: var(--color-primary);
   }

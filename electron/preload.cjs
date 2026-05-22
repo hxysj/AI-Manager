@@ -78,6 +78,10 @@ contextBridge.exposeInMainWorld("aiManager", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
   refresh: () => ipcRenderer.invoke("app:refresh"),
   checkForUpdates: () => ipcRenderer.invoke("app:check-updates"),
+  getUpdateStatus: () => ipcRenderer.invoke("app:update-status"),
+  downloadUpdate: () => ipcRenderer.invoke("app:update-download"),
+  installUpdate: () => ipcRenderer.invoke("app:update-install"),
+  dismissUpdate: () => ipcRenderer.invoke("app:update-dismiss"),
   showMainPanel: () => ipcRenderer.invoke("quick-switch:show-main"),
   setQuickSwitchCollapsed: payload =>
     ipcRenderer.invoke("quick-switch:set-collapsed", toPlainPayload(payload)),
@@ -219,6 +223,11 @@ contextBridge.exposeInMainWorld("aiManager", {
     const handler = (_, state) => callback(state)
     ipcRenderer.on("state:changed", handler)
     return () => ipcRenderer.removeListener("state:changed", handler)
+  },
+  onUpdateStatus: callback => {
+    const handler = (_, payload) => callback(payload)
+    ipcRenderer.on("app:update-status", handler)
+    return () => ipcRenderer.removeListener("app:update-status", handler)
   },
   onCloseRequested: callback => {
     const handler = () => callback()
