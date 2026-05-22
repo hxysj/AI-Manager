@@ -1094,7 +1094,7 @@ import {
   ref,
   watch
 } from "vue"
-import * as monaco from "monaco-editor"
+import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
 import {
   ArrowLeft,
   Check,
