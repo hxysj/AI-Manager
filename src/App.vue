@@ -67,7 +67,107 @@
         </button>
       </nav>
 
-      <section class="quick-switch-panel__list">
+      <section v-if="quickMode === 'usage'" class="quick-switch-panel__usage">
+        <div class="quick-switch-panel__hero">
+          <div class="quick-switch-panel__hero-copy">
+            <span>当前用量</span>
+            <strong>{{ quickActiveCli?.name || "未选择" }}</strong>
+            <small>{{ quickActiveName }}</small>
+          </div>
+          <button
+            class="quick-switch-panel__manage-button"
+            type="button"
+            @click="quickMode = 'provider'"
+          >
+            管理
+          </button>
+        </div>
+
+        <div class="quick-switch-panel__metrics">
+          <article class="quick-switch-panel__metric">
+            <span>请求</span>
+            <strong>{{ formatQuickNumber(quickUsageSummary.requestCount) }}</strong>
+          </article>
+          <article class="quick-switch-panel__metric">
+            <span>Token</span>
+            <strong>{{ formatQuickNumber(quickUsageSummary.actualTokens) }}</strong>
+          </article>
+          <article class="quick-switch-panel__metric">
+            <span>费用</span>
+            <strong>{{ formatQuickCost(quickUsageSummary.totalCostUsd) }}</strong>
+          </article>
+        </div>
+
+        <div class="quick-switch-panel__summary-row">
+          <section class="quick-switch-panel__usage-panel">
+            <div class="quick-switch-panel__usage-head">
+              <strong>最近用量</strong>
+              <span>{{ quickUsageTrend.length }} 天</span>
+            </div>
+            <div v-if="quickUsageTrend.length" class="quick-switch-panel__bars">
+              <div
+                v-for="item in quickUsageTrend"
+                :key="item.date"
+                class="quick-switch-panel__bar"
+                :title="`${item.date} · ${formatQuickNumber(item.actualTokens)} Token`"
+              >
+                <span
+                  class="quick-switch-panel__bar-fill"
+                  :style="{ height: `${item.percent}%` }"
+                ></span>
+                <small>{{ item.label }}</small>
+              </div>
+            </div>
+            <div v-else class="quick-switch-panel__empty">暂无用量统计</div>
+          </section>
+
+          <section
+            class="quick-switch-panel__usage-panel quick-switch-panel__usage-panel--providers"
+          >
+            <div class="quick-switch-panel__usage-head">
+              <strong>Provider</strong>
+              <span>{{ quickUsageProviders.length }} 个</span>
+            </div>
+            <div
+              v-if="quickUsageProviders.length"
+              class="quick-switch-panel__provider-bars"
+            >
+              <article
+                v-for="item in quickUsageProviders"
+                :key="item.providerId"
+                class="quick-switch-panel__provider-bar"
+              >
+                <div class="quick-switch-panel__provider-bar-head">
+                  <strong>{{ item.providerName }}</strong>
+                  <span>{{ formatQuickCost(item.totalCostUsd) }}</span>
+                </div>
+                <div class="quick-switch-panel__provider-track">
+                  <span
+                    class="quick-switch-panel__provider-fill"
+                    :style="{ width: `${item.percent}%` }"
+                  ></span>
+                </div>
+              </article>
+            </div>
+            <div v-else class="quick-switch-panel__empty">暂无 Provider</div>
+          </section>
+        </div>
+      </section>
+
+      <section v-else class="quick-switch-panel__list">
+        <div class="quick-switch-panel__manager-head">
+          <div>
+            <strong>Provider 管理</strong>
+            <span>{{ quickActiveCli?.name || "未选择" }} · {{ quickActiveName }}</span>
+          </div>
+          <button
+            class="quick-switch-panel__manage-button"
+            type="button"
+            @click="quickMode = 'usage'"
+          >
+            统计
+          </button>
+        </div>
         <article
           v-for="item in quickItems"
           :key="item.key"
@@ -929,6 +1029,7 @@ const appLogStatusFilter = ref("all")
 const appLogPage = ref(1)
 const appLogPageSize = ref(20)
 const quickSelectedCli = ref("")
+const quickMode = ref("usage")
 const quickCollapsed = ref(false)
 const quickLogoDrag = {
   active: false,
@@ -1242,6 +1343,87 @@ const quickItems = computed(() => {
   ]
 })
 
+const quickUsageLogs = computed(() => {
+  return (state.usage.logs || []).filter((item) => {
+    return item.appType === quickActiveCli.value?.id
+  })
+})
+
+const quickUsageSummary = computed(() => {
+  return quickUsageLogs.value.reduce(
+    (result, item) => {
+      result.requestCount += 1
+      result.actualTokens += Number(item.actualTokens || 0)
+      result.totalCostUsd += Number(item.totalCostUsd || 0)
+      return result
+    },
+    {
+      requestCount: 0,
+      actualTokens: 0,
+      totalCostUsd: 0
+    }
+  )
+})
+
+const quickUsageTrend = computed(() => {
+  const groups = new Map()
+
+  for (const item of quickUsageLogs.value) {
+    const date = new Date(Number(item.createdAt || 0))
+    const key = date.toLocaleDateString("zh-CN")
+
+    groups.set(key, {
+      date: key,
+      label: `${date.getMonth() + 1}/${date.getDate()}`,
+      timestamp: new Date(
+        date.getFullYear(),
+        date.getMonth(),
+        date.getDate()
+      ).getTime(),
+      actualTokens:
+        (groups.get(key)?.actualTokens || 0) + Number(item.actualTokens || 0)
+    })
+  }
+
+  const rows = Array.from(groups.values())
+    .sort((left, right) => left.timestamp - right.timestamp)
+    .slice(-7)
+  const maxTokens = Math.max(...rows.map((item) => item.actualTokens), 1)
+
+  return rows.map((item) => ({
+    ...item,
+    percent: Math.max(8, Math.round((item.actualTokens / maxTokens) * 100))
+  }))
+})
+
+const quickUsageProviders = computed(() => {
+  const groups = new Map()
+
+  for (const item of quickUsageLogs.value) {
+    const key = item.providerId || item.providerName || "unknown"
+    const previous = groups.get(key) || {
+      providerId: key,
+      providerName: item.providerName || "未知 Provider",
+      actualTokens: 0,
+      totalCostUsd: 0
+    }
+
+    previous.actualTokens += Number(item.actualTokens || 0)
+    previous.totalCostUsd += Number(item.totalCostUsd || 0)
+    groups.set(key, previous)
+  }
+
+  const rows = Array.from(groups.values())
+    .sort((left, right) => right.actualTokens - left.actualTokens)
+    .slice(0, 2)
+  const maxTokens = Math.max(...rows.map((item) => item.actualTokens), 1)
+
+  return rows.map((item) => ({
+    ...item,
+    percent: Math.max(4, Math.round((item.actualTokens / maxTokens) * 100))
+  }))
+})
+
 async function bootstrap() {
   await withGlobalLoading(async () => {
     try {
@@ -1456,6 +1638,22 @@ function firstQuickModelName(provider) {
     state.runtimeModels.find((item) => item.providerId === provider.id)?.name ||
     ""
   )
+}
+
+function formatQuickNumber(value) {
+  return new Intl.NumberFormat("zh-CN", {
+    maximumFractionDigits: 0
+  }).format(Number(value || 0))
+}
+
+function formatQuickCost(value) {
+  const cost = Number(value || 0)
+
+  if (!cost) {
+    return "$0"
+  }
+
+  return `$${cost >= 1 ? cost.toFixed(2) : cost.toFixed(6)}`
 }
 
 function formatQuickAccountDescription(account) {
@@ -2449,8 +2647,8 @@ onBeforeUnmount(() => {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid #c9d7e8;
-  background: #f6f8fb;
+  border: 1px solid #b8cce5;
+  background: #eef4fb;
   color: #101828;
 
   &__header {
@@ -2459,10 +2657,10 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    height: 36px;
+    height: 34px;
     padding: 0 8px 0 10px;
-    border-bottom: 1px solid #dce5f0;
-    background: #ffffff;
+    border-bottom: 1px solid #d7e3f1;
+    background: #fbfdff;
     -webkit-app-region: drag;
   }
 
@@ -2553,28 +2751,271 @@ onBeforeUnmount(() => {
   &__cli-tabs {
     display: flex;
     flex: none;
-    gap: 6px;
-    padding: 7px 8px;
-    border-bottom: 1px solid #dce5f0;
-    background: #ffffff;
+    gap: 4px;
+    padding: 6px 7px;
+    background: #fbfdff;
   }
 
   &__cli-tab {
-    height: 26px;
+    height: 24px;
     flex: 1;
-    border: 1px solid transparent;
+    border: 1px solid #dce6f2;
     border-radius: 6px;
-    background: #edf1f6;
-    color: #596579;
+    background: #f0f4f9;
+    color: #516070;
     cursor: pointer;
-    font-size: 12px;
+    font-size: 11px;
     font-weight: 700;
   }
 
   &__cli-tab--active {
-    border-color: #93c5fd;
-    background: #e8f3ff;
+    border-color: #1677ff;
+    background: #1677ff;
+    color: #ffffff;
+  }
+
+  &__usage {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 4px;
+    overflow: hidden;
+    padding: 0 7px 6px;
+  }
+
+  &__hero {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    height: 34px;
+    padding: 0 8px;
+    border: 1px solid #d6e4f3;
+    border-radius: 7px;
+    background: #ffffff;
+  }
+
+  &__hero-copy {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 2px 8px;
+  }
+
+  &__hero-copy span {
+    grid-row: 1 / 3;
+    align-self: center;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: #eef6ff;
     color: #1677ff;
+    font-size: 10px;
+    font-weight: 800;
+  }
+
+  &__hero-copy strong,
+  &__hero-copy small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__hero-copy strong {
+    font-size: 12px;
+    line-height: 1.15;
+  }
+
+  &__hero-copy small {
+    color: #667085;
+    font-size: 11px;
+    line-height: 1.15;
+  }
+
+  &__manage-button {
+    display: inline-flex;
+    height: 23px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    border: 1px solid #b9d4f4;
+    border-radius: 6px;
+    background: #f7fbff;
+    color: #1769c2;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 800;
+  }
+
+  &__manage-button:hover {
+    border-color: #7fb7f5;
+    background: #eaf5ff;
+  }
+
+  &__metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 5px;
+  }
+
+  &__metric {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    height: 28px;
+    padding: 0 7px;
+    border: 1px solid #d8e6f4;
+    border-radius: 7px;
+    background: #ffffff;
+  }
+
+  &__metric span {
+    color: #667085;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  &__metric strong {
+    overflow: hidden;
+    color: #101828;
+    font-size: 12px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__summary-row {
+    display: grid;
+    min-height: 0;
+    flex: 1;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+    gap: 5px;
+  }
+
+  &__usage-panel {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 4px;
+    overflow: hidden;
+    padding: 6px 7px;
+    border: 1px solid #d8e6f4;
+    border-radius: 7px;
+    background: #ffffff;
+  }
+
+  &__usage-panel--providers {
+    min-width: 0;
+  }
+
+  &__usage-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__usage-head strong {
+    color: #101828;
+    font-size: 11px;
+  }
+
+  &__usage-head span {
+    color: #667085;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  &__bars {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 4px;
+    height: 48px;
+    align-items: end;
+  }
+
+  &__bar {
+    display: flex;
+    min-width: 0;
+    height: 100%;
+    flex-direction: column;
+    justify-content: flex-end;
+    gap: 4px;
+  }
+
+  &__bar-fill {
+    display: block;
+    min-height: 6px;
+    border-radius: 4px 4px 2px 2px;
+    background: #1677ff;
+  }
+
+  &__bar small {
+    overflow: hidden;
+    color: #667085;
+    font-size: 9px;
+    line-height: 1;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__provider-bars {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  &__provider-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__provider-bar-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  &__provider-bar-head strong,
+  &__provider-bar-head span {
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__provider-bar-head strong {
+    color: #101828;
+  }
+
+  &__provider-bar-head span {
+    flex: none;
+    color: #667085;
+    font-weight: 700;
+  }
+
+  &__provider-track {
+    height: 6px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #edf2f7;
+  }
+
+  &__provider-fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: #18a058;
   }
 
   &__list {
@@ -2585,7 +3026,45 @@ onBeforeUnmount(() => {
     gap: 6px;
     overflow-x: hidden;
     overflow-y: auto;
-    padding: 7px 8px 8px;
+    padding: 0 7px 7px;
+  }
+
+  &__manager-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 9px;
+    border: 1px solid #d8e6f4;
+    border-radius: 7px;
+    background: #ffffff;
+  }
+
+  &__manager-head div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  &__manager-head strong,
+  &__manager-head span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__manager-head strong {
+    color: #101828;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+
+  &__manager-head span {
+    color: #667085;
+    font-size: 11px;
+    line-height: 1.2;
   }
 
   &__item {
