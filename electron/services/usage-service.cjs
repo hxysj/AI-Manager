@@ -198,6 +198,7 @@ function enrichUsageLog(log, pricingConfig) {
 
   return {
     ...sourceLog,
+    actualTokens: toActualTokens(sourceLog),
     ...calculateCostUsd(sourceLog, pricingConfig)
   }
 }

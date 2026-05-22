@@ -833,8 +833,10 @@ function setQuickSwitchCollapsed(collapsed) {
   const bounds = quickSwitchWindow.getBounds()
   const display = screen.getDisplayMatching(bounds)
   const { workArea } = display
-  const nextX = bounds.x + bounds.width - size.width
-  const nextY = bounds.y + bounds.height - size.height
+  const centerX = bounds.x + bounds.width / 2
+  const centerY = bounds.y + bounds.height / 2
+  const nextX = Math.round(centerX - size.width / 2)
+  const nextY = Math.round(centerY - size.height / 2)
   const x = Math.min(
     Math.max(nextX, workArea.x),
     workArea.x + workArea.width - size.width
@@ -1271,25 +1273,7 @@ function buildProviderTrayItems(state, cli) {
     return item.cli === cli.id && item.enabled !== false
   })
   const profile = state.runtimeProfiles.find(item => item.cli === cli.id)
-  const activeProvider = providers.find(item => item.id === profile?.providerId)
-  const items = [
-    {
-      label: `当前 Provider：${activeProvider?.name || "未启用"}`,
-      enabled: false
-    }
-  ]
-
-  if (activeProvider) {
-    items.push({
-      label: "取消启用 Provider",
-      click: () =>
-        runTrayAction(() => {
-          return managerService.clearRuntime(cli.id)
-        })
-    })
-  }
-
-  items.push({ type: "separator" })
+  const items = []
 
   if (!providers.length) {
     items.push({
@@ -1310,29 +1294,18 @@ function buildProviderTrayItems(state, cli) {
           ? provider.name
           : `${provider.name}（缺少模型）`,
       enabled: Boolean(model),
-      submenu: active
-        ? [
-            {
-              label: "取消启用",
-              click: () =>
-                runTrayAction(() => {
-                  return managerService.clearRuntime(cli.id)
-                })
-            }
-          ]
-        : [
-            {
-              label: "启用",
-              click: () =>
-                runTrayAction(() => {
-                  return managerService.switchRuntime({
-                    cli: cli.id,
-                    providerId: provider.id,
-                    model
-                  })
-                })
-            }
-          ]
+      click: () =>
+        runTrayAction(() => {
+          if (active) {
+            return managerService.clearRuntime(cli.id)
+          }
+
+          return managerService.switchRuntime({
+            cli: cli.id,
+            providerId: provider.id,
+            model
+          })
+        })
     })
   }
 
@@ -1388,27 +1361,13 @@ function buildCodexAccountTrayItems(state) {
       label: account.active
         ? `${formatTrayAccountLabel(account)}（已启用）`
         : formatTrayAccountLabel(account),
-      submenu: account.active
-        ? [
-            {
-              label: "取消启用",
-              click: () =>
-                runTrayAction(() => {
-                  return managerService.clearCodexAccount()
-                })
-            }
-          ]
-        : [
-            {
-              label: "启用",
-              click: () =>
-                runTrayAction(() => {
-                  return managerService.enableCodexAccount({
-                    accountId: account.id
-                  })
-                })
-            }
-          ]
+      enabled: !account.active,
+      click: () =>
+        runTrayAction(() => {
+          return managerService.enableCodexAccount({
+            accountId: account.id
+          })
+        })
     })
   }
 
@@ -1569,32 +1528,16 @@ function buildUnifiedCodexTrayItems(state, cli) {
         : model
           ? provider.name
           : `${provider.name}（缺少模型）`,
-      enabled: Boolean(model),
-      submenu: active
-        ? [
-            {
-              label: "取消启用",
-              click: () =>
-                runTrayAction(async () => {
-                  await managerService.clearCodexAccount()
-                  return managerService.clearRuntime(cli.id)
-                })
-            }
-          ]
-        : [
-            {
-              label: "启用",
-              click: () =>
-                runTrayAction(async () => {
-                  await managerService.clearCodexAccount()
-                  return managerService.switchRuntime({
-                    cli: cli.id,
-                    providerId: provider.id,
-                    model
-                  })
-                })
-            }
-          ]
+      enabled: Boolean(model) && !active,
+      click: () =>
+        runTrayAction(async () => {
+          await managerService.clearCodexAccount()
+          return managerService.switchRuntime({
+            cli: cli.id,
+            providerId: provider.id,
+            model
+          })
+        })
     })
   }
 
@@ -1603,39 +1546,14 @@ function buildUnifiedCodexTrayItems(state, cli) {
       label: account.active
         ? `${formatTrayAccountLabel(account)}（已启用）`
         : formatTrayAccountLabel(account),
-      submenu: account.active
-        ? [
-            {
-              label: "刷新额度",
-              click: () =>
-                runTrayAction(() => {
-                  return managerService.refreshCodexAccount({
-                    accountId: account.id,
-                    syncAuth: false
-                  })
-                })
-            },
-            {
-              label: "取消启用",
-              click: () =>
-                runTrayAction(async () => {
-                  await managerService.clearRuntime(cli.id)
-                  return managerService.clearCodexAccount()
-                })
-            }
-          ]
-        : [
-            {
-              label: "启用",
-              click: () =>
-                runTrayAction(async () => {
-                  await managerService.clearRuntime(cli.id)
-                  return managerService.enableCodexAccount({
-                    accountId: account.id
-                  })
-                })
-            }
-          ]
+      enabled: !account.active,
+      click: () =>
+        runTrayAction(async () => {
+          await managerService.clearRuntime(cli.id)
+          return managerService.enableCodexAccount({
+            accountId: account.id
+          })
+        })
     })
   }
 
