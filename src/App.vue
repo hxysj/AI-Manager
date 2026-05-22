@@ -4006,7 +4006,8 @@ onBeforeUnmount(() => {
   &__panel {
     position: relative;
     width: 560px;
-    overflow: hidden;
+    max-height: calc(100vh - 48px);
+    overflow: auto;
     border: 1px solid var(--color-line);
     border-radius: 8px;
     background: var(--color-panel);

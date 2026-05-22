@@ -65,6 +65,12 @@ const appIconPath = app.isPackaged
   ? path.join(process.resourcesPath, "assets", "icon.png")
   : path.join(__dirname, "..", "build", "icon.png")
 app.setAppUserModelId("com.monkeythief.desktop")
+const singleInstanceLock = app.requestSingleInstanceLock()
+
+if (!singleInstanceLock) {
+  app.quit()
+}
+
 const quickSwitchExpandedSize = { width: 360, height: 238 }
 const quickSwitchCollapsedSize = { width: 44, height: 44 }
 const portableHomePrefix = path.join(path.dirname(os.homedir()), "%USERNAME%")
@@ -2622,65 +2628,71 @@ function registerIpc() {
   })
 }
 
-app.whenReady().then(async () => {
-  await initAppCallLogs()
-  applyAutoLaunchSetting(appSettings)
-  managerService = new ManagerService(app.getPath("userData"), appSettings)
-  instrumentBackendServices(managerService)
-  translationService = new TranslationService(app.getPath("userData"))
-  instrumentBackendService("TranslationService", translationService)
-  managerReadyPromise = managerService.init()
-  managerService.on("state-changed", state => {
-    sendStateChanged(state)
-    updateTrayMenu(state)
+if (singleInstanceLock) {
+  app.on("second-instance", () => {
+    showMainPanel().catch(showTrayError)
   })
 
-  registerIpc()
-  createTray()
-  restartLocalBackupTimer()
-  managerReadyPromise
-    .then(() => {
-      updateTrayMenu()
+  app.whenReady().then(async () => {
+    await initAppCallLogs()
+    applyAutoLaunchSetting(appSettings)
+    managerService = new ManagerService(app.getPath("userData"), appSettings)
+    instrumentBackendServices(managerService)
+    translationService = new TranslationService(app.getPath("userData"))
+    instrumentBackendService("TranslationService", translationService)
+    managerReadyPromise = managerService.init()
+    managerService.on("state-changed", state => {
+      sendStateChanged(state)
+      updateTrayMenu(state)
     })
-    .catch(showTrayError)
-  await createWindow()
-  await syncQuickSwitchWindow()
-  setupAutoUpdater()
 
-  screen.on("display-metrics-changed", positionQuickSwitchWindow)
-  screen.on("display-added", positionQuickSwitchWindow)
-  screen.on("display-removed", positionQuickSwitchWindow)
+    registerIpc()
+    createTray()
+    restartLocalBackupTimer()
+    managerReadyPromise
+      .then(() => {
+        updateTrayMenu()
+      })
+      .catch(showTrayError)
+    await createWindow()
+    await syncQuickSwitchWindow()
+    setupAutoUpdater()
 
-  app.on("activate", async () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      await createWindow()
+    screen.on("display-metrics-changed", positionQuickSwitchWindow)
+    screen.on("display-added", positionQuickSwitchWindow)
+    screen.on("display-removed", positionQuickSwitchWindow)
+
+    app.on("activate", async () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        await createWindow()
+        return
+      }
+
+      await showMainPanel()
+    })
+  })
+
+  app.on("window-all-closed", () => {
+    if (!isQuitting) {
       return
     }
 
-    await showMainPanel()
+    if (process.platform !== "darwin") {
+      app.quit()
+    }
   })
-})
 
-app.on("window-all-closed", () => {
-  if (!isQuitting) {
-    return
-  }
+  app.on("before-quit", async () => {
+    isQuitting = true
 
-  if (process.platform !== "darwin") {
-    app.quit()
-  }
-})
+    if (localBackupTimer) {
+      clearInterval(localBackupTimer)
+      localBackupTimer = null
+    }
 
-app.on("before-quit", async () => {
-  isQuitting = true
-
-  if (localBackupTimer) {
-    clearInterval(localBackupTimer)
-    localBackupTimer = null
-  }
-
-  if (managerService) {
-    await managerService.dispose()
-  }
-})
+    if (managerService) {
+      await managerService.dispose()
+    }
+  })
+}
 
