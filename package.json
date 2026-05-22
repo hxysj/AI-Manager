@@ -42,7 +42,7 @@
   "build": {
     "appId": "com.aimanager.desktop",
     "productName": "Monkey Thief",
-    "artifactName": "${productName}-windows-setup.${ext}",
+    "artifactName": "Monkey-Thief-windows-setup.${ext}",
     "icon": "build/icon.ico",
     "directories": {
       "output": "release"
