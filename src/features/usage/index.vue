@@ -36,12 +36,16 @@
     <section class="usage-view__filters">
       <label class="usage-view__field">
         <span>时间范围</span>
-        <select v-model="rangeType">
-          <option value="today">今天</option>
-          <option value="7d">最近 7 天</option>
-          <option value="30d">最近 30 天</option>
-          <option value="all">全部</option>
-        </select>
+        <el-date-picker
+          v-model="dateTimeRange"
+          type="datetimerange"
+          :shortcuts="dateTimeShortcuts"
+          :default-time="defaultDateTimeRange"
+          clearable
+          end-placeholder="结束时间"
+          range-separator="至"
+          start-placeholder="开始时间"
+        />
       </label>
       <label class="usage-view__field">
         <span>应用</span>
@@ -642,6 +646,7 @@ const reportExporting = ref(false)
 const pricingSaving = ref(false)
 const stats = ref(props.usage || {})
 const rangeType = ref(usageSearchParams.get("rangeType") || "today")
+const dateTimeRange = ref(createInitialDateTimeRange())
 const appType = ref(usageSearchParams.get("appType") || "all")
 const providerId = ref(usageSearchParams.get("providerId") || "all")
 const model = ref(usageSearchParams.get("model") || "all")
@@ -700,6 +705,29 @@ const usageLogCsvColumns = [
   ["总量", (item) => actualTokens(item)],
   ["费用", (item) => formatCost(item.totalCostUsd)]
 ]
+const defaultDateTimeRange = [
+  new Date(2000, 0, 1, 0, 0, 0),
+  new Date(2000, 0, 1, 23, 59, 59)
+]
+const dateTimeShortcuts = [
+  {
+    text: "当天",
+    value: () => createPresetDateTimeRange("today")
+  },
+  {
+    text: "最近一周",
+    value: () => createPresetDateTimeRange("week")
+  },
+  {
+    text: "最近一个月",
+    value: () => createPresetDateTimeRange("month")
+  },
+  {
+    text: "全部时间",
+    value: null,
+    onClick: () => (dateTimeRange.value = [])
+  }
+]
 
 const summary = computed(() => stats.value.summary || createEmptySummary())
 const pricingConfig = computed(
@@ -714,8 +742,15 @@ const displayCurrencyLabel = computed(() =>
 const providerStats = computed(() => stats.value.providerStats || [])
 const modelStats = computed(() => stats.value.modelStats || [])
 const trendStats = computed(() => stats.value.trends || [])
+const trendMode = computed(() => {
+  const [start, end] = dateTimeRange.value || []
+
+  return start && end && start.toDateString() === end.toDateString()
+    ? "hour"
+    : "day"
+})
 const trendLabel = computed(() =>
-  rangeType.value === "today"
+  trendMode.value === "hour"
     ? `${trendStats.value.length} 个小时`
     : `${trendStats.value.length} 个本地日`
 )
@@ -734,14 +769,11 @@ const appOptions = computed(() => stats.value.filters?.appTypes || [])
 const providerOptions = computed(() => stats.value.filters?.providers || [])
 const modelOptions = computed(() => stats.value.filters?.models || [])
 const rangeTypeLabel = computed(() => {
-  const names = {
-    today: "今天",
-    "7d": "最近7天",
-    "30d": "最近30天",
-    all: "全部时间"
-  }
+  const [start, end] = dateTimeRange.value || []
 
-  return names[rangeType.value] || rangeType.value
+  return start && end
+    ? `${formatFilterDateTime(start)} 至 ${formatFilterDateTime(end)}`
+    : "全部时间"
 })
 const selectedAppLabel = computed(() =>
   appType.value === "all" ? "全部应用" : formatAppName(appType.value)
@@ -817,7 +849,7 @@ const pagedPricingItems = computed(() => {
   )
 })
 
-watch([rangeType, appType, providerId, model], () => {
+watch([dateTimeRange, appType, providerId, model], () => {
   logPage.value = 1
   loadStats()
 })
@@ -904,25 +936,48 @@ function clonePricingConfig(input) {
   }
 }
 
-function createFilterPayload() {
-  const now = Date.now()
-  const days = rangeType.value === "7d" ? 7 : 30
-  const todayStart = new Date()
+function createPresetDateTimeRange(type) {
+  if (type === "all") {
+    return []
+  }
 
-  todayStart.setHours(0, 0, 0, 0)
+  const end = new Date()
+  const start = new Date()
+
+  if (type === "today") {
+    start.setHours(0, 0, 0, 0)
+  } else {
+    if (type === "week" || type === "7d") {
+      start.setDate(start.getDate() - 7)
+    } else {
+      start.setMonth(start.getMonth() - 1)
+    }
+  }
+
+  return [start, end]
+}
+
+function createInitialDateTimeRange() {
+  const startAt = Number(usageSearchParams.get("startAt") || 0)
+  const endAt = Number(usageSearchParams.get("endAt") || 0)
+
+  if (startAt && endAt) {
+    return [new Date(startAt), new Date(endAt)]
+  }
+
+  return createPresetDateTimeRange(rangeType.value)
+}
+
+function createFilterPayload() {
+  const [start, end] = dateTimeRange.value || []
 
   return {
     appType: appType.value,
     providerId: providerId.value,
     model: model.value,
-    trendMode: rangeType.value === "today" ? "hour" : "day",
-    startAt:
-      rangeType.value === "all"
-        ? 0
-        : rangeType.value === "today"
-          ? todayStart.getTime()
-          : now - days * 24 * 60 * 60 * 1000,
-    endAt: now
+    trendMode: trendMode.value,
+    startAt: start ? start.getTime() : 0,
+    endAt: end ? end.getTime() : 0
   }
 }
 
@@ -1589,8 +1644,11 @@ async function exportUsageReport() {
   reportExporting.value = true
 
   try {
+    const filterPayload = createFilterPayload()
     const result = await window.aiManager.exportUsageReportImage({
-      rangeType: rangeType.value,
+      rangeType: filterPayload.startAt ? rangeType.value : "all",
+      startAt: filterPayload.startAt,
+      endAt: filterPayload.endAt,
       appType: appType.value,
       providerId: providerId.value,
       model: model.value,
@@ -1824,6 +1882,15 @@ function formatDateTime(value) {
   }).format(new Date(value))
 }
 
+function formatFilterDateTime(value) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value))
+}
+
 function formatExportDateTime(value) {
   return value ? new Date(value).toLocaleString("zh-CN") : "未记录"
 }
@@ -2001,7 +2068,7 @@ function formatSessionLabel(item) {
 
   &__filters {
     display: grid;
-    grid-template-columns: 150px 150px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: 320px 150px minmax(0, 1fr) minmax(0, 1fr);
     flex: none;
     gap: 10px;
     padding: 10px;
@@ -2034,6 +2101,30 @@ function formatSessionLabel(item) {
     min-width: 0;
     padding: 0 10px;
     color: var(--color-text);
+  }
+
+  &__field :deep(.el-date-editor.el-input__wrapper) {
+    width: 100%;
+    height: 36px;
+    min-width: 0;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 0 0 1px var(--color-line) inset;
+  }
+
+  &__field :deep(.el-date-editor.el-input__wrapper.is-focus) {
+    box-shadow: 0 0 0 1px var(--color-primary) inset;
+  }
+
+  &__field :deep(.el-range-input) {
+    color: var(--color-text);
+    font-size: 0.8rem;
+  }
+
+  &__field :deep(.el-range-separator) {
+    flex: none;
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
   }
 
   &__metrics {

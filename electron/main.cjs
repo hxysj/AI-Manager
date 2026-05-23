@@ -2367,6 +2367,8 @@ function registerIpc() {
       view: "usage",
       export: "usage-report",
       rangeType: String(payload.rangeType || "today"),
+      startAt: String(payload.startAt || ""),
+      endAt: String(payload.endAt || ""),
       appType: String(payload.appType || "all"),
       providerId: String(payload.providerId || "all"),
       model: String(payload.model || "all"),
