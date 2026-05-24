@@ -90,46 +90,97 @@
                 >
                   {{ formatPlanName(item.account.plan) }}
                 </span>
+                <span
+                  v-if="item.account.refresh_status === 'failed'"
+                  class="providers-view__account-error"
+                  :aria-label="`刷新额度失败：${item.account.refresh_message}`"
+                >
+                  <span
+                    class="providers-view__account-tag providers-view__account-tag--error"
+                  >
+                    {{ item.account.refresh_status_code || '错误' }}
+                  </span>
+                  <span class="providers-view__account-error-tip">
+                    <span class="providers-view__account-error-title">
+                      刷新额度失败
+                    </span>
+                    <span class="providers-view__account-error-message">
+                      {{ item.account.refresh_message }}
+                    </span>
+                  </span>
+                </span>
               </div>
               <div
-                v-if="item.account.usage?.rate_limit"
+                v-if="
+                  item.account.usage?.rate_limit ||
+                  isCodexAccountRefreshing(item.account)
+                "
                 class="providers-view__quota-list"
               >
-                <div
-                  v-for="quota in rateLimitWindows(
-                    item.account.usage.rate_limit
-                  )"
-                  :key="quota.key"
-                  :class="[
-                    'providers-view__account-quota',
-                    quotaLevelClass(quota.window)
-                  ]"
-                >
+                <template v-if="item.account.usage?.rate_limit">
                   <div
-                    class="providers-view__quota-bar"
-                    :title="formatUnixTime(quota.window.reset_at)"
+                    v-for="quota in rateLimitWindows(
+                      item.account.usage.rate_limit
+                    )"
+                    :key="quota.key"
+                    :class="[
+                      'providers-view__account-quota',
+                      quotaLevelClass(quota.window),
+                      {
+                        'providers-view__account-quota--loading':
+                          isCodexAccountRefreshing(item.account)
+                      }
+                    ]"
                   >
+                    <div
+                      class="providers-view__quota-bar"
+                      :title="formatUnixTime(quota.window.reset_at)"
+                    >
+                      <div class="providers-view__quota-title">
+                        <span class="providers-view__quota-icon"></span>
+                        <span class="providers-view__quota-name">{{
+                          formatRateWindowName(
+                            quota.window.limit_window_seconds
+                          )
+                        }}</span>
+                      </div>
+                      <span
+                        class="providers-view__quota-fill"
+                        :style="{
+                          width: formatRateWidth(
+                            100 - (quota.window.used_percent || 0)
+                          )
+                        }"
+                      ></span>
+                      <div class="providers-view__quota-meta">
+                        <strong class="providers-view__quota-value">
+                          {{ 100 - (quota.window.used_percent || 0) }}% ·
+                        </strong>
+                        <span class="providers-view__quota-reset">
+                          {{
+                            formatResetCountdown(quota.window.reset_at)
+                          }}后重置
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+                <div
+                  v-else
+                  class="providers-view__account-quota providers-view__account-quota--loading"
+                >
+                  <div class="providers-view__quota-bar" title="额度刷新中">
                     <div class="providers-view__quota-title">
                       <span class="providers-view__quota-icon"></span>
-                      <span class="providers-view__quota-name">{{
-                        formatRateWindowName(quota.window.limit_window_seconds)
-                      }}</span>
+                      <span class="providers-view__quota-name">额度刷新中</span>
                     </div>
                     <span
                       class="providers-view__quota-fill"
-                      :style="{
-                        width: formatRateWidth(
-                          100 - (quota.window.used_percent || 0)
-                        )
-                      }"
+                      style="width: 56%"
                     ></span>
                     <div class="providers-view__quota-meta">
-                      <strong class="providers-view__quota-value">
-                        {{ 100 - (quota.window.used_percent || 0) }}% ·
-                      </strong>
-                      <span class="providers-view__quota-reset">
-                        {{ formatResetCountdown(quota.window.reset_at) }}后重置
-                      </span>
+                      <strong class="providers-view__quota-value"> ... </strong>
+                      <span class="providers-view__quota-reset"> 请稍候 </span>
                     </div>
                   </div>
                 </div>
@@ -165,10 +216,17 @@
               </div>
               <div class="providers-view__icon-actions">
                 <button
-                  class="providers-view__icon-button"
+                  :class="[
+                    'providers-view__icon-button',
+                    {
+                      'providers-view__icon-button--loading':
+                        isCodexAccountRefreshing(item.account)
+                    }
+                  ]"
                   type="button"
                   title="刷新额度"
                   aria-label="刷新额度"
+                  :disabled="isCodexAccountRefreshing(item.account)"
                   @click="refreshCodexAccount(item.account)"
                 >
                   <RefreshCw :size="15" />
@@ -1238,6 +1296,7 @@ const codexLoginTab = ref("oauth")
 const codexAuthDataDraft = ref("")
 const codexProxyDraft = ref("")
 const codexAccountProxyDrafts = reactive({})
+const codexAccountRefreshingMap = reactive({})
 const editingCodexAccountId = ref("")
 const editingCodexProxy = ref("")
 const codexAccountDetail = ref(null)
@@ -1314,7 +1373,11 @@ const mixedItems = computed(() => {
           className: [
             "providers-view__account-card",
             {
-              "providers-view__account-card--active": account.active
+              "providers-view__account-card--active": account.active,
+              "providers-view__account-card--refreshing":
+                codexAccountRefreshingMap[account.id],
+              "providers-view__account-card--error":
+                account.refresh_status === "failed"
             }
           ],
           createdAt: account.createdAt || account.updatedAt || 0
@@ -1449,7 +1512,7 @@ function selectCli(cli) {
   clearDraft()
 
   if (cli === "codex" && previousCli !== "codex") {
-    emit("codex-accounts-refresh")
+    refreshCodexAccounts()
   }
 }
 
@@ -1749,9 +1812,32 @@ function formatJson(value) {
   return JSON.stringify(value || {}, null, 2)
 }
 
-function refreshCodexAccount(account) {
+function isCodexAccountRefreshing(account) {
+  return Boolean(codexAccountRefreshingMap[account.id])
+}
+
+function refreshCodexAccounts() {
+  props.codexAccounts.forEach(account => {
+    refreshCodexAccount(account, {
+      showSuccess: false,
+      syncAuth: false
+    })
+  })
+}
+
+function refreshCodexAccount(account, options = {}) {
+  if (codexAccountRefreshingMap[account.id]) {
+    return
+  }
+
+  codexAccountRefreshingMap[account.id] = true
   emit("codex-account-refresh", {
-    accountId: account.id
+    accountId: account.id,
+    showSuccess: options.showSuccess !== false,
+    syncAuth: options.syncAuth,
+    onSettled: () => {
+      codexAccountRefreshingMap[account.id] = false
+    }
   })
 }
 
@@ -2009,6 +2095,42 @@ watch(
 </script>
 
 <style scoped lang="less">
+@keyframes providers-quota-loading {
+  from {
+    opacity: 0.36;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes providers-quota-sweep {
+  from {
+    transform: translateX(-110%);
+  }
+
+  to {
+    transform: translateX(110%);
+  }
+}
+
+@keyframes providers-item-sweep {
+  from {
+    background-position: 160% 0;
+  }
+
+  to {
+    background-position: -160% 0;
+  }
+}
+
+@keyframes providers-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .providers-view {
   display: flex;
   min-height: 0;
@@ -2133,6 +2255,27 @@ watch(
     transform: translateY(-1px);
   }
 
+  &__icon-button:disabled,
+  &__icon-button:disabled:hover {
+    background: transparent;
+    color: #98a2b3;
+    cursor: not-allowed;
+    opacity: 0.5;
+    transform: none;
+  }
+
+  &__icon-button--loading,
+  &__icon-button--loading:disabled,
+  &__icon-button--loading:disabled:hover {
+    background: #eaf5ff;
+    color: #1682ff;
+    opacity: 1;
+  }
+
+  &__icon-button--loading :deep(svg) {
+    animation: providers-refresh-spin 0.8s linear infinite;
+  }
+
   &__icon-button--danger {
     color: #98a2b3;
   }
@@ -2246,6 +2389,10 @@ watch(
       transform 0.18s ease;
   }
 
+  &__account-card {
+    position: relative;
+  }
+
   &__provider-card--active,
   &__account-card--active {
     border-color: #9fd1ff;
@@ -2253,6 +2400,12 @@ watch(
     box-shadow:
       0 8px 22px rgba(22, 130, 255, 0.12),
       inset 4px 0 0 #1682ff;
+  }
+
+  &__account-card--error {
+    border-color: #edf1f6;
+    background: #fff7f7;
+    box-shadow: 0 8px 22px rgba(180, 35, 24, 0.1);
   }
 
   &__provider-card:hover,
@@ -2270,6 +2423,43 @@ watch(
     box-shadow:
       0 12px 26px rgba(22, 130, 255, 0.16),
       inset 4px 0 0 #1682ff;
+  }
+
+  &__account-card--error:hover {
+    border-color: #edf1f6;
+    background: #fff7f7;
+    box-shadow: 0 12px 26px rgba(180, 35, 24, 0.14);
+  }
+
+  &__account-card--refreshing,
+  &__account-card--refreshing:hover {
+    transform: none;
+  }
+
+  &__account-card--refreshing:not(.providers-view__account-card--active):not(
+      .providers-view__account-card--error
+    ):hover {
+    border-color: #edf1f6;
+    background: #ffffff;
+    box-shadow: 0 3px 12px rgba(15, 23, 42, 0.06);
+  }
+
+  &__account-card--refreshing::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(
+      100deg,
+      transparent 0%,
+      rgba(22, 130, 255, 0.08) 34%,
+      rgba(22, 130, 255, 0.22) 50%,
+      rgba(22, 130, 255, 0.08) 66%,
+      transparent 100%
+    );
+    background-size: 220% 100%;
+    animation: providers-item-sweep 1.2s ease-in-out infinite;
+    pointer-events: none;
   }
 
   &__account-panel {
@@ -2315,6 +2505,73 @@ watch(
     line-height: 1.4;
   }
 
+  &__account-error {
+    position: relative;
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+  }
+
+  &__account-error-tip {
+    position: absolute;
+    top: calc(100% + 9px);
+    left: 50%;
+    z-index: 8;
+    display: flex;
+    width: max-content;
+    max-width: 360px;
+    min-width: 220px;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow:
+      0 14px 34px rgba(52, 64, 84, 0.18),
+      0 0 0 1px rgba(253, 162, 155, 0.28);
+    color: #344054;
+    font-size: 0.76rem;
+    line-height: 1.5;
+    opacity: 0;
+    pointer-events: none;
+    transform: translate(-50%, -4px);
+    transition:
+      opacity 0.16s ease,
+      transform 0.16s ease,
+      visibility 0.16s ease;
+    visibility: hidden;
+    white-space: normal;
+  }
+
+  &__account-error-tip::before {
+    content: "";
+    position: absolute;
+    top: -5px;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    background: #ffffff;
+    box-shadow: -1px -1px 0 rgba(253, 162, 155, 0.2);
+    transform: translateX(-50%) rotate(45deg);
+  }
+
+  &__account-error:hover &__account-error-tip {
+    opacity: 1;
+    transform: translate(-50%, 0);
+    visibility: visible;
+  }
+
+  &__account-error-title {
+    color: #b42318;
+    font-size: 0.72rem;
+    font-weight: 800;
+  }
+
+  &__account-error-message {
+    overflow-wrap: anywhere;
+  }
+
   &__account-tag--pro {
     border-color: #8b5cf6;
     background: #f4f0ff;
@@ -2326,6 +2583,13 @@ watch(
     border-color: #1570ef;
     background: #eef7ff;
     color: #175cd3;
+    font-weight: 800;
+  }
+
+  &__account-tag--error {
+    border-color: #fda29b;
+    background: #fff1f1;
+    color: #b42318;
     font-weight: 800;
   }
 
@@ -2342,6 +2606,8 @@ watch(
     --quota-icon-bg: #ecfdf3;
 
     display: flex;
+    position: relative;
+    overflow: hidden;
     width: 212px;
     min-width: 0;
     flex-direction: column;
@@ -2362,6 +2628,31 @@ watch(
     --quota-color: #ef4444;
     --quota-bg: #fff5f5;
     --quota-icon-bg: #ffe4e6;
+  }
+
+  &__account-quota--loading {
+    --quota-color: #1682ff;
+    --quota-bg: #eef7ff;
+    --quota-icon-bg: #eaf5ff;
+
+    border-color: #9fd1ff;
+    box-shadow:
+      0 8px 18px rgba(22, 130, 255, 0.14),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.86);
+  }
+
+  &__account-quota--loading::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      100deg,
+      transparent 0%,
+      rgba(22, 130, 255, 0.18) 42%,
+      transparent 72%
+    );
+    animation: providers-quota-sweep 1.1s ease-in-out infinite;
+    pointer-events: none;
   }
 
   &__quota-bar {
@@ -2404,6 +2695,16 @@ watch(
     background: var(--quota-icon-bg);
   }
 
+  &__account-quota--loading &__quota-icon,
+  &__account-quota--loading &__quota-fill {
+    animation: providers-quota-loading 0.86s ease-in-out infinite alternate;
+  }
+
+  &__account-quota--loading &__quota-name,
+  &__account-quota--loading &__quota-value {
+    color: #1682ff;
+  }
+
   &__quota-bar::before {
     content: "";
     display: block;
@@ -2412,6 +2713,10 @@ watch(
     border-radius: 999px;
     background: #dbeee2;
     order: 2;
+  }
+
+  &__account-quota--loading &__quota-bar::before {
+    background: #cfe6ff;
   }
 
   &__quota-fill {
@@ -2423,6 +2728,10 @@ watch(
     max-width: 100%;
     border-radius: 999px;
     background: var(--quota-color);
+  }
+
+  &__account-quota--loading &__quota-fill {
+    box-shadow: 0 0 12px rgba(22, 130, 255, 0.48);
   }
 
   &__quota-meta {

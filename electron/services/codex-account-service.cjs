@@ -67,7 +67,9 @@ async function readJson(response) {
   const text = await response.text()
 
   if (!response.ok) {
-    throw new Error(`OpenAI 请求失败：${response.status} ${text}`)
+    const error = new Error(`OpenAI 请求失败：${response.status} ${text}`)
+    error.status = response.status
+    throw error
   }
 
   return JSON.parse(text)
@@ -313,6 +315,9 @@ class CodexAccountService extends EventEmitter {
       type: account.type,
       token_generation: account.token_generation || 0,
       token_updated_at: account.token_updated_at || 0,
+      refresh_status: account.refresh_status || "",
+      refresh_status_code: account.refresh_status_code || 0,
+      refresh_message: account.refresh_message || "",
       requires_reauth: Boolean(account.requires_reauth),
       reauth_reason: account.reauth_reason || "",
       reauth_message: account.reauth_message || "",
@@ -544,6 +549,9 @@ class CodexAccountService extends EventEmitter {
         Number(tokens.token_generation || tokens.tokenGeneration || 0) ||
         Number(currentAccount?.token_generation || 0),
       token_updated_at: tokenUpdatedAt,
+      refresh_status: "",
+      refresh_status_code: 0,
+      refresh_message: "",
       requires_reauth: false,
       reauth_reason: "",
       reauth_message: "",
@@ -728,6 +736,8 @@ class CodexAccountService extends EventEmitter {
         )
       }
 
+      this.markAccountRefreshError(account.id, error.status || 0, error.message)
+
       throw error
     }
   }
@@ -740,6 +750,22 @@ class CodexAccountService extends EventEmitter {
             requires_reauth: true,
             reauth_reason: reason,
             reauth_message: message,
+            updatedAt: Date.now()
+          }
+        : account
+    )
+    this.storage.scheduleWrite("codexAccounts", this.accounts)
+    this.emit("changed", this.getState())
+  }
+
+  markAccountRefreshError(accountId, statusCode, message) {
+    this.accounts = this.accounts.map(account =>
+      account.id === accountId
+        ? {
+            ...account,
+            refresh_status: "failed",
+            refresh_status_code: statusCode,
+            refresh_message: message,
             updatedAt: Date.now()
           }
         : account
@@ -781,6 +807,7 @@ class CodexAccountService extends EventEmitter {
         const message =
           "Codex 登录授权缺少 refresh_token，无法自动续期；当前 access_token 已不可用。"
         this.markAccountReauth(account.id, missingRefreshTokenReason, message)
+        this.markAccountRefreshError(account.id, 0, message)
         throw new Error(message)
       }
 
@@ -799,6 +826,8 @@ class CodexAccountService extends EventEmitter {
           )
         }
 
+        this.markAccountRefreshError(account.id, error.status || 0, error.message)
+
         throw error
       }
     }
@@ -809,11 +838,19 @@ class CodexAccountService extends EventEmitter {
       account.accountId ||
       account.id ||
       claims.account_id
-    const usage = await this.fetchUsageInfo(
-      tokens.accessToken,
-      claims,
-      account.proxy
-    )
+    let usage
+
+    try {
+      usage = await this.fetchUsageInfo(
+        tokens.accessToken,
+        claims,
+        account.proxy
+      )
+    } catch (error) {
+      this.markAccountRefreshError(account.id, error.status || 0, error.message)
+
+      throw error
+    }
     const nextAccount = this.saveAccount(
       tokens,
       {
@@ -1059,6 +1096,7 @@ class CodexAccountService extends EventEmitter {
           payload.error_description || payload.error || text
         }`
       )
+      error.status = response.status
       error.oauthError = payload.error || ""
       error.oauthErrorDescription = payload.error_description || ""
       throw error
@@ -1136,6 +1174,9 @@ class CodexAccountService extends EventEmitter {
       type: nextAccount.type,
       token_generation: nextAccount.token_generation || 0,
       token_updated_at: nextAccount.token_updated_at || 0,
+      refresh_status: nextAccount.refresh_status || "",
+      refresh_status_code: nextAccount.refresh_status_code || 0,
+      refresh_message: nextAccount.refresh_message || "",
       requires_reauth: Boolean(nextAccount.requires_reauth),
       reauth_reason: nextAccount.reauth_reason || "",
       reauth_message: nextAccount.reauth_message || "",
