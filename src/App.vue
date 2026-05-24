@@ -1680,6 +1680,10 @@ function showErrorMessage(error) {
   createMessage.error(error.message || String(error))
 }
 
+function isCodexAccountRefreshError(error) {
+  return Boolean(error)
+}
+
 function showSuccessMessage(message) {
   createMessage.success(message)
 }
@@ -1879,12 +1883,20 @@ async function handleQuickLogoClick() {
 }
 
 async function refreshQuickCodexAccount(item) {
-  await runAction(() =>
-    window.aiManager.refreshCodexAccount({
-      accountId: item.account.id,
-      syncAuth: false
-    })
-  )
+  await withGlobalLoading(async () => {
+    try {
+      updateState(
+        await window.aiManager.refreshCodexAccount({
+          accountId: item.account.id,
+          syncAuth: false
+        })
+      )
+    } catch (error) {
+      if (!isCodexAccountRefreshError(error)) {
+        showErrorMessage(error)
+      }
+    }
+  })
 }
 
 async function selectQuickItem(item) {
@@ -2567,12 +2579,22 @@ async function deleteCodexAccount(payload) {
 }
 
 async function refreshCodexAccount(payload) {
-  const success = await runAction(() =>
-    window.aiManager.refreshCodexAccount(payload)
-  )
+  const { onSettled, showSuccess, ...input } = payload
 
-  if (success) {
-    showSuccessMessage("Codex 官方账号额度已刷新。")
+  try {
+    updateState(await window.aiManager.refreshCodexAccount(input))
+
+    if (showSuccess !== false) {
+      showSuccessMessage("Codex 官方账号额度已刷新。")
+    }
+  } catch (error) {
+    if (!isCodexAccountRefreshError(error)) {
+      showErrorMessage(error)
+    }
+  } finally {
+    if (onSettled) {
+      onSettled()
+    }
   }
 }
 
@@ -2581,20 +2603,22 @@ async function refreshCodexAccounts() {
     return
   }
 
-  await withGlobalLoading(async () => {
-    try {
-      for (const account of state.codexAccounts) {
+  await Promise.all(
+    state.codexAccounts.map(async account => {
+      try {
         updateState(
           await window.aiManager.refreshCodexAccount({
             accountId: account.id,
             syncAuth: false
           })
         )
+      } catch (error) {
+        if (!isCodexAccountRefreshError(error)) {
+          showErrorMessage(error)
+        }
       }
-    } catch (error) {
-      showErrorMessage(error)
-    }
-  })
+    })
+  )
 }
 
 async function updateCodexAccountProxy(payload) {
