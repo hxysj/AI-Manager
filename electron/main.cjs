@@ -620,6 +620,16 @@ function sendStateChanged(state) {
   }
 }
 
+function sendRuntimeDelta(delta) {
+  const payload = JSON.parse(JSON.stringify(delta))
+
+  for (const targetWindow of [mainWindow, quickSwitchWindow]) {
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send("runtime:delta", payload)
+    }
+  }
+}
+
 function sendUpdateStatus(patch = {}) {
   updateStatus = {
     ...updateStatus,
@@ -663,6 +673,7 @@ async function restartManagerService(nextSettings = appSettings) {
     sendStateChanged(state)
     updateTrayMenu(state)
   })
+  managerService.on("runtime-delta", sendRuntimeDelta)
 
   return JSON.parse(JSON.stringify(managerService.getState()))
 }
@@ -1238,6 +1249,10 @@ async function checkForAppUpdates(manual = false) {
   }
 
   if (updateChecking || updateDownloading || updatePromptOpen) {
+    if (manual) {
+      updateManualCheck = true
+    }
+
     return sendUpdateStatus({
       phase: updateDownloading
         ? "downloading"
@@ -2307,6 +2322,22 @@ function registerIpc() {
     return managerService.loadSessionMessages(payload?.sessionId)
   })
 
+  registerLoggedIpc("runtime:snapshot", async () => {
+    return managerService.getRuntimeSnapshot()
+  })
+
+  registerLoggedIpc("runtime:codex-start", async (_, payload) => {
+    return managerService.startCodexRuntime(payload)
+  })
+
+  registerLoggedIpc("runtime:codex-write", async (_, payload) => {
+    return managerService.writeCodexRuntime(payload)
+  })
+
+  registerLoggedIpc("runtime:codex-stop", async (_, payload) => {
+    return managerService.stopCodexRuntime(payload)
+  })
+
   registerLoggedIpc("usage:stats", async (_, payload) => {
     return managerService.getUsageStats(payload || {})
   })
@@ -2647,6 +2678,7 @@ if (singleInstanceLock) {
       sendStateChanged(state)
       updateTrayMenu(state)
     })
+    managerService.on("runtime-delta", sendRuntimeDelta)
 
     registerIpc()
     createTray()

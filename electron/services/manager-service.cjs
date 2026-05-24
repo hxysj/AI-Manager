@@ -25,6 +25,7 @@ const { UsageService } = require("./usage-service.cjs")
 const { CodexAccountService } = require("./codex-account-service.cjs")
 const { RuntimeProviderService } = require("./runtime-provider-service.cjs")
 const { PromptRuntimeService } = require("./prompt-runtime-service.cjs")
+const { RuntimeService } = require("../runtime/services/runtime-service.cjs")
 
 const execFileAsync = promisify(execFile)
 const BACKUP_SECRET = crypto
@@ -1033,6 +1034,8 @@ class ManagerService extends EventEmitter {
     this.codexAccountService = new CodexAccountService(this.storage)
     this.runtimeProviderService = new RuntimeProviderService(this.storage)
     this.promptRuntimeService = new PromptRuntimeService(this.paths)
+    this.runtimeService = new RuntimeService()
+    this.runtimeService.bindStorage(this.storage)
     this.state = {
       cliTargets: [],
       skills: [],
@@ -1047,6 +1050,10 @@ class ManagerService extends EventEmitter {
       runtimeModels: [],
       runtimeProfiles: [],
       runtimeProviderState: {},
+      runtimeObservability: {
+        sequence: 0,
+        sessions: []
+      },
       diagnostics: [],
       paths: this.toPublicPaths(),
       appSettings: this.toPublicSettings(false),
@@ -1078,6 +1085,15 @@ class ManagerService extends EventEmitter {
       this.emit("state-changed", this.state)
     })
     await this.runtimeProviderService.init()
+    await this.runtimeService.init()
+    this.runtimeService.on("delta", delta => {
+      this.state = {
+        ...this.state,
+        runtimeObservability: this.runtimeService.getSnapshot(),
+        refreshedAt: Date.now()
+      }
+      this.emit("runtime-delta", delta)
+    })
     await this.refreshAll({ emit: false })
     this.codexAccountService.startAutoRefresh(() =>
       this.state.cliTargets.find((item) => item.id === "codex")
@@ -1239,6 +1255,8 @@ class ManagerService extends EventEmitter {
       }
       this.emit("state-changed", this.state)
     })
+
+    this.runtimeService.startWatcher(this.state.cliTargets)
   }
 
   getState() {
@@ -1399,6 +1417,7 @@ class ManagerService extends EventEmitter {
       codexAccounts,
       codexLoginState: this.codexAccountService.getLoginState(),
       ...runtimeState,
+      runtimeObservability: this.runtimeService.getSnapshot(),
       rules,
       diagnostics: [...diagnostics, ...sessionDiagnostics, ...usageDiagnostics],
       paths: this.toPublicPaths(),
@@ -2034,6 +2053,22 @@ class ManagerService extends EventEmitter {
     return this.sessionService.search(query)
   }
 
+  getRuntimeSnapshot() {
+    return this.runtimeService.getSnapshot()
+  }
+
+  startCodexRuntime(payload = {}) {
+    return this.runtimeService.startManagedRuntime(payload)
+  }
+
+  writeCodexRuntime(payload = {}) {
+    return this.runtimeService.writeRuntime(payload.sessionId, payload.data)
+  }
+
+  stopCodexRuntime(payload = {}) {
+    return this.runtimeService.stopRuntime(payload.sessionId)
+  }
+
   getUsageStats(input) {
     return this.usageService.getStats(input)
   }
@@ -2585,6 +2620,7 @@ class ManagerService extends EventEmitter {
     this.codexAccountService.stopAutoRefresh()
     this.fileWatcherService.stop()
     await this.sessionService.dispose()
+    await this.runtimeService.dispose()
     await this.storage.flush()
   }
 }

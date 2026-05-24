@@ -137,6 +137,13 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("session:search", toPlainPayload(payload)),
   loadSessionMessages: payload =>
     ipcRenderer.invoke("session:messages", toPlainPayload(payload)),
+  getRuntimeSnapshot: () => ipcRenderer.invoke("runtime:snapshot"),
+  startCodexRuntime: payload =>
+    ipcRenderer.invoke("runtime:codex-start", toPlainPayload(payload)),
+  writeCodexRuntime: payload =>
+    ipcRenderer.invoke("runtime:codex-write", toPlainPayload(payload)),
+  stopCodexRuntime: payload =>
+    ipcRenderer.invoke("runtime:codex-stop", toPlainPayload(payload)),
   getUsageStats: payload =>
     ipcRenderer.invoke("usage:stats", toPlainPayload(payload)),
   getUsagePricing: () => ipcRenderer.invoke("usage:pricing"),
@@ -225,6 +232,11 @@ contextBridge.exposeInMainWorld("aiManager", {
     const handler = (_, state) => callback(state)
     ipcRenderer.on("state:changed", handler)
     return () => ipcRenderer.removeListener("state:changed", handler)
+  },
+  onRuntimeDelta: callback => {
+    const handler = (_, delta) => callback(delta)
+    ipcRenderer.on("runtime:delta", handler)
+    return () => ipcRenderer.removeListener("runtime:delta", handler)
   },
   onUpdateStatus: callback => {
     const handler = (_, payload) => callback(payload)
