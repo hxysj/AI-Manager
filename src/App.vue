@@ -371,6 +371,16 @@
 
         <UsageView v-else-if="activeView === 'usage'" :usage="state.usage" />
 
+        <ActivityView
+          v-else-if="activeView === 'activity'"
+          :paths="state.paths"
+          :runtime="state.runtimeObservability"
+          @refresh="refreshRuntimeSnapshot"
+          @send-input="sendCodexRuntimeInput"
+          @start-codex="startCodexRuntime"
+          @stop-codex="stopCodexRuntime"
+        />
+
         <RulesView
           v-else-if="activeView === 'rules'"
           :cli-targets="state.cliTargets"
@@ -962,6 +972,7 @@ import {
   watch
 } from "vue"
 import {
+  Activity,
   BarChart3,
   ChevronDown,
   Compass,
@@ -1002,6 +1013,9 @@ const SkillsView = defineAsyncComponent(() =>
   import("@/features/skills/index.vue")
 )
 const UsageView = defineAsyncComponent(() => import("@/features/usage/index.vue"))
+const ActivityView = defineAsyncComponent(() =>
+  import("@/features/activity/index.vue")
+)
 const CreateSkillModal = defineAsyncComponent(() =>
   import("@/features/skills/components/CreateSkillModal.vue")
 )
@@ -1014,6 +1028,7 @@ const SkillDrawer = defineAsyncComponent(() =>
 
 const baseNavItems = [
   { id: "providers", label: "Providers", icon: Network },
+  { id: "activity", label: "Activity", icon: Activity },
   { id: "usage", label: "Usage", icon: BarChart3 },
   { id: "skills", label: "Skills", icon: ShieldCheck },
   { id: "sessions", label: "Sessions", icon: Gauge },
@@ -1060,6 +1075,10 @@ const state = reactive({
   },
   runtimeConfigSchemas: {},
   runtimeModels: [],
+  runtimeObservability: {
+    sequence: 0,
+    sessions: []
+  },
   runtimeProviderState: {},
   runtimeProfiles: [],
   diagnostics: [],
@@ -1162,7 +1181,9 @@ const { loading: pending, withGlobalLoading } = useGlobalLoading()
 
 let unsubscribe = null
 let unsubscribeClose = null
+let unsubscribeRuntime = null
 let unsubscribeUpdate = null
+let runtimeSnapshotTimer = null
 
 const navItems = computed(() =>
   showLogsTab.value
@@ -1551,6 +1572,10 @@ function updateState(nextState) {
   state.rules = nextState.rules || state.rules
   state.runtimeConfigSchemas = nextState.runtimeConfigSchemas || {}
   state.runtimeModels = nextState.runtimeModels || []
+  state.runtimeObservability = nextState.runtimeObservability || {
+    sequence: 0,
+    sessions: []
+  }
   state.runtimeProviderState = nextState.runtimeProviderState || {}
   state.runtimeProfiles = nextState.runtimeProfiles || []
   state.diagnostics = nextState.diagnostics || []
@@ -1686,6 +1711,50 @@ function showSuccessMessage(message) {
 
 function showWarningMessage(message) {
   createMessage.warning(message)
+}
+
+function applyRuntimeSnapshot(snapshot = {}) {
+  state.runtimeObservability = {
+    sequence: Number(snapshot.sequence || 0),
+    sessions: Array.isArray(snapshot.sessions) ? snapshot.sessions : []
+  }
+}
+
+function applyRuntimeDelta(delta = {}) {
+  const runtime = state.runtimeObservability || { sequence: 0, sessions: [] }
+  const sessions = Array.isArray(runtime.sessions) ? runtime.sessions : []
+  let session = sessions.find(item => item.id === delta.sessionId)
+  const events = Array.isArray(delta.events)
+    ? delta.events
+    : [delta.event].filter(Boolean)
+
+  if (!session) {
+    session = {
+      id: delta.sessionId,
+      title: delta.sessionId,
+      state: "idle",
+      activeTools: [],
+      agents: [],
+      tokenUsage: {
+        input: 0,
+        output: 0
+      },
+      timeline: []
+    }
+    sessions.unshift(session)
+  }
+
+  Object.assign(session, delta.patch || {})
+  if (events.length && !delta.patch?.timeline) {
+    session.timeline = [...(session.timeline || []), ...events].slice(-2000)
+  }
+  state.runtimeObservability = {
+    sequence: Number(delta.sequence || runtime.sequence || 0),
+    sessions: sessions.sort(
+      (left, right) =>
+        Number(right.lastActivityAt || 0) - Number(left.lastActivityAt || 0)
+    )
+  }
 }
 
 function applyUpdateStatus(status = {}) {
@@ -1927,6 +1996,39 @@ async function clearQuickActive() {
 
 async function refreshState() {
   await runAction(() => window.aiManager.refresh())
+}
+
+async function refreshRuntimeSnapshot() {
+  try {
+    applyRuntimeSnapshot(await window.aiManager.getRuntimeSnapshot())
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function startCodexRuntime(payload) {
+  try {
+    await window.aiManager.startCodexRuntime(payload)
+    await refreshRuntimeSnapshot()
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function sendCodexRuntimeInput(payload) {
+  try {
+    await window.aiManager.writeCodexRuntime(payload)
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function stopCodexRuntime(sessionId) {
+  try {
+    await window.aiManager.stopCodexRuntime({ sessionId })
+  } catch (error) {
+    showErrorMessage(error)
+  }
 }
 
 async function saveSettings(payload) {
@@ -2677,6 +2779,9 @@ onMounted(() => {
   }
 
   bootstrap()
+  unsubscribeRuntime = window.aiManager.onRuntimeDelta(applyRuntimeDelta)
+  refreshRuntimeSnapshot()
+  runtimeSnapshotTimer = setInterval(refreshRuntimeSnapshot, 30000)
   unsubscribeUpdate = window.aiManager.onUpdateStatus(applyUpdateStatus)
   window.aiManager
     .getUpdateStatus()
@@ -2699,8 +2804,17 @@ onBeforeUnmount(() => {
     unsubscribeClose()
   }
 
+  if (typeof unsubscribeRuntime === "function") {
+    unsubscribeRuntime()
+  }
+
   if (typeof unsubscribeUpdate === "function") {
     unsubscribeUpdate()
+  }
+
+  if (runtimeSnapshotTimer) {
+    clearInterval(runtimeSnapshotTimer)
+    runtimeSnapshotTimer = null
   }
 
   if (isQuickSwitchPanel) {
