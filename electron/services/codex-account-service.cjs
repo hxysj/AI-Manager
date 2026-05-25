@@ -333,6 +333,14 @@ class CodexAccountService extends EventEmitter {
       throw new Error("Codex 官方登录正在进行中")
     }
 
+    const targetAccountId = String(input.accountId || "").trim()
+    if (
+      targetAccountId &&
+      !this.accounts.find((account) => account.id === targetAccountId)
+    ) {
+      throw new Error("Codex 官方账号不存在")
+    }
+
     const pkce = createPkce()
     const state = crypto.randomBytes(16).toString("hex")
     const callback = await this.startCallbackServer()
@@ -356,6 +364,7 @@ class CodexAccountService extends EventEmitter {
       state,
       redirectUri: callback.redirectUri,
       proxy: String(input.proxy || "").trim(),
+      targetAccountId,
       authUrl
     }
     this.emit("login-state", this.getLoginState())
@@ -389,15 +398,35 @@ class CodexAccountService extends EventEmitter {
     }
 
     const proxy = String(input.proxy || "").trim()
+    const targetAccountId = String(input.accountId || "").trim()
+    const targetAccount = targetAccountId
+      ? this.accounts.find((account) => account.id === targetAccountId)
+      : null
     const accountId = extractAccountId(claims)
+
+    if (targetAccountId && !targetAccount) {
+      throw new Error("Codex 官方账号不存在")
+    }
+
+    if (
+      targetAccount &&
+      ![
+        targetAccount.id,
+        targetAccount.accountId,
+        targetAccount.account_id
+      ].includes(accountId)
+    ) {
+      throw new Error("登录数据与当前账号不一致")
+    }
 
     if (
       accountId &&
       this.accounts.find(
         (account) =>
-          account.id === accountId ||
-          account.accountId === accountId ||
-          account.account_id === accountId
+          account.id !== targetAccountId &&
+          (account.id === accountId ||
+            account.accountId === accountId ||
+            account.account_id === accountId)
       )
     ) {
       throw new Error("此账户已导入")
@@ -409,6 +438,13 @@ class CodexAccountService extends EventEmitter {
       sub: claims.sub
     }
     const account = this.saveAccount(tokens, profile, claims, usage, proxy)
+
+    if (
+      account.id === this.activeAccountId &&
+      typeof this.getCodexCliTarget === "function"
+    ) {
+      await this.writeAccountBundle(account, this.getCodexCliTarget())
+    }
 
     return {
       id: account.id,
@@ -991,14 +1027,34 @@ class CodexAccountService extends EventEmitter {
     const tokens = await this.exchangeCode(code)
     const claims = decodeJwtPayload(tokens.idToken || tokens.accessToken)
     const accountId = extractAccountId(claims)
+    const targetAccountId = this.loginState.targetAccountId || ""
+    const targetAccount = targetAccountId
+      ? this.accounts.find((account) => account.id === targetAccountId)
+      : null
+
+    if (targetAccountId && !targetAccount) {
+      throw new Error("Codex 官方账号不存在")
+    }
+
+    if (
+      targetAccount &&
+      ![
+        targetAccount.id,
+        targetAccount.accountId,
+        targetAccount.account_id
+      ].includes(accountId)
+    ) {
+      throw new Error("登录账号与当前账号不一致")
+    }
 
     if (
       accountId &&
       this.accounts.find(
         (account) =>
-          account.id === accountId ||
-          account.accountId === accountId ||
-          account.account_id === accountId
+          account.id !== targetAccountId &&
+          (account.id === accountId ||
+            account.accountId === accountId ||
+            account.account_id === accountId)
       )
     ) {
       throw new Error("此账户已导入")
@@ -1020,6 +1076,14 @@ class CodexAccountService extends EventEmitter {
       usage,
       this.loginState.proxy
     )
+
+    if (
+      nextAccount.id === this.activeAccountId &&
+      typeof this.getCodexCliTarget === "function"
+    ) {
+      await this.writeAccountBundle(nextAccount, this.getCodexCliTarget())
+    }
+
     this.loginState = {
       ...this.loginState,
       status: "success",

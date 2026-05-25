@@ -96,6 +96,14 @@
                     </span>
                   </span>
                 </span>
+                <button
+                  v-if="item.account.refresh_status === 'failed'"
+                  class="providers-view__reauth-button"
+                  type="button"
+                  @click.stop="openCodexAuthUpdateModal(item.account)"
+                >
+                  更新认证信息
+                </button>
               </div>
               <div
                 v-if="
@@ -809,7 +817,7 @@
     <BaseModal
       v-if="showCodexLoginModal"
       class="providers-view__codex-login-modal"
-      title="添加 Codex 账号"
+      :title="codexLoginTitle"
       @close="closeCodexLoginModal"
     >
       <section class="providers-view__login-panel">
@@ -1289,6 +1297,7 @@ const runtimeDiffPath = ref("")
 const codexLoginTab = ref("oauth")
 const codexAuthDataDraft = ref("")
 const codexProxyDraft = ref("")
+const codexAuthUpdateAccountId = ref("")
 const codexAccountProxyDrafts = reactive({})
 const codexAccountRefreshingMap = reactive({})
 const editingCodexAccountId = ref("")
@@ -1420,6 +1429,10 @@ const filteredIconOptions = computed(() => {
   return iconOptions.filter((item) =>
     iconLabel(item).toLowerCase().includes(keyword)
   )
+})
+
+const codexLoginTitle = computed(() => {
+  return codexAuthUpdateAccountId.value ? "更新认证信息" : "添加 Codex 账号"
 })
 
 const configPreviewMap = computed(() => {
@@ -1575,7 +1588,7 @@ function closeProviderCreateModal() {
   iconKeyword.value = ""
 }
 
-function openCodexLoginModal() {
+function openCodexLoginModal(account = null) {
   showCodexCreateOptions.value = false
   showCodexLoginModal.value = true
   closeCodexAccountDetail()
@@ -1583,11 +1596,17 @@ function openCodexLoginModal() {
   codexLoginTab.value = "oauth"
   manualCallbackUrl.value = ""
   codexAuthDataDraft.value = ""
-  codexProxyDraft.value = ""
+  codexAuthUpdateAccountId.value = account?.id || ""
+  codexProxyDraft.value = account?.proxy || ""
+}
+
+function openCodexAuthUpdateModal(account) {
+  openCodexLoginModal(account)
 }
 
 function closeCodexLoginModal() {
   showCodexLoginModal.value = false
+  codexAuthUpdateAccountId.value = ""
   closeCodexAccountDetail()
   closeProviderDetail()
   emit("cancel-codex-official-login")
@@ -1595,6 +1614,7 @@ function closeCodexLoginModal() {
 
 function startCodexOfficialLogin() {
   emit("codex-official-login", {
+    accountId: codexAuthUpdateAccountId.value,
     proxy: codexProxyDraft.value
   })
 }
@@ -1618,6 +1638,7 @@ async function openManualCallbackUrl() {
 
 function importCodexAuthData() {
   emit("codex-auth-json-import", {
+    accountId: codexAuthUpdateAccountId.value,
     content: codexAuthDataDraft.value,
     proxy: codexProxyDraft.value
   })
@@ -2070,6 +2091,17 @@ watch(
 watch(
   () => props.codexAccounts,
   (accounts) => {
+    if (codexAuthUpdateAccountId.value) {
+      const account = accounts.find(
+        (item) => item.id === codexAuthUpdateAccountId.value
+      )
+
+      if (account && account.refresh_status !== "failed") {
+        closeCodexLoginModal()
+        return
+      }
+    }
+
     if (
       codexAccountDetail.value &&
       !accounts.find((item) => item.id === codexAccountDetail.value.id)
@@ -2891,6 +2923,7 @@ watch(
   &__using,
   &__primary,
   &__compare-button,
+  &__reauth-button,
   &__section-actions button {
     display: inline-flex;
     align-items: center;
@@ -2931,6 +2964,16 @@ watch(
     color: #b42318;
     font-size: 12px;
     height: 25px;
+  }
+
+  &__reauth-button {
+    flex: none;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid #fda29b;
+    background: #ffffff;
+    color: #b42318;
+    font-size: 12px;
   }
 
   &__empty {
