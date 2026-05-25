@@ -1745,6 +1745,7 @@ function renderTrendChart() {
       ],
       tooltip: {
         trigger: "axis",
+        appendToBody: true,
         valueFormatter: (value) => formatNumber(value)
       },
       grid: {
@@ -1800,6 +1801,7 @@ function renderProviderPie() {
     color: ["#2f5f91", "#5d7fa4", "#8aa7c4", "#b9c9d8", "#d8e2ec"],
     tooltip: {
       trigger: "item",
+      appendToBody: true,
       formatter: (item) => {
         return `${item.name}<br />${formatNumber(item.value)} Tokens · ${item.percent}%`
       }
