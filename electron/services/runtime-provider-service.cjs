@@ -112,7 +112,36 @@ function combineConfigContents(files) {
     .join("\n\n")
 }
 
+function normalizeClaudeSettingsContent(content) {
+  const settings = String(content || "").trim() ? JSON.parse(content) : {}
+
+  if ("effortLevel" in settings) {
+    delete settings.effortLevel
+  }
+
+  if ("model" in settings) {
+    delete settings.model
+  }
+
+  return `${JSON.stringify(settings, null, 2)}\n`
+}
+
 function combineManagedConfigContents(cli, files) {
+  if (cli === "claude") {
+    return combineConfigContents(
+      files.map(file => {
+        if (file.name !== "settings.json") {
+          return file
+        }
+
+        return {
+          name: file.name,
+          content: normalizeClaudeSettingsContent(file.content)
+        }
+      })
+    )
+  }
+
   if (cli !== "codex") {
     return combineConfigContents(files)
   }
@@ -1003,8 +1032,8 @@ class RuntimeProviderService {
     return {
       provider,
       profile: this.toPublicProfile(profile),
-      managerContent: combineConfigContents(managerFiles),
-      runtimeContent: combineConfigContents(runtimeFiles),
+      managerContent: combineManagedConfigContents(cli, managerFiles),
+      runtimeContent: combineManagedConfigContents(cli, runtimeFiles),
       runtimePath: this.formatRuntimePath(cliTarget.configPath, managerFiles)
     }
   }

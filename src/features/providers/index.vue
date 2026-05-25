@@ -23,6 +23,10 @@
           </button>
         </div>
 
+        <section v-if="showRuntimeWarning" class="providers-view__runtime">
+          <strong>{{ activeCliName }} Runtime 配置不一致</strong>
+        </section>
+
         <div class="providers-view__toolbar-actions">
           <button
             class="providers-view__system-config"
@@ -43,23 +47,6 @@
           </button>
         </div>
       </header>
-
-      <section v-if="showRuntimeWarning" class="providers-view__runtime">
-        <div>
-          <strong>{{ activeCliName }} Runtime 配置不一致</strong>
-          <span>{{
-            runtimeState.runtimePath || "尚未发现 CLI 配置文件路径"
-          }}</span>
-        </div>
-        <button
-          class="providers-view__compare-button"
-          type="button"
-          :disabled="pending"
-          @click="openRuntimeCompareDialog"
-        >
-          对比
-        </button>
-      </section>
 
       <section class="providers-view__list-panel">
         <article
@@ -98,7 +85,7 @@
                   <span
                     class="providers-view__account-tag providers-view__account-tag--error"
                   >
-                    {{ item.account.refresh_status_code || '错误' }}
+                    {{ item.account.refresh_status_code || "错误" }}
                   </span>
                   <span class="providers-view__account-error-tip">
                     <span class="providers-view__account-error-title">
@@ -274,6 +261,13 @@
             </span>
             <div class="providers-view__provider-main">
               <strong>{{ item.provider.name }}</strong>
+              <span
+                v-if="item.provider.note"
+                class="providers-view__provider-note"
+                :title="item.provider.note"
+              >
+                {{ item.provider.note }}
+              </span>
               <span>{{ item.provider.baseUrl || "未配置官网地址" }}</span>
             </div>
             <div class="providers-view__provider-actions">
@@ -1311,12 +1305,12 @@ const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
   import: "default"
 })
 const iconOptions = Object.keys(iconModules)
-  .map(item => item.split("/").pop())
+  .map((item) => item.split("/").pop())
   .sort((left, right) => left.localeCompare(right))
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
-  return props.cliTargets.filter(item => {
+  return props.cliTargets.filter((item) => {
     return props.runtimeConfigSchemas[item.id]?.enabled
   })
 })
@@ -1336,22 +1330,22 @@ const activeRuntimeSchema = computed(() => {
 
 const activeCliName = computed(() => {
   return (
-    visibleCliTargets.value.find(item => item.id === activeCli.value)?.name ||
+    visibleCliTargets.value.find((item) => item.id === activeCli.value)?.name ||
     activeCli.value ||
     "Runtime"
   )
 })
 
 const selectedProvider = computed(() => {
-  return props.providers.find(item => item.id === draft.id) || null
+  return props.providers.find((item) => item.id === draft.id) || null
 })
 
 const scopedProviders = computed(() => {
-  return props.providers.filter(item => item.cli === activeCli.value)
+  return props.providers.filter((item) => item.cli === activeCli.value)
 })
 
 const mixedItems = computed(() => {
-  const providerItems = scopedProviders.value.map(provider => ({
+  const providerItems = scopedProviders.value.map((provider) => ({
     type: "provider",
     provider,
     key: `provider:${provider.id}`,
@@ -1359,6 +1353,9 @@ const mixedItems = computed(() => {
       "providers-view__provider-card",
       {
         "providers-view__provider-card--active":
+          profileMap.value[activeCli.value]?.providerId === provider.id,
+        "providers-view__provider-card--runtime-warning":
+          showRuntimeWarning.value &&
           profileMap.value[activeCli.value]?.providerId === provider.id
       }
     ],
@@ -1366,7 +1363,7 @@ const mixedItems = computed(() => {
   }))
   const accountItems =
     activeCli.value === "codex"
-      ? props.codexAccounts.map(account => ({
+      ? props.codexAccounts.map((account) => ({
           type: "account",
           account,
           key: `account:${account.id}`,
@@ -1390,7 +1387,9 @@ const mixedItems = computed(() => {
 })
 
 const profileMap = computed(() => {
-  return Object.fromEntries(props.runtimeProfiles.map(item => [item.cli, item]))
+  return Object.fromEntries(
+    props.runtimeProfiles.map((item) => [item.cli, item])
+  )
 })
 
 const runtimeState = computed(() => {
@@ -1418,14 +1417,14 @@ const runtimeConfigDescription = computed(() => {
 const filteredIconOptions = computed(() => {
   const keyword = iconKeyword.value.toLowerCase()
 
-  return iconOptions.filter(item =>
+  return iconOptions.filter((item) =>
     iconLabel(item).toLowerCase().includes(keyword)
   )
 })
 
 const configPreviewMap = computed(() => {
   return Object.fromEntries(
-    activeRuntimeSchema.value.configFiles.map(file => [
+    activeRuntimeSchema.value.configFiles.map((file) => [
       file.name,
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
@@ -1496,7 +1495,7 @@ function applyConfigTemplate(template) {
 }
 
 function ensureActiveCli() {
-  if (visibleCliTargets.value.find(item => item.id === activeCli.value)) {
+  if (visibleCliTargets.value.find((item) => item.id === activeCli.value)) {
     return
   }
 
@@ -1711,7 +1710,7 @@ function rateLimitWindows(rateLimit) {
   return [
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
-  ].filter(item => item.window)
+  ].filter((item) => item.window)
 }
 
 function formatPlanName(value) {
@@ -1817,7 +1816,7 @@ function isCodexAccountRefreshing(account) {
 }
 
 function refreshCodexAccounts() {
-  props.codexAccounts.forEach(account => {
+  props.codexAccounts.forEach((account) => {
     refreshCodexAccount(account, {
       showSuccess: false,
       syncAuth: false
@@ -1874,7 +1873,8 @@ function clearDraft() {
 
 function firstModelName(providerId) {
   return (
-    props.runtimeModels.find(item => item.providerId === providerId)?.name || ""
+    props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
+    ""
   )
 }
 
@@ -2052,8 +2052,8 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  accounts => {
-    accounts.forEach(account => {
+  (accounts) => {
+    accounts.forEach((account) => {
       codexAccountProxyDrafts[account.id] = account.proxy || ""
     })
   },
@@ -2069,10 +2069,10 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  accounts => {
+  (accounts) => {
     if (
       codexAccountDetail.value &&
-      !accounts.find(item => item.id === codexAccountDetail.value.id)
+      !accounts.find((item) => item.id === codexAccountDetail.value.id)
     ) {
       closeCodexAccountDetail()
     }
@@ -2082,10 +2082,10 @@ watch(
 
 watch(
   () => props.providers,
-  providers => {
+  (providers) => {
     if (
       providerDetail.value &&
-      !providers.find(item => item.id === providerDetail.value.id)
+      !providers.find((item) => item.id === providerDetail.value.id)
     ) {
       closeProviderDetail()
     }
@@ -2171,6 +2171,13 @@ watch(
 
   &__toolbar {
     justify-content: space-between;
+  }
+
+  &__toolbar &__runtime {
+    flex: 1;
+    min-width: 0;
+    justify-content: flex-start;
+    margin-left: 12px;
   }
 
   &__cli-tabs {
@@ -2331,45 +2338,34 @@ watch(
 
   &__list-panel {
     display: flex;
-    height: calc(100vh - 98px);
+    height: calc(100vh - 76px);
     overflow-x: hidden;
     overflow-y: auto;
     flex: 1 1 auto;
     min-height: 0;
     flex-direction: column;
     gap: 10px;
-    padding: 14px 16px;
+    padding: 14px 14px;
     border: 0;
     border-radius: 0;
-    background: #f8fafc;
   }
 
   &__runtime {
     flex: none;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 14px 16px;
-    border-bottom: 1px solid #ffd56a;
+    gap: 8px;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid #ffd56a;
+    border-radius: 8px;
     background: #fff9e8;
   }
 
-  &__runtime div {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 5px;
-  }
-
   &__runtime strong {
-    color: #111827;
-  }
-
-  &__runtime span {
     overflow: hidden;
-    color: #c25a00;
-    font-size: 0.84rem;
+    color: #111827;
+    font-size: 0.86rem;
     text-overflow: ellipsis;
-    white-space: pre-line;
+    white-space: nowrap;
   }
 
   &__provider-card,
@@ -2423,6 +2419,11 @@ watch(
     box-shadow:
       0 12px 26px rgba(22, 130, 255, 0.16),
       inset 4px 0 0 #1682ff;
+  }
+
+  &__provider-card--runtime-warning,
+  &__provider-card--runtime-warning:hover {
+    border-color: #f2b94b;
   }
 
   &__account-card--error:hover {
@@ -2842,6 +2843,11 @@ watch(
     white-space: nowrap;
   }
 
+  &__provider-main &__provider-note {
+    color: #667085;
+    font-size: 0.84rem;
+  }
+
   &__action-main,
   &__icon-actions {
     display: flex;
@@ -2851,7 +2857,7 @@ watch(
 
   &__action-main {
     width: 100%;
-    gap: 12px;
+    gap: 8px;
     min-height: 36px;
   }
 
@@ -2862,6 +2868,7 @@ watch(
 
   &__state-pill {
     display: inline-flex;
+    flex: none;
     height: 24px;
     align-items: center;
     gap: 6px;
@@ -2918,9 +2925,12 @@ watch(
   }
 
   &__compare-button {
+    flex: none;
     border: 1px solid #d92d20;
     background: #ffffff;
     color: #b42318;
+    font-size: 12px;
+    height: 25px;
   }
 
   &__empty {
@@ -3408,7 +3418,7 @@ watch(
 
   &__diff-modal {
     :deep(.base-modal__panel) {
-      width: 1180px;
+      width: 1120px;
     }
 
     :deep(.base-modal__header) {

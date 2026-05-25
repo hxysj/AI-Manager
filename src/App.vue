@@ -151,15 +151,21 @@
         <div class="quick-switch-panel__metrics">
           <article class="quick-switch-panel__metric">
             <span>请求</span>
-            <strong>{{ formatQuickNumber(quickUsageSummary.requestCount) }}</strong>
+            <strong>{{
+              formatQuickNumber(quickUsageSummary.requestCount)
+            }}</strong>
           </article>
           <article class="quick-switch-panel__metric">
             <span>Token</span>
-            <strong>{{ formatQuickNumber(quickUsageSummary.actualTokens) }}</strong>
+            <strong>{{
+              formatQuickNumber(quickUsageSummary.actualTokens)
+            }}</strong>
           </article>
           <article class="quick-switch-panel__metric">
             <span>费用</span>
-            <strong>{{ formatQuickCost(quickUsageSummary.totalCostUsd) }}</strong>
+            <strong>{{
+              formatQuickCost(quickUsageSummary.totalCostUsd)
+            }}</strong>
           </article>
         </div>
 
@@ -223,7 +229,10 @@
         <div class="quick-switch-panel__manager-head">
           <div>
             <strong>Provider 管理</strong>
-            <span>{{ quickActiveCli?.name || "未选择" }} · {{ quickActiveName }}</span>
+            <span
+              >{{ quickActiveCli?.name || "未选择" }} ·
+              {{ quickActiveName }}</span
+            >
           </div>
           <button
             class="quick-switch-panel__manage-button"
@@ -984,32 +993,38 @@ import logoUrl from "@/assets/ai-manager-logo.svg?url"
 import { useGlobalLoading } from "@/utils/global-loading"
 import { createMessage } from "@/utils/message"
 
-const ProvidersView = defineAsyncComponent(() =>
-  import("@/features/providers/index.vue")
+const ProvidersView = defineAsyncComponent(
+  () => import("@/features/providers/index.vue")
 )
-const ReposView = defineAsyncComponent(() => import("@/features/repos/index.vue"))
-const AddRepoModal = defineAsyncComponent(() =>
-  import("@/features/repos/components/AddRepoModal.vue")
+const ReposView = defineAsyncComponent(
+  () => import("@/features/repos/index.vue")
 )
-const RulesView = defineAsyncComponent(() => import("@/features/rules/index.vue"))
-const SessionsView = defineAsyncComponent(() =>
-  import("@/features/sessions/index.vue")
+const AddRepoModal = defineAsyncComponent(
+  () => import("@/features/repos/components/AddRepoModal.vue")
 )
-const SettingsView = defineAsyncComponent(() =>
-  import("@/features/settings/index.vue")
+const RulesView = defineAsyncComponent(
+  () => import("@/features/rules/index.vue")
 )
-const SkillsView = defineAsyncComponent(() =>
-  import("@/features/skills/index.vue")
+const SessionsView = defineAsyncComponent(
+  () => import("@/features/sessions/index.vue")
 )
-const UsageView = defineAsyncComponent(() => import("@/features/usage/index.vue"))
-const CreateSkillModal = defineAsyncComponent(() =>
-  import("@/features/skills/components/CreateSkillModal.vue")
+const SettingsView = defineAsyncComponent(
+  () => import("@/features/settings/index.vue")
 )
-const ImportSkillsModal = defineAsyncComponent(() =>
-  import("@/features/skills/components/ImportSkillsModal.vue")
+const SkillsView = defineAsyncComponent(
+  () => import("@/features/skills/index.vue")
 )
-const SkillDrawer = defineAsyncComponent(() =>
-  import("@/features/skills/components/SkillDrawer.vue")
+const UsageView = defineAsyncComponent(
+  () => import("@/features/usage/index.vue")
+)
+const CreateSkillModal = defineAsyncComponent(
+  () => import("@/features/skills/components/CreateSkillModal.vue")
+)
+const ImportSkillsModal = defineAsyncComponent(
+  () => import("@/features/skills/components/ImportSkillsModal.vue")
+)
+const SkillDrawer = defineAsyncComponent(
+  () => import("@/features/skills/components/SkillDrawer.vue")
 )
 
 const baseNavItems = [
@@ -2604,7 +2619,7 @@ async function refreshCodexAccounts() {
   }
 
   await Promise.all(
-    state.codexAccounts.map(async account => {
+    state.codexAccounts.map(async (account) => {
       try {
         updateState(
           await window.aiManager.refreshCodexAccount({
@@ -3524,7 +3539,7 @@ onBeforeUnmount(() => {
   &__content {
     flex: 1;
     min-height: 0;
-    overflow: auto;
+    // overflow: auto;
     padding-right: 6px;
   }
 
