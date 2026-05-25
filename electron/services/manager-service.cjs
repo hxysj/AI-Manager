@@ -2064,10 +2064,11 @@ class ManagerService extends EventEmitter {
   }
 
   async syncUsage() {
+    const { sessions } = await this.sessionService.refresh(this.state.cliTargets)
     const runtimeState = this.runtimeProviderService.getState()
     const codexAccounts = this.codexAccountService.getState()
     const { diagnostics: usageDiagnostics } = await this.usageService.refresh({
-      sessions: this.state.sessions,
+      sessions,
       providers: runtimeState.providers,
       runtimeProfiles: runtimeState.runtimeProfiles,
       runtimeProviderState: runtimeState.runtimeProviderState,
@@ -2076,6 +2077,7 @@ class ManagerService extends EventEmitter {
 
     this.state = {
       ...this.state,
+      sessions,
       usage: this.usageService.getStats().data,
       diagnostics: [
         ...this.state.diagnostics.filter(

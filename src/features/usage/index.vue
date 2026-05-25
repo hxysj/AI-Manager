@@ -110,18 +110,18 @@
       <section class="usage-view__trend">
         <div class="usage-view__section-header">
           <div>
-            <h2>Token 趋势</h2>
-            <span>{{ trendLabel }}</span>
+            <h2>模型 Token 趋势</h2>
+            <span>{{ modelTrendLabel }}</span>
           </div>
           <BarChart3 :size="18" />
         </div>
         <div
-          v-show="trendStats.length"
+          v-show="modelTrendSeries.length"
           ref="trendChartRef"
           class="usage-view__chart"
         ></div>
-        <div v-if="!trendStats.length" class="usage-view__empty">
-          暂无用量趋势。
+        <div v-if="!modelTrendSeries.length" class="usage-view__empty">
+          暂无模型用量趋势。
         </div>
       </section>
 
@@ -592,7 +592,11 @@
 </template>
 
 <script setup>
-import { BarChart, LineChart, PieChart as EchartsPieChart } from "echarts/charts"
+import {
+  BarChart,
+  LineChart,
+  PieChart as EchartsPieChart
+} from "echarts/charts"
 import {
   GridComponent,
   LegendComponent,
@@ -639,8 +643,7 @@ const props = defineProps({
 })
 
 const usageSearchParams = new URLSearchParams(window.location.search)
-const isReportExportWindow =
-  usageSearchParams.get("export") === "usage-report"
+const isReportExportWindow = usageSearchParams.get("export") === "usage-report"
 const pending = ref(false)
 const reportExporting = ref(false)
 const pricingSaving = ref(false)
@@ -650,9 +653,7 @@ const dateTimeRange = ref(createInitialDateTimeRange())
 const appType = ref(usageSearchParams.get("appType") || "all")
 const providerId = ref(usageSearchParams.get("providerId") || "all")
 const model = ref(usageSearchParams.get("model") || "all")
-const displayCurrency = ref(
-  usageSearchParams.get("displayCurrency") || "USD"
-)
+const displayCurrency = ref(usageSearchParams.get("displayCurrency") || "USD")
 const logPage = ref(1)
 const logPageSize = ref(20)
 const pricingDialogOpen = ref(false)
@@ -671,6 +672,7 @@ const trendChartRef = ref(null)
 const providerPieRef = ref(null)
 let trendChart = null
 let providerPie = null
+let usageSyncTimer = null
 const pricingPageSizeOptions = [8, 12, 20, 50]
 const pricingImportPlaceholder = `[
   {
@@ -755,6 +757,40 @@ const trendLabel = computed(() =>
     : `${trendStats.value.length} 个本地日`
 )
 const logs = computed(() => stats.value.logs || [])
+const modelTrendSeries = computed(() => {
+  const labels = trendStats.value.map((item) => item.date)
+  const labelIndex = new Map(labels.map((label, index) => [label, index]))
+  const seriesMap = new Map()
+
+  for (const item of modelStats.value) {
+    const name = `${item.model} · ${formatAppName(item.appType)}`
+
+    seriesMap.set(`${item.appType}:${item.model}`, {
+      name,
+      data: labels.map(() => 0)
+    })
+  }
+
+  for (const item of logs.value) {
+    const label =
+      trendMode.value === "hour"
+        ? `${String(new Date(item.createdAt).getHours()).padStart(2, "0")}:00`
+        : new Date(item.createdAt).toLocaleDateString("zh-CN")
+    const series = seriesMap.get(`${item.appType}:${item.model || "未识别模型"}`)
+    const index = labelIndex.get(label)
+
+    if (series && index !== undefined) {
+      series.data[index] += actualTokens(item)
+    }
+  }
+
+  return Array.from(seriesMap.values()).filter((item) =>
+    item.data.some((value) => value > 0)
+  )
+})
+const modelTrendLabel = computed(
+  () => `${modelTrendSeries.value.length} 个模型 · ${trendLabel.value}`
+)
 const totalLogPages = computed(() =>
   Math.max(1, Math.ceil(logs.value.length / logPageSize.value))
 )
@@ -882,10 +918,20 @@ onMounted(() => {
   }
 
   loadStats()
+  if (!isReportExportWindow) {
+    usageSyncTimer = window.setInterval(() => {
+      if (!pending.value && !reportExporting.value) {
+        syncUsage()
+      }
+    }, 60000)
+  }
   window.addEventListener("resize", resizeCharts)
 })
 
 onBeforeUnmount(() => {
+  if (usageSyncTimer) {
+    window.clearInterval(usageSyncTimer)
+  }
   window.removeEventListener("resize", resizeCharts)
   if (isReportExportWindow) {
     document.body.classList.remove("usage-report-exporting")
@@ -920,7 +966,9 @@ function createPricingItem(input = {}) {
       input.id ||
       `pricing-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     modelId: input.modelId || "",
-    modelCategory: normalizeModelCategory(input.modelCategory ?? input.category),
+    modelCategory: normalizeModelCategory(
+      input.modelCategory ?? input.category
+    ),
     currency: normalizePricingCurrency(input.currency),
     inputCostPerMillion: Number(input.inputCostPerMillion || 0),
     outputCostPerMillion: Number(input.outputCostPerMillion || 0),
@@ -1068,9 +1116,7 @@ function clearPricingImport() {
 function addPricingItem() {
   const item = createPricingItem({
     modelCategory:
-      pricingCategoryFilter.value === "all"
-        ? ""
-        : pricingCategoryFilter.value
+      pricingCategoryFilter.value === "all" ? "" : pricingCategoryFilter.value
   })
 
   pricingDraft.value.items.push(item)
@@ -1455,15 +1501,18 @@ function createUsageLogCsvText(items) {
 function createExportTimestamp() {
   const now = new Date()
 
-  return [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0")
-  ].join("") + `-${[
-    String(now.getHours()).padStart(2, "0"),
-    String(now.getMinutes()).padStart(2, "0"),
-    String(now.getSeconds()).padStart(2, "0")
-  ].join("")}`
+  return (
+    [
+      now.getFullYear(),
+      String(now.getMonth() + 1).padStart(2, "0"),
+      String(now.getDate()).padStart(2, "0")
+    ].join("") +
+    `-${[
+      String(now.getHours()).padStart(2, "0"),
+      String(now.getMinutes()).padStart(2, "0"),
+      String(now.getSeconds()).padStart(2, "0")
+    ].join("")}`
+  )
 }
 
 function downloadUsageFile(fileName, content, type) {
@@ -1677,71 +1726,68 @@ function renderCharts() {
 }
 
 function renderTrendChart() {
-  if (!trendChartRef.value || !trendStats.value.length) {
+  if (!trendChartRef.value || !modelTrendSeries.value.length) {
     return
   }
 
   trendChart = trendChart || echarts.init(trendChartRef.value)
-  trendChart.setOption({
-    color: ["#2f5f91", "#7a9bbb", "#b7c7d8"],
-    tooltip: {
-      trigger: "axis",
-      valueFormatter: (value) => formatNumber(value)
-    },
-    grid: {
-      top: 28,
-      right: 18,
-      bottom: 28,
-      left: 48
-    },
-    legend: {
-      top: 0,
-      right: 0,
-      itemWidth: 10,
-      itemHeight: 10,
-      textStyle: {
-        color: "#5f7087",
-        fontSize: 11
-      }
-    },
-    xAxis: {
-      type: "category",
-      data: trendStats.value.map((item) => item.date),
-      axisTick: { show: false },
-      axisLine: { lineStyle: { color: "#dbe5ed" } },
-      axisLabel: { color: "#5f7087" }
-    },
-    yAxis: {
-      type: "value",
-      splitLine: { lineStyle: { color: "#edf2f8" } },
-      axisLabel: {
-        color: "#5f7087",
-        formatter: (value) => formatCompactNumber(value)
-      }
-    },
-    series: [
-      {
-        name: "真实消耗",
-        type: "bar",
-        barMaxWidth: 28,
-        data: trendStats.value.map((item) => item.actualTokens)
+  trendChart.setOption(
+    {
+      color: [
+        "#2f5f91",
+        "#4f8f7b",
+        "#9f6b3d",
+        "#7b6ea8",
+        "#b05c5c",
+        "#5d7fa4",
+        "#8aa7c4",
+        "#c2a64c"
+      ],
+      tooltip: {
+        trigger: "axis",
+        valueFormatter: (value) => formatNumber(value)
       },
-      {
-        name: "输出",
+      grid: {
+        top: 28,
+        right: 18,
+        bottom: 28,
+        left: 48
+      },
+      legend: {
+        top: 0,
+        right: 0,
+        itemWidth: 10,
+        itemHeight: 10,
+        textStyle: {
+          color: "#5f7087",
+          fontSize: 11
+        }
+      },
+      xAxis: {
+        type: "category",
+        data: trendStats.value.map((item) => item.date),
+        axisTick: { show: false },
+        axisLine: { lineStyle: { color: "#dbe5ed" } },
+        axisLabel: { color: "#5f7087" }
+      },
+      yAxis: {
+        type: "value",
+        splitLine: { lineStyle: { color: "#edf2f8" } },
+        axisLabel: {
+          color: "#5f7087",
+          formatter: (value) => formatCompactNumber(value)
+        }
+      },
+      series: modelTrendSeries.value.map((item) => ({
+        name: item.name,
         type: "line",
         smooth: true,
-        symbolSize: 6,
-        data: trendStats.value.map((item) => item.outputTokens)
-      },
-      {
-        name: "缓存读取",
-        type: "line",
-        smooth: true,
-        symbolSize: 6,
-        data: trendStats.value.map((item) => item.cacheReadTokens)
-      }
-    ]
-  })
+        symbolSize: 5,
+        data: item.data
+      }))
+    },
+    { notMerge: true }
+  )
 }
 
 function renderProviderPie() {
