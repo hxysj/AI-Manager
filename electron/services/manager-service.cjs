@@ -2534,6 +2534,20 @@ class ManagerService extends EventEmitter {
     return this.state
   }
 
+  async restoreCodexAccount(input) {
+    this.codexAccountService.restoreAccount(input.accountId)
+    await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
+    this.state = {
+      ...this.state,
+      ...this.getRuntimeStateWithProxy(),
+      codexAccounts: this.codexAccountService.getState(),
+      codexProxyState: this.codexProxyService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
   async updateCodexAccountProxy(input) {
     this.codexAccountService.updateAccountProxy(input.accountId, input.proxy)
     this.state = {

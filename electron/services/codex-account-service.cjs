@@ -970,6 +970,26 @@ class CodexAccountService extends EventEmitter {
     this.emit("changed", this.getState())
   }
 
+  restoreAccount(accountId) {
+    const account = this.accounts.find(item => item.id === accountId)
+
+    if (!account) {
+      throw new Error("Codex 官方账号不存在")
+    }
+
+    this.accounts = this.accounts.map(item =>
+      item.id === account.id
+        ? {
+            ...item,
+            disabled: false,
+            updatedAt: Date.now()
+          }
+        : item
+    )
+    this.storage.scheduleWrite("codexAccounts", this.accounts)
+    this.emit("changed", this.getState())
+  }
+
   async writeAccountBundle(account, cliTarget) {
     await this.writeAccountAuth(account, cliTarget)
     await this.writeCodexBuiltinConfig(cliTarget)

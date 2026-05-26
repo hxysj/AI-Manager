@@ -111,6 +111,16 @@
             }}
           </span>
           <button
+            v-if="provider.disabled"
+            class="codex-proxy-panel-activate"
+            type="button"
+            :disabled="pending"
+            @click="restoreTarget(provider)"
+          >
+            恢复
+          </button>
+          <button
+            v-else
             class="codex-proxy-panel-activate"
             type="button"
             :disabled="
@@ -418,7 +428,9 @@ const props = defineProps({
 const emit = defineEmits([
   "add-provider",
   "remove-provider",
-  "activate-provider"
+  "activate-provider",
+  "restore-account",
+  "restore-provider"
 ])
 
 const showProviderPicker = ref(false)
@@ -444,6 +456,7 @@ const targetItems = computed(() => {
     ...props.providers.map(item => ({
       id: item.id,
       type: "provider",
+      provider: item,
       name: item.name,
       icon: item.icon,
       description: item.note || item.baseUrl || "未配置备注",
@@ -452,6 +465,7 @@ const targetItems = computed(() => {
     ...props.accounts.map(item => ({
       id: `account:${item.id}`,
       accountId: item.id,
+      account: item,
       type: "account",
       name: item.email || item.accountId || "Codex 官方账号",
       icon: "",
@@ -581,6 +595,20 @@ function removeTarget(target) {
 
   emit("remove-provider", {
     providerId: target.id
+  })
+}
+
+function restoreTarget(target) {
+  if (target.type === "account") {
+    emit("restore-account", {
+      accountId: target.accountId
+    })
+    return
+  }
+
+  emit("restore-provider", {
+    ...target.provider,
+    enabled: true
   })
 }
 

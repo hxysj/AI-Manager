@@ -191,6 +191,8 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("codex-account:refresh", toPlainPayload(payload)),
   disableCodexAccount: payload =>
     ipcRenderer.invoke("codex-account:disable", toPlainPayload(payload)),
+  restoreCodexAccount: payload =>
+    ipcRenderer.invoke("codex-account:restore", toPlainPayload(payload)),
   updateCodexAccountProxy: payload =>
     ipcRenderer.invoke("codex-account:update-proxy", toPlainPayload(payload)),
   getCodexAccountDetail: payload =>

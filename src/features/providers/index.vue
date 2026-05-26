@@ -134,6 +134,8 @@
         "
         @remove-provider="emit('codex-proxy-provider-remove', $event)"
         @activate-provider="emit('codex-proxy-provider-activate', $event)"
+        @restore-account="emit('codex-account-restore', $event)"
+        @restore-provider="emit('save-provider', $event)"
       />
 
       <BaseModal
@@ -157,6 +159,8 @@
           "
           @remove-provider="emit('codex-proxy-provider-remove', $event)"
           @activate-provider="emit('codex-proxy-provider-activate', $event)"
+          @restore-account="emit('codex-account-restore', $event)"
+          @restore-provider="emit('save-provider', $event)"
         />
       </BaseModal>
 
@@ -313,6 +317,15 @@
                 >
                   已禁用
                 </span>
+                <button
+                  v-if="item.account.disabled"
+                  class="providers-view__enable"
+                  type="button"
+                  @click="restoreCodexAccount(item.account)"
+                >
+                  <RefreshCw :size="15" />
+                  恢复
+                </button>
                 <span
                   v-else-if="item.account.active"
                   class="providers-view__state-pill"
@@ -437,6 +450,15 @@
                 >
                   已禁用
                 </span>
+                <button
+                  v-if="item.provider.enabled === false"
+                  class="providers-view__enable"
+                  type="button"
+                  @click.stop="restoreProvider(item.provider)"
+                >
+                  <RefreshCw :size="15" />
+                  恢复
+                </button>
                 <span
                   v-else-if="
                     profileMap[activeCli]?.providerId === item.provider.id
@@ -1430,6 +1452,7 @@ const emit = defineEmits([
   "codex-account-disable",
   "codex-account-proxy-save",
   "codex-account-refresh",
+  "codex-account-restore",
   "codex-accounts-refresh",
   "codex-official-login",
   "codex-proxy-enable",
@@ -2248,8 +2271,21 @@ function disableProvider(provider) {
   })
 }
 
+function restoreProvider(provider) {
+  emit("save-provider", {
+    ...provider,
+    enabled: true
+  })
+}
+
 function disableCodexAccount(account) {
   emit("codex-account-disable", {
+    accountId: account.id
+  })
+}
+
+function restoreCodexAccount(account) {
+  emit("codex-account-restore", {
     accountId: account.id
   })
 }
