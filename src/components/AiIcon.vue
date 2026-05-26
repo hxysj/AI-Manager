@@ -35,6 +35,11 @@ watch(
       return
     }
 
+    if (/^(data:|https?:\/\/|file:|blob:)/i.test(name)) {
+      iconUrl.value = name
+      return
+    }
+
     const iconName = name.endsWith('.svg') ? name : `${name}.svg`
     const loader = iconModules[`/src/assets/ai-icons/${iconName}`]
 

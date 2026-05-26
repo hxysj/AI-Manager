@@ -2577,6 +2577,26 @@ function registerIpc() {
     return managerService.deleteCodexAccount(payload)
   })
 
+  registerLoggedIpc("codex-proxy:enable", async (_, payload) => {
+    return managerService.enableCodexProxy(payload)
+  })
+
+  registerLoggedIpc("codex-proxy:disable", async () => {
+    return managerService.disableCodexProxy()
+  })
+
+  registerLoggedIpc("codex-proxy:add-provider", async (_, payload) => {
+    return managerService.addCodexProxyProvider(payload)
+  })
+
+  registerLoggedIpc("codex-proxy:remove-provider", async (_, payload) => {
+    return managerService.removeCodexProxyProvider(payload)
+  })
+
+  registerLoggedIpc("codex-proxy:activate-provider", async (_, payload) => {
+    return managerService.activateCodexProxyProvider(payload)
+  })
+
   registerLoggedIpc("runtime-model:save", async (_, payload) => {
     return managerService.saveRuntimeModel(payload)
   })

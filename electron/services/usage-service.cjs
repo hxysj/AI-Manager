@@ -239,6 +239,36 @@ function finalizeSummary(summary) {
 }
 
 function resolveProvider(cli, input = {}) {
+  const proxyTargetId = input.codexProxyState?.enabled
+    ? input.codexProxyState.activeProviderId
+    : ""
+  const proxyAccountId = String(proxyTargetId || "").startsWith("account:")
+    ? String(proxyTargetId).slice("account:".length)
+    : ""
+  const proxyAccount = (input.codexAccounts || []).find(
+    (item) => item.id === proxyAccountId
+  )
+  const proxyProvider = (input.providers || []).find(
+    (item) => item.id === proxyTargetId
+  )
+
+  if (cli === "codex" && proxyAccount) {
+    return {
+      providerId: proxyTargetId,
+      providerName:
+        proxyAccount.email || proxyAccount.accountId || "Codex 官方账号",
+      providerType: "codex"
+    }
+  }
+
+  if (cli === "codex" && proxyProvider) {
+    return {
+      providerId: proxyProvider.id,
+      providerName: proxyProvider.name,
+      providerType: proxyProvider.type
+    }
+  }
+
   const activeCodexAccount = (input.codexAccounts || []).find(
     (item) => item.active
   )
@@ -744,21 +774,26 @@ class UsageService {
 
     for (const log of logs) {
       const record = recordMap.get(log.requestId)
-      const providerInfo = record
-        ? {
-            providerId: record.providerId,
-            providerName:
-              input.providers?.find((item) => item.id === record.providerId)
-                ?.name || record.providerName,
-            providerType:
-              input.providers?.find((item) => item.id === record.providerId)
-                ?.type || record.providerType
-          }
-        : {
-            providerId: log.providerId,
-            providerName: log.providerName,
-            providerType: log.providerType
-          }
+      const shouldRefreshProxyRecord =
+        log.appType === "codex" &&
+        input.codexProxyState?.enabled &&
+        record?.providerId === "codex"
+      const providerInfo =
+        record && !shouldRefreshProxyRecord
+          ? {
+              providerId: record.providerId,
+              providerName:
+                input.providers?.find((item) => item.id === record.providerId)
+                  ?.name || record.providerName,
+              providerType:
+                input.providers?.find((item) => item.id === record.providerId)
+                  ?.type || record.providerType
+            }
+          : {
+              providerId: log.providerId,
+              providerName: log.providerName,
+              providerType: log.providerType
+            }
       const requestRecord = createRequestRecord(log, providerInfo)
 
       recordMap.set(log.requestId, requestRecord)

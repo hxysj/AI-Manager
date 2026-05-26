@@ -10,8 +10,7 @@ const TOKEN_URL = `${OAUTH_BASE_URL}/oauth/token`
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 const CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback"
-const OAUTH_SCOPE =
-  "openid profile email offline_access"
+const OAUTH_SCOPE = "openid profile email offline_access"
 const AUTO_REFRESH_INTERVAL = 30 * 60 * 1000
 const missingRefreshTokenReason = "missing_refresh_token"
 const reauthRefreshErrors = new Set([
@@ -152,7 +151,8 @@ function createTokensFromAuthData(authData) {
       idToken,
       expiresAt,
       access_token: accessToken,
-      refresh_token: tokenSource.refresh_token || tokenSource.refreshToken || "",
+      refresh_token:
+        tokenSource.refresh_token || tokenSource.refreshToken || "",
       id_token: idToken,
       last_refresh: tokenSource.last_refresh || authData.last_refresh || "",
       expired:
@@ -160,8 +160,9 @@ function createTokensFromAuthData(authData) {
         authData.expired ||
         (expiresAt ? formatRfc3339(expiresAt) : ""),
       token_updated_at:
-        Number(tokenSource.token_updated_at || authData.token_updated_at || 0) ||
-        parseTimestamp(tokenSource.last_refresh || authData.last_refresh)
+        Number(
+          tokenSource.token_updated_at || authData.token_updated_at || 0
+        ) || parseTimestamp(tokenSource.last_refresh || authData.last_refresh)
     }
   }
 }
@@ -186,9 +187,7 @@ function accountAccessTokenExpired(account) {
 
 function tokensAccessTokenExpired(tokens) {
   return (
-    !tokens.accessToken ||
-    !tokens.expiresAt ||
-    tokens.expiresAt <= Date.now()
+    !tokens.accessToken || !tokens.expiresAt || tokens.expiresAt <= Date.now()
   )
 }
 
@@ -235,7 +234,10 @@ function removeTomlRootKeys(content, keys) {
     nextLines.push(line)
   }
 
-  return nextLines.join("\n").replace(/\n{3,}/g, "\n\n").trim()
+  return nextLines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim()
 }
 
 function shouldMarkReauth(error) {
@@ -245,7 +247,7 @@ function shouldMarkReauth(error) {
     error.message
   ].join(" ")
 
-  return [...reauthRefreshErrors].some(item => text.includes(item))
+  return [...reauthRefreshErrors].some((item) => text.includes(item))
 }
 
 class CodexAccountService extends EventEmitter {
@@ -602,7 +604,7 @@ class CodexAccountService extends EventEmitter {
     }
 
     this.accounts = currentAccount
-      ? this.accounts.map(account =>
+      ? this.accounts.map((account) =>
           account.id === accountId ? nextAccount : account
         )
       : [...this.accounts, nextAccount]
@@ -648,6 +650,21 @@ class CodexAccountService extends EventEmitter {
     }
 
     return this.performManagedTokenRefresh(account, cliTarget)
+  }
+
+  async getProxyAuth(accountId, cliTarget) {
+    const account = await this.prepareAccountForSwitch(accountId, cliTarget)
+    const accessToken = accountAccessToken(account)
+
+    if (!accessToken) {
+      throw new Error("Codex 官方账号缺少 access_token")
+    }
+
+    return {
+      accessToken,
+      accountId: account.account_id || account.accountId || account.id,
+      name: account.email || account.accountId || account.id
+    }
   }
 
   async syncAccountFromAuthoritySources(account, cliTarget) {
@@ -717,7 +734,7 @@ class CodexAccountService extends EventEmitter {
       updatedAt: Date.now()
     }
 
-    this.accounts = this.accounts.map(item =>
+    this.accounts = this.accounts.map((item) =>
       item.id === account.id ? nextAccount : item
     )
     this.storage.scheduleWrite("codexAccounts", this.accounts)
@@ -784,7 +801,7 @@ class CodexAccountService extends EventEmitter {
   }
 
   markAccountReauth(accountId, reason, message) {
-    this.accounts = this.accounts.map(account =>
+    this.accounts = this.accounts.map((account) =>
       account.id === accountId
         ? {
             ...account,
@@ -800,7 +817,7 @@ class CodexAccountService extends EventEmitter {
   }
 
   markAccountRefreshError(accountId, statusCode, message) {
-    this.accounts = this.accounts.map(account =>
+    this.accounts = this.accounts.map((account) =>
       account.id === accountId
         ? {
             ...account,
@@ -867,7 +884,11 @@ class CodexAccountService extends EventEmitter {
           )
         }
 
-        this.markAccountRefreshError(account.id, error.status || 0, error.message)
+        this.markAccountRefreshError(
+          account.id,
+          error.status || 0,
+          error.message
+        )
 
         throw error
       }
@@ -875,10 +896,7 @@ class CodexAccountService extends EventEmitter {
 
     const claims = decodeJwtPayload(tokens.idToken || tokens.accessToken)
     claims.account_id =
-      account.account_id ||
-      account.accountId ||
-      account.id ||
-      claims.account_id
+      account.account_id || account.accountId || account.id || claims.account_id
     let usage
 
     try {
@@ -1162,12 +1180,17 @@ class CodexAccountService extends EventEmitter {
       const payload = JSON.parse(text)
       const error = new Error(
         `OpenAI 请求失败：${response.status} ${
-          payload.error_description || payload.error || text
+          payload.error_description ||
+          payload.error?.message ||
+          payload.error?.code ||
+          payload.error ||
+          text
         }`
       )
       error.status = response.status
-      error.oauthError = payload.error || ""
-      error.oauthErrorDescription = payload.error_description || ""
+      error.oauthError = payload.error?.code || payload.error || ""
+      error.oauthErrorDescription =
+        payload.error_description || payload.error?.message || ""
       throw error
     }
 
@@ -1240,26 +1263,31 @@ class CodexAccountService extends EventEmitter {
 
     this.clearScheduledRefresh(account.id)
 
-    const timer = setTimeout(() => {
-      this.autoRefreshTimers.delete(account.id)
-      const currentAccount = this.accounts.find(item => item.id === account.id)
+    const timer = setTimeout(
+      () => {
+        this.autoRefreshTimers.delete(account.id)
+        const currentAccount = this.accounts.find(
+          (item) => item.id === account.id
+        )
 
-      if (!currentAccount || accountExpiresAt(currentAccount) > Date.now()) {
-        return
-      }
+        if (!currentAccount || accountExpiresAt(currentAccount) > Date.now()) {
+          return
+        }
 
-      const cliTarget =
-        typeof this.getCodexCliTarget === "function"
-          ? this.getCodexCliTarget()
-          : null
+        const cliTarget =
+          typeof this.getCodexCliTarget === "function"
+            ? this.getCodexCliTarget()
+            : null
 
-      this.refreshAccount(currentAccount, cliTarget).catch((error) => {
-        this.emit("login-state", {
-          status: "failed",
-          message: `Codex 自动刷新失败：${error.message || String(error)}`
+        this.refreshAccount(currentAccount, cliTarget).catch((error) => {
+          this.emit("login-state", {
+            status: "failed",
+            message: `Codex 自动刷新失败：${error.message || String(error)}`
+          })
         })
-      })
-    }, Math.max(0, expiresAt - Date.now() + 1000))
+      },
+      Math.max(0, expiresAt - Date.now() + 1000)
+    )
 
     this.autoRefreshTimers.set(account.id, {
       expiresAt,
@@ -1346,5 +1374,6 @@ class CodexAccountService extends EventEmitter {
 }
 
 module.exports = {
-  CodexAccountService
+  CodexAccountService,
+  fetchWithProxy
 }
