@@ -831,7 +831,7 @@
           </div>
         </div>
 
-        <pre v-if="updateDialog.releaseNotes" class="update-modal__notes">{{
+        <pre v-if="updateDialog.releaseNotes && updateDialog.phase !== 'downloading'" class="update-modal__notes">{{
           updateDialog.releaseNotes
         }}</pre>
 
@@ -1718,6 +1718,11 @@ function applyUpdateStatus(status = {}) {
   updateDialog.bytesPerSecond = Number(status.bytesPerSecond || 0)
   updateDialog.manual = Boolean(status.manual)
 
+  if (updateDialog.phase === "error" && updateDialog.message) {
+    console.error("[update]", updateDialog.message)
+    createMessage.error(updateDialog.message)
+  }
+
   if (updateDialog.phase === "idle" || isQuickSwitchPanel) {
     updateDialog.open = false
     return
@@ -2002,6 +2007,7 @@ async function downloadAppUpdate() {
   try {
     applyUpdateStatus(await window.aiManager.downloadUpdate())
   } catch (error) {
+    console.error("[update:download]", error)
     applyUpdateStatus({
       phase: "error",
       message: error.message || String(error),
