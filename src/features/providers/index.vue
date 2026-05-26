@@ -28,6 +28,31 @@
         </section>
 
         <div class="providers-view__toolbar-actions">
+          <div v-if="codexProxyEnabled" class="providers-view-proxy-tabs">
+            <button
+              :class="[
+                'providers-view-proxy-tab',
+                { 'providers-view-proxy-tab-active': codexProxyTab === 'proxy' }
+              ]"
+              type="button"
+              @click="codexProxyTab = 'proxy'"
+            >
+              接管池
+            </button>
+            <button
+              :class="[
+                'providers-view-proxy-tab',
+                {
+                  'providers-view-proxy-tab-active':
+                    codexProxyTab === 'providers'
+                }
+              ]"
+              type="button"
+              @click="codexProxyTab = 'providers'"
+            >
+              Provider 列表
+            </button>
+          </div>
           <label
             v-if="activeCli === 'codex'"
             :class="[
@@ -46,7 +71,7 @@
             <i></i>
           </label>
           <button
-            v-if="activeCli === 'codex'"
+            v-if="activeCli === 'codex' && !codexProxyEnabled"
             class="providers-view-proxy-manage"
             type="button"
             :disabled="pending"
@@ -91,29 +116,6 @@
         </div>
       </header>
 
-      <div v-if="codexProxyEnabled" class="providers-view-proxy-tabs">
-        <button
-          :class="[
-            'providers-view-proxy-tab',
-            { 'providers-view-proxy-tab-active': codexProxyTab === 'proxy' }
-          ]"
-          type="button"
-          @click="codexProxyTab = 'proxy'"
-        >
-          接管池
-        </button>
-        <button
-          :class="[
-            'providers-view-proxy-tab',
-            { 'providers-view-proxy-tab-active': codexProxyTab === 'providers' }
-          ]"
-          type="button"
-          @click="codexProxyTab = 'providers'"
-        >
-          Provider 列表
-        </button>
-      </div>
-
       <CodexProxyPanel
         v-if="
           activeCli === 'codex' &&
@@ -125,7 +127,7 @@
         :providers="scopedProviders"
         :proxy-state="codexProxyState"
         @add-provider="
-          (payload) => {
+          payload => {
             showCodexProxyAddAction = false
             emit('codex-proxy-provider-add', payload)
           }
@@ -138,7 +140,7 @@
         v-if="showCodexProxyManager"
         class="providers-view-proxy-modal"
         title="接管池管理"
-        description="管理 Codex 代理接管池。"
+        description=""
         @close="showCodexProxyManager = false"
       >
         <CodexProxyPanel
@@ -148,7 +150,7 @@
           :providers="scopedProviders"
           :proxy-state="codexProxyState"
           @add-provider="
-            (payload) => {
+            payload => {
               showCodexProxyAddAction = false
               emit('codex-proxy-provider-add', payload)
             }
@@ -191,6 +193,12 @@
                   {{ formatPlanName(item.account.plan) }}
                 </span>
                 <span
+                  v-if="item.account.disabled"
+                  class="providers-view__account-tag providers-view__account-tag--disabled"
+                >
+                  已禁用
+                </span>
+                <span
                   v-if="item.account.refresh_status === 'failed'"
                   class="providers-view__account-error"
                   :aria-label="`刷新额度失败：${item.account.refresh_message}`"
@@ -210,7 +218,10 @@
                   </span>
                 </span>
                 <button
-                  v-if="item.account.refresh_status === 'failed'"
+                  v-if="
+                    !item.account.disabled &&
+                    item.account.refresh_status === 'failed'
+                  "
                   class="providers-view__reauth-button"
                   type="button"
                   @click.stop="openCodexAuthUpdateModal(item.account)"
@@ -297,14 +308,20 @@
             <div class="providers-view__account-actions">
               <div class="providers-view__action-main">
                 <span
-                  v-if="item.account.active"
+                  v-if="item.account.disabled"
+                  class="providers-view__state-pill providers-view__state-pill--disabled"
+                >
+                  已禁用
+                </span>
+                <span
+                  v-else-if="item.account.active"
                   class="providers-view__state-pill"
                 >
                   <span class="providers-view__state-dot"></span>
                   已启用
                 </span>
                 <button
-                  v-if="item.account.active"
+                  v-if="!item.account.disabled && item.account.active"
                   class="providers-view__using"
                   type="button"
                   @click="clearCodexAccount"
@@ -313,7 +330,7 @@
                   取消启用
                 </button>
                 <button
-                  v-else
+                  v-else-if="!item.account.disabled"
                   class="providers-view__enable"
                   type="button"
                   @click="enableCodexAccount(item.account)"
@@ -335,6 +352,7 @@
                   title="刷新额度"
                   aria-label="刷新额度"
                   :disabled="isCodexAccountRefreshing(item.account)"
+                  v-if="!item.account.disabled"
                   @click="refreshCodexAccount(item.account)"
                 >
                   <RefreshCw :size="15" />
@@ -349,6 +367,7 @@
                   <Eye :size="15" />
                 </button>
                 <button
+                  v-if="!item.account.disabled"
                   class="providers-view__icon-button"
                   type="button"
                   title="编辑代理"
@@ -358,6 +377,17 @@
                   <SquarePen :size="15" />
                 </button>
                 <button
+                  v-if="!item.account.disabled"
+                  class="providers-view__icon-button providers-view__icon-button--warning"
+                  type="button"
+                  title="禁用账号"
+                  aria-label="禁用账号"
+                  @click="disableCodexAccount(item.account)"
+                >
+                  <Ban :size="15" />
+                </button>
+                <button
+                  v-if="!item.account.disabled"
                   class="providers-view__icon-button providers-view__icon-button--danger"
                   type="button"
                   title="删除账号"
@@ -381,7 +411,15 @@
               <template v-else>{{ item.provider.name.slice(0, 1) }}</template>
             </span>
             <div class="providers-view__provider-main">
-              <strong>{{ item.provider.name }}</strong>
+              <div class="providers-view__provider-title">
+                <strong>{{ item.provider.name }}</strong>
+                <span
+                  v-if="item.provider.enabled === false"
+                  class="providers-view__account-tag providers-view__account-tag--disabled"
+                >
+                  已禁用
+                </span>
+              </div>
               <span
                 v-if="item.provider.note"
                 class="providers-view__provider-note"
@@ -394,7 +432,15 @@
             <div class="providers-view__provider-actions">
               <div class="providers-view__action-main">
                 <span
-                  v-if="profileMap[activeCli]?.providerId === item.provider.id"
+                  v-if="item.provider.enabled === false"
+                  class="providers-view__state-pill providers-view__state-pill--disabled"
+                >
+                  已禁用
+                </span>
+                <span
+                  v-else-if="
+                    profileMap[activeCli]?.providerId === item.provider.id
+                  "
                   class="providers-view__state-pill"
                 >
                   <span class="providers-view__state-dot"></span>
@@ -402,6 +448,7 @@
                 </span>
                 <button
                   v-if="
+                    item.provider.enabled !== false &&
                     showRuntimeWarning &&
                     profileMap[activeCli]?.providerId === item.provider.id
                   "
@@ -413,7 +460,10 @@
                   对比
                 </button>
                 <button
-                  v-if="profileMap[activeCli]?.providerId === item.provider.id"
+                  v-if="
+                    item.provider.enabled !== false &&
+                    profileMap[activeCli]?.providerId === item.provider.id
+                  "
                   class="providers-view__using"
                   type="button"
                   @click.stop="clearRuntime"
@@ -422,7 +472,7 @@
                   取消使用
                 </button>
                 <button
-                  v-else
+                  v-else-if="item.provider.enabled !== false"
                   class="providers-view__enable"
                   type="button"
                   @click.stop="enableProvider(item.provider)"
@@ -442,6 +492,7 @@
                   <Eye :size="16" />
                 </button>
                 <button
+                  v-if="item.provider.enabled !== false"
                   class="providers-view__icon-button"
                   type="button"
                   @click.stop="editProvider(item.provider)"
@@ -449,6 +500,17 @@
                   <SquarePen :size="16" />
                 </button>
                 <button
+                  v-if="item.provider.enabled !== false"
+                  class="providers-view__icon-button providers-view__icon-button--warning"
+                  type="button"
+                  title="禁用 Provider"
+                  aria-label="禁用 Provider"
+                  @click.stop="disableProvider(item.provider)"
+                >
+                  <Ban :size="16" />
+                </button>
+                <button
+                  v-if="item.provider.enabled !== false"
                   class="providers-view__icon-button providers-view__icon-button--danger"
                   type="button"
                   @click.stop="removeProvider(item.provider)"
@@ -1160,6 +1222,7 @@
                   email: codexAccountDetail.email,
                   plan: codexAccountDetail.plan,
                   proxy: codexAccountDetail.proxy,
+                  disabled: codexAccountDetail.disabled,
                   expired: codexAccountDetail.expired,
                   last_refresh: codexAccountDetail.last_refresh
                 })
@@ -1288,6 +1351,7 @@ import {
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
 import {
   ArrowLeft,
+  Ban,
   Check,
   Copy,
   Globe2,
@@ -1363,6 +1427,7 @@ const emit = defineEmits([
   "codex-account-clear",
   "codex-account-enable",
   "codex-account-delete",
+  "codex-account-disable",
   "codex-account-proxy-save",
   "codex-account-refresh",
   "codex-accounts-refresh",
@@ -1466,12 +1531,12 @@ const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
   import: "default"
 })
 const iconOptions = Object.keys(iconModules)
-  .map((item) => item.split("/").pop())
+  .map(item => item.split("/").pop())
   .sort((left, right) => left.localeCompare(right))
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
-  return props.cliTargets.filter((item) => {
+  return props.cliTargets.filter(item => {
     return props.runtimeConfigSchemas[item.id]?.enabled
   })
 })
@@ -1491,22 +1556,22 @@ const activeRuntimeSchema = computed(() => {
 
 const activeCliName = computed(() => {
   return (
-    visibleCliTargets.value.find((item) => item.id === activeCli.value)?.name ||
+    visibleCliTargets.value.find(item => item.id === activeCli.value)?.name ||
     activeCli.value ||
     "Runtime"
   )
 })
 
 const selectedProvider = computed(() => {
-  return props.providers.find((item) => item.id === draft.id) || null
+  return props.providers.find(item => item.id === draft.id) || null
 })
 
 const scopedProviders = computed(() => {
-  return props.providers.filter((item) => item.cli === activeCli.value)
+  return props.providers.filter(item => item.cli === activeCli.value)
 })
 
 const mixedItems = computed(() => {
-  const providerItems = scopedProviders.value.map((provider) => ({
+  const providerItems = scopedProviders.value.map(provider => ({
     type: "provider",
     provider,
     key: `provider:${provider.id}`,
@@ -1517,14 +1582,15 @@ const mixedItems = computed(() => {
           profileMap.value[activeCli.value]?.providerId === provider.id,
         "providers-view__provider-card--runtime-warning":
           showRuntimeWarning.value &&
-          profileMap.value[activeCli.value]?.providerId === provider.id
+          profileMap.value[activeCli.value]?.providerId === provider.id,
+        "providers-view__provider-card--disabled": provider.enabled === false
       }
     ],
     createdAt: provider.createdAt || 0
   }))
   const accountItems =
     activeCli.value === "codex"
-      ? props.codexAccounts.map((account) => ({
+      ? props.codexAccounts.map(account => ({
           type: "account",
           account,
           key: `account:${account.id}`,
@@ -1535,7 +1601,8 @@ const mixedItems = computed(() => {
               "providers-view__account-card--refreshing":
                 codexAccountRefreshingMap[account.id],
               "providers-view__account-card--error":
-                account.refresh_status === "failed"
+                account.refresh_status === "failed",
+              "providers-view__account-card--disabled": account.disabled
             }
           ],
           createdAt: account.createdAt || account.updatedAt || 0
@@ -1548,9 +1615,7 @@ const mixedItems = computed(() => {
 })
 
 const profileMap = computed(() => {
-  return Object.fromEntries(
-    props.runtimeProfiles.map((item) => [item.cli, item])
-  )
+  return Object.fromEntries(props.runtimeProfiles.map(item => [item.cli, item]))
 })
 
 const runtimeState = computed(() => {
@@ -1586,7 +1651,7 @@ const runtimeConfigDescription = computed(() => {
 const filteredIconOptions = computed(() => {
   const keyword = iconKeyword.value.toLowerCase()
 
-  return iconOptions.filter((item) =>
+  return iconOptions.filter(item =>
     iconLabel(item).toLowerCase().includes(keyword)
   )
 })
@@ -1597,7 +1662,7 @@ const codexLoginTitle = computed(() => {
 
 const configPreviewMap = computed(() => {
   return Object.fromEntries(
-    activeRuntimeSchema.value.configFiles.map((file) => [
+    activeRuntimeSchema.value.configFiles.map(file => [
       file.name,
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
@@ -1668,7 +1733,7 @@ function applyConfigTemplate(template) {
 }
 
 function ensureActiveCli() {
-  if (visibleCliTargets.value.find((item) => item.id === activeCli.value)) {
+  if (visibleCliTargets.value.find(item => item.id === activeCli.value)) {
     return
   }
 
@@ -1891,7 +1956,7 @@ function rateLimitWindows(rateLimit) {
   return [
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
-  ].filter((item) => item.window)
+  ].filter(item => item.window)
 }
 
 function formatPlanName(value) {
@@ -1997,7 +2062,11 @@ function isCodexAccountRefreshing(account) {
 }
 
 function refreshCodexAccounts() {
-  props.codexAccounts.forEach((account) => {
+  props.codexAccounts.forEach(account => {
+    if (account.disabled) {
+      return
+    }
+
     refreshCodexAccount(account, {
       showSuccess: false,
       syncAuth: false
@@ -2006,6 +2075,10 @@ function refreshCodexAccounts() {
 }
 
 function refreshCodexAccount(account, options = {}) {
+  if (account.disabled) {
+    return
+  }
+
   if (codexAccountRefreshingMap[account.id]) {
     return
   }
@@ -2054,8 +2127,7 @@ function clearDraft() {
 
 function firstModelName(providerId) {
   return (
-    props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
-    ""
+    props.runtimeModels.find(item => item.providerId === providerId)?.name || ""
   )
 }
 
@@ -2152,6 +2224,10 @@ function submitProvider() {
 }
 
 function enableProvider(provider) {
+  if (provider.enabled === false) {
+    return
+  }
+
   const model = provider.runtimeConfig?.mainModel || firstModelName(provider.id)
 
   if (!model) {
@@ -2162,6 +2238,19 @@ function enableProvider(provider) {
     cli: activeCli.value,
     providerId: provider.id,
     model
+  })
+}
+
+function disableProvider(provider) {
+  emit("save-provider", {
+    ...provider,
+    enabled: false
+  })
+}
+
+function disableCodexAccount(account) {
+  emit("codex-account-disable", {
+    accountId: account.id
   })
 }
 
@@ -2297,8 +2386,8 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  (accounts) => {
-    accounts.forEach((account) => {
+  accounts => {
+    accounts.forEach(account => {
       codexAccountProxyDrafts[account.id] = account.proxy || ""
     })
   },
@@ -2314,7 +2403,7 @@ watch(
 
 watch(
   () => props.codexProxyState.enabled,
-  (enabled) => {
+  enabled => {
     codexProxyTab.value = enabled ? "proxy" : "providers"
   },
   { immediate: true }
@@ -2322,10 +2411,10 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  (accounts) => {
+  accounts => {
     if (codexAuthUpdateAccountId.value) {
       const account = accounts.find(
-        (item) => item.id === codexAuthUpdateAccountId.value
+        item => item.id === codexAuthUpdateAccountId.value
       )
 
       if (account && account.refresh_status !== "failed") {
@@ -2336,7 +2425,7 @@ watch(
 
     if (
       codexAccountDetail.value &&
-      !accounts.find((item) => item.id === codexAccountDetail.value.id)
+      !accounts.find(item => item.id === codexAccountDetail.value.id)
     ) {
       closeCodexAccountDetail()
     }
@@ -2346,10 +2435,10 @@ watch(
 
 watch(
   () => props.providers,
-  (providers) => {
+  providers => {
     if (
       providerDetail.value &&
-      !providers.find((item) => item.id === providerDetail.value.id)
+      !providers.find(item => item.id === providerDetail.value.id)
     ) {
       closeProviderDetail()
     }
@@ -2614,9 +2703,7 @@ watch(
   &-proxy-tabs {
     display: inline-flex;
     flex: none;
-    align-self: flex-start;
     gap: 4px;
-    margin: 12px 14px 0;
     padding: 4px;
     border: 1px solid #edf0f3;
     border-radius: 12px;
@@ -2681,6 +2768,15 @@ watch(
   &__icon-button--danger:hover {
     background: #fff1f0;
     color: #d92d20;
+  }
+
+  &__icon-button--warning {
+    color: #98a2b3;
+  }
+
+  &__icon-button--warning:hover {
+    background: #fff7ed;
+    color: #c2410c;
   }
 
   &__add {
@@ -2799,6 +2895,14 @@ watch(
     box-shadow: 0 8px 22px rgba(180, 35, 24, 0.1);
   }
 
+  &__provider-card--disabled,
+  &__account-card--disabled {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+    box-shadow: none;
+    opacity: 0.72;
+  }
+
   &__provider-card:hover,
   &__account-card:hover {
     border-color: #d8ecff;
@@ -2825,6 +2929,14 @@ watch(
     border-color: #edf1f6;
     background: #fff7f7;
     box-shadow: 0 12px 26px rgba(180, 35, 24, 0.14);
+  }
+
+  &__provider-card--disabled:hover,
+  &__account-card--disabled:hover {
+    border-color: #94a3b8;
+    background: #f1f5f9;
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.08);
+    transform: translateY(-1px);
   }
 
   &__account-card--refreshing,
@@ -2986,6 +3098,13 @@ watch(
     border-color: #fda29b;
     background: #fff1f1;
     color: #b42318;
+    font-weight: 800;
+  }
+
+  &__account-tag--disabled {
+    border-color: #d0d5dd;
+    background: #f2f4f7;
+    color: #667085;
     font-weight: 800;
   }
 
@@ -3225,6 +3344,13 @@ watch(
     gap: 8px;
   }
 
+  &__provider-title {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+  }
+
   &__provider-main strong {
     color: #111827;
     font-size: 1rem;
@@ -3236,6 +3362,11 @@ watch(
     font-size: 0.9rem;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  &__provider-title &__account-tag {
+    color: #667085;
+    font-size: 0.72rem;
   }
 
   &__provider-main &__provider-note {
@@ -3280,6 +3411,11 @@ watch(
     height: 6px;
     border-radius: 999px;
     background: #00b981;
+  }
+
+  &__state-pill--disabled {
+    background: #f2f4f7;
+    color: #667085;
   }
 
   &__enable,

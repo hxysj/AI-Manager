@@ -798,6 +798,11 @@ class RuntimeProviderService {
 
   saveProvider(input) {
     const previous = this.providers.find((item) => item.id === input.id)
+
+    if (previous?.enabled === false) {
+      throw new Error("Provider 已禁用，不能编辑")
+    }
+
     const provider = normalizeProvider(input, previous)
 
     if (previous) {
@@ -807,6 +812,12 @@ class RuntimeProviderService {
     } else {
       this.providers = [...this.providers, provider]
       this.addDefaultModels(provider)
+    }
+
+    if (provider.enabled === false) {
+      this.profiles = this.profiles.filter(
+        (item) => item.providerId !== provider.id
+      )
     }
 
     if ("apiKey" in input) {
@@ -826,6 +837,12 @@ class RuntimeProviderService {
   }
 
   deleteProvider(providerId) {
+    const provider = this.providers.find((item) => item.id === providerId)
+
+    if (provider?.enabled === false) {
+      throw new Error("Provider 已禁用，不能删除")
+    }
+
     this.providers = this.providers.filter((item) => item.id !== providerId)
     this.models = this.models.filter((item) => item.providerId !== providerId)
     this.profiles = this.profiles.filter(
@@ -874,6 +891,10 @@ class RuntimeProviderService {
 
     if (!provider) {
       throw new Error("Provider 不存在")
+    }
+
+    if (provider.enabled === false) {
+      throw new Error("Provider 已禁用，不能启用")
     }
 
     if (provider.cli !== input.cli) {

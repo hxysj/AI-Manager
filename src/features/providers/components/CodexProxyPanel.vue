@@ -74,7 +74,8 @@
             'codex-proxy-panel-pool-item',
             {
               'codex-proxy-panel-pool-item-active':
-                provider.id === proxyState.activeProviderId
+                provider.id === proxyState.activeProviderId,
+              'codex-proxy-panel-pool-item-disabled': provider.disabled
             }
           ]"
         >
@@ -102,17 +103,29 @@
             ]"
           >
             {{
-              provider.id === proxyState.activeProviderId ? "当前激活" : "备用"
+              provider.disabled
+                ? "已禁用"
+                : provider.id === proxyState.activeProviderId
+                  ? "当前激活"
+                  : "备用"
             }}
           </span>
           <button
             class="codex-proxy-panel-activate"
             type="button"
-            :disabled="pending || provider.id === proxyState.activeProviderId"
+            :disabled="
+              pending ||
+              provider.disabled ||
+              provider.id === proxyState.activeProviderId
+            "
             @click="activateTarget(provider)"
           >
             {{
-              provider.id === proxyState.activeProviderId ? "使用中" : "激活"
+              provider.disabled
+                ? "禁用中"
+                : provider.id === proxyState.activeProviderId
+                  ? "使用中"
+                  : "激活"
             }}
           </button>
           <button
@@ -359,7 +372,8 @@ const targetItems = computed(() => {
       type: "provider",
       name: item.name,
       icon: item.icon,
-      description: item.note || item.baseUrl || "未配置备注"
+      description: item.note || item.baseUrl || "未配置备注",
+      disabled: item.enabled === false
     })),
     ...props.accounts.map((item) => ({
       id: `account:${item.id}`,
@@ -367,7 +381,8 @@ const targetItems = computed(() => {
       type: "account",
       name: item.email || item.accountId || "Codex 官方账号",
       icon: "",
-      description: `${formatPlanName(item.plan)} · 官方账号`
+      description: `${formatPlanName(item.plan)} · 官方账号`,
+      disabled: Boolean(item.disabled)
     }))
   ]
 })
@@ -390,7 +405,7 @@ const proxyProviders = computed(() => {
 
 const availableTargets = computed(() => {
   return targetItems.value.filter(
-    (item) => !proxyProviderIds.value.includes(item.id)
+    item => !item.disabled && !proxyProviderIds.value.includes(item.id)
   )
 })
 
@@ -666,6 +681,18 @@ defineExpose({
     border-color: #9bb7ff;
     background: #f5f8ff;
     box-shadow: inset 3px 0 0 #2f6fed;
+  }
+
+  &-pool-item-disabled {
+    border-color: #cbd5e1;
+    background: #f8fafc;
+    opacity: 0.72;
+  }
+
+  &-pool-item-disabled:hover {
+    border-color: #94a3b8;
+    background: #f1f5f9;
+    box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
   }
 
   &-avatar {

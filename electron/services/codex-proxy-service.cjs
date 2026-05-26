@@ -409,6 +409,10 @@ class CodexProxyService extends EventEmitter {
       throw new Error("Codex Provider 不存在")
     }
 
+    if (provider.enabled === false) {
+      throw new Error("Codex Provider 已禁用")
+    }
+
     return provider
   }
 
@@ -432,6 +436,10 @@ class CodexProxyService extends EventEmitter {
 
     if (!account) {
       throw new Error("Codex 官方账号不存在")
+    }
+
+    if (account.disabled) {
+      throw new Error("Codex 官方账号已禁用")
     }
 
     return account
@@ -502,8 +510,26 @@ class CodexProxyService extends EventEmitter {
     }
   }
 
+  isTargetEnabled(targetId) {
+    if (isAccountTarget(targetId)) {
+      const account = this.codexAccountService.accounts.find(
+        item => item.id === getAccountIdFromTarget(targetId)
+      )
+
+      return Boolean(account && !account.disabled)
+    }
+
+    const provider = this.runtimeProviderService.providers.find(
+      item => item.id === targetId
+    )
+
+    return Boolean(
+      provider && provider.cli === "codex" && provider.enabled !== false
+    )
+  }
+
   async enable(input = {}, cliTarget) {
-    const activeProviderId = this.config.failoverProviderIds[0] || ""
+    const activeProviderId = this.getForwardProviderIds()[0] || ""
 
     if (!activeProviderId) {
       throw new Error("请先把 Provider 加入代理接管列表")
@@ -638,7 +664,11 @@ class CodexProxyService extends EventEmitter {
       this.config.activeProviderId,
       ...this.config.failoverProviderIds
     ].filter((providerId, index, providerIds) => {
-      return providerId && providerIds.indexOf(providerId) === index
+      return (
+        providerId &&
+        providerIds.indexOf(providerId) === index &&
+        this.isTargetEnabled(providerId)
+      )
     })
   }
 

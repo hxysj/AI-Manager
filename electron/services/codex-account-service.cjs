@@ -247,7 +247,7 @@ function shouldMarkReauth(error) {
     error.message
   ].join(" ")
 
-  return [...reauthRefreshErrors].some((item) => text.includes(item))
+  return [...reauthRefreshErrors].some(item => text.includes(item))
 }
 
 class CodexAccountService extends EventEmitter {
@@ -275,7 +275,7 @@ class CodexAccountService extends EventEmitter {
 
     this.getCodexCliTarget = getCodexCliTarget
 
-    this.refreshExpiringAccounts().catch((error) => {
+    this.refreshExpiringAccounts().catch(error => {
       this.emit("login-state", {
         status: "failed",
         message: `Codex 自动刷新失败：${error.message || String(error)}`
@@ -283,7 +283,7 @@ class CodexAccountService extends EventEmitter {
     })
 
     this.autoRefreshTimer = setInterval(() => {
-      this.refreshExpiringAccounts().catch((error) => {
+      this.refreshExpiringAccounts().catch(error => {
         this.emit("login-state", {
           status: "failed",
           message: `Codex 自动刷新失败：${error.message || String(error)}`
@@ -305,7 +305,7 @@ class CodexAccountService extends EventEmitter {
   }
 
   getState() {
-    return this.accounts.map((account) => ({
+    return this.accounts.map(account => ({
       id: account.id,
       provider: account.provider,
       accountId: account.accountId,
@@ -328,6 +328,7 @@ class CodexAccountService extends EventEmitter {
       requires_reauth: Boolean(account.requires_reauth),
       reauth_reason: account.reauth_reason || "",
       reauth_message: account.reauth_message || "",
+      disabled: Boolean(account.disabled),
       active: account.id === this.activeAccountId,
       auth: {
         expiresAt: account.auth?.expiresAt || 0
@@ -343,7 +344,7 @@ class CodexAccountService extends EventEmitter {
     const targetAccountId = String(input.accountId || "").trim()
     if (
       targetAccountId &&
-      !this.accounts.find((account) => account.id === targetAccountId)
+      !this.accounts.find(account => account.id === targetAccountId)
     ) {
       throw new Error("Codex 官方账号不存在")
     }
@@ -407,12 +408,16 @@ class CodexAccountService extends EventEmitter {
     const proxy = String(input.proxy || "").trim()
     const targetAccountId = String(input.accountId || "").trim()
     const targetAccount = targetAccountId
-      ? this.accounts.find((account) => account.id === targetAccountId)
+      ? this.accounts.find(account => account.id === targetAccountId)
       : null
     const accountId = extractAccountId(claims)
 
     if (targetAccountId && !targetAccount) {
       throw new Error("Codex 官方账号不存在")
+    }
+
+    if (targetAccount?.disabled) {
+      throw new Error("Codex 官方账号已禁用，不能编辑")
     }
 
     if (
@@ -429,7 +434,7 @@ class CodexAccountService extends EventEmitter {
     if (
       accountId &&
       this.accounts.find(
-        (account) =>
+        account =>
           account.id !== targetAccountId &&
           (account.id === accountId ||
             account.accountId === accountId ||
@@ -563,7 +568,7 @@ class CodexAccountService extends EventEmitter {
       createId("codex-account")
     const email = profile.email || extractEmail(claims) || "未识别账号"
     const currentAccount =
-      this.accounts.find((account) => account.id === accountId) || null
+      this.accounts.find(account => account.id === accountId) || null
     const tokenUpdatedAt =
       Number(tokens.token_updated_at || tokens.tokenUpdatedAt || 0) ||
       parseTimestamp(tokens.last_refresh) ||
@@ -599,12 +604,13 @@ class CodexAccountService extends EventEmitter {
       reauth_reason: "",
       reauth_message: "",
       autoRefresh: currentAccount?.autoRefresh !== false,
+      disabled: Boolean(currentAccount?.disabled),
       createdAt: currentAccount?.createdAt || Date.now(),
       updatedAt: Date.now()
     }
 
     this.accounts = currentAccount
-      ? this.accounts.map((account) =>
+      ? this.accounts.map(account =>
           account.id === accountId ? nextAccount : account
         )
       : [...this.accounts, nextAccount]
@@ -624,10 +630,14 @@ class CodexAccountService extends EventEmitter {
   }
 
   async prepareAccountForSwitch(accountId, cliTarget) {
-    let account = this.accounts.find((item) => item.id === accountId)
+    let account = this.accounts.find(item => item.id === accountId)
 
     if (!account) {
       throw new Error("Codex 官方账号不存在")
+    }
+
+    if (account.disabled) {
+      throw new Error("Codex 官方账号已禁用，不能启用")
     }
 
     if (account.type === "apikey") {
@@ -734,7 +744,7 @@ class CodexAccountService extends EventEmitter {
       updatedAt: Date.now()
     }
 
-    this.accounts = this.accounts.map((item) =>
+    this.accounts = this.accounts.map(item =>
       item.id === account.id ? nextAccount : item
     )
     this.storage.scheduleWrite("codexAccounts", this.accounts)
@@ -801,7 +811,7 @@ class CodexAccountService extends EventEmitter {
   }
 
   markAccountReauth(accountId, reason, message) {
-    this.accounts = this.accounts.map((account) =>
+    this.accounts = this.accounts.map(account =>
       account.id === accountId
         ? {
             ...account,
@@ -817,7 +827,7 @@ class CodexAccountService extends EventEmitter {
   }
 
   markAccountRefreshError(accountId, statusCode, message) {
-    this.accounts = this.accounts.map((account) =>
+    this.accounts = this.accounts.map(account =>
       account.id === accountId
         ? {
             ...account,
@@ -833,10 +843,14 @@ class CodexAccountService extends EventEmitter {
   }
 
   async refreshAccountUsage(accountId, cliTarget, options = {}) {
-    const account = this.accounts.find((item) => item.id === accountId)
+    const account = this.accounts.find(item => item.id === accountId)
 
     if (!account) {
       throw new Error("Codex 官方账号不存在")
+    }
+
+    if (account.disabled) {
+      throw new Error("Codex 官方账号已禁用，不能刷新额度")
     }
 
     const expiresAt = accountExpiresAt(account)
@@ -928,6 +942,34 @@ class CodexAccountService extends EventEmitter {
     return nextAccount
   }
 
+  disableAccount(accountId) {
+    const account = this.accounts.find(item => item.id === accountId)
+
+    if (!account) {
+      throw new Error("Codex 官方账号不存在")
+    }
+
+    this.clearScheduledRefresh(account.id)
+    this.accounts = this.accounts.map(item =>
+      item.id === account.id
+        ? {
+            ...item,
+            autoRefresh: false,
+            disabled: true,
+            updatedAt: Date.now()
+          }
+        : item
+    )
+
+    if (this.activeAccountId === account.id) {
+      this.activeAccountId = ""
+      this.storage.scheduleWrite("codexActiveAccountId", this.activeAccountId)
+    }
+
+    this.storage.scheduleWrite("codexAccounts", this.accounts)
+    this.emit("changed", this.getState())
+  }
+
   async writeAccountBundle(account, cliTarget) {
     await this.writeAccountAuth(account, cliTarget)
     await this.writeCodexBuiltinConfig(cliTarget)
@@ -997,13 +1039,17 @@ class CodexAccountService extends EventEmitter {
   }
 
   async deleteAccount(accountId, cliTarget) {
-    const account = this.accounts.find((item) => item.id === accountId)
+    const account = this.accounts.find(item => item.id === accountId)
 
     if (!account) {
       throw new Error("Codex 官方账号不存在")
     }
 
-    this.accounts = this.accounts.filter((item) => item.id !== accountId)
+    if (account.disabled) {
+      throw new Error("Codex 官方账号已禁用，不能删除")
+    }
+
+    this.accounts = this.accounts.filter(item => item.id !== accountId)
 
     if (account.id === this.activeAccountId) {
       this.activeAccountId = ""
@@ -1018,10 +1064,14 @@ class CodexAccountService extends EventEmitter {
   }
 
   updateAccountProxy(accountId, proxy) {
-    const account = this.accounts.find((item) => item.id === accountId)
+    const account = this.accounts.find(item => item.id === accountId)
 
     if (!account) {
       throw new Error("Codex 官方账号不存在")
+    }
+
+    if (account.disabled) {
+      throw new Error("Codex 官方账号已禁用，不能编辑")
     }
 
     account.proxy = String(proxy || "").trim()
@@ -1052,11 +1102,15 @@ class CodexAccountService extends EventEmitter {
     const accountId = extractAccountId(claims)
     const targetAccountId = this.loginState.targetAccountId || ""
     const targetAccount = targetAccountId
-      ? this.accounts.find((account) => account.id === targetAccountId)
+      ? this.accounts.find(account => account.id === targetAccountId)
       : null
 
     if (targetAccountId && !targetAccount) {
       throw new Error("Codex 官方账号不存在")
+    }
+
+    if (targetAccount?.disabled) {
+      throw new Error("Codex 官方账号已禁用，不能编辑")
     }
 
     if (
@@ -1073,7 +1127,7 @@ class CodexAccountService extends EventEmitter {
     if (
       accountId &&
       this.accounts.find(
-        (account) =>
+        account =>
           account.id !== targetAccountId &&
           (account.id === accountId ||
             account.accountId === accountId ||
@@ -1221,8 +1275,9 @@ class CodexAccountService extends EventEmitter {
         : null
     const accounts = []
 
-    this.accounts.forEach((account) => {
+    this.accounts.forEach(account => {
       if (
+        !account.disabled &&
         account.autoRefresh !== false &&
         account.requires_reauth !== true &&
         account.auth?.refreshToken
@@ -1249,7 +1304,7 @@ class CodexAccountService extends EventEmitter {
       await Promise.all(
         accounts
           .slice(index, index + 3)
-          .map((account) => this.refreshAccount(account, cliTarget))
+          .map(account => this.refreshAccount(account, cliTarget))
       )
     }
   }
@@ -1267,7 +1322,7 @@ class CodexAccountService extends EventEmitter {
       () => {
         this.autoRefreshTimers.delete(account.id)
         const currentAccount = this.accounts.find(
-          (item) => item.id === account.id
+          item => item.id === account.id
         )
 
         if (!currentAccount || accountExpiresAt(currentAccount) > Date.now()) {
@@ -1279,7 +1334,7 @@ class CodexAccountService extends EventEmitter {
             ? this.getCodexCliTarget()
             : null
 
-        this.refreshAccount(currentAccount, cliTarget).catch((error) => {
+        this.refreshAccount(currentAccount, cliTarget).catch(error => {
           this.emit("login-state", {
             status: "failed",
             message: `Codex 自动刷新失败：${error.message || String(error)}`
@@ -1311,13 +1366,13 @@ class CodexAccountService extends EventEmitter {
   }
 
   async getAccountDetail(accountId, cliTarget) {
-    const account = this.accounts.find((item) => item.id === accountId)
+    const account = this.accounts.find(item => item.id === accountId)
 
     if (!account) {
       throw new Error("Codex 官方账号不存在")
     }
 
-    const nextAccount = this.accounts.find((item) => item.id === accountId)
+    const nextAccount = this.accounts.find(item => item.id === accountId)
 
     return {
       id: nextAccount.id,
@@ -1342,6 +1397,7 @@ class CodexAccountService extends EventEmitter {
       requires_reauth: Boolean(nextAccount.requires_reauth),
       reauth_reason: nextAccount.reauth_reason || "",
       reauth_message: nextAccount.reauth_message || "",
+      disabled: Boolean(nextAccount.disabled),
       active: nextAccount.id === this.activeAccountId,
       auth: nextAccount.auth
     }
@@ -1369,7 +1425,9 @@ class CodexAccountService extends EventEmitter {
       proxy
     )
 
-    return readJson(response)
+    const usage = await readJson(response)
+    console.log("[Codex 刷新额度接口返回]", JSON.stringify(usage, null, 2))
+    return usage
   }
 }
 
