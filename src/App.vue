@@ -1396,7 +1396,41 @@ const quickActiveProfile = computed(() => {
   )
 })
 
+const quickProxyActiveTargetId = computed(() => {
+  if (quickActiveCli.value?.id !== "codex" || !state.codexProxyState.enabled) {
+    return ""
+  }
+
+  return state.codexProxyState.activeProviderId || ""
+})
+
+const quickProxyActiveProvider = computed(() => {
+  if (!quickProxyActiveTargetId.value.startsWith("account:")) {
+    return (
+      state.providers.find(
+        (item) => item.id === quickProxyActiveTargetId.value
+      ) || null
+    )
+  }
+
+  return null
+})
+
+const quickProxyActiveAccount = computed(() => {
+  if (!quickProxyActiveTargetId.value.startsWith("account:")) {
+    return null
+  }
+
+  const accountId = quickProxyActiveTargetId.value.slice("account:".length)
+
+  return state.codexAccounts.find((item) => item.id === accountId) || null
+})
+
 const quickActiveProvider = computed(() => {
+  if (quickProxyActiveTargetId.value) {
+    return quickProxyActiveProvider.value
+  }
+
   return (
     state.providers.find(
       (item) => item.id === quickActiveProfile.value?.providerId
@@ -1409,10 +1443,23 @@ const quickActiveAccount = computed(() => {
     return null
   }
 
+  if (quickProxyActiveTargetId.value) {
+    return quickProxyActiveAccount.value
+  }
+
   return state.codexAccounts.find((item) => item.active) || null
 })
 
 const quickActiveName = computed(() => {
+  if (quickProxyActiveTargetId.value) {
+    return `Proxy 接管中：${
+      quickActiveProvider.value?.name ||
+      quickActiveAccount.value?.email ||
+      quickActiveAccount.value?.accountId ||
+      "未激活"
+    }`
+  }
+
   if (quickActiveAccount.value) {
     return (
       quickActiveAccount.value.email ||
@@ -1435,6 +1482,10 @@ const quickItems = computed(() => {
     })
     .map((provider) => {
       const model = firstQuickModelName(provider)
+      const active = quickProxyActiveTargetId.value
+        ? quickProxyActiveTargetId.value === provider.id
+        : !quickActiveAccount.value &&
+          quickActiveProvider.value?.id === provider.id
 
       return {
         key: `provider:${provider.id}`,
@@ -1443,9 +1494,7 @@ const quickItems = computed(() => {
         model,
         label: provider.name,
         description: model || "缺少模型",
-        active:
-          !quickActiveAccount.value &&
-          quickActiveProvider.value?.id === provider.id,
+        active,
         disabled: !model || provider.enabled === false
       }
     })
@@ -1463,7 +1512,9 @@ const quickItems = computed(() => {
       label: account.email || account.accountId || "Codex 官方账号",
       description: formatQuickAccountDescription(account),
       quotas: formatQuickAccountQuotas(account),
-      active: account.active,
+      active: quickProxyActiveTargetId.value
+        ? quickProxyActiveTargetId.value === `account:${account.id}`
+        : account.active,
       disabled: Boolean(account.disabled)
     }))
   ]
@@ -1947,6 +1998,10 @@ async function selectQuickItem(item) {
   if (item.type === "provider") {
     await runAction(async () => {
       if (quickActiveCli.value?.id === "codex") {
+        if (state.codexProxyState.enabled) {
+          await window.aiManager.disableCodexProxy()
+        }
+
         await window.aiManager.clearCodexAccount()
       }
 
@@ -1960,6 +2015,10 @@ async function selectQuickItem(item) {
   }
 
   await runAction(async () => {
+    if (state.codexProxyState.enabled) {
+      await window.aiManager.disableCodexProxy()
+    }
+
     await window.aiManager.clearRuntime({
       cli: quickActiveCli.value.id
     })
@@ -1971,6 +2030,10 @@ async function selectQuickItem(item) {
 
 async function clearQuickActive() {
   await runAction(async () => {
+    if (quickActiveCli.value?.id === "codex" && state.codexProxyState.enabled) {
+      return window.aiManager.disableCodexProxy()
+    }
+
     if (quickActiveCli.value?.id === "codex") {
       await window.aiManager.clearCodexAccount()
     }

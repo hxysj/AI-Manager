@@ -1474,8 +1474,43 @@ function buildQuickSwitchTrayItems(state) {
   })
 }
 
+function getCodexProxyActiveTarget(state) {
+  if (!state.codexProxyState?.enabled) {
+    return null
+  }
+
+  const targetId = String(state.codexProxyState.activeProviderId || "")
+
+  if (targetId.startsWith("account:")) {
+    const accountId = targetId.slice("account:".length)
+    const account = (state.codexAccounts || []).find(item => item.id === accountId)
+
+    return {
+      type: "account",
+      provider: null,
+      account,
+      name: account?.email || account?.accountId || targetId || "未激活"
+    }
+  }
+
+  const provider = state.providers.find(item => item.id === targetId)
+
+  return {
+    type: "provider",
+    provider,
+    account: null,
+    name: provider?.name || targetId || "未激活"
+  }
+}
+
 function getCliTrayActiveName(state, cli) {
   if (cli.id === "codex") {
+    const proxyTarget = getCodexProxyActiveTarget(state)
+
+    if (proxyTarget) {
+      return `Proxy 接管中：${proxyTarget.name}`
+    }
+
     const activeAccount = (state.codexAccounts || []).find(item => item.active)
 
     if (activeAccount) {
@@ -1495,8 +1530,11 @@ function buildUnifiedCodexTrayItems(state, cli) {
   })
   const accounts = state.codexAccounts || []
   const profile = state.runtimeProfiles.find(item => item.cli === cli.id)
-  const activeProvider = providers.find(item => item.id === profile?.providerId)
-  const activeAccount = accounts.find(item => item.active)
+  const proxyTarget = getCodexProxyActiveTarget(state)
+  const activeProvider =
+    proxyTarget?.provider ||
+    providers.find(item => item.id === profile?.providerId)
+  const activeAccount = proxyTarget?.account || accounts.find(item => item.active)
   const items = [
     {
       label: `当前启用：${getCliTrayActiveName(state, cli)}`,
@@ -1517,7 +1555,12 @@ function buildUnifiedCodexTrayItems(state, cli) {
     })
   }
 
-  if (activeProvider || activeAccount) {
+  if (proxyTarget) {
+    items.push({
+      label: "关闭 Proxy 接管",
+      click: () => runTrayAction(() => managerService.disableCodexProxy())
+    })
+  } else if (activeProvider || activeAccount) {
     items.push({
       label: "取消启用",
       click: () =>
@@ -1540,17 +1583,23 @@ function buildUnifiedCodexTrayItems(state, cli) {
 
   for (const provider of providers) {
     const model = findRuntimeModel(state, provider, profile)
-    const active = !activeAccount && provider.id === activeProvider?.id
+    const active = proxyTarget
+      ? provider.id === proxyTarget.provider?.id
+      : !activeAccount && provider.id === activeProvider?.id
 
     items.push({
       label: active
-        ? `${provider.name}（已启用）`
+        ? `${provider.name}（${proxyTarget ? "Proxy 当前" : "已启用"}）`
         : model
           ? provider.name
           : `${provider.name}（缺少模型）`,
       enabled: Boolean(model) && !active,
       click: () =>
         runTrayAction(async () => {
+          if (proxyTarget) {
+            await managerService.disableCodexProxy()
+          }
+
           await managerService.clearCodexAccount()
           return managerService.switchRuntime({
             cli: cli.id,
@@ -1562,13 +1611,23 @@ function buildUnifiedCodexTrayItems(state, cli) {
   }
 
   for (const account of accounts) {
+    const active = proxyTarget
+      ? proxyTarget.account?.id === account.id
+      : account.active
+
     items.push({
-      label: account.active
-        ? `${formatTrayAccountLabel(account)}（已启用）`
+      label: active
+        ? `${formatTrayAccountLabel(account)}（${
+            proxyTarget ? "Proxy 当前" : "已启用"
+          }）`
         : formatTrayAccountLabel(account),
-      enabled: !account.active,
+      enabled: !active && !account.disabled,
       click: () =>
         runTrayAction(async () => {
+          if (proxyTarget) {
+            await managerService.disableCodexProxy()
+          }
+
           await managerService.clearRuntime(cli.id)
           return managerService.enableCodexAccount({
             accountId: account.id
@@ -1672,6 +1731,17 @@ function getUnifiedTrayStatusTarget(state) {
 
   for (const cli of cliTargets) {
     if (cli.id === "codex") {
+      const proxyTarget = getCodexProxyActiveTarget(state)
+
+      if (proxyTarget) {
+        return {
+          cli,
+          provider: proxyTarget.provider,
+          account: proxyTarget.account,
+          proxy: true
+        }
+      }
+
       const account = (state.codexAccounts || []).find(item => item.active)
 
       if (account) {
@@ -1729,7 +1799,9 @@ function createTrayStatusImage(state) {
   const label = getTrayStatusText(
     target.account?.email || target.provider?.name || target.cli?.name
   )
-  const cliLabel = getTrayStatusText(target.cli?.name).slice(0, 1)
+  const cliLabel = target.proxy
+    ? "P"
+    : getTrayStatusText(target.cli?.name).slice(0, 1)
   const background = target.cli?.id === "codex" ? "#111827" : "#1682ff"
   const svg = `
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
