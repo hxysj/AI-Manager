@@ -2565,6 +2565,10 @@ function registerIpc() {
     return managerService.refreshCodexAccount(payload)
   })
 
+  registerLoggedIpc("codex-account:disable", async (_, payload) => {
+    return managerService.disableCodexAccount(payload)
+  })
+
   registerLoggedIpc("codex-account:update-proxy", async (_, payload) => {
     return managerService.updateCodexAccountProxy(payload)
   })

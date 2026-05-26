@@ -273,7 +273,7 @@
           </span>
           <span class="quick-switch-panel__item-actions">
             <button
-              v-if="item.type === 'account'"
+              v-if="item.type === 'account' && !item.disabled"
               class="quick-switch-panel__item-icon-button"
               type="button"
               title="刷新额度"
@@ -369,6 +369,7 @@
           @codex-account-clear="clearCodexAccount"
           @codex-account-delete="deleteCodexAccount"
           @codex-account-refresh="refreshCodexAccount"
+          @codex-account-disable="disableCodexAccount"
           @codex-accounts-refresh="refreshCodexAccounts"
           @codex-account-proxy-save="updateCodexAccountProxy"
           @codex-proxy-enable="enableCodexProxy"
@@ -1444,7 +1445,7 @@ const quickItems = computed(() => {
         active:
           !quickActiveAccount.value &&
           quickActiveProvider.value?.id === provider.id,
-        disabled: !model
+        disabled: !model || provider.enabled === false
       }
     })
 
@@ -1462,7 +1463,7 @@ const quickItems = computed(() => {
       description: formatQuickAccountDescription(account),
       quotas: formatQuickAccountQuotas(account),
       active: account.active,
-      disabled: false
+      disabled: Boolean(account.disabled)
     }))
   ]
 })
@@ -2489,7 +2490,9 @@ async function saveProvider(payload) {
   const success = await runAction(() => window.aiManager.saveProvider(payload))
 
   if (success) {
-    showSuccessMessage("Provider 已保存。")
+    showSuccessMessage(
+      payload.enabled === false ? "Provider 已禁用。" : "Provider 已保存。"
+    )
   }
 }
 
@@ -2630,6 +2633,16 @@ async function deleteCodexAccount(payload) {
   }
 }
 
+async function disableCodexAccount(payload) {
+  const success = await runAction(() =>
+    window.aiManager.disableCodexAccount(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Codex 官方账号已禁用。")
+  }
+}
+
 async function refreshCodexAccount(payload) {
   const { onSettled, showSuccess, ...input } = payload
 
@@ -2657,6 +2670,10 @@ async function refreshCodexAccounts() {
 
   await Promise.all(
     state.codexAccounts.map(async (account) => {
+      if (account.disabled) {
+        return
+      }
+
       try {
         updateState(
           await window.aiManager.refreshCodexAccount({
