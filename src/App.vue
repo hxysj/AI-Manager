@@ -370,6 +370,7 @@
           @codex-account-delete="deleteCodexAccount"
           @codex-account-refresh="refreshCodexAccount"
           @codex-account-disable="disableCodexAccount"
+          @codex-account-restore="restoreCodexAccount"
           @codex-accounts-refresh="refreshCodexAccounts"
           @codex-account-proxy-save="updateCodexAccountProxy"
           @codex-proxy-enable="enableCodexProxy"
@@ -2487,11 +2488,18 @@ async function deleteSession(sessionId) {
 }
 
 async function saveProvider(payload) {
+  const restoringProvider =
+    state.providers.find((item) => item.id === payload.id)?.enabled === false &&
+    payload.enabled === true
   const success = await runAction(() => window.aiManager.saveProvider(payload))
 
   if (success) {
     showSuccessMessage(
-      payload.enabled === false ? "Provider 已禁用。" : "Provider 已保存。"
+      payload.enabled === false
+        ? "Provider 已禁用。"
+        : restoringProvider
+          ? "Provider 已恢复。"
+          : "Provider 已保存。"
     )
   }
 }
@@ -2640,6 +2648,16 @@ async function disableCodexAccount(payload) {
 
   if (success) {
     showSuccessMessage("Codex 官方账号已禁用。")
+  }
+}
+
+async function restoreCodexAccount(payload) {
+  const success = await runAction(() =>
+    window.aiManager.restoreCodexAccount(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Codex 官方账号已恢复。")
   }
 }
 

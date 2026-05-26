@@ -799,7 +799,7 @@ class RuntimeProviderService {
   saveProvider(input) {
     const previous = this.providers.find((item) => item.id === input.id)
 
-    if (previous?.enabled === false) {
+    if (previous?.enabled === false && input.enabled !== true) {
       throw new Error("Provider 已禁用，不能编辑")
     }
 
