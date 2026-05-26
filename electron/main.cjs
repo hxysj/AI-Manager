@@ -1056,6 +1056,7 @@ function setupAutoUpdater() {
   process.env.GH_TOKEN = githubToken
   updateConfigured = true
   autoUpdater.autoDownload = false
+  autoUpdater.disableDifferentialDownload = true
   autoUpdater.autoInstallOnAppQuit = true
   autoUpdater.addAuthHeader(`Bearer ${githubToken}`)
 
@@ -1095,6 +1096,7 @@ function setupAutoUpdater() {
     updateChecking = false
     updateDownloading = false
     updatePromptOpen = false
+    console.error("[update]", error)
     sendUpdateStatus({
       phase: "error",
       message: error?.message || String(error),
@@ -1176,6 +1178,7 @@ async function downloadAppUpdate() {
     await autoUpdater.downloadUpdate()
   } catch (error) {
     updateDownloading = false
+    console.error("[update:download]", error)
     return sendUpdateStatus({
       phase: "error",
       message: error?.message || String(error),

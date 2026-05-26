@@ -13,7 +13,6 @@ const OAUTH_REDIRECT_URI = "http://localhost:1455/auth/callback"
 const OAUTH_SCOPE =
   "openid profile email offline_access"
 const AUTO_REFRESH_INTERVAL = 30 * 60 * 1000
-const REFRESH_THRESHOLD = 10 * 60 * 1000
 const missingRefreshTokenReason = "missing_refresh_token"
 const reauthRefreshErrors = new Set([
   "refresh_token_reused",
@@ -257,6 +256,7 @@ class CodexAccountService extends EventEmitter {
     this.loginState = null
     this.loginServer = null
     this.autoRefreshTimer = null
+    this.autoRefreshTimers = new Map()
     this.getCodexCliTarget = null
     this.activeAccountId = ""
   }
@@ -295,6 +295,11 @@ class CodexAccountService extends EventEmitter {
       clearInterval(this.autoRefreshTimer)
       this.autoRefreshTimer = null
     }
+
+    for (const schedule of this.autoRefreshTimers.values()) {
+      clearTimeout(schedule.timer)
+    }
+    this.autoRefreshTimers.clear()
   }
 
   getState() {
@@ -1185,18 +1190,36 @@ class CodexAccountService extends EventEmitter {
   }
 
   async refreshExpiringAccounts() {
-    const threshold = Date.now() + REFRESH_THRESHOLD
+    const now = Date.now()
+    const nextCheckAt = now + AUTO_REFRESH_INTERVAL
     const cliTarget =
       typeof this.getCodexCliTarget === "function"
         ? this.getCodexCliTarget()
         : null
-    const accounts = this.accounts.filter((account) => {
-      return (
+    const accounts = []
+
+    this.accounts.forEach((account) => {
+      if (
         account.autoRefresh !== false &&
         account.requires_reauth !== true &&
-        account.auth?.refreshToken &&
-        (!account.auth.expiresAt || account.auth.expiresAt <= threshold)
-      )
+        account.auth?.refreshToken
+      ) {
+        const expiresAt = accountExpiresAt(account)
+
+        if (!expiresAt || expiresAt <= now) {
+          this.clearScheduledRefresh(account.id)
+          accounts.push(account)
+          return
+        }
+
+        if (expiresAt <= nextCheckAt) {
+          this.scheduleAccountRefresh(account, expiresAt)
+        }
+
+        return
+      }
+
+      this.clearScheduledRefresh(account.id)
     })
 
     for (let index = 0; index < accounts.length; index += 3) {
@@ -1206,6 +1229,53 @@ class CodexAccountService extends EventEmitter {
           .map((account) => this.refreshAccount(account, cliTarget))
       )
     }
+  }
+
+  scheduleAccountRefresh(account, expiresAt) {
+    const currentSchedule = this.autoRefreshTimers.get(account.id)
+
+    if (currentSchedule?.expiresAt === expiresAt) {
+      return
+    }
+
+    this.clearScheduledRefresh(account.id)
+
+    const timer = setTimeout(() => {
+      this.autoRefreshTimers.delete(account.id)
+      const currentAccount = this.accounts.find(item => item.id === account.id)
+
+      if (!currentAccount || accountExpiresAt(currentAccount) > Date.now()) {
+        return
+      }
+
+      const cliTarget =
+        typeof this.getCodexCliTarget === "function"
+          ? this.getCodexCliTarget()
+          : null
+
+      this.refreshAccount(currentAccount, cliTarget).catch((error) => {
+        this.emit("login-state", {
+          status: "failed",
+          message: `Codex 自动刷新失败：${error.message || String(error)}`
+        })
+      })
+    }, Math.max(0, expiresAt - Date.now() + 1000))
+
+    this.autoRefreshTimers.set(account.id, {
+      expiresAt,
+      timer
+    })
+  }
+
+  clearScheduledRefresh(accountId) {
+    const schedule = this.autoRefreshTimers.get(accountId)
+
+    if (!schedule) {
+      return
+    }
+
+    clearTimeout(schedule.timer)
+    this.autoRefreshTimers.delete(accountId)
   }
 
   async refreshAccount(account, cliTarget) {
