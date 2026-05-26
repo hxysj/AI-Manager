@@ -195,6 +195,15 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("codex-account:detail", toPlainPayload(payload)),
   deleteCodexAccount: payload =>
     ipcRenderer.invoke("codex-account:delete", toPlainPayload(payload)),
+  enableCodexProxy: payload =>
+    ipcRenderer.invoke("codex-proxy:enable", toPlainPayload(payload)),
+  disableCodexProxy: () => ipcRenderer.invoke("codex-proxy:disable"),
+  addCodexProxyProvider: payload =>
+    ipcRenderer.invoke("codex-proxy:add-provider", toPlainPayload(payload)),
+  removeCodexProxyProvider: payload =>
+    ipcRenderer.invoke("codex-proxy:remove-provider", toPlainPayload(payload)),
+  activateCodexProxyProvider: payload =>
+    ipcRenderer.invoke("codex-proxy:activate-provider", toPlainPayload(payload)),
   saveRuntimeModel: payload =>
     ipcRenderer.invoke("runtime-model:save", toPlainPayload(payload)),
   switchRuntime: payload =>

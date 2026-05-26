@@ -356,6 +356,7 @@
           :pending="pending"
           :codex-accounts="state.codexAccounts"
           :codex-login-state="state.codexLoginState"
+          :codex-proxy-state="state.codexProxyState"
           :providers="state.providers"
           :runtime-config-schemas="state.runtimeConfigSchemas"
           :runtime-models="state.runtimeModels"
@@ -370,6 +371,11 @@
           @codex-account-refresh="refreshCodexAccount"
           @codex-accounts-refresh="refreshCodexAccounts"
           @codex-account-proxy-save="updateCodexAccountProxy"
+          @codex-proxy-enable="enableCodexProxy"
+          @codex-proxy-disable="disableCodexProxy"
+          @codex-proxy-provider-add="addCodexProxyProvider"
+          @codex-proxy-provider-remove="removeCodexProxyProvider"
+          @codex-proxy-provider-activate="activateCodexProxyProvider"
           @cancel-codex-official-login="cancelCodexOfficialLogin"
           @delete-provider="deleteProvider"
           @save-model="saveRuntimeModel"
@@ -831,9 +837,13 @@
           </div>
         </div>
 
-        <pre v-if="updateDialog.releaseNotes && updateDialog.phase !== 'downloading'" class="update-modal__notes">{{
-          updateDialog.releaseNotes
-        }}</pre>
+        <pre
+          v-if="
+            updateDialog.releaseNotes && updateDialog.phase !== 'downloading'
+          "
+          class="update-modal__notes"
+          >{{ updateDialog.releaseNotes }}</pre
+        >
 
         <footer class="update-modal__footer">
           <button
@@ -1066,6 +1076,12 @@ const state = reactive({
   usage: {},
   codexAccounts: [],
   codexLoginState: null,
+  codexProxyState: {
+    enabled: false,
+    localBaseUrl: "",
+    activeProviderId: "",
+    failoverProviderIds: []
+  },
   providers: [],
   rules: {
     supportedClis: [],
@@ -1562,6 +1578,12 @@ function updateState(nextState) {
   state.usage = nextState.usage || {}
   state.codexAccounts = nextState.codexAccounts || []
   state.codexLoginState = nextState.codexLoginState || null
+  state.codexProxyState = nextState.codexProxyState || {
+    enabled: false,
+    localBaseUrl: "",
+    activeProviderId: "",
+    failoverProviderIds: []
+  }
   state.providers = nextState.providers || []
   state.rules = nextState.rules || state.rules
   state.runtimeConfigSchemas = nextState.runtimeConfigSchemas || {}
@@ -2572,12 +2594,21 @@ async function importCodexAuthJson(payload) {
 }
 
 async function enableCodexAccount(payload) {
-  const success = await runAction(() =>
-    window.aiManager.enableCodexAccount(payload)
-  )
+  const shouldDisableCodexProxy = state.codexProxyState.enabled
+  const success = await runAction(async () => {
+    if (shouldDisableCodexProxy) {
+      await window.aiManager.disableCodexProxy()
+    }
+
+    return window.aiManager.enableCodexAccount(payload)
+  })
 
   if (success) {
-    showSuccessMessage("Codex 官方账号已启用。")
+    showSuccessMessage(
+      shouldDisableCodexProxy
+        ? "Codex 代理接管已关闭，官方账号已启用。"
+        : "Codex 官方账号已启用。"
+    )
   }
 }
 
@@ -2652,6 +2683,54 @@ async function updateCodexAccountProxy(payload) {
   }
 }
 
+async function enableCodexProxy(payload) {
+  const success = await runAction(() =>
+    window.aiManager.enableCodexProxy(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Codex 代理接管已开启。")
+  }
+}
+
+async function disableCodexProxy() {
+  const success = await runAction(() => window.aiManager.disableCodexProxy())
+
+  if (success) {
+    showSuccessMessage("Codex 代理接管已关闭。")
+  }
+}
+
+async function addCodexProxyProvider(payload) {
+  const success = await runAction(() =>
+    window.aiManager.addCodexProxyProvider(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Provider 已加入代理接管列表。")
+  }
+}
+
+async function removeCodexProxyProvider(payload) {
+  const success = await runAction(() =>
+    window.aiManager.removeCodexProxyProvider(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Provider 已移出代理接管列表。")
+  }
+}
+
+async function activateCodexProxyProvider(payload) {
+  const success = await runAction(() =>
+    window.aiManager.activateCodexProxyProvider(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("代理接管目标已切换。")
+  }
+}
+
 async function saveRuntimeModel(payload) {
   const success = await runAction(() =>
     window.aiManager.saveRuntimeModel(payload)
@@ -2663,10 +2742,22 @@ async function saveRuntimeModel(payload) {
 }
 
 async function switchRuntime(payload) {
-  const success = await runAction(() => window.aiManager.switchRuntime(payload))
+  const shouldDisableCodexProxy =
+    payload.cli === "codex" && state.codexProxyState.enabled
+  const success = await runAction(async () => {
+    if (shouldDisableCodexProxy) {
+      await window.aiManager.disableCodexProxy()
+    }
+
+    return window.aiManager.switchRuntime(payload)
+  })
 
   if (success) {
-    showSuccessMessage("Runtime Profile 已切换。")
+    showSuccessMessage(
+      shouldDisableCodexProxy
+        ? "Codex 代理接管已关闭，Runtime Profile 已切换。"
+        : "Runtime Profile 已切换。"
+    )
   }
 }
 

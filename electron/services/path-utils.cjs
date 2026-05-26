@@ -119,6 +119,15 @@ function resolveAppPaths(userDataPath) {
       runtimeProfiles: path.join(storageDir, "runtime-profiles.json"),
       runtimeProviderState: path.join(storageDir, "runtime-provider-state.json"),
       runtimeProviderKeys: path.join(storageDir, "runtime-provider-keys.json"),
+      codexProxyConfig: path.join(storageDir, "codex-proxy-config.json"),
+      codexProxyLiveBackup: path.join(
+        storageDir,
+        "codex-proxy-live-backup.json"
+      ),
+      codexProxyRequestLogs: path.join(
+        storageDir,
+        "codex-proxy-request-logs.json"
+      ),
       codexAccounts: path.join(storageDir, "codex-accounts.json"),
       codexActiveAccountId: path.join(
         storageDir,

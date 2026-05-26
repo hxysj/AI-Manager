@@ -28,6 +28,49 @@
         </section>
 
         <div class="providers-view__toolbar-actions">
+          <label
+            v-if="activeCli === 'codex'"
+            :class="[
+              'providers-view-proxy-switch',
+              { 'providers-view-proxy-switch-disabled': pending }
+            ]"
+            title="Codex 代理接管"
+          >
+            <span>Proxy</span>
+            <input
+              type="checkbox"
+              :checked="codexProxyState.enabled"
+              :disabled="pending"
+              @change="toggleCodexProxySwitch"
+            />
+            <i></i>
+          </label>
+          <button
+            v-if="activeCli === 'codex'"
+            class="providers-view-proxy-manage"
+            type="button"
+            :disabled="pending"
+            @click="showCodexProxyManager = true"
+          >
+            <SlidersHorizontal :size="16" />
+            接管池
+            <span>{{ codexProxyProviderIds.length }}</span>
+          </button>
+          <button
+            v-if="
+              activeCli === 'codex' &&
+              showCodexProxyAddAction &&
+              !codexProxyEnabled &&
+              !codexProxyProviderIds.length
+            "
+            class="providers-view-proxy-add"
+            type="button"
+            :disabled="pending"
+            @click="openCodexProxyProviderPicker"
+          >
+            <Plus :size="16" />
+            加入接管池
+          </button>
           <button
             class="providers-view__system-config"
             type="button"
@@ -48,7 +91,77 @@
         </div>
       </header>
 
-      <section class="providers-view__list-panel">
+      <div v-if="codexProxyEnabled" class="providers-view-proxy-tabs">
+        <button
+          :class="[
+            'providers-view-proxy-tab',
+            { 'providers-view-proxy-tab-active': codexProxyTab === 'proxy' }
+          ]"
+          type="button"
+          @click="codexProxyTab = 'proxy'"
+        >
+          接管池
+        </button>
+        <button
+          :class="[
+            'providers-view-proxy-tab',
+            { 'providers-view-proxy-tab-active': codexProxyTab === 'providers' }
+          ]"
+          type="button"
+          @click="codexProxyTab = 'providers'"
+        >
+          Provider 列表
+        </button>
+      </div>
+
+      <CodexProxyPanel
+        v-if="
+          activeCli === 'codex' &&
+          (!codexProxyEnabled || codexProxyTab === 'proxy')
+        "
+        ref="codexProxyPanelRef"
+        :accounts="codexAccounts"
+        :pending="pending"
+        :providers="scopedProviders"
+        :proxy-state="codexProxyState"
+        @add-provider="
+          (payload) => {
+            showCodexProxyAddAction = false
+            emit('codex-proxy-provider-add', payload)
+          }
+        "
+        @remove-provider="emit('codex-proxy-provider-remove', $event)"
+        @activate-provider="emit('codex-proxy-provider-activate', $event)"
+      />
+
+      <BaseModal
+        v-if="showCodexProxyManager"
+        class="providers-view-proxy-modal"
+        title="接管池管理"
+        description="管理 Codex 代理接管池。"
+        @close="showCodexProxyManager = false"
+      >
+        <CodexProxyPanel
+          mode="manage"
+          :accounts="codexAccounts"
+          :pending="pending"
+          :providers="scopedProviders"
+          :proxy-state="codexProxyState"
+          @add-provider="
+            (payload) => {
+              showCodexProxyAddAction = false
+              emit('codex-proxy-provider-add', payload)
+            }
+          "
+          @remove-provider="emit('codex-proxy-provider-remove', $event)"
+          @activate-provider="emit('codex-proxy-provider-activate', $event)"
+        />
+      </BaseModal>
+
+      <section
+        v-if="!codexProxyEnabled || codexProxyTab === 'providers'"
+        class="providers-view__list-panel"
+      >
         <article
           v-for="item in mixedItems"
           :key="item.key"
@@ -384,6 +497,15 @@
             {{ iconLabel(draft.icon) }}
           </div>
           <section v-if="showIconPicker" class="providers-view__icon-panel">
+            <label class="providers-view-icon-upload">
+              <Upload :size="16" />
+              上传图标
+              <input
+                type="file"
+                accept="image/svg+xml,image/png,image/jpeg,image/webp"
+                @change="uploadCustomIcon"
+              />
+            </label>
             <label class="providers-view__field providers-view__field--wide">
               <span>搜索图标</span>
               <input
@@ -594,6 +716,15 @@
             {{ iconLabel(draft.icon) }}
           </div>
           <section v-if="showIconPicker" class="providers-view__icon-panel">
+            <label class="providers-view-icon-upload">
+              <Upload :size="16" />
+              上传图标
+              <input
+                type="file"
+                accept="image/svg+xml,image/png,image/jpeg,image/webp"
+                @change="uploadCustomIcon"
+              />
+            </label>
             <label class="providers-view__field providers-view__field--wide">
               <span>搜索图标</span>
               <input
@@ -1168,12 +1299,15 @@ import {
   Save,
   Server,
   ShieldCheck,
+  SlidersHorizontal,
   SquarePen,
   Trash2,
+  Upload,
   X
 } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
+import CodexProxyPanel from "@/features/providers/components/CodexProxyPanel.vue"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
@@ -1184,6 +1318,15 @@ const props = defineProps({
   codexLoginState: {
     type: Object,
     default: null
+  },
+  codexProxyState: {
+    type: Object,
+    default: () => ({
+      enabled: false,
+      localBaseUrl: "",
+      activeProviderId: "",
+      failoverProviderIds: []
+    })
   },
   cliTargets: {
     type: Array,
@@ -1224,6 +1367,11 @@ const emit = defineEmits([
   "codex-account-refresh",
   "codex-accounts-refresh",
   "codex-official-login",
+  "codex-proxy-enable",
+  "codex-proxy-disable",
+  "codex-proxy-provider-add",
+  "codex-proxy-provider-remove",
+  "codex-proxy-provider-activate",
   "clear-runtime",
   "cancel-codex-official-login",
   "delete-provider",
@@ -1304,6 +1452,10 @@ const editingCodexAccountId = ref("")
 const editingCodexProxy = ref("")
 const codexAccountDetail = ref(null)
 const codexAccountDetailLoading = ref(false)
+const codexProxyPanelRef = ref(null)
+const showCodexProxyAddAction = ref(false)
+const showCodexProxyManager = ref(false)
+const codexProxyTab = ref("proxy")
 const providerDetail = ref(null)
 const manualCallbackUrl = ref("")
 const countdownNow = ref(Date.now())
@@ -1403,6 +1555,14 @@ const profileMap = computed(() => {
 
 const runtimeState = computed(() => {
   return props.runtimeProviderState[activeCli.value] || {}
+})
+
+const codexProxyEnabled = computed(() => {
+  return activeCli.value === "codex" && props.codexProxyState.enabled
+})
+
+const codexProxyProviderIds = computed(() => {
+  return props.codexProxyState.failoverProviderIds || []
 })
 
 const runtimeStatus = computed(() => {
@@ -1900,12 +2060,54 @@ function firstModelName(providerId) {
 }
 
 function iconLabel(icon) {
+  if (/^(data:|https?:\/\/|file:|blob:)/i.test(String(icon || ""))) {
+    return "自定义图标"
+  }
+
   return String(icon || "").replace(/\.svg$/, "")
 }
 
 function selectIcon(icon) {
   draft.icon = icon
   showIconPicker.value = false
+}
+
+function uploadCustomIcon(event) {
+  const input = event.target
+  const file = input.files?.[0]
+
+  if (!file) {
+    return
+  }
+
+  if (
+    !["image/svg+xml", "image/png", "image/jpeg", "image/webp"].includes(
+      file.type
+    )
+  ) {
+    createMessage.error("请选择 SVG、PNG、JPG 或 WebP 图标。")
+    input.value = ""
+    return
+  }
+
+  if (file.size > 1024 * 1024) {
+    createMessage.error("图标文件不能超过 1MB。")
+    input.value = ""
+    return
+  }
+
+  const reader = new FileReader()
+
+  reader.onload = () => {
+    draft.icon = String(reader.result || "")
+    showIconPicker.value = false
+    input.value = ""
+  }
+  reader.onerror = () => {
+    createMessage.error("图标读取失败。")
+    input.value = ""
+  }
+  reader.readAsDataURL(file)
 }
 
 function submitProvider() {
@@ -1961,6 +2163,28 @@ function enableProvider(provider) {
     providerId: provider.id,
     model
   })
+}
+
+function toggleCodexProxySwitch(event) {
+  if (event.target.checked) {
+    if (!codexProxyProviderIds.value.length) {
+      event.target.checked = false
+      showCodexProxyAddAction.value = true
+      createMessage.error("请先添加代理接管池")
+      return
+    }
+
+    emit("codex-proxy-enable", {})
+    event.target.checked = props.codexProxyState.enabled
+    return
+  }
+
+  emit("codex-proxy-disable")
+  event.target.checked = props.codexProxyState.enabled
+}
+
+function openCodexProxyProviderPicker() {
+  codexProxyPanelRef.value?.openProviderPicker()
 }
 
 function clearRuntime() {
@@ -2086,6 +2310,14 @@ watch(
   () => {
     manualCallbackUrl.value = ""
   }
+)
+
+watch(
+  () => props.codexProxyState.enabled,
+  (enabled) => {
+    codexProxyTab.value = enabled ? "proxy" : "providers"
+  },
+  { immediate: true }
 )
 
 watch(
@@ -2282,6 +2514,133 @@ watch(
     opacity: 0.55;
   }
 
+  &-proxy-switch {
+    display: inline-flex;
+    height: 38px;
+    align-items: center;
+    gap: 8px;
+    padding: 0 10px;
+    border: 1px solid #d8e0eb;
+    border-radius: 12px;
+    background: #ffffff;
+    color: #475467;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  &-proxy-switch input {
+    display: none;
+  }
+
+  &-proxy-switch i {
+    position: relative;
+    width: 34px;
+    height: 18px;
+    border-radius: 999px;
+    background: #d0d5dd;
+  }
+
+  &-proxy-switch i::before {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 12px;
+    height: 12px;
+    border-radius: 999px;
+    background: #ffffff;
+    transition: left 0.18s ease;
+  }
+
+  &-proxy-switch input:checked + i {
+    background: #d7a533;
+  }
+
+  &-proxy-switch input:checked + i::before {
+    left: 19px;
+  }
+
+  &-proxy-switch-disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  &-proxy-add,
+  &-proxy-manage {
+    display: inline-flex;
+    height: 38px;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 12px;
+    border: 1px solid #f2b94b;
+    border-radius: 12px;
+    background: #fffaf0;
+    color: #9a6700;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  &-proxy-manage {
+    border-color: #d8e0eb;
+    background: #ffffff;
+    color: #475467;
+  }
+
+  &-proxy-manage span {
+    display: grid;
+    min-width: 18px;
+    height: 18px;
+    place-items: center;
+    border-radius: 999px;
+    background: #f2f4f7;
+    color: #667085;
+    font-size: 12px;
+  }
+
+  &-proxy-manage:hover {
+    border-color: #f2b94b;
+    color: #9a6700;
+  }
+
+  &-proxy-add:disabled,
+  &-proxy-manage:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  &-proxy-tabs {
+    display: inline-flex;
+    flex: none;
+    align-self: flex-start;
+    gap: 4px;
+    margin: 12px 14px 0;
+    padding: 4px;
+    border: 1px solid #edf0f3;
+    border-radius: 12px;
+    background: #f7f8fa;
+  }
+
+  &-proxy-tab {
+    height: 32px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 9px;
+    background: transparent;
+    color: #667085;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  &-proxy-tab-active {
+    background: #ffffff;
+    color: #111827;
+    box-shadow: 0 1px 5px rgba(15, 23, 42, 0.08);
+  }
+
   &__icon-button {
     width: 30px;
     height: 30px;
@@ -2380,6 +2739,10 @@ watch(
     padding: 14px 14px;
     border: 0;
     border-radius: 0;
+  }
+
+  :deep(.codex-proxy-panel) + &__list-panel {
+    height: calc(100vh - 260px);
   }
 
   &__runtime {
@@ -3055,6 +3418,25 @@ watch(
     border: 1px solid #dfe3e8;
     border-radius: 12px;
     background: #fbfcfd;
+  }
+
+  &-icon-upload {
+    display: inline-flex;
+    width: fit-content;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 12px;
+    border: 1px solid #c7d7fe;
+    border-radius: 8px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    cursor: pointer;
+    font-size: 0.84rem;
+    font-weight: 700;
+  }
+
+  &-icon-upload input {
+    display: none;
   }
 
   &__icon-grid {
