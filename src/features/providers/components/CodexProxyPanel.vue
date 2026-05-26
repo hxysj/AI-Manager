@@ -14,7 +14,7 @@
           </strong>
           <span class="codex-proxy-panel-running">运行中</span>
         </div>
-        <div class="codex-proxy-panel-meta">
+        <!-- <div class="codex-proxy-panel-meta">
           <span>
             {{
               proxyState.enabled
@@ -25,7 +25,7 @@
             }}
           </span>
           <small>{{ proxyState.localBaseUrl }}</small>
-        </div>
+        </div> -->
       </div>
       <div class="codex-proxy-panel-actions">
         <button
@@ -44,7 +44,7 @@
       <div class="codex-proxy-panel-pool-head">
         <div class="codex-proxy-panel-pool-title">
           <span>接管池</span>
-          <small>已加入 {{ proxyProviders.length }} 个 Provider</small>
+          <!-- <small>已加入 {{ proxyProviders.length }} 个 Provider</small> -->
         </div>
         <div class="codex-proxy-panel-pool-actions">
           <strong>
@@ -149,49 +149,120 @@
 
     <div v-if="mode !== 'manage'" class="codex-proxy-panel-logs">
       <div class="codex-proxy-panel-logs-head">
-        <span>请求日志</span>
-        <small>共 {{ proxyLogs.length }} 条</small>
-      </div>
-      <div v-if="proxyLogs.length" class="codex-proxy-panel-logs-list">
-        <article
-          v-for="log in proxyLogs"
-          :key="log.id"
-          :class="[
-            'codex-proxy-panel-log-item',
-            { 'codex-proxy-panel-log-item-error': !log.ok }
-          ]"
-          role="button"
-          tabindex="0"
-          @click="openProxyLogDetail(log)"
-          @keydown.enter="openProxyLogDetail(log)"
-          @keydown.space.prevent="openProxyLogDetail(log)"
-        >
-          <div
-            :class="[
-              'codex-proxy-panel-log-code',
-              { 'codex-proxy-panel-log-code-ok': log.ok }
-            ]"
+        <div>
+          <span>请求日志</span>
+          <small>
+            显示 {{ filteredProxyLogs.length }} / {{ proxyLogs.length }} 条
+          </small>
+        </div>
+        <div class="codex-proxy-panel-logs-filter">
+          <button
+            type="button"
+            :class="{
+              'codex-proxy-panel-logs-filter-active': proxyLogFilter === 'all'
+            }"
+            @click="proxyLogFilter = 'all'"
           >
-            <span>{{ log.ok ? "OK" : "ERR" }}</span>
-            <strong>{{ log.statusCode || "--" }}</strong>
-          </div>
-          <div class="codex-proxy-panel-log-main">
-            <div class="codex-proxy-panel-log-title">
-              <strong>{{ logProviderName(log) }}</strong>
-              <span>{{ formatTargetType(log.targetType) }}</span>
-            </div>
-            <div class="codex-proxy-panel-log-meta">
-              <span>{{ log.method || "POST" }}</span>
-              <span>{{ log.endpoint }}</span>
-              <span>{{ formatProxyLogTime(log.createdAt) }}</span>
-              <span>{{ log.latencyMs || 0 }} ms</span>
-            </div>
-            <small v-if="log.errorMessage">{{ log.errorMessage }}</small>
-          </div>
-          <span class="codex-proxy-panel-log-status"> 详情 </span>
-        </article>
+            全部
+          </button>
+          <button
+            type="button"
+            :class="{
+              'codex-proxy-panel-logs-filter-active':
+                proxyLogFilter === 'success'
+            }"
+            @click="proxyLogFilter = 'success'"
+          >
+            成功
+          </button>
+          <button
+            type="button"
+            :class="{
+              'codex-proxy-panel-logs-filter-active': proxyLogFilter === 'error'
+            }"
+            @click="proxyLogFilter = 'error'"
+          >
+            错误
+          </button>
+        </div>
       </div>
-      <div v-else class="codex-proxy-panel-empty">暂无代理请求日志。</div>
+      <div v-if="filteredProxyLogs.length" class="codex-proxy-panel-logs-body">
+        <div class="codex-proxy-panel-logs-list">
+          <article
+            v-for="(log, index) in pagedProxyLogs"
+            :key="
+              log.id ||
+              `${proxyLogStartIndex + index}-${log.createdAt}-${log.providerId}`
+            "
+            :class="[
+              'codex-proxy-panel-log-item',
+              { 'codex-proxy-panel-log-item-error': !log.ok }
+            ]"
+            role="button"
+            tabindex="0"
+            @click="openProxyLogDetail(log)"
+            @keydown.enter="openProxyLogDetail(log)"
+            @keydown.space.prevent="openProxyLogDetail(log)"
+          >
+            <div
+              :class="[
+                'codex-proxy-panel-log-code',
+                { 'codex-proxy-panel-log-code-ok': log.ok }
+              ]"
+            >
+              <span>{{ log.ok ? "OK" : "ERR" }}</span>
+              <strong>{{ log.statusCode || "--" }}</strong>
+            </div>
+            <div class="codex-proxy-panel-log-main">
+              <div class="codex-proxy-panel-log-title">
+                <strong>{{ logProviderName(log) }}</strong>
+                <span>{{ formatTargetType(log.targetType) }}</span>
+              </div>
+              <div class="codex-proxy-panel-log-meta">
+                <span>{{ log.method || "POST" }}</span>
+                <span>{{ log.endpoint }}</span>
+                <span>{{ formatProxyLogTime(log.createdAt) }}</span>
+                <span>{{ log.latencyMs || 0 }} ms</span>
+              </div>
+              <small v-if="log.errorMessage">{{ log.errorMessage }}</small>
+            </div>
+            <span class="codex-proxy-panel-log-status"> 详情 </span>
+          </article>
+        </div>
+        <div class="codex-proxy-panel-logs-pager">
+          <div>
+            <span>
+              {{ proxyLogStartIndex + 1 }}-{{ proxyLogEndIndex }} /
+              {{ filteredProxyLogs.length }}
+            </span>
+            <select v-model.number="proxyLogPageSize">
+              <option :value="20">20 条/页</option>
+              <option :value="50">50 条/页</option>
+              <option :value="100">100 条/页</option>
+            </select>
+          </div>
+          <div>
+            <button
+              type="button"
+              :disabled="proxyLogPage <= 1"
+              @click="prevProxyLogPage"
+            >
+              上一页
+            </button>
+            <strong>第 {{ proxyLogPage }} / {{ proxyLogPageCount }} 页</strong>
+            <button
+              type="button"
+              :disabled="proxyLogPage >= proxyLogPageCount"
+              @click="nextProxyLogPage"
+            >
+              下一页
+            </button>
+          </div>
+        </div>
+      </div>
+      <div v-else class="codex-proxy-panel-empty">
+        {{ proxyLogs.length ? "当前筛选暂无请求日志。" : "暂无代理请求日志。" }}
+      </div>
     </div>
   </section>
 
@@ -316,7 +387,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import { Plus, ShieldCheck, X } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
@@ -352,6 +423,9 @@ const emit = defineEmits([
 
 const showProviderPicker = ref(false)
 const selectedProxyLog = ref(null)
+const proxyLogFilter = ref("all")
+const proxyLogPage = ref(1)
+const proxyLogPageSize = ref(20)
 const proxyLogTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
   month: "2-digit",
   day: "2-digit",
@@ -367,7 +441,7 @@ const proxyProviderIds = computed(() => {
 
 const targetItems = computed(() => {
   return [
-    ...props.providers.map((item) => ({
+    ...props.providers.map(item => ({
       id: item.id,
       type: "provider",
       name: item.name,
@@ -375,7 +449,7 @@ const targetItems = computed(() => {
       description: item.note || item.baseUrl || "未配置备注",
       disabled: item.enabled === false
     })),
-    ...props.accounts.map((item) => ({
+    ...props.accounts.map(item => ({
       id: `account:${item.id}`,
       accountId: item.id,
       type: "account",
@@ -390,16 +464,14 @@ const targetItems = computed(() => {
 const activeProxyProvider = computed(() => {
   return (
     targetItems.value.find(
-      (item) => item.id === props.proxyState.activeProviderId
+      item => item.id === props.proxyState.activeProviderId
     ) || null
   )
 })
 
 const proxyProviders = computed(() => {
   return proxyProviderIds.value
-    .map((providerId) =>
-      targetItems.value.find((item) => item.id === providerId)
-    )
+    .map(providerId => targetItems.value.find(item => item.id === providerId))
     .filter(Boolean)
 })
 
@@ -416,6 +488,60 @@ const firstProxyProvider = computed(() => {
 const proxyLogs = computed(() => {
   return props.proxyState.logs || []
 })
+
+const filteredProxyLogs = computed(() => {
+  if (proxyLogFilter.value === "success") {
+    return proxyLogs.value.filter(item => item.ok)
+  }
+
+  if (proxyLogFilter.value === "error") {
+    return proxyLogs.value.filter(item => !item.ok)
+  }
+
+  return proxyLogs.value
+})
+
+const proxyLogPageCount = computed(() =>
+  Math.max(
+    1,
+    Math.ceil(filteredProxyLogs.value.length / proxyLogPageSize.value)
+  )
+)
+
+const proxyLogStartIndex = computed(
+  () => (proxyLogPage.value - 1) * proxyLogPageSize.value
+)
+
+const proxyLogEndIndex = computed(() =>
+  Math.min(
+    proxyLogStartIndex.value + proxyLogPageSize.value,
+    filteredProxyLogs.value.length
+  )
+)
+
+const pagedProxyLogs = computed(() =>
+  filteredProxyLogs.value.slice(
+    proxyLogStartIndex.value,
+    proxyLogEndIndex.value
+  )
+)
+
+watch(proxyLogFilter, () => {
+  proxyLogPage.value = 1
+})
+
+watch(proxyLogPageSize, () => {
+  proxyLogPage.value = 1
+})
+
+watch(
+  () => filteredProxyLogs.value.length,
+  () => {
+    if (proxyLogPage.value > proxyLogPageCount.value) {
+      proxyLogPage.value = proxyLogPageCount.value
+    }
+  }
+)
 
 function addTarget(target) {
   showProviderPicker.value = false
@@ -473,7 +599,7 @@ function formatTargetType(value) {
 function logProviderName(log) {
   return (
     log.providerName ||
-    targetItems.value.find((item) => item.id === log.providerId)?.name ||
+    targetItems.value.find(item => item.id === log.providerId)?.name ||
     log.providerId ||
     "未知目标"
   )
@@ -485,6 +611,14 @@ function openProxyLogDetail(log) {
 
 function closeProxyLogDetail() {
   selectedProxyLog.value = null
+}
+
+function prevProxyLogPage() {
+  proxyLogPage.value = Math.max(1, proxyLogPage.value - 1)
+}
+
+function nextProxyLogPage() {
+  proxyLogPage.value = Math.min(proxyLogPageCount.value, proxyLogPage.value + 1)
 }
 
 function openProviderPicker() {
@@ -657,8 +791,11 @@ defineExpose({
 
   &-pool-list {
     display: grid;
+    max-height: 160px;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
+    overflow-y: auto;
+    padding-right: 4px;
   }
 
   &-pool-item,
@@ -812,9 +949,62 @@ defineExpose({
     font-size: 0.8rem;
   }
 
+  &-logs-head div:first-child {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+
   &-logs-head span {
     color: #111827;
     font-weight: 700;
+  }
+
+  &-logs-head small {
+    color: #667085;
+    font-size: 0.76rem;
+  }
+
+  &-logs-filter {
+    display: flex;
+    flex: none;
+    overflow: hidden;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  &-logs-filter button {
+    display: inline-flex;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 12px;
+    border: 0;
+    border-right: 1px solid #d8e0eb;
+    background: transparent;
+    color: #475467;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &-logs-filter button:last-child {
+    border-right: 0;
+  }
+
+  &-logs-filter button:hover,
+  &-logs-filter-active {
+    background: #eef4ff;
+    color: #1d4ed8;
+  }
+
+  &-logs-body {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 8px;
   }
 
   &-logs-list {
@@ -824,6 +1014,61 @@ defineExpose({
     gap: 6px;
     overflow-y: auto;
     padding-right: 4px;
+  }
+
+  &-logs-pager {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: #667085;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &-logs-pager div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &-logs-pager select {
+    height: 30px;
+    padding: 0 8px;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #111827;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &-logs-pager button {
+    display: inline-flex;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #1d4ed8;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &-logs-pager button:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  &-logs-pager strong {
+    color: #111827;
+    font-size: 0.78rem;
+    white-space: nowrap;
   }
 
   &-log-item {
