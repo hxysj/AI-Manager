@@ -3,6 +3,7 @@ const fs = require("node:fs")
 const os = require("node:os")
 const crypto = require("node:crypto")
 const fsp = require("node:fs/promises")
+const { spawn } = require("node:child_process")
 const { AsyncLocalStorage } = require("node:async_hooks")
 const {
   app,
@@ -49,6 +50,7 @@ let updateStatus = {
   transferred: 0,
   total: 0,
   bytesPerSecond: 0,
+  installDirectory: "",
   configured: false,
   isDev: !app.isPackaged,
   updatedAt: 0
@@ -1045,6 +1047,10 @@ function formatUpdateReleaseNotes(value) {
   return String(value || "").trim()
 }
 
+function getDefaultUpdateInstallDirectory() {
+  return path.dirname(app.getPath("exe"))
+}
+
 function setupAutoUpdater() {
   const updateConfig = loadUpdateConfig()
   const githubToken = String(updateConfig.githubToken || "").trim()
@@ -1057,7 +1063,7 @@ function setupAutoUpdater() {
   updateConfigured = true
   autoUpdater.autoDownload = false
   autoUpdater.disableDifferentialDownload = true
-  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.addAuthHeader(`Bearer ${githubToken}`)
 
   autoUpdater.on("checking-for-update", () => {
@@ -1069,7 +1075,8 @@ function setupAutoUpdater() {
       percent: 0,
       transferred: 0,
       total: 0,
-      bytesPerSecond: 0
+      bytesPerSecond: 0,
+      installDirectory: getDefaultUpdateInstallDirectory()
     })
   })
 
@@ -1124,7 +1131,8 @@ function setupAutoUpdater() {
       percent: 0,
       transferred: 0,
       total: 0,
-      bytesPerSecond: 0
+      bytesPerSecond: 0,
+      installDirectory: getDefaultUpdateInstallDirectory()
     })
   })
 
@@ -1145,10 +1153,11 @@ function setupAutoUpdater() {
     updatePromptOpen = true
     sendUpdateStatus({
       phase: "downloaded",
-      message: `新版本 ${info.version} 已下载完成`,
+      message: `新版本 ${info.version} 已下载完成，请在安装向导中确认安装目录。`,
       version: info.version,
       manual: true,
-      percent: 100
+      percent: 100,
+      installDirectory: getDefaultUpdateInstallDirectory()
     })
   })
 }
@@ -1171,7 +1180,8 @@ async function downloadAppUpdate() {
     percent: 0,
     transferred: 0,
     total: 0,
-    bytesPerSecond: 0
+    bytesPerSecond: 0,
+    installDirectory: getDefaultUpdateInstallDirectory()
   })
 
   try {
@@ -1189,14 +1199,34 @@ async function downloadAppUpdate() {
   return getUpdateStatus()
 }
 
-function installAppUpdate() {
+function installAppUpdate(payload = {}) {
+  const installDirectory = String(
+    payload.installDirectory || getDefaultUpdateInstallDirectory()
+  ).trim()
+  const installerPath = autoUpdater.installerPath
+
+  if (!installDirectory) {
+    throw new Error("安装目录不能为空")
+  }
+
+  if (!installerPath) {
+    throw new Error("更新安装包未下载完成")
+  }
+
   sendUpdateStatus({
     phase: "installing",
-    message: "正在重启并安装更新。",
-    manual: true
+    message: "正在打开安装向导，安装目录可在向导中继续确认。",
+    manual: true,
+    installDirectory
   })
+  spawn(installerPath, [`/D=${installDirectory}`], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false
+  }).unref()
   isQuitting = true
-  autoUpdater.quitAndInstall()
+  require("electron").autoUpdater.emit("before-quit-for-update")
+  app.quit()
   return getUpdateStatus()
 }
 
@@ -2074,7 +2104,9 @@ function registerIpc() {
   registerLoggedIpc("app:check-updates", async () => checkForAppUpdates(true))
   registerLoggedIpc("app:update-status", async () => getUpdateStatus())
   registerLoggedIpc("app:update-download", async () => downloadAppUpdate())
-  registerLoggedIpc("app:update-install", async () => installAppUpdate())
+  registerLoggedIpc("app:update-install", async (_, payload = {}) =>
+    installAppUpdate(payload)
+  )
   registerLoggedIpc("app:update-dismiss", async () => dismissAppUpdate())
   registerLoggedIpc("app:close-action", async (_, payload) => {
     handleCloseAction(payload)
@@ -2269,6 +2301,16 @@ function registerIpc() {
       restoreId,
       fileName: cloudSync.fileName,
       preview: await managerService.previewDataBackupRestore(content)
+    }))
+  })
+
+  registerLoggedIpc("data:cloud-inspect", async (_, payload) => {
+    const cloudSync = normalizeCloudSyncSettings(payload)
+    const content = await downloadWebDavBackup(cloudSync)
+
+    return JSON.parse(JSON.stringify({
+      fileName: cloudSync.fileName,
+      backup: managerService.inspectDataBackup(content)
     }))
   })
 

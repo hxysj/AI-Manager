@@ -80,7 +80,8 @@ contextBridge.exposeInMainWorld("aiManager", {
   checkForUpdates: () => ipcRenderer.invoke("app:check-updates"),
   getUpdateStatus: () => ipcRenderer.invoke("app:update-status"),
   downloadUpdate: () => ipcRenderer.invoke("app:update-download"),
-  installUpdate: () => ipcRenderer.invoke("app:update-install"),
+  installUpdate: payload =>
+    ipcRenderer.invoke("app:update-install", toPlainPayload(payload)),
   dismissUpdate: () => ipcRenderer.invoke("app:update-dismiss"),
   showMainPanel: () => ipcRenderer.invoke("quick-switch:show-main"),
   setQuickSwitchCollapsed: payload =>
@@ -103,6 +104,8 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("data:local-backup-restore", toPlainPayload(payload)),
   pushCloudBackup: payload =>
     ipcRenderer.invoke("data:cloud-push", toPlainPayload(payload)),
+  inspectCloudBackup: payload =>
+    ipcRenderer.invoke("data:cloud-inspect", toPlainPayload(payload)),
   previewCloudBackupRestore: payload =>
     ipcRenderer.invoke("data:cloud-preview", toPlainPayload(payload)),
   pullCloudBackup: payload =>
