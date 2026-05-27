@@ -363,6 +363,10 @@
               <UploadCloud :size="16" />
               推送到坚果云
             </button>
+            <button type="button" @click="inspectCloudData">
+              <Eye :size="16" />
+              查看云端备份
+            </button>
             <button type="button" @click="pullCloudData">
               <DownloadCloud :size="16" />
               从坚果云恢复
@@ -504,6 +508,7 @@ import { computed, reactive, ref, watch } from "vue"
 import {
   Download,
   DownloadCloud,
+  Eye,
   FolderOpen,
   RefreshCw,
   RotateCcw,
@@ -546,6 +551,7 @@ const emit = defineEmits([
   "local-backups-refresh",
   "local-backup-restore",
   "push-cloud-data",
+  "inspect-cloud-data",
   "pull-cloud-data"
 ])
 
@@ -747,6 +753,10 @@ function emitCloudSync(eventName) {
 
 function pushCloudData() {
   emitCloudSync("push-cloud-data")
+}
+
+function inspectCloudData() {
+  emitCloudSync("inspect-cloud-data")
 }
 
 function pullCloudData() {

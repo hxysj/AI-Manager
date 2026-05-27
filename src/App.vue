@@ -425,6 +425,7 @@
           @local-backup-now="createLocalBackup"
           @local-backup-restore="previewLocalBackupRestore"
           @local-backups-refresh="refreshLocalBackups"
+          @inspect-cloud-data="inspectCloudBackup"
           @pull-cloud-data="pullCloudBackup"
           @push-cloud-data="pushCloudBackup"
           @check-update="checkForAppUpdates"
@@ -791,6 +792,55 @@
       </div>
     </BaseModal>
 
+    <BaseModal
+      v-if="cloudBackupView"
+      title="云端备份内容"
+      :description="cloudBackupDescription"
+      @close="closeCloudBackupView"
+    >
+      <div class="cloud-backup-modal">
+        <div class="cloud-backup-modal__summary">
+          <span>文件 {{ cloudBackupView.backup.fileCount }} 个</span>
+          <span>目录 {{ cloudBackupView.backup.directoryCount }} 个</span>
+          <span>条目 {{ cloudBackupView.backup.entryCount }} 个</span>
+        </div>
+
+        <div class="cloud-backup-modal__body">
+          <aside class="cloud-backup-modal__list">
+            <button
+              v-for="entry in cloudBackupView.backup.entries"
+              :key="entry.path"
+              :class="[
+                'cloud-backup-modal__entry',
+                {
+                  'cloud-backup-modal__entry--active':
+                    entry.path === selectedCloudBackupPath
+                }
+              ]"
+              type="button"
+              @click="selectedCloudBackupPath = entry.path"
+            >
+              <strong>{{ entry.typeName }}</strong>
+              <span>{{ entry.path }}</span>
+            </button>
+          </aside>
+
+          <section class="cloud-backup-modal__content">
+            <div v-if="selectedCloudBackupEntry" class="cloud-backup-modal__head">
+              <div>
+                <strong>{{ selectedCloudBackupEntry.typeName }}</strong>
+                <span>{{ selectedCloudBackupEntry.path }}</span>
+              </div>
+              <small>{{ formatBackupEntrySize(selectedCloudBackupEntry.size) }}</small>
+            </div>
+            <pre v-if="selectedCloudBackupEntry">{{
+              selectedCloudBackupEntry.content || "空内容"
+            }}</pre>
+          </section>
+        </div>
+      </div>
+    </BaseModal>
+
     <div v-if="updateDialog.open" class="update-modal">
       <div class="update-modal__overlay"></div>
       <section class="update-modal__panel" role="dialog" aria-modal="true">
@@ -879,7 +929,7 @@
             type="button"
             @click="installAppUpdate"
           >
-            重启安装
+            打开安装向导
           </button>
           <button
             v-else-if="updateDialog.phase === 'downloading'"
@@ -1182,6 +1232,7 @@ const updateDialog = reactive({
   transferred: 0,
   total: 0,
   bytesPerSecond: 0,
+  installDirectory: "",
   manual: false
 })
 const importCandidates = ref([])
@@ -1191,6 +1242,8 @@ const restorePreview = ref(null)
 const restoreSource = ref(null)
 const restoreCompareKey = ref("")
 const restoreChoices = reactive({})
+const cloudBackupView = ref(null)
+const selectedCloudBackupPath = ref("")
 const { loading: pending, withGlobalLoading } = useGlobalLoading()
 
 let unsubscribe = null
@@ -1366,6 +1419,24 @@ const restorePreviewDescription = computed(() => {
         : restoreSource.value?.filePath || "本地备份"
 
   return `从 ${sourceName} 兼容合并配置数据。`
+})
+
+const cloudBackupDescription = computed(() => {
+  if (!cloudBackupView.value) {
+    return ""
+  }
+
+  return `${cloudBackupView.value.fileName} · 创建于 ${formatCloudBackupTime(
+    cloudBackupView.value.backup.createdAt
+  )}`
+})
+
+const selectedCloudBackupEntry = computed(() => {
+  return (
+    cloudBackupView.value?.backup.entries.find(
+      (entry) => entry.path === selectedCloudBackupPath.value
+    ) || null
+  )
 })
 
 const restoreCanSubmit = computed(() => {
@@ -1707,6 +1778,37 @@ function formatLogTime(value) {
   }).format(new Date(Number(value || 0)))
 }
 
+function formatCloudBackupTime(value) {
+  const timestamp = Number(value || 0)
+
+  if (!timestamp) {
+    return "未知时间"
+  }
+
+  return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).format(new Date(timestamp))
+}
+
+function formatBackupEntrySize(value) {
+  const size = Number(value || 0)
+
+  if (size < 1024) {
+    return `${size} B`
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`
+  }
+
+  return `${(size / 1024 / 1024).toFixed(2)} MB`
+}
+
 function formatLogPayload(value) {
   return JSON.stringify(value, null, 2)
 }
@@ -1791,6 +1893,8 @@ function applyUpdateStatus(status = {}) {
   updateDialog.transferred = Number(status.transferred || 0)
   updateDialog.total = Number(status.total || 0)
   updateDialog.bytesPerSecond = Number(status.bytesPerSecond || 0)
+  updateDialog.installDirectory =
+    status.installDirectory || updateDialog.installDirectory || ""
   updateDialog.manual = Boolean(status.manual)
 
   if (updateDialog.phase === "error" && updateDialog.message) {
@@ -2105,7 +2209,9 @@ async function downloadAppUpdate() {
 
 async function installAppUpdate() {
   try {
-    await window.aiManager.installUpdate()
+    await window.aiManager.installUpdate({
+      installDirectory: updateDialog.installDirectory
+    })
   } catch (error) {
     applyUpdateStatus({
       phase: "error",
@@ -2223,6 +2329,24 @@ async function pushCloudBackup(payload) {
   })
 }
 
+async function inspectCloudBackup(payload) {
+  await withGlobalLoading(async () => {
+    try {
+      const result = await window.aiManager.inspectCloudBackup(payload)
+
+      cloudBackupView.value = result
+      selectedCloudBackupPath.value =
+        result.backup?.entries.find(
+          (entry) => entry.path === "storage/usage-pricing.json"
+        )?.path ||
+        result.backup?.entries.find((entry) => entry.type === "file")?.path ||
+        ""
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
+}
+
 async function pullCloudBackup(payload) {
   await withGlobalLoading(async () => {
     try {
@@ -2238,6 +2362,11 @@ async function pullCloudBackup(payload) {
       showErrorMessage(error)
     }
   })
+}
+
+function closeCloudBackupView() {
+  cloudBackupView.value = null
+  selectedCloudBackupPath.value = ""
 }
 
 function openRestorePreview(result, type) {
@@ -2258,7 +2387,8 @@ function openRestorePreview(result, type) {
   restoreCompareKey.value = ""
 
   for (const item of result.preview?.conflicts || []) {
-    restoreChoices[item.key] = "current"
+    restoreChoices[item.key] =
+      item.path === "storage/usage-pricing.json" ? "backup" : "current"
   }
 }
 
@@ -3982,6 +4112,141 @@ onBeforeUnmount(() => {
   &:disabled {
     cursor: not-allowed;
     opacity: 0.52;
+  }
+}
+
+.cloud-backup-modal {
+  display: flex;
+  height: min(680px, calc(100vh - 180px));
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+
+  &__summary {
+    display: flex;
+    gap: 8px;
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    font-weight: 700;
+  }
+
+  &__summary span {
+    padding: 4px 8px;
+    border-radius: 999px;
+    background: var(--color-primary-soft);
+  }
+
+  &__body {
+    display: grid;
+    flex: 1;
+    min-height: 0;
+    grid-template-columns: 300px minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  &__list {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 8px;
+    overflow: auto;
+    padding-right: 4px;
+  }
+
+  &__entry {
+    display: flex;
+    min-height: 58px;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 3px;
+    padding: 9px 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel-soft);
+    color: var(--color-text);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  &__entry--active {
+    border-color: #8eb6d9;
+    background: #eef6ff;
+  }
+
+  &__entry strong {
+    font-size: 0.82rem;
+  }
+
+  &__entry span {
+    width: 100%;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__content {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  &__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px;
+    border-bottom: 1px solid var(--color-line);
+    background: #f7fafc;
+  }
+
+  &__head div {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  &__head strong {
+    color: var(--color-text);
+    font-size: 0.88rem;
+  }
+
+  &__head span {
+    color: var(--color-text-muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+    word-break: break-all;
+  }
+
+  &__head small {
+    flex: none;
+    color: var(--color-text-muted);
+    font-size: 0.76rem;
+    font-weight: 700;
+  }
+
+  &__content pre {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    margin: 0;
+    padding: 12px;
+    color: var(--color-text);
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.76rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
   }
 }
 

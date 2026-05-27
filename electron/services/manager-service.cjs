@@ -350,6 +350,90 @@ function readBackupEntryJson(entry) {
   return JSON.parse(readBackupEntryText(entry))
 }
 
+function createBackupViewEntry(pathName, typeName, content) {
+  return {
+    path: pathName,
+    type: "file",
+    typeName,
+    size: Buffer.byteLength(content, "utf8"),
+    content
+  }
+}
+
+function createBackupEntryView(entry) {
+  if (entry.type === "dir") {
+    return {
+      path: entry.path,
+      type: entry.type,
+      typeName: "目录",
+      size: 0,
+      content: ""
+    }
+  }
+
+  if (entry.type === "symlink") {
+    return {
+      path: entry.path,
+      type: entry.type,
+      typeName: "链接",
+      size: Buffer.byteLength(entry.target || "", "utf8"),
+      content: entry.target || ""
+    }
+  }
+
+  const buffer = Buffer.from(entry.content, "base64")
+  const text = buffer.toString("utf8")
+
+  return {
+    path: entry.path,
+    type: entry.type,
+    typeName: restoreStorageNames[entry.path] || "文件",
+    size: buffer.length,
+    content: isStorageJsonPath(entry.path)
+      ? JSON.stringify(JSON.parse(text), null, 2)
+      : text
+  }
+}
+
+function createBackupDataView(content) {
+  const backup = parseBackup(content)
+  const appSettingsContent = `${JSON.stringify(
+    backup.appSettings || {},
+    null,
+    2
+  )}\n`
+  const runtimeProviderKeys = backup.runtimeProviderKeys
+    ? decryptBackupData(backup.runtimeProviderKeys)
+    : {}
+  const entries = [
+    createBackupViewEntry(
+      "app-settings.json",
+      "应用设置",
+      appSettingsContent
+    ),
+    ...backup.workspaceEntries.map((entry) => createBackupEntryView(entry))
+  ]
+
+  if (backup.runtimeProviderKeys) {
+    entries.push(
+      createBackupViewEntry(
+        "runtime-provider-keys",
+        "Runtime 密钥",
+        `已加密保存 ${Object.keys(runtimeProviderKeys).length} 个 Provider 密钥，查看器不展开密钥明文。\n`
+      )
+    )
+  }
+
+  return {
+    version: backup.version,
+    createdAt: backup.createdAt || 0,
+    entryCount: entries.length,
+    fileCount: entries.filter((entry) => entry.type === "file").length,
+    directoryCount: entries.filter((entry) => entry.type === "dir").length,
+    entries
+  }
+}
+
 function createRestoreChoiceKey(entryPath, itemKey) {
   return `json:${entryPath}:${itemKey}`
 }
@@ -807,7 +891,7 @@ async function createRestorePreview(rootPath, entries) {
   for (const entry of entries.filter((item) => item.type === "file")) {
     const currentContent = await readCurrentFile(rootPath, entry.path)
 
-    if (isStorageJsonPath(entry.path)) {
+    if (isStorageJsonPath(entry.path) && entry.path !== "storage/usage-pricing.json") {
       appendJsonRestorePreview(
         entry.path,
         currentContent
@@ -973,7 +1057,7 @@ async function restoreDirectoryEntries(rootPath, entries, choices = {}) {
 
     assertBackupPath(rootPath, targetPath)
 
-    if (isStorageJsonPath(entry.path)) {
+    if (isStorageJsonPath(entry.path) && entry.path !== "storage/usage-pricing.json") {
       await restoreJsonEntry(rootPath, entry, choices)
       continue
     }
@@ -1173,6 +1257,10 @@ class ManagerService extends EventEmitter {
         backup.workspaceEntries
       ))
     }
+  }
+
+  inspectDataBackup(content) {
+    return createBackupDataView(content)
   }
 
   async restoreDataBackup(content, options = {}) {
