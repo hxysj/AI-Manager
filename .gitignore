@@ -8,5 +8,7 @@ electron/update-config.generated.cjs
 .DS_Store
 Thumbs.db
 tests
+!tests/
+!tests/manager-service.test.cjs
 docs
 release
