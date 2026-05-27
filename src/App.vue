@@ -358,6 +358,7 @@
           :codex-login-state="state.codexLoginState"
           :codex-proxy-state="state.codexProxyState"
           :providers="state.providers"
+          :usage="state.usage"
           :runtime-config-schemas="state.runtimeConfigSchemas"
           :runtime-models="state.runtimeModels"
           :runtime-provider-state="state.runtimeProviderState"

@@ -1222,14 +1222,46 @@
             ×
           </button>
         </header>
+        <nav class="providers-view-drawer-tabs">
+          <button
+            :class="[
+              'providers-view-drawer-tab',
+              {
+                'providers-view-drawer-tab-active':
+                  codexAccountDetailTab === 'config'
+              }
+            ]"
+            type="button"
+            @click="codexAccountDetailTab = 'config'"
+          >
+            配置
+          </button>
+          <button
+            :class="[
+              'providers-view-drawer-tab',
+              {
+                'providers-view-drawer-tab-active':
+                  codexAccountDetailTab === 'usage'
+              }
+            ]"
+            type="button"
+            @click="codexAccountDetailTab = 'usage'"
+          >
+            用量
+          </button>
+        </nav>
         <div class="providers-view__drawer-content">
           <div
-            v-if="codexAccountDetailLoading"
+            v-if="
+              codexAccountDetailLoading && codexAccountDetailTab === 'config'
+            "
             class="providers-view__drawer-empty"
           >
             加载中...
           </div>
-          <template v-else-if="codexAccountDetail">
+          <template
+            v-else-if="codexAccountDetail && codexAccountDetailTab === 'config'"
+          >
             <section class="providers-view__drawer-section">
               <h3>auth</h3>
               <pre class="providers-view__drawer-json">{{
@@ -1249,6 +1281,111 @@
                   last_refresh: codexAccountDetail.last_refresh
                 })
               }}</pre>
+            </section>
+          </template>
+          <template v-else-if="codexAccountDetailTarget">
+            <section class="providers-view__drawer-section">
+              <h3>用量概览</h3>
+              <div class="providers-view-usage-hero">
+                <div class="providers-view-usage-hero-main">
+                  <span class="providers-view-usage-label">Token 总量</span>
+                  <strong class="providers-view-usage-total">
+                    {{
+                      formatProviderNumber(codexAccountUsageSummary.actualTokens)
+                    }}
+                  </strong>
+                  <span class="providers-view-usage-subtext">
+                    {{
+                      formatProviderNumber(codexAccountUsageSummary.requestCount)
+                    }}
+                    次请求
+                  </span>
+                </div>
+                <div class="providers-view-usage-hero-side">
+                  <span class="providers-view-usage-label">费用</span>
+                  <strong class="providers-view-usage-cost">
+                    {{ formatProviderCost(codexAccountUsageSummary.totalCostUsd) }}
+                  </strong>
+                  <span class="providers-view-usage-subtext">估算金额</span>
+                </div>
+              </div>
+            </section>
+            <section class="providers-view__drawer-section">
+              <h3>Token 明细</h3>
+              <div class="providers-view-usage-token-grid">
+                <article class="providers-view-usage-token-item">
+                  <span class="providers-view-usage-label">输入</span>
+                  <strong class="providers-view-usage-value">
+                    {{
+                      formatProviderNumber(codexAccountUsageSummary.inputTokens)
+                    }}
+                  </strong>
+                </article>
+                <article class="providers-view-usage-token-item">
+                  <span class="providers-view-usage-label">输出</span>
+                  <strong class="providers-view-usage-value">
+                    {{
+                      formatProviderNumber(codexAccountUsageSummary.outputTokens)
+                    }}
+                  </strong>
+                </article>
+                <article class="providers-view-usage-token-item">
+                  <span class="providers-view-usage-label">缓存读取</span>
+                  <strong class="providers-view-usage-value">
+                    {{
+                      formatProviderNumber(
+                        codexAccountUsageSummary.cacheReadTokens
+                      )
+                    }}
+                  </strong>
+                </article>
+                <article class="providers-view-usage-token-item">
+                  <span class="providers-view-usage-label">缓存写入</span>
+                  <strong class="providers-view-usage-value">
+                    {{
+                      formatProviderNumber(
+                        codexAccountUsageSummary.cacheCreationTokens
+                      )
+                    }}
+                  </strong>
+                </article>
+              </div>
+            </section>
+            <section class="providers-view__drawer-section">
+              <h3>模型费用</h3>
+              <div
+                v-if="codexAccountUsageModelStats.length"
+                class="providers-view-usage-list"
+              >
+                <article
+                  v-for="item in codexAccountUsageModelStats"
+                  :key="item.model"
+                  class="providers-view-usage-row"
+                >
+                  <div class="providers-view-usage-row-main">
+                    <strong
+                      class="providers-view-usage-value"
+                      :title="item.model"
+                    >
+                      {{ item.model }}
+                    </strong>
+                    <span class="providers-view-usage-label">
+                      {{ formatProviderNumber(item.requestCount) }} 次请求
+                    </span>
+                  </div>
+                  <div class="providers-view-usage-row-side">
+                    <strong class="providers-view-usage-value">
+                      {{ formatProviderNumber(item.actualTokens) }}
+                    </strong>
+                    <span class="providers-view-usage-label">
+                      {{ formatProviderCost(item.totalCostUsd) }}
+                    </span>
+                  </div>
+                </article>
+              </div>
+              <div v-else class="providers-view__drawer-empty">
+                暂无用量记录。
+              </div>
             </section>
           </template>
         </div>
@@ -1274,8 +1411,36 @@
             ×
           </button>
         </header>
+        <nav class="providers-view-drawer-tabs">
+          <button
+            :class="[
+              'providers-view-drawer-tab',
+              {
+                'providers-view-drawer-tab-active':
+                  providerDetailTab === 'config'
+              }
+            ]"
+            type="button"
+            @click="providerDetailTab = 'config'"
+          >
+            配置
+          </button>
+          <button
+            :class="[
+              'providers-view-drawer-tab',
+              {
+                'providers-view-drawer-tab-active':
+                  providerDetailTab === 'usage'
+              }
+            ]"
+            type="button"
+            @click="providerDetailTab = 'usage'"
+          >
+            用量
+          </button>
+        </nav>
         <div class="providers-view__drawer-content">
-          <template v-if="providerDetail">
+          <template v-if="providerDetail && providerDetailTab === 'config'">
             <section class="providers-view__drawer-section">
               <h3>基础信息</h3>
               <pre class="providers-view__drawer-json">{{
@@ -1299,6 +1464,101 @@
               <pre class="providers-view__drawer-json">{{
                 formatJson(providerDetail.runtimeConfig)
               }}</pre>
+            </section>
+          </template>
+          <template v-else-if="providerDetail">
+            <section class="providers-view__drawer-section">
+              <h3>用量概览</h3>
+              <div class="providers-view-usage-hero">
+                <div class="providers-view-usage-hero-main">
+                  <span class="providers-view-usage-label">Token 总量</span>
+                  <strong class="providers-view-usage-total">
+                    {{ formatProviderNumber(providerUsageSummary.actualTokens) }}
+                  </strong>
+                  <span class="providers-view-usage-subtext">
+                    {{ formatProviderNumber(providerUsageSummary.requestCount) }}
+                    次请求
+                  </span>
+                </div>
+                <div class="providers-view-usage-hero-side">
+                  <span class="providers-view-usage-label">费用</span>
+                  <strong class="providers-view-usage-cost">
+                    {{ formatProviderCost(providerUsageSummary.totalCostUsd) }}
+                  </strong>
+                  <span class="providers-view-usage-subtext">估算金额</span>
+                </div>
+              </div>
+            </section>
+            <section class="providers-view__drawer-section">
+              <h3>Token 明细</h3>
+              <div class="providers-view-usage-token-grid">
+                <article class="providers-view-usage-token-item">
+                  <span class="providers-view-usage-label">输入</span>
+                  <strong class="providers-view-usage-value">
+                    {{ formatProviderNumber(providerUsageSummary.inputTokens) }}
+                  </strong>
+                </article>
+                <article class="providers-view-usage-token-item">
+                  <span class="providers-view-usage-label">输出</span>
+                  <strong class="providers-view-usage-value">
+                    {{ formatProviderNumber(providerUsageSummary.outputTokens) }}
+                  </strong>
+                </article>
+                <article class="providers-view-usage-token-item">
+                  <span class="providers-view-usage-label">缓存读取</span>
+                  <strong class="providers-view-usage-value">
+                    {{
+                      formatProviderNumber(providerUsageSummary.cacheReadTokens)
+                    }}
+                  </strong>
+                </article>
+                <article class="providers-view-usage-token-item">
+                  <span class="providers-view-usage-label">缓存写入</span>
+                  <strong class="providers-view-usage-value">
+                    {{
+                      formatProviderNumber(
+                        providerUsageSummary.cacheCreationTokens
+                      )
+                    }}
+                  </strong>
+                </article>
+              </div>
+            </section>
+            <section class="providers-view__drawer-section">
+              <h3>模型费用</h3>
+              <div
+                v-if="providerUsageModelStats.length"
+                class="providers-view-usage-list"
+              >
+                <article
+                  v-for="item in providerUsageModelStats"
+                  :key="item.model"
+                  class="providers-view-usage-row"
+                >
+                  <div class="providers-view-usage-row-main">
+                    <strong
+                      class="providers-view-usage-value"
+                      :title="item.model"
+                    >
+                      {{ item.model }}
+                    </strong>
+                    <span class="providers-view-usage-label">
+                      {{ formatProviderNumber(item.requestCount) }} 次请求
+                    </span>
+                  </div>
+                  <div class="providers-view-usage-row-side">
+                    <strong class="providers-view-usage-value">
+                      {{ formatProviderNumber(item.actualTokens) }}
+                    </strong>
+                    <span class="providers-view-usage-label">
+                      {{ formatProviderCost(item.totalCostUsd) }}
+                    </span>
+                  </div>
+                </article>
+              </div>
+              <div v-else class="providers-view__drawer-empty">
+                暂无用量记录。
+              </div>
             </section>
           </template>
         </div>
@@ -1426,6 +1686,10 @@ const props = defineProps({
     type: Array,
     required: true
   },
+  usage: {
+    type: Object,
+    default: () => ({})
+  },
   runtimeConfigSchemas: {
     type: Object,
     required: true
@@ -1539,12 +1803,15 @@ const codexAccountRefreshingMap = reactive({})
 const editingCodexAccountId = ref("")
 const editingCodexProxy = ref("")
 const codexAccountDetail = ref(null)
+const codexAccountDetailTarget = ref(null)
 const codexAccountDetailLoading = ref(false)
+const codexAccountDetailTab = ref("config")
 const codexProxyPanelRef = ref(null)
 const showCodexProxyAddAction = ref(false)
 const showCodexProxyManager = ref(false)
 const codexProxyTab = ref("proxy")
 const providerDetail = ref(null)
+const providerDetailTab = ref("config")
 const manualCallbackUrl = ref("")
 const countdownNow = ref(Date.now())
 let countdownTimer = null
@@ -1689,6 +1956,125 @@ const configPreviewMap = computed(() => {
       file.name,
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
+  )
+})
+
+const codexAccountUsageLogs = computed(() => {
+  if (!codexAccountDetailTarget.value) {
+    return []
+  }
+
+  const accountIds = [
+    `codex-account:${codexAccountDetailTarget.value.id}`,
+    `account:${codexAccountDetailTarget.value.id}`
+  ]
+
+  return (props.usage.logs || []).filter(item => {
+    return accountIds.includes(item.providerId)
+  })
+})
+
+const codexAccountUsageSummary = computed(() => {
+  return codexAccountUsageLogs.value.reduce(
+    (result, item) => {
+      result.requestCount += 1
+      result.inputTokens += providerUsageInputTokens(item)
+      result.outputTokens += Number(item.outputTokens || 0)
+      result.cacheReadTokens += Number(item.cacheReadTokens || 0)
+      result.cacheCreationTokens += Number(item.cacheCreationTokens || 0)
+      result.actualTokens += Number(item.actualTokens || 0)
+      result.totalCostUsd += Number(item.totalCostUsd || 0)
+      return result
+    },
+    {
+      requestCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      actualTokens: 0,
+      totalCostUsd: 0
+    }
+  )
+})
+
+const codexAccountUsageModelStats = computed(() => {
+  const groups = new Map()
+
+  for (const item of codexAccountUsageLogs.value) {
+    const model = item.model || "未识别模型"
+    const current = groups.get(model) || {
+      model,
+      requestCount: 0,
+      actualTokens: 0,
+      totalCostUsd: 0
+    }
+
+    current.requestCount += 1
+    current.actualTokens += Number(item.actualTokens || 0)
+    current.totalCostUsd += Number(item.totalCostUsd || 0)
+    groups.set(model, current)
+  }
+
+  return Array.from(groups.values()).sort(
+    (left, right) => right.actualTokens - left.actualTokens
+  )
+})
+
+const providerUsageLogs = computed(() => {
+  if (!providerDetail.value) {
+    return []
+  }
+
+  return (props.usage.logs || []).filter(item => {
+    return item.providerId === providerDetail.value.id
+  })
+})
+
+const providerUsageSummary = computed(() => {
+  return providerUsageLogs.value.reduce(
+    (result, item) => {
+      result.requestCount += 1
+      result.inputTokens += providerUsageInputTokens(item)
+      result.outputTokens += Number(item.outputTokens || 0)
+      result.cacheReadTokens += Number(item.cacheReadTokens || 0)
+      result.cacheCreationTokens += Number(item.cacheCreationTokens || 0)
+      result.actualTokens += Number(item.actualTokens || 0)
+      result.totalCostUsd += Number(item.totalCostUsd || 0)
+      return result
+    },
+    {
+      requestCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      actualTokens: 0,
+      totalCostUsd: 0
+    }
+  )
+})
+
+const providerUsageModelStats = computed(() => {
+  const groups = new Map()
+
+  for (const item of providerUsageLogs.value) {
+    const model = item.model || "未识别模型"
+    const current = groups.get(model) || {
+      model,
+      requestCount: 0,
+      actualTokens: 0,
+      totalCostUsd: 0
+    }
+
+    current.requestCount += 1
+    current.actualTokens += Number(item.actualTokens || 0)
+    current.totalCostUsd += Number(item.totalCostUsd || 0)
+    groups.set(model, current)
+  }
+
+  return Array.from(groups.values()).sort(
+    (left, right) => right.actualTokens - left.actualTokens
   )
 })
 
@@ -1940,6 +2326,8 @@ function saveCodexAccountProxy() {
 
 async function openCodexAccountDetail(account) {
   closeProviderDetail()
+  codexAccountDetailTarget.value = account
+  codexAccountDetailTab.value = "config"
   showCodexAccountDrawer.value = true
   codexAccountDetailLoading.value = true
   codexAccountDetail.value = null
@@ -1961,18 +2349,22 @@ async function openCodexAccountDetail(account) {
 function closeCodexAccountDetail() {
   showCodexAccountDrawer.value = false
   codexAccountDetail.value = null
+  codexAccountDetailTarget.value = null
   codexAccountDetailLoading.value = false
+  codexAccountDetailTab.value = "config"
 }
 
 function openProviderDetail(provider) {
   closeCodexAccountDetail()
   providerDetail.value = provider
+  providerDetailTab.value = "config"
   showProviderDrawer.value = true
 }
 
 function closeProviderDetail() {
   showProviderDrawer.value = false
   providerDetail.value = null
+  providerDetailTab.value = "config"
 }
 
 function rateLimitWindows(rateLimit) {
@@ -2078,6 +2470,31 @@ function formatUnixTime(value) {
 
 function formatJson(value) {
   return JSON.stringify(value || {}, null, 2)
+}
+
+function providerUsageInputTokens(item) {
+  if (item.appType === "codex" || item.appType === "gemini") {
+    return Math.max(
+      0,
+      Number(item.inputTokens || 0) - Number(item.cacheReadTokens || 0)
+    )
+  }
+
+  return Number(item.inputTokens || 0)
+}
+
+function formatProviderNumber(value) {
+  return new Intl.NumberFormat("zh-CN").format(Number(value || 0))
+}
+
+function formatProviderCost(value) {
+  const cost = Number(value || 0)
+
+  if (!cost) {
+    return "$0"
+  }
+
+  return `$${cost >= 1 ? cost.toFixed(2) : cost.toFixed(6)}`
 }
 
 function isCodexAccountRefreshing(account) {
@@ -4151,6 +4568,32 @@ watch(
     }
   }
 
+  .providers-view-drawer-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 10px 24px;
+    border-bottom: 1px solid #edf1f6;
+    background: #f8fbfe;
+  }
+
+  .providers-view-drawer-tab {
+    height: 30px;
+    padding: 0 14px;
+    border: 1px solid #d8e0eb;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #526176;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  .providers-view-drawer-tab-active {
+    border-color: #1682ff;
+    background: #1682ff;
+    color: #ffffff;
+  }
+
   &__drawer-close {
     width: 28px;
     height: 28px;
@@ -4201,6 +4644,125 @@ watch(
   &__drawer-empty {
     color: #697789;
     font-size: 0.88rem;
+  }
+
+  .providers-view-usage-hero {
+    display: flex;
+    min-width: 0;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid #cfdbea;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #f8fbff 0%, #eef6ff 100%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  }
+
+  .providers-view-usage-hero-main,
+  .providers-view-usage-hero-side {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .providers-view-usage-hero-main {
+    flex: 1;
+  }
+
+  .providers-view-usage-hero-side {
+    width: 128px;
+    align-items: flex-end;
+    padding-left: 14px;
+    border-left: 1px solid #d7e4f2;
+  }
+
+  .providers-view-usage-label {
+    color: #697789;
+    font-size: 0.78rem;
+  }
+
+  .providers-view-usage-value {
+    min-width: 0;
+    overflow: hidden;
+    color: #172033;
+    font-size: 1rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .providers-view-usage-total {
+    min-width: 0;
+    overflow: hidden;
+    color: #101828;
+    font-size: 1.46rem;
+    font-weight: 800;
+    line-height: 1.12;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .providers-view-usage-cost {
+    color: #114a8b;
+    font-size: 1.22rem;
+    font-weight: 800;
+    line-height: 1.1;
+  }
+
+  .providers-view-usage-subtext {
+    color: #7a899c;
+    font-size: 0.76rem;
+  }
+
+  .providers-view-usage-token-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .providers-view-usage-token-item {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #f8fbfe;
+  }
+
+  .providers-view-usage-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .providers-view-usage-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px 16px;
+    border: 1px solid #d5dfeb;
+    border-radius: 8px;
+    background: #ffffff;
+    box-shadow: 0 8px 22px rgba(31, 52, 78, 0.05);
+  }
+
+  .providers-view-usage-row-main,
+  .providers-view-usage-row-side {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .providers-view-usage-row-side {
+    align-items: flex-end;
+    flex-shrink: 0;
   }
 
   &__login-panel {
