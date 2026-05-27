@@ -1103,6 +1103,149 @@ async function restoreDirectoryEntries(rootPath, entries, choices = {}) {
   }
 }
 
+function createRuntimeProfileConfigHash(runtimeProviderService, profile) {
+  const provider = runtimeProviderService.providers.find(
+    (item) => item.id === profile.providerId
+  )
+
+  if (!provider) {
+    return ""
+  }
+
+  const files = runtimeProviderService.buildCliConfigFiles(
+    profile.cli,
+    provider,
+    profile
+  )
+
+  return sha256(
+    JSON.stringify(
+      files.map((file) => ({
+        name: file.name,
+        content: file.content || ""
+      }))
+    )
+  )
+}
+
+function createRuntimeProfileRestoreSnapshots(runtimeProviderService) {
+  return runtimeProviderService.profiles.map((profile) => ({
+    cli: profile.cli,
+    providerId: profile.providerId,
+    configHash: createRuntimeProfileConfigHash(
+      runtimeProviderService,
+      profile
+    )
+  }))
+}
+
+function createCodexAccountConfigHash(account) {
+  return sha256(
+    JSON.stringify({
+      id: account.id,
+      type: account.type || "",
+      disabled: Boolean(account.disabled),
+      accountId: account.account_id || account.accountId || account.id,
+      accessToken: account.auth?.accessToken || account.access_token || "",
+      refreshToken: account.auth?.refreshToken || account.refresh_token || "",
+      idToken: account.auth?.idToken || account.id_token || ""
+    })
+  )
+}
+
+function createCodexAccountRestoreSnapshot(codexAccountService) {
+  const accountId = codexAccountService.activeAccountId || ""
+  const account = codexAccountService.accounts.find(
+    (item) => item.id === accountId
+  )
+
+  if (!account) {
+    return null
+  }
+
+  return {
+    accountId,
+    configHash: createCodexAccountConfigHash(account)
+  }
+}
+
+function createCodexProxyConfigHash(config) {
+  return sha256(
+    JSON.stringify({
+      enabled: Boolean(config.enabled),
+      host: config.host || "",
+      port: config.port || 0,
+      activeProviderId: config.activeProviderId || "",
+      failoverProviderIds: config.failoverProviderIds || [],
+      retryCount: config.retryCount || 0,
+      streamTimeoutMs: config.streamTimeoutMs || 0,
+      requestTimeoutMs: config.requestTimeoutMs || 0
+    })
+  )
+}
+
+function createCodexProxyTargetConfigHash(codexProxyService, targetId) {
+  if (!targetId) {
+    return ""
+  }
+
+  if (targetId.startsWith("account:")) {
+    const accountId = targetId.slice("account:".length)
+    const account = codexProxyService.codexAccountService.accounts.find(
+      (item) => item.id === accountId
+    )
+
+    return account
+      ? sha256(
+          JSON.stringify({
+            accountHash: createCodexAccountConfigHash(account),
+            proxy: account.proxy || ""
+          })
+        )
+      : ""
+  }
+
+  const provider = codexProxyService.runtimeProviderService.providers.find(
+    (item) => item.id === targetId
+  )
+
+  if (!provider) {
+    return ""
+  }
+
+  return sha256(
+    JSON.stringify({
+      id: provider.id,
+      cli: provider.cli,
+      type: provider.type,
+      disabled: provider.enabled === false,
+      baseUrl: provider.baseUrl || "",
+      proxy: provider.proxy || "",
+      apiKey:
+        codexProxyService.runtimeProviderService.keyManager.getProviderKey(
+          provider.id
+        ) || ""
+    })
+  )
+}
+
+function createCodexProxyRestoreSnapshot(codexProxyService) {
+  const config = codexProxyService.getState()
+
+  if (!config.enabled) {
+    return null
+  }
+
+  return {
+    configHash: createCodexProxyConfigHash(config),
+    targetId: config.activeProviderId || "",
+    targetHash: createCodexProxyTargetConfigHash(
+      codexProxyService,
+      config.activeProviderId
+    )
+  }
+}
+
 class ManagerService extends EventEmitter {
   constructor(userDataPath, appSettings = {}) {
     super()
@@ -1266,6 +1409,15 @@ class ManagerService extends EventEmitter {
   async restoreDataBackup(content, options = {}) {
     const backup = parseBackup(content)
     const choices = options.choices || {}
+    const runtimeProfileSnapshots = createRuntimeProfileRestoreSnapshots(
+      this.runtimeProviderService
+    )
+    const codexAccountSnapshot = createCodexAccountRestoreSnapshot(
+      this.codexAccountService
+    )
+    const codexProxySnapshot = createCodexProxyRestoreSnapshot(
+      this.codexProxyService
+    )
 
     this.codexAccountService.stopAutoRefresh()
     this.fileWatcherService.stop()
@@ -1279,13 +1431,68 @@ class ManagerService extends EventEmitter {
       choices
     )
     await this.storage.writeNow("cliTargets", [])
-    await this.storage.writeNow("runtimeProfiles", [])
-    await this.storage.writeNow("runtimeProviderState", {})
     if (backup.runtimeProviderKeys) {
       await this.runtimeProviderService.mergeProviderKeys(
         decryptBackupData(backup.runtimeProviderKeys),
         choices
       )
+    }
+    await this.runtimeProviderService.init()
+    await this.codexAccountService.init()
+    await this.codexProxyService.init()
+
+    if (codexProxySnapshot) {
+      const nextProxyConfig = this.codexProxyService.getState()
+      const nextProxyTargetHash = createCodexProxyTargetConfigHash(
+        this.codexProxyService,
+        codexProxySnapshot.targetId
+      )
+
+      if (
+        createCodexProxyConfigHash(nextProxyConfig) !==
+          codexProxySnapshot.configHash ||
+        nextProxyTargetHash !== codexProxySnapshot.targetHash
+      ) {
+        await this.disableCodexProxy()
+      }
+    }
+
+    for (const snapshot of runtimeProfileSnapshots) {
+      const nextProfile = this.runtimeProviderService.profiles.find(
+        (item) =>
+          item.cli === snapshot.cli && item.providerId === snapshot.providerId
+      )
+      const nextHash = nextProfile
+        ? createRuntimeProfileConfigHash(
+            this.runtimeProviderService,
+            nextProfile
+          )
+        : ""
+
+      if (nextHash && nextHash === snapshot.configHash) {
+        continue
+      }
+
+      if (snapshot.cli !== "codex" || !this.codexProxyService.isEnabled()) {
+        await this.clearRuntime(snapshot.cli)
+      }
+    }
+
+    if (codexAccountSnapshot) {
+      const nextAccount = this.codexAccountService.accounts.find(
+        (item) => item.id === codexAccountSnapshot.accountId
+      )
+      const nextHash = nextAccount
+        ? createCodexAccountConfigHash(nextAccount)
+        : ""
+
+      if (
+        this.codexAccountService.activeAccountId ===
+          codexAccountSnapshot.accountId &&
+        nextHash !== codexAccountSnapshot.configHash
+      ) {
+        await this.clearCodexAccount()
+      }
     }
 
     return {
