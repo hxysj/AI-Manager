@@ -948,6 +948,12 @@ watch([dateTimeRange, appType, providerId, model], () => {
   loadStats()
 })
 
+watch(() => props.usage, () => {
+  if (!pending.value) {
+    loadStats()
+  }
+})
+
 watch(logPageSize, () => {
   logPage.value = 1
 })
@@ -1739,8 +1745,11 @@ async function syncUsage() {
   pending.value = true
 
   try {
-    await window.aiManager.syncUsage()
-    await loadStats()
+    const result = await window.aiManager.syncUsage(createFilterPayload())
+    stats.value = result?.data || createEmptySummary()
+    clampLogPage()
+    await nextTick()
+    renderCharts()
   } finally {
     pending.value = false
   }
@@ -1818,6 +1827,7 @@ function renderTrendChart() {
         left: 48
       },
       legend: {
+        type: "scroll",
         top: 0,
         right: 0,
         itemWidth: 10,
@@ -1871,6 +1881,7 @@ function renderProviderPie() {
         }
       },
       legend: {
+        type: "scroll",
         orient: "vertical",
         right: 0,
         top: 0,
@@ -1889,8 +1900,9 @@ function renderProviderPie() {
       series: [
         {
           type: "pie",
+          right: 170,
           radius: ["42%", "68%"],
-          center: ["36%", "52%"],
+          center: ["50%", "52%"],
           avoidLabelOverlap: true,
           label: {
             color: "#14213a",

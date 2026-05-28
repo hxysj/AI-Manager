@@ -145,7 +145,8 @@ contextBridge.exposeInMainWorld("aiManager", {
   getUsagePricing: () => ipcRenderer.invoke("usage:pricing"),
   saveUsagePricing: payload =>
     ipcRenderer.invoke("usage:save-pricing", toPlainPayload(payload)),
-  syncUsage: () => ipcRenderer.invoke("usage:sync"),
+  syncUsage: payload =>
+    ipcRenderer.invoke("usage:sync", toPlainPayload(payload)),
   exportUsageReportImage: payload =>
     ipcRenderer.invoke("usage:export-image", toPlainPayload(payload)),
   getAppLogs: () => ipcRenderer.invoke("app-log:list"),
