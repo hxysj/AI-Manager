@@ -443,6 +443,7 @@
           @push-cloud-data="pushCloudBackup"
           @check-update="checkForAppUpdates"
           @open-path="openPath"
+          @quit-app="quitApp"
           @restore-data="restoreDataBackup"
           @save="saveSettings"
         />
@@ -3162,6 +3163,17 @@ async function submitCloseAction(action) {
     await window.aiManager.handleCloseAction({
       action,
       remember: closeRemember.value
+    })
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function quitApp() {
+  try {
+    await window.aiManager.handleCloseAction({
+      action: "quit",
+      remember: false
     })
   } catch (error) {
     showErrorMessage(error)
