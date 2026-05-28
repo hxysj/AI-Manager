@@ -2467,7 +2467,7 @@ class ManagerService extends EventEmitter {
     }
   }
 
-  async syncUsage() {
+  async syncUsage(input = {}) {
     const { sessions } = await this.sessionService.refresh(this.state.cliTargets)
     const runtimeState = this.getRuntimeStateWithProxy()
     const codexAccounts = this.codexAccountService.getState()
@@ -2494,7 +2494,7 @@ class ManagerService extends EventEmitter {
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
-    return this.usageService.getStats()
+    return this.usageService.getStats(input)
   }
 
   async deleteSession(sessionId) {
@@ -2731,7 +2731,22 @@ class ManagerService extends EventEmitter {
 
   async saveRule(input) {
     await this.promptRuntimeService.savePrompt(input)
-    await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
+    const prompt = this.promptRuntimeService.prompts.find(
+      (item) => item.id === input.id
+    )
+
+    if (
+      prompt &&
+      this.promptRuntimeService.profiles[prompt.cli]?.activePromptId ===
+        prompt.id
+    ) {
+      await this.promptRuntimeService.enablePrompt(
+        prompt.id,
+        this.state.cliTargets.find((item) => item.id === prompt.cli)
+      )
+    } else {
+      await this.promptRuntimeService.refreshDrift(this.state.cliTargets)
+    }
     this.state = {
       ...this.state,
       rules: this.promptRuntimeService.getState(),

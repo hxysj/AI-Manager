@@ -2436,8 +2436,8 @@ function registerIpc() {
     return managerService.saveUsagePricing(payload || {})
   })
 
-  registerLoggedIpc("usage:sync", async () => {
-    return managerService.syncUsage()
+  registerLoggedIpc("usage:sync", async (_, payload) => {
+    return managerService.syncUsage(payload || {})
   })
 
   registerLoggedIpc("usage:export-image", async (_, payload = {}) => {

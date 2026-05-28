@@ -481,3 +481,40 @@ test("Claude 和 Codex 代理接管池互相独立", async () => {
     /Codex Provider 不存在/
   )
 })
+
+test("已启用 Prompt 修改后会自动应用到对应 CLI", async () => {
+  const service = await createService()
+  const configPath = path.join(service.paths.userDataPath, ".codex")
+
+  await service.promptRuntimeService.init()
+  service.state.cliTargets = [
+    {
+      id: "codex",
+      configPath
+    }
+  ]
+
+  await service.saveRule({
+    cli: "codex",
+    name: "Codex Prompt",
+    content: "old prompt"
+  })
+
+  const prompt = service.promptRuntimeService.prompts.find(
+    item => item.name === "Codex Prompt"
+  )
+
+  await service.enableRule(prompt.id)
+  await service.saveRule({
+    id: prompt.id,
+    cli: "codex",
+    name: "Codex Prompt",
+    content: "new prompt"
+  })
+
+  assert.equal(await readText(path.join(configPath, "AGENTS.md")), "new prompt")
+  assert.equal(
+    service.promptRuntimeService.runtimeState.codex.status,
+    "SYNCED"
+  )
+})
