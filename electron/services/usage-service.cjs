@@ -239,9 +239,10 @@ function finalizeSummary(summary) {
 }
 
 function resolveProvider(cli, input = {}) {
-  const proxyTargetId = input.codexProxyState?.enabled
-    ? input.codexProxyState.activeProviderId
-    : ""
+  const proxyState =
+    input.proxyStates?.[`${cli}ProxyState`] ||
+    (cli === "codex" ? input.codexProxyState : null)
+  const proxyTargetId = proxyState?.enabled ? proxyState.activeProviderId : ""
   const proxyAccountId = String(proxyTargetId || "").startsWith("account:")
     ? String(proxyTargetId).slice("account:".length)
     : ""
@@ -261,7 +262,7 @@ function resolveProvider(cli, input = {}) {
     }
   }
 
-  if (cli === "codex" && proxyProvider) {
+  if (proxyProvider && proxyProvider.cli === cli) {
     return {
       providerId: proxyProvider.id,
       providerName: proxyProvider.name,
@@ -775,9 +776,8 @@ class UsageService {
     for (const log of logs) {
       const record = recordMap.get(log.requestId)
       const shouldRefreshProxyRecord =
-        log.appType === "codex" &&
-        input.codexProxyState?.enabled &&
-        record?.providerId === "codex"
+        input.proxyStates?.[`${log.appType}ProxyState`]?.enabled &&
+        record?.providerId === log.appType
       const providerInfo =
         record && !shouldRefreshProxyRecord
           ? {

@@ -356,6 +356,7 @@
           :pending="pending"
           :codex-accounts="state.codexAccounts"
           :codex-login-state="state.codexLoginState"
+          :claude-proxy-state="state.claudeProxyState"
           :codex-proxy-state="state.codexProxyState"
           :providers="state.providers"
           :usage="state.usage"
@@ -364,6 +365,11 @@
           :runtime-provider-state="state.runtimeProviderState"
           :runtime-profiles="state.runtimeProfiles"
           @clear-runtime="clearRuntime"
+          @claude-proxy-enable="enableClaudeProxy"
+          @claude-proxy-disable="disableClaudeProxy"
+          @claude-proxy-provider-add="addClaudeProxyProvider"
+          @claude-proxy-provider-remove="removeClaudeProxyProvider"
+          @claude-proxy-provider-activate="activateClaudeProxyProvider"
           @codex-official-login="startCodexOfficialLogin"
           @codex-auth-json-import="importCodexAuthJson"
           @codex-account-enable="enableCodexAccount"
@@ -1129,6 +1135,12 @@ const state = reactive({
   usage: {},
   codexAccounts: [],
   codexLoginState: null,
+  claudeProxyState: {
+    enabled: false,
+    localBaseUrl: "",
+    activeProviderId: "",
+    failoverProviderIds: []
+  },
   codexProxyState: {
     enabled: false,
     localBaseUrl: "",
@@ -1468,12 +1480,24 @@ const quickActiveProfile = computed(() => {
   )
 })
 
+const quickActiveProxyState = computed(() => {
+  if (quickActiveCli.value?.id === "claude") {
+    return state.claudeProxyState
+  }
+
+  if (quickActiveCli.value?.id === "codex") {
+    return state.codexProxyState
+  }
+
+  return null
+})
+
 const quickProxyActiveTargetId = computed(() => {
-  if (quickActiveCli.value?.id !== "codex" || !state.codexProxyState.enabled) {
+  if (!quickActiveProxyState.value?.enabled) {
     return ""
   }
 
-  return state.codexProxyState.activeProviderId || ""
+  return quickActiveProxyState.value.activeProviderId || ""
 })
 
 const quickProxyActiveProvider = computed(() => {
@@ -1703,6 +1727,12 @@ function updateState(nextState) {
   state.usage = nextState.usage || {}
   state.codexAccounts = nextState.codexAccounts || []
   state.codexLoginState = nextState.codexLoginState || null
+  state.claudeProxyState = nextState.claudeProxyState || {
+    enabled: false,
+    localBaseUrl: "",
+    activeProviderId: "",
+    failoverProviderIds: []
+  }
   state.codexProxyState = nextState.codexProxyState || {
     enabled: false,
     localBaseUrl: "",
@@ -1875,6 +1905,42 @@ function showErrorMessage(error) {
 
 function isCodexAccountRefreshError(error) {
   return Boolean(error)
+}
+
+function getProxyState(cli) {
+  if (cli === "claude") {
+    return state.claudeProxyState
+  }
+
+  if (cli === "codex") {
+    return state.codexProxyState
+  }
+
+  return null
+}
+
+function getProxyApi(cli) {
+  if (cli === "claude") {
+    return {
+      enable: window.aiManager.enableClaudeProxy,
+      disable: window.aiManager.disableClaudeProxy,
+      addProvider: window.aiManager.addClaudeProxyProvider,
+      removeProvider: window.aiManager.removeClaudeProxyProvider,
+      activateProvider: window.aiManager.activateClaudeProxyProvider
+    }
+  }
+
+  if (cli === "codex") {
+    return {
+      enable: window.aiManager.enableCodexProxy,
+      disable: window.aiManager.disableCodexProxy,
+      addProvider: window.aiManager.addCodexProxyProvider,
+      removeProvider: window.aiManager.removeCodexProxyProvider,
+      activateProvider: window.aiManager.activateCodexProxyProvider
+    }
+  }
+
+  return null
 }
 
 function showSuccessMessage(message) {
@@ -2102,11 +2168,14 @@ async function refreshQuickCodexAccount(item) {
 async function selectQuickItem(item) {
   if (item.type === "provider") {
     await runAction(async () => {
-      if (quickActiveCli.value?.id === "codex") {
-        if (state.codexProxyState.enabled) {
-          await window.aiManager.disableCodexProxy()
-        }
+      const proxyApi = getProxyApi(quickActiveCli.value?.id)
+      const proxyState = getProxyState(quickActiveCli.value?.id)
 
+      if (proxyState?.enabled) {
+        await proxyApi.disable()
+      }
+
+      if (quickActiveCli.value?.id === "codex") {
         await window.aiManager.clearCodexAccount()
       }
 
@@ -2120,8 +2189,11 @@ async function selectQuickItem(item) {
   }
 
   await runAction(async () => {
-    if (state.codexProxyState.enabled) {
-      await window.aiManager.disableCodexProxy()
+    const proxyApi = getProxyApi(quickActiveCli.value?.id)
+    const proxyState = getProxyState(quickActiveCli.value?.id)
+
+    if (proxyState?.enabled) {
+      await proxyApi.disable()
     }
 
     await window.aiManager.clearRuntime({
@@ -2135,8 +2207,11 @@ async function selectQuickItem(item) {
 
 async function clearQuickActive() {
   await runAction(async () => {
-    if (quickActiveCli.value?.id === "codex" && state.codexProxyState.enabled) {
-      return window.aiManager.disableCodexProxy()
+    const proxyApi = getProxyApi(quickActiveCli.value?.id)
+    const proxyState = getProxyState(quickActiveCli.value?.id)
+
+    if (proxyState?.enabled) {
+      return proxyApi.disable()
     }
 
     if (quickActiveCli.value?.id === "codex") {
@@ -2922,6 +2997,54 @@ async function enableCodexProxy(payload) {
   }
 }
 
+async function enableClaudeProxy(payload) {
+  const success = await runAction(() =>
+    window.aiManager.enableClaudeProxy(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Claude 代理接管已开启。")
+  }
+}
+
+async function disableClaudeProxy() {
+  const success = await runAction(() => window.aiManager.disableClaudeProxy())
+
+  if (success) {
+    showSuccessMessage("Claude 代理接管已关闭。")
+  }
+}
+
+async function addClaudeProxyProvider(payload) {
+  const success = await runAction(() =>
+    window.aiManager.addClaudeProxyProvider(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Provider 已加入代理接管列表。")
+  }
+}
+
+async function removeClaudeProxyProvider(payload) {
+  const success = await runAction(() =>
+    window.aiManager.removeClaudeProxyProvider(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Provider 已移出代理接管列表。")
+  }
+}
+
+async function activateClaudeProxyProvider(payload) {
+  const success = await runAction(() =>
+    window.aiManager.activateClaudeProxyProvider(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("代理接管目标已切换。")
+  }
+}
+
 async function disableCodexProxy() {
   const success = await runAction(() => window.aiManager.disableCodexProxy())
 
@@ -2971,11 +3094,12 @@ async function saveRuntimeModel(payload) {
 }
 
 async function switchRuntime(payload) {
-  const shouldDisableCodexProxy =
-    payload.cli === "codex" && state.codexProxyState.enabled
+  const proxyApi = getProxyApi(payload.cli)
+  const proxyState = getProxyState(payload.cli)
+  const shouldDisableProxy = Boolean(proxyState?.enabled)
   const success = await runAction(async () => {
-    if (shouldDisableCodexProxy) {
-      await window.aiManager.disableCodexProxy()
+    if (shouldDisableProxy) {
+      await proxyApi.disable()
     }
 
     return window.aiManager.switchRuntime(payload)
@@ -2983,8 +3107,8 @@ async function switchRuntime(payload) {
 
   if (success) {
     showSuccessMessage(
-      shouldDisableCodexProxy
-        ? "Codex 代理接管已关闭，Runtime Profile 已切换。"
+      shouldDisableProxy
+        ? `${payload.cli === "claude" ? "Claude" : "Codex"} 代理接管已关闭，Runtime Profile 已切换。`
         : "Runtime Profile 已切换。"
     )
   }

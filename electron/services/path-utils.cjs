@@ -119,6 +119,15 @@ function resolveAppPaths(userDataPath) {
       runtimeProfiles: path.join(storageDir, "runtime-profiles.json"),
       runtimeProviderState: path.join(storageDir, "runtime-provider-state.json"),
       runtimeProviderKeys: path.join(storageDir, "runtime-provider-keys.json"),
+      claudeProxyConfig: path.join(storageDir, "claude-proxy-config.json"),
+      claudeProxyLiveBackup: path.join(
+        storageDir,
+        "claude-proxy-live-backup.json"
+      ),
+      claudeProxyRequestLogs: path.join(
+        storageDir,
+        "claude-proxy-request-logs.json"
+      ),
       codexProxyConfig: path.join(storageDir, "codex-proxy-config.json"),
       codexProxyLiveBackup: path.join(
         storageDir,
