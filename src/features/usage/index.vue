@@ -128,18 +128,33 @@
       <section class="usage-view__trend">
         <div class="usage-view__section-header">
           <div>
-            <h2>Provider 占比</h2>
-            <span>{{ providerStats.length }} 个来源</span>
+            <h2>{{ usagePieTitle }}</h2>
+            <span>{{ usagePieCountLabel }}</span>
           </div>
-          <PieChart :size="18" />
+          <div class="usage-view__chart-tabs" role="tablist">
+            <button
+              v-for="item in usagePieTabs"
+              :key="item.id"
+              type="button"
+              :class="[
+                'usage-view__chart-tab',
+                { 'usage-view__chart-tab--active': usagePieMode === item.id }
+              ]"
+              role="tab"
+              :aria-selected="usagePieMode === item.id"
+              @click="usagePieMode = item.id"
+            >
+              {{ item.label }}
+            </button>
+          </div>
         </div>
         <div
-          v-show="providerStats.length"
+          v-show="usagePieStats.length"
           ref="providerPieRef"
           class="usage-view__chart"
         ></div>
-        <div v-if="!providerStats.length" class="usage-view__empty">
-          暂无 Provider 占比。
+        <div v-if="!usagePieStats.length" class="usage-view__empty">
+          {{ usagePieEmptyText }}
         </div>
       </section>
     </section>
@@ -614,7 +629,6 @@ import {
   Layers,
   Network,
   Pencil,
-  PieChart,
   Plus,
   RefreshCw,
   Save,
@@ -668,6 +682,7 @@ const pricingExportFormat = ref("json")
 const pricingImportFileRef = ref(null)
 const pricingPage = ref(1)
 const pricingPageSize = ref(8)
+const usagePieMode = ref("provider")
 const trendChartRef = ref(null)
 const providerPieRef = ref(null)
 let trendChart = null
@@ -744,6 +759,49 @@ const displayCurrencyLabel = computed(() =>
 const providerStats = computed(() => stats.value.providerStats || [])
 const modelStats = computed(() => stats.value.modelStats || [])
 const trendStats = computed(() => stats.value.trends || [])
+const usagePieTabs = [
+  { id: "provider", label: "Provider" },
+  { id: "model", label: "模型" }
+]
+const modelPieStats = computed(() => {
+  const groups = new Map()
+
+  for (const item of modelStats.value) {
+    const name = item.model || "未识别模型"
+
+    if (!groups.has(name)) {
+      groups.set(name, {
+        name,
+        value: 0
+      })
+    }
+
+    groups.get(name).value += item.actualTokens
+  }
+
+  return Array.from(groups.values()).sort(
+    (left, right) => right.value - left.value
+  )
+})
+const usagePieStats = computed(() =>
+  usagePieMode.value === "provider"
+    ? providerStats.value.map((item) => ({
+        name: item.providerName,
+        value: item.actualTokens
+      }))
+    : modelPieStats.value
+)
+const usagePieTitle = computed(() =>
+  usagePieMode.value === "provider" ? "Provider 占比" : "模型占比统计"
+)
+const usagePieCountLabel = computed(() =>
+  usagePieMode.value === "provider"
+    ? `${providerStats.value.length} 个来源`
+    : `${modelPieStats.value.length} 个模型`
+)
+const usagePieEmptyText = computed(() =>
+  usagePieMode.value === "provider" ? "暂无 Provider 占比。" : "暂无模型占比。"
+)
 const trendMode = computed(() => {
   const [start, end] = dateTimeRange.value || []
 
@@ -900,6 +958,11 @@ watch(pricingPageSize, () => {
 
 watch(pricingCategoryFilter, () => {
   pricingPage.value = 1
+})
+
+watch(usagePieMode, async () => {
+  await nextTick()
+  renderProviderPie()
 })
 
 watch(
@@ -1792,57 +1855,57 @@ function renderTrendChart() {
 }
 
 function renderProviderPie() {
-  if (!providerPieRef.value || !providerStats.value.length) {
+  if (!providerPieRef.value || !usagePieStats.value.length) {
     return
   }
 
   providerPie = providerPie || echarts.init(providerPieRef.value)
-  providerPie.setOption({
-    color: ["#2f5f91", "#5d7fa4", "#8aa7c4", "#b9c9d8", "#d8e2ec"],
-    tooltip: {
-      trigger: "item",
-      appendToBody: true,
-      formatter: (item) => {
-        return `${item.name}<br />${formatNumber(item.value)} Tokens · ${item.percent}%`
-      }
-    },
-    legend: {
-      orient: "vertical",
-      right: 0,
-      top: 0,
-      itemWidth: 10,
-      itemHeight: 10,
-      formatter: (name) => {
-        return name.length > 24 ? `${name.slice(0, 24)}...` : name
+  providerPie.setOption(
+    {
+      color: ["#2f5f91", "#5d7fa4", "#8aa7c4", "#b9c9d8", "#d8e2ec"],
+      tooltip: {
+        trigger: "item",
+        appendToBody: true,
+        formatter: (item) => {
+          return `${item.name}<br />${formatNumber(item.value)} Tokens · ${item.percent}%`
+        }
       },
-      textStyle: {
-        color: "#5f7087",
-        fontSize: 11,
-        width: 150,
-        overflow: "truncate"
-      }
+      legend: {
+        orient: "vertical",
+        right: 0,
+        top: 0,
+        itemWidth: 10,
+        itemHeight: 10,
+        formatter: (name) => {
+          return name.length > 24 ? `${name.slice(0, 24)}...` : name
+        },
+        textStyle: {
+          color: "#5f7087",
+          fontSize: 11,
+          width: 150,
+          overflow: "truncate"
+        }
+      },
+      series: [
+        {
+          type: "pie",
+          radius: ["42%", "68%"],
+          center: ["36%", "52%"],
+          avoidLabelOverlap: true,
+          label: {
+            color: "#14213a",
+            formatter: "{d}%"
+          },
+          labelLine: {
+            length: 10,
+            length2: 8
+          },
+          data: usagePieStats.value
+        }
+      ]
     },
-    series: [
-      {
-        type: "pie",
-        radius: ["42%", "68%"],
-        center: ["36%", "52%"],
-        avoidLabelOverlap: true,
-        label: {
-          color: "#14213a",
-          formatter: "{d}%"
-        },
-        labelLine: {
-          length: 10,
-          length2: 8
-        },
-        data: providerStats.value.map((item) => ({
-          name: item.providerName,
-          value: item.actualTokens
-        }))
-      }
-    ]
-  })
+    { notMerge: true }
+  )
 }
 
 function resizeCharts() {
@@ -2279,6 +2342,36 @@ function formatSessionLabel(item) {
   &__section-actions button:disabled {
     cursor: not-allowed;
     opacity: 0.5;
+  }
+
+  &__chart-tabs {
+    display: inline-flex;
+    flex: none;
+    gap: 4px;
+    padding: 3px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel-soft);
+  }
+
+  &__chart-tab {
+    display: inline-flex;
+    height: 26px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 0.74rem;
+    font-weight: 800;
+  }
+
+  &__chart-tab--active {
+    background: var(--color-primary);
+    color: #ffffff;
   }
 
   &__grid {
