@@ -497,6 +497,20 @@
               </label>
             </div>
           </article>
+          <article class="settings-view__system-card">
+            <div class="settings-view__data-copy">
+              <strong>关闭程序</strong>
+              <span>立即退出桌面端，不最小化到托盘。</span>
+            </div>
+            <button
+              class="settings-view__danger-button"
+              type="button"
+              @click="$emit('quit-app')"
+            >
+              <Power :size="16" />
+              关闭程序
+            </button>
+          </article>
         </div>
       </section>
     </div>
@@ -510,6 +524,7 @@ import {
   DownloadCloud,
   Eye,
   FolderOpen,
+  Power,
   RefreshCw,
   RotateCcw,
   Save,
@@ -550,6 +565,7 @@ const emit = defineEmits([
   "local-backup-now",
   "local-backups-refresh",
   "local-backup-restore",
+  "quit-app",
   "push-cloud-data",
   "inspect-cloud-data",
   "pull-cloud-data"
@@ -1194,6 +1210,23 @@ watch(
   &__choice--active {
     background: #edf1f7;
     color: var(--color-primary);
+  }
+
+  &__danger-button {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid #d92d20;
+    border-radius: 7px;
+    background: #fff5f5;
+    color: #b42318;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 700;
   }
 
   &__cloud {
