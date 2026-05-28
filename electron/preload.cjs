@@ -142,6 +142,8 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("session:messages", toPlainPayload(payload)),
   getUsageStats: payload =>
     ipcRenderer.invoke("usage:stats", toPlainPayload(payload)),
+  getSkillUsageStats: payload =>
+    ipcRenderer.invoke("skill-usage:stats", toPlainPayload(payload)),
   getUsagePricing: () => ipcRenderer.invoke("usage:pricing"),
   saveUsagePricing: payload =>
     ipcRenderer.invoke("usage:save-pricing", toPlainPayload(payload)),

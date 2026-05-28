@@ -22,6 +22,7 @@ const { RepoService } = require("./repo-service.cjs")
 const { FileWatcherService } = require("./file-watcher-service.cjs")
 const { SessionService } = require("./session-service.cjs")
 const { UsageService } = require("./usage-service.cjs")
+const { SkillUsageService } = require("./skill-usage-service.cjs")
 const { CodexAccountService } = require("./codex-account-service.cjs")
 const { RuntimeProviderService } = require("./runtime-provider-service.cjs")
 const { CodexProxyService } = require("./codex-proxy-service.cjs")
@@ -1277,6 +1278,7 @@ class ManagerService extends EventEmitter {
     this.sessionService.bindStorage(this.storage)
     this.usageService = new UsageService()
     this.usageService.bindStorage(this.storage)
+    this.skillUsageService = new SkillUsageService(this.sessionService)
     this.codexAccountService = new CodexAccountService(this.storage)
     this.runtimeProviderService = new RuntimeProviderService(this.storage)
     this.claudeProxyService = new CodexProxyService(
@@ -2440,6 +2442,15 @@ class ManagerService extends EventEmitter {
 
   getUsageStats(input) {
     return this.usageService.getStats(input)
+  }
+
+  async getSkillUsageStats(input = {}) {
+    return this.skillUsageService.getStats({
+      ...input,
+      cliTargets: this.state.cliTargets,
+      managedSkills: this.state.skills,
+      usageLogs: this.usageService.getStats().data.logs
+    })
   }
 
   getUsagePricing() {
