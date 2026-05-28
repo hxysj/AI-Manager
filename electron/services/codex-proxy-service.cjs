@@ -7,10 +7,30 @@ const { fetchWithProxy } = require("./codex-account-service.cjs")
 const proxyManagedApiKey = "PROXY_MANAGED"
 const codexAccountPrefix = "account:"
 const codexOfficialBaseUrl = "https://chatgpt.com/backend-api/codex"
-const defaultProxyConfig = {
+const proxyCliDefaults = {
+  claude: {
+    name: "Claude",
+    port: 15722,
+    storageKeys: {
+      config: "claudeProxyConfig",
+      liveBackup: "claudeProxyLiveBackup",
+      logs: "claudeProxyRequestLogs"
+    }
+  },
+  codex: {
+    name: "Codex",
+    port: 15721,
+    storageKeys: {
+      config: "codexProxyConfig",
+      liveBackup: "codexProxyLiveBackup",
+      logs: "codexProxyRequestLogs"
+    }
+  }
+}
+
+const baseProxyConfig = {
   enabled: false,
   host: "127.0.0.1",
-  port: 15721,
   activeProviderId: "",
   failoverProviderIds: [],
   retryCount: 1,
@@ -19,24 +39,31 @@ const defaultProxyConfig = {
   updatedAt: 0
 }
 
-function normalizeProxyConfig(input = {}) {
-  const host = String(input.host || defaultProxyConfig.host).trim()
-  const port = Number(input.port || defaultProxyConfig.port)
+function getDefaultProxyConfig(cli) {
+  return {
+    ...baseProxyConfig,
+    port: proxyCliDefaults[cli]?.port || proxyCliDefaults.codex.port
+  }
+}
+
+function normalizeProxyConfig(input = {}, defaults = getDefaultProxyConfig("codex")) {
+  const host = String(input.host || defaults.host).trim()
+  const port = Number(input.port || defaults.port)
 
   return {
     enabled: Boolean(input.enabled),
     host,
-    port: Number.isFinite(port) ? port : defaultProxyConfig.port,
+    port: Number.isFinite(port) ? port : defaults.port,
     activeProviderId: String(input.activeProviderId || "").trim(),
     failoverProviderIds: Array.isArray(input.failoverProviderIds)
       ? input.failoverProviderIds.map(item => String(item || "").trim()).filter(Boolean)
       : [],
-    retryCount: Number(input.retryCount || defaultProxyConfig.retryCount),
+    retryCount: Number(input.retryCount || defaults.retryCount),
     streamTimeoutMs: Number(
-      input.streamTimeoutMs || defaultProxyConfig.streamTimeoutMs
+      input.streamTimeoutMs || defaults.streamTimeoutMs
     ),
     requestTimeoutMs: Number(
-      input.requestTimeoutMs || defaultProxyConfig.requestTimeoutMs
+      input.requestTimeoutMs || defaults.requestTimeoutMs
     ),
     updatedAt: Number(input.updatedAt || 0)
   }
@@ -62,6 +89,12 @@ function buildLocalBaseUrl(config) {
   const host = formatHostForUrl(normalizeHostForClient(config.host))
 
   return `http://${host}:${config.port}/v1`
+}
+
+function buildAnthropicLocalBaseUrl(config) {
+  const host = formatHostForUrl(normalizeHostForClient(config.host))
+
+  return `http://${host}:${config.port}`
 }
 
 function toAccountTargetId(accountId) {
@@ -192,6 +225,41 @@ function setCodexProxyConfigToml(content, localBaseUrl) {
   )
 }
 
+function buildClaudeProxySettings(content, localBaseUrl, provider) {
+  const settings = String(content || "").trim() ? JSON.parse(content) : {}
+  const runtimeConfig = provider.runtimeConfig || {}
+  const env = {
+    ...(settings.env || {}),
+    ANTHROPIC_AUTH_TOKEN: proxyManagedApiKey,
+    ANTHROPIC_BASE_URL: localBaseUrl
+  }
+  const modelEnvKeys = [
+    ["mainModel", "ANTHROPIC_MODEL"],
+    ["haikuModel", "ANTHROPIC_DEFAULT_HAIKU_MODEL"],
+    ["sonnetModel", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
+    ["opusModel", "ANTHROPIC_DEFAULT_OPUS_MODEL"]
+  ]
+
+  for (const [configKey, envKey] of modelEnvKeys) {
+    const value = String(runtimeConfig[configKey] || "").trim()
+
+    if (value) {
+      env[envKey] = value
+    } else {
+      delete env[envKey]
+    }
+  }
+
+  return `${JSON.stringify(
+    {
+      ...settings,
+      env
+    },
+    null,
+    2
+  )}\n`
+}
+
 function createJsonResponse(response, statusCode, payload) {
   response.writeHead(statusCode, {
     "content-type": "application/json; charset=utf-8"
@@ -215,6 +283,23 @@ function normalizeEndpoint(requestUrl) {
       pathname === `/v1/v1${endpoint}` ||
       pathname === `/codex/v1${endpoint}`
     ) {
+      return {
+        endpoint,
+        search: url.search
+      }
+    }
+  }
+
+  return null
+}
+
+function normalizeAnthropicEndpoint(requestUrl) {
+  const url = new URL(requestUrl, "http://127.0.0.1")
+  const pathname = url.pathname.replace(/\/+/g, "/")
+  const knownEndpoints = ["/messages", "/messages/count_tokens"]
+
+  for (const endpoint of knownEndpoints) {
+    if (pathname === endpoint || pathname === `/v1${endpoint}`) {
       return {
         endpoint,
         search: url.search
@@ -249,14 +334,45 @@ function buildUpstreamUrl(baseUrl, endpoint, search) {
   )
 }
 
+function buildAnthropicUpstreamUrl(baseUrl, endpoint, search) {
+  const cleanBase = String(baseUrl || "").trim().replace(/\/+$/, "")
+
+  if (!cleanBase) {
+    throw new Error("当前 Claude Provider 缺少请求地址")
+  }
+
+  if (/\/messages(?:\/count_tokens)?$/i.test(cleanBase)) {
+    return `${cleanBase}${search || ""}`
+  }
+
+  const basePath = new URL(cleanBase).pathname.replace(/\/+$/, "")
+  const pathPrefix = /\/v1$/i.test(basePath) ? "" : "/v1"
+
+  return `${cleanBase}${pathPrefix}${endpoint}${search || ""}`.replace(
+    /\/v1\/v1\//g,
+    "/v1/"
+  )
+}
+
 class CodexProxyService extends EventEmitter {
-  constructor(storage, runtimeProviderService, codexAccountService, getCodexCliTarget) {
+  constructor(
+    storage,
+    runtimeProviderService,
+    codexAccountService,
+    getCodexCliTarget,
+    options = {}
+  ) {
     super()
+    this.cli = options.cli || "codex"
+    this.cliName = proxyCliDefaults[this.cli]?.name || this.cli
+    this.storageKeys =
+      options.storageKeys || proxyCliDefaults[this.cli]?.storageKeys || proxyCliDefaults.codex.storageKeys
+    this.defaultConfig = getDefaultProxyConfig(this.cli)
     this.storage = storage
     this.runtimeProviderService = runtimeProviderService
     this.codexAccountService = codexAccountService
     this.getCodexCliTarget = getCodexCliTarget
-    this.config = normalizeProxyConfig()
+    this.config = normalizeProxyConfig({}, this.defaultConfig)
     this.liveBackup = null
     this.logs = []
     this.server = null
@@ -264,10 +380,11 @@ class CodexProxyService extends EventEmitter {
 
   async init() {
     this.config = normalizeProxyConfig(
-      await this.storage.read("codexProxyConfig", defaultProxyConfig)
+      await this.storage.read(this.storageKeys.config, this.defaultConfig),
+      this.defaultConfig
     )
-    this.liveBackup = await this.storage.read("codexProxyLiveBackup", null)
-    this.logs = await this.storage.read("codexProxyRequestLogs", [])
+    this.liveBackup = await this.storage.read(this.storageKeys.liveBackup, null)
+    this.logs = await this.storage.read(this.storageKeys.logs, [])
 
     if (this.config.enabled) {
       await this.startServer()
@@ -277,7 +394,10 @@ class CodexProxyService extends EventEmitter {
   getState() {
     return {
       ...this.config,
-      localBaseUrl: buildLocalBaseUrl(this.config),
+      localBaseUrl:
+        this.cli === "claude"
+          ? buildAnthropicLocalBaseUrl(this.config)
+          : buildLocalBaseUrl(this.config),
       hasLiveBackup: Boolean(this.liveBackup),
       logs: this.logs
     }
@@ -288,7 +408,7 @@ class CodexProxyService extends EventEmitter {
   }
 
   async persistConfig() {
-    await this.storage.writeNow("codexProxyConfig", this.config)
+    await this.storage.writeNow(this.storageKeys.config, this.config)
   }
 
   emitChanged() {
@@ -297,7 +417,7 @@ class CodexProxyService extends EventEmitter {
 
   async persistLogs() {
     await this.storage.writeNow(
-      "codexProxyRequestLogs",
+      this.storageKeys.logs,
       this.logs.slice(0, 500)
     )
   }
@@ -339,7 +459,13 @@ class CodexProxyService extends EventEmitter {
 
   getCodexPaths(cliTarget) {
     if (!cliTarget?.configPath) {
-      throw new Error("Codex 配置目录不存在")
+      throw new Error(`${this.cliName} 配置目录不存在`)
+    }
+
+    if (this.cli === "claude") {
+      return {
+        settingsPath: path.join(cliTarget.configPath, "settings.json")
+      }
     }
 
     return {
@@ -350,6 +476,22 @@ class CodexProxyService extends EventEmitter {
 
   async readLiveConfig(cliTarget) {
     const paths = this.getCodexPaths(cliTarget)
+    if (this.cli === "claude") {
+      let settings = "{}\n"
+
+      try {
+        settings = await fs.readFile(paths.settingsPath, "utf8")
+      } catch (error) {
+        if (error.code !== "ENOENT") {
+          throw error
+        }
+      }
+
+      return {
+        settings
+      }
+    }
+
     const authContent = await fs.readFile(paths.authPath, "utf8")
     const auth = JSON.parse(authContent)
     let config = ""
@@ -370,6 +512,12 @@ class CodexProxyService extends EventEmitter {
 
   async writeLiveConfigAtomic(cliTarget, liveConfig) {
     const paths = this.getCodexPaths(cliTarget)
+    if (this.cli === "claude") {
+      await fs.mkdir(path.dirname(paths.settingsPath), { recursive: true })
+      await fs.writeFile(paths.settingsPath, liveConfig.settings, "utf8")
+      return
+    }
+
     let previousAuth = null
 
     try {
@@ -405,12 +553,12 @@ class CodexProxyService extends EventEmitter {
       item => item.id === providerId
     )
 
-    if (!provider || provider.cli !== "codex") {
-      throw new Error("Codex Provider 不存在")
+    if (!provider || provider.cli !== this.cli) {
+      throw new Error(`${this.cliName} Provider 不存在`)
     }
 
     if (provider.enabled === false) {
-      throw new Error("Codex Provider 已禁用")
+      throw new Error(`${this.cliName} Provider 已禁用`)
     }
 
     return provider
@@ -422,13 +570,17 @@ class CodexProxyService extends EventEmitter {
     )
 
     if (!apiKey) {
-      throw new Error("当前 Codex Provider 缺少 API Key")
+      throw new Error(`当前 ${this.cliName} Provider 缺少 API Key`)
     }
 
     return apiKey
   }
 
   getAccount(targetId) {
+    if (this.cli !== "codex") {
+      throw new Error(`${this.cliName} 代理不支持官方账号`)
+    }
+
     const accountId = getAccountIdFromTarget(targetId)
     const account = this.codexAccountService.accounts.find(
       item => item.id === accountId
@@ -486,6 +638,7 @@ class CodexProxyService extends EventEmitter {
 
     return {
       token: this.getProviderApiKey(targetId),
+      provider: this.getProvider(targetId),
       accountId: ""
     }
   }
@@ -524,7 +677,7 @@ class CodexProxyService extends EventEmitter {
     )
 
     return Boolean(
-      provider && provider.cli === "codex" && provider.enabled !== false
+      provider && provider.cli === this.cli && provider.enabled !== false
     )
   }
 
@@ -540,14 +693,27 @@ class CodexProxyService extends EventEmitter {
     await this.startServer()
 
     const liveConfig = await this.readLiveConfig(cliTarget)
-    const localBaseUrl = buildLocalBaseUrl(this.config)
-    const nextLiveConfig = {
-      auth: {
-        ...liveConfig.auth,
-        OPENAI_API_KEY: proxyManagedApiKey
-      },
-      config: setCodexProxyConfigToml(liveConfig.config, localBaseUrl)
-    }
+    const localBaseUrl =
+      this.cli === "claude"
+        ? buildAnthropicLocalBaseUrl(this.config)
+        : buildLocalBaseUrl(this.config)
+    const activeTarget = this.getTarget(activeProviderId)
+    const nextLiveConfig =
+      this.cli === "claude"
+        ? {
+            settings: buildClaudeProxySettings(
+              liveConfig.settings,
+              localBaseUrl,
+              activeTarget.provider
+            )
+          }
+        : {
+            auth: {
+              ...liveConfig.auth,
+              OPENAI_API_KEY: proxyManagedApiKey
+            },
+            config: setCodexProxyConfigToml(liveConfig.config, localBaseUrl)
+          }
 
     this.liveBackup = {
       ...liveConfig,
@@ -556,14 +722,14 @@ class CodexProxyService extends EventEmitter {
       previousProfile: input.previousProfile || null,
       createdAt: Date.now()
     }
-    await this.storage.writeNow("codexProxyLiveBackup", this.liveBackup)
+    await this.storage.writeNow(this.storageKeys.liveBackup, this.liveBackup)
     await this.writeLiveConfigAtomic(cliTarget, nextLiveConfig)
     this.config = normalizeProxyConfig({
       ...this.config,
       enabled: true,
       activeProviderId,
       updatedAt: Date.now()
-    })
+    }, this.defaultConfig)
     await this.persistConfig()
     this.emitChanged()
     return this.getState()
@@ -571,7 +737,7 @@ class CodexProxyService extends EventEmitter {
 
   async disable(cliTarget) {
     if (!this.liveBackup) {
-      throw new Error("Codex 代理 Live 备份不存在，无法恢复")
+      throw new Error(`${this.cliName} 代理 Live 备份不存在，无法恢复`)
     }
 
     const previousAccountId = this.liveBackup.previousAccountId || ""
@@ -579,16 +745,17 @@ class CodexProxyService extends EventEmitter {
 
     await this.writeLiveConfigAtomic(cliTarget, {
       auth: this.liveBackup.auth,
-      config: this.liveBackup.config
+      config: this.liveBackup.config,
+      settings: this.liveBackup.settings
     })
     this.liveBackup = null
-    await this.storage.writeNow("codexProxyLiveBackup", null)
+    await this.storage.writeNow(this.storageKeys.liveBackup, null)
     this.config = normalizeProxyConfig({
       ...this.config,
       enabled: false,
       activeProviderId: "",
       updatedAt: Date.now()
-    })
+    }, this.defaultConfig)
     await this.persistConfig()
     await this.stopServer()
     this.emitChanged()
@@ -611,7 +778,7 @@ class CodexProxyService extends EventEmitter {
         ...this.config,
         failoverProviderIds: [...this.config.failoverProviderIds, targetId],
         updatedAt: Date.now()
-      })
+      }, this.defaultConfig)
       await this.persistConfig()
       this.emitChanged()
     }
@@ -640,20 +807,32 @@ class CodexProxyService extends EventEmitter {
           : this.config.activeProviderId,
       failoverProviderIds: nextProviderIds,
       updatedAt: Date.now()
-    })
+    }, this.defaultConfig)
     await this.persistConfig()
     this.emitChanged()
     return this.getState()
   }
 
-  async updateActiveProvider(providerId) {
+  async updateActiveProvider(providerId, cliTarget) {
     await this.assertTargetReady(providerId)
     this.assertTargetJoined(providerId)
+    const target = this.getTarget(providerId)
+    if (this.cli === "claude" && this.config.enabled) {
+      const liveConfig = await this.readLiveConfig(cliTarget)
+
+      await this.writeLiveConfigAtomic(cliTarget, {
+        settings: buildClaudeProxySettings(
+          liveConfig.settings,
+          buildAnthropicLocalBaseUrl(this.config),
+          target.provider
+        )
+      })
+    }
     this.config = normalizeProxyConfig({
       ...this.config,
       activeProviderId: providerId,
       updatedAt: Date.now()
-    })
+    }, this.defaultConfig)
     await this.persistConfig()
     this.emitChanged()
     return this.getState()
@@ -687,34 +866,54 @@ class CodexProxyService extends EventEmitter {
     const auth = await this.getTargetAuth(targetId)
 
     delete headers.authorization
+    delete headers["x-api-key"]
     delete headers.host
     delete headers["content-length"]
     delete headers["accept-encoding"]
-    headers.authorization = `Bearer ${auth.token}`
     headers["accept-encoding"] = "identity"
 
     if (auth.accountId) {
       headers["chatgpt-account-id"] = auth.accountId
+      headers.authorization = `Bearer ${auth.token}`
+      return headers
     }
 
+    if (this.cli === "claude") {
+      headers["x-api-key"] = auth.token
+      return headers
+    }
+
+    headers.authorization = `Bearer ${auth.token}`
     return headers
   }
 
   async forwardRequest(request, route, body, targetId) {
     const target = this.getTarget(targetId)
-    const upstreamUrl = buildUpstreamUrl(
-      target.baseUrl,
-      route.endpoint,
-      route.search
-    )
+    const upstreamUrl =
+      this.cli === "claude"
+        ? buildAnthropicUpstreamUrl(target.baseUrl, route.endpoint, route.search)
+        : buildUpstreamUrl(target.baseUrl, route.endpoint, route.search)
     const method = String(request.method || "GET").toUpperCase()
     const options = {
       method,
       headers: await this.buildForwardHeaders(request, targetId)
     }
+    let requestBody = body
+
+    if (
+      this.cli === "claude" &&
+      method !== "GET" &&
+      method !== "HEAD" &&
+      target.provider.runtimeConfig?.mainModel
+    ) {
+      const payload = JSON.parse(body.toString("utf8"))
+
+      payload.model = target.provider.runtimeConfig.mainModel
+      requestBody = Buffer.from(`${JSON.stringify(payload)}\n`)
+    }
 
     if (method !== "GET" && method !== "HEAD") {
-      options.body = body
+      options.body = requestBody
     }
 
     const startedAt = Date.now()
@@ -731,7 +930,7 @@ class CodexProxyService extends EventEmitter {
   appendLog(input) {
     this.logs.unshift({
       id: `proxy-log-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      appType: "codex",
+      appType: this.cli,
       dataSource: "proxy",
       createdAt: Date.now(),
       ...input
@@ -742,12 +941,15 @@ class CodexProxyService extends EventEmitter {
   }
 
   async handleRequest(request, response) {
-    const route = normalizeEndpoint(request.url)
+    const route =
+      this.cli === "claude"
+        ? normalizeAnthropicEndpoint(request.url)
+        : normalizeEndpoint(request.url)
 
     if (!route) {
       createJsonResponse(response, 404, {
         error: {
-          message: "Codex 代理不支持该请求路径"
+          message: `${this.cliName} 代理不支持该请求路径`
         }
       })
       return
@@ -756,7 +958,7 @@ class CodexProxyService extends EventEmitter {
     if (!this.config.enabled) {
       createJsonResponse(response, 503, {
         error: {
-          message: "Codex 代理未开启接管"
+          message: `${this.cliName} 代理未开启接管`
         }
       })
       return
@@ -775,7 +977,7 @@ class CodexProxyService extends EventEmitter {
             ...this.config,
             activeProviderId: providerId,
             updatedAt: Date.now()
-          })
+          }, this.defaultConfig)
           await this.persistConfig()
         }
         this.emitChanged()
@@ -811,7 +1013,7 @@ class CodexProxyService extends EventEmitter {
             ...this.config,
             activeProviderId: providerId,
             updatedAt: Date.now()
-          })
+          }, this.defaultConfig)
           await this.persistConfig()
           this.emitChanged()
         }
@@ -849,7 +1051,7 @@ class CodexProxyService extends EventEmitter {
       }
     }
 
-    throw lastError || new Error("没有可用的 Codex 代理 Provider")
+    throw lastError || new Error(`没有可用的 ${this.cliName} 代理 Provider`)
   }
 
   async dispose() {

@@ -202,6 +202,15 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("codex-account:detail", toPlainPayload(payload)),
   deleteCodexAccount: payload =>
     ipcRenderer.invoke("codex-account:delete", toPlainPayload(payload)),
+  enableClaudeProxy: payload =>
+    ipcRenderer.invoke("claude-proxy:enable", toPlainPayload(payload)),
+  disableClaudeProxy: () => ipcRenderer.invoke("claude-proxy:disable"),
+  addClaudeProxyProvider: payload =>
+    ipcRenderer.invoke("claude-proxy:add-provider", toPlainPayload(payload)),
+  removeClaudeProxyProvider: payload =>
+    ipcRenderer.invoke("claude-proxy:remove-provider", toPlainPayload(payload)),
+  activateClaudeProxyProvider: payload =>
+    ipcRenderer.invoke("claude-proxy:activate-provider", toPlainPayload(payload)),
   enableCodexProxy: payload =>
     ipcRenderer.invoke("codex-proxy:enable", toPlainPayload(payload)),
   disableCodexProxy: () => ipcRenderer.invoke("codex-proxy:disable"),

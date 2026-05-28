@@ -28,14 +28,14 @@
         </section>
 
         <div class="providers-view__toolbar-actions">
-          <div v-if="codexProxyEnabled" class="providers-view-proxy-tabs">
+          <div v-if="activeProxyEnabled" class="providers-view-proxy-tabs">
             <button
               :class="[
                 'providers-view-proxy-tab',
-                { 'providers-view-proxy-tab-active': codexProxyTab === 'proxy' }
+                { 'providers-view-proxy-tab-active': proxyTab === 'proxy' }
               ]"
               type="button"
-              @click="codexProxyTab = 'proxy'"
+              @click="proxyTab = 'proxy'"
             >
               接管池
             </button>
@@ -44,54 +44,54 @@
                 'providers-view-proxy-tab',
                 {
                   'providers-view-proxy-tab-active':
-                    codexProxyTab === 'providers'
+                    proxyTab === 'providers'
                 }
               ]"
               type="button"
-              @click="codexProxyTab = 'providers'"
+              @click="proxyTab = 'providers'"
             >
               Provider 列表
             </button>
           </div>
           <label
-            v-if="activeCli === 'codex'"
+            v-if="activeProxyState"
             :class="[
               'providers-view-proxy-switch',
               { 'providers-view-proxy-switch-disabled': pending }
             ]"
-            title="Codex 代理接管"
+            :title="`${activeCliName} 代理接管`"
           >
             <span>Proxy</span>
             <input
               type="checkbox"
-              :checked="codexProxyState.enabled"
+              :checked="activeProxyState.enabled"
               :disabled="pending"
-              @change="toggleCodexProxySwitch"
+              @change="toggleProxySwitch"
             />
             <i></i>
           </label>
           <button
-            v-if="activeCli === 'codex' && !codexProxyEnabled"
+            v-if="activeProxyState && !activeProxyEnabled"
             class="providers-view-proxy-manage"
             type="button"
             :disabled="pending"
-            @click="showCodexProxyManager = true"
+            @click="showProxyManager = true"
           >
             <SlidersHorizontal :size="16" />
             接管池
-            <span>{{ codexProxyProviderIds.length }}</span>
+            <span>{{ activeProxyProviderIds.length }}</span>
           </button>
           <button
             v-if="
-              activeCli === 'codex' &&
-              showCodexProxyAddAction &&
-              !codexProxyEnabled &&
-              !codexProxyProviderIds.length
+              activeProxyState &&
+              showProxyAddAction &&
+              !activeProxyEnabled &&
+              !activeProxyProviderIds.length
             "
             class="providers-view-proxy-add"
             type="button"
             :disabled="pending"
-            @click="openCodexProxyProviderPicker"
+            @click="openProxyProviderPicker"
           >
             <Plus :size="16" />
             加入接管池
@@ -118,54 +118,58 @@
 
       <CodexProxyPanel
         v-if="
-          activeCli === 'codex' &&
-          (!codexProxyEnabled || codexProxyTab === 'proxy')
+          activeProxyState &&
+          (!activeProxyEnabled || proxyTab === 'proxy')
         "
-        ref="codexProxyPanelRef"
+        ref="proxyPanelRef"
         :accounts="codexAccounts"
+        :cli-name="activeCliName"
+        :include-accounts="activeCli === 'codex'"
         :pending="pending"
         :providers="scopedProviders"
-        :proxy-state="codexProxyState"
+        :proxy-state="activeProxyState"
         @add-provider="
           payload => {
-            showCodexProxyAddAction = false
-            emit('codex-proxy-provider-add', payload)
+            showProxyAddAction = false
+            emitProxyEvent('provider-add', payload)
           }
         "
-        @remove-provider="emit('codex-proxy-provider-remove', $event)"
-        @activate-provider="emit('codex-proxy-provider-activate', $event)"
+        @remove-provider="emitProxyEvent('provider-remove', $event)"
+        @activate-provider="emitProxyEvent('provider-activate', $event)"
         @restore-account="emit('codex-account-restore', $event)"
         @restore-provider="emit('save-provider', $event)"
       />
 
       <BaseModal
-        v-if="showCodexProxyManager"
+        v-if="showProxyManager"
         class="providers-view-proxy-modal"
         title="接管池管理"
         description=""
-        @close="showCodexProxyManager = false"
+        @close="showProxyManager = false"
       >
         <CodexProxyPanel
           mode="manage"
           :accounts="codexAccounts"
+          :cli-name="activeCliName"
+          :include-accounts="activeCli === 'codex'"
           :pending="pending"
           :providers="scopedProviders"
-          :proxy-state="codexProxyState"
+          :proxy-state="activeProxyState"
           @add-provider="
             payload => {
-              showCodexProxyAddAction = false
-              emit('codex-proxy-provider-add', payload)
+              showProxyAddAction = false
+              emitProxyEvent('provider-add', payload)
             }
           "
-          @remove-provider="emit('codex-proxy-provider-remove', $event)"
-          @activate-provider="emit('codex-proxy-provider-activate', $event)"
+          @remove-provider="emitProxyEvent('provider-remove', $event)"
+          @activate-provider="emitProxyEvent('provider-activate', $event)"
           @restore-account="emit('codex-account-restore', $event)"
           @restore-provider="emit('save-provider', $event)"
         />
       </BaseModal>
 
       <section
-        v-if="!codexProxyEnabled || codexProxyTab === 'providers'"
+        v-if="!activeProxyEnabled || proxyTab === 'providers'"
         class="providers-view__list-panel"
       >
         <article
@@ -1665,6 +1669,15 @@ const props = defineProps({
     type: Object,
     default: null
   },
+  claudeProxyState: {
+    type: Object,
+    default: () => ({
+      enabled: false,
+      localBaseUrl: "",
+      activeProviderId: "",
+      failoverProviderIds: []
+    })
+  },
   codexProxyState: {
     type: Object,
     default: () => ({
@@ -1709,6 +1722,11 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
+  "claude-proxy-disable",
+  "claude-proxy-enable",
+  "claude-proxy-provider-activate",
+  "claude-proxy-provider-add",
+  "claude-proxy-provider-remove",
   "codex-auth-json-import",
   "codex-account-clear",
   "codex-account-enable",
@@ -1806,10 +1824,10 @@ const codexAccountDetail = ref(null)
 const codexAccountDetailTarget = ref(null)
 const codexAccountDetailLoading = ref(false)
 const codexAccountDetailTab = ref("config")
-const codexProxyPanelRef = ref(null)
-const showCodexProxyAddAction = ref(false)
-const showCodexProxyManager = ref(false)
-const codexProxyTab = ref("proxy")
+const proxyPanelRef = ref(null)
+const showProxyAddAction = ref(false)
+const showProxyManager = ref(false)
+const proxyTab = ref("proxy")
 const providerDetail = ref(null)
 const providerDetailTab = ref("config")
 const manualCallbackUrl = ref("")
@@ -1912,12 +1930,24 @@ const runtimeState = computed(() => {
   return props.runtimeProviderState[activeCli.value] || {}
 })
 
-const codexProxyEnabled = computed(() => {
-  return activeCli.value === "codex" && props.codexProxyState.enabled
+const activeProxyState = computed(() => {
+  if (activeCli.value === "claude") {
+    return props.claudeProxyState
+  }
+
+  if (activeCli.value === "codex") {
+    return props.codexProxyState
+  }
+
+  return null
 })
 
-const codexProxyProviderIds = computed(() => {
-  return props.codexProxyState.failoverProviderIds || []
+const activeProxyEnabled = computed(() => {
+  return Boolean(activeProxyState.value?.enabled)
+})
+
+const activeProxyProviderIds = computed(() => {
+  return activeProxyState.value?.failoverProviderIds || []
 })
 
 const runtimeStatus = computed(() => {
@@ -2707,26 +2737,30 @@ function restoreCodexAccount(account) {
   })
 }
 
-function toggleCodexProxySwitch(event) {
+function emitProxyEvent(action, payload) {
+  emit(`${activeCli.value}-proxy-${action}`, payload)
+}
+
+function toggleProxySwitch(event) {
   if (event.target.checked) {
-    if (!codexProxyProviderIds.value.length) {
+    if (!activeProxyProviderIds.value.length) {
       event.target.checked = false
-      showCodexProxyAddAction.value = true
+      showProxyAddAction.value = true
       createMessage.error("请先添加代理接管池")
       return
     }
 
-    emit("codex-proxy-enable", {})
-    event.target.checked = props.codexProxyState.enabled
+    emitProxyEvent("enable", {})
+    event.target.checked = activeProxyState.value.enabled
     return
   }
 
-  emit("codex-proxy-disable")
-  event.target.checked = props.codexProxyState.enabled
+  emitProxyEvent("disable")
+  event.target.checked = activeProxyState.value.enabled
 }
 
-function openCodexProxyProviderPicker() {
-  codexProxyPanelRef.value?.openProviderPicker()
+function openProxyProviderPicker() {
+  proxyPanelRef.value?.openProviderPicker()
 }
 
 function clearRuntime() {
@@ -2855,9 +2889,9 @@ watch(
 )
 
 watch(
-  () => props.codexProxyState.enabled,
+  () => activeProxyState.value?.enabled,
   enabled => {
-    codexProxyTab.value = enabled ? "proxy" : "providers"
+    proxyTab.value = enabled ? "proxy" : "providers"
   },
   { immediate: true }
 )

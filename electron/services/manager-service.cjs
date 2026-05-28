@@ -742,6 +742,11 @@ async function collectBackupEntries(paths) {
       paths.storageFiles.runtimeProviderKeys,
       "storage/runtime-provider-keys.json"
     ],
+    [paths.storageFiles.claudeProxyConfig, "storage/claude-proxy-config.json"],
+    [
+      paths.storageFiles.claudeProxyRequestLogs,
+      "storage/claude-proxy-request-logs.json"
+    ],
     [paths.storageFiles.codexProxyConfig, "storage/codex-proxy-config.json"],
     [
       paths.storageFiles.codexProxyRequestLogs,
@@ -1246,6 +1251,14 @@ function createCodexProxyRestoreSnapshot(codexProxyService) {
   }
 }
 
+function createProxyRestoreSnapshots(proxyServices) {
+  return Object.fromEntries(
+    Object.entries(proxyServices)
+      .map(([cli, service]) => [cli, createCodexProxyRestoreSnapshot(service)])
+      .filter(([, snapshot]) => Boolean(snapshot))
+  )
+}
+
 class ManagerService extends EventEmitter {
   constructor(userDataPath, appSettings = {}) {
     super()
@@ -1266,6 +1279,13 @@ class ManagerService extends EventEmitter {
     this.usageService.bindStorage(this.storage)
     this.codexAccountService = new CodexAccountService(this.storage)
     this.runtimeProviderService = new RuntimeProviderService(this.storage)
+    this.claudeProxyService = new CodexProxyService(
+      this.storage,
+      this.runtimeProviderService,
+      this.codexAccountService,
+      () => this.state.cliTargets.find((item) => item.id === "claude"),
+      { cli: "claude" }
+    )
     this.codexProxyService = new CodexProxyService(
       this.storage,
       this.runtimeProviderService,
@@ -1287,6 +1307,7 @@ class ManagerService extends EventEmitter {
       runtimeModels: [],
       runtimeProfiles: [],
       runtimeProviderState: {},
+      claudeProxyState: this.claudeProxyService.getState(),
       codexProxyState: this.codexProxyService.getState(),
       diagnostics: [],
       paths: this.toPublicPaths(),
@@ -1318,6 +1339,15 @@ class ManagerService extends EventEmitter {
       }
       this.emit("state-changed", this.state)
     })
+    this.claudeProxyService.on("changed", (claudeProxyState) => {
+      this.state = {
+        ...this.state,
+        ...this.getRuntimeStateWithProxy(),
+        claudeProxyState,
+        refreshedAt: Date.now()
+      }
+      this.emit("state-changed", this.state)
+    })
     this.codexProxyService.on("changed", (codexProxyState) => {
       this.state = {
         ...this.state,
@@ -1328,6 +1358,7 @@ class ManagerService extends EventEmitter {
       this.emit("state-changed", this.state)
     })
     await this.runtimeProviderService.init()
+    await this.claudeProxyService.init()
     await this.codexProxyService.init()
     await this.refreshAll({ emit: false })
     this.codexAccountService.startAutoRefresh(() =>
@@ -1415,9 +1446,10 @@ class ManagerService extends EventEmitter {
     const codexAccountSnapshot = createCodexAccountRestoreSnapshot(
       this.codexAccountService
     )
-    const codexProxySnapshot = createCodexProxyRestoreSnapshot(
-      this.codexProxyService
-    )
+    const proxySnapshots = createProxyRestoreSnapshots({
+      claude: this.claudeProxyService,
+      codex: this.codexProxyService
+    })
 
     this.codexAccountService.stopAutoRefresh()
     this.fileWatcherService.stop()
@@ -1439,21 +1471,23 @@ class ManagerService extends EventEmitter {
     }
     await this.runtimeProviderService.init()
     await this.codexAccountService.init()
+    await this.claudeProxyService.init()
     await this.codexProxyService.init()
 
-    if (codexProxySnapshot) {
-      const nextProxyConfig = this.codexProxyService.getState()
+    for (const [cli, snapshot] of Object.entries(proxySnapshots)) {
+      const proxyService = this.getProxyService(cli)
+      const nextProxyConfig = proxyService.getState()
       const nextProxyTargetHash = createCodexProxyTargetConfigHash(
-        this.codexProxyService,
-        codexProxySnapshot.targetId
+        proxyService,
+        snapshot.targetId
       )
 
       if (
         createCodexProxyConfigHash(nextProxyConfig) !==
-          codexProxySnapshot.configHash ||
-        nextProxyTargetHash !== codexProxySnapshot.targetHash
+          snapshot.configHash ||
+        nextProxyTargetHash !== snapshot.targetHash
       ) {
-        await this.disableCodexProxy()
+        await this.disableProxy(cli)
       }
     }
 
@@ -1473,7 +1507,7 @@ class ManagerService extends EventEmitter {
         continue
       }
 
-      if (snapshot.cli !== "codex" || !this.codexProxyService.isEnabled()) {
+      if (!this.getProxyService(snapshot.cli)?.isEnabled()) {
         await this.clearRuntime(snapshot.cli)
       }
     }
@@ -1529,7 +1563,7 @@ class ManagerService extends EventEmitter {
       const { sessions, diagnostics } = await this.sessionService.refresh(
         this.state.cliTargets
       )
-      const runtimeState = this.runtimeProviderService.getState()
+      const runtimeState = this.getRuntimeStateWithProxy()
       const codexAccounts = this.codexAccountService.getState()
       const { diagnostics: usageDiagnostics } = await this.usageService.refresh(
         {
@@ -1538,6 +1572,7 @@ class ManagerService extends EventEmitter {
           runtimeProfiles: runtimeState.runtimeProfiles,
           runtimeProviderState: runtimeState.runtimeProviderState,
           codexAccounts,
+          proxyStates: this.getProxyStatePatch(),
           codexProxyState: this.codexProxyService.getState()
         }
       )
@@ -1565,15 +1600,44 @@ class ManagerService extends EventEmitter {
     return this.state
   }
 
+  getProxyService(cli) {
+    if (cli === "claude") {
+      return this.claudeProxyService
+    }
+
+    if (cli === "codex") {
+      return this.codexProxyService
+    }
+
+    return null
+  }
+
+  getProxyStateKey(cli) {
+    return cli === "claude" ? "claudeProxyState" : "codexProxyState"
+  }
+
+  getProxyStatePatch() {
+    return {
+      claudeProxyState: this.claudeProxyService.getState(),
+      codexProxyState: this.codexProxyService.getState()
+    }
+  }
+
   getRuntimeStateWithProxy() {
     const runtimeState = this.runtimeProviderService.getState()
 
-    if (this.codexProxyService.isEnabled()) {
+    for (const cli of ["claude", "codex"]) {
+      const proxyService = this.getProxyService(cli)
+
+      if (!proxyService?.isEnabled()) {
+        continue
+      }
+
       runtimeState.runtimeProviderState = {
         ...runtimeState.runtimeProviderState,
-        codex: {
-          ...(runtimeState.runtimeProviderState.codex || {}),
-          activeProviderId: this.codexProxyService.getState().activeProviderId,
+        [cli]: {
+          ...(runtimeState.runtimeProviderState[cli] || {}),
+          activeProviderId: proxyService.getState().activeProviderId,
           status: "PROXY_MANAGED"
         }
       }
@@ -1620,6 +1684,7 @@ class ManagerService extends EventEmitter {
       runtimeProfiles: runtimeState.runtimeProfiles,
       runtimeProviderState: runtimeState.runtimeProviderState,
       codexAccounts,
+      proxyStates: this.getProxyStatePatch(),
       codexProxyState: this.codexProxyService.getState()
     })
     await this.promptRuntimeService.refreshDrift(cliTargets)
@@ -1737,7 +1802,7 @@ class ManagerService extends EventEmitter {
       codexAccounts,
       codexLoginState: this.codexAccountService.getLoginState(),
       ...runtimeState,
-      codexProxyState: this.codexProxyService.getState(),
+      ...this.getProxyStatePatch(),
       rules,
       diagnostics: [...diagnostics, ...sessionDiagnostics, ...usageDiagnostics],
       paths: this.toPublicPaths(),
@@ -2412,6 +2477,7 @@ class ManagerService extends EventEmitter {
       runtimeProfiles: runtimeState.runtimeProfiles,
       runtimeProviderState: runtimeState.runtimeProviderState,
       codexAccounts,
+      proxyStates: this.getProxyStatePatch(),
       codexProxyState: this.codexProxyService.getState()
     })
 
@@ -2822,7 +2888,7 @@ class ManagerService extends EventEmitter {
       ...this.state,
       ...this.getRuntimeStateWithProxy(),
       codexAccounts: this.codexAccountService.getState(),
-      codexProxyState: this.codexProxyService.getState(),
+      ...this.getProxyStatePatch(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
@@ -2836,7 +2902,7 @@ class ManagerService extends EventEmitter {
       ...this.state,
       ...this.getRuntimeStateWithProxy(),
       codexAccounts: this.codexAccountService.getState(),
-      codexProxyState: this.codexProxyService.getState(),
+      ...this.getProxyStatePatch(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
@@ -2881,45 +2947,59 @@ class ManagerService extends EventEmitter {
     }
   }
 
-  async enableCodexProxy(input) {
+  async enableProxy(cli, input) {
+    const proxyService = this.getProxyService(cli)
+    const cliTarget = this.state.cliTargets.find((item) => item.id === cli)
+
+    if (!proxyService) {
+      throw new Error("该 CLI 不支持代理接管")
+    }
+
     const targetId =
-      this.codexProxyService.getState().failoverProviderIds[0] || ""
+      proxyService.getState().failoverProviderIds[0] || ""
     const previousProfile =
-      this.runtimeProviderService.profiles.find((item) => item.cli === "codex") ||
+      this.runtimeProviderService.profiles.find((item) => item.cli === cli) ||
       null
-    const previousAccountId = this.codexAccountService.activeAccountId || ""
+    const previousAccountId =
+      cli === "codex" ? this.codexAccountService.activeAccountId || "" : ""
 
     if (!targetId) {
       throw new Error("请先把目标加入代理接管池")
     }
 
-    await this.codexProxyService.enable(
+    await proxyService.enable(
       {
         ...input,
         previousAccountId,
         previousProfile
       },
-      this.state.cliTargets.find((item) => item.id === "codex")
+      cliTarget
     )
-    this.runtimeProviderService.clearRuntime("codex")
-    this.codexAccountService.clearActiveAccount()
+    this.runtimeProviderService.clearRuntime(cli)
+    if (cli === "codex") this.codexAccountService.clearActiveAccount()
     await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
     this.state = {
       ...this.state,
       ...this.getRuntimeStateWithProxy(),
       codexAccounts: this.codexAccountService.getState(),
-      codexProxyState: this.codexProxyService.getState(),
+      ...this.getProxyStatePatch(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
     return this.state
   }
 
-  async disableCodexProxy() {
-    const result = await this.codexProxyService.disable(
-      this.state.cliTargets.find((item) => item.id === "codex")
+  async disableProxy(cli) {
+    const proxyService = this.getProxyService(cli)
+
+    if (!proxyService) {
+      throw new Error("该 CLI 不支持代理接管")
+    }
+
+    const result = await proxyService.disable(
+      this.state.cliTargets.find((item) => item.id === cli)
     )
-    if (result.previousAccountId) {
+    if (cli === "codex" && result.previousAccountId) {
       await this.codexAccountService.enableAccount(
         result.previousAccountId,
         this.state.cliTargets.find((item) => item.id === "codex")
@@ -2928,56 +3008,117 @@ class ManagerService extends EventEmitter {
     } else if (result.previousProfile) {
       this.runtimeProviderService.switchRuntime(result.previousProfile)
     } else {
-      this.runtimeProviderService.clearRuntime("codex")
+      this.runtimeProviderService.clearRuntime(cli)
     }
     await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
     this.state = {
       ...this.state,
       ...this.getRuntimeStateWithProxy(),
       codexAccounts: this.codexAccountService.getState(),
-      codexProxyState: this.codexProxyService.getState(),
+      ...this.getProxyStatePatch(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
     return this.state
   }
 
-  async addCodexProxyProvider(input) {
-    await this.codexProxyService.addProvider(input)
+  async addProxyProvider(cli, input) {
+    const proxyService = this.getProxyService(cli)
+
+    if (!proxyService) {
+      throw new Error("该 CLI 不支持代理接管")
+    }
+
+    await proxyService.addProvider(input)
     this.state = {
       ...this.state,
-      codexProxyState: this.codexProxyService.getState(),
+      [this.getProxyStateKey(cli)]: proxyService.getState(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
     return this.state
   }
 
-  async removeCodexProxyProvider(input) {
-    await this.codexProxyService.removeProvider(input)
+  async removeProxyProvider(cli, input) {
+    const proxyService = this.getProxyService(cli)
+
+    if (!proxyService) {
+      throw new Error("该 CLI 不支持代理接管")
+    }
+
+    await proxyService.removeProvider(input)
     this.state = {
       ...this.state,
-      codexProxyState: this.codexProxyService.getState(),
+      [this.getProxyStateKey(cli)]: proxyService.getState(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
     return this.state
   }
 
-  async activateCodexProxyProvider(input) {
+  async activateProxyProvider(cli, input) {
+    const proxyService = this.getProxyService(cli)
+
+    if (!proxyService) {
+      throw new Error("该 CLI 不支持代理接管")
+    }
+
     const targetId = input.accountId
       ? `account:${String(input.accountId || "").trim()}`
       : String(input.providerId || "").trim()
 
-    await this.codexProxyService.updateActiveProvider(targetId)
+    await proxyService.updateActiveProvider(
+      targetId,
+      this.state.cliTargets.find((item) => item.id === cli)
+    )
     this.state = {
       ...this.state,
       ...this.getRuntimeStateWithProxy(),
-      codexProxyState: this.codexProxyService.getState(),
+      [this.getProxyStateKey(cli)]: proxyService.getState(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
     return this.state
+  }
+
+  async enableClaudeProxy(input) {
+    return this.enableProxy("claude", input)
+  }
+
+  async disableClaudeProxy() {
+    return this.disableProxy("claude")
+  }
+
+  async addClaudeProxyProvider(input) {
+    return this.addProxyProvider("claude", input)
+  }
+
+  async removeClaudeProxyProvider(input) {
+    return this.removeProxyProvider("claude", input)
+  }
+
+  async activateClaudeProxyProvider(input) {
+    return this.activateProxyProvider("claude", input)
+  }
+
+  async enableCodexProxy(input) {
+    return this.enableProxy("codex", input)
+  }
+
+  async disableCodexProxy() {
+    return this.disableProxy("codex")
+  }
+
+  async addCodexProxyProvider(input) {
+    return this.addProxyProvider("codex", input)
+  }
+
+  async removeCodexProxyProvider(input) {
+    return this.removeProxyProvider("codex", input)
+  }
+
+  async activateCodexProxyProvider(input) {
+    return this.activateProxyProvider("codex", input)
   }
 
   async saveRuntimeModel(input) {
@@ -2992,8 +3133,10 @@ class ManagerService extends EventEmitter {
   }
 
   async switchRuntime(input) {
-    if (input.cli === "codex" && this.codexProxyService.isEnabled()) {
-      throw new Error("请先关闭 Codex 代理接管")
+    const proxyService = this.getProxyService(input.cli)
+
+    if (proxyService?.isEnabled()) {
+      throw new Error(`请先关闭 ${proxyService.cliName} 代理接管`)
     }
 
     this.runtimeProviderService.switchRuntime(input)
@@ -3007,7 +3150,7 @@ class ManagerService extends EventEmitter {
       ...this.state,
       ...this.getRuntimeStateWithProxy(),
       codexAccounts: this.codexAccountService.getState(),
-      codexProxyState: this.codexProxyService.getState(),
+      ...this.getProxyStatePatch(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
@@ -3015,8 +3158,10 @@ class ManagerService extends EventEmitter {
   }
 
   async clearRuntime(cli) {
-    if (cli === "codex" && this.codexProxyService.isEnabled()) {
-      throw new Error("请先关闭 Codex 代理接管")
+    const proxyService = this.getProxyService(cli)
+
+    if (proxyService?.isEnabled()) {
+      throw new Error(`请先关闭 ${proxyService.cliName} 代理接管`)
     }
 
     this.runtimeProviderService.clearRuntime(cli)
@@ -3066,6 +3211,7 @@ class ManagerService extends EventEmitter {
   async dispose() {
     this.codexAccountService.stopAutoRefresh()
     this.fileWatcherService.stop()
+    await this.claudeProxyService.dispose()
     await this.codexProxyService.dispose()
     await this.sessionService.dispose()
     await this.storage.flush()

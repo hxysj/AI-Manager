@@ -10,7 +10,11 @@
       <div class="codex-proxy-panel-main">
         <div class="codex-proxy-panel-title-row">
           <strong>
-            {{ proxyState.enabled ? "Codex 代理正在接管" : "Codex 代理未接管" }}
+            {{
+              proxyState.enabled
+                ? `${cliName} 代理正在接管`
+                : `${cliName} 代理未接管`
+            }}
           </strong>
           <span class="codex-proxy-panel-running">运行中</span>
         </div>
@@ -361,7 +365,7 @@
     v-if="showProviderPicker"
     class="codex-proxy-panel-modal"
     title="加入接管池"
-    description="选择 Codex Provider 加入代理故障转移池。"
+    :description="`选择 ${cliName} Provider 加入代理故障转移池。`"
     @close="showProviderPicker = false"
   >
     <section class="codex-proxy-panel-picker">
@@ -406,6 +410,14 @@ const props = defineProps({
   accounts: {
     type: Array,
     required: true
+  },
+  cliName: {
+    type: String,
+    default: "Codex"
+  },
+  includeAccounts: {
+    type: Boolean,
+    default: true
   },
   pending: {
     type: Boolean,
@@ -462,16 +474,18 @@ const targetItems = computed(() => {
       description: item.note || item.baseUrl || "未配置备注",
       disabled: item.enabled === false
     })),
-    ...props.accounts.map(item => ({
-      id: `account:${item.id}`,
-      accountId: item.id,
-      account: item,
-      type: "account",
-      name: item.email || item.accountId || "Codex 官方账号",
-      icon: "",
-      description: `${formatPlanName(item.plan)} · 官方账号`,
-      disabled: Boolean(item.disabled)
-    }))
+    ...(props.includeAccounts
+      ? props.accounts.map(item => ({
+          id: `account:${item.id}`,
+          accountId: item.id,
+          account: item,
+          type: "account",
+          name: item.email || item.accountId || "Codex 官方账号",
+          icon: "",
+          description: `${formatPlanName(item.plan)} · 官方账号`,
+          disabled: Boolean(item.disabled)
+        }))
+      : [])
   ]
 })
 
