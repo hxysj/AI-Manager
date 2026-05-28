@@ -336,9 +336,15 @@
           @import-zip-skill="importSkillFromZip"
           @install-skill="installSkill"
           @open-path="openPath"
+          @open-usage="activeView = 'skill-usage'"
           @refresh="refreshState"
           @select-skill="selectSkill"
           @uninstall-skill="uninstallSkill"
+        />
+
+        <SkillUsageView
+          v-else-if="activeView === 'skill-usage'"
+          @back="activeView = 'skills'"
         />
 
         <SessionsView
@@ -1082,6 +1088,9 @@ const SettingsView = defineAsyncComponent(
 )
 const SkillsView = defineAsyncComponent(
   () => import("@/features/skills/index.vue")
+)
+const SkillUsageView = defineAsyncComponent(
+  () => import("@/features/skills/usage.vue")
 )
 const UsageView = defineAsyncComponent(
   () => import("@/features/usage/index.vue")

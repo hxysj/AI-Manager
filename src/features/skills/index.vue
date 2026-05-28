@@ -34,6 +34,14 @@
         <button
           class="action-button"
           type="button"
+          @click="$emit('open-usage')"
+        >
+          <BarChart3 class="action-button__icon" :size="16" />
+          使用统计
+        </button>
+        <button
+          class="action-button"
+          type="button"
           @click="$emit('open-path', paths.skillsDir)"
         >
           <FolderOpen class="action-button__icon" :size="16" />
@@ -98,7 +106,14 @@
 
 <script setup>
 import { computed, ref } from "vue"
-import { Archive, Download, FolderOpen, Plus, RefreshCw } from "lucide-vue-next"
+import {
+  Archive,
+  BarChart3,
+  Download,
+  FolderOpen,
+  Plus,
+  RefreshCw
+} from "lucide-vue-next"
 import SkillCard from "./components/SkillCard.vue"
 
 const props = defineProps({
@@ -122,6 +137,7 @@ defineEmits([
   "import-zip-skill",
   "install-skill",
   "open-path",
+  "open-usage",
   "refresh",
   "select-skill",
   "uninstall-skill"

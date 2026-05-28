@@ -2428,6 +2428,10 @@ function registerIpc() {
     return managerService.getUsageStats(payload || {})
   })
 
+  registerLoggedIpc("skill-usage:stats", async (_, payload) => {
+    return managerService.getSkillUsageStats(payload || {})
+  })
+
   registerLoggedIpc("usage:pricing", async () => {
     return managerService.getUsagePricing()
   })
