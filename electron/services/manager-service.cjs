@@ -257,6 +257,20 @@ const restoreStorageNames = {
   "storage/prompt-runtime-state.json": "Prompt Runtime 状态"
 }
 
+const mergeableRestoreJsonPaths = new Set([
+  "storage/skills.json",
+  "storage/installs.json",
+  "storage/providers.json",
+  "storage/runtime-models.json",
+  "storage/runtime-profiles.json",
+  "storage/runtime-provider-state.json",
+  "storage/runtime-provider-keys.json",
+  "storage/codex-accounts.json",
+  "storage/codex-active-account-id.json",
+  "storage/rules.json",
+  "storage/prompt-runtime-state.json"
+])
+
 function createBackupJsonEntry(entry, value) {
   return {
     ...entry,
@@ -447,6 +461,10 @@ function isStorageJsonPath(entryPath) {
   return entryPath.startsWith("storage/") && entryPath.endsWith(".json")
 }
 
+function isMergeableRestoreJsonPath(entryPath) {
+  return mergeableRestoreJsonPaths.has(entryPath)
+}
+
 function normalizeSkillRestoreValue(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value
@@ -462,6 +480,24 @@ function normalizePromptRuntimeRestoreValue(value) {
   }
 
   const { lastSyncAt, runtimePath, ...state } = value
+  return state
+}
+
+function normalizeCodexAccountRestoreValue(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value
+  }
+
+  const { usage, ...account } = value
+  return account
+}
+
+function normalizeRuntimeProviderStateRestoreValue(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value
+  }
+
+  const { runtimeHash, ...state } = value
   return state
 }
 
@@ -518,6 +554,18 @@ function normalizeRestoreValue(entryPath, value) {
     return JSON.stringify(normalizePromptRuntimeRestoreValue(value), null, 2)
   }
 
+  if (entryPath === "storage/codex-accounts.json") {
+    return JSON.stringify(normalizeCodexAccountRestoreValue(value), null, 2)
+  }
+
+  if (entryPath === "storage/runtime-provider-state.json") {
+    return JSON.stringify(
+      normalizeRuntimeProviderStateRestoreValue(value),
+      null,
+      2
+    )
+  }
+
   return JSON.stringify(value, null, 2)
 }
 
@@ -553,6 +601,25 @@ function getRestoreItemName(entryPath, itemKey, value) {
   return value.name || value.id || itemKey
 }
 
+function getRestoreGroupPath(entryPath) {
+  const normalizedPath = String(entryPath || "").replace(/\\/g, "/")
+  const parts = normalizedPath.split("/").filter(Boolean)
+
+  if (parts[0] === "skills" && parts[1]) {
+    return `skills/${parts[1]}`
+  }
+
+  if (parts[0] === "prompts" && parts[1]) {
+    return "prompts"
+  }
+
+  if (parts[0] === "profiles" && parts[1]) {
+    return "profiles"
+  }
+
+  return parts.length > 1 ? parts.slice(0, -1).join("/") : "根目录"
+}
+
 function createRestorePreviewItem(
   entryPath,
   itemKey,
@@ -567,6 +634,7 @@ function createRestorePreviewItem(
     type,
     name: getRestoreItemName(entryPath, itemKey, value),
     path: entryPath,
+    groupPath: getRestoreGroupPath(entryPath),
     status,
     currentContent:
       status === "conflict"
@@ -594,6 +662,7 @@ function createRestoreFilePreviewItem(
           : "文件",
     name: path.basename(entryPath),
     path: entryPath,
+    groupPath: getRestoreGroupPath(entryPath),
     status,
     currentContent,
     backupContent
@@ -721,6 +790,20 @@ function mergeRestoreValue(entryPath, currentValue, backupValue) {
 
   if (entryPath === "storage/prompt-runtime-state.json") {
     return mergePromptRuntimeRestoreValue(currentValue, backupValue)
+  }
+
+  if (entryPath === "storage/codex-accounts.json") {
+    return {
+      ...backupValue,
+      usage: currentValue?.usage || backupValue?.usage
+    }
+  }
+
+  if (entryPath === "storage/runtime-provider-state.json") {
+    return {
+      ...backupValue,
+      runtimeHash: currentValue?.runtimeHash || backupValue?.runtimeHash
+    }
   }
 
   return backupValue
@@ -897,7 +980,7 @@ async function createRestorePreview(rootPath, entries) {
   for (const entry of entries.filter((item) => item.type === "file")) {
     const currentContent = await readCurrentFile(rootPath, entry.path)
 
-    if (isStorageJsonPath(entry.path) && entry.path !== "storage/usage-pricing.json") {
+    if (isMergeableRestoreJsonPath(entry.path)) {
       appendJsonRestorePreview(
         entry.path,
         currentContent
@@ -1063,7 +1146,7 @@ async function restoreDirectoryEntries(rootPath, entries, choices = {}) {
 
     assertBackupPath(rootPath, targetPath)
 
-    if (isStorageJsonPath(entry.path) && entry.path !== "storage/usage-pricing.json") {
+    if (isMergeableRestoreJsonPath(entry.path)) {
       await restoreJsonEntry(rootPath, entry, choices)
       continue
     }
