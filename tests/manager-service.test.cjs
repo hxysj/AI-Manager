@@ -249,6 +249,125 @@ test("恢复配置修改当前官方账号认证内容时会取消启用", async
   assert.equal(await readJson(service.paths.storageFiles.codexActiveAccountId), "")
 })
 
+test("恢复预览忽略官方账号用量和 runtime hash 运行态字段", async () => {
+  const service = await createService()
+  const backupService = await createService()
+  const account = {
+    id: "account-1",
+    accountId: "chatgpt-account-1",
+    email: "current@example.com",
+    usage: {
+      used: 10
+    }
+  }
+  const runtimeState = {
+    codex: {
+      status: "SYNCED",
+      activeProviderId: "provider-1",
+      runtimeHash: "current-hash"
+    }
+  }
+
+  await writeJson(service.paths.storageFiles.codexAccounts, [account])
+  await writeJson(service.paths.storageFiles.runtimeProviderState, runtimeState)
+  await writeJson(backupService.paths.storageFiles.codexAccounts, [
+    {
+      ...account,
+      usage: {
+        used: 99
+      }
+    }
+  ])
+  await writeJson(backupService.paths.storageFiles.runtimeProviderState, {
+    codex: {
+      ...runtimeState.codex,
+      runtimeHash: "backup-hash"
+    }
+  })
+
+  const preview = await service.previewDataBackupRestore(
+    await backupService.createDataBackup()
+  )
+
+  assert.equal(preview.conflictCount, 0)
+})
+
+test("恢复配置保留官方账号用量和 runtime hash 运行态字段", async () => {
+  const service = await createService()
+  const backupService = await createService()
+  const account = {
+    id: "account-1",
+    accountId: "chatgpt-account-1",
+    email: "current@example.com",
+    plan: "plus",
+    usage: {
+      used: 10
+    }
+  }
+  const runtimeState = {
+    codex: {
+      status: "SYNCED",
+      activeProviderId: "provider-1",
+      runtimeHash: "current-hash"
+    }
+  }
+
+  await writeJson(service.paths.storageFiles.codexAccounts, [account])
+  await writeJson(service.paths.storageFiles.runtimeProviderState, runtimeState)
+  await writeJson(backupService.paths.storageFiles.codexAccounts, [
+    {
+      ...account,
+      plan: "pro",
+      usage: {
+        used: 99
+      }
+    }
+  ])
+  await writeJson(backupService.paths.storageFiles.runtimeProviderState, {
+    codex: {
+      ...runtimeState.codex,
+      status: "DIRTY",
+      runtimeHash: "backup-hash"
+    }
+  })
+
+  await service.restoreDataBackup(await backupService.createDataBackup(), {
+    choices: {
+      "json:storage/codex-accounts.json:account-1": "backup",
+      "json:storage/runtime-provider-state.json:codex": "backup"
+    }
+  })
+  await service.storage.flush()
+
+  const accounts = await readJson(service.paths.storageFiles.codexAccounts)
+  const providerState = await readJson(
+    service.paths.storageFiles.runtimeProviderState
+  )
+
+  assert.equal(accounts[0].plan, "pro")
+  assert.deepEqual(accounts[0].usage, { used: 10 })
+  assert.equal(providerState.codex.runtimeHash, "current-hash")
+})
+
+test("恢复预览按新增目录标记分组路径", async () => {
+  const service = await createService()
+  const backupService = await createService()
+  const skillPath = path.join(backupService.paths.skillsDir, "demo-skill")
+
+  await fs.mkdir(skillPath, { recursive: true })
+  await fs.writeFile(path.join(skillPath, "SKILL.md"), "# Demo\n", "utf8")
+  await fs.writeFile(path.join(skillPath, "README.md"), "# Readme\n", "utf8")
+
+  const preview = await service.previewDataBackupRestore(
+    await backupService.createDataBackup()
+  )
+  const addedPaths = preview.added
+    .filter((item) => item.path.startsWith("skills/demo-skill/"))
+    .map((item) => item.groupPath)
+
+  assert.deepEqual([...new Set(addedPaths)], ["skills/demo-skill"])
+})
+
 test("Claude 代理接管写入 Anthropic base_url，不追加 /v1", async () => {
   const service = await createService()
   const provider = createProvider()

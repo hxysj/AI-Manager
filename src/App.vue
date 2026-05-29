@@ -635,20 +635,40 @@
             class="restore-preview-modal__section"
           >
             <h3 class="restore-preview-modal__section-title">将新增</h3>
-            <div class="restore-preview-modal__list">
-              <article
-                v-for="item in restoreAddedItems"
-                :key="item.key"
-                class="restore-preview-modal__item"
-              >
-                <strong class="restore-preview-modal__item-name"
-                  >{{ item.type }}：{{ item.name }}</strong
-                >
-                <span class="restore-preview-modal__item-path">{{
-                  item.path
-                }}</span>
-              </article>
-            </div>
+            <section
+              v-for="group in restoreAddedGroups"
+              :key="group.path"
+              class="restore-preview-modal__group"
+            >
+              <div class="restore-preview-modal__group-head">
+                <strong>{{ group.path }}</strong>
+                <span>{{ group.items.length }} 项</span>
+              </div>
+              <div class="restore-preview-modal__tree">
+                <template v-for="row in group.rows" :key="row.key">
+                  <div
+                    v-if="row.kind === 'dir'"
+                    class="restore-preview-modal__tree-folder"
+                    :style="{ paddingLeft: `${row.depth * 18 + 10}px` }"
+                  >
+                    <strong>{{ row.name }}</strong>
+                    <span>{{ row.itemCount }} 项</span>
+                  </div>
+                  <article
+                    v-else
+                    class="restore-preview-modal__item restore-preview-modal__tree-item"
+                    :style="{ marginLeft: `${row.depth * 18}px` }"
+                  >
+                    <strong class="restore-preview-modal__item-name"
+                      >{{ row.item.type }}：{{ row.item.name }}</strong
+                    >
+                    <span class="restore-preview-modal__item-path">{{
+                      row.relativePath
+                    }}</span>
+                  </article>
+                </template>
+              </div>
+            </section>
           </section>
 
           <section
@@ -656,54 +676,76 @@
             class="restore-preview-modal__section"
           >
             <h3 class="restore-preview-modal__section-title">需要选择</h3>
-            <article
-              v-for="item in restoreConflictItems"
-              :key="item.key"
-              class="restore-preview-modal__conflict"
+            <section
+              v-for="group in restoreConflictGroups"
+              :key="group.path"
+              class="restore-preview-modal__group"
             >
-              <div class="restore-preview-modal__conflict-head">
-                <div>
-                  <strong class="restore-preview-modal__item-name"
-                    >{{ item.type }}：{{ item.name }}</strong
-                  >
-                  <span class="restore-preview-modal__item-path">{{
-                    item.path
-                  }}</span>
-                </div>
-                <button
-                  class="restore-preview-modal__compare-button"
-                  type="button"
-                  :disabled="pending"
-                  @click="toggleRestoreCompare(item)"
-                >
-                  对比
-                </button>
+              <div class="restore-preview-modal__group-head">
+                <strong>{{ group.path }}</strong>
+                <span>{{ group.items.length }} 项</span>
               </div>
-              <label class="restore-preview-modal__choice">
-                <input
-                  v-model="restoreChoices[item.key]"
-                  type="radio"
-                  :name="`restore-${item.key}`"
-                  value="current"
-                  :disabled="pending"
-                />
-                <span class="restore-preview-modal__choice-text"
-                  >保留当前版本</span
-                >
-              </label>
-              <label class="restore-preview-modal__choice">
-                <input
-                  v-model="restoreChoices[item.key]"
-                  type="radio"
-                  :name="`restore-${item.key}`"
-                  value="backup"
-                  :disabled="pending"
-                />
-                <span class="restore-preview-modal__choice-text"
-                  >使用备份版本</span
-                >
-              </label>
-            </article>
+              <div class="restore-preview-modal__tree">
+                <template v-for="row in group.rows" :key="row.key">
+                  <div
+                    v-if="row.kind === 'dir'"
+                    class="restore-preview-modal__tree-folder"
+                    :style="{ paddingLeft: `${row.depth * 18 + 10}px` }"
+                  >
+                    <strong>{{ row.name }}</strong>
+                    <span>{{ row.itemCount }} 项</span>
+                  </div>
+                  <article
+                    v-else
+                    class="restore-preview-modal__conflict restore-preview-modal__tree-item"
+                    :style="{ marginLeft: `${row.depth * 18}px` }"
+                  >
+                    <div class="restore-preview-modal__conflict-head">
+                      <div>
+                        <strong class="restore-preview-modal__item-name"
+                          >{{ row.item.type }}：{{ row.item.name }}</strong
+                        >
+                        <span class="restore-preview-modal__item-path">{{
+                          row.relativePath
+                        }}</span>
+                      </div>
+                      <button
+                        class="restore-preview-modal__compare-button"
+                        type="button"
+                        :disabled="pending"
+                        @click="toggleRestoreCompare(row.item)"
+                      >
+                        对比
+                      </button>
+                    </div>
+                    <label class="restore-preview-modal__choice">
+                      <input
+                        v-model="restoreChoices[row.item.key]"
+                        type="radio"
+                        :name="`restore-${row.item.key}`"
+                        value="current"
+                        :disabled="pending"
+                      />
+                      <span class="restore-preview-modal__choice-text"
+                        >保留当前版本</span
+                      >
+                    </label>
+                    <label class="restore-preview-modal__choice">
+                      <input
+                        v-model="restoreChoices[row.item.key]"
+                        type="radio"
+                        :name="`restore-${row.item.key}`"
+                        value="backup"
+                        :disabled="pending"
+                      />
+                      <span class="restore-preview-modal__choice-text"
+                        >使用备份版本</span
+                      >
+                    </label>
+                  </article>
+                </template>
+              </div>
+            </section>
           </section>
 
           <div
@@ -749,7 +791,11 @@
         >
           <section class="restore-preview-modal__compare-panel">
             <strong>当前内容</strong>
-            <div class="restore-preview-modal__compare-code">
+            <div
+              ref="restoreCurrentCompareCodeRef"
+              class="restore-preview-modal__compare-code"
+              @scroll="syncRestoreCompareScroll('current')"
+            >
               <div
                 v-for="row in restoreCompareRows"
                 :key="`current-${row.index}`"
@@ -772,7 +818,11 @@
           </section>
           <section class="restore-preview-modal__compare-panel">
             <strong>备份内容</strong>
-            <div class="restore-preview-modal__compare-code">
+            <div
+              ref="restoreBackupCompareCodeRef"
+              class="restore-preview-modal__compare-code"
+              @scroll="syncRestoreCompareScroll('backup')"
+            >
               <div
                 v-for="row in restoreCompareRows"
                 :key="`backup-${row.index}`"
@@ -840,12 +890,17 @@
           </aside>
 
           <section class="cloud-backup-modal__content">
-            <div v-if="selectedCloudBackupEntry" class="cloud-backup-modal__head">
+            <div
+              v-if="selectedCloudBackupEntry"
+              class="cloud-backup-modal__head"
+            >
               <div>
                 <strong>{{ selectedCloudBackupEntry.typeName }}</strong>
                 <span>{{ selectedCloudBackupEntry.path }}</span>
               </div>
-              <small>{{ formatBackupEntrySize(selectedCloudBackupEntry.size) }}</small>
+              <small>{{
+                formatBackupEntrySize(selectedCloudBackupEntry.size)
+              }}</small>
             </div>
             <pre v-if="selectedCloudBackupEntry">{{
               selectedCloudBackupEntry.content || "空内容"
@@ -1264,6 +1319,8 @@ const localBackupDirectory = ref("")
 const restorePreview = ref(null)
 const restoreSource = ref(null)
 const restoreCompareKey = ref("")
+const restoreCurrentCompareCodeRef = ref(null)
+const restoreBackupCompareCodeRef = ref(null)
 const restoreChoices = reactive({})
 const cloudBackupView = ref(null)
 const selectedCloudBackupPath = ref("")
@@ -1272,6 +1329,7 @@ const { loading: pending, withGlobalLoading } = useGlobalLoading()
 let unsubscribe = null
 let unsubscribeClose = null
 let unsubscribeUpdate = null
+let syncingRestoreCompareScroll = false
 
 const navItems = computed(() =>
   showLogsTab.value
@@ -1399,6 +1457,14 @@ const restoreAddedItems = computed(() => {
 
 const restoreConflictItems = computed(() => {
   return restorePreview.value?.conflicts || []
+})
+
+const restoreAddedGroups = computed(() => {
+  return groupRestoreItems(restoreAddedItems.value)
+})
+
+const restoreConflictGroups = computed(() => {
+  return groupRestoreItems(restoreConflictItems.value)
 })
 
 const restoreCompareItem = computed(() => {
@@ -2486,6 +2552,41 @@ function closeRestoreCompare() {
   restoreCompareKey.value = ""
 }
 
+function syncRestoreCompareScroll(source) {
+  if (syncingRestoreCompareScroll) {
+    return
+  }
+
+  const currentElement = restoreCurrentCompareCodeRef.value
+  const backupElement = restoreBackupCompareCodeRef.value
+  const sourceElement = source === "current" ? currentElement : backupElement
+  const targetElement = source === "current" ? backupElement : currentElement
+
+  if (!sourceElement || !targetElement) {
+    return
+  }
+
+  const sourceScrollHeight =
+    sourceElement.scrollHeight - sourceElement.clientHeight
+  const targetScrollHeight =
+    targetElement.scrollHeight - targetElement.clientHeight
+  const sourceScrollWidth =
+    sourceElement.scrollWidth - sourceElement.clientWidth
+  const targetScrollWidth =
+    targetElement.scrollWidth - targetElement.clientWidth
+
+  syncingRestoreCompareScroll = true
+  targetElement.scrollTop = sourceScrollHeight
+    ? (sourceElement.scrollTop / sourceScrollHeight) * targetScrollHeight
+    : sourceElement.scrollTop
+  targetElement.scrollLeft = sourceScrollWidth
+    ? (sourceElement.scrollLeft / sourceScrollWidth) * targetScrollWidth
+    : sourceElement.scrollLeft
+  requestAnimationFrame(() => {
+    syncingRestoreCompareScroll = false
+  })
+}
+
 function formatRestoreCompareContent(value) {
   if (value === undefined || value === null || value === "") {
     return "空内容"
@@ -2494,99 +2595,127 @@ function formatRestoreCompareContent(value) {
   return String(value)
 }
 
+function groupRestoreItems(items) {
+  const groups = new Map()
+
+  for (const item of items) {
+    const groupPath = item.groupPath || item.path || "根目录"
+
+    if (!groups.has(groupPath)) {
+      groups.set(groupPath, {
+        path: groupPath,
+        items: []
+      })
+    }
+
+    groups.get(groupPath).items.push(item)
+  }
+
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    rows: createRestoreTreeRows(group.path, group.items)
+  }))
+}
+
+function createRestoreTreeRows(groupPath, items) {
+  const rows = []
+  const dirKeys = new Set()
+  const normalizedGroupPath = groupPath === "根目录" ? "" : groupPath
+  const itemInfos = items.map((item) => {
+    const normalizedPath = String(item.path || "").replace(/\\/g, "/")
+    const relativePath =
+      normalizedGroupPath &&
+      normalizedPath.startsWith(`${normalizedGroupPath}/`)
+        ? normalizedPath.slice(normalizedGroupPath.length + 1)
+        : normalizedPath
+
+    return {
+      item,
+      relativePath,
+      parts: relativePath.split("/").filter(Boolean)
+    }
+  })
+  const dirCounts = new Map()
+
+  for (const itemInfo of itemInfos) {
+    itemInfo.parts.slice(0, -1).forEach((part, index) => {
+      const key = itemInfo.parts.slice(0, index + 1).join("/")
+
+      dirCounts.set(key, (dirCounts.get(key) || 0) + 1)
+    })
+  }
+
+  for (const itemInfo of itemInfos) {
+    itemInfo.parts.slice(0, -1).forEach((part, index) => {
+      const key = itemInfo.parts.slice(0, index + 1).join("/")
+
+      if (dirKeys.has(key)) {
+        return
+      }
+
+      dirKeys.add(key)
+      rows.push({
+        key: `dir:${groupPath}:${key}`,
+        kind: "dir",
+        name: part,
+        depth: index,
+        itemCount: dirCounts.get(key) || 0
+      })
+    })
+
+    rows.push({
+      key: itemInfo.item.key,
+      kind: "item",
+      item: itemInfo.item,
+      relativePath: itemInfo.relativePath,
+      depth: Math.max(itemInfo.parts.length - 1, 0)
+    })
+  }
+
+  return rows
+}
+
 function createRestoreCompareRows(currentContent, backupContent) {
   const currentLines =
     formatRestoreCompareContent(currentContent).split(/\r?\n/)
   const backupLines = formatRestoreCompareContent(backupContent).split(/\r?\n/)
-  const table = Array.from({ length: currentLines.length + 1 }, () =>
-    Array(backupLines.length + 1).fill(0)
-  )
-
-  for (
-    let currentIndex = currentLines.length - 1;
-    currentIndex >= 0;
-    currentIndex -= 1
-  ) {
-    for (
-      let backupIndex = backupLines.length - 1;
-      backupIndex >= 0;
-      backupIndex -= 1
-    ) {
-      table[currentIndex][backupIndex] =
-        currentLines[currentIndex] === backupLines[backupIndex]
-          ? table[currentIndex + 1][backupIndex + 1] + 1
-          : Math.max(
-              table[currentIndex + 1][backupIndex],
-              table[currentIndex][backupIndex + 1]
-            )
-    }
-  }
-
+  const maxLength = Math.max(currentLines.length, backupLines.length)
   const rows = []
-  let currentIndex = 0
-  let backupIndex = 0
 
-  while (
-    currentIndex < currentLines.length ||
-    backupIndex < backupLines.length
-  ) {
-    if (
-      currentIndex < currentLines.length &&
-      backupIndex < backupLines.length &&
-      currentLines[currentIndex] === backupLines[backupIndex]
-    ) {
+  for (let index = 0; index < maxLength; index += 1) {
+    const currentText = currentLines[index]
+    const backupText = backupLines[index]
+    const hasCurrent = index < currentLines.length
+    const hasBackup = index < backupLines.length
+
+    if (hasCurrent && hasBackup && currentText === backupText) {
       rows.push({
         index: rows.length,
         status: "same",
         currentStatus: "same",
         backupStatus: "same",
-        currentLineNumber: currentIndex + 1,
-        backupLineNumber: backupIndex + 1,
+        currentLineNumber: index + 1,
+        backupLineNumber: index + 1,
         currentMarker: "",
         backupMarker: "",
-        currentText: currentLines[currentIndex],
-        backupText: backupLines[backupIndex]
+        currentText,
+        backupText
       })
-      currentIndex += 1
-      backupIndex += 1
-      continue
-    }
-
-    if (
-      currentIndex < currentLines.length &&
-      (backupIndex >= backupLines.length ||
-        table[currentIndex + 1][backupIndex] >=
-          table[currentIndex][backupIndex + 1])
-    ) {
-      rows.push({
-        index: rows.length,
-        status: "current-only",
-        currentStatus: "current-only",
-        backupStatus: "empty",
-        currentLineNumber: currentIndex + 1,
-        backupLineNumber: "",
-        currentMarker: "仅当前",
-        backupMarker: "缺少",
-        currentText: currentLines[currentIndex],
-        backupText: ""
-      })
-      currentIndex += 1
       continue
     }
 
     rows.push({
       index: rows.length,
-      status: "backup-only",
-      currentStatus: "empty",
-      backupStatus: "backup-only",
-      currentLineNumber: "",
-      backupLineNumber: backupIndex + 1,
-      currentMarker: "缺少",
-      backupMarker: "仅备份",
-      currentText: "",
-      backupText: backupLines[backupIndex]
+      status: "changed",
+      currentStatus: hasCurrent ? "current-only" : "empty",
+      backupStatus: hasBackup ? "backup-only" : "empty",
+      currentLineNumber: hasCurrent ? index + 1 : "",
+      backupLineNumber: hasBackup ? index + 1 : "",
+      currentMarker: hasCurrent ? "当前" : "缺少",
+      backupMarker: hasBackup ? "备份" : "缺少",
+      currentText: hasCurrent ? currentText : "",
+      backupText: hasBackup ? backupText : ""
     })
-    backupIndex += 1
   }
 
   return rows
@@ -4458,6 +4587,89 @@ onBeforeUnmount(() => {
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  &__group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 10px;
+    border: 1px solid #d8e2ec;
+    border-radius: 8px;
+    background: #f6f9fc;
+  }
+
+  &__group-head strong,
+  &__group-head span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__group-head strong {
+    min-width: 0;
+    color: var(--color-text);
+    font-size: 0.82rem;
+  }
+
+  &__group-head span {
+    flex: none;
+    color: var(--color-text-muted);
+    font-size: 0.76rem;
+    font-weight: 700;
+  }
+
+  &__tree {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  &__tree-folder {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 26px;
+    border-left: 2px solid #b7c7d9;
+    color: var(--color-text);
+    font-size: 0.8rem;
+  }
+
+  &__tree-folder strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__tree-folder span {
+    flex: none;
+    color: var(--color-text-muted);
+    font-size: 0.74rem;
+    font-weight: 700;
+  }
+
+  &__tree-item {
+    position: relative;
+  }
+
+  &__tree-item::before {
+    position: absolute;
+    top: -7px;
+    bottom: 12px;
+    left: -10px;
+    width: 8px;
+    border-bottom: 1px solid #b7c7d9;
+    border-left: 1px solid #b7c7d9;
+    content: "";
   }
 
   &__item,
