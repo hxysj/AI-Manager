@@ -344,16 +344,36 @@ function createTrendStats(invocations, filters) {
       groups.set(key, {
         date: key,
         usageCount: 0,
+        skillCounts: new Map(),
         sortKey
       })
     }
 
-    groups.get(key).usageCount += 1
+    const group = groups.get(key)
+    group.usageCount += 1
+    group.skillCounts.set(
+      invocation.skillName,
+      (group.skillCounts.get(invocation.skillName) || 0) + 1
+    )
   }
 
   return Array.from(groups.values())
     .sort((left, right) => left.sortKey - right.sortKey)
-    .map(({ sortKey, ...item }) => item)
+    .map(({ sortKey, skillCounts, ...item }) => ({
+      ...item,
+      skills: Array.from(skillCounts.entries())
+        .map(([skillName, usageCount]) => ({
+          skillName,
+          usageCount
+        }))
+        .sort((left, right) => {
+          if (right.usageCount !== left.usageCount) {
+            return right.usageCount - left.usageCount
+          }
+
+          return left.skillName.localeCompare(right.skillName, "zh-Hans-CN")
+        })
+    }))
 }
 
 class SkillUsageService {

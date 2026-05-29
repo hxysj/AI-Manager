@@ -57,6 +57,7 @@
       <button
         class="action-button action-button--primary"
         type="button"
+        :disabled="pending"
         @click="loadStats"
       >
         <BarChart3 class="action-button__icon" :size="16" />
@@ -64,129 +65,135 @@
       </button>
     </section>
 
-    <div class="skill-usage-view__body">
-      <section class="skill-usage-view__metrics">
-        <article class="skill-usage-view__metric">
-          <span>Skill 总数</span>
-          <strong>{{ formatNumber(summary.skillCount) }}</strong>
-          <small>已使用 {{ formatNumber(summary.usedSkillCount) }} 个</small>
-        </article>
-        <article class="skill-usage-view__metric">
-          <span>调用次数</span>
-          <strong>{{ formatNumber(summary.usageCount) }}</strong>
-          <small>命中请求 {{ formatNumber(summary.requestCount) }} 次</small>
-        </article>
-        <article class="skill-usage-view__metric">
-          <span>Token 消耗</span>
-          <strong>{{ formatNumber(summary.actualTokens) }}</strong>
-          <small>按 Session 用量区间归因</small>
-        </article>
-        <article class="skill-usage-view__metric">
-          <span>最近使用</span>
-          <strong>{{ formatDate(summary.lastUsedAt) }}</strong>
-          <small>来自 history / session 记录</small>
-        </article>
-      </section>
-
-      <section class="skill-usage-view__chart-grid">
-        <section class="skill-usage-view__chart-panel">
-          <div class="skill-usage-view__section-header">
-            <div>
-              <h2>调用趋势</h2>
-              <span>{{ skillTrendLabel }}</span>
-            </div>
-            <BarChart3 :size="18" />
-          </div>
-          <div
-            v-show="trendStats.length"
-            ref="trendChartRef"
-            class="skill-usage-view__chart"
-            @wheel="handleTrendWheel"
-          ></div>
-          <div v-if="!trendStats.length" class="skill-usage-view__empty">
-            暂无 Skill 调用趋势。
-          </div>
-        </section>
-
-        <section class="skill-usage-view__chart-panel">
-          <div class="skill-usage-view__section-header">
-            <div>
-              <h2>Skill 调用占比</h2>
-              <span>{{ skillPieLabel }}</span>
-            </div>
-            <PieChartIcon :size="18" />
-          </div>
-          <div
-            v-show="skillPieStats.length"
-            ref="skillPieRef"
-            class="skill-usage-view__chart"
-          ></div>
-          <div v-if="!skillPieStats.length" class="skill-usage-view__empty">
-            暂无 Skill 调用占比。
-          </div>
-        </section>
-      </section>
-
-      <div class="skill-usage-view__meta">
-        <span>{{ filteredSkills.length }} / {{ rows.length }} 个 Skill</span>
-        <span>{{ diagnostics.length }} 条解析诊断</span>
+    <div class="skill-usage-view__body-shell">
+      <div v-if="pending" class="skill-usage-view__loading">
+        <RefreshCw class="skill-usage-view__loading-icon" :size="22" />
+        <span>正在分析 Skill 调用记录...</span>
       </div>
+      <div class="skill-usage-view__body">
+        <section class="skill-usage-view__metrics">
+          <article class="skill-usage-view__metric">
+            <span>Skill 总数</span>
+            <strong>{{ formatNumber(summary.skillCount) }}</strong>
+            <small>已使用 {{ formatNumber(summary.usedSkillCount) }} 个</small>
+          </article>
+          <article class="skill-usage-view__metric">
+            <span>调用次数</span>
+            <strong>{{ formatNumber(summary.usageCount) }}</strong>
+            <small>命中请求 {{ formatNumber(summary.requestCount) }} 次</small>
+          </article>
+          <article class="skill-usage-view__metric">
+            <span>Token 消耗</span>
+            <strong>{{ formatNumber(summary.actualTokens) }}</strong>
+            <small>按 Session 用量区间归因</small>
+          </article>
+          <article class="skill-usage-view__metric">
+            <span>最近使用</span>
+            <strong>{{ formatDate(summary.lastUsedAt) }}</strong>
+            <small>来自 history / session 记录</small>
+          </article>
+        </section>
 
-      <section v-if="filteredSkills.length" class="skill-usage-view__table">
-        <div class="skill-usage-view__table-head">
-          <span>Skill</span>
-          <span>CLI</span>
-          <span>调用</span>
-          <span>Token</span>
-          <span>Provider</span>
-          <span>模型</span>
-          <span>最近使用</span>
+        <section class="skill-usage-view__chart-grid">
+          <section class="skill-usage-view__chart-panel">
+            <div class="skill-usage-view__section-header">
+              <div>
+                <h2>调用趋势</h2>
+                <span>{{ skillTrendLabel }}</span>
+              </div>
+              <BarChart3 :size="18" />
+            </div>
+            <div
+              v-show="skillTrendSeries.length"
+              ref="trendChartRef"
+              class="skill-usage-view__chart"
+              @wheel="handleTrendWheel"
+            ></div>
+            <div v-if="!skillTrendSeries.length" class="skill-usage-view__empty">
+              暂无 Skill 调用趋势。
+            </div>
+          </section>
+
+          <section class="skill-usage-view__chart-panel">
+            <div class="skill-usage-view__section-header">
+              <div>
+                <h2>Skill 调用占比</h2>
+                <span>{{ skillPieLabel }}</span>
+              </div>
+              <PieChartIcon :size="18" />
+            </div>
+            <div
+              v-show="skillPieStats.length"
+              ref="skillPieRef"
+              class="skill-usage-view__chart"
+            ></div>
+            <div v-if="!skillPieStats.length" class="skill-usage-view__empty">
+              暂无 Skill 调用占比。
+            </div>
+          </section>
+        </section>
+
+        <div class="skill-usage-view__meta">
+          <span>{{ filteredSkills.length }} / {{ rows.length }} 个 Skill</span>
+          <span>{{ diagnostics.length }} 条解析诊断</span>
         </div>
-        <article
-          v-for="item in filteredSkills"
-          :key="item.name"
-          class="skill-usage-view__table-row"
-        >
-          <span>
-            <strong>{{ item.name }}</strong>
-            <small :title="item.sourcePaths.join('\n')">
-              {{ item.description || item.sourcePaths[0] || "未记录来源" }}
-            </small>
-          </span>
-          <span>{{ formatCliList(item.cliTypes) }}</span>
-          <span>{{ formatNumber(item.usageCount) }}</span>
-          <span>
-            <strong>{{ formatNumber(item.actualTokens) }}</strong>
-            <small>{{ formatCost(item.totalCostUsd) }}</small>
-          </span>
-          <span
-            class="skill-usage-view__usage-list"
-            :title="formatProviderTitle(item.providers)"
-          >
-            <small
-              v-for="provider in formatUsageItems(item.providers, 'provider')"
-              :key="provider.key"
-            >
-              {{ provider.label }}
-            </small>
-          </span>
-          <span
-            class="skill-usage-view__usage-list"
-            :title="formatModelTitle(item.models)"
-          >
-            <small
-              v-for="model in formatUsageItems(item.models, 'model')"
-              :key="model.key"
-            >
-              {{ model.label }}
-            </small>
-          </span>
-          <span>{{ formatDate(item.lastUsedAt) }}</span>
-        </article>
-      </section>
 
-      <div v-else class="skill-usage-view__empty">
-        暂无匹配的 Skill 使用统计。
+        <section v-if="filteredSkills.length" class="skill-usage-view__table">
+          <div class="skill-usage-view__table-head">
+            <span>Skill</span>
+            <span>CLI</span>
+            <span>调用</span>
+            <span>Token</span>
+            <span>Provider</span>
+            <span>模型</span>
+            <span>最近使用</span>
+          </div>
+          <article
+            v-for="item in filteredSkills"
+            :key="item.name"
+            class="skill-usage-view__table-row"
+          >
+            <span>
+              <strong>{{ item.name }}</strong>
+              <small :title="item.sourcePaths.join('\n')">
+                {{ item.description || item.sourcePaths[0] || "未记录来源" }}
+              </small>
+            </span>
+            <span>{{ formatCliList(item.cliTypes) }}</span>
+            <span>{{ formatNumber(item.usageCount) }}</span>
+            <span>
+              <strong>{{ formatNumber(item.actualTokens) }}</strong>
+              <small>{{ formatCost(item.totalCostUsd) }}</small>
+            </span>
+            <span
+              class="skill-usage-view__usage-list"
+              :title="formatProviderTitle(item.providers)"
+            >
+              <small
+                v-for="provider in formatUsageItems(item.providers, 'provider')"
+                :key="provider.key"
+              >
+                {{ provider.label }}
+              </small>
+            </span>
+            <span
+              class="skill-usage-view__usage-list"
+              :title="formatModelTitle(item.models)"
+            >
+              <small
+                v-for="model in formatUsageItems(item.models, 'model')"
+                :key="model.key"
+              >
+                {{ model.label }}
+              </small>
+            </span>
+            <span>{{ formatDate(item.lastUsedAt) }}</span>
+          </article>
+        </section>
+
+        <div v-else class="skill-usage-view__empty">
+          暂无匹配的 Skill 使用统计。
+        </div>
       </div>
     </div>
   </section>
@@ -294,6 +301,30 @@ const skillPieStats = computed(() =>
       value: item.usageCount
     }))
 )
+const skillTrendNames = computed(() =>
+  Array.from(
+    new Set(
+      trendStats.value.flatMap(item =>
+        (item.skills || []).map(skill => skill.skillName)
+      )
+    )
+  ).filter(name => filteredSkills.value.some(item => item.name === name))
+)
+const skillTrendSeries = computed(() =>
+  skillTrendNames.value.map(name => ({
+    name,
+    type: "line",
+    smooth: true,
+    symbolSize: 5,
+    data: trendStats.value.map(item => {
+      const skill = (item.skills || []).find(
+        skillItem => skillItem.skillName === name
+      )
+
+      return skill?.usageCount || 0
+    })
+  }))
+)
 const trendMode = computed(() => {
   if (trendModeOverride.value) {
     return trendModeOverride.value
@@ -306,13 +337,15 @@ const trendMode = computed(() => {
     : "day"
 })
 const skillTrendLabel = computed(() => {
+  const skillCount = skillTrendNames.value.length
+
   if (trendMode.value === "minute") {
-    return `${trendStats.value.length} 个分钟`
+    return `${skillCount} 个 Skill · ${trendStats.value.length} 个分钟`
   }
 
   return trendMode.value === "hour"
-    ? `${trendStats.value.length} 个小时`
-    : `${trendStats.value.length} 个本地日`
+    ? `${skillCount} 个 Skill · ${trendStats.value.length} 个小时`
+    : `${skillCount} 个 Skill · ${trendStats.value.length} 个本地日`
 })
 const skillPieLabel = computed(
   () => `${skillPieStats.value.length} 个已使用 Skill`
@@ -335,7 +368,7 @@ watch([dateTimeRange, cliFilter], () => {
 
 watch(searchQuery, async () => {
   await nextTick()
-  renderSkillPie()
+  renderCharts()
 })
 
 function createPresetDateTimeRange(type) {
@@ -411,21 +444,32 @@ function renderCharts() {
 }
 
 function renderTrendChart() {
-  if (!trendChartRef.value || !trendStats.value.length) {
+  if (!trendChartRef.value || !skillTrendSeries.value.length) {
     return
   }
 
   trendChart = trendChart || echarts.init(trendChartRef.value)
   trendChart.setOption(
     {
-      color: ["#2f5f91"],
+      color: ["#2f5f91", "#4f8f7b", "#9f6b3d", "#7b6ea8", "#b05c5c"],
       tooltip: {
         trigger: "axis",
         appendToBody: true,
         valueFormatter: value => `${formatNumber(value)} 次`
       },
+      legend: {
+        type: "scroll",
+        top: 0,
+        right: 8,
+        itemWidth: 10,
+        itemHeight: 10,
+        textStyle: {
+          color: "#5f7087",
+          fontSize: 11
+        }
+      },
       grid: {
-        top: 24,
+        top: 32,
         right: 18,
         bottom: 28,
         left: 44
@@ -445,18 +489,7 @@ function renderTrendChart() {
           formatter: value => formatCompactNumber(value)
         }
       },
-      series: [
-        {
-          name: "调用次数",
-          type: "line",
-          smooth: true,
-          symbolSize: 5,
-          areaStyle: {
-            color: "rgba(47, 95, 145, 0.12)"
-          },
-          data: trendStats.value.map(item => item.usageCount)
-        }
-      ]
+      series: skillTrendSeries.value
     },
     { notMerge: true }
   )
@@ -707,6 +740,14 @@ function formatUsageItems(items, type) {
     font-size: 0.78rem;
   }
 
+  &__body-shell {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+  }
+
   &__body {
     display: flex;
     flex: 1;
@@ -715,6 +756,26 @@ function formatUsageItems(items, type) {
     gap: 10px;
     overflow: auto;
     padding-right: 4px;
+  }
+
+  &__loading {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: rgba(248, 251, 255, 0.78);
+    color: var(--color-primary);
+    font-size: 0.92rem;
+    font-weight: 700;
+  }
+
+  &__loading-icon {
+    animation: skill-usage-loading-spin 1s linear infinite;
   }
 
   &__metrics {
@@ -884,6 +945,16 @@ function formatUsageItems(items, type) {
     border-radius: 8px;
     background: var(--color-panel);
     color: var(--color-text-muted);
+  }
+}
+
+@keyframes skill-usage-loading-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
   }
 }
 
