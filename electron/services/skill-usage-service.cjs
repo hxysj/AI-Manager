@@ -264,6 +264,61 @@ function createGroupStats(logs, keySelector, baseSelector) {
   )
 }
 
+function padDatePart(value) {
+  return String(value).padStart(2, "0")
+}
+
+function shouldUseHourlyTrend(filters) {
+  if (!filters.startAt || !filters.endAt) {
+    return false
+  }
+
+  const start = new Date(filters.startAt)
+  const end = new Date(filters.endAt)
+
+  return (
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth() &&
+    start.getDate() === end.getDate()
+  )
+}
+
+function createTrendStats(invocations, filters) {
+  const hourly = shouldUseHourlyTrend(filters)
+  const groups = new Map()
+
+  for (const invocation of invocations) {
+    if (!invocation.createdAt) {
+      continue
+    }
+
+    const date = new Date(invocation.createdAt)
+    const key = hourly
+      ? `${padDatePart(date.getHours())}:00`
+      : [
+          date.getFullYear(),
+          padDatePart(date.getMonth() + 1),
+          padDatePart(date.getDate())
+        ].join("-")
+
+    if (!groups.has(key)) {
+      groups.set(key, {
+        date: key,
+        usageCount: 0,
+        sortKey: hourly
+          ? date.getHours()
+          : new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+      })
+    }
+
+    groups.get(key).usageCount += 1
+  }
+
+  return Array.from(groups.values())
+    .sort((left, right) => left.sortKey - right.sortKey)
+    .map(({ sortKey, ...item }) => item)
+}
+
 class SkillUsageService {
   constructor(sessionService) {
     this.sessionService = sessionService
@@ -321,11 +376,15 @@ class SkillUsageService {
     const usageLogs = (input.usageLogs || []).filter((log) =>
       this.matchLogFilters(log, filters)
     )
+    const filteredInvocations = invocations.filter((item) =>
+      this.matchInvocationFilters(item, filters)
+    )
     const matchedLogs = this.matchInvocationLogs(
-      invocations.filter((item) => this.matchInvocationFilters(item, filters)),
+      filteredInvocations,
       usageLogs
     )
     const rows = this.createRows(skills, invocations, matchedLogs, filters)
+    const trends = createTrendStats(filteredInvocations, filters)
     const summary = rows.reduce(
       (result, item) => {
         result.skillCount += 1
@@ -357,6 +416,7 @@ class SkillUsageService {
       data: {
         summary,
         skills: rows,
+        trends,
         filters: {
           clis: Array.from(
             new Map(
