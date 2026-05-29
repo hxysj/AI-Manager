@@ -119,7 +119,10 @@
           <strong>{{ formatNumber(item.actualTokens) }}</strong>
           <small>{{ formatCost(item.totalCostUsd) }}</small>
         </span>
-        <span :title="formatProviderTitle(item.providers)">
+        <span
+          class="skill-usage-view__usage-list"
+          :title="formatProviderTitle(item.providers)"
+        >
           <small
             v-for="provider in formatUsageItems(item.providers, 'provider')"
             :key="provider.key"
@@ -127,7 +130,10 @@
             {{ provider.label }}
           </small>
         </span>
-        <span :title="formatModelTitle(item.models)">
+        <span
+          class="skill-usage-view__usage-list"
+          :title="formatModelTitle(item.models)"
+        >
           <small
             v-for="model in formatUsageItems(item.models, 'model')"
             :key="model.key"
@@ -531,6 +537,7 @@ function formatUsageItems(items, type) {
 
   &__table-row strong,
   &__table-row small {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -539,6 +546,12 @@ function formatUsageItems(items, type) {
   &__table-row small {
     color: var(--color-text-muted);
     font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  &__usage-list {
+    align-self: stretch;
+    justify-content: center;
   }
 
   &__empty {
