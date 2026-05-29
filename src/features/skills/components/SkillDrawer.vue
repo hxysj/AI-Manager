@@ -6,7 +6,9 @@
         <div class="skill-drawer__hero">
           <div
             class="skill-drawer__icon"
-            :style="{ background: skill.icon ? '#ffffff' : hashColor(skill.name) }"
+            :style="{
+              background: skill.icon ? '#ffffff' : hashColor(skill.name)
+            }"
           >
             <img
               v-if="skill.icon"
@@ -58,13 +60,13 @@
         <section v-if="activeTab === 'overview'" class="skill-drawer__section">
           <div class="skill-drawer__block">
             <span>描述</span>
-            <p>{{ skill.description || '未提供描述。' }}</p>
+            <p>{{ skill.description || "未提供描述。" }}</p>
           </div>
 
           <div class="skill-drawer__block">
             <span>详细内容</span>
             <pre class="skill-drawer__content-text">{{
-              skill.content || '未提供详细内容。'
+              skill.content || "未提供详细内容。"
             }}</pre>
           </div>
 
@@ -93,7 +95,7 @@
             </article>
             <article>
               <span>作者</span>
-              <strong>{{ skill.author || '未声明' }}</strong>
+              <strong>{{ skill.author || "未声明" }}</strong>
             </article>
           </div>
         </section>
@@ -107,7 +109,7 @@
             <div class="skill-drawer__target-head">
               <div>
                 <h3>{{ cli.name }}</h3>
-                <p>{{ cli.skillsPath || '该 CLI 不支持 Skill 目录' }}</p>
+                <p>{{ cli.skillsPath || "该 CLI 不支持 Skill 目录" }}</p>
               </div>
               <span
                 :class="[
@@ -193,7 +195,97 @@
           </div>
           <div class="skill-drawer__block">
             <span>图标文件</span>
-            <p>{{ skill.icon || '未提供 icon，将使用默认图标。' }}</p>
+            <p>{{ skill.icon || "未提供 icon，将使用默认图标。" }}</p>
+          </div>
+          <div class="skill-drawer__file-browser">
+            <div class="skill-drawer__file-tree">
+              <div class="skill-drawer__file-tree-head">
+                <span>目录内容</span>
+                <strong>{{ skillFileRows.length }} 项</strong>
+              </div>
+
+              <div v-if="skillFilesLoading" class="skill-drawer__file-message">
+                正在读取 Skill 目录...
+              </div>
+              <div
+                v-else-if="skillFilesError"
+                class="skill-drawer__file-message skill-drawer__file-message--error"
+              >
+                {{ skillFilesError }}
+              </div>
+              <div
+                v-else-if="skillFileRows.length"
+                class="skill-drawer__file-list"
+              >
+                <button
+                  v-for="row in skillFileRows"
+                  :key="row.path"
+                  :class="[
+                    'skill-drawer__file-row',
+                    `skill-drawer__file-row--${row.type}`,
+                    {
+                      'skill-drawer__file-row--active':
+                        selectedSkillFilePath === row.path
+                    }
+                  ]"
+                  type="button"
+                  :style="{ paddingLeft: `${row.depth * 14 + 10}px` }"
+                  @click="selectSkillFile(row)"
+                >
+                  <Folder v-if="row.type === 'dir'" :size="14" />
+                  <Link2 v-else-if="row.type === 'symlink'" :size="14" />
+                  <FileText v-else :size="14" />
+                  <span>{{ row.name }}</span>
+                  <small v-if="row.type === 'file'">
+                    {{ formatSkillFileSize(row.size) }}
+                  </small>
+                </button>
+              </div>
+              <div v-else class="skill-drawer__file-message">
+                暂无目录内容。
+              </div>
+            </div>
+
+            <div class="skill-drawer__file-preview">
+              <div class="skill-drawer__file-preview-head">
+                <span>{{ selectedSkillFile?.path || "未选择文件" }}</span>
+                <strong>{{
+                  selectedSkillFile
+                    ? formatSkillFileType(selectedSkillFile)
+                    : "内容预览"
+                }}</strong>
+              </div>
+
+              <pre
+                v-if="
+                  selectedSkillFile?.type === 'file' &&
+                  selectedSkillFile.previewable
+                "
+                class="skill-drawer__file-content"
+                >{{ selectedSkillFile.content }}</pre
+              >
+              <div
+                v-else-if="selectedSkillFile?.type === 'file'"
+                class="skill-drawer__file-message"
+              >
+                该文件不可直接预览，可从源目录打开查看。
+              </div>
+              <div
+                v-else-if="selectedSkillFile?.type === 'symlink'"
+                class="skill-drawer__file-message"
+              >
+                链接目标：{{ selectedSkillFile.target }}
+              </div>
+              <div
+                v-else-if="selectedSkillFile"
+                class="skill-drawer__file-message"
+              >
+                目录项：{{ selectedSkillFile.path }}
+              </div>
+              <div v-else class="skill-drawer__file-message">
+                选择左侧文件查看内容。
+              </div>
+            </div>
           </div>
         </section>
       </div>
@@ -202,14 +294,14 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
-import { X } from 'lucide-vue-next'
+import { computed, ref, watch } from "vue"
+import { FileText, Folder, Link2, X } from "lucide-vue-next"
 import {
   formatDateTime,
   formatStatusLabel,
   hashColor,
   iconLetters
-} from '@/utils/formatters'
+} from "@/utils/formatters"
 
 const props = defineProps({
   cliTargets: {
@@ -222,25 +314,112 @@ const props = defineProps({
   }
 })
 
-defineEmits(['close', 'install', 'uninstall', 'repair', 'open-path'])
+defineEmits(["close", "install", "uninstall", "repair", "open-path"])
 
 const tabs = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'targets', label: 'Targets' },
-  { id: 'files', label: 'Files' }
+  { id: "overview", label: "Overview" },
+  { id: "targets", label: "Targets" },
+  { id: "files", label: "Files" }
 ]
 
-const activeTab = ref('overview')
+const activeTab = ref("overview")
+const skillFiles = ref([])
+const skillFilesLoading = ref(false)
+const skillFilesError = ref("")
+const selectedSkillFilePath = ref("")
+
+const skillFileRows = computed(() =>
+  skillFiles.value.map((item) => ({
+    ...item,
+    depth: item.path.split("/").length - 1
+  }))
+)
+const selectedSkillFile = computed(() => {
+  return (
+    skillFiles.value.find(
+      (item) => item.path === selectedSkillFilePath.value
+    ) || null
+  )
+})
 
 watch(
   () => props.skill?.name,
   () => {
-    activeTab.value = 'overview'
+    activeTab.value = "overview"
+    skillFiles.value = []
+    skillFilesError.value = ""
+    selectedSkillFilePath.value = ""
   }
 )
 
+watch(activeTab, (value) => {
+  if (value === "files") {
+    loadSkillFiles()
+  }
+})
+
 function toFileUrl(value) {
-  return encodeURI(`file:///${String(value).replace(/\\/g, '/')}`)
+  return encodeURI(`file:///${String(value).replace(/\\/g, "/")}`)
+}
+
+async function loadSkillFiles() {
+  if (!props.skill) {
+    return
+  }
+
+  skillFilesLoading.value = true
+  skillFilesError.value = ""
+
+  try {
+    const result = await window.aiManager.getSkillFiles({
+      skillName: props.skill.name
+    })
+    skillFiles.value = result.entries || []
+
+    const entryFile =
+      skillFiles.value.find((item) => item.path === props.skill.entry) ||
+      skillFiles.value.find((item) => item.path === "SKILL.md")
+    const previewFile = skillFiles.value.find((item) => item.previewable)
+    const firstFile = skillFiles.value.find((item) => item.type === "file")
+    selectedSkillFilePath.value =
+      (entryFile || previewFile || firstFile || skillFiles.value[0])?.path || ""
+  } catch (error) {
+    skillFiles.value = []
+    selectedSkillFilePath.value = ""
+    skillFilesError.value = error.message || String(error)
+  } finally {
+    skillFilesLoading.value = false
+  }
+}
+
+function selectSkillFile(file) {
+  selectedSkillFilePath.value = file.path
+}
+
+function formatSkillFileSize(value) {
+  const size = Number(value || 0)
+
+  if (size < 1024) {
+    return `${size} B`
+  }
+
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`
+  }
+
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function formatSkillFileType(file) {
+  if (file.type === "dir") {
+    return "目录"
+  }
+
+  if (file.type === "symlink") {
+    return "链接"
+  }
+
+  return file.previewable ? "文本内容" : "不可预览"
 }
 </script>
 
@@ -412,7 +591,7 @@ function toFileUrl(value) {
   }
 
   &__tab--active::after {
-    content: '';
+    content: "";
     position: absolute;
     left: 0;
     right: 0;
@@ -582,6 +761,139 @@ function toFileUrl(value) {
   &__path-button:hover {
     border-color: #b9ccda;
     background: var(--color-primary-soft);
+  }
+
+  &__file-browser {
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    gap: 10px;
+    min-height: 380px;
+  }
+
+  &__file-tree,
+  &__file-preview {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    overflow: hidden;
+    box-shadow: 0 8px 22px rgba(34, 56, 83, 0.04);
+  }
+
+  &__file-tree-head,
+  &__file-preview-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 38px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--color-line);
+    background: #fbfcfd;
+  }
+
+  &__file-tree-head span,
+  &__file-preview-head span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 0.74rem;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__file-tree-head strong,
+  &__file-preview-head strong {
+    flex: none;
+    color: var(--color-text-soft);
+    font-size: 0.72rem;
+  }
+
+  &__file-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 6px;
+  }
+
+  &__file-row {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    gap: 7px;
+    min-height: 30px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 0.78rem;
+    text-align: left;
+  }
+
+  &__file-row:hover,
+  &__file-row--active {
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  &__file-row svg {
+    flex: 0 0 auto;
+  }
+
+  &__file-row span {
+    min-width: 0;
+    overflow: hidden;
+    flex: 1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &__file-row small {
+    flex: none;
+    color: var(--color-text-soft);
+    font-size: 0.68rem;
+  }
+
+  &__file-row--dir {
+    color: var(--color-text);
+    font-weight: 700;
+  }
+
+  &__file-content {
+    flex: 1;
+    min-height: 0;
+    margin: 0;
+    overflow: auto;
+    padding: 12px;
+    background: #ffffff;
+    color: var(--color-text);
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.76rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  &__file-message {
+    display: grid;
+    flex: 1;
+    min-height: 120px;
+    place-items: center;
+    padding: 14px;
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+    line-height: 1.55;
+    text-align: center;
+    word-break: break-word;
+  }
+
+  &__file-message--error {
+    color: var(--color-danger);
   }
 }
 

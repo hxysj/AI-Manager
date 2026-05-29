@@ -683,7 +683,25 @@
             >
               <div class="restore-preview-modal__group-head">
                 <strong>{{ group.path }}</strong>
-                <span>{{ group.items.length }} 项</span>
+                <div class="restore-preview-modal__group-actions">
+                  <span>{{ group.items.length }} 项</span>
+                  <button
+                    class="restore-preview-modal__bulk-button"
+                    type="button"
+                    :disabled="pending"
+                    @click="chooseRestoreItems(group.items, 'current')"
+                  >
+                    保留当前
+                  </button>
+                  <button
+                    class="restore-preview-modal__bulk-button"
+                    type="button"
+                    :disabled="pending"
+                    @click="chooseRestoreItems(group.items, 'backup')"
+                  >
+                    使用备份
+                  </button>
+                </div>
               </div>
               <div class="restore-preview-modal__tree">
                 <template v-for="row in group.rows" :key="row.key">
@@ -693,7 +711,25 @@
                     :style="{ paddingLeft: `${row.depth * 18 + 10}px` }"
                   >
                     <strong>{{ row.name }}</strong>
-                    <span>{{ row.itemCount }} 项</span>
+                    <div class="restore-preview-modal__directory-actions">
+                      <span>{{ row.itemCount }} 项</span>
+                      <button
+                        class="restore-preview-modal__bulk-button"
+                        type="button"
+                        :disabled="pending"
+                        @click="chooseRestoreItems(row.items, 'current')"
+                      >
+                        保留当前
+                      </button>
+                      <button
+                        class="restore-preview-modal__bulk-button"
+                        type="button"
+                        :disabled="pending"
+                        @click="chooseRestoreItems(row.items, 'backup')"
+                      >
+                        使用备份
+                      </button>
+                    </div>
                   </div>
                   <article
                     v-else
@@ -2659,7 +2695,12 @@ function createRestoreTreeRows(groupPath, items) {
         kind: "dir",
         name: part,
         depth: index,
-        itemCount: dirCounts.get(key) || 0
+        itemCount: dirCounts.get(key) || 0,
+        items: itemInfos
+          .filter((targetInfo) =>
+            targetInfo.parts.slice(0, index + 1).join("/") === key
+          )
+          .map((targetInfo) => targetInfo.item)
       })
     })
 
@@ -2673,6 +2714,12 @@ function createRestoreTreeRows(groupPath, items) {
   }
 
   return rows
+}
+
+function chooseRestoreItems(items, choice) {
+  for (const item of items) {
+    restoreChoices[item.key] = choice
+  }
 }
 
 function createRestoreCompareRows(currentContent, backupContent) {
@@ -4624,6 +4671,31 @@ onBeforeUnmount(() => {
     color: var(--color-text-muted);
     font-size: 0.76rem;
     font-weight: 700;
+  }
+
+  &__group-actions,
+  &__directory-actions {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+  }
+
+  &__bulk-button {
+    height: 24px;
+    padding: 0 8px;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background: #ffffff;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+
+  &__bulk-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.52;
   }
 
   &__tree {
