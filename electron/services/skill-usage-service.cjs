@@ -50,6 +50,28 @@ function toActualTokens(log) {
   )
 }
 
+function collectTextValues(value, output) {
+  if (typeof value === "string") {
+    output.push(value)
+    return
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectTextValues(item, output)
+    }
+    return
+  }
+
+  if (!value || typeof value !== "object") {
+    return
+  }
+
+  for (const item of Object.values(value)) {
+    collectTextValues(item, output)
+  }
+}
+
 function createEmptySummary() {
   return {
     usageCount: 0,
@@ -75,31 +97,6 @@ function appendLogSummary(summary, log) {
   summary.lastUsedAt = Math.max(summary.lastUsedAt, Number(log.createdAt || 0))
 }
 
-function collectDisplayRecords(value, records) {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      collectDisplayRecords(item, records)
-    }
-    return
-  }
-
-  if (!value || typeof value !== "object") {
-    return
-  }
-
-  if (typeof value.display === "string") {
-    records.push(value)
-  }
-
-  if (typeof value.payload?.arguments === "string") {
-    records.push({ ...value, display: value.payload.arguments })
-  }
-
-  for (const item of Object.values(value)) {
-    collectDisplayRecords(item, records)
-  }
-}
-
 function extractSkillNames(display, aliasMap) {
   const matches = []
   const patterns = [
@@ -122,6 +119,49 @@ function extractSkillNames(display, aliasMap) {
   }
 
   return matches
+}
+
+function getSessionRecordRole(record) {
+  const payload = record.payload || record
+  const message = record.message || payload.message || payload
+
+  return message.role || payload.role || record.role || record.type || ""
+}
+
+function collectToolUseTexts(content, output) {
+  if (!Array.isArray(content)) {
+    return
+  }
+
+  for (const item of content) {
+    if (item?.type === "tool_use") {
+      collectTextValues(item.input, output)
+    }
+  }
+}
+
+function collectSessionRecordTexts(record, output) {
+  const payload = record.payload || record
+  const message = record.message || payload.message || payload
+  const role = getSessionRecordRole(record)
+
+  if (payload.type === "function_call") {
+    try {
+      collectTextValues(JSON.parse(payload.arguments), output)
+    } catch {
+      collectTextValues(payload.arguments, output)
+    }
+    return
+  }
+
+  if (role === "user") {
+    collectTextValues(message.content || payload.content || record.display, output)
+    return
+  }
+
+  if (role === "assistant") {
+    collectToolUseTexts(message.content || payload.content, output)
+  }
 }
 
 async function readSkillName(skillRoot) {
@@ -153,7 +193,10 @@ async function scanSkillRoots(skillsPath) {
 
     const stat = await fs.stat(skillRoot).catch(() => null)
 
-    if (stat?.isDirectory() && (await pathExists(path.join(skillRoot, "SKILL.md")))) {
+    if (
+      stat?.isDirectory() &&
+      (await pathExists(path.join(skillRoot, "SKILL.md")))
+    ) {
       roots.push(skillRoot)
     }
   }
@@ -161,14 +204,9 @@ async function scanSkillRoots(skillsPath) {
   return roots
 }
 
-async function readHistoryRecords(filePath) {
+async function readJsonlRecords(filePath) {
   const content = await fs.readFile(filePath, "utf8")
   const records = []
-
-  if (path.extname(filePath).toLowerCase() === ".json") {
-    collectDisplayRecords(JSON.parse(content), records)
-    return records
-  }
 
   for (const line of content.split(/\r?\n/)) {
     const text = line.trim()
@@ -177,10 +215,32 @@ async function readHistoryRecords(filePath) {
       continue
     }
 
-    collectDisplayRecords(JSON.parse(text), records)
+    records.push(JSON.parse(text))
   }
 
   return records
+}
+
+async function readSessionRecords(item) {
+  const records = await readJsonlRecords(item.filePath)
+
+  return records.map((record) => {
+    const texts = []
+
+    collectSessionRecordTexts(record, texts)
+
+    return {
+      display: texts.join("\n"),
+      timestamp: firstDefined(
+        record.timestamp,
+        record.createdAt,
+        record.created_at,
+        record.payload?.timestamp,
+        record.message?.timestamp
+      ),
+      rawPath: item.filePath
+    }
+  })
 }
 
 function createGroupStats(logs, keySelector, baseSelector) {
@@ -213,7 +273,7 @@ class SkillUsageService {
     const cliTargets = input.cliTargets || []
     const skills = await this.collectSkills(cliTargets, input.managedSkills || [])
     const aliasMap = this.createAliasMap(skills)
-    const files = await this.collectHistoryFiles(cliTargets)
+    const files = await this.collectSkillUsageFiles(cliTargets)
     const diagnostics = []
     const invocations = []
     const filters = {
@@ -224,7 +284,7 @@ class SkillUsageService {
 
     for (const item of files) {
       try {
-        const records = await readHistoryRecords(item.filePath)
+        const records = await readSessionRecords(item)
 
         for (const record of records) {
           const display = String(record.display || "").trim()
@@ -234,16 +294,7 @@ class SkillUsageService {
             continue
           }
 
-          const createdAt = toTimestampMs(
-            firstDefined(
-              record.timestamp,
-              record.createdAt,
-              record.created_at,
-              record.payload?.timestamp,
-              record.message?.timestamp
-            ),
-            0
-          )
+          const createdAt = toTimestampMs(record.timestamp, 0)
 
           for (const skillName of skillNames) {
             invocations.push({
@@ -251,7 +302,7 @@ class SkillUsageService {
               cli: item.cli,
               cliName: item.cliName,
               display,
-              rawPath: item.filePath,
+              rawPath: record.rawPath,
               sourceType: item.sourceType,
               createdAt,
               timestamp: createdAt ? Math.floor(createdAt / 1000) : 0
@@ -416,26 +467,12 @@ class SkillUsageService {
     return aliasMap
   }
 
-  async collectHistoryFiles(cliTargets) {
+  async collectSkillUsageFiles(cliTargets) {
     const files = []
 
     for (const cliTarget of cliTargets) {
       const cli = getCliType(cliTarget)
       const cliName = cliTarget.name || cli
-      const configPath = cliTarget.configPath
-
-      if (cli === "claude" && configPath) {
-        const historyPath = path.join(configPath, "history.jsonl")
-
-        if (await pathExists(historyPath)) {
-          files.push({
-            cli,
-            cliName,
-            filePath: historyPath,
-            sourceType: "history"
-          })
-        }
-      }
 
       for (const sessionPath of this.sessionService.getSessionPaths(cliTarget)) {
         if (!(await pathExists(sessionPath))) {
@@ -460,7 +497,6 @@ class SkillUsageService {
 
     return files
   }
-
   matchInvocationFilters(invocation, filters) {
     if (filters.cli !== "all" && invocation.cli !== filters.cli) {
       return false
@@ -518,7 +554,7 @@ class SkillUsageService {
     const invocationsByPath = new Map()
 
     for (const invocation of invocations) {
-      if (!invocation.rawPath || invocation.sourceType !== "session") {
+      if (!invocation.rawPath) {
         continue
       }
 
@@ -531,23 +567,25 @@ class SkillUsageService {
 
     for (const [rawPath, items] of invocationsByPath) {
       const logs = logsByPath.get(rawPath) || []
-      const sortedItems = items.sort((left, right) => left.createdAt - right.createdAt)
+      items.sort((left, right) => left.createdAt - right.createdAt)
 
-      for (let index = 0; index < sortedItems.length; index += 1) {
-        const invocation = sortedItems[index]
-        const nextInvocation = sortedItems[index + 1]
+      for (const [index, invocation] of items.entries()) {
+        const nextInvocation = items
+          .slice(index + 1)
+          .find((item) => item.createdAt > invocation.createdAt)
+
+        if (!invocation.createdAt) {
+          result.set(invocation, [])
+          continue
+        }
+
         const matched = logs.filter((log) => {
-          if (!invocation.createdAt) {
-            return false
-          }
-
           if (log.createdAt < invocation.createdAt) {
             return false
           }
 
-          return !nextInvocation?.createdAt || log.createdAt < nextInvocation.createdAt
+          return !nextInvocation || log.createdAt < nextInvocation.createdAt
         })
-
         result.set(invocation, matched)
       }
     }
@@ -560,14 +598,20 @@ class SkillUsageService {
       const skillInvocations = invocations.filter((item) => {
         return item.skillName === skill.name && this.matchInvocationFilters(item, filters)
       })
-      const logs = skillInvocations.flatMap((item) => matchedLogs.get(item) || [])
+      const logs = Array.from(
+        new Map(
+          skillInvocations
+            .flatMap((item) => matchedLogs.get(item) || [])
+            .map((log) => [log.requestId, log])
+        ).values()
+      )
       const summary = logs.reduce((result, log) => {
         appendLogSummary(result, log)
         return result
       }, createEmptySummary())
       summary.usageCount = skillInvocations.length
       summary.lastUsedAt = Math.max(
-        summary.lastUsedAt,
+        0,
         ...skillInvocations.map((item) => item.createdAt || 0)
       )
 

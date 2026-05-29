@@ -26,6 +26,15 @@ async function writeJson(filePath, value) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8")
 }
 
+async function writeJsonl(filePath, records) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true })
+  await fs.writeFile(
+    filePath,
+    `${records.map((record) => JSON.stringify(record)).join("\n")}\n`,
+    "utf8"
+  )
+}
+
 async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, "utf8"))
 }
@@ -480,6 +489,265 @@ test("Claude 和 Codex 代理接管池互相独立", async () => {
       }),
     /Codex Provider 不存在/
   )
+})
+
+test("Skill 使用统计扫描 Claude 和 Codex 聊天文件", async () => {
+  const service = await createService()
+  const claudeConfigPath = service.appSettings.cliConfigPaths.claude
+  const codexConfigPath = service.appSettings.cliConfigPaths.codex
+  const claudeSessionPath = path.join(
+    claudeConfigPath,
+    "projects",
+    "project-a",
+    "claude-session-1.jsonl"
+  )
+  const codexSessionPath = path.join(
+    codexConfigPath,
+    "sessions",
+    "2026",
+    "05",
+    "rollout-2026-05-29T10-00-00-codex-session-1.jsonl"
+  )
+
+  await writeJsonl(path.join(claudeConfigPath, "history.jsonl"), [
+    {
+      display: "普通 Claude 输入",
+      timestamp: 1770000001000,
+      project: "project-a",
+      sessionId: "claude-session-1"
+    },
+    {
+      display: "/skill-alpha 第二次执行",
+      timestamp: 1770000003000,
+      project: "project-a",
+      sessionId: "claude-session-1"
+    }
+  ])
+  await writeJsonl(path.join(codexConfigPath, "history.jsonl"), [
+    {
+      session_id: "codex-session-1",
+      ts: 1770000002,
+      text: "普通 Codex 输入"
+    }
+  ])
+  await writeJsonl(claudeSessionPath, [
+    {
+      type: "assistant",
+      timestamp: "2026-02-02T02:40:02.000Z",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            input: {
+              command: `Get-Content -Path ${path.join(
+                claudeConfigPath,
+                "skills",
+                "skill-alpha",
+                "SKILL.md"
+              )}`
+            }
+          }
+        ]
+      }
+    },
+    {
+      type: "assistant",
+      timestamp: "2026-02-02T02:40:04.000Z",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_use",
+            input: {
+              command: `Get-Content -Path ${path.join(
+                claudeConfigPath,
+                "skills",
+                "skill-gamma",
+                "SKILL.md"
+              )}`
+            }
+          }
+        ]
+      }
+    }
+  ])
+  await writeJsonl(codexSessionPath, [
+    {
+      timestamp: "2026-02-02T02:40:01.000Z",
+      type: "response_item",
+      payload: {
+        type: "message",
+        role: "developer",
+        content: [
+          {
+            type: "input_text",
+            text: `可用 Skill：${path.join(
+              codexConfigPath,
+              "skills",
+              "skill-delta",
+              "SKILL.md"
+            )}`
+          }
+        ]
+      }
+    },
+    {
+      timestamp: "2026-02-02T02:40:02.000Z",
+      type: "response_item",
+      payload: {
+        type: "function_call",
+        name: "shell_command",
+        arguments: JSON.stringify({
+          command: `Get-Content -Path ${path.join(
+            codexConfigPath,
+            "skills",
+            "skill-beta",
+            "SKILL.md"
+          )}`
+        })
+      }
+    }
+  ])
+
+  service.state.cliTargets = [
+    {
+      id: "claude",
+      type: "claude",
+      name: "Claude",
+      configPath: claudeConfigPath,
+      skillsPath: path.join(claudeConfigPath, "skills"),
+      sessionsPath: path.join(claudeConfigPath, "projects"),
+      sessionPaths: [path.join(claudeConfigPath, "projects")],
+      sessionScanRules: {
+        extensions: [".jsonl"],
+        names: []
+      }
+    },
+    {
+      id: "codex",
+      type: "codex",
+      name: "Codex",
+      configPath: codexConfigPath,
+      skillsPath: path.join(codexConfigPath, "skills"),
+      sessionsPath: path.join(codexConfigPath, "sessions"),
+      sessionPaths: [path.join(codexConfigPath, "sessions")],
+      sessionScanRules: {
+        extensions: [".jsonl"],
+        names: []
+      }
+    }
+  ]
+  service.state.skills = [
+    {
+      name: "skill-alpha",
+      description: "Alpha",
+      sourcePath: path.join(claudeConfigPath, "skills", "skill-alpha")
+    },
+    {
+      name: "skill-beta",
+      description: "Beta",
+      sourcePath: path.join(codexConfigPath, "skills", "skill-beta")
+    },
+    {
+      name: "skill-gamma",
+      description: "Gamma",
+      sourcePath: path.join(claudeConfigPath, "skills", "skill-gamma")
+    },
+    {
+      name: "skill-delta",
+      description: "Delta",
+      sourcePath: path.join(codexConfigPath, "skills", "skill-delta")
+    }
+  ]
+  service.usageService.logs = [
+    {
+      requestId: "claude-1",
+      appType: "claude",
+      providerId: "claude-provider",
+      providerName: "Claude Provider",
+      model: "claude-sonnet-4",
+      inputTokens: 10,
+      outputTokens: 5,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalCostUsd: 0.01,
+      rawPath: claudeSessionPath,
+      createdAt: 1770000002000
+    },
+    {
+      requestId: "claude-2",
+      appType: "claude",
+      providerId: "claude-provider-2",
+      providerName: "Claude Provider 2",
+      model: "claude-opus-4",
+      inputTokens: 30,
+      outputTokens: 15,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalCostUsd: 0.03,
+      rawPath: claudeSessionPath,
+      createdAt: 1770000004500
+    },
+    {
+      requestId: "codex-1",
+      appType: "codex",
+      providerId: "codex-provider",
+      providerName: "Codex Provider",
+      model: "gpt-5.2",
+      inputTokens: 20,
+      outputTokens: 10,
+      cacheReadTokens: 5,
+      cacheCreationTokens: 0,
+      totalCostUsd: 0.02,
+      rawPath: codexSessionPath,
+      createdAt: 1770000002500
+    }
+  ]
+
+  const result = await service.getSkillUsageStats({ cli: "all" })
+  const alpha = result.data.skills.find((item) => item.name === "skill-alpha")
+  const beta = result.data.skills.find((item) => item.name === "skill-beta")
+  const gamma = result.data.skills.find((item) => item.name === "skill-gamma")
+  const delta = result.data.skills.find((item) => item.name === "skill-delta")
+
+  assert.equal(alpha.usageCount, 1)
+  assert.equal(alpha.requestCount, 1)
+  assert.equal(alpha.actualTokens, 15)
+  assert.equal(alpha.lastUsedAt, 1770000002000)
+  assert.deepEqual(
+    alpha.providers.map((item) => item.providerName),
+    ["Claude Provider"]
+  )
+  assert.equal(beta.usageCount, 1)
+  assert.equal(beta.requestCount, 1)
+  assert.equal(beta.actualTokens, 30)
+  assert.equal(gamma.usageCount, 1)
+  assert.equal(gamma.requestCount, 1)
+  assert.equal(gamma.actualTokens, 45)
+  assert.equal(gamma.lastUsedAt, 1770000004000)
+  assert.deepEqual(
+    gamma.providers.map((item) => item.providerName),
+    ["Claude Provider 2"]
+  )
+  assert.equal(delta.usageCount, 0)
+  assert.equal(delta.requestCount, 0)
+  assert.deepEqual(result.data.diagnostics, [])
+
+  const filtered = await service.getSkillUsageStats({
+    cli: "claude",
+    startAt: 1770000002500
+  })
+  const filteredAlpha = filtered.data.skills.find(
+    (item) => item.name === "skill-alpha"
+  )
+  const filteredBeta = filtered.data.skills.find(
+    (item) => item.name === "skill-beta"
+  )
+
+  assert.equal(filteredAlpha.usageCount, 0)
+  assert.equal(filteredAlpha.requestCount, 0)
+  assert.equal(filteredBeta.usageCount, 0)
 })
 
 test("已启用 Prompt 修改后会自动应用到对应 CLI", async () => {
