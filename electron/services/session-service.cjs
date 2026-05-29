@@ -30,6 +30,20 @@ function truncateText(value, length) {
   return text.length > length ? `${text.slice(0, length)}...` : text
 }
 
+function isAgentInstructionContent(value) {
+  const text = String(value || "").trim()
+
+  return text.startsWith("# AGENTS.md instructions for ")
+}
+
+function createTitleContent(value) {
+  const text = String(value || "").trim()
+  const marker = "My request for Codex:"
+  const markerIndex = text.indexOf(marker)
+
+  return markerIndex >= 0 ? text.slice(markerIndex + marker.length).trim() : text
+}
+
 function readNestedValue(source, keys) {
   for (const key of keys) {
     if (source?.[key]) {
@@ -70,6 +84,10 @@ function normalizeContent(content) {
 }
 
 function normalizeRole(value) {
+  if (value === "function_call") {
+    return "tool"
+  }
+
   if (["user", "assistant", "tool", "system"].includes(value)) {
     return value
   }
@@ -112,11 +130,16 @@ function normalizeMessage(record) {
   const payload = record.payload || record
   const message = payload.message || payload
   const role = normalizeRole(message.role || payload.role || payload.type)
-  const content = normalizeContent(message.content || payload.content)
   const timestampSource =
     record.timestamp || payload.timestamp || message.timestamp || payload.createdAt
   const timestamp = timestampSource ? new Date(timestampSource).getTime() : undefined
   const toolCalls = extractToolCalls(record)
+  const content =
+    payload.type === "function_call"
+      ? `${payload.name || payload.call_id || "function_call"}\n${
+          payload.arguments || ""
+        }`.trim()
+      : normalizeContent(message.content || payload.content)
 
   return {
     role,
@@ -206,8 +229,12 @@ class BaseSessionParser {
 
     state.messageCount += 1
 
-    if (!state.firstUserContent && message.role === "user") {
-      state.firstUserContent = message.content
+    if (
+      !state.firstUserContent &&
+      message.role === "user" &&
+      !isAgentInstructionContent(message.content)
+    ) {
+      state.firstUserContent = createTitleContent(message.content)
     }
 
     if (!state.firstAssistantContent && message.role === "assistant") {
@@ -510,12 +537,16 @@ class SessionService {
       rawPath,
       parsed.metadata
     )
-    const firstUserMessage = parsed.messages.find((item) => item.role === "user")
+    const firstUserMessage = parsed.messages.find(
+      (item) =>
+        item.role === "user" && !isAgentInstructionContent(item.content)
+    )
     const firstAssistantMessage = parsed.messages.find(
       (item) => item.role === "assistant"
     )
     const title =
-      parsed.metadata.title || truncateText(firstUserMessage?.content, 50)
+      parsed.metadata.title ||
+      truncateText(createTitleContent(firstUserMessage?.content), 50)
 
     return {
       id,
@@ -555,7 +586,12 @@ class SessionService {
       parsed = {
         metadata: fullParsed.metadata,
         firstUserContent:
-          fullParsed.messages.find((item) => item.role === "user")?.content || "",
+          createTitleContent(
+            fullParsed.messages.find(
+              (item) =>
+                item.role === "user" && !isAgentInstructionContent(item.content)
+            )?.content
+          ) || "",
         firstAssistantContent:
           fullParsed.messages.find((item) => item.role === "assistant")?.content || "",
         messageCount: fullParsed.messages.length

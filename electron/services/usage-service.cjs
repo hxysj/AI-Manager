@@ -641,27 +641,98 @@ function createGroupStats(logs, keySelector, baseSelector) {
     .sort((left, right) => right.actualTokens - left.actualTokens)
 }
 
-function createTrendStats(logs, trendMode = "day") {
+function createTrendStats(logs, trendMode = "day", filters = {}) {
   const groups = new Map()
+  const isSingleDay =
+    filters.startAt &&
+    filters.endAt &&
+    new Date(filters.startAt).toDateString() ===
+      new Date(filters.endAt).toDateString()
 
   if (trendMode === "hour") {
-    for (let hour = 0; hour < 24; hour += 1) {
-      const label = `${String(hour).padStart(2, "0")}:00`
+    if (isSingleDay) {
+      for (let hour = 0; hour < 24; hour += 1) {
+        const label = `${String(hour).padStart(2, "0")}:00`
 
-      groups.set(label, {
-        date: label,
-        ...createEmptySummary()
-      })
+        groups.set(label, {
+          date: label,
+          sortAt: hour,
+          ...createEmptySummary()
+        })
+      }
     }
 
     for (const log of logs) {
       const date = new Date(log.createdAt)
-      const label = `${String(date.getHours()).padStart(2, "0")}:00`
+      const hour = String(date.getHours()).padStart(2, "0")
+      const day = date.toLocaleDateString("zh-CN")
+      const label = isSingleDay ? `${hour}:00` : `${day} ${hour}:00`
+
+      if (!groups.has(label)) {
+        groups.set(label, {
+          date: label,
+          sortAt: new Date(
+            date.getFullYear(),
+            date.getMonth(),
+            date.getDate(),
+            date.getHours()
+          ).getTime(),
+          ...createEmptySummary()
+        })
+      }
 
       appendSummary(groups.get(label), log)
     }
 
-    return Array.from(groups.values()).map((item) => finalizeSummary(item))
+    return Array.from(groups.values())
+      .sort((left, right) => left.sortAt - right.sortAt)
+      .map(({ sortAt, ...item }) => finalizeSummary(item))
+  }
+
+  if (trendMode === "minute") {
+    if (isSingleDay) {
+      for (let hour = 0; hour < 24; hour += 1) {
+        for (let minute = 0; minute < 60; minute += 1) {
+          const label = `${String(hour).padStart(2, "0")}:${String(
+            minute
+          ).padStart(2, "0")}`
+
+          groups.set(label, {
+            date: label,
+            sortAt: hour * 60 + minute,
+            ...createEmptySummary()
+          })
+        }
+      }
+    }
+
+    for (const log of logs) {
+      const date = new Date(log.createdAt)
+      const hour = String(date.getHours()).padStart(2, "0")
+      const minute = String(date.getMinutes()).padStart(2, "0")
+      const day = date.toLocaleDateString("zh-CN")
+      const label = isSingleDay ? `${hour}:${minute}` : `${day} ${hour}:${minute}`
+
+      if (!groups.has(label)) {
+        groups.set(label, {
+          date: label,
+          sortAt: new Date(
+            date.getFullYear(),
+            date.getMonth(),
+            date.getDate(),
+            date.getHours(),
+            date.getMinutes()
+          ).getTime(),
+          ...createEmptySummary()
+        })
+      }
+
+      appendSummary(groups.get(label), log)
+    }
+
+    return Array.from(groups.values())
+      .sort((left, right) => left.sortAt - right.sortAt)
+      .map(({ sortAt, ...item }) => finalizeSummary(item))
   }
 
   for (const log of logs) {
@@ -822,7 +893,10 @@ class UsageService {
       model: String(input.model || "all"),
       startAt: Number(input.startAt || 0),
       endAt: Number(input.endAt || 0),
-      trendMode: input.trendMode === "hour" ? "hour" : "day"
+      trendMode:
+        input.trendMode === "hour" || input.trendMode === "minute"
+          ? input.trendMode
+          : "day"
     }
     const logs = this.logs
       .filter((item) => inRange(item, filters))
@@ -863,7 +937,7 @@ class UsageService {
             providerName: log.providerName
           })
         ),
-        trends: createTrendStats(logs, filters.trendMode),
+        trends: createTrendStats(logs, filters.trendMode, filters),
         logs,
         filters: {
           appTypes: Array.from(new Set(this.logs.map((item) => item.appType))),

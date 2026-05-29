@@ -101,6 +101,7 @@
             v-show="trendStats.length"
             ref="trendChartRef"
             class="skill-usage-view__chart"
+            @wheel="handleTrendWheel"
           ></div>
           <div v-if="!trendStats.length" class="skill-usage-view__empty">
             暂无 Skill 调用趋势。
@@ -228,10 +229,12 @@ const stats = ref({
 })
 const searchQuery = ref("")
 const cliFilter = ref("all")
+const trendModeOverride = ref("")
 const trendChartRef = ref(null)
 const skillPieRef = ref(null)
 let trendChart = null
 let skillPie = null
+const trendModeLevels = ["day", "hour", "minute"]
 const dateTimeRange = ref(createPresetDateTimeRange("today"))
 const defaultDateTimeRange = [
   new Date(2000, 0, 1, 0, 0, 0),
@@ -292,17 +295,25 @@ const skillPieStats = computed(() =>
     }))
 )
 const trendMode = computed(() => {
+  if (trendModeOverride.value) {
+    return trendModeOverride.value
+  }
+
   const [start, end] = dateTimeRange.value || []
 
   return start && end && start.toDateString() === end.toDateString()
     ? "hour"
     : "day"
 })
-const skillTrendLabel = computed(() =>
-  trendMode.value === "hour"
+const skillTrendLabel = computed(() => {
+  if (trendMode.value === "minute") {
+    return `${trendStats.value.length} 个分钟`
+  }
+
+  return trendMode.value === "hour"
     ? `${trendStats.value.length} 个小时`
     : `${trendStats.value.length} 个本地日`
-)
+})
 const skillPieLabel = computed(
   () => `${skillPieStats.value.length} 个已使用 Skill`
 )
@@ -351,9 +362,32 @@ function createPayload() {
 
   return {
     cli: cliFilter.value,
+    trendMode: trendMode.value,
     startAt: start ? start.getTime() : 0,
     endAt: end ? end.getTime() : 0
   }
+}
+
+function handleTrendWheel(event) {
+  if (!event.ctrlKey || pending.value) {
+    return
+  }
+
+  event.preventDefault()
+
+  const currentIndex = trendModeLevels.indexOf(trendMode.value)
+  const nextIndex =
+    event.deltaY < 0
+      ? Math.min(currentIndex + 1, trendModeLevels.length - 1)
+      : Math.max(currentIndex - 1, 0)
+  const nextMode = trendModeLevels[nextIndex]
+
+  if (nextMode === trendMode.value) {
+    return
+  }
+
+  trendModeOverride.value = nextMode
+  loadStats()
 }
 
 async function loadStats() {
