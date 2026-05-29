@@ -284,7 +284,15 @@ function shouldUseHourlyTrend(filters) {
 }
 
 function createTrendStats(invocations, filters) {
-  const hourly = shouldUseHourlyTrend(filters)
+  const singleDay = shouldUseHourlyTrend(filters)
+  const trendMode =
+    filters.trendMode === "minute" ||
+    filters.trendMode === "hour" ||
+    filters.trendMode === "day"
+      ? filters.trendMode
+      : singleDay
+        ? "hour"
+        : "day"
   const groups = new Map()
 
   for (const invocation of invocations) {
@@ -293,21 +301,50 @@ function createTrendStats(invocations, filters) {
     }
 
     const date = new Date(invocation.createdAt)
-    const key = hourly
-      ? `${padDatePart(date.getHours())}:00`
-      : [
-          date.getFullYear(),
-          padDatePart(date.getMonth() + 1),
-          padDatePart(date.getDate())
-        ].join("-")
+    const day = [
+      date.getFullYear(),
+      padDatePart(date.getMonth() + 1),
+      padDatePart(date.getDate())
+    ].join("-")
+    const key =
+      trendMode === "minute"
+        ? singleDay
+          ? `${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`
+          : `${day} ${padDatePart(date.getHours())}:${padDatePart(
+              date.getMinutes()
+            )}`
+        : trendMode === "hour"
+          ? singleDay
+            ? `${padDatePart(date.getHours())}:00`
+            : `${day} ${padDatePart(date.getHours())}:00`
+          : day
+    const sortKey =
+      trendMode === "minute"
+        ? new Date(
+            date.getFullYear(),
+            date.getMonth(),
+            date.getDate(),
+            date.getHours(),
+            date.getMinutes()
+          ).getTime()
+        : trendMode === "hour"
+          ? new Date(
+              date.getFullYear(),
+              date.getMonth(),
+              date.getDate(),
+              date.getHours()
+            ).getTime()
+          : new Date(
+              date.getFullYear(),
+              date.getMonth(),
+              date.getDate()
+            ).getTime()
 
     if (!groups.has(key)) {
       groups.set(key, {
         date: key,
         usageCount: 0,
-        sortKey: hourly
-          ? date.getHours()
-          : new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+        sortKey
       })
     }
 
@@ -334,7 +371,13 @@ class SkillUsageService {
     const filters = {
       cli: String(input.cli || "all"),
       startAt: Number(input.startAt || 0),
-      endAt: Number(input.endAt || 0)
+      endAt: Number(input.endAt || 0),
+      trendMode:
+        input.trendMode === "minute" ||
+        input.trendMode === "hour" ||
+        input.trendMode === "day"
+          ? input.trendMode
+          : ""
     }
 
     for (const item of files) {

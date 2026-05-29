@@ -110,18 +110,34 @@
       <section class="usage-view__trend">
         <div class="usage-view__section-header">
           <div>
-            <h2>模型 Token 趋势</h2>
-            <span>{{ modelTrendLabel }}</span>
+            <h2>Token 趋势</h2>
+            <span>{{ tokenTrendLabel }}</span>
           </div>
-          <BarChart3 :size="18" />
+          <div class="usage-view__chart-tabs" role="tablist">
+            <button
+              v-for="item in tokenTrendTabs"
+              :key="item.id"
+              type="button"
+              :class="[
+                'usage-view__chart-tab',
+                { 'usage-view__chart-tab--active': tokenTrendMode === item.id }
+              ]"
+              role="tab"
+              :aria-selected="tokenTrendMode === item.id"
+              @click="tokenTrendMode = item.id"
+            >
+              {{ item.label }}
+            </button>
+          </div>
         </div>
         <div
-          v-show="modelTrendSeries.length"
+          v-show="tokenTrendSeries.length"
           ref="trendChartRef"
           class="usage-view__chart"
+          @wheel="handleTrendWheel"
         ></div>
-        <div v-if="!modelTrendSeries.length" class="usage-view__empty">
-          暂无模型用量趋势。
+        <div v-if="!tokenTrendSeries.length" class="usage-view__empty">
+          {{ tokenTrendEmptyText }}
         </div>
       </section>
 
@@ -682,12 +698,15 @@ const pricingExportFormat = ref("json")
 const pricingImportFileRef = ref(null)
 const pricingPage = ref(1)
 const pricingPageSize = ref(8)
+const tokenTrendMode = ref("model")
 const usagePieMode = ref("provider")
+const trendModeOverride = ref("")
 const trendChartRef = ref(null)
 const providerPieRef = ref(null)
 let trendChart = null
 let providerPie = null
 let usageSyncTimer = null
+const trendModeLevels = ["day", "hour", "minute"]
 const pricingPageSizeOptions = [8, 12, 20, 50]
 const pricingImportPlaceholder = `[
   {
@@ -759,6 +778,10 @@ const displayCurrencyLabel = computed(() =>
 const providerStats = computed(() => stats.value.providerStats || [])
 const modelStats = computed(() => stats.value.modelStats || [])
 const trendStats = computed(() => stats.value.trends || [])
+const tokenTrendTabs = [
+  { id: "model", label: "模型" },
+  { id: "provider", label: "Provider" }
+]
 const usagePieTabs = [
   { id: "provider", label: "Provider" },
   { id: "model", label: "模型" }
@@ -802,18 +825,27 @@ const usagePieCountLabel = computed(() =>
 const usagePieEmptyText = computed(() =>
   usagePieMode.value === "provider" ? "暂无 Provider 占比。" : "暂无模型占比。"
 )
-const trendMode = computed(() => {
+const isSingleDayTrendRange = computed(() => {
   const [start, end] = dateTimeRange.value || []
 
   return start && end && start.toDateString() === end.toDateString()
-    ? "hour"
-    : "day"
 })
-const trendLabel = computed(() =>
-  trendMode.value === "hour"
+const trendMode = computed(() => {
+  if (trendModeOverride.value) {
+    return trendModeOverride.value
+  }
+
+  return isSingleDayTrendRange.value ? "hour" : "day"
+})
+const trendLabel = computed(() => {
+  if (trendMode.value === "minute") {
+    return `${trendStats.value.length} 个分钟`
+  }
+
+  return trendMode.value === "hour"
     ? `${trendStats.value.length} 个小时`
     : `${trendStats.value.length} 个本地日`
-)
+})
 const logs = computed(() => stats.value.logs || [])
 const modelTrendSeries = computed(() => {
   const labels = trendStats.value.map((item) => item.date)
@@ -830,10 +862,7 @@ const modelTrendSeries = computed(() => {
   }
 
   for (const item of logs.value) {
-    const label =
-      trendMode.value === "hour"
-        ? `${String(new Date(item.createdAt).getHours()).padStart(2, "0")}:00`
-        : new Date(item.createdAt).toLocaleDateString("zh-CN")
+    const label = createTrendLogLabel(item.createdAt)
     const series = seriesMap.get(`${item.appType}:${item.model || "未识别模型"}`)
     const index = labelIndex.get(label)
 
@@ -846,8 +875,48 @@ const modelTrendSeries = computed(() => {
     item.data.some((value) => value > 0)
   )
 })
-const modelTrendLabel = computed(
-  () => `${modelTrendSeries.value.length} 个模型 · ${trendLabel.value}`
+const providerTrendSeries = computed(() => {
+  const labels = trendStats.value.map((item) => item.date)
+  const labelIndex = new Map(labels.map((label, index) => [label, index]))
+  const seriesMap = new Map()
+
+  for (const item of providerStats.value) {
+    seriesMap.set(item.providerId, {
+      name: item.providerName,
+      data: labels.map(() => 0)
+    })
+  }
+
+  for (const item of logs.value) {
+    const label = createTrendLogLabel(item.createdAt)
+    const series = seriesMap.get(item.providerId)
+    const index = labelIndex.get(label)
+
+    if (series && index !== undefined) {
+      series.data[index] += actualTokens(item)
+    }
+  }
+
+  return Array.from(seriesMap.values()).filter((item) =>
+    item.data.some((value) => value > 0)
+  )
+})
+const tokenTrendSeries = computed(() =>
+  tokenTrendMode.value === "provider"
+    ? providerTrendSeries.value
+    : modelTrendSeries.value
+)
+const tokenTrendLabel = computed(
+  () =>
+    `${tokenTrendSeries.value.length} 个${
+      tokenTrendMode.value === "provider" ? "来源" : "模型"
+    } · ${trendLabel.value}`
+)
+const tokenTrendEmptyText = computed(
+  () =>
+    tokenTrendMode.value === "provider"
+      ? "暂无 Provider 用量趋势。"
+      : "暂无模型用量趋势。"
 )
 const totalLogPages = computed(() =>
   Math.max(1, Math.ceil(logs.value.length / logPageSize.value))
@@ -969,6 +1038,11 @@ watch(pricingCategoryFilter, () => {
 watch(usagePieMode, async () => {
   await nextTick()
   renderProviderPie()
+})
+
+watch(tokenTrendMode, async () => {
+  await nextTick()
+  renderTrendChart()
 })
 
 watch(
@@ -1096,6 +1170,47 @@ function createFilterPayload() {
     startAt: start ? start.getTime() : 0,
     endAt: end ? end.getTime() : 0
   }
+}
+
+function createTrendLogLabel(createdAt) {
+  const date = new Date(createdAt)
+  const hour = String(date.getHours()).padStart(2, "0")
+  const minute = String(date.getMinutes()).padStart(2, "0")
+  const localDate = date.toLocaleDateString("zh-CN")
+
+  if (trendMode.value === "minute") {
+    return isSingleDayTrendRange.value
+      ? `${hour}:${minute}`
+      : `${localDate} ${hour}:${minute}`
+  }
+
+  if (trendMode.value === "hour") {
+    return isSingleDayTrendRange.value ? `${hour}:00` : `${localDate} ${hour}:00`
+  }
+
+  return localDate
+}
+
+function handleTrendWheel(event) {
+  if (!event.ctrlKey || pending.value) {
+    return
+  }
+
+  event.preventDefault()
+
+  const currentIndex = trendModeLevels.indexOf(trendMode.value)
+  const nextIndex =
+    event.deltaY < 0
+      ? Math.min(currentIndex + 1, trendModeLevels.length - 1)
+      : Math.max(currentIndex - 1, 0)
+  const nextMode = trendModeLevels[nextIndex]
+
+  if (nextMode === trendMode.value) {
+    return
+  }
+
+  trendModeOverride.value = nextMode
+  loadStats()
 }
 
 function resetScopedFilters() {
@@ -1798,7 +1913,7 @@ function renderCharts() {
 }
 
 function renderTrendChart() {
-  if (!trendChartRef.value || !modelTrendSeries.value.length) {
+  if (!trendChartRef.value || !tokenTrendSeries.value.length) {
     return
   }
 
@@ -1852,7 +1967,7 @@ function renderTrendChart() {
           formatter: (value) => formatCompactNumber(value)
         }
       },
-      series: modelTrendSeries.value.map((item) => ({
+      series: tokenTrendSeries.value.map((item) => ({
         name: item.name,
         type: "line",
         smooth: true,
