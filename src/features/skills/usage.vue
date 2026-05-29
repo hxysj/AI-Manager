@@ -64,97 +64,155 @@
       </button>
     </section>
 
-    <section class="skill-usage-view__metrics">
-      <article class="skill-usage-view__metric">
-        <span>Skill 总数</span>
-        <strong>{{ formatNumber(summary.skillCount) }}</strong>
-        <small>已使用 {{ formatNumber(summary.usedSkillCount) }} 个</small>
-      </article>
-      <article class="skill-usage-view__metric">
-        <span>调用次数</span>
-        <strong>{{ formatNumber(summary.usageCount) }}</strong>
-        <small>命中请求 {{ formatNumber(summary.requestCount) }} 次</small>
-      </article>
-      <article class="skill-usage-view__metric">
-        <span>Token 消耗</span>
-        <strong>{{ formatNumber(summary.actualTokens) }}</strong>
-        <small>按 Session 用量区间归因</small>
-      </article>
-      <article class="skill-usage-view__metric">
-        <span>最近使用</span>
-        <strong>{{ formatDate(summary.lastUsedAt) }}</strong>
-        <small>来自 history / session 记录</small>
-      </article>
-    </section>
+    <div class="skill-usage-view__body">
+      <section class="skill-usage-view__metrics">
+        <article class="skill-usage-view__metric">
+          <span>Skill 总数</span>
+          <strong>{{ formatNumber(summary.skillCount) }}</strong>
+          <small>已使用 {{ formatNumber(summary.usedSkillCount) }} 个</small>
+        </article>
+        <article class="skill-usage-view__metric">
+          <span>调用次数</span>
+          <strong>{{ formatNumber(summary.usageCount) }}</strong>
+          <small>命中请求 {{ formatNumber(summary.requestCount) }} 次</small>
+        </article>
+        <article class="skill-usage-view__metric">
+          <span>Token 消耗</span>
+          <strong>{{ formatNumber(summary.actualTokens) }}</strong>
+          <small>按 Session 用量区间归因</small>
+        </article>
+        <article class="skill-usage-view__metric">
+          <span>最近使用</span>
+          <strong>{{ formatDate(summary.lastUsedAt) }}</strong>
+          <small>来自 history / session 记录</small>
+        </article>
+      </section>
 
-    <div class="skill-usage-view__meta">
-      <span>{{ filteredSkills.length }} / {{ rows.length }} 个 Skill</span>
-      <span>{{ diagnostics.length }} 条解析诊断</span>
-    </div>
+      <section class="skill-usage-view__chart-grid">
+        <section class="skill-usage-view__chart-panel">
+          <div class="skill-usage-view__section-header">
+            <div>
+              <h2>调用趋势</h2>
+              <span>{{ skillTrendLabel }}</span>
+            </div>
+            <BarChart3 :size="18" />
+          </div>
+          <div
+            v-show="trendStats.length"
+            ref="trendChartRef"
+            class="skill-usage-view__chart"
+          ></div>
+          <div v-if="!trendStats.length" class="skill-usage-view__empty">
+            暂无 Skill 调用趋势。
+          </div>
+        </section>
 
-    <section v-if="filteredSkills.length" class="skill-usage-view__table">
-      <div class="skill-usage-view__table-head">
-        <span>Skill</span>
-        <span>CLI</span>
-        <span>调用</span>
-        <span>Token</span>
-        <span>Provider</span>
-        <span>模型</span>
-        <span>最近使用</span>
+        <section class="skill-usage-view__chart-panel">
+          <div class="skill-usage-view__section-header">
+            <div>
+              <h2>Skill 调用占比</h2>
+              <span>{{ skillPieLabel }}</span>
+            </div>
+            <PieChartIcon :size="18" />
+          </div>
+          <div
+            v-show="skillPieStats.length"
+            ref="skillPieRef"
+            class="skill-usage-view__chart"
+          ></div>
+          <div v-if="!skillPieStats.length" class="skill-usage-view__empty">
+            暂无 Skill 调用占比。
+          </div>
+        </section>
+      </section>
+
+      <div class="skill-usage-view__meta">
+        <span>{{ filteredSkills.length }} / {{ rows.length }} 个 Skill</span>
+        <span>{{ diagnostics.length }} 条解析诊断</span>
       </div>
-      <article
-        v-for="item in filteredSkills"
-        :key="item.name"
-        class="skill-usage-view__table-row"
-      >
-        <span>
-          <strong>{{ item.name }}</strong>
-          <small :title="item.sourcePaths.join('\n')">
-            {{ item.description || item.sourcePaths[0] || "未记录来源" }}
-          </small>
-        </span>
-        <span>{{ formatCliList(item.cliTypes) }}</span>
-        <span>{{ formatNumber(item.usageCount) }}</span>
-        <span>
-          <strong>{{ formatNumber(item.actualTokens) }}</strong>
-          <small>{{ formatCost(item.totalCostUsd) }}</small>
-        </span>
-        <span
-          class="skill-usage-view__usage-list"
-          :title="formatProviderTitle(item.providers)"
-        >
-          <small
-            v-for="provider in formatUsageItems(item.providers, 'provider')"
-            :key="provider.key"
-          >
-            {{ provider.label }}
-          </small>
-        </span>
-        <span
-          class="skill-usage-view__usage-list"
-          :title="formatModelTitle(item.models)"
-        >
-          <small
-            v-for="model in formatUsageItems(item.models, 'model')"
-            :key="model.key"
-          >
-            {{ model.label }}
-          </small>
-        </span>
-        <span>{{ formatDate(item.lastUsedAt) }}</span>
-      </article>
-    </section>
 
-    <div v-else class="skill-usage-view__empty">
-      暂无匹配的 Skill 使用统计。
+      <section v-if="filteredSkills.length" class="skill-usage-view__table">
+        <div class="skill-usage-view__table-head">
+          <span>Skill</span>
+          <span>CLI</span>
+          <span>调用</span>
+          <span>Token</span>
+          <span>Provider</span>
+          <span>模型</span>
+          <span>最近使用</span>
+        </div>
+        <article
+          v-for="item in filteredSkills"
+          :key="item.name"
+          class="skill-usage-view__table-row"
+        >
+          <span>
+            <strong>{{ item.name }}</strong>
+            <small :title="item.sourcePaths.join('\n')">
+              {{ item.description || item.sourcePaths[0] || "未记录来源" }}
+            </small>
+          </span>
+          <span>{{ formatCliList(item.cliTypes) }}</span>
+          <span>{{ formatNumber(item.usageCount) }}</span>
+          <span>
+            <strong>{{ formatNumber(item.actualTokens) }}</strong>
+            <small>{{ formatCost(item.totalCostUsd) }}</small>
+          </span>
+          <span
+            class="skill-usage-view__usage-list"
+            :title="formatProviderTitle(item.providers)"
+          >
+            <small
+              v-for="provider in formatUsageItems(item.providers, 'provider')"
+              :key="provider.key"
+            >
+              {{ provider.label }}
+            </small>
+          </span>
+          <span
+            class="skill-usage-view__usage-list"
+            :title="formatModelTitle(item.models)"
+          >
+            <small
+              v-for="model in formatUsageItems(item.models, 'model')"
+              :key="model.key"
+            >
+              {{ model.label }}
+            </small>
+          </span>
+          <span>{{ formatDate(item.lastUsedAt) }}</span>
+        </article>
+      </section>
+
+      <div v-else class="skill-usage-view__empty">
+        暂无匹配的 Skill 使用统计。
+      </div>
     </div>
   </section>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from "vue"
-import { ArrowLeft, BarChart3, RefreshCw } from "lucide-vue-next"
+import { LineChart, PieChart as EchartsPieChart } from "echarts/charts"
+import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components"
+import * as echarts from "echarts/core"
+import { CanvasRenderer } from "echarts/renderers"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import {
+  ArrowLeft,
+  BarChart3,
+  PieChart as PieChartIcon,
+  RefreshCw
+} from "lucide-vue-next"
 import { createMessage } from "@/utils/message"
+
+echarts.use([
+  LineChart,
+  EchartsPieChart,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+  CanvasRenderer
+])
 
 defineEmits(["back"])
 
@@ -162,6 +220,7 @@ const pending = ref(false)
 const stats = ref({
   summary: {},
   skills: [],
+  trends: [],
   filters: {
     clis: []
   },
@@ -169,6 +228,10 @@ const stats = ref({
 })
 const searchQuery = ref("")
 const cliFilter = ref("all")
+const trendChartRef = ref(null)
+const skillPieRef = ref(null)
+let trendChart = null
+let skillPie = null
 const dateTimeRange = ref(createPresetDateTimeRange("today"))
 const defaultDateTimeRange = [
   new Date(2000, 0, 1, 0, 0, 0),
@@ -196,6 +259,7 @@ const dateTimeShortcuts = [
 
 const rows = computed(() => stats.value.skills || [])
 const summary = computed(() => stats.value.summary || {})
+const trendStats = computed(() => stats.value.trends || [])
 const diagnostics = computed(() => stats.value.diagnostics || [])
 const cliOptions = computed(() => stats.value.filters?.clis || [])
 const filteredSkills = computed(() => {
@@ -219,13 +283,48 @@ const filteredSkills = computed(() => {
     return source.includes(keyword)
   })
 })
+const skillPieStats = computed(() =>
+  filteredSkills.value
+    .filter(item => item.usageCount > 0)
+    .map(item => ({
+      name: item.name,
+      value: item.usageCount
+    }))
+)
+const trendMode = computed(() => {
+  const [start, end] = dateTimeRange.value || []
+
+  return start && end && start.toDateString() === end.toDateString()
+    ? "hour"
+    : "day"
+})
+const skillTrendLabel = computed(() =>
+  trendMode.value === "hour"
+    ? `${trendStats.value.length} 个小时`
+    : `${trendStats.value.length} 个本地日`
+)
+const skillPieLabel = computed(
+  () => `${skillPieStats.value.length} 个已使用 Skill`
+)
 
 onMounted(() => {
   loadStats()
+  window.addEventListener("resize", resizeCharts)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener("resize", resizeCharts)
+  trendChart?.dispose()
+  skillPie?.dispose()
 })
 
 watch([dateTimeRange, cliFilter], () => {
   loadStats()
+})
+
+watch(searchQuery, async () => {
+  await nextTick()
+  renderSkillPie()
 })
 
 function createPresetDateTimeRange(type) {
@@ -263,11 +362,131 @@ async function loadStats() {
   try {
     const result = await window.aiManager.getSkillUsageStats(createPayload())
     stats.value = result.data || stats.value
+    await nextTick()
+    renderCharts()
   } catch (error) {
     createMessage.error(error.message || String(error))
   } finally {
     pending.value = false
   }
+}
+
+function renderCharts() {
+  renderTrendChart()
+  renderSkillPie()
+}
+
+function renderTrendChart() {
+  if (!trendChartRef.value || !trendStats.value.length) {
+    return
+  }
+
+  trendChart = trendChart || echarts.init(trendChartRef.value)
+  trendChart.setOption(
+    {
+      color: ["#2f5f91"],
+      tooltip: {
+        trigger: "axis",
+        appendToBody: true,
+        valueFormatter: value => `${formatNumber(value)} 次`
+      },
+      grid: {
+        top: 24,
+        right: 18,
+        bottom: 28,
+        left: 44
+      },
+      xAxis: {
+        type: "category",
+        data: trendStats.value.map(item => item.date),
+        axisTick: { show: false },
+        axisLine: { lineStyle: { color: "#dbe5ed" } },
+        axisLabel: { color: "#5f7087" }
+      },
+      yAxis: {
+        type: "value",
+        splitLine: { lineStyle: { color: "#edf2f8" } },
+        axisLabel: {
+          color: "#5f7087",
+          formatter: value => formatCompactNumber(value)
+        }
+      },
+      series: [
+        {
+          name: "调用次数",
+          type: "line",
+          smooth: true,
+          symbolSize: 5,
+          areaStyle: {
+            color: "rgba(47, 95, 145, 0.12)"
+          },
+          data: trendStats.value.map(item => item.usageCount)
+        }
+      ]
+    },
+    { notMerge: true }
+  )
+}
+
+function renderSkillPie() {
+  if (!skillPieRef.value || !skillPieStats.value.length) {
+    return
+  }
+
+  skillPie = skillPie || echarts.init(skillPieRef.value)
+  skillPie.setOption(
+    {
+      color: ["#2f5f91", "#4f8f7b", "#9f6b3d", "#7b6ea8", "#b05c5c"],
+      tooltip: {
+        trigger: "item",
+        appendToBody: true,
+        formatter: item => {
+          return `${item.name}<br />${formatNumber(item.value)} 次 · ${item.percent}%`
+        }
+      },
+      legend: {
+        type: "scroll",
+        orient: "vertical",
+        right: 0,
+        top: 0,
+        itemWidth: 10,
+        itemHeight: 10,
+        formatter: name => {
+          return name.length > 24 ? `${name.slice(0, 24)}...` : name
+        },
+        textStyle: {
+          color: "#5f7087",
+          fontSize: 11,
+          width: 150,
+          overflow: "truncate"
+        }
+      },
+      series: [
+        {
+          type: "pie",
+          right: 170,
+          radius: ["42%", "68%"],
+          center: ["50%", "52%"],
+          avoidLabelOverlap: true,
+          label: {
+            color: "#14213a",
+            formatter: "{d}%"
+          },
+          labelLine: {
+            length: 10,
+            length2: 8
+          },
+          data: skillPieStats.value
+        }
+      ]
+    },
+    { notMerge: true }
+  )
+}
+
+function resizeCharts() {
+  trendChart?.resize()
+  skillPie?.resize()
 }
 
 function formatNumber(value) {
@@ -282,6 +501,20 @@ function formatCost(value) {
   }
 
   return `$${cost >= 1 ? cost.toFixed(2) : cost.toFixed(6)}`
+}
+
+function formatCompactNumber(value) {
+  const number = Number(value || 0)
+
+  if (number >= 1000000) {
+    return `${(number / 1000000).toFixed(1)}M`
+  }
+
+  if (number >= 1000) {
+    return `${(number / 1000).toFixed(0)}K`
+  }
+
+  return String(number)
 }
 
 function formatDate(value) {
@@ -351,6 +584,7 @@ function formatUsageItems(items, type) {
 
   &__toolbar {
     display: flex;
+    flex: none;
     align-items: center;
     justify-content: space-between;
     gap: 18px;
@@ -379,6 +613,7 @@ function formatUsageItems(items, type) {
   &__filters {
     display: grid;
     grid-template-columns: 320px minmax(0, 1fr) 150px 94px;
+    flex: none;
     gap: 10px;
     align-items: end;
     padding: 10px;
@@ -438,6 +673,16 @@ function formatUsageItems(items, type) {
     font-size: 0.78rem;
   }
 
+  &__body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 10px;
+    overflow: auto;
+    padding-right: 4px;
+  }
+
   &__metrics {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -473,6 +718,48 @@ function formatUsageItems(items, type) {
     white-space: nowrap;
   }
 
+  &__chart-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    flex: none;
+    gap: 10px;
+  }
+
+  &__chart-panel {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+  }
+
+  &__section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  &__section-header h2 {
+    margin: 0 0 4px;
+    font-size: 0.95rem;
+    line-height: 1.25;
+  }
+
+  &__section-header span {
+    color: var(--color-text-muted);
+    font-size: 0.74rem;
+  }
+
+  &__chart {
+    width: 100%;
+    height: 230px;
+    min-width: 0;
+  }
+
   &__meta {
     display: flex;
     align-items: center;
@@ -484,8 +771,8 @@ function formatUsageItems(items, type) {
 
   &__table {
     display: flex;
-    flex: 1;
-    min-height: 0;
+    flex: none;
+    min-height: 260px;
     flex-direction: column;
     overflow: auto;
     border: 1px solid var(--color-line);
@@ -556,8 +843,8 @@ function formatUsageItems(items, type) {
 
   &__empty {
     display: grid;
-    flex: 1;
-    min-height: 0;
+    flex: none;
+    min-height: 180px;
     place-items: center;
     border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
