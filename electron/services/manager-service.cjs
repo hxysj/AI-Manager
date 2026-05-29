@@ -133,6 +133,106 @@ async function collectSkillFiles(rootPath) {
   return files
 }
 
+const skillTextFileExtensions = new Set([
+  ".bat",
+  ".cjs",
+  ".cmd",
+  ".css",
+  ".csv",
+  ".html",
+  ".ini",
+  ".js",
+  ".json",
+  ".jsonl",
+  ".less",
+  ".md",
+  ".mjs",
+  ".ps1",
+  ".py",
+  ".scss",
+  ".sh",
+  ".toml",
+  ".ts",
+  ".tsx",
+  ".txt",
+  ".vue",
+  ".xml",
+  ".yaml",
+  ".yml"
+])
+const skillTextFileNames = new Set([".env", ".gitignore"])
+const skillViewIgnoredDirs = new Set([".git", "node_modules"])
+const skillPreviewMaxSize = 512 * 1024
+
+function canPreviewSkillFile(fileName, ext, size) {
+  return (
+    size <= skillPreviewMaxSize &&
+    (skillTextFileExtensions.has(ext) || skillTextFileNames.has(fileName))
+  )
+}
+
+async function collectSkillViewEntries(rootPath) {
+  const entries = []
+
+  const visit = async (currentPath) => {
+    const children = await fs.readdir(currentPath, { withFileTypes: true })
+
+    for (const child of children.sort((left, right) =>
+      left.name.localeCompare(right.name)
+    )) {
+      const childPath = path.join(currentPath, child.name)
+      const relativePath = path
+        .relative(rootPath, childPath)
+        .replace(/\\/g, "/")
+      const stat = await fs.lstat(childPath)
+
+      if (stat.isSymbolicLink()) {
+        entries.push({
+          path: relativePath,
+          name: child.name,
+          type: "symlink",
+          target: await fs.readlink(childPath)
+        })
+        continue
+      }
+
+      if (stat.isDirectory()) {
+        entries.push({
+          path: relativePath,
+          name: child.name,
+          type: "dir"
+        })
+
+        if (!skillViewIgnoredDirs.has(child.name)) {
+          await visit(childPath)
+        }
+        continue
+      }
+
+      if (stat.isFile()) {
+        const ext = path.extname(child.name).toLowerCase()
+        const entry = {
+          path: relativePath,
+          name: child.name,
+          type: "file",
+          ext,
+          size: stat.size,
+          previewable: canPreviewSkillFile(child.name, ext, stat.size)
+        }
+
+        if (entry.previewable) {
+          entry.content = await fs.readFile(childPath, "utf8")
+        }
+
+        entries.push(entry)
+      }
+    }
+  }
+
+  await visit(rootPath)
+  return entries
+}
+
 async function createSkillSignature(skill) {
   const payload = {
     name: skill.name,
@@ -2030,6 +2130,23 @@ class ManagerService extends EventEmitter {
 
     await this.linkManager.repairSkill(skill, targetId)
     await this.refreshAll()
+  }
+
+  async getSkillFiles(skillName) {
+    const skill = this.state.skills.find((item) => item.name === skillName)
+
+    if (!skill) {
+      throw new Error("Skill 不存在")
+    }
+
+    if (!(await pathExists(skill.sourcePath))) {
+      throw new Error("Skill 源目录不存在")
+    }
+
+    return {
+      sourcePath: skill.sourcePath,
+      entries: await collectSkillViewEntries(skill.sourcePath)
+    }
   }
 
   async createSkill(input) {

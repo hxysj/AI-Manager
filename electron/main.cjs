@@ -2396,6 +2396,10 @@ function registerIpc() {
     return managerService.getState()
   })
 
+  registerLoggedIpc("skill:files", async (_, payload) => {
+    return managerService.getSkillFiles(payload.skillName)
+  })
+
   registerLoggedIpc("repo:add", async (_, payload) => {
     await managerService.addRepo(payload)
     return managerService.getState()
