@@ -33,6 +33,7 @@ const baseProxyConfig = {
   host: "127.0.0.1",
   activeProviderId: "",
   failoverProviderIds: [],
+  accountModel: "",
   retryCount: 1,
   streamTimeoutMs: 120000,
   requestTimeoutMs: 120000,
@@ -58,6 +59,7 @@ function normalizeProxyConfig(input = {}, defaults = getDefaultProxyConfig("code
     failoverProviderIds: Array.isArray(input.failoverProviderIds)
       ? input.failoverProviderIds.map(item => String(item || "").trim()).filter(Boolean)
       : [],
+    accountModel: String(input.accountModel || "").trim(),
     retryCount: Number(input.retryCount || defaults.retryCount),
     streamTimeoutMs: Number(
       input.streamTimeoutMs || defaults.streamTimeoutMs
@@ -170,6 +172,36 @@ function setTomlRootValue(content, key, value) {
   return lines.join("\n").replace(/\n*$/, "\n")
 }
 
+function removeTomlRootValue(content, key) {
+  const lines = String(content || "").split(/\r?\n/)
+  const nextLines = []
+  let inSection = false
+
+  for (const line of lines) {
+    const text = line.trim()
+
+    if (text.startsWith("[")) {
+      inSection = true
+      nextLines.push(line)
+      continue
+    }
+
+    const equalIndex = text.indexOf("=")
+
+    if (
+      !inSection &&
+      equalIndex > 0 &&
+      text.slice(0, equalIndex).trim() === key
+    ) {
+      continue
+    }
+
+    nextLines.push(line)
+  }
+
+  return nextLines.join("\n").replace(/\n*$/, "\n")
+}
+
 function setTomlSectionValue(content, sectionName, key, value) {
   const lines = String(content || "").split(/\r?\n/)
   const sectionHeader = `[${sectionName}]`
@@ -204,12 +236,15 @@ function setTomlSectionValue(content, sectionName, key, value) {
   return lines.join("\n").replace(/\n*$/, "\n")
 }
 
-function setCodexProxyConfigToml(content, localBaseUrl) {
+function setCodexProxyConfigToml(content, localBaseUrl, model = "") {
   const modelProvider = readTomlRootValue(content, "model_provider")
+  let nextContent = model
+    ? setTomlRootValue(content, "model", model)
+    : removeTomlRootValue(content, "model")
 
   if (!modelProvider) {
     return setTomlRootValue(
-      setTomlRootValue(content, "base_url", localBaseUrl),
+      setTomlRootValue(nextContent, "base_url", localBaseUrl),
       "wire_api",
       "responses"
     )
@@ -218,7 +253,7 @@ function setCodexProxyConfigToml(content, localBaseUrl) {
   const sectionName = `model_providers.${modelProvider}`
 
   return setTomlSectionValue(
-    setTomlSectionValue(content, sectionName, "base_url", localBaseUrl),
+    setTomlSectionValue(nextContent, sectionName, "base_url", localBaseUrl),
     sectionName,
     "wire_api",
     "responses"
@@ -607,7 +642,8 @@ class CodexProxyService extends EventEmitter {
         name: account.email || account.accountId || account.id,
         baseUrl: codexOfficialBaseUrl,
         accountId: account.id,
-        proxy: account.proxy || ""
+        proxy: account.proxy || "",
+        model: this.config.accountModel
       }
     }
 
@@ -619,7 +655,8 @@ class CodexProxyService extends EventEmitter {
       name: provider.name,
       baseUrl: provider.baseUrl,
       proxy: provider.proxy || "",
-      provider
+      provider,
+      model: provider.runtimeConfig?.mainModel || ""
     }
   }
 
@@ -698,6 +735,8 @@ class CodexProxyService extends EventEmitter {
         ? buildAnthropicLocalBaseUrl(this.config)
         : buildLocalBaseUrl(this.config)
     const activeTarget = this.getTarget(activeProviderId)
+    const configModel =
+      activeTarget.model || readTomlRootValue(liveConfig.config, "model")
     const nextLiveConfig =
       this.cli === "claude"
         ? {
@@ -712,7 +751,11 @@ class CodexProxyService extends EventEmitter {
               ...liveConfig.auth,
               OPENAI_API_KEY: proxyManagedApiKey
             },
-            config: setCodexProxyConfigToml(liveConfig.config, localBaseUrl)
+            config: setCodexProxyConfigToml(
+              liveConfig.config,
+              localBaseUrl,
+              configModel
+            )
           }
 
     this.liveBackup = {
@@ -813,6 +856,38 @@ class CodexProxyService extends EventEmitter {
     return this.getState()
   }
 
+  async updateAccountModel(input, cliTarget) {
+    this.config = normalizeProxyConfig({
+      ...this.config,
+      accountModel: input.accountModel,
+      updatedAt: Date.now()
+    }, this.defaultConfig)
+    await this.persistConfig()
+
+    if (
+      this.cli === "codex" &&
+      this.config.enabled &&
+      isAccountTarget(this.config.activeProviderId)
+    ) {
+      const liveConfig = await this.readLiveConfig(cliTarget)
+
+      await this.writeLiveConfigAtomic(cliTarget, {
+        auth: liveConfig.auth,
+        config: setCodexProxyConfigToml(
+          liveConfig.config,
+          buildLocalBaseUrl(this.config),
+          this.config.accountModel || readTomlRootValue(
+            this.liveBackup?.config,
+            "model"
+          )
+        )
+      })
+    }
+
+    this.emitChanged()
+    return this.getState()
+  }
+
   async updateActiveProvider(providerId, cliTarget) {
     await this.assertTargetReady(providerId)
     this.assertTargetJoined(providerId)
@@ -825,6 +900,18 @@ class CodexProxyService extends EventEmitter {
           liveConfig.settings,
           buildAnthropicLocalBaseUrl(this.config),
           target.provider
+        )
+      })
+    }
+    if (this.cli === "codex" && this.config.enabled) {
+      const liveConfig = await this.readLiveConfig(cliTarget)
+
+      await this.writeLiveConfigAtomic(cliTarget, {
+        auth: liveConfig.auth,
+        config: setCodexProxyConfigToml(
+          liveConfig.config,
+          buildLocalBaseUrl(this.config),
+          target.model || readTomlRootValue(this.liveBackup?.config, "model")
         )
       })
     }
@@ -894,21 +981,18 @@ class CodexProxyService extends EventEmitter {
         ? buildAnthropicUpstreamUrl(target.baseUrl, route.endpoint, route.search)
         : buildUpstreamUrl(target.baseUrl, route.endpoint, route.search)
     const method = String(request.method || "GET").toUpperCase()
+    const model =
+      target.model || readTomlRootValue(this.liveBackup?.config, "model")
     const options = {
       method,
       headers: await this.buildForwardHeaders(request, targetId)
     }
     let requestBody = body
 
-    if (
-      this.cli === "claude" &&
-      method !== "GET" &&
-      method !== "HEAD" &&
-      target.provider.runtimeConfig?.mainModel
-    ) {
+    if (method !== "GET" && method !== "HEAD" && model) {
       const payload = JSON.parse(body.toString("utf8"))
 
-      payload.model = target.provider.runtimeConfig.mainModel
+      payload.model = model
       requestBody = Buffer.from(`${JSON.stringify(payload)}\n`)
     }
 

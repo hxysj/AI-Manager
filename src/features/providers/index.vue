@@ -128,6 +128,9 @@
         :pending="pending"
         :providers="scopedProviders"
         :proxy-state="activeProxyState"
+        @account-model-save="
+          emit('codex-proxy-account-model-save', $event)
+        "
         @add-provider="
           payload => {
             showProxyAddAction = false
@@ -155,6 +158,9 @@
           :pending="pending"
           :providers="scopedProviders"
           :proxy-state="activeProxyState"
+          @account-model-save="
+            emit('codex-proxy-account-model-save', $event)
+          "
           @add-provider="
             payload => {
               showProxyAddAction = false
@@ -1684,7 +1690,8 @@ const props = defineProps({
       enabled: false,
       localBaseUrl: "",
       activeProviderId: "",
-      failoverProviderIds: []
+      failoverProviderIds: [],
+      accountModel: ""
     })
   },
   cliTargets: {
@@ -1742,6 +1749,7 @@ const emit = defineEmits([
   "codex-proxy-provider-add",
   "codex-proxy-provider-remove",
   "codex-proxy-provider-activate",
+  "codex-proxy-account-model-save",
   "clear-runtime",
   "cancel-codex-official-login",
   "delete-provider",
