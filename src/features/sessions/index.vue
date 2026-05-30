@@ -293,9 +293,10 @@ const emit = defineEmits(["delete-session", "open-path", "refresh"])
 
 const iconMap = {
   claude: "claude.svg",
-  codex: "codex.svg",
-  gemini: "geminicli.svg",
-  opencode: "opencode.svg"
+  codex: "codex.svg"
+  // 当前版本暂不启用 Gemini 和 OpenCode。
+  // gemini: "geminicli.svg",
+  // opencode: "opencode.svg"
 }
 
 const searchQuery = ref("")

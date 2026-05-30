@@ -72,13 +72,15 @@ function serializeAppSettingsPaths(input = {}) {
     dataPath: serializePortablePath(input.dataPath),
     cliConfigPaths: {
       claude: serializePortablePath(input.cliConfigPaths?.claude),
-      codex: serializePortablePath(input.cliConfigPaths?.codex),
-      gemini: serializePortablePath(input.cliConfigPaths?.gemini)
+      codex: serializePortablePath(input.cliConfigPaths?.codex)
+      // 当前版本暂不启用 Gemini。
+      // gemini: serializePortablePath(input.cliConfigPaths?.gemini)
     },
     defaultCliConfigPaths: {
       claude: serializePortablePath(input.defaultCliConfigPaths?.claude),
-      codex: serializePortablePath(input.defaultCliConfigPaths?.codex),
-      gemini: serializePortablePath(input.defaultCliConfigPaths?.gemini)
+      codex: serializePortablePath(input.defaultCliConfigPaths?.codex)
+      // 当前版本暂不启用 Gemini。
+      // gemini: serializePortablePath(input.defaultCliConfigPaths?.gemini)
     }
   }
 }

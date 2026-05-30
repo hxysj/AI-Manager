@@ -577,8 +577,9 @@ const draft = reactive({
   dataPath: "",
   cliConfigPaths: {
     claude: "",
-    codex: "",
-    gemini: ""
+    codex: ""
+    // 当前版本暂不启用 Gemini。
+    // gemini: ""
   },
   cloudSync: {
     provider: "jianguoyun",
@@ -603,8 +604,9 @@ const draft = reactive({
 
 const cliNames = {
   claude: "Claude",
-  codex: "Codex",
-  gemini: "Gemini"
+  codex: "Codex"
+  // 当前版本暂不启用 Gemini。
+  // gemini: "Gemini"
 }
 
 const tabs = [
@@ -663,7 +665,8 @@ function syncDraft() {
   draft.dataPath = props.appSettings.dataPath || ""
   draft.cliConfigPaths.claude = props.appSettings.cliConfigPaths?.claude || ""
   draft.cliConfigPaths.codex = props.appSettings.cliConfigPaths?.codex || ""
-  draft.cliConfigPaths.gemini = props.appSettings.cliConfigPaths?.gemini || ""
+  // 当前版本暂不启用 Gemini。
+  // draft.cliConfigPaths.gemini = props.appSettings.cliConfigPaths?.gemini || ""
   draft.cloudSync.provider = "jianguoyun"
   draft.cloudSync.webdavUrl =
     props.appSettings.cloudSync?.webdavUrl ||
@@ -721,8 +724,9 @@ function submitSettings() {
     dataPath: draft.dataPath,
     cliConfigPaths: {
       claude: draft.cliConfigPaths.claude,
-      codex: draft.cliConfigPaths.codex,
-      gemini: draft.cliConfigPaths.gemini
+      codex: draft.cliConfigPaths.codex
+      // 当前版本暂不启用 Gemini。
+      // gemini: draft.cliConfigPaths.gemini
     },
     cloudSync: {
       provider: draft.cloudSync.provider,

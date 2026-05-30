@@ -78,8 +78,9 @@ const quickSwitchCollapsedSize = { width: 44, height: 44 }
 const portableHomePrefix = path.join(path.dirname(os.homedir()), "%USERNAME%")
 const defaultCliConfigPaths = {
   claude: path.join(portableHomePrefix, ".claude"),
-  codex: path.join(portableHomePrefix, ".codex"),
-  gemini: path.join(portableHomePrefix, ".gemini")
+  codex: path.join(portableHomePrefix, ".codex")
+  // 当前版本暂不启用 Gemini。
+  // gemini: path.join(portableHomePrefix, ".gemini")
 }
 const defaultCloudSyncSettings = {
   provider: "jianguoyun",
@@ -179,10 +180,11 @@ function normalizeAppSettings(input = {}) {
       ),
       codex: resolvePortablePath(
         String(cliConfigPaths.codex || defaultCliConfigPaths.codex).trim()
-      ),
-      gemini: resolvePortablePath(
-        String(cliConfigPaths.gemini || defaultCliConfigPaths.gemini).trim()
       )
+      // 当前版本暂不启用 Gemini。
+      // gemini: resolvePortablePath(
+      //   String(cliConfigPaths.gemini || defaultCliConfigPaths.gemini).trim()
+      // )
     },
     defaultCliConfigPaths,
     cloudSync: normalizeCloudSyncSettings(input.cloudSync),

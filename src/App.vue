@@ -1278,13 +1278,15 @@ const state = reactive({
     restartRequired: false,
     cliConfigPaths: {
       claude: "",
-      codex: "",
-      gemini: ""
+      codex: ""
+      // 当前版本暂不启用 Gemini。
+      // gemini: ""
     },
     defaultCliConfigPaths: {
       claude: "",
-      codex: "",
-      gemini: ""
+      codex: ""
+      // 当前版本暂不启用 Gemini。
+      // gemini: ""
     },
     cloudSync: {
       provider: "jianguoyun",
