@@ -179,6 +179,135 @@
       </div>
     </div>
 
+    <div class="codex-proxy-panel-api">
+      <div class="codex-proxy-panel-api-head">
+        <div>
+          <span>API 服务</span>
+          <small>{{ apiState.enabled ? "已开启" : "未开启" }}</small>
+        </div>
+        <div class="codex-proxy-panel-api-actions">
+          <span class="codex-proxy-panel-api-scope">
+            <button
+              type="button"
+              :class="{
+                'codex-proxy-panel-api-scope-active':
+                  apiHostMode === 'local'
+              }"
+              :disabled="pending || apiState.enabled"
+              @click="setApiHostMode('local')"
+            >
+              本机
+            </button>
+            <button
+              type="button"
+              :class="{
+                'codex-proxy-panel-api-scope-active': apiHostMode === 'lan'
+              }"
+              :disabled="pending || apiState.enabled"
+              @click="setApiHostMode('lan')"
+            >
+              局域网
+            </button>
+          </span>
+          <button
+            v-if="apiState.localBaseUrl"
+            type="button"
+            :disabled="pending"
+            @click="copyText(apiState.localBaseUrl, 'Base URL 已复制。')"
+          >
+            <Copy :size="14" />
+            Base URL
+          </button>
+          <button
+            v-if="apiState.apiKey"
+            type="button"
+            :disabled="pending"
+            @click="copyText(apiState.apiKey, 'API Key 已复制。')"
+          >
+            <KeyRound :size="14" />
+            API Key
+          </button>
+          <button
+            type="button"
+            :disabled="pending"
+            @click="emit('api-key-regenerate')"
+          >
+            <KeyRound :size="14" />
+            新增 Key
+          </button>
+          <button
+            type="button"
+            :disabled="pending || !proxyProviders.length"
+            @click="toggleApi"
+          >
+            <Power :size="14" />
+            {{ apiState.enabled ? "关闭" : "开启" }}
+          </button>
+        </div>
+      </div>
+      <div class="codex-proxy-panel-api-grid">
+        <div>
+          <span>Base URL</span>
+          <strong>{{ apiState.localBaseUrl || "未生成" }}</strong>
+        </div>
+        <div>
+          <span>API Key</span>
+          <strong>{{ apiState.apiKey || "未生成" }}</strong>
+        </div>
+        <div>
+          <span>当前 Key 消耗</span>
+          <strong>
+            {{ formatNumber(apiState.currentKeyUsage?.totalTokens) }} tokens ·
+            {{ formatNumber(apiState.currentKeyUsage?.requestCount) }} 次
+          </strong>
+        </div>
+      </div>
+      <div
+        v-if="apiKeyRows.length"
+        class="codex-proxy-panel-api-keys"
+      >
+        <div
+          v-for="key in apiKeyRows"
+          :key="key.id"
+          class="codex-proxy-panel-api-key"
+        >
+          <div>
+            <span>
+              {{ key.id === apiState.apiKeyId ? "当前 Key" : "API Key" }}
+            </span>
+            <strong>{{ key.key }}</strong>
+          </div>
+          <small>
+            {{ key.enabled ? "启用" : "停用" }} ·
+            {{ formatNumber(key.usage?.totalTokens) }} tokens ·
+            {{ formatNumber(key.usage?.requestCount) }} 次
+          </small>
+          <button
+            type="button"
+            :disabled="pending"
+            @click="copyText(key.key, 'API Key 已复制。')"
+          >
+            <Copy :size="14" />
+          </button>
+        </div>
+      </div>
+      <div
+        v-if="apiState.lanBaseUrls?.length"
+        class="codex-proxy-panel-api-lan"
+      >
+        <span>局域网</span>
+        <button
+          v-for="url in apiState.lanBaseUrls"
+          :key="url"
+          type="button"
+          :disabled="pending"
+          @click="copyText(url, '局域网 Base URL 已复制。')"
+        >
+          {{ url }}
+        </button>
+      </div>
+    </div>
+
     <div v-if="mode !== 'manage'" class="codex-proxy-panel-logs">
       <div class="codex-proxy-panel-logs-head">
         <div>
@@ -420,9 +549,18 @@
 
 <script setup>
 import { computed, ref, watch } from "vue"
-import { Plus, ShieldCheck, X } from "lucide-vue-next"
+import {
+  Copy,
+  KeyRound,
+  Plus,
+  Power,
+  RefreshCw,
+  ShieldCheck,
+  X
+} from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
+import { createMessage } from "@/utils/message"
 
 const props = defineProps({
   accounts: {
@@ -449,6 +587,23 @@ const props = defineProps({
     type: Array,
     required: true
   },
+  apiState: {
+    type: Object,
+    default: () => ({
+      enabled: false,
+      host: "",
+      port: 0,
+      apiKey: "",
+      apiKeyId: "",
+      apiKeys: [],
+      localBaseUrl: "",
+      lanBaseUrls: [],
+      currentKeyUsage: {
+        requestCount: 0,
+        totalTokens: 0
+      }
+    })
+  },
   proxyState: {
     type: Object,
     required: true
@@ -457,6 +612,9 @@ const props = defineProps({
 
 const emit = defineEmits([
   "account-model-save",
+  "api-enable",
+  "api-disable",
+  "api-key-regenerate",
   "add-provider",
   "remove-provider",
   "activate-provider",
@@ -467,6 +625,7 @@ const emit = defineEmits([
 const showProviderPicker = ref(false)
 const selectedProxyLog = ref(null)
 const accountModelDraft = ref("")
+const apiHostMode = ref("local")
 const proxyLogFilter = ref("all")
 const proxyLogPage = ref(1)
 const proxyLogPageSize = ref(20)
@@ -541,6 +700,10 @@ const proxyLogs = computed(() => {
   return props.proxyState.logs || []
 })
 
+const apiKeyRows = computed(() => {
+  return props.apiState.apiKeys || []
+})
+
 const filteredProxyLogs = computed(() => {
   if (proxyLogFilter.value === "success") {
     return proxyLogs.value.filter(item => item.ok)
@@ -599,6 +762,14 @@ watch(
   () => props.proxyState.accountModel,
   value => {
     accountModelDraft.value = value || ""
+  },
+  { immediate: true }
+)
+
+watch(
+  () => props.apiState.host,
+  value => {
+    apiHostMode.value = ["0.0.0.0", "::"].includes(value) ? "lan" : "local"
   },
   { immediate: true }
 )
@@ -668,6 +839,10 @@ function formatPlanName(plan) {
   return String(plan || "free").toUpperCase()
 }
 
+function formatNumber(value) {
+  return Number(value || 0).toLocaleString("zh-CN")
+}
+
 function formatProxyLogTime(value) {
   return proxyLogTimeFormatter.format(new Date(Number(value || 0)))
 }
@@ -703,6 +878,31 @@ function openProxyLogDetail(log) {
 
 function closeProxyLogDetail() {
   selectedProxyLog.value = null
+}
+
+function toggleApi() {
+  if (props.apiState.enabled) {
+    emit("api-disable")
+    return
+  }
+
+  emit("api-enable", {
+    host: apiHostMode.value === "lan" ? "0.0.0.0" : "127.0.0.1",
+    port: props.apiState.port
+  })
+}
+
+function setApiHostMode(value) {
+  apiHostMode.value = value
+}
+
+async function copyText(value, message) {
+  try {
+    await navigator.clipboard.writeText(String(value || ""))
+    createMessage.success(message)
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  }
 }
 
 function prevProxyLogPage() {
@@ -1080,6 +1280,214 @@ defineExpose({
     display: flex;
     flex-direction: column;
     gap: 8px;
+  }
+
+  &-api {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  &-api-head,
+  &-api-actions,
+  &-api-grid,
+  &-api-keys,
+  &-api-key,
+  &-api-lan {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+  }
+
+  &-api-head {
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  &-api-head > div:first-child {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  &-api-head span,
+  &-api-lan span {
+    color: #111827;
+    font-size: 0.8rem;
+    font-weight: 700;
+  }
+
+  &-api-head small {
+    color: #667085;
+    font-size: 0.76rem;
+  }
+
+  &-api-actions {
+    flex: none;
+    gap: 6px;
+  }
+
+  &-api-scope {
+    display: inline-flex;
+    flex: none;
+    overflow: hidden;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  &-api-scope button {
+    border: 0;
+    border-right: 1px solid #d8e0eb;
+    border-radius: 0;
+    color: #475467;
+  }
+
+  &-api-scope button:last-child {
+    border-right: 0;
+  }
+
+  &-api-actions button,
+  &-api-lan button {
+    display: inline-flex;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #1d4ed8;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &-api-actions button {
+    padding: 0 8px;
+  }
+
+  &-api-scope &-api-scope-active {
+    background: #eef4ff;
+    color: #1d4ed8;
+  }
+
+  &-api-actions button:disabled,
+  &-api-lan button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  &-api-grid {
+    gap: 8px;
+  }
+
+  &-api-grid div {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    border: 1px solid #edf1f6;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  &-api-grid span {
+    color: #667085;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  &-api-grid strong {
+    overflow: hidden;
+    color: #111827;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &-api-keys {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  &-api-key {
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid #edf1f6;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  &-api-key div {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  &-api-key span {
+    color: #667085;
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  &-api-key strong {
+    overflow: hidden;
+    color: #111827;
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  &-api-key small {
+    flex: none;
+    color: #667085;
+    font-size: 11px;
+  }
+
+  &-api-key button {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #1d4ed8;
+    cursor: pointer;
+  }
+
+  &-api-key button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  &-api-lan {
+    gap: 6px;
+  }
+
+  &-api-lan span {
+    flex: none;
+  }
+
+  &-api-lan button {
+    min-width: 0;
+    padding: 0 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   &-logs-head {
