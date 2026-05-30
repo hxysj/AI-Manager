@@ -88,6 +88,7 @@ function serializeAppSettingsPaths(input = {}) {
 function resolveAppPaths(userDataPath) {
   const workspaceRoot = path.join(userDataPath, "workspace")
   const storageDir = path.join(workspaceRoot, "storage")
+  const apiRecordsDir = path.join(storageDir, "api-records")
   const sessionsDir = path.join(workspaceRoot, "sessions")
   const sessionRecycleDir = path.join(sessionsDir, "recycle")
   const promptsDir = path.join(workspaceRoot, "prompts")
@@ -105,6 +106,7 @@ function resolveAppPaths(userDataPath) {
     sessionRecycleSessionsDir: path.join(sessionRecycleDir, "sessions"),
     sessionRecycleMetadataDir: path.join(sessionRecycleDir, "metadata"),
     storageDir,
+    apiRecordsDir,
     storageFiles: {
       repos: path.join(storageDir, "repos.json"),
       skills: path.join(storageDir, "skills.json"),
@@ -130,6 +132,11 @@ function resolveAppPaths(userDataPath) {
         storageDir,
         "claude-proxy-request-logs.json"
       ),
+      claudeApiConfig: path.join(storageDir, "claude-api-config.json"),
+      claudeApiRequestRecords: path.join(
+        apiRecordsDir,
+        "claude-api-request-records.json"
+      ),
       codexProxyConfig: path.join(storageDir, "codex-proxy-config.json"),
       codexProxyLiveBackup: path.join(
         storageDir,
@@ -138,6 +145,11 @@ function resolveAppPaths(userDataPath) {
       codexProxyRequestLogs: path.join(
         storageDir,
         "codex-proxy-request-logs.json"
+      ),
+      codexApiConfig: path.join(storageDir, "codex-api-config.json"),
+      codexApiRequestRecords: path.join(
+        apiRecordsDir,
+        "codex-api-request-records.json"
       ),
       codexAccounts: path.join(storageDir, "codex-accounts.json"),
       codexActiveAccountId: path.join(
@@ -159,7 +171,8 @@ async function ensureAppDirectories(paths) {
     fs.mkdir(paths.reposDir, { recursive: true }),
     fs.mkdir(paths.sessionRecycleSessionsDir, { recursive: true }),
     fs.mkdir(paths.sessionRecycleMetadataDir, { recursive: true }),
-    fs.mkdir(paths.storageDir, { recursive: true })
+    fs.mkdir(paths.storageDir, { recursive: true }),
+    fs.mkdir(paths.apiRecordsDir, { recursive: true })
   ])
 }
 

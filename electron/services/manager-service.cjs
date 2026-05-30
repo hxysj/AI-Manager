@@ -931,10 +931,20 @@ async function collectBackupEntries(paths) {
       paths.storageFiles.claudeProxyRequestLogs,
       "storage/claude-proxy-request-logs.json"
     ],
+    [paths.storageFiles.claudeApiConfig, "storage/claude-api-config.json"],
+    [
+      paths.storageFiles.claudeApiRequestRecords,
+      "storage/api-records/claude-api-request-records.json"
+    ],
     [paths.storageFiles.codexProxyConfig, "storage/codex-proxy-config.json"],
     [
       paths.storageFiles.codexProxyRequestLogs,
       "storage/codex-proxy-request-logs.json"
+    ],
+    [paths.storageFiles.codexApiConfig, "storage/codex-api-config.json"],
+    [
+      paths.storageFiles.codexApiRequestRecords,
+      "storage/api-records/codex-api-request-records.json"
     ],
     [paths.storageFiles.codexAccounts, "storage/codex-accounts.json"],
     [
@@ -1337,7 +1347,8 @@ function createCodexAccountConfigHash(account) {
       accountId: account.account_id || account.accountId || account.id,
       accessToken: account.auth?.accessToken || account.access_token || "",
       refreshToken: account.auth?.refreshToken || account.refresh_token || "",
-      idToken: account.auth?.idToken || account.id_token || ""
+      idToken: account.auth?.idToken || account.id_token || "",
+      model: account.model || account.defaultModel || ""
     })
   )
 }
@@ -1390,7 +1401,11 @@ function createCodexProxyTargetConfigHash(codexProxyService, targetId) {
           JSON.stringify({
             accountHash: createCodexAccountConfigHash(account),
             proxy: account.proxy || "",
-            model: codexProxyService.getState().accountModel || ""
+            model:
+              account.model ||
+              account.defaultModel ||
+              codexProxyService.getState().accountModel ||
+              ""
           })
         )
       : ""
@@ -3139,10 +3154,15 @@ class ManagerService extends EventEmitter {
   }
 
   async updateCodexAccountProxy(input) {
-    this.codexAccountService.updateAccountProxy(input.accountId, input.proxy)
+    this.codexAccountService.updateAccountProxy(
+      input.accountId,
+      input.proxy,
+      input.model
+    )
     this.state = {
       ...this.state,
       codexAccounts: this.codexAccountService.getState(),
+      codexProxyState: this.codexProxyService.getState(),
       refreshedAt: Date.now()
     }
     this.emit("state-changed", this.state)
@@ -3345,6 +3365,78 @@ class ManagerService extends EventEmitter {
     return this.activateProxyProvider("claude", input)
   }
 
+  async enableApi(cli, input) {
+    const proxyService = this.getProxyService(cli)
+
+    if (!proxyService) {
+      throw new Error("该 CLI 不支持 API 服务")
+    }
+
+    if (!proxyService.isEnabled()) {
+      await this.enableProxy(cli, {})
+    }
+
+    await proxyService.enableApi(
+      input,
+      this.state.cliTargets.find((item) => item.id === cli)
+    )
+    await this.runtimeProviderService.refreshDrift(this.state.cliTargets)
+    this.state = {
+      ...this.state,
+      ...this.getRuntimeStateWithProxy(),
+      [this.getProxyStateKey(cli)]: proxyService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async disableApi(cli) {
+    const proxyService = this.getProxyService(cli)
+
+    if (!proxyService) {
+      throw new Error("该 CLI 不支持 API 服务")
+    }
+
+    await proxyService.disableApi()
+    this.state = {
+      ...this.state,
+      [this.getProxyStateKey(cli)]: proxyService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async regenerateApiKey(cli) {
+    const proxyService = this.getProxyService(cli)
+
+    if (!proxyService) {
+      throw new Error("该 CLI 不支持 API 服务")
+    }
+
+    await proxyService.regenerateApiKey()
+    this.state = {
+      ...this.state,
+      [this.getProxyStateKey(cli)]: proxyService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
+  async enableClaudeApi(input) {
+    return this.enableApi("claude", input)
+  }
+
+  async disableClaudeApi() {
+    return this.disableApi("claude")
+  }
+
+  async regenerateClaudeApiKey() {
+    return this.regenerateApiKey("claude")
+  }
+
   async enableCodexProxy(input) {
     return this.enableProxy("codex", input)
   }
@@ -3367,6 +3459,18 @@ class ManagerService extends EventEmitter {
 
   async saveCodexProxyAccountModel(input) {
     return this.updateCodexProxyAccountModel(input)
+  }
+
+  async enableCodexApi(input) {
+    return this.enableApi("codex", input)
+  }
+
+  async disableCodexApi() {
+    return this.disableApi("codex")
+  }
+
+  async regenerateCodexApiKey() {
+    return this.regenerateApiKey("codex")
   }
 
   async saveRuntimeModel(input) {

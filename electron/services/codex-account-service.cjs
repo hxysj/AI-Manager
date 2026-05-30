@@ -314,6 +314,8 @@ class CodexAccountService extends EventEmitter {
       plan: account.plan,
       usage: account.usage,
       proxy: account.proxy,
+      model: account.model || "",
+      defaultModel: account.defaultModel || account.model || "",
       autoRefresh: account.autoRefresh,
       createdAt: account.createdAt,
       updatedAt: account.updatedAt,
@@ -587,6 +589,8 @@ class CodexAccountService extends EventEmitter {
         "",
       usage,
       proxy: proxy || currentAccount?.proxy || "",
+      model: currentAccount?.model || currentAccount?.defaultModel || "",
+      defaultModel: currentAccount?.defaultModel || currentAccount?.model || "",
       id_token: tokens.id_token,
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
@@ -1083,7 +1087,7 @@ class CodexAccountService extends EventEmitter {
     this.emit("changed", this.getState())
   }
 
-  updateAccountProxy(accountId, proxy) {
+  updateAccountProxy(accountId, proxy, model) {
     const account = this.accounts.find(item => item.id === accountId)
 
     if (!account) {
@@ -1094,7 +1098,14 @@ class CodexAccountService extends EventEmitter {
       throw new Error("Codex 官方账号已禁用，不能编辑")
     }
 
+    const nextModel =
+      model === undefined
+        ? account.model || account.defaultModel || ""
+        : String(model || "").trim()
+
     account.proxy = String(proxy || "").trim()
+    account.model = nextModel
+    account.defaultModel = account.model
     account.updatedAt = Date.now()
     this.storage.scheduleWrite("codexAccounts", this.accounts)
     this.emit("changed", this.getState())
@@ -1403,6 +1414,8 @@ class CodexAccountService extends EventEmitter {
       plan: nextAccount.plan,
       usage: nextAccount.usage,
       proxy: nextAccount.proxy,
+      model: nextAccount.model || "",
+      defaultModel: nextAccount.defaultModel || nextAccount.model || "",
       autoRefresh: nextAccount.autoRefresh,
       createdAt: nextAccount.createdAt,
       updatedAt: nextAccount.updatedAt,

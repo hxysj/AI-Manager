@@ -376,6 +376,9 @@
           @claude-proxy-provider-add="addClaudeProxyProvider"
           @claude-proxy-provider-remove="removeClaudeProxyProvider"
           @claude-proxy-provider-activate="activateClaudeProxyProvider"
+          @claude-api-enable="enableClaudeApi"
+          @claude-api-disable="disableClaudeApi"
+          @claude-api-key-regenerate="regenerateClaudeApiKey"
           @codex-official-login="startCodexOfficialLogin"
           @codex-auth-json-import="importCodexAuthJson"
           @codex-account-enable="enableCodexAccount"
@@ -392,6 +395,9 @@
           @codex-proxy-provider-remove="removeCodexProxyProvider"
           @codex-proxy-provider-activate="activateCodexProxyProvider"
           @codex-proxy-account-model-save="saveCodexProxyAccountModel"
+          @codex-api-enable="enableCodexApi"
+          @codex-api-disable="disableCodexApi"
+          @codex-api-key-regenerate="regenerateCodexApiKey"
           @cancel-codex-official-login="cancelCodexOfficialLogin"
           @delete-provider="deleteProvider"
           @save-model="saveRuntimeModel"
@@ -1241,14 +1247,42 @@ const state = reactive({
     enabled: false,
     localBaseUrl: "",
     activeProviderId: "",
-    failoverProviderIds: []
+    failoverProviderIds: [],
+    api: {
+      enabled: false,
+      host: "",
+      port: 0,
+      apiKey: "",
+      apiKeyId: "",
+      apiKeys: [],
+      localBaseUrl: "",
+      lanBaseUrls: [],
+      currentKeyUsage: {
+        requestCount: 0,
+        totalTokens: 0
+      }
+    }
   },
   codexProxyState: {
     enabled: false,
     localBaseUrl: "",
     activeProviderId: "",
     failoverProviderIds: [],
-    accountModel: ""
+    accountModel: "",
+    api: {
+      enabled: false,
+      host: "",
+      port: 0,
+      apiKey: "",
+      apiKeyId: "",
+      apiKeys: [],
+      localBaseUrl: "",
+      lanBaseUrls: [],
+      currentKeyUsage: {
+        requestCount: 0,
+        totalTokens: 0
+      }
+    }
   },
   providers: [],
   rules: {
@@ -1847,14 +1881,42 @@ function updateState(nextState) {
     enabled: false,
     localBaseUrl: "",
     activeProviderId: "",
-    failoverProviderIds: []
+    failoverProviderIds: [],
+    api: {
+      enabled: false,
+      host: "",
+      port: 0,
+      apiKey: "",
+      apiKeyId: "",
+      apiKeys: [],
+      localBaseUrl: "",
+      lanBaseUrls: [],
+      currentKeyUsage: {
+        requestCount: 0,
+        totalTokens: 0
+      }
+    }
   }
   state.codexProxyState = nextState.codexProxyState || {
     enabled: false,
     localBaseUrl: "",
     activeProviderId: "",
     failoverProviderIds: [],
-    accountModel: ""
+    accountModel: "",
+    api: {
+      enabled: false,
+      host: "",
+      port: 0,
+      apiKey: "",
+      apiKeyId: "",
+      apiKeys: [],
+      localBaseUrl: "",
+      lanBaseUrls: [],
+      currentKeyUsage: {
+        requestCount: 0,
+        totalTokens: 0
+      }
+    }
   }
   state.providers = nextState.providers || []
   state.rules = nextState.rules || state.rules
@@ -3245,6 +3307,32 @@ async function activateClaudeProxyProvider(payload) {
   }
 }
 
+async function enableClaudeApi(payload) {
+  const success = await runAction(() => window.aiManager.enableClaudeApi(payload))
+
+  if (success) {
+    showSuccessMessage("Claude API 服务已开启。")
+  }
+}
+
+async function disableClaudeApi() {
+  const success = await runAction(() => window.aiManager.disableClaudeApi())
+
+  if (success) {
+    showSuccessMessage("Claude API 服务已关闭。")
+  }
+}
+
+async function regenerateClaudeApiKey() {
+  const success = await runAction(() =>
+    window.aiManager.regenerateClaudeApiKey()
+  )
+
+  if (success) {
+    showSuccessMessage("Claude API Key 已新增。")
+  }
+}
+
 async function disableCodexProxy() {
   const success = await runAction(() => window.aiManager.disableCodexProxy())
 
@@ -3299,6 +3387,32 @@ async function saveCodexProxyAccountModel(payload) {
 
   if (success) {
     showSuccessMessage("官方账号接管模型已保存。")
+  }
+}
+
+async function enableCodexApi(payload) {
+  const success = await runAction(() => window.aiManager.enableCodexApi(payload))
+
+  if (success) {
+    showSuccessMessage("Codex API 服务已开启。")
+  }
+}
+
+async function disableCodexApi() {
+  const success = await runAction(() => window.aiManager.disableCodexApi())
+
+  if (success) {
+    showSuccessMessage("Codex API 服务已关闭。")
+  }
+}
+
+async function regenerateCodexApiKey() {
+  const success = await runAction(() =>
+    window.aiManager.regenerateCodexApiKey()
+  )
+
+  if (success) {
+    showSuccessMessage("Codex API Key 已新增。")
   }
 }
 

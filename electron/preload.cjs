@@ -216,6 +216,11 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("claude-proxy:remove-provider", toPlainPayload(payload)),
   activateClaudeProxyProvider: payload =>
     ipcRenderer.invoke("claude-proxy:activate-provider", toPlainPayload(payload)),
+  enableClaudeApi: payload =>
+    ipcRenderer.invoke("claude-api:enable", toPlainPayload(payload)),
+  disableClaudeApi: () => ipcRenderer.invoke("claude-api:disable"),
+  regenerateClaudeApiKey: () =>
+    ipcRenderer.invoke("claude-api:regenerate-key"),
   enableCodexProxy: payload =>
     ipcRenderer.invoke("codex-proxy:enable", toPlainPayload(payload)),
   disableCodexProxy: () => ipcRenderer.invoke("codex-proxy:disable"),
@@ -230,6 +235,11 @@ contextBridge.exposeInMainWorld("aiManager", {
       "codex-proxy:save-account-model",
       toPlainPayload(payload)
     ),
+  enableCodexApi: payload =>
+    ipcRenderer.invoke("codex-api:enable", toPlainPayload(payload)),
+  disableCodexApi: () => ipcRenderer.invoke("codex-api:disable"),
+  regenerateCodexApiKey: () =>
+    ipcRenderer.invoke("codex-api:regenerate-key"),
   saveRuntimeModel: payload =>
     ipcRenderer.invoke("runtime-model:save", toPlainPayload(payload)),
   switchRuntime: payload =>

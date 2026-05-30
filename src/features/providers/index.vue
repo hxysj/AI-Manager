@@ -127,10 +127,14 @@
         :include-accounts="activeCli === 'codex'"
         :pending="pending"
         :providers="scopedProviders"
+        :api-state="activeProxyState.api"
         :proxy-state="activeProxyState"
         @account-model-save="
           emit('codex-proxy-account-model-save', $event)
         "
+        @api-enable="emitApiEvent('enable', $event)"
+        @api-disable="emitApiEvent('disable')"
+        @api-key-regenerate="emitApiEvent('key-regenerate')"
         @add-provider="
           payload => {
             showProxyAddAction = false
@@ -157,10 +161,14 @@
           :include-accounts="activeCli === 'codex'"
           :pending="pending"
           :providers="scopedProviders"
+          :api-state="activeProxyState.api"
           :proxy-state="activeProxyState"
           @account-model-save="
             emit('codex-proxy-account-model-save', $event)
           "
+          @api-enable="emitApiEvent('enable', $event)"
+          @api-disable="emitApiEvent('disable')"
+          @api-key-regenerate="emitApiEvent('key-regenerate')"
           @add-provider="
             payload => {
               showProxyAddAction = false
@@ -1200,6 +1208,14 @@
             placeholder="可选，例如：http://127.0.0.1:7890"
           />
         </label>
+        <label class="providers-view__login-field">
+          <span>默认模型</span>
+          <input
+            v-model.trim="editingCodexAccountModel"
+            type="text"
+            placeholder="例如 gpt-5"
+          />
+        </label>
         <div class="providers-view__login-actions">
           <button type="button" @click="closeCodexAccountProxy">取消</button>
           <button
@@ -1681,7 +1697,21 @@ const props = defineProps({
       enabled: false,
       localBaseUrl: "",
       activeProviderId: "",
-      failoverProviderIds: []
+      failoverProviderIds: [],
+      api: {
+        enabled: false,
+        host: "",
+        port: 0,
+        apiKey: "",
+        apiKeyId: "",
+        apiKeys: [],
+        localBaseUrl: "",
+        lanBaseUrls: [],
+        currentKeyUsage: {
+          requestCount: 0,
+          totalTokens: 0
+        }
+      }
     })
   },
   codexProxyState: {
@@ -1691,7 +1721,21 @@ const props = defineProps({
       localBaseUrl: "",
       activeProviderId: "",
       failoverProviderIds: [],
-      accountModel: ""
+      accountModel: "",
+      api: {
+        enabled: false,
+        host: "",
+        port: 0,
+        apiKey: "",
+        apiKeyId: "",
+        apiKeys: [],
+        localBaseUrl: "",
+        lanBaseUrls: [],
+        currentKeyUsage: {
+          requestCount: 0,
+          totalTokens: 0
+        }
+      }
     })
   },
   cliTargets: {
@@ -1734,6 +1778,9 @@ const emit = defineEmits([
   "claude-proxy-provider-activate",
   "claude-proxy-provider-add",
   "claude-proxy-provider-remove",
+  "claude-api-disable",
+  "claude-api-enable",
+  "claude-api-key-regenerate",
   "codex-auth-json-import",
   "codex-account-clear",
   "codex-account-enable",
@@ -1750,6 +1797,9 @@ const emit = defineEmits([
   "codex-proxy-provider-remove",
   "codex-proxy-provider-activate",
   "codex-proxy-account-model-save",
+  "codex-api-disable",
+  "codex-api-enable",
+  "codex-api-key-regenerate",
   "clear-runtime",
   "cancel-codex-official-login",
   "delete-provider",
@@ -1825,9 +1875,11 @@ const codexAuthDataDraft = ref("")
 const codexProxyDraft = ref("")
 const codexAuthUpdateAccountId = ref("")
 const codexAccountProxyDrafts = reactive({})
+const codexAccountModelDrafts = reactive({})
 const codexAccountRefreshingMap = reactive({})
 const editingCodexAccountId = ref("")
 const editingCodexProxy = ref("")
+const editingCodexAccountModel = ref("")
 const codexAccountDetail = ref(null)
 const codexAccountDetailTarget = ref(null)
 const codexAccountDetailLoading = ref(false)
@@ -2344,6 +2396,11 @@ function openCodexAccountProxy(account) {
   editingCodexAccountId.value = account.id
   editingCodexProxy.value =
     codexAccountProxyDrafts[account.id] ?? account.proxy ?? ""
+  editingCodexAccountModel.value =
+    codexAccountModelDrafts[account.id] ??
+    account.model ??
+    account.defaultModel ??
+    ""
   showCodexProxyModal.value = true
 }
 
@@ -2351,13 +2408,17 @@ function closeCodexAccountProxy() {
   showCodexProxyModal.value = false
   editingCodexAccountId.value = ""
   editingCodexProxy.value = ""
+  editingCodexAccountModel.value = ""
 }
 
 function saveCodexAccountProxy() {
   codexAccountProxyDrafts[editingCodexAccountId.value] = editingCodexProxy.value
+  codexAccountModelDrafts[editingCodexAccountId.value] =
+    editingCodexAccountModel.value
   emit("codex-account-proxy-save", {
     accountId: editingCodexAccountId.value,
-    proxy: editingCodexProxy.value
+    proxy: editingCodexProxy.value,
+    model: editingCodexAccountModel.value
   })
   closeCodexAccountProxy()
 }
@@ -2749,6 +2810,10 @@ function emitProxyEvent(action, payload) {
   emit(`${activeCli.value}-proxy-${action}`, payload)
 }
 
+function emitApiEvent(action, payload) {
+  emit(`${activeCli.value}-api-${action}`, payload)
+}
+
 function toggleProxySwitch(event) {
   if (event.target.checked) {
     if (!activeProxyProviderIds.value.length) {
@@ -2884,6 +2949,8 @@ watch(
   accounts => {
     accounts.forEach(account => {
       codexAccountProxyDrafts[account.id] = account.proxy || ""
+      codexAccountModelDrafts[account.id] =
+        account.model || account.defaultModel || ""
     })
   },
   { deep: true, immediate: true }

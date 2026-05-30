@@ -1,5 +1,7 @@
 const fs = require("node:fs/promises")
 const http = require("node:http")
+const crypto = require("node:crypto")
+const os = require("node:os")
 const path = require("node:path")
 const { EventEmitter } = require("node:events")
 const { fetchWithProxy } = require("./codex-account-service.cjs")
@@ -11,19 +13,31 @@ const proxyCliDefaults = {
   claude: {
     name: "Claude",
     port: 15722,
+    api: {
+      port: 15723,
+      protocol: "openai-chat-to-anthropic"
+    },
     storageKeys: {
       config: "claudeProxyConfig",
       liveBackup: "claudeProxyLiveBackup",
-      logs: "claudeProxyRequestLogs"
+      logs: "claudeProxyRequestLogs",
+      apiConfig: "claudeApiConfig",
+      apiRecords: "claudeApiRequestRecords"
     }
   },
   codex: {
     name: "Codex",
     port: 15721,
+    api: {
+      port: 15724,
+      protocol: "openai-chat"
+    },
     storageKeys: {
       config: "codexProxyConfig",
       liveBackup: "codexProxyLiveBackup",
-      logs: "codexProxyRequestLogs"
+      logs: "codexProxyRequestLogs",
+      apiConfig: "codexApiConfig",
+      apiRecords: "codexApiRequestRecords"
     }
   }
 }
@@ -40,11 +54,57 @@ const baseProxyConfig = {
   updatedAt: 0
 }
 
+const baseApiConfig = {
+  enabled: false,
+  host: "127.0.0.1",
+  port: 15724,
+  apiKey: "",
+  apiKeyId: "",
+  apiKeys: [],
+  protocol: "openai-chat",
+  updatedAt: 0
+}
+
 function getDefaultProxyConfig(cli) {
   return {
     ...baseProxyConfig,
     port: proxyCliDefaults[cli]?.port || proxyCliDefaults.codex.port
   }
+}
+
+function getDefaultApiConfig(cli) {
+  const apiDefaults = proxyCliDefaults[cli]?.api || proxyCliDefaults.codex.api
+
+  return {
+    ...baseApiConfig,
+    port: apiDefaults.port,
+    protocol: apiDefaults.protocol
+  }
+}
+
+function createLocalApiKey(cli) {
+  return `mt-${cli}-${crypto.randomBytes(24).toString("hex")}`
+}
+
+function createApiKeyRecord(cli, input = {}) {
+  const now = Date.now()
+
+  return {
+    id: String(input.id || `api-key-${crypto.randomUUID()}`).trim(),
+    cli,
+    key: String(input.key || createLocalApiKey(cli)).trim(),
+    enabled: input.enabled === undefined ? true : Boolean(input.enabled),
+    createdAt: Number(input.createdAt || now),
+    updatedAt: Number(input.updatedAt || now)
+  }
+}
+
+function createApiKeyFingerprint(apiKey) {
+  return crypto
+    .createHash("sha256")
+    .update(String(apiKey || ""))
+    .digest("hex")
+    .slice(0, 16)
 }
 
 function normalizeProxyConfig(input = {}, defaults = getDefaultProxyConfig("codex")) {
@@ -67,6 +127,52 @@ function normalizeProxyConfig(input = {}, defaults = getDefaultProxyConfig("code
     requestTimeoutMs: Number(
       input.requestTimeoutMs || defaults.requestTimeoutMs
     ),
+    updatedAt: Number(input.updatedAt || 0)
+  }
+}
+
+function normalizeApiConfig(
+  input = {},
+  defaults = getDefaultApiConfig("codex"),
+  cli = "codex"
+) {
+  const host = String(input.host || defaults.host).trim()
+  const port = Number(input.port || defaults.port)
+  const legacyApiKey = String(input.apiKey || "").trim()
+  const apiKeys = Array.isArray(input.apiKeys)
+    ? input.apiKeys
+        .map(item => createApiKeyRecord(cli, item))
+        .filter(item => item.key && item.cli === cli)
+    : []
+
+  if (legacyApiKey && !apiKeys.find(item => item.key === legacyApiKey)) {
+    apiKeys.unshift(
+      createApiKeyRecord(cli, {
+        id: input.apiKeyId || undefined,
+        key: legacyApiKey,
+        createdAt: input.updatedAt || 0,
+        updatedAt: input.updatedAt || 0
+      })
+    )
+  }
+
+  if (!apiKeys.length) {
+    apiKeys.push(createApiKeyRecord(cli))
+  }
+
+  const activeApiKey =
+    apiKeys.find(item => item.id === input.apiKeyId) ||
+    apiKeys.find(item => item.enabled) ||
+    apiKeys[0]
+
+  return {
+    enabled: Boolean(input.enabled),
+    host,
+    port: Number.isFinite(port) ? port : defaults.port,
+    apiKey: activeApiKey.key,
+    apiKeyId: activeApiKey.id,
+    apiKeys,
+    protocol: String(input.protocol || defaults.protocol).trim(),
     updatedAt: Number(input.updatedAt || 0)
   }
 }
@@ -97,6 +203,23 @@ function buildAnthropicLocalBaseUrl(config) {
   const host = formatHostForUrl(normalizeHostForClient(config.host))
 
   return `http://${host}:${config.port}`
+}
+
+function buildApiLocalBaseUrl(config) {
+  const host = formatHostForUrl(normalizeHostForClient(config.host))
+
+  return `http://${host}:${config.port}/v1`
+}
+
+function buildApiLanBaseUrls(config) {
+  if (!["0.0.0.0", "::"].includes(config.host)) {
+    return []
+  }
+
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter(item => item && item.family === "IPv4" && !item.internal)
+    .map(item => `http://${item.address}:${config.port}/v1`)
 }
 
 function toAccountTargetId(accountId) {
@@ -302,6 +425,217 @@ function createJsonResponse(response, statusCode, payload) {
   response.end(`${JSON.stringify(payload)}\n`)
 }
 
+function getAuthorizationToken(request) {
+  const authorization = String(request.headers.authorization || "").trim()
+
+  if (authorization.toLowerCase().startsWith("bearer ")) {
+    return authorization.slice("bearer ".length).trim()
+  }
+
+  return String(request.headers["x-api-key"] || "").trim()
+}
+
+function getRequestClientIp(request) {
+  const forwardedFor = String(request.headers["x-forwarded-for"] || "")
+    .split(",")[0]
+    .trim()
+
+  return (
+    forwardedFor ||
+    request.socket?.remoteAddress ||
+    request.connection?.remoteAddress ||
+    ""
+  )
+}
+
+function normalizeModelName(value) {
+  return String(value || "").trim().toLowerCase()
+}
+
+function getOpenAiUsage(payload = {}) {
+  const usage = payload.usage || {}
+  const inputTokens = Number(
+    usage.prompt_tokens || usage.input_tokens || 0
+  )
+  const outputTokens = Number(
+    usage.completion_tokens || usage.output_tokens || 0
+  )
+  const cacheReadTokens = Number(
+    usage.prompt_tokens_details?.cached_tokens ||
+      usage.cache_read_input_tokens ||
+      usage.cached_input_tokens ||
+      0
+  )
+  const cacheCreationTokens = Number(
+    usage.cache_creation_input_tokens || 0
+  )
+
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    totalTokens: Number(usage.total_tokens || inputTokens + outputTokens)
+  }
+}
+
+function normalizeOpenAiPayloadModel(body, model) {
+  const payload = parseJsonBody(body)
+
+  if (model) {
+    payload.model = model
+  }
+
+  return Buffer.from(`${JSON.stringify(payload)}\n`)
+}
+
+function getAnthropicUsage(payload = {}) {
+  const usage = payload.usage || {}
+  const inputTokens = Number(usage.input_tokens || 0)
+  const outputTokens = Number(usage.output_tokens || 0)
+  const cacheReadTokens = Number(usage.cache_read_input_tokens || 0)
+  const cacheCreationTokens = Number(
+    usage.cache_creation_input_tokens ||
+      usage.cache_creation?.ephemeral_1h_input_tokens ||
+      usage.cache_creation?.ephemeral_5m_input_tokens ||
+      0
+  )
+
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    totalTokens:
+      inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens
+  }
+}
+
+function createEmptyUsage() {
+  return {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    totalTokens: 0
+  }
+}
+
+function pickRequestMessages(input = {}) {
+  if (Array.isArray(input.messages)) {
+    return input.messages.map(message => ({
+      role: String(message.role || "").trim(),
+      content: message.content
+    }))
+  }
+
+  if (input.input !== undefined) {
+    return [
+      {
+        role: "user",
+        content: input.input
+      }
+    ]
+  }
+
+  return []
+}
+
+function parseJsonBody(body) {
+  return JSON.parse(body.toString("utf8"))
+}
+
+function createOpenAiChatResponse(payload, model) {
+  const content = Array.isArray(payload.content)
+    ? payload.content
+        .filter(item => item.type === "text")
+        .map(item => item.text || "")
+        .join("")
+    : String(payload.content || "")
+
+  return {
+    id: `chatcmpl-${crypto.randomUUID()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content
+        },
+        finish_reason: payload.stop_reason || "stop"
+      }
+    ],
+    usage: {
+      prompt_tokens: payload.usage?.input_tokens || 0,
+      completion_tokens: payload.usage?.output_tokens || 0,
+      total_tokens:
+        (payload.usage?.input_tokens || 0) + (payload.usage?.output_tokens || 0)
+    }
+  }
+}
+
+function normalizeOpenAiContent(content) {
+  if (Array.isArray(content)) {
+    return content
+      .filter(item => item.type === "text")
+      .map(item => ({
+        type: "text",
+        text: String(item.text || "")
+      }))
+  }
+
+  return String(content || "")
+}
+
+function convertOpenAiChatToAnthropic(input, model) {
+  if (input.stream) {
+    throw new Error("Claude API 服务暂不支持流式请求")
+  }
+
+  if (!model) {
+    throw new Error("请求缺少模型名称")
+  }
+
+  const messages = []
+  const system = []
+
+  for (const message of input.messages || []) {
+    const role = String(message.role || "").trim()
+    const content = normalizeOpenAiContent(message.content)
+
+    if (role === "system") {
+      if (Array.isArray(content)) {
+        system.push(...content.map(item => item.text).filter(Boolean))
+      } else if (content) {
+        system.push(content)
+      }
+      continue
+    }
+
+    if (role === "assistant" || role === "user") {
+      messages.push({
+        role,
+        content
+      })
+    }
+  }
+
+  return {
+    model,
+    messages,
+    max_tokens: Number(input.max_tokens || 4096),
+    ...(system.length ? { system: system.join("\n") } : {}),
+    ...(input.temperature === undefined
+      ? {}
+      : { temperature: Number(input.temperature) }),
+    ...(input.top_p === undefined ? {} : { top_p: Number(input.top_p) }),
+    ...(input.stop === undefined ? {} : { stop_sequences: input.stop })
+  }
+}
+
 function normalizeEndpoint(requestUrl) {
   const url = new URL(requestUrl, "http://127.0.0.1")
   const pathname = url.pathname.replace(/\/+/g, "/")
@@ -403,6 +737,7 @@ class CodexProxyService extends EventEmitter {
     this.storageKeys =
       options.storageKeys || proxyCliDefaults[this.cli]?.storageKeys || proxyCliDefaults.codex.storageKeys
     this.defaultConfig = getDefaultProxyConfig(this.cli)
+    this.defaultApiConfig = getDefaultApiConfig(this.cli)
     this.storage = storage
     this.runtimeProviderService = runtimeProviderService
     this.codexAccountService = codexAccountService
@@ -411,6 +746,9 @@ class CodexProxyService extends EventEmitter {
     this.liveBackup = null
     this.logs = []
     this.server = null
+    this.apiConfig = normalizeApiConfig({}, this.defaultApiConfig, this.cli)
+    this.apiRecords = []
+    this.apiServer = null
   }
 
   async init() {
@@ -420,9 +758,18 @@ class CodexProxyService extends EventEmitter {
     )
     this.liveBackup = await this.storage.read(this.storageKeys.liveBackup, null)
     this.logs = await this.storage.read(this.storageKeys.logs, [])
+    this.apiConfig = normalizeApiConfig(
+      await this.storage.read(this.storageKeys.apiConfig, this.defaultApiConfig),
+      this.defaultApiConfig,
+      this.cli
+    )
+    this.apiRecords = await this.storage.read(this.storageKeys.apiRecords, [])
 
     if (this.config.enabled) {
       await this.startServer()
+    }
+    if (this.apiConfig.enabled) {
+      await this.startApiServer()
     }
   }
 
@@ -433,6 +780,18 @@ class CodexProxyService extends EventEmitter {
         this.cli === "claude"
           ? buildAnthropicLocalBaseUrl(this.config)
           : buildLocalBaseUrl(this.config),
+      api: {
+        ...this.apiConfig,
+        apiKeys: this.apiConfig.apiKeys.map(item => ({
+          ...item,
+          usage: this.getApiKeyUsage(item.id)
+        })),
+        apiKeyCount: this.apiConfig.apiKeys.length,
+        usage: this.getApiUsageSummary(),
+        currentKeyUsage: this.getCurrentApiKeyUsage(),
+        localBaseUrl: buildApiLocalBaseUrl(this.apiConfig),
+        lanBaseUrls: buildApiLanBaseUrls(this.apiConfig)
+      },
       hasLiveBackup: Boolean(this.liveBackup),
       logs: this.logs
     }
@@ -490,6 +849,100 @@ class CodexProxyService extends EventEmitter {
       this.server.close(error => (error ? reject(error) : resolve()))
     })
     this.server = null
+  }
+
+  async startApiServer() {
+    if (this.apiServer) {
+      return
+    }
+
+    this.apiServer = http.createServer((request, response) => {
+      this.handleApiRequest(request, response).catch(error => {
+        createJsonResponse(response, 502, {
+          error: {
+            message: error.message
+          }
+        })
+      })
+    })
+
+    await new Promise((resolve, reject) => {
+      this.apiServer.once("error", reject)
+      this.apiServer.listen(this.apiConfig.port, this.apiConfig.host, () => {
+        this.apiServer.off("error", reject)
+        resolve()
+      })
+    })
+  }
+
+  async stopApiServer() {
+    if (!this.apiServer) {
+      return
+    }
+
+    await new Promise((resolve, reject) => {
+      this.apiServer.close(error => (error ? reject(error) : resolve()))
+    })
+    this.apiServer = null
+  }
+
+  async persistApiConfig() {
+    await this.storage.writeNow(this.storageKeys.apiConfig, this.apiConfig)
+  }
+
+  async persistApiRecords() {
+    await this.storage.writeNow(
+      this.storageKeys.apiRecords,
+      this.apiRecords.slice(0, 2000)
+    )
+  }
+
+  getApiUsageSummary() {
+    return this.apiRecords.reduce(
+      (summary, record) => {
+        if (!record.ok) {
+          return summary
+        }
+
+        summary.requestCount += 1
+        summary.inputTokens += Number(record.inputTokens || 0)
+        summary.outputTokens += Number(record.outputTokens || 0)
+        summary.cacheReadTokens += Number(record.cacheReadTokens || 0)
+        summary.cacheCreationTokens += Number(record.cacheCreationTokens || 0)
+        summary.totalTokens += Number(record.totalTokens || 0)
+        return summary
+      },
+      {
+        requestCount: 0,
+        ...createEmptyUsage()
+      }
+    )
+  }
+
+  getApiKeyUsage(apiKeyId) {
+    return this.apiRecords.reduce(
+      (summary, record) => {
+        if (!record.ok || record.apiKeyId !== apiKeyId) {
+          return summary
+        }
+
+        summary.requestCount += 1
+        summary.inputTokens += Number(record.inputTokens || 0)
+        summary.outputTokens += Number(record.outputTokens || 0)
+        summary.cacheReadTokens += Number(record.cacheReadTokens || 0)
+        summary.cacheCreationTokens += Number(record.cacheCreationTokens || 0)
+        summary.totalTokens += Number(record.totalTokens || 0)
+        return summary
+      },
+      {
+        requestCount: 0,
+        ...createEmptyUsage()
+      }
+    )
+  }
+
+  getCurrentApiKeyUsage() {
+    return this.getApiKeyUsage(this.apiConfig.apiKeyId)
   }
 
   getCodexPaths(cliTarget) {
@@ -643,7 +1096,12 @@ class CodexProxyService extends EventEmitter {
         baseUrl: codexOfficialBaseUrl,
         accountId: account.id,
         proxy: account.proxy || "",
-        model: this.config.accountModel
+        model:
+          account.model ||
+          account.defaultModel ||
+          this.config.accountModel ||
+          "",
+        models: this.getAccountModels(account)
       }
     }
 
@@ -656,8 +1114,45 @@ class CodexProxyService extends EventEmitter {
       baseUrl: provider.baseUrl,
       proxy: provider.proxy || "",
       provider,
-      model: provider.runtimeConfig?.mainModel || ""
+      model: provider.runtimeConfig?.mainModel || "",
+      models: this.getProviderModels(provider)
     }
+  }
+
+  getProviderModels(provider) {
+    const runtimeConfig = provider.runtimeConfig || {}
+
+    return [
+      runtimeConfig.mainModel,
+      runtimeConfig.haikuModel,
+      runtimeConfig.sonnetModel,
+      runtimeConfig.opusModel,
+      provider.model
+    ]
+      .map(item => String(item || "").trim())
+      .filter((item, index, models) => item && models.indexOf(item) === index)
+  }
+
+  getAccountModels(account) {
+    return [
+      account.model,
+      account.defaultModel,
+      this.config.accountModel
+    ]
+      .map(item => String(item || "").trim())
+      .filter((item, index, models) => item && models.indexOf(item) === index)
+  }
+
+  targetSupportsModel(targetId, model) {
+    const normalizedModel = normalizeModelName(model)
+
+    if (!normalizedModel) {
+      return false
+    }
+
+    return this.getTarget(targetId).models.some(
+      item => normalizeModelName(item) === normalizedModel
+    )
   }
 
   async getTargetAuth(targetId) {
@@ -938,6 +1433,25 @@ class CodexProxyService extends EventEmitter {
     })
   }
 
+  getApiProviderIds(requestModel) {
+    const providerIds = this.getForwardProviderIds()
+    const matchedProviderIds = providerIds.filter(providerId =>
+      this.targetSupportsModel(providerId, requestModel)
+    )
+
+    if (matchedProviderIds.length) {
+      return matchedProviderIds
+    }
+
+    return providerIds
+      .map(providerId => ({
+        providerId,
+        sort: crypto.randomInt(0, 1000000)
+      }))
+      .sort((left, right) => left.sort - right.sort)
+      .map(item => item.providerId)
+  }
+
   async readBody(request) {
     const chunks = []
 
@@ -974,7 +1488,7 @@ class CodexProxyService extends EventEmitter {
     return headers
   }
 
-  async forwardRequest(request, route, body, targetId) {
+  async forwardRequest(request, route, body, targetId, modelOverride = "") {
     const target = this.getTarget(targetId)
     const upstreamUrl =
       this.cli === "claude"
@@ -982,7 +1496,9 @@ class CodexProxyService extends EventEmitter {
         : buildUpstreamUrl(target.baseUrl, route.endpoint, route.search)
     const method = String(request.method || "GET").toUpperCase()
     const model =
-      target.model || readTomlRootValue(this.liveBackup?.config, "model")
+      modelOverride ||
+      target.model ||
+      readTomlRootValue(this.liveBackup?.config, "model")
     const options = {
       method,
       headers: await this.buildForwardHeaders(request, targetId)
@@ -990,10 +1506,7 @@ class CodexProxyService extends EventEmitter {
     let requestBody = body
 
     if (method !== "GET" && method !== "HEAD" && model) {
-      const payload = JSON.parse(body.toString("utf8"))
-
-      payload.model = model
-      requestBody = Buffer.from(`${JSON.stringify(payload)}\n`)
+      requestBody = normalizeOpenAiPayloadModel(body, model)
     }
 
     if (method !== "GET" && method !== "HEAD") {
@@ -1007,6 +1520,7 @@ class CodexProxyService extends EventEmitter {
       response,
       target,
       upstreamUrl,
+      model,
       latencyMs: Date.now() - startedAt
     }
   }
@@ -1022,6 +1536,133 @@ class CodexProxyService extends EventEmitter {
     this.logs = this.logs.slice(0, 500)
     this.persistLogs().catch(() => {})
     this.emitChanged()
+  }
+
+  appendApiRecord(input) {
+    this.apiRecords.unshift({
+      id: `api-record-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      cli: this.cli,
+      createdAt: Date.now(),
+      ...input
+    })
+    this.apiRecords = this.apiRecords.slice(0, 2000)
+    this.persistApiRecords().catch(() => {})
+  }
+
+  getApiKeyRecord(token) {
+    const apiKey = String(token || "").trim()
+
+    return this.apiConfig.apiKeys.find(item => {
+      return item.cli === this.cli && item.enabled && item.key === apiKey
+    })
+  }
+
+  async forwardClaudeApiRequest(request, input, targetId, modelOverride = "") {
+    const target = this.getTarget(targetId)
+    const model =
+      modelOverride || target.model || String(input.model || "").trim()
+    const payload = convertOpenAiChatToAnthropic(input, model)
+    const upstreamUrl = buildAnthropicUpstreamUrl(
+      target.baseUrl,
+      "/messages",
+      ""
+    )
+    const options = {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "anthropic-version": request.headers["anthropic-version"] || "2023-06-01",
+        "x-api-key": this.getProviderApiKey(targetId)
+      },
+      body: Buffer.from(`${JSON.stringify(payload)}\n`)
+    }
+    const startedAt = Date.now()
+    const response = await fetchWithProxy(upstreamUrl, options, target.proxy)
+
+    return {
+      response,
+      target,
+      upstreamUrl,
+      model,
+      latencyMs: Date.now() - startedAt
+    }
+  }
+
+  async forwardCodexApiRequest(request, body, targetId, modelOverride = "") {
+    const route = {
+      endpoint: "/chat/completions",
+      search: ""
+    }
+    const input = parseJsonBody(body)
+
+    if (input.stream) {
+      throw new Error("Codex API 服务暂不支持流式请求")
+    }
+
+    return this.forwardRequest(request, route, body, targetId, modelOverride)
+  }
+
+  async forwardApiRequest(request, body, input, targetId, modelOverride = "") {
+    if (this.cli === "claude") {
+      return this.forwardClaudeApiRequest(request, input, targetId, modelOverride)
+    }
+
+    if (this.cli === "codex") {
+      return this.forwardCodexApiRequest(request, body, targetId, modelOverride)
+    }
+
+    throw new Error(`${this.cliName} 暂不支持 API 服务`)
+  }
+
+  async writeApiResponse(response, result) {
+    if (this.cli === "claude") {
+      const text = await result.response.text()
+      if (!result.response.ok) {
+        const error = new Error(
+          `上游返回非 2xx 状态：${result.response.status} ${text}`
+        )
+
+        error.status = result.response.status
+        error.upstreamUrl = result.upstreamUrl
+        error.upstreamResponseText = text
+        throw error
+      }
+
+      const upstreamPayload = JSON.parse(text)
+      const responsePayload = createOpenAiChatResponse(
+        upstreamPayload,
+        result.model
+      )
+
+      createJsonResponse(response, result.response.status, responsePayload)
+      return {
+        responseSize: Buffer.byteLength(JSON.stringify(responsePayload)),
+        usage: getAnthropicUsage(upstreamPayload)
+      }
+    }
+
+    if (!result.response.ok) {
+      const errorText = await result.response.text()
+      const error = new Error(
+        `上游返回非 2xx 状态：${result.response.status} ${errorText}`
+      )
+
+      error.status = result.response.status
+      error.upstreamUrl = result.upstreamUrl
+      error.upstreamResponseText = errorText
+      throw error
+    }
+
+    const text = await result.response.text()
+    const responsePayload = JSON.parse(text)
+    const headers = Object.fromEntries(result.response.headers.entries())
+
+    response.writeHead(result.response.status, headers)
+    response.end(`${text}\n`)
+    return {
+      responseSize: Buffer.byteLength(text),
+      usage: getOpenAiUsage(responsePayload)
+    }
   }
 
   async handleRequest(request, response) {
@@ -1138,8 +1779,233 @@ class CodexProxyService extends EventEmitter {
     throw lastError || new Error(`没有可用的 ${this.cliName} 代理 Provider`)
   }
 
+  async handleApiRequest(request, response) {
+    const url = new URL(request.url, "http://127.0.0.1")
+    const pathname = url.pathname.replace(/\/+/g, "/")
+    const requestUrl = url.pathname + url.search
+    const requestHost = String(request.headers.host || "").trim()
+    const baseUrl = requestHost
+      ? `http://${requestHost}/v1`
+      : buildApiLocalBaseUrl(this.apiConfig)
+    const clientIp = getRequestClientIp(request)
+    const token = getAuthorizationToken(request)
+    const apiKeyRecord = this.getApiKeyRecord(token)
+
+    const endpoint = "/v1/chat/completions"
+
+    if (pathname !== endpoint && pathname !== "/chat/completions") {
+      createJsonResponse(response, 404, {
+        error: {
+          message: `${this.cliName} API 服务不支持该请求路径`
+        }
+      })
+      return
+    }
+
+    if (String(request.method || "").toUpperCase() !== "POST") {
+      createJsonResponse(response, 405, {
+        error: {
+          message: `${this.cliName} API 服务仅支持 POST 请求`
+        }
+      })
+      return
+    }
+
+    if (!apiKeyRecord) {
+      createJsonResponse(response, 401, {
+        error: {
+          message: "API Key 无效"
+        }
+      })
+      return
+    }
+
+    if (!this.config.enabled) {
+      createJsonResponse(response, 503, {
+        error: {
+          message: `${this.cliName} 接管池未开启`
+        }
+      })
+      return
+    }
+
+    const body = await this.readBody(request)
+    const input = parseJsonBody(body)
+    const requestModel = String(input.model || "").trim()
+    const requestMessages = pickRequestMessages(input)
+    const providerIds = this.getApiProviderIds(requestModel)
+    let lastError = null
+
+    for (const providerId of providerIds) {
+      const target = this.getTarget(providerId)
+      const matchedModel = requestModel && this.targetSupportsModel(
+        providerId,
+        requestModel
+      )
+      const modelOverride = matchedModel ? requestModel : ""
+
+      try {
+        const result = await this.forwardApiRequest(
+          request,
+          body,
+          input,
+          providerId,
+          modelOverride
+        )
+        const output = await this.writeApiResponse(response, result)
+        if (this.config.activeProviderId !== providerId) {
+          this.config = normalizeProxyConfig({
+            ...this.config,
+            activeProviderId: providerId,
+            updatedAt: Date.now()
+          }, this.defaultConfig)
+          await this.persistConfig()
+          this.emitChanged()
+        }
+        this.appendLog({
+          providerId,
+          providerName: result.target.name,
+          targetType: "api",
+          method: request.method,
+          requestUrl: request.url,
+          upstreamUrl: result.upstreamUrl,
+          endpoint,
+          statusCode: result.response.status,
+          ok: true,
+          latencyMs: result.latencyMs,
+          responseSize: output.responseSize,
+          errorMessage: ""
+        })
+        this.appendApiRecord({
+          apiKeyId: apiKeyRecord.id,
+          apiKeyFingerprint: createApiKeyFingerprint(apiKeyRecord.key),
+          clientIp,
+          method: request.method,
+          requestUrl,
+          requestHost,
+          baseUrl,
+          requestModel,
+          finalModel: result.model || "",
+          matchedModel: Boolean(matchedModel),
+          providerId,
+          providerName: result.target.name,
+          targetType: result.target.type,
+          upstreamUrl: result.upstreamUrl,
+          statusCode: result.response.status,
+          ok: true,
+          latencyMs: result.latencyMs,
+          responseSize: output.responseSize,
+          requestMessages,
+          usage: output.usage,
+          inputTokens: output.usage.inputTokens,
+          outputTokens: output.usage.outputTokens,
+          cacheReadTokens: output.usage.cacheReadTokens,
+          cacheCreationTokens: output.usage.cacheCreationTokens,
+          totalTokens: output.usage.totalTokens,
+          errorMessage: ""
+        })
+        return
+      } catch (error) {
+        lastError = error
+        this.appendLog({
+          providerId,
+          providerName: target.name,
+          targetType: "api",
+          method: request.method,
+          requestUrl: request.url,
+          upstreamUrl: error.upstreamUrl || "",
+          endpoint,
+          statusCode: error.status || 0,
+          ok: false,
+          latencyMs: 0,
+          errorMessage: error.message,
+          upstreamResponseText: error.upstreamResponseText || ""
+        })
+        this.appendApiRecord({
+          apiKeyId: apiKeyRecord.id,
+          apiKeyFingerprint: createApiKeyFingerprint(apiKeyRecord.key),
+          clientIp,
+          method: request.method,
+          requestUrl,
+          requestHost,
+          baseUrl,
+          requestModel,
+          finalModel: modelOverride || target.model || "",
+          matchedModel: Boolean(matchedModel),
+          providerId,
+          providerName: target.name,
+          targetType: target.type,
+          upstreamUrl: error.upstreamUrl || "",
+          statusCode: error.status || 0,
+          ok: false,
+          latencyMs: 0,
+          responseSize: 0,
+          requestMessages,
+          usage: createEmptyUsage(),
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheCreationTokens: 0,
+          totalTokens: 0,
+          errorMessage: error.message,
+          upstreamResponseText: error.upstreamResponseText || ""
+        })
+      }
+    }
+
+    throw lastError || new Error(`没有可用的 ${this.cliName} API Provider`)
+  }
+
+  async enableApi(input = {}, cliTarget) {
+    if (!this.config.enabled) {
+      throw new Error(`${this.cliName} 接管池未开启`)
+    }
+
+    this.apiConfig = normalizeApiConfig({
+      ...this.apiConfig,
+      ...input,
+      enabled: true,
+      updatedAt: Date.now()
+    }, this.defaultApiConfig, this.cli)
+    await this.startApiServer()
+    await this.persistApiConfig()
+    this.emitChanged()
+    return this.getState()
+  }
+
+  async disableApi() {
+    this.apiConfig = normalizeApiConfig({
+      ...this.apiConfig,
+      enabled: false,
+      updatedAt: Date.now()
+    }, this.defaultApiConfig, this.cli)
+    await this.stopApiServer()
+    await this.persistApiConfig()
+    this.emitChanged()
+    return this.getState()
+  }
+
+  async regenerateApiKey() {
+    const nextApiKey = createApiKeyRecord(this.cli)
+
+    this.apiConfig = normalizeApiConfig({
+      ...this.apiConfig,
+      apiKey: nextApiKey.key,
+      apiKeyId: nextApiKey.id,
+      apiKeys: [
+        nextApiKey,
+        ...this.apiConfig.apiKeys
+      ],
+      updatedAt: Date.now()
+    }, this.defaultApiConfig, this.cli)
+    await this.persistApiConfig()
+    this.emitChanged()
+    return this.getState()
+  }
+
   async dispose() {
     await this.stopServer()
+    await this.stopApiServer()
   }
 }
 

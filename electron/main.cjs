@@ -2729,6 +2729,18 @@ function registerIpc() {
     return managerService.activateClaudeProxyProvider(payload)
   })
 
+  registerLoggedIpc("claude-api:enable", async (_, payload) => {
+    return managerService.enableClaudeApi(payload)
+  })
+
+  registerLoggedIpc("claude-api:disable", async () => {
+    return managerService.disableClaudeApi()
+  })
+
+  registerLoggedIpc("claude-api:regenerate-key", async () => {
+    return managerService.regenerateClaudeApiKey()
+  })
+
   registerLoggedIpc("codex-proxy:enable", async (_, payload) => {
     return managerService.enableCodexProxy(payload)
   })
@@ -2751,6 +2763,18 @@ function registerIpc() {
 
   registerLoggedIpc("codex-proxy:save-account-model", async (_, payload) => {
     return managerService.saveCodexProxyAccountModel(payload)
+  })
+
+  registerLoggedIpc("codex-api:enable", async (_, payload) => {
+    return managerService.enableCodexApi(payload)
+  })
+
+  registerLoggedIpc("codex-api:disable", async () => {
+    return managerService.disableCodexApi()
+  })
+
+  registerLoggedIpc("codex-api:regenerate-key", async () => {
+    return managerService.regenerateCodexApiKey()
   })
 
   registerLoggedIpc("runtime-model:save", async (_, payload) => {
