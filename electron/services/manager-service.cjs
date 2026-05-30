@@ -1366,6 +1366,7 @@ function createCodexProxyConfigHash(config) {
       port: config.port || 0,
       activeProviderId: config.activeProviderId || "",
       failoverProviderIds: config.failoverProviderIds || [],
+      accountModel: config.accountModel || "",
       retryCount: config.retryCount || 0,
       streamTimeoutMs: config.streamTimeoutMs || 0,
       requestTimeoutMs: config.requestTimeoutMs || 0
@@ -1388,7 +1389,8 @@ function createCodexProxyTargetConfigHash(codexProxyService, targetId) {
       ? sha256(
           JSON.stringify({
             accountHash: createCodexAccountConfigHash(account),
-            proxy: account.proxy || ""
+            proxy: account.proxy || "",
+            model: codexProxyService.getState().accountModel || ""
           })
         )
       : ""
@@ -1410,6 +1412,7 @@ function createCodexProxyTargetConfigHash(codexProxyService, targetId) {
       disabled: provider.enabled === false,
       baseUrl: provider.baseUrl || "",
       proxy: provider.proxy || "",
+      model: provider.runtimeConfig?.mainModel || "",
       apiKey:
         codexProxyService.runtimeProviderService.keyManager.getProviderKey(
           provider.id
@@ -3307,6 +3310,21 @@ class ManagerService extends EventEmitter {
     return this.state
   }
 
+  async updateCodexProxyAccountModel(input) {
+    await this.codexProxyService.updateAccountModel(
+      input,
+      this.state.cliTargets.find((item) => item.id === "codex")
+    )
+    this.state = {
+      ...this.state,
+      ...this.getRuntimeStateWithProxy(),
+      codexProxyState: this.codexProxyService.getState(),
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return this.state
+  }
+
   async enableClaudeProxy(input) {
     return this.enableProxy("claude", input)
   }
@@ -3345,6 +3363,10 @@ class ManagerService extends EventEmitter {
 
   async activateCodexProxyProvider(input) {
     return this.activateProxyProvider("codex", input)
+  }
+
+  async saveCodexProxyAccountModel(input) {
+    return this.updateCodexProxyAccountModel(input)
   }
 
   async saveRuntimeModel(input) {

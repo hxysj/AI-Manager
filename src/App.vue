@@ -391,6 +391,7 @@
           @codex-proxy-provider-add="addCodexProxyProvider"
           @codex-proxy-provider-remove="removeCodexProxyProvider"
           @codex-proxy-provider-activate="activateCodexProxyProvider"
+          @codex-proxy-account-model-save="saveCodexProxyAccountModel"
           @cancel-codex-official-login="cancelCodexOfficialLogin"
           @delete-provider="deleteProvider"
           @save-model="saveRuntimeModel"
@@ -1246,7 +1247,8 @@ const state = reactive({
     enabled: false,
     localBaseUrl: "",
     activeProviderId: "",
-    failoverProviderIds: []
+    failoverProviderIds: [],
+    accountModel: ""
   },
   providers: [],
   rules: {
@@ -1849,7 +1851,8 @@ function updateState(nextState) {
     enabled: false,
     localBaseUrl: "",
     activeProviderId: "",
-    failoverProviderIds: []
+    failoverProviderIds: [],
+    accountModel: ""
   }
   state.providers = nextState.providers || []
   state.rules = nextState.rules || state.rules
@@ -3222,12 +3225,21 @@ async function removeClaudeProxyProvider(payload) {
 }
 
 async function activateClaudeProxyProvider(payload) {
-  const success = await runAction(() =>
-    window.aiManager.activateClaudeProxyProvider(payload)
-  )
+  const shouldEnableProxy = !state.claudeProxyState.enabled
+  const success = await runAction(async () => {
+    const nextState = await window.aiManager.activateClaudeProxyProvider(payload)
+
+    if (shouldEnableProxy) {
+      return window.aiManager.enableClaudeProxy({})
+    }
+
+    return nextState
+  })
 
   if (success) {
-    showSuccessMessage("代理接管目标已切换。")
+    showSuccessMessage(
+      shouldEnableProxy ? "Claude 代理接管已开启。" : "代理接管目标已切换。"
+    )
   }
 }
 
@@ -3260,12 +3272,31 @@ async function removeCodexProxyProvider(payload) {
 }
 
 async function activateCodexProxyProvider(payload) {
+  const shouldEnableProxy = !state.codexProxyState.enabled
+  const success = await runAction(async () => {
+    const nextState = await window.aiManager.activateCodexProxyProvider(payload)
+
+    if (shouldEnableProxy) {
+      return window.aiManager.enableCodexProxy({})
+    }
+
+    return nextState
+  })
+
+  if (success) {
+    showSuccessMessage(
+      shouldEnableProxy ? "Codex 代理接管已开启。" : "代理接管目标已切换。"
+    )
+  }
+}
+
+async function saveCodexProxyAccountModel(payload) {
   const success = await runAction(() =>
-    window.aiManager.activateCodexProxyProvider(payload)
+    window.aiManager.saveCodexProxyAccountModel(payload)
   )
 
   if (success) {
-    showSuccessMessage("代理接管目标已切换。")
+    showSuccessMessage("官方账号接管模型已保存。")
   }
 }
 

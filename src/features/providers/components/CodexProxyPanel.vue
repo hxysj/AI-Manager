@@ -70,92 +70,110 @@
           </button>
         </div>
       </div>
-      <div v-if="proxyProviders.length" class="codex-proxy-panel-pool-list">
-        <article
-          v-for="provider in proxyProviders"
-          :key="provider.id"
-          :class="[
-            'codex-proxy-panel-pool-item',
-            {
-              'codex-proxy-panel-pool-item-active':
-                provider.id === proxyState.activeProviderId,
-              'codex-proxy-panel-pool-item-disabled': provider.disabled
-            }
-          ]"
-        >
-          <span class="codex-proxy-panel-avatar">
-            <AiIcon
-              v-if="provider.icon"
-              class="codex-proxy-panel-avatar-icon"
-              :name="provider.icon"
-              :alt="`${provider.name} 图标`"
-            />
-            <ShieldCheck v-else-if="provider.type === 'account'" :size="18" />
-            <template v-else>{{ provider.name.slice(0, 1) }}</template>
-          </span>
-          <div class="codex-proxy-panel-provider">
-            <strong>{{ provider.name }}</strong>
-            <span>{{ provider.description }}</span>
-          </div>
-          <span
+      <template v-if="proxyProviders.length">
+        <div class="codex-proxy-panel-pool-list">
+          <article
+            v-for="provider in proxyProviders"
+            :key="provider.id"
             :class="[
-              'codex-proxy-panel-status',
+              'codex-proxy-panel-pool-item',
               {
-                'codex-proxy-panel-status-active':
-                  provider.id === proxyState.activeProviderId
+                'codex-proxy-panel-pool-item-active':
+                  provider.id === proxyState.activeProviderId,
+                'codex-proxy-panel-pool-item-disabled': provider.disabled
               }
             ]"
           >
-            {{
-              provider.disabled
-                ? "已禁用"
-                : provider.id === proxyState.activeProviderId
-                  ? "当前激活"
-                  : "备用"
-            }}
-          </span>
-          <button
-            v-if="provider.disabled"
-            class="codex-proxy-panel-activate"
-            type="button"
+            <span class="codex-proxy-panel-avatar">
+              <AiIcon
+                v-if="provider.icon"
+                class="codex-proxy-panel-avatar-icon"
+                :name="provider.icon"
+                :alt="`${provider.name} 图标`"
+              />
+              <ShieldCheck v-else-if="provider.type === 'account'" :size="18" />
+              <template v-else>{{ provider.name.slice(0, 1) }}</template>
+            </span>
+            <div class="codex-proxy-panel-provider">
+              <strong>{{ provider.name }}</strong>
+              <span>{{ provider.description }}</span>
+            </div>
+            <span
+              :class="[
+                'codex-proxy-panel-status',
+                {
+                  'codex-proxy-panel-status-active':
+                    provider.id === proxyState.activeProviderId
+                }
+              ]"
+            >
+              {{
+                provider.disabled
+                  ? "已禁用"
+                  : provider.id === proxyState.activeProviderId
+                    ? "当前激活"
+                    : "备用"
+              }}
+            </span>
+            <button
+              v-if="provider.disabled"
+              class="codex-proxy-panel-activate"
+              type="button"
+              :disabled="pending"
+              @click="restoreTarget(provider)"
+            >
+              恢复
+            </button>
+            <button
+              v-else
+              class="codex-proxy-panel-activate"
+              type="button"
+              :disabled="
+                pending ||
+                provider.disabled ||
+                (proxyState.enabled &&
+                  provider.id === proxyState.activeProviderId)
+              "
+              @click="activateTarget(provider)"
+            >
+              {{ formatActivateText(provider) }}
+            </button>
+            <button
+              class="codex-proxy-panel-remove"
+              type="button"
+              :disabled="
+                pending ||
+                (proxyState.enabled &&
+                  provider.id === proxyState.activeProviderId)
+              "
+              @click="removeTarget(provider)"
+            >
+              <X :size="15" />
+            </button>
+          </article>
+        </div>
+        <div
+          v-if="hasAccountTarget"
+          class="codex-proxy-panel-account-model"
+        >
+          <span>官方账号模型</span>
+          <input
+            v-model.trim="accountModelDraft"
+            type="text"
+            placeholder="例如 gpt-5"
             :disabled="pending"
-            @click="restoreTarget(provider)"
-          >
-            恢复
-          </button>
+          />
           <button
-            v-else
-            class="codex-proxy-panel-activate"
             type="button"
             :disabled="
-              pending ||
-              provider.disabled ||
-              provider.id === proxyState.activeProviderId
+              pending || accountModelDraft === proxyState.accountModel
             "
-            @click="activateTarget(provider)"
+            @click="saveAccountModel"
           >
-            {{
-              provider.disabled
-                ? "禁用中"
-                : provider.id === proxyState.activeProviderId
-                  ? "使用中"
-                  : "激活"
-            }}
+            保存
           </button>
-          <button
-            class="codex-proxy-panel-remove"
-            type="button"
-            :disabled="
-              pending ||
-              (proxyState.enabled &&
-                provider.id === proxyState.activeProviderId)
-            "
-            @click="removeTarget(provider)"
-          >
-            <X :size="15" />
-          </button>
-        </article>
-      </div>
+        </div>
+      </template>
       <div v-else class="codex-proxy-panel-empty">
         接管池为空，请先加入 Provider。
       </div>
@@ -438,6 +456,7 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
+  "account-model-save",
   "add-provider",
   "remove-provider",
   "activate-provider",
@@ -447,6 +466,7 @@ const emit = defineEmits([
 
 const showProviderPicker = ref(false)
 const selectedProxyLog = ref(null)
+const accountModelDraft = ref("")
 const proxyLogFilter = ref("all")
 const proxyLogPage = ref(1)
 const proxyLogPageSize = ref(20)
@@ -501,6 +521,10 @@ const proxyProviders = computed(() => {
   return proxyProviderIds.value
     .map(providerId => targetItems.value.find(item => item.id === providerId))
     .filter(Boolean)
+})
+
+const hasAccountTarget = computed(() => {
+  return proxyProviders.value.some(item => item.type === "account")
 })
 
 const availableTargets = computed(() => {
@@ -571,6 +595,14 @@ watch(
   }
 )
 
+watch(
+  () => props.proxyState.accountModel,
+  value => {
+    accountModelDraft.value = value || ""
+  },
+  { immediate: true }
+)
+
 function addTarget(target) {
   showProviderPicker.value = false
 
@@ -626,6 +658,12 @@ function restoreTarget(target) {
   })
 }
 
+function saveAccountModel() {
+  emit("account-model-save", {
+    accountModel: accountModelDraft.value
+  })
+}
+
 function formatPlanName(plan) {
   return String(plan || "free").toUpperCase()
 }
@@ -636,6 +674,18 @@ function formatProxyLogTime(value) {
 
 function formatTargetType(value) {
   return value === "account" ? "官方账号" : "Provider"
+}
+
+function formatActivateText(provider) {
+  if (provider.disabled) {
+    return "禁用中"
+  }
+
+  if (provider.id !== props.proxyState.activeProviderId) {
+    return "激活"
+  }
+
+  return props.proxyState.enabled ? "使用中" : "开启"
 }
 
 function logProviderName(log) {
@@ -896,6 +946,56 @@ defineExpose({
   &-provider,
   &-picker-main {
     flex: 1;
+  }
+
+  &-account-model {
+    display: flex;
+    min-width: 0;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #ffffff;
+  }
+
+  &-account-model span {
+    flex: none;
+    color: #475467;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &-account-model input {
+    min-width: 0;
+    flex: 1;
+    height: 28px;
+    padding: 0 8px;
+    border: 1px solid #d8e0eb;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #111827;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &-account-model button {
+    height: 28px;
+    flex: none;
+    padding: 0 8px;
+    border: 1px solid #9bb7ff;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #1d4ed8;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  &-account-model button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
   }
 
   &-status {

@@ -225,6 +225,11 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("codex-proxy:remove-provider", toPlainPayload(payload)),
   activateCodexProxyProvider: payload =>
     ipcRenderer.invoke("codex-proxy:activate-provider", toPlainPayload(payload)),
+  saveCodexProxyAccountModel: payload =>
+    ipcRenderer.invoke(
+      "codex-proxy:save-account-model",
+      toPlainPayload(payload)
+    ),
   saveRuntimeModel: payload =>
     ipcRenderer.invoke("runtime-model:save", toPlainPayload(payload)),
   switchRuntime: payload =>

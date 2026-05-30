@@ -2747,6 +2747,10 @@ function registerIpc() {
     return managerService.activateCodexProxyProvider(payload)
   })
 
+  registerLoggedIpc("codex-proxy:save-account-model", async (_, payload) => {
+    return managerService.saveCodexProxyAccountModel(payload)
+  })
+
   registerLoggedIpc("runtime-model:save", async (_, payload) => {
     return managerService.saveRuntimeModel(payload)
   })
