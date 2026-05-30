@@ -66,7 +66,13 @@
           </span>
           <div v-if="!collapsed" class="app-sidebar__cli-info">
             <strong>{{ cli.name }}</strong>
-            <small>{{ cli.installed ? "已检测" : "未安装" }}</small>
+            <small>{{
+              cli.installed && cli.version
+                ? cli.version
+                : cli.installed
+                  ? "已检测"
+                  : "未安装"
+            }}</small>
           </div>
           <span
             v-if="!collapsed"
@@ -109,8 +115,9 @@ defineEmits(['toggle', 'select-view', 'title-click'])
 const colorMap = {
   claude: '#c58f72',
   codex: '#7d8aa3',
-  gemini: '#9fb5d6',
-  ['open' + 'code']: '#aaa3c7',
+  // 当前版本暂不启用 Gemini 和 OpenCode。
+  // gemini: '#9fb5d6',
+  // ['open' + 'code']: '#aaa3c7',
   default: '#a8b0bd'
 }
 </script>

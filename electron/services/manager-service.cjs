@@ -2019,7 +2019,7 @@ class ManagerService extends EventEmitter {
       previousCliTargets.map((item) => [item.id, item])
     )
     const targetIds = [
-      ...new Set([...detectedMap.keys(), ...previousMap.keys()])
+      ...new Set([...detectedMap.keys()])
     ]
 
     return targetIds

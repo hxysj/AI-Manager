@@ -19,42 +19,51 @@ async function pathExists(targetPath) {
   }
 }
 
-async function resolveBinary(binaryName) {
+async function resolveBinaryCandidates(binaryName) {
   const locator = process.platform === "win32" ? "where.exe" : "which"
 
   try {
     const { stdout } = await execFileAsync(locator, [binaryName], {
       windowsHide: true
     })
-    const firstLine = stdout
+    const candidates = stdout
       .split(/\r?\n/)
       .map((item) => item.trim())
-      .find(Boolean)
+      .filter(Boolean)
 
-    return firstLine || null
+    return [...new Set(candidates)]
   } catch {
-    return null
+    return []
   }
 }
 
-async function detectVersion(binaryPath) {
-  if (!binaryPath) {
+async function runVersionCommand(binaryPath) {
+  return execFileAsync(binaryPath, ["--version"], {
+    windowsHide: true,
+    shell: process.platform === "win32"
+  })
+}
+
+async function detectVersion(binaryPaths) {
+  if (!binaryPaths.length) {
     return undefined
   }
 
-  try {
-    const { stdout, stderr } = await execFileAsync(binaryPath, ["--version"], {
-      windowsHide: true
-    })
-    const output = `${stdout}\n${stderr}`
-      .split(/\r?\n/)
-      .map((item) => item.trim())
-      .find(Boolean)
+  for (const binaryPath of binaryPaths) {
+    try {
+      const { stdout, stderr } = await runVersionCommand(binaryPath)
+      const output = `${stdout}\n${stderr}`
+        .split(/\r?\n/)
+        .map((item) => item.trim())
+        .find(Boolean)
 
-    return output || undefined
-  } catch {
-    return undefined
+      if (output) {
+        return output
+      }
+    } catch {}
   }
+
+  return undefined
 }
 
 class BaseCliAdapter {
@@ -109,7 +118,8 @@ class BaseCliAdapter {
 
   async detect() {
     const configPath = this.getConfigPath()
-    const executablePath = await resolveBinary(this.binaryName)
+    const executablePaths = await resolveBinaryCandidates(this.binaryName)
+    const executablePath = executablePaths[0]
     const configExists = await pathExists(configPath)
     const installed = Boolean(configExists || executablePath)
 
@@ -125,7 +135,7 @@ class BaseCliAdapter {
       sessionsPath: this.getSessionsPath(),
       sessionPaths: this.getSessionPaths(),
       sessionScanRules: this.getSessionScanRules(),
-      version: await detectVersion(executablePath),
+      version: await detectVersion(executablePaths),
       detectedAt: Date.now()
     }
   }
@@ -219,9 +229,10 @@ class OpenCodeAdapter extends BaseCliAdapter {
 function createCliAdapters(cliConfigPaths = {}) {
   return [
     new ClaudeAdapter(cliConfigPaths.claude),
-    new CodexAdapter(cliConfigPaths.codex),
-    new GeminiAdapter(cliConfigPaths.gemini),
-    new OpenCodeAdapter(cliConfigPaths.opencode)
+    new CodexAdapter(cliConfigPaths.codex)
+    // 当前版本暂不启用 Gemini 和 OpenCode。
+    // new GeminiAdapter(cliConfigPaths.gemini),
+    // new OpenCodeAdapter(cliConfigPaths.opencode)
   ]
 }
 
