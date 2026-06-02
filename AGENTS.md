@@ -38,6 +38,7 @@ git commit -m "feat: 中文摘要" -m "- 修改内容一。" -m "- 修改内容�
 ## Electron 桌面端规则
 
 - 当前项目以 Electron + Vue 3 + Less 桌面端应用为主，不再按网页端交互处理。
+- `electron/services` 旧文件保持现状不强制迁移，后续新增 service 必须按业务分类放入子目录。
 
 ## 前端规则
 

@@ -138,6 +138,56 @@ contextBridge.exposeInMainWorld("aiManager", {
   syncAllRepos: () => ipcRenderer.invoke("repo:sync-all"),
   removeRepo: payload =>
     ipcRenderer.invoke("repo:remove", toPlainPayload(payload)),
+  scanGitToolBranches: payload =>
+    ipcRenderer.invoke("git-tool:branches", toPlainPayload(payload)),
+  listGitToolCommits: payload =>
+    ipcRenderer.invoke("git-tool:commits", toPlainPayload(payload)),
+  getGitToolCommitDetail: payload =>
+    ipcRenderer.invoke("git-tool:commit-detail", toPlainPayload(payload)),
+  updateGitToolCheckBranch: payload =>
+    ipcRenderer.invoke("git-tool:update-check-branch", toPlainPayload(payload)),
+  clearGitToolCommitCheckCache: payload =>
+    ipcRenderer.invoke("git-tool:clear-check-cache", toPlainPayload(payload)),
+  checkGitToolCommitOnBranch: payload =>
+    ipcRenderer.invoke("git-tool:check-commit", toPlainPayload(payload)),
+  archiveGitToolBranch: payload =>
+    ipcRenderer.invoke("git-tool:archive-branch", toPlainPayload(payload)),
+  listGitToolArchives: payload =>
+    ipcRenderer.invoke("git-tool:archives", toPlainPayload(payload)),
+  listGitToolArchiveCommits: payload =>
+    ipcRenderer.invoke("git-tool:archive-commits", toPlainPayload(payload)),
+  getGitToolArchiveCommitDetail: payload =>
+    ipcRenderer.invoke(
+      "git-tool:archive-commit-detail",
+      toPlainPayload(payload)
+    ),
+  restoreGitToolArchive: payload =>
+    ipcRenderer.invoke("git-tool:restore-archive", toPlainPayload(payload)),
+  deleteGitToolArchive: payload =>
+    ipcRenderer.invoke("git-tool:delete-archive", toPlainPayload(payload)),
+  listGitToolStashes: payload =>
+    ipcRenderer.invoke("git-tool:stashes", toPlainPayload(payload)),
+  listGitToolStashArchives: payload =>
+    ipcRenderer.invoke("git-tool:stash-archives", toPlainPayload(payload)),
+  getGitToolStashDetail: payload =>
+    ipcRenderer.invoke("git-tool:stash-detail", toPlainPayload(payload)),
+  getGitToolStashArchiveDetail: payload =>
+    ipcRenderer.invoke(
+      "git-tool:stash-archive-detail",
+      toPlainPayload(payload)
+    ),
+  archiveGitToolStash: payload =>
+    ipcRenderer.invoke("git-tool:archive-stash", toPlainPayload(payload)),
+  restoreGitToolStashArchive: payload =>
+    ipcRenderer.invoke(
+      "git-tool:restore-stash-archive",
+      toPlainPayload(payload)
+    ),
+  deleteGitToolStashArchive: payload =>
+    ipcRenderer.invoke(
+      "git-tool:delete-stash-archive",
+      toPlainPayload(payload)
+    ),
   searchSessions: payload =>
     ipcRenderer.invoke("session:search", toPlainPayload(payload)),
   loadSessionMessages: payload =>

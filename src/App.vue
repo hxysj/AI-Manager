@@ -417,15 +417,10 @@
           @toggle-rule="toggleRule"
         />
 
-        <ReposView
-          v-else-if="activeView === 'repos'"
-          :paths="state.paths"
+        <ToolsView
+          v-else-if="activeView === 'tools'"
           :repos="state.repos"
           @add-repo="showAddRepo = true"
-          @open-path="openPath"
-          @remove-repo="removeRepo"
-          @sync-all="syncAllRepos"
-          @sync-repo="syncRepo"
         />
 
         <SettingsView
@@ -1151,6 +1146,7 @@ import {
   RefreshCw,
   Settings,
   ShieldCheck,
+  Wrench,
   X
 } from "lucide-vue-next"
 import AppSidebar from "@/components/AppSidebar.vue"
@@ -1164,8 +1160,8 @@ import { createMessage } from "@/utils/message"
 const ProvidersView = defineAsyncComponent(
   () => import("@/features/providers/index.vue")
 )
-const ReposView = defineAsyncComponent(
-  () => import("@/features/repos/index.vue")
+const ToolsView = defineAsyncComponent(
+  () => import("@/features/tools/index.vue")
 )
 const AddRepoModal = defineAsyncComponent(
   () => import("@/features/repos/components/AddRepoModal.vue")
@@ -1204,6 +1200,7 @@ const baseNavItems = [
   { id: "skills", label: "Skills", icon: ShieldCheck },
   { id: "sessions", label: "Sessions", icon: Gauge },
   { id: "rules", label: "Rules", icon: Compass },
+  { id: "tools", label: "其他工具", icon: Wrench },
   { id: "settings", label: "Settings", icon: Settings }
 ]
 
@@ -2919,28 +2916,8 @@ async function addRepo(payload) {
 
   if (success) {
     showAddRepo.value = false
-    activeView.value = "repos"
+    activeView.value = "tools"
   }
-}
-
-async function syncRepo(repoId) {
-  await runAction(() => window.aiManager.syncRepo({ repoId }))
-}
-
-async function syncAllRepos() {
-  await runAction(() => window.aiManager.syncAllRepos())
-}
-
-async function removeRepo(repoId) {
-  const shouldContinue = window.confirm(
-    "删除 Repo 会先卸载它挂载到 CLI 的 Skill，是否继续？"
-  )
-
-  if (!shouldContinue) {
-    return
-  }
-
-  await runAction(() => window.aiManager.removeRepo({ repoId }))
 }
 
 async function deleteSession(sessionId) {

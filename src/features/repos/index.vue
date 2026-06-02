@@ -114,7 +114,7 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
 .repos-view {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
 
   &__toolbar {
     display: flex;
@@ -124,22 +124,23 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
   }
 
   &__eyebrow {
-    margin: 0 0 8px;
+    margin: 0 0 5px;
     color: var(--color-text-soft);
-    font-size: 0.78rem;
+    font-size: 0.7rem;
     font-weight: 700;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
   &__toolbar h1 {
     margin: 0;
-    font-size: 2rem;
+    font-size: 1.38rem;
+    line-height: 1.2;
   }
 
   &__toolbar-actions {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: wrap;
   }
 
@@ -228,9 +229,12 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
   }
 
   &__empty {
-    display: grid;
-    min-height: 360px;
-    place-items: center;
+    display: flex;
+    min-height: 260px;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 8px;
     border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
     background: var(--color-panel);
@@ -238,25 +242,27 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
   }
 
   &__empty h2 {
-    margin: 0 0 10px;
-    font-size: 1.5rem;
+    margin: 0;
+    font-size: 1rem;
   }
 
   &__empty p {
     margin: 0;
     color: var(--color-text-muted);
+    font-size: 0.84rem;
   }
 }
 
 .action-button {
-  height: 42px;
-  padding: 0 16px;
+  height: 36px;
+  padding: 0 13px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-weight: 600;
+  font-size: 0.84rem;
+  font-weight: 700;
 
   &--primary {
     border-color: var(--color-primary);
