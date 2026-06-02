@@ -1,4 +1,5 @@
 const fs = require("node:fs/promises")
+const crypto = require("node:crypto")
 
 class JsonStorage {
   constructor(storageFiles, delay = 300) {
@@ -35,7 +36,15 @@ class JsonStorage {
     }
 
     const content = JSON.stringify(payload, null, 2)
-    await fs.writeFile(filePath, `${content}\n`, "utf8")
+    const tempPath = `${filePath}.${crypto.randomUUID()}.tmp`
+
+    try {
+      await fs.writeFile(tempPath, `${content}\n`, "utf8")
+      await fs.rename(tempPath, filePath)
+    } catch (error) {
+      await fs.rm(tempPath, { force: true })
+      throw error
+    }
   }
 
   scheduleWrite(key, payload) {
