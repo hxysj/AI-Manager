@@ -2422,6 +2422,82 @@ function registerIpc() {
     return managerService.getState()
   })
 
+  registerLoggedIpc("git-tool:branches", async (_, payload) => {
+    return managerService.scanGitToolBranches(payload.repoId)
+  })
+
+  registerLoggedIpc("git-tool:commits", async (_, payload) => {
+    return managerService.listGitToolCommits(payload)
+  })
+
+  registerLoggedIpc("git-tool:commit-detail", async (_, payload) => {
+    return managerService.getGitToolCommitDetail(payload)
+  })
+
+  registerLoggedIpc("git-tool:update-check-branch", async (_, payload) => {
+    return managerService.updateGitToolCheckBranch(payload)
+  })
+
+  registerLoggedIpc("git-tool:clear-check-cache", async (_, payload) => {
+    return managerService.clearGitToolCommitCheckCache(payload)
+  })
+
+  registerLoggedIpc("git-tool:check-commit", async (_, payload) => {
+    return managerService.checkGitToolCommitOnBranch(payload)
+  })
+
+  registerLoggedIpc("git-tool:archive-branch", async (_, payload) => {
+    return managerService.archiveGitToolBranch(payload)
+  })
+
+  registerLoggedIpc("git-tool:archives", async (_, payload) => {
+    return managerService.listGitToolArchives(payload.repoId)
+  })
+
+  registerLoggedIpc("git-tool:archive-commits", async (_, payload) => {
+    return managerService.listGitToolArchiveCommits(payload.archiveId)
+  })
+
+  registerLoggedIpc("git-tool:archive-commit-detail", async (_, payload) => {
+    return managerService.getGitToolArchiveCommitDetail(payload)
+  })
+
+  registerLoggedIpc("git-tool:restore-archive", async (_, payload) => {
+    return managerService.restoreGitToolArchive(payload)
+  })
+
+  registerLoggedIpc("git-tool:delete-archive", async (_, payload) => {
+    return managerService.deleteGitToolArchive(payload.archiveId)
+  })
+
+  registerLoggedIpc("git-tool:stashes", async (_, payload) => {
+    return managerService.listGitToolStashes(payload.repoId)
+  })
+
+  registerLoggedIpc("git-tool:stash-archives", async (_, payload) => {
+    return managerService.listGitToolStashArchives(payload.repoId)
+  })
+
+  registerLoggedIpc("git-tool:stash-detail", async (_, payload) => {
+    return managerService.getGitToolStashDetail(payload)
+  })
+
+  registerLoggedIpc("git-tool:stash-archive-detail", async (_, payload) => {
+    return managerService.getGitToolStashArchiveDetail(payload)
+  })
+
+  registerLoggedIpc("git-tool:archive-stash", async (_, payload) => {
+    return managerService.archiveGitToolStash(payload)
+  })
+
+  registerLoggedIpc("git-tool:restore-stash-archive", async (_, payload) => {
+    return managerService.restoreGitToolStashArchive(payload.stashArchiveId)
+  })
+
+  registerLoggedIpc("git-tool:delete-stash-archive", async (_, payload) => {
+    return managerService.deleteGitToolStashArchive(payload.stashArchiveId)
+  })
+
   registerLoggedIpc("session:search", async (_, payload) => {
     return managerService.searchSessions(payload?.query)
   })

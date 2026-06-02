@@ -1,7 +1,8 @@
 <template>
   <BaseModal
-    title="添加 Repo"
-    description="支持 GitHub、通用 Git 仓库与本地目录。远程仓库会 clone 到 Monkey Thief 的 repos 工作区。"
+    class="add-repo-modal-shell"
+    title="添加项目"
+    description="支持 GitHub、通用 Git 仓库与本地目录。远程仓库会 clone 到 Monkey Thief 的项目工作区。"
     @close="$emit('close')"
   >
     <form class="add-repo-modal" @submit.prevent="submit">
@@ -22,12 +23,22 @@
 
       <label class="add-repo-modal__field">
         <span>{{ form.type === "local" ? "本地目录" : "仓库地址" }}</span>
-        <input
-          v-model.trim="form.source"
-          required
-          type="text"
-          :placeholder="placeholderText"
-        />
+        <div class="add-repo-modal__source-row">
+          <input
+            v-model.trim="form.source"
+            required
+            type="text"
+            :placeholder="placeholderText"
+          />
+          <button
+            v-if="form.type === 'local'"
+            class="add-repo-modal__directory-button"
+            type="button"
+            @click="selectLocalDirectory"
+          >
+            选择目录
+          </button>
+        </div>
       </label>
 
       <div class="add-repo-modal__actions">
@@ -35,7 +46,7 @@
           取消
         </button>
         <button class="action-button action-button--primary" type="submit">
-          添加 Repo
+          添加项目
         </button>
       </div>
     </form>
@@ -77,42 +88,108 @@ function submit() {
   form.name = ""
   form.source = ""
 }
+
+async function selectLocalDirectory() {
+  const selectedPath = await window.aiManager.selectDirectory({
+    title: "选择本地项目目录",
+    defaultPath: form.source
+  })
+
+  if (selectedPath) {
+    form.source = selectedPath
+  }
+}
 </script>
 
 <style scoped lang="less">
+.add-repo-modal-shell {
+  :deep(.base-modal__panel) {
+    width: 920px;
+  }
+
+  :deep(.base-modal__header) {
+    padding: 18px 24px 8px;
+  }
+
+  :deep(.base-modal__header h2) {
+    font-size: 1.12rem;
+  }
+
+  :deep(.base-modal__header p) {
+    margin-top: 5px;
+    font-size: 0.8rem;
+  }
+
+  :deep(.base-modal__close) {
+    width: 32px;
+    height: 32px;
+    font-size: 1.1rem;
+  }
+}
+
 .add-repo-modal {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 
   &__field {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
   }
 
   & span {
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: 0.76rem;
     font-weight: 700;
   }
 
   & input,
   & select {
     width: 100%;
-    height: 46px;
-    padding: 0 14px;
+    height: 38px;
+    padding: 0 11px;
     border: 1px solid var(--color-line);
-    border-radius: 8px;
+    border-radius: 7px;
     background: var(--color-panel);
     color: var(--color-text);
-    font: inherit;
+    font-size: 0.84rem;
   }
 
   &__grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 16px;
+    display: flex;
+    gap: 12px;
+  }
+
+  &__grid > * {
+    flex: 1;
+  }
+
+  &__source-row {
+    display: flex;
+    gap: 8px;
+  }
+
+  &__source-row input {
+    flex: 1;
+  }
+
+  &__directory-button {
+    height: 38px;
+    padding: 0 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: #ffffff;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  &__directory-button:hover {
+    border-color: #b9ccda;
+    background: #f7f9fc;
   }
 
   &__actions {
@@ -127,14 +204,15 @@ function submit() {
 }
 
 .action-button {
-  height: 40px;
-  padding: 0 16px;
+  height: 36px;
+  padding: 0 14px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-weight: 600;
+  font-size: 0.84rem;
+  font-weight: 700;
 
   &--primary {
     border-color: var(--color-primary);

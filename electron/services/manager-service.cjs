@@ -27,6 +27,7 @@ const { CodexAccountService } = require("./codex-account-service.cjs")
 const { RuntimeProviderService } = require("./runtime-provider-service.cjs")
 const { CodexProxyService } = require("./codex-proxy-service.cjs")
 const { PromptRuntimeService } = require("./prompt-runtime-service.cjs")
+const { GitToolService } = require("./tools/git-tool-service.cjs")
 
 const execFileAsync = promisify(execFile)
 const BACKUP_SECRET = crypto
@@ -1459,6 +1460,9 @@ class ManagerService extends EventEmitter {
     this.skillScanner = new SkillScanner()
     this.linkManager = new LinkManager(this.cliDetectionService)
     this.repoService = new RepoService(this.paths, this.storage)
+    this.gitToolService = new GitToolService(this.paths, () =>
+      this.repoService.listRepos()
+    )
     this.fileWatcherService = new FileWatcherService()
     this.sessionService = new SessionService(this.paths)
     this.sessionService.bindStorage(this.storage)
@@ -1507,6 +1511,7 @@ class ManagerService extends EventEmitter {
   async init() {
     await ensureAppDirectories(this.paths)
     await this.repoService.init()
+    await this.gitToolService.init()
     await this.sessionService.init()
     await this.usageService.init()
     await this.codexAccountService.init()
@@ -2629,6 +2634,117 @@ class ManagerService extends EventEmitter {
     await this.repoService.removeRepo(repoId)
     this.startWatcher()
     await this.refreshAll()
+  }
+
+  async scanGitToolBranches(repoId) {
+    return this.gitToolService.scanBranches(repoId)
+  }
+
+  async listGitToolCommits(input) {
+    return this.gitToolService.listCommits(input.repoId, input.branchName)
+  }
+
+  async getGitToolCommitDetail(input) {
+    return this.gitToolService.getCommitDetail(
+      input.repoId,
+      input.commitHash,
+      input.filePath || ""
+    )
+  }
+
+  async updateGitToolCheckBranch(input) {
+    return this.gitToolService.updateCheckBranch(
+      input.repoId,
+      input.branchName
+    )
+  }
+
+  async clearGitToolCommitCheckCache(input) {
+    return this.gitToolService.clearCommitCheckCache(
+      input.repoId,
+      input.sourceBranchName,
+      input.targetBranchName
+    )
+  }
+
+  async checkGitToolCommitOnBranch(input) {
+    return this.gitToolService.checkCommitOnBranch(
+      input.repoId,
+      input.sourceBranchName,
+      input.targetBranchName,
+      input.commitHash,
+      input.subject
+    )
+  }
+
+  async archiveGitToolBranch(input) {
+    return this.gitToolService.archiveBranch(input.repoId, input.branchName)
+  }
+
+  async listGitToolArchives(repoId) {
+    return this.gitToolService.listArchives(repoId)
+  }
+
+  async listGitToolArchiveCommits(archiveId) {
+    return this.gitToolService.listArchiveCommits(archiveId)
+  }
+
+  async getGitToolArchiveCommitDetail(input) {
+    return this.gitToolService.getArchiveCommitDetail(
+      input.archiveId,
+      input.commitHash,
+      input.filePath || ""
+    )
+  }
+
+  async restoreGitToolArchive(input) {
+    return this.gitToolService.restoreArchive(
+      input.archiveId,
+      input.targetBranchName
+    )
+  }
+
+  async deleteGitToolArchive(archiveId) {
+    return this.gitToolService.deleteArchive(archiveId)
+  }
+
+  async listGitToolStashes(repoId) {
+    return this.gitToolService.listStashes(repoId)
+  }
+
+  async listGitToolStashArchives(repoId) {
+    return this.gitToolService.listStashArchives(repoId)
+  }
+
+  async getGitToolStashDetail(input) {
+    return this.gitToolService.getStashDetail(
+      input.repoId,
+      input.stashHash,
+      input.filePath || ""
+    )
+  }
+
+  async getGitToolStashArchiveDetail(input) {
+    return this.gitToolService.getStashArchiveDetail(
+      input.stashArchiveId,
+      input.filePath || ""
+    )
+  }
+
+  async archiveGitToolStash(input) {
+    return this.gitToolService.archiveStash(
+      input.repoId,
+      input.stashRef,
+      input.stashHash
+    )
+  }
+
+  async restoreGitToolStashArchive(stashArchiveId) {
+    return this.gitToolService.restoreStashArchive(stashArchiveId)
+  }
+
+  async deleteGitToolStashArchive(stashArchiveId) {
+    return this.gitToolService.deleteStashArchive(stashArchiveId)
   }
 
   async openFolder(folderPath) {
