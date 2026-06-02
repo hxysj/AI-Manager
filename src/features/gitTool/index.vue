@@ -106,6 +106,9 @@
             <strong>本地分支</strong>
             <span>{{ currentBranch || "-" }}</span>
           </div>
+          <span class="git-tool-branch-path">{{
+            selectedRepo?.localPath || ""
+          }}</span>
           <div class="git-tool-branch-summary-row">
             <span>
               已选 {{ selectedBranchNames.length }}/{{ archivableBranches.length }}
@@ -407,8 +410,12 @@
       </section>
     </section>
 
-    <section v-if="detailDrawerVisible" class="git-tool-drawer">
-      <div class="git-tool-drawer-panel">
+    <section
+      v-if="detailDrawerVisible"
+      class="git-tool-drawer"
+      @click="closeDetailDrawer"
+    >
+      <div class="git-tool-drawer-panel" @click.stop>
         <header class="git-tool-drawer-head">
           <div>
             <span class="git-tool-label">{{ detailDrawerEyebrow }}</span>
@@ -601,6 +608,7 @@ import {
   Archive,
   ArchiveRestore,
   ChevronDown,
+  ChevronRight,
   Copy,
   FileText,
   Folder,
@@ -645,6 +653,26 @@ const GitChangeDetail = defineComponent({
     const fileTree = computed(() =>
       buildFileTree(detailProps.detail?.files || [])
     )
+    const closedDirectoryPaths = ref(new Set())
+
+    watch(
+      () => detailProps.detail?.hash,
+      () => {
+        closedDirectoryPaths.value = new Set()
+      }
+    )
+
+    function toggleDirectoryClosed(path) {
+      const nextPaths = new Set(closedDirectoryPaths.value)
+
+      if (nextPaths.has(path)) {
+        nextPaths.delete(path)
+      } else {
+        nextPaths.add(path)
+      }
+
+      closedDirectoryPaths.value = nextPaths
+    }
 
     return () =>
       h(
@@ -694,7 +722,9 @@ const GitChangeDetail = defineComponent({
                       ? renderFileTreeNodes(
                           fileTree.value.children,
                           selectedPath.value,
-                          emit
+                          emit,
+                          closedDirectoryPaths.value,
+                          toggleDirectoryClosed
                         )
                       : h(
                           "div",
@@ -800,41 +830,69 @@ function sortFileTree(node) {
   node.children.forEach((child) => sortFileTree(child))
 }
 
-function renderFileTreeNodes(nodes, selectedPath, emit, level = 0) {
+function renderFileTreeNodes(
+  nodes,
+  selectedPath,
+  emit,
+  closedDirectoryPaths,
+  toggleDirectoryClosed,
+  level = 0
+) {
   return nodes.map((node) => {
     if (node.type === "directory") {
+      const isClosed = closedDirectoryPaths.has(node.path)
+      const children = [
+        h(
+          "button",
+          {
+            class: [
+              "git-change-view-tree-directory",
+              { "git-change-view-tree-directory-closed": isClosed }
+            ],
+            style: { paddingLeft: `${level * 14 + 8}px` },
+            type: "button",
+            title: node.path,
+            onClick: () => toggleDirectoryClosed(node.path)
+          },
+          [
+            h(isClosed ? ChevronRight : ChevronDown, {
+              class: "git-change-view-tree-caret",
+              size: 13
+            }),
+            h(Folder, {
+              class: "git-change-view-tree-folder",
+              size: 13
+            }),
+            h("strong", { title: node.path }, node.name),
+            h("small", {}, node.count)
+          ]
+        )
+      ]
+
+      if (!isClosed) {
+        children.push(
+          h(
+            "div",
+            { class: "git-change-view-tree-children" },
+            renderFileTreeNodes(
+              node.children,
+              selectedPath,
+              emit,
+              closedDirectoryPaths,
+              toggleDirectoryClosed,
+              level + 1
+            )
+          )
+        )
+      }
+
       return h(
         "div",
         {
           key: `dir:${node.path}`,
           class: "git-change-view-tree-node"
         },
-        [
-          h(
-            "div",
-            {
-              class: "git-change-view-tree-directory",
-              style: { paddingLeft: `${level * 14 + 8}px` }
-            },
-            [
-              h(ChevronDown, {
-                class: "git-change-view-tree-caret",
-                size: 13
-              }),
-              h(Folder, {
-                class: "git-change-view-tree-folder",
-                size: 13
-              }),
-              h("strong", { title: node.path }, node.name),
-              h("small", {}, node.count)
-            ]
-          ),
-          h(
-            "div",
-            { class: "git-change-view-tree-children" },
-            renderFileTreeNodes(node.children, selectedPath, emit, level + 1)
-          )
-        ]
+        children
       )
     }
 
@@ -2003,8 +2061,8 @@ function showErrorMessage(error) {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px 12px 10px;
+  gap: 8px;
+  padding: 14px 12px 10px;
   background: #ffffff;
 }
 
@@ -2024,7 +2082,16 @@ function showErrorMessage(error) {
 .git-tool-branch-title-row span {
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-tool-branch-path {
+  display: block;
+  overflow: hidden;
+  color: #2f5f91;
+  font-size: 0.72rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2062,9 +2129,9 @@ function showErrorMessage(error) {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   overflow: auto;
-  padding: 0 8px 12px;
+  padding: 0 8px 10px;
 }
 
 .git-tool-branch-group {
@@ -2079,7 +2146,7 @@ function showErrorMessage(error) {
   height: 30px;
   padding: 0 9px;
   border: 1px solid #cfe0ef;
-  border-radius: 7px 7px 0 0;
+  border-radius: 7px;
   background: #eef5fb;
   color: #2f5f91;
 }
@@ -2104,14 +2171,16 @@ function showErrorMessage(error) {
   display: flex;
   flex-direction: column;
   border-left: 1px solid #cfe0ef;
+  margin-left: 8px;
+  padding-top: 4px;
 }
 
 .git-tool-branch {
   display: flex;
-  min-height: 36px;
+  min-height: 34px;
   align-items: center;
-  gap: 8px;
-  padding: 3px 0 3px 10px;
+  gap: 7px;
+  padding: 2px 0 2px 8px;
   color: var(--color-text);
 }
 
@@ -2129,10 +2198,10 @@ function showErrorMessage(error) {
   flex: 1;
   align-items: center;
   gap: 8px;
-  height: 32px;
-  padding: 0 8px;
+  height: 30px;
+  padding: 0 9px;
   border: 0;
-  border-radius: 5px;
+  border-radius: 6px;
   background: transparent;
   color: var(--color-text);
   cursor: pointer;
@@ -2144,7 +2213,7 @@ function showErrorMessage(error) {
 }
 
 .git-tool-branch-active .git-tool-branch-main {
-  background: #eef6ff;
+  background: #e9f4ff;
   color: var(--color-primary);
 }
 
@@ -2823,9 +2892,15 @@ function showErrorMessage(error) {
 }
 
 .git-change-view-tree-directory {
+  width: 100%;
+  cursor: pointer;
   color: var(--color-primary);
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.git-change-view-tree-directory:hover {
+  background: #edf3f8;
 }
 
 .git-change-view-tree-file {
@@ -2977,5 +3052,318 @@ function showErrorMessage(error) {
 .git-change-view-line-meta {
   background: #f4f6f8;
   color: #637386;
+}
+
+.git-tool {
+  :deep(.git-change-view) {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  :deep(.git-change-view-head) {
+    flex: none;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--color-line);
+    background: #ffffff;
+  }
+
+  :deep(.git-change-view-summary) {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  :deep(.git-change-view .git-tool-label) {
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+  }
+
+  :deep(.git-change-view-title) {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 0.86rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :deep(.git-change-view-meta-row) {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+  }
+
+  :deep(.git-change-view-meta-row span) {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :deep(.git-change-view-meta-row small) {
+    flex: none;
+    color: var(--color-text-soft);
+    font-size: 0.68rem;
+    font-weight: 700;
+  }
+
+  :deep(.git-change-view-meta-row code),
+  :deep(.git-change-view-meta-row strong) {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :deep(.git-change-view-body) {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+  }
+
+  :deep(.git-change-view-tree) {
+    display: flex;
+    width: 300px;
+    flex: 0 0 300px;
+    min-height: 0;
+    flex-direction: column;
+    border-right: 1px solid var(--color-line);
+    background: #f8fafc;
+  }
+
+  :deep(.git-change-view-tree-head) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    height: 32px;
+    padding: 0 9px;
+    border-bottom: 1px solid var(--color-line);
+    color: var(--color-text-muted);
+    font-size: 0.74rem;
+  }
+
+  :deep(.git-change-view-tree-head strong) {
+    color: var(--color-primary);
+    font-size: 0.72rem;
+  }
+
+  :deep(.git-change-view-tree-body) {
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    padding: 4px 0;
+  }
+
+  :deep(.git-change-view-tree-node) {
+    display: flex;
+    flex-direction: column;
+  }
+
+  :deep(.git-change-view-tree-directory),
+  :deep(.git-change-view-tree-file) {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 26px;
+    padding: 0 8px;
+    border: 0;
+    border-left: 2px solid transparent;
+    background: transparent;
+    color: var(--color-text);
+    text-align: left;
+  }
+
+  :deep(.git-change-view-tree-directory) {
+    width: 100%;
+    cursor: pointer;
+    color: var(--color-primary);
+    font-size: 0.76rem;
+    font-weight: 700;
+  }
+
+  :deep(.git-change-view-tree-directory:hover) {
+    background: #edf3f8;
+  }
+
+  :deep(.git-change-view-tree-file) {
+    width: 100%;
+    cursor: pointer;
+  }
+
+  :deep(.git-change-view-tree-file:hover) {
+    background: #edf3f8;
+  }
+
+  :deep(.git-change-view-tree-file-active) {
+    border-left-color: var(--color-primary);
+    background: #e9f4ff;
+  }
+
+  :deep(.git-change-view-tree-caret),
+  :deep(.git-change-view-tree-folder) {
+    flex: none;
+    color: #6d85a5;
+  }
+
+  :deep(.git-change-view-tree-directory strong) {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :deep(.git-change-view-tree-directory small) {
+    display: inline-flex;
+    min-width: 18px;
+    height: 18px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: #e8eef5;
+    color: #506b91;
+    font-size: 0.68rem;
+  }
+
+  :deep(.git-change-view-file-status) {
+    display: inline-flex;
+    width: 18px;
+    height: 18px;
+    flex: 0 0 18px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    font-size: 0.64rem;
+    font-weight: 700;
+  }
+
+  :deep(.git-change-view-file-status-add) {
+    background: var(--color-success-soft);
+    color: var(--color-success);
+  }
+
+  :deep(.git-change-view-file-status-modify),
+  :deep(.git-change-view-file-status-move),
+  :deep(.git-change-view-file-status-copy) {
+    background: var(--color-warning-soft);
+    color: var(--color-warning);
+  }
+
+  :deep(.git-change-view-file-status-delete) {
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+
+  :deep(.git-change-view-file-icon) {
+    flex: none;
+    color: var(--color-text-muted);
+  }
+
+  :deep(.git-change-view-file-path) {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 0.72rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :deep(.git-change-view-diff-panel) {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+
+  :deep(.git-change-view-file-head) {
+    flex: none;
+    height: 32px;
+    padding: 0 10px;
+    border-bottom: 1px solid var(--color-line);
+    background: #f8fafc;
+  }
+
+  :deep(.git-change-view-file-head strong) {
+    display: block;
+    overflow: hidden;
+    color: var(--color-primary);
+    font-size: 0.76rem;
+    line-height: 32px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :deep(.git-change-view-diff) {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    margin: 0;
+    overflow: auto;
+    background: #ffffff;
+    color: var(--color-text);
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-size: 0.7rem;
+    line-height: 1.45;
+  }
+
+  :deep(.git-change-view-line) {
+    display: block;
+    min-height: 19px;
+    padding: 1px 10px;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+
+  :deep(.git-change-view-line-add) {
+    background: #effaf2;
+    color: #176238;
+  }
+
+  :deep(.git-change-view-line-delete) {
+    background: #fff0ee;
+    color: #9f241b;
+  }
+
+  :deep(.git-change-view-line-chunk) {
+    background: #eef5fb;
+    color: #2f5f91;
+    font-weight: 700;
+  }
+
+  :deep(.git-change-view-line-meta) {
+    background: #f4f6f8;
+    color: #637386;
+  }
+
+  :deep(.git-change-view .git-tool-detail-empty),
+  :deep(.git-change-view .git-tool-list-empty) {
+    display: flex;
+    min-height: 110px;
+    align-items: center;
+    justify-content: center;
+    border: 1px dashed var(--color-line);
+    border-radius: 8px;
+    color: var(--color-text-muted);
+    font-size: 0.84rem;
+    font-weight: 700;
+  }
 }
 </style>
