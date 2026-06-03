@@ -28,7 +28,7 @@
               { 'git-tool-tab-active': gitWorkspace === 'branch' }
             ]"
             type="button"
-            @click="gitWorkspace = 'branch'"
+            @click="selectGitWorkspace('branch')"
           >
             <GitBranchIcon :size="15" />
             分支
@@ -39,7 +39,7 @@
               { 'git-tool-tab-active': gitWorkspace === 'stash' }
             ]"
             type="button"
-            @click="gitWorkspace = 'stash'"
+            @click="selectGitWorkspace('stash')"
           >
             <Archive :size="15" />
             Stash
@@ -257,17 +257,27 @@
               @contextmenu.prevent="openCommitContextMenu($event, commit)"
             >
               <span class="git-tool-commit-graph-cell">
-                <span
-                  v-if="!commit.isGraphOnly"
-                  class="git-tool-commit-graph-line"
-                ></span>
-                <span
-                  v-if="!commit.isGraphOnly"
-                  class="git-tool-commit-graph-dot"
-                ></span>
-                <span class="git-tool-commit-graph-text">{{
-                  commit.isGraphOnly ? commit.graph : ""
-                }}</span>
+                <svg
+                  class="git-tool-commit-graph-svg"
+                  viewBox="0 0 48 32"
+                  preserveAspectRatio="none"
+                >
+                  <path
+                    v-for="line in getCommitGraphLines(commit)"
+                    :key="`${commit.rowId}:${line.key}`"
+                    class="git-tool-commit-graph-line"
+                    :d="line.path"
+                    :stroke="line.color"
+                  />
+                  <circle
+                    v-if="getCommitGraphNode(commit)"
+                    class="git-tool-commit-graph-node"
+                    :cx="getCommitGraphNode(commit)?.x"
+                    cy="16"
+                    r="4"
+                    :fill="getCommitGraphNode(commit)?.color"
+                  />
+                </svg>
               </span>
               <span class="git-tool-commit-description">
                 <strong class="git-tool-commit-title">{{
@@ -293,7 +303,10 @@
                 {{ commit.isGraphOnly ? "" : commit.shortHash }}
               </span>
             </button>
-            <div v-if="!commits.length" class="git-tool-list-empty">
+            <div v-if="commitsLoading" class="git-tool-list-empty">
+              正在读取提交
+            </div>
+            <div v-else-if="!commits.length" class="git-tool-list-empty">
               暂无提交记录
             </div>
           </div>
@@ -603,7 +616,15 @@
 </template>
 
 <script setup>
-import { computed, defineComponent, h, ref, watch } from "vue"
+import {
+  computed,
+  defineComponent,
+  h,
+  nextTick,
+  onBeforeUnmount,
+  ref,
+  watch
+} from "vue"
 import {
   Archive,
   ArchiveRestore,
@@ -958,6 +979,16 @@ const selectedArchiveCommitDetail = ref(null)
 const selectedStash = ref(null)
 const selectedStashArchive = ref(null)
 const stashDetail = ref(null)
+let commitLoadSeq = 0
+let stashLoaded = false
+const graphColors = ["#d95c6a", "#d08a2f", "#3f8b62", "#4679b2", "#8a64b7"]
+const graphTrackOffset = 14
+const graphColumnWidth = 4
+const graphNodeY = 16
+const graphNodeRadius = 4
+const graphLineStart = -1
+const graphLineEnd = 33
+let refreshTimer = 0
 const commitContextMenu = ref({
   visible: false,
   x: 0,
@@ -971,6 +1002,16 @@ const selectedRepo = computed(() => {
 
 const archivableBranches = computed(() => {
   return branches.value.filter((item) => !item.isCurrent)
+})
+
+const commitGraphMap = computed(() => {
+  const graphMap = new Map()
+
+  commits.value.forEach((commit) => {
+    graphMap.set(commit.rowId, createCommitGraph(commit.graph || ""))
+  })
+
+  return graphMap
 })
 
 const branchGroups = computed(() => {
@@ -1074,7 +1115,7 @@ const visibleArchiveCommits = computed(() => {
 
 watch(
   () => props.repos,
-  () => {
+  async () => {
     const previousRepoId = selectedRepoId.value
 
     if (
@@ -1089,7 +1130,8 @@ watch(
     }
 
     if (selectedRepoId.value && selectedRepoId.value !== previousRepoId) {
-      refreshGitProject()
+      await nextTick()
+      scheduleRefreshGitProject()
     }
   },
   { immediate: true }
@@ -1097,8 +1139,28 @@ watch(
 
 function handleRepoChange(event) {
   selectedRepoId.value = event.target.value
-  refreshGitProject()
+  stashLoaded = false
+  scheduleRefreshGitProject()
 }
+
+function selectGitWorkspace(workspace) {
+  gitWorkspace.value = workspace
+
+  if (workspace === "stash" && !stashLoaded) {
+    loadStashes()
+  }
+}
+
+function scheduleRefreshGitProject() {
+  window.clearTimeout(refreshTimer)
+  refreshTimer = window.setTimeout(() => {
+    refreshGitProject()
+  }, 30)
+}
+
+onBeforeUnmount(() => {
+  window.clearTimeout(refreshTimer)
+})
 
 async function refreshGitProject() {
   if (!selectedRepoId.value) {
@@ -1118,6 +1180,7 @@ async function refreshGitProject() {
     archives.value = result.archives || []
     stashes.value = result.stashes || []
     stashArchives.value = result.stashArchives || []
+    stashLoaded = false
     selectedBranchNames.value = selectedBranchNames.value.filter((branchName) =>
       branches.value.find((item) => item.name === branchName && !item.isCurrent)
     )
@@ -1130,8 +1193,12 @@ async function refreshGitProject() {
         ""
     }
 
-    if (selectedBranch.value) {
-      await loadCommits()
+    if (gitWorkspace.value === "branch" && selectedBranch.value) {
+      loadCommits({ checkCommits: false })
+    }
+
+    if (gitWorkspace.value === "stash") {
+      loadStashes()
     }
   } catch (error) {
     showErrorMessage(error)
@@ -1148,7 +1215,7 @@ async function selectBranch(branchName) {
   await loadCommits()
 }
 
-async function loadCommits() {
+async function loadCommits(options = {}) {
   closeCommitContextMenu()
 
   if (!selectedRepoId.value || !selectedBranch.value) {
@@ -1157,19 +1224,60 @@ async function loadCommits() {
   }
 
   commitsLoading.value = true
+  const loadSeq = commitLoadSeq + 1
+  commitLoadSeq = loadSeq
+  const repoId = selectedRepoId.value
+  const branchName = selectedBranch.value
+  commits.value = []
+  selectedCommit.value = null
+  selectedCommitDetail.value = null
 
   try {
-    commits.value = await window.aiManager.listGitToolCommits({
-      repoId: selectedRepoId.value,
-      branchName: selectedBranch.value
+    const quickCommits = await window.aiManager.listGitToolCommits({
+      repoId,
+      branchName,
+      skipCheck: true
     })
 
-    selectedCommit.value = null
-    selectedCommitDetail.value = null
+    if (
+      loadSeq !== commitLoadSeq ||
+      repoId !== selectedRepoId.value ||
+      branchName !== selectedBranch.value
+    ) {
+      return
+    }
+
+    commits.value = quickCommits
+
+    if (
+      options.checkCommits === false ||
+      !project.value?.checkBranchName ||
+      project.value.checkBranchName === branchName
+    ) {
+      return
+    }
+
+    const checkedCommits = await window.aiManager.listGitToolCommits({
+      repoId,
+      branchName,
+      skipCheck: false
+    })
+
+    if (
+      loadSeq !== commitLoadSeq ||
+      repoId !== selectedRepoId.value ||
+      branchName !== selectedBranch.value
+    ) {
+      return
+    }
+
+    commits.value = checkedCommits
   } catch (error) {
     showErrorMessage(error)
   } finally {
-    commitsLoading.value = false
+    if (loadSeq === commitLoadSeq) {
+      commitsLoading.value = false
+    }
   }
 }
 
@@ -1547,6 +1655,7 @@ async function loadStashes() {
     stashArchives.value = await window.aiManager.listGitToolStashArchives({
       repoId: selectedRepoId.value
     })
+    stashLoaded = true
   } catch (error) {
     showErrorMessage(error)
   }
@@ -1730,6 +1839,93 @@ function formatCheckStatus(status) {
   }
 
   return statusMap[status] || ""
+}
+
+function getGraphColumnX(index) {
+  return graphTrackOffset + index * graphColumnWidth
+}
+
+function getGraphColor(index) {
+  return graphColors[Math.abs(index) % graphColors.length]
+}
+
+function createCommitGraph(graph) {
+  return {
+    lines: createGraphLines(graph),
+    node: createGraphNode(graph)
+  }
+}
+
+function getCommitGraphLines(commit) {
+  return commitGraphMap.value.get(commit.rowId)?.lines || []
+}
+
+function getCommitGraphNode(commit) {
+  return commitGraphMap.value.get(commit.rowId)?.node || null
+}
+
+// 按 git --graph 的字符轨道绘制，同一轨道颜色固定绑定。
+function createGraphLines(graph) {
+  const lines = []
+
+  graph.split("").forEach((char, index) => {
+    const x = getGraphColumnX(index)
+
+    if (char === "*") {
+      lines.push({
+        key: `node-line-top-${index}`,
+        path: `M ${x} ${graphLineStart} L ${x} ${graphNodeY - graphNodeRadius}`,
+        color: getGraphColor(index)
+      })
+      lines.push({
+        key: `node-line-bottom-${index}`,
+        path: `M ${x} ${graphNodeY + graphNodeRadius} L ${x} ${graphLineEnd}`,
+        color: getGraphColor(index)
+      })
+      return
+    }
+
+    if (char === "/") {
+      lines.push({
+        key: `diagonal-left-${index}`,
+        path: `M ${x + graphColumnWidth} ${graphLineStart} L ${x - graphColumnWidth} ${graphLineEnd}`,
+        color: getGraphColor(index)
+      })
+      return
+    }
+
+    if (char === "\\") {
+      lines.push({
+        key: `diagonal-right-${index}`,
+        path: `M ${x - graphColumnWidth} ${graphLineStart} L ${x + graphColumnWidth} ${graphLineEnd}`,
+        color: getGraphColor(index)
+      })
+      return
+    }
+
+    if (char === "|") {
+      lines.push({
+        key: `line-${index}`,
+        path: `M ${x} ${graphLineStart} L ${x} ${graphLineEnd}`,
+        color: getGraphColor(index)
+      })
+    }
+  })
+
+  return lines
+}
+
+function createGraphNode(graph) {
+  const nodeIndex = graph.indexOf("*")
+
+  if (nodeIndex === -1) {
+    return null
+  }
+
+  return {
+    x: getGraphColumnX(nodeIndex),
+    color: getGraphColor(nodeIndex)
+  }
 }
 
 function getFileStatusLabel(status) {
@@ -2328,31 +2524,33 @@ function showErrorMessage(error) {
 
 .git-tool-commit-graph-cell {
   position: relative;
-  display: flex;
+  display: block;
   min-width: 0;
   height: 100%;
-  align-items: center;
-  padding: 0 8px;
+  overflow: visible;
+  padding: 0;
+}
+
+.git-tool-commit-graph-svg {
+  display: block;
+  width: 48px;
+  height: calc(100% + 2px);
+  margin-top: -1px;
+  overflow: visible;
 }
 
 .git-tool-commit-graph-line {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 14px;
-  width: 1px;
-  background: #e15675;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
-.git-tool-commit-graph-dot {
-  position: relative;
-  z-index: 1;
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
-  border-radius: 999px;
-  background: #e15675;
-  box-shadow: 0 0 0 2px #ffffff;
+.git-tool-commit-graph-node {
+  stroke: #ffffff;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
 }
 
 .git-tool-commit-description,
@@ -2413,13 +2611,6 @@ function showErrorMessage(error) {
 .git-tool-commit-graph {
   min-height: 28px;
   color: var(--color-text-soft);
-}
-
-.git-tool-commit-graph-text {
-  flex: none;
-  color: var(--color-text-soft);
-  font-family: "JetBrains Mono", "Consolas", monospace;
-  font-size: 0.75rem;
 }
 
 .git-tool-commit-main {
