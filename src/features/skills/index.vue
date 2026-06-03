@@ -245,14 +245,14 @@ function installRepositorySkill(skill) {
   .skills-view-head {
     display: flex;
     flex: none;
-    align-items: center;
+    align-items: flex-start;
     gap: 12px;
   }
 
   .skills-view-title {
     display: flex;
-    min-width: 0;
-    flex: 1;
+    width: 96px;
+    flex: none;
     flex-direction: column;
     gap: 3px;
   }
@@ -271,14 +271,17 @@ function installRepositorySkill(skill) {
     color: var(--color-text);
     font-size: 1.26rem;
     line-height: 1.2;
+    white-space: nowrap;
   }
 
   .skills-view-actions {
     display: flex;
-    flex: none;
+    min-width: 0;
+    flex: 1;
     align-items: center;
     justify-content: flex-end;
     gap: 8px;
+    row-gap: 8px;
     flex-wrap: wrap;
   }
 

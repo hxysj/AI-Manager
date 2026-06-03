@@ -1,18 +1,29 @@
 <template>
   <section class="skill-repository-list">
     <header class="skill-repository-list-head">
-      <button class="skill-repository-list-back" type="button" @click="$emit('back')">
+      <button
+        class="skill-repository-list-back"
+        type="button"
+        @click="$emit('back')"
+      >
         <ArrowLeft :size="15" />
         返回
       </button>
       <div class="skill-repository-list-title">
         <h1 class="skill-repository-list-title-text">Skill 仓库</h1>
         <span class="skill-repository-list-title-desc">
-          {{ repositorySkillGroups.length }} 个 Skill，{{ repositorySkillItems.length }} 个来源
+          {{ repositorySkillGroups.length }} 个 Skill，{{
+            repositorySkillItems.length
+          }}
+          个来源
         </span>
       </div>
       <div class="skill-repository-list-actions">
-        <button class="skill-repository-list-button" type="button" @click="$emit('refresh')">
+        <button
+          class="skill-repository-list-button"
+          type="button"
+          @click="$emit('refresh')"
+        >
           <RefreshCw :size="16" />
           刷新
         </button>
@@ -42,7 +53,10 @@
       </label>
       <label class="skill-repository-list-field select">
         <span class="skill-repository-list-field-label">仓库</span>
-        <select v-model="repositoryFilter" class="skill-repository-list-field-control">
+        <select
+          v-model="repositoryFilter"
+          class="skill-repository-list-field-control"
+        >
           <option value="all">全部仓库</option>
           <option
             v-for="repository in repositories"
@@ -55,7 +69,10 @@
       </label>
       <label class="skill-repository-list-field select">
         <span class="skill-repository-list-field-label">安装状态</span>
-        <select v-model="installFilter" class="skill-repository-list-field-control">
+        <select
+          v-model="installFilter"
+          class="skill-repository-list-field-control"
+        >
           <option value="all">全部状态</option>
           <option value="not-installed">未安装</option>
           <option value="installed">已安装</option>
@@ -148,11 +165,18 @@
     </div>
 
     <div v-else class="skill-repository-list-empty">
-      <strong class="skill-repository-list-empty-title">{{ emptyTitle }}</strong>
-      <span class="skill-repository-list-empty-desc">{{ emptyDescription }}</span>
+      <strong class="skill-repository-list-empty-title">{{
+        emptyTitle
+      }}</strong>
+      <span class="skill-repository-list-empty-desc">{{
+        emptyDescription
+      }}</span>
     </div>
 
-    <section v-if="repositoryDetailSkill" class="skill-repository-list-detail-layer">
+    <section
+      v-if="repositoryDetailSkill"
+      class="skill-repository-list-detail-layer"
+    >
       <div class="skill-repository-list-detail-panel">
         <header class="skill-repository-list-detail-head">
           <button
@@ -285,8 +309,8 @@ const installFilter = ref("all")
 const repositoryDetailSkill = ref(null)
 
 const repositorySkillItems = computed(() => {
-  return props.repositories.flatMap(repository =>
-    repository.skills.map(skill => ({
+  return props.repositories.flatMap((repository) =>
+    repository.skills.map((skill) => ({
       ...skill,
       repositoryId: repository.id,
       repositoryName: repository.name,
@@ -330,7 +354,8 @@ const repositorySkillGroups = computed(() => {
 
     if (
       !group.repositorySources.some(
-        repositorySource => repositorySource.repositoryId === skill.repositoryId
+        (repositorySource) =>
+          repositorySource.repositoryId === skill.repositoryId
       )
     ) {
       group.repositorySources.push(source)
@@ -343,59 +368,63 @@ const repositorySkillGroups = computed(() => {
 })
 
 const repositoryErrorCount = computed(() => {
-  return props.repositories.filter(repository => repository.status === "error").length
+  return props.repositories.filter(
+    (repository) => repository.status === "error"
+  ).length
 })
 
 const filteredRepositorySkillItems = computed(() => {
   const keyword = searchQuery.value.toLowerCase()
 
-  return repositorySkillGroups.value.map(skill => {
-    const matchedSources =
-      repositoryFilter.value === "all"
-        ? skill.sources
-        : skill.sources.filter(
-            source => source.repositoryId === repositoryFilter.value
-          )
+  return repositorySkillGroups.value
+    .map((skill) => {
+      const matchedSources =
+        repositoryFilter.value === "all"
+          ? skill.sources
+          : skill.sources.filter(
+              (source) => source.repositoryId === repositoryFilter.value
+            )
 
-    if (!matchedSources.length) {
-      return null
-    }
+      if (!matchedSources.length) {
+        return null
+      }
 
-    const selectedSource = matchedSources[0]
+      const selectedSource = matchedSources[0]
 
-    return {
-      ...skill,
-      id: selectedSource.id,
-      repositoryId: selectedSource.repositoryId,
-      repositoryName: selectedSource.repositoryName,
-      repositoryBranch: selectedSource.repositoryBranch,
-      repositorySource: selectedSource.repositorySource,
-      skillPath: selectedSource.skillPath,
-      displayPath: selectedSource.displayPath
-    }
-  }).filter(skill => {
-    if (!skill) {
-      return false
-    }
+      return {
+        ...skill,
+        id: selectedSource.id,
+        repositoryId: selectedSource.repositoryId,
+        repositoryName: selectedSource.repositoryName,
+        repositoryBranch: selectedSource.repositoryBranch,
+        repositorySource: selectedSource.repositorySource,
+        skillPath: selectedSource.skillPath,
+        displayPath: selectedSource.displayPath
+      }
+    })
+    .filter((skill) => {
+      if (!skill) {
+        return false
+      }
 
-    const installed = isRepositorySkillInstalled(skill)
-    const searchSource = [
-      skill.name,
-      skill.description,
-      ...skill.sources.map(source => source.displayPath),
-      ...skill.repositorySources.map(source => source.repositoryName),
-      ...(skill.tags || [])
-    ]
-      .join(" ")
-      .toLowerCase()
-    const matchKeyword = !keyword || searchSource.includes(keyword)
-    const matchInstall =
-      installFilter.value === "all" ||
-      (installFilter.value === "installed" && installed) ||
-      (installFilter.value === "not-installed" && !installed)
+      const installed = isRepositorySkillInstalled(skill)
+      const searchSource = [
+        skill.name,
+        skill.description,
+        ...skill.sources.map((source) => source.displayPath),
+        ...skill.repositorySources.map((source) => source.repositoryName),
+        ...(skill.tags || [])
+      ]
+        .join(" ")
+        .toLowerCase()
+      const matchKeyword = !keyword || searchSource.includes(keyword)
+      const matchInstall =
+        installFilter.value === "all" ||
+        (installFilter.value === "installed" && installed) ||
+        (installFilter.value === "not-installed" && !installed)
 
-    return matchKeyword && matchInstall
-  })
+      return matchKeyword && matchInstall
+    })
 })
 
 const emptyTitle = computed(() => {
@@ -415,7 +444,7 @@ const emptyDescription = computed(() => {
 })
 
 function isRepositorySkillInstalled(skill) {
-  return props.skills.some(item => item.name === skill.name)
+  return props.skills.some((item) => item.name === skill.name)
 }
 </script>
 
@@ -612,7 +641,6 @@ function isRepositorySkillInstalled(skill) {
   .skill-repository-list-grid {
     display: grid;
     min-height: 0;
-    flex: 1;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
     overflow: auto;
@@ -622,10 +650,9 @@ function isRepositorySkillInstalled(skill) {
   .skill-repository-list-card {
     display: flex;
     min-width: 0;
-    min-height: 172px;
     flex-direction: column;
-    gap: 9px;
-    padding: 13px;
+    gap: 10px;
+    padding: 14px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
     background: #ffffff;
@@ -671,21 +698,23 @@ function isRepositorySkillInstalled(skill) {
 
   .skill-repository-list-card-desc {
     display: -webkit-box;
-    height: 40px;
+    min-height: 38px;
     overflow: hidden;
     margin: 0;
     color: var(--color-text-muted);
     font-size: 0.8rem;
-    line-height: 1.55;
+    line-height: 1.5;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
   }
 
   .skill-repository-list-card-path {
+    min-height: 18px;
     overflow: hidden;
     color: var(--color-text-soft);
     font-size: 0.76rem;
     font-weight: 700;
+    line-height: 18px;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -731,7 +760,7 @@ function isRepositorySkillInstalled(skill) {
     justify-content: flex-end;
     gap: 8px;
     margin-top: auto;
-    padding-top: 2px;
+    padding-top: 4px;
   }
 
   .skill-repository-list-card-action {
