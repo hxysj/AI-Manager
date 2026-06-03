@@ -36,8 +36,24 @@
           工具列表
         </button>
         <div class="tools-view-detail-title">
-          <strong>{{ activeToolMeta?.label || "工具" }}</strong>
-          <span>{{ activeToolMeta?.summary || "" }}</span>
+          <strong class="tools-view-detail-name">{{
+            activeToolMeta?.label || "工具"
+          }}</strong>
+          <span class="tools-view-detail-summary">{{
+            activeToolMeta?.summary || ""
+          }}</span>
+        </div>
+        <div v-if="activeTool === 'git'" class="tools-view-git-status">
+          <div
+            v-for="item in gitToolStatus"
+            :key="item.label"
+            class="tools-view-git-status-item"
+          >
+            <span class="tools-view-git-status-label">{{ item.label }}</span>
+            <strong class="tools-view-git-status-value">{{
+              item.value
+            }}</strong>
+          </div>
         </div>
       </header>
 
@@ -45,6 +61,7 @@
         v-if="activeTool === 'git'"
         :repos="repos"
         @add-repo="$emit('add-repo')"
+        @status-change="gitToolStatus = $event"
       />
     </section>
   </section>
@@ -65,6 +82,7 @@ const props = defineProps({
 defineEmits(["add-repo"])
 
 const activeTool = ref("")
+const gitToolStatus = ref([])
 
 const toolItems = computed(() => [
   {
@@ -77,7 +95,7 @@ const toolItems = computed(() => [
 ])
 
 const activeToolMeta = computed(
-  () => toolItems.value.find(tool => tool.id === activeTool.value) || null
+  () => toolItems.value.find((tool) => tool.id === activeTool.value) || null
 )
 
 function openTool(toolId) {
@@ -201,55 +219,98 @@ function openTool(toolId) {
 
 .tools-view-detail-page {
   gap: 10px;
-}
 
-.tools-view-detail-head {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--color-line);
-}
+  .tools-view-detail-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--color-line);
+  }
 
-.tools-view-back {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid var(--color-line);
-  border-radius: 7px;
-  background: #ffffff;
-  color: var(--color-primary);
-  cursor: pointer;
-  font-size: 0.8rem;
-  font-weight: 700;
-}
+  .tools-view-back {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: #ffffff;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 700;
+  }
 
-.tools-view-back:hover {
-  border-color: #b9ccda;
-  background: #f7f9fc;
-}
+  .tools-view-back:hover {
+    border-color: #b9ccda;
+    background: #f7f9fc;
+  }
 
-.tools-view-detail-title {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
+  .tools-view-detail-title {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+  }
 
-.tools-view-detail-title strong {
-  color: var(--color-text);
-  font-size: 0.94rem;
-}
+  .tools-view-detail-name {
+    color: var(--color-text);
+    font-size: 0.94rem;
+  }
 
-.tools-view-detail-title span {
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: 0.76rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  .tools-view-detail-summary {
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 0.76rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tools-view-git-status {
+    display: grid;
+    width: 318px;
+    flex: none;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px 8px;
+    padding: 7px 8px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #f8fafc;
+
+    .tools-view-git-status-item {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 22px;
+      padding: 0 2px;
+
+      .tools-view-git-status-label {
+        overflow: hidden;
+        color: var(--color-text-soft);
+        font-size: 0.72rem;
+        font-weight: 700;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .tools-view-git-status-value {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--color-primary);
+        font-size: 0.84rem;
+        text-align: right;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+  }
 }
 </style>

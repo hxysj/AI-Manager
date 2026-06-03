@@ -910,7 +910,7 @@ function mergeRestoreValue(entryPath, currentValue, backupValue) {
   return backupValue
 }
 
-async function collectBackupEntries(paths) {
+async function collectBackupEntries(paths, options = {}) {
   const storageFiles = [
     [paths.storageFiles.skills, "storage/skills.json"],
     [paths.storageFiles.installs, "storage/installs.json"],
@@ -955,11 +955,17 @@ async function collectBackupEntries(paths) {
     }
   }
 
-  for (const sourcePath of [
+  const sourceDirs = [
     paths.skillsDir,
     paths.promptsDir,
     paths.promptProfilesDir
-  ]) {
+  ]
+
+  if (options.includeGitToolData) {
+    sourceDirs.push(path.join(paths.workspaceRoot, "git-tool"))
+  }
+
+  for (const sourcePath of sourceDirs) {
     const sourceEntries = await collectDirectoryEntries(sourcePath)
     const rootName = path
       .relative(paths.workspaceRoot, sourcePath)
@@ -1600,14 +1606,14 @@ class ManagerService extends EventEmitter {
     await this.refreshAll({ preferDetectedPaths: true })
   }
 
-  async createDataBackup() {
+  async createDataBackup(options = {}) {
     await this.storage.flush()
 
     return encryptBackupPayload({
       version: 1,
       createdAt: Date.now(),
       appSettings: serializeAppSettingsPaths(this.appSettings),
-      workspaceEntries: await collectBackupEntries(this.paths),
+      workspaceEntries: await collectBackupEntries(this.paths, options),
       runtimeProviderKeys: encryptBackupData(
         this.runtimeProviderService.exportProviderKeys()
       )

@@ -1200,7 +1200,7 @@ const baseNavItems = [
   { id: "skills", label: "Skills", icon: ShieldCheck },
   { id: "sessions", label: "Sessions", icon: Gauge },
   { id: "rules", label: "Rules", icon: Compass },
-  { id: "tools", label: "其他工具", icon: Wrench },
+  { id: "tools", label: "Tools", icon: Wrench },
   { id: "settings", label: "Settings", icon: Settings }
 ]
 
@@ -2699,8 +2699,9 @@ function createRestoreTreeRows(groupPath, items) {
         depth: index,
         itemCount: dirCounts.get(key) || 0,
         items: itemInfos
-          .filter((targetInfo) =>
-            targetInfo.parts.slice(0, index + 1).join("/") === key
+          .filter(
+            (targetInfo) =>
+              targetInfo.parts.slice(0, index + 1).join("/") === key
           )
           .map((targetInfo) => targetInfo.item)
       })
@@ -3206,7 +3207,8 @@ async function removeClaudeProxyProvider(payload) {
 async function activateClaudeProxyProvider(payload) {
   const shouldEnableProxy = !state.claudeProxyState.enabled
   const success = await runAction(async () => {
-    const nextState = await window.aiManager.activateClaudeProxyProvider(payload)
+    const nextState =
+      await window.aiManager.activateClaudeProxyProvider(payload)
 
     if (shouldEnableProxy) {
       return window.aiManager.enableClaudeProxy({})

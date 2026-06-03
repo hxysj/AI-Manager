@@ -754,7 +754,11 @@ async function createLocalBackup() {
     const filePath = path.join(backupDir, fileName)
 
     await fsp.mkdir(backupDir, { recursive: true })
-    await fsp.writeFile(filePath, await managerService.createDataBackup(), "utf8")
+    await fsp.writeFile(
+      filePath,
+      await managerService.createDataBackup({ includeGitToolData: true }),
+      "utf8"
+    )
     await pruneLocalBackups()
 
     appSettings = normalizeAppSettings({
