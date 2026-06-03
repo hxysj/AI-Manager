@@ -2647,9 +2647,20 @@ class ManagerService extends EventEmitter {
   }
 
   async addRepo(input) {
-    await this.repoService.addRepo(input)
-    this.startWatcher()
-    await this.refreshAll()
+    const repo = await this.repoService.addRepo(input)
+    const previousRepoMap = new Map(this.state.repos.map((item) => [item.id, item]))
+    const repos = this.repoService.listRepos().map((item) => ({
+      ...item,
+      skillCount: previousRepoMap.get(item.id)?.skillCount || 0
+    }))
+
+    this.state = {
+      ...this.state,
+      repos,
+      refreshedAt: Date.now()
+    }
+    this.emit("state-changed", this.state)
+    return repo
   }
 
   async syncRepo(repoId) {
@@ -2726,7 +2737,8 @@ class ManagerService extends EventEmitter {
       input.sourceBranchName,
       input.targetBranchName,
       input.commitHash,
-      input.subject
+      input.subject,
+      input.date
     )
   }
 

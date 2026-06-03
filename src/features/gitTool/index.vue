@@ -1,5 +1,5 @@
 <template>
-  <section class="git-tool" @click="closeCommitContextMenu">
+  <section class="git-tool" @click="closeContextMenus">
     <section class="git-tool-top">
       <div class="git-tool-command-row">
         <label class="git-tool-picker">
@@ -151,6 +151,7 @@
                     'git-tool-branch-current': branch.isCurrent
                   }
                 ]"
+                @contextmenu.prevent="openBranchContextMenu($event, branch)"
               >
                 <input
                   class="git-tool-branch-check"
@@ -320,15 +321,39 @@
               >{{ stashes.length }} 条记录</span
             >
           </div>
-          <button
-            class="git-tool-action"
-            type="button"
-            :disabled="stashLoading || !selectedRepo"
-            @click="loadStashes"
-          >
-            <RefreshCw :size="14" />
-            刷新
-          </button>
+          <div class="git-tool-panel-actions">
+            <button
+              class="git-tool-action"
+              type="button"
+              :disabled="stashLoading || !selectedRepo"
+              @click="loadStashes"
+            >
+              <RefreshCw :size="14" />
+              刷新
+            </button>
+          </div>
+        </div>
+
+        <div class="git-tool-stash-summary-row">
+          <span>已选 {{ selectedStashHashes.length }}/{{ stashes.length }}</span>
+          <div class="git-tool-stash-toolbar">
+            <button
+              class="git-tool-branch-toolbar-button"
+              type="button"
+              :disabled="!stashes.length"
+              @click="selectAllStashes"
+            >
+              全选
+            </button>
+            <button
+              class="git-tool-branch-toolbar-button"
+              type="button"
+              :disabled="!selectedStashHashes.length"
+              @click="archiveSelectedStashes"
+            >
+              归档选中
+            </button>
+          </div>
         </div>
 
         <div class="git-tool-stash-list">
@@ -341,6 +366,13 @@
               :key="stash.hash"
               class="git-tool-stash"
             >
+              <input
+                class="git-tool-stash-check"
+                type="checkbox"
+                :checked="isStashChecked(stash.hash)"
+                @click.stop
+                @change="toggleStashChecked(stash, $event)"
+              />
               <button
                 class="git-tool-stash-main"
                 type="button"
@@ -488,48 +520,94 @@
           class="git-tool-drawer-body"
         >
           <div class="git-tool-drawer-archives">
-            <article
-              v-for="archive in archives"
-              :key="archive.archiveId"
-              class="git-tool-archive"
-            >
+            <div v-if="archives.length" class="git-tool-archive-tools">
+              <span>共 {{ archives.length }} 条归档</span>
               <button
-                class="git-tool-archive-main"
+                class="git-tool-branch-toolbar-button"
                 type="button"
-                @click="openArchiveDetail(archive)"
+                @click="restoreArchives(archives)"
               >
-                <strong
-                  class="git-tool-archive-name"
-                  :title="archive.branchName"
-                  >{{ archive.branchName }}</strong
-                >
-                <span class="git-tool-archive-path">{{
-                  archive.projectPath
-                }}</span>
-                <span class="git-tool-archive-meta">
-                  <code>{{ formatHash(archive.commitHash) }}</code>
-                  <span>{{ formatDate(archive.archivedAt) }}</span>
-                </span>
+                全部恢复
               </button>
-              <div class="git-tool-archive-actions">
+            </div>
+            <section
+              v-for="group in archiveGroups"
+              :key="group.id"
+              class="git-tool-archive-group"
+            >
+              <div class="git-tool-archive-group-head">
                 <button
-                  class="git-tool-icon-button"
+                  class="git-tool-archive-group-toggle"
                   type="button"
-                  title="恢复归档"
-                  @click="restoreArchive(archive)"
+                  @click="toggleArchiveGroup(group.id)"
                 >
-                  <RotateCcw :size="14" />
+                  <component
+                    :is="
+                      isArchiveGroupClosed(group.id)
+                        ? ChevronRight
+                        : ChevronDown
+                    "
+                    :size="13"
+                  />
+                  <strong>{{ group.label }}</strong>
+                  <span>{{ group.archives.length }}</span>
                 </button>
                 <button
-                  class="git-tool-icon-button git-tool-icon-danger"
+                  class="git-tool-branch-toolbar-button"
                   type="button"
-                  title="删除归档"
-                  @click="deleteArchive(archive)"
+                  @click="restoreArchives(group.archives)"
                 >
-                  <Trash2 :size="14" />
+                  恢复本组
                 </button>
               </div>
-            </article>
+              <div
+                v-if="!isArchiveGroupClosed(group.id)"
+                class="git-tool-archive-group-body"
+              >
+                <article
+                  v-for="archive in group.archives"
+                  :key="archive.archiveId"
+                  class="git-tool-archive"
+                >
+                  <button
+                    class="git-tool-archive-main"
+                    type="button"
+                    @click="openArchiveDetail(archive)"
+                  >
+                    <strong
+                      class="git-tool-archive-name"
+                      :title="archive.branchName"
+                      >{{ archive.branchName }}</strong
+                    >
+                    <span class="git-tool-archive-path">{{
+                      archive.projectPath
+                    }}</span>
+                    <span class="git-tool-archive-meta">
+                      <code>{{ formatHash(archive.commitHash) }}</code>
+                      <span>{{ formatDate(archive.archivedAt) }}</span>
+                    </span>
+                  </button>
+                  <div class="git-tool-archive-actions">
+                    <button
+                      class="git-tool-icon-button"
+                      type="button"
+                      title="恢复归档"
+                      @click="restoreArchive(archive)"
+                    >
+                      <RotateCcw :size="14" />
+                    </button>
+                    <button
+                      class="git-tool-icon-button git-tool-icon-danger"
+                      type="button"
+                      title="删除归档"
+                      @click="deleteArchive(archive)"
+                    >
+                      <Trash2 :size="14" />
+                    </button>
+                  </div>
+                </article>
+              </div>
+            </section>
             <div v-if="!archives.length" class="git-tool-list-empty">
               暂无分支归档
             </div>
@@ -647,6 +725,25 @@
       >
         <Hash :size="14" />
         复制完整 Hash
+      </button>
+    </div>
+
+    <div
+      v-if="branchContextMenu.visible"
+      class="git-tool-context-menu"
+      :style="{
+        left: `${branchContextMenu.x}px`,
+        top: `${branchContextMenu.y}px`
+      }"
+      @click.stop
+    >
+      <button
+        class="git-tool-context-menu-button"
+        type="button"
+        @click="copyContextBranchName"
+      >
+        <Copy :size="14" />
+        复制分支名
       </button>
     </div>
 
@@ -1050,6 +1147,7 @@ const stashArchives = ref([])
 const currentBranch = ref("")
 const selectedBranch = ref("")
 const selectedBranchNames = ref([])
+const selectedStashHashes = ref([])
 const selectedCommit = ref(null)
 const selectedCommitDetail = ref(null)
 const selectedArchive = ref(null)
@@ -1060,6 +1158,7 @@ const selectedStash = ref(null)
 const selectedStashArchive = ref(null)
 const stashDetail = ref(null)
 const closedBranchGroups = ref(new Set())
+const closedArchiveGroups = ref(new Set())
 const confirmDialog = ref({
   visible: false,
   title: "操作确认",
@@ -1087,6 +1186,12 @@ const commitContextMenu = ref({
   x: 0,
   y: 0,
   commit: null
+})
+const branchContextMenu = ref({
+  visible: false,
+  x: 0,
+  y: 0,
+  branch: null
 })
 
 const selectedRepo = computed(() => {
@@ -1153,6 +1258,48 @@ const branchGroups = computed(() => {
   ].filter((item) => item.branches.length)
 })
 
+const archiveGroups = computed(() => {
+  const groupMap = new Map()
+  const baseArchives = []
+
+  archives.value.forEach((archive) => {
+    if (
+      ["master", "main", "release", "develop", "dev"].includes(
+        archive.branchName
+      )
+    ) {
+      baseArchives.push(archive)
+      return
+    }
+
+    const groupName = archive.branchName.includes("/")
+      ? archive.branchName.split("/")[0]
+      : "其他分支"
+
+    if (!groupMap.has(groupName)) {
+      groupMap.set(groupName, {
+        id: groupName,
+        label: groupName,
+        archives: []
+      })
+    }
+
+    groupMap.get(groupName).archives.push(archive)
+  })
+
+  const groups = Array.from(groupMap.values())
+
+  if (baseArchives.length) {
+    groups.push({
+      id: "base",
+      label: "基础分支",
+      archives: baseArchives
+    })
+  }
+
+  return groups
+})
+
 function isBranchGroupClosed(groupId) {
   return closedBranchGroups.value.has(groupId)
 }
@@ -1167,6 +1314,22 @@ function toggleBranchGroup(groupId) {
   }
 
   closedBranchGroups.value = nextGroups
+}
+
+function isArchiveGroupClosed(groupId) {
+  return closedArchiveGroups.value.has(groupId)
+}
+
+function toggleArchiveGroup(groupId) {
+  const nextGroups = new Set(closedArchiveGroups.value)
+
+  if (nextGroups.has(groupId)) {
+    nextGroups.delete(groupId)
+  } else {
+    nextGroups.add(groupId)
+  }
+
+  closedArchiveGroups.value = nextGroups
 }
 
 const stashDetailTitle = computed(() => {
@@ -1320,6 +1483,9 @@ async function refreshGitProject() {
     selectedBranchNames.value = selectedBranchNames.value.filter((branchName) =>
       branches.value.find((item) => item.name === branchName && !item.isCurrent)
     )
+    selectedStashHashes.value = selectedStashHashes.value.filter((stashHash) =>
+      stashes.value.find((item) => item.hash === stashHash)
+    )
 
     if (!branches.value.find((item) => item.name === selectedBranch.value)) {
       selectedBranch.value =
@@ -1433,11 +1599,22 @@ function openCommitContextMenu(event, commit) {
     return
   }
 
+  closeBranchContextMenu()
   commitContextMenu.value = {
     visible: true,
     x: event.clientX,
     y: event.clientY,
     commit
+  }
+}
+
+function openBranchContextMenu(event, branch) {
+  closeCommitContextMenu()
+  branchContextMenu.value = {
+    visible: true,
+    x: event.clientX,
+    y: event.clientY,
+    branch
   }
 }
 
@@ -1452,6 +1629,24 @@ function closeCommitContextMenu() {
     y: 0,
     commit: null
   }
+}
+
+function closeBranchContextMenu() {
+  if (!branchContextMenu.value.visible) {
+    return
+  }
+
+  branchContextMenu.value = {
+    visible: false,
+    x: 0,
+    y: 0,
+    branch: null
+  }
+}
+
+function closeContextMenus() {
+  closeCommitContextMenu()
+  closeBranchContextMenu()
 }
 
 async function checkContextCommitOnBranch() {
@@ -1474,7 +1669,8 @@ async function checkContextCommitOnBranch() {
       sourceBranchName: selectedBranch.value,
       targetBranchName: project.value.checkBranchName,
       commitHash: commit.hash,
-      subject: commit.subject
+      subject: commit.subject,
+      date: commit.date
     })
     const checkStatus = result?.matchedBy
       ? result.matchedBy === "hash"
@@ -1532,6 +1728,24 @@ async function copyContextCommitHash() {
     showErrorMessage(error)
   } finally {
     closeCommitContextMenu()
+  }
+}
+
+async function copyContextBranchName() {
+  const branch = branchContextMenu.value.branch
+
+  if (!branch) {
+    closeBranchContextMenu()
+    return
+  }
+
+  try {
+    await navigator.clipboard.writeText(branch.name || "")
+    createMessage.success("分支名已复制。")
+  } catch (error) {
+    showErrorMessage(error)
+  } finally {
+    closeBranchContextMenu()
   }
 }
 
@@ -1596,6 +1810,25 @@ function toggleBranchChecked(branch, event) {
 
 function selectAllBranches() {
   selectedBranchNames.value = archivableBranches.value.map((item) => item.name)
+}
+
+function isStashChecked(stashHash) {
+  return selectedStashHashes.value.includes(stashHash)
+}
+
+function toggleStashChecked(stash, event) {
+  if (event.target.checked) {
+    selectedStashHashes.value = [...selectedStashHashes.value, stash.hash]
+    return
+  }
+
+  selectedStashHashes.value = selectedStashHashes.value.filter(
+    (item) => item !== stash.hash
+  )
+}
+
+function selectAllStashes() {
+  selectedStashHashes.value = stashes.value.map((item) => item.hash)
 }
 
 function confirmGitAction(options) {
@@ -1665,6 +1898,8 @@ async function archiveSelectedBranches() {
     return
   }
 
+  gitLoading.value = true
+
   try {
     for (const branchName of branchNames) {
       await window.aiManager.archiveGitToolBranch({
@@ -1679,6 +1914,8 @@ async function archiveSelectedBranches() {
     await refreshGitProject()
   } catch (error) {
     showErrorMessage(error)
+  } finally {
+    gitLoading.value = false
   }
 }
 
@@ -1816,6 +2053,8 @@ async function restoreArchive(archive) {
     return
   }
 
+  gitLoading.value = true
+
   try {
     await window.aiManager.restoreGitToolArchive({
       archiveId: archive.archiveId,
@@ -1827,6 +2066,46 @@ async function restoreArchive(archive) {
     await refreshGitProject()
   } catch (error) {
     showErrorMessage(error)
+  } finally {
+    gitLoading.value = false
+  }
+}
+
+async function restoreArchives(targetArchives) {
+  if (!targetArchives.length) {
+    return
+  }
+
+  if (
+    !(await confirmGitAction({
+      title: "批量恢复分支归档",
+      description: "会使用归档前的分支名恢复到本地分支。",
+      message: `确认恢复 ${targetArchives.length} 个分支归档吗？`,
+      detail: targetArchives.map((archive) => archive.branchName).join("、"),
+      confirmText: "确认恢复"
+    }))
+  ) {
+    return
+  }
+
+  gitLoading.value = true
+
+  try {
+    for (const archive of targetArchives) {
+      await window.aiManager.restoreGitToolArchive({
+        archiveId: archive.archiveId,
+        targetBranchName: archive.branchName
+      })
+    }
+
+    createMessage.success("分支归档已恢复。")
+    closeDetailDrawer()
+    selectedBranch.value = targetArchives[0].branchName
+    await refreshGitProject()
+  } catch (error) {
+    showErrorMessage(error)
+  } finally {
+    gitLoading.value = false
   }
 }
 
@@ -1842,6 +2121,8 @@ async function deleteArchive(archive) {
     return
   }
 
+  gitLoading.value = true
+
   try {
     archives.value = await window.aiManager.deleteGitToolArchive({
       archiveId: archive.archiveId
@@ -1849,6 +2130,8 @@ async function deleteArchive(archive) {
     createMessage.success("归档已删除。")
   } catch (error) {
     showErrorMessage(error)
+  } finally {
+    gitLoading.value = false
   }
 }
 
@@ -1866,6 +2149,9 @@ async function loadStashes() {
     stashArchives.value = await window.aiManager.listGitToolStashArchives({
       repoId: selectedRepoId.value
     })
+    selectedStashHashes.value = selectedStashHashes.value.filter((stashHash) =>
+      stashes.value.find((item) => item.hash === stashHash)
+    )
     stashLoaded = true
   } catch (error) {
     showErrorMessage(error)
@@ -1968,6 +2254,8 @@ async function archiveStash(stash) {
     return
   }
 
+  gitLoading.value = true
+
   try {
     await window.aiManager.archiveGitToolStash({
       repoId: selectedRepoId.value,
@@ -1980,6 +2268,52 @@ async function archiveStash(stash) {
     await loadStashes()
   } catch (error) {
     showErrorMessage(error)
+  } finally {
+    gitLoading.value = false
+  }
+}
+
+async function archiveSelectedStashes() {
+  if (!selectedRepoId.value || !selectedStashHashes.value.length) {
+    return
+  }
+
+  const selectedStashes = stashes.value
+    .filter((stash) => selectedStashHashes.value.includes(stash.hash))
+    .sort((left, right) => right.index - left.index)
+
+  if (
+    !(await confirmGitAction({
+      title: "归档 Stash",
+      description: "归档后会从当前 stash list 中移除。",
+      message: `归档成功后，${selectedStashes.length} 条 Stash 会从 stash list 中删除。`,
+      detail: `已选 ${selectedStashes.length}/${stashes.value.length}`,
+      confirmText: "确认归档"
+    }))
+  ) {
+    return
+  }
+
+  gitLoading.value = true
+
+  try {
+    for (const stash of selectedStashes) {
+      await window.aiManager.archiveGitToolStash({
+        repoId: selectedRepoId.value,
+        stashRef: stash.stashRef,
+        stashHash: stash.hash
+      })
+    }
+
+    createMessage.success("选中 stash 已归档。")
+    selectedStashHashes.value = []
+    stashDetail.value = null
+    selectedStash.value = null
+    await loadStashes()
+  } catch (error) {
+    showErrorMessage(error)
+  } finally {
+    gitLoading.value = false
   }
 }
 
@@ -1996,6 +2330,8 @@ async function restoreStashArchive(archive) {
     return
   }
 
+  gitLoading.value = true
+
   try {
     await window.aiManager.restoreGitToolStashArchive({
       stashArchiveId: archive.stashArchiveId
@@ -2006,6 +2342,8 @@ async function restoreStashArchive(archive) {
     await loadStashes()
   } catch (error) {
     showErrorMessage(error)
+  } finally {
+    gitLoading.value = false
   }
 }
 
@@ -2022,6 +2360,8 @@ async function deleteStashArchive(archive) {
     return
   }
 
+  gitLoading.value = true
+
   try {
     stashArchives.value = await window.aiManager.deleteGitToolStashArchive({
       stashArchiveId: archive.stashArchiveId
@@ -2029,6 +2369,8 @@ async function deleteStashArchive(archive) {
     createMessage.success("stash 归档已删除。")
   } catch (error) {
     showErrorMessage(error)
+  } finally {
+    gitLoading.value = false
   }
 }
 
@@ -3161,15 +3503,43 @@ function showErrorMessage(error) {
   min-height: 0;
   flex: 1;
   gap: 12px;
-}
 
-.git-tool-stash-panel {
-  flex: 1;
-  min-width: 0;
-}
+  .git-tool-stash-panel {
+    flex: 1;
+    min-width: 0;
+  }
 
-.git-tool-stash-list {
-  flex: 1;
+  .git-tool-stash-summary-row {
+    display: flex;
+    min-height: 42px;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--color-line);
+    background: #f8fafc;
+    color: #2f5f91;
+    font-size: 0.76rem;
+  }
+
+  .git-tool-stash-toolbar {
+    display: flex;
+    flex: none;
+    gap: 7px;
+  }
+
+  .git-tool-stash-list {
+    flex: 1;
+  }
+
+  .git-tool-stash-check {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    margin: 0;
+    accent-color: var(--color-primary);
+  }
 }
 
 .git-tool-drawer {
@@ -3280,11 +3650,82 @@ function showErrorMessage(error) {
 
 .git-tool-drawer-archives {
   width: 520px;
+  min-height: 0;
   flex: 0 0 520px;
-  align-self: flex-start;
   gap: 8px;
+  overflow: auto;
   padding: 10px;
   background: #f8fafc;
+
+  .git-tool-archive-tools {
+    display: flex;
+    min-height: 38px;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 2px 2px;
+    color: #2f5f91;
+    font-size: 0.76rem;
+  }
+
+  .git-tool-archive-group {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .git-tool-archive-group-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .git-tool-archive-group-toggle {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: 7px;
+    height: 32px;
+    padding: 0 9px;
+    border: 1px solid #cfe0ef;
+    border-radius: 7px;
+    background: #eef5fb;
+    color: #2f5f91;
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .git-tool-archive-group-toggle:hover {
+    border-color: #bad4ea;
+    background: #e6f1fa;
+  }
+
+  .git-tool-archive-group-toggle strong {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 0.78rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-tool-archive-group-toggle span {
+    flex: none;
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+  }
+
+  .git-tool-archive-group-body {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    border-left: 1px solid #cfe0ef;
+    margin-left: 8px;
+    padding-left: 8px;
+  }
 
   .git-tool-archive {
     min-height: 66px;

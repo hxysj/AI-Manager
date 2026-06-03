@@ -196,7 +196,7 @@ async function getCommits(projectPath, branchName) {
   return parseCommitLog(output)
 }
 
-async function findCommitBySubject(projectPath, branchName, subject) {
+async function findCommitBySubjectAndDate(projectPath, branchName, subject, date) {
   try {
     const output = await runGit(
       [
@@ -211,7 +211,11 @@ async function findCommitBySubject(projectPath, branchName, subject) {
       projectPath
     )
 
-    return parseCommitLog(output).find((item) => item.subject === subject) || null
+    return (
+      parseCommitLog(output).find(
+        (item) => item.subject === subject && item.date === date
+      ) || null
+    )
   } catch (error) {
     return null
   }
@@ -235,11 +239,13 @@ async function checkCommitsOnBranch(projectPath, branchName, commits) {
   const targetHashMap = new Map(
     targetCommits.map((commit) => [commit.hash, commit])
   )
-  const targetSubjectMap = new Map()
+  const targetSubjectDateMap = new Map()
 
   targetCommits.forEach((commit) => {
-    if (!targetSubjectMap.has(commit.subject)) {
-      targetSubjectMap.set(commit.subject, commit)
+    const subjectDateKey = `${commit.subject}\u0000${commit.date}`
+
+    if (!targetSubjectDateMap.has(subjectDateKey)) {
+      targetSubjectDateMap.set(subjectDateKey, commit)
     }
   })
 
@@ -259,6 +265,7 @@ async function checkCommitsOnBranch(projectPath, branchName, commits) {
       matchedCommits.push({
         commitHash: commit.hash,
         subject: commit.subject,
+        date: commit.date,
         targetBranchName: branchName,
         matchedBy: "hash",
         matchedCommit: {
@@ -270,7 +277,9 @@ async function checkCommitsOnBranch(projectPath, branchName, commits) {
       continue
     }
 
-    const matchedCommit = targetSubjectMap.get(commit.subject)
+    const matchedCommit = targetSubjectDateMap.get(
+      `${commit.subject}\u0000${commit.date}`
+    )
 
     checkedCommits.push({
       ...commit,
@@ -282,8 +291,9 @@ async function checkCommitsOnBranch(projectPath, branchName, commits) {
       matchedCommits.push({
         commitHash: commit.hash,
         subject: commit.subject,
+        date: commit.date,
         targetBranchName: branchName,
-        matchedBy: "subject",
+        matchedBy: "subject-date",
         matchedCommit: {
           ...matchedCommit,
           checkStatus: "exists-subject",
@@ -299,7 +309,13 @@ async function checkCommitsOnBranch(projectPath, branchName, commits) {
   }
 }
 
-async function checkCommitOnBranch(projectPath, branchName, commitHash, subject) {
+async function checkCommitOnBranch(
+  projectPath,
+  branchName,
+  commitHash,
+  subject,
+  date
+) {
   try {
     await runGit(["merge-base", "--is-ancestor", commitHash, branchName], projectPath)
 
@@ -319,14 +335,19 @@ async function checkCommitOnBranch(projectPath, branchName, commitHash, subject)
       commit: parseCommitLog(output)[0]
     }
   } catch (error) {
-    const matchedCommit = await findCommitBySubject(projectPath, branchName, subject)
+    const matchedCommit = await findCommitBySubjectAndDate(
+      projectPath,
+      branchName,
+      subject,
+      date
+    )
 
     if (!matchedCommit) {
       return null
     }
 
     return {
-      matchedBy: "subject",
+      matchedBy: "subject-date",
       commit: matchedCommit
     }
   }
@@ -721,7 +742,7 @@ class GitToolService {
     const commitCheckCache = await this.readCommitCheckCache(repoId)
     const commitCheckCacheMap = new Map(
       commitCheckCache.map((item) => [
-        `${item.sourceBranchName}\u0000${item.commitHash}\u0000${item.subject}\u0000${item.targetBranchName}`,
+        `${item.sourceBranchName}\u0000${item.commitHash}\u0000${item.subject}\u0000${item.date}\u0000${item.targetBranchName}`,
         item
       ])
     )
@@ -732,7 +753,7 @@ class GitToolService {
       }
 
       const cachedCommit = commitCheckCacheMap.get(
-        `${branchName}\u0000${commit.hash}\u0000${commit.subject}\u0000${project.checkBranchName}`
+        `${branchName}\u0000${commit.hash}\u0000${commit.subject}\u0000${commit.date}\u0000${project.checkBranchName}`
       )
 
       if (!cachedCommit) {
@@ -773,7 +794,7 @@ class GitToolService {
 
       checkResult.matchedCommits.forEach((item) => {
         commitCheckCacheMap.set(
-          `${branchName}\u0000${item.commitHash}\u0000${item.subject}\u0000${item.targetBranchName}`,
+          `${branchName}\u0000${item.commitHash}\u0000${item.subject}\u0000${item.date}\u0000${item.targetBranchName}`,
           {
             ...item,
             sourceBranchName: branchName,
@@ -814,18 +835,19 @@ class GitToolService {
     sourceBranchName,
     targetBranchName,
     commitHash,
-    subject
+    subject,
+    date
   ) {
     const project = await this.getRepoProject(repoId)
     const commitCheckCache = await this.readCommitCheckCache(repoId)
     const commitCheckCacheMap = new Map(
       commitCheckCache.map((item) => [
-        `${item.sourceBranchName}\u0000${item.commitHash}\u0000${item.subject}\u0000${item.targetBranchName}`,
+        `${item.sourceBranchName}\u0000${item.commitHash}\u0000${item.subject}\u0000${item.date}\u0000${item.targetBranchName}`,
         item
       ])
     )
     const cachedCommit = commitCheckCacheMap.get(
-      `${sourceBranchName}\u0000${commitHash}\u0000${subject}\u0000${targetBranchName}`
+      `${sourceBranchName}\u0000${commitHash}\u0000${subject}\u0000${date}\u0000${targetBranchName}`
     )
 
     if (cachedCommit) {
@@ -839,16 +861,18 @@ class GitToolService {
       project.projectPath,
       targetBranchName,
       commitHash,
-      subject
+      subject,
+      date
     )
 
     if (matchedResult) {
       commitCheckCacheMap.set(
-        `${sourceBranchName}\u0000${commitHash}\u0000${subject}\u0000${targetBranchName}`,
+        `${sourceBranchName}\u0000${commitHash}\u0000${subject}\u0000${date}\u0000${targetBranchName}`,
         {
           sourceBranchName,
           commitHash,
           subject,
+          date,
           targetBranchName,
           matchedBy: matchedResult.matchedBy,
           matchedCommit: matchedResult.commit,
