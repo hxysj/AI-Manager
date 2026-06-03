@@ -2641,7 +2641,9 @@ class ManagerService extends EventEmitter {
   }
 
   async listGitToolCommits(input) {
-    return this.gitToolService.listCommits(input.repoId, input.branchName)
+    return this.gitToolService.listCommits(input.repoId, input.branchName, {
+      skipCheck: Boolean(input.skipCheck)
+    })
   }
 
   async getGitToolCommitDetail(input) {

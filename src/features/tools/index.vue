@@ -51,12 +51,9 @@
 </template>
 
 <script setup>
-import { computed, defineAsyncComponent, ref } from "vue"
+import { computed, ref } from "vue"
 import { ArrowLeft, GitBranchIcon } from "lucide-vue-next"
-
-const GitToolView = defineAsyncComponent(
-  () => import("@/features/gitTool/index.vue")
-)
+import GitToolView from "@/features/gitTool/index.vue"
 
 const props = defineProps({
   repos: {

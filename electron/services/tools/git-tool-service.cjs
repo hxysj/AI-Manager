@@ -94,25 +94,43 @@ async function getCurrentBranch(projectPath) {
   return runGit(["branch", "--show-current"], projectPath)
 }
 
-async function getLocalBranches(projectPath, currentBranch) {
+async function getLocalBranchScan(projectPath) {
   const branchOutput = await runGit(
-    ["for-each-ref", "--format=%(refname:short)%00%(objectname)", "refs/heads"],
+    [
+      "for-each-ref",
+      "--format=%(HEAD)%00%(refname:short)%00%(objectname)",
+      "refs/heads"
+    ],
     projectPath
   )
 
   if (!branchOutput) {
-    return []
+    return {
+      currentBranch: "",
+      branches: []
+    }
   }
 
-  return branchOutput.split("\n").map((line) => {
-    const [name, commitHash] = line.split("\u0000")
+  let currentBranch = ""
+  const branches = branchOutput.split("\n").map((line) => {
+    const [head, name, commitHash] = line.split("\u0000")
+    const isCurrent = head.trim() === "*"
+
+    if (isCurrent) {
+      currentBranch = name
+    }
 
     return {
       name,
       commitHash,
-      isCurrent: name === currentBranch
+      isCurrent
     }
   })
+
+  return {
+    currentBranch,
+    branches
+  }
 }
 
 function parseCommitLog(output) {
@@ -202,6 +220,28 @@ async function findCommitBySubject(projectPath, branchName, subject) {
 async function checkCommitsOnBranch(projectPath, branchName, commits) {
   const checkedCommits = []
   const matchedCommits = []
+  const targetOutput = await runGit(
+    [
+      "log",
+      branchName,
+      "--date=iso-strict",
+      "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ad"
+    ],
+    projectPath
+  )
+  const targetCommits = parseCommitLog(targetOutput).filter(
+    (item) => !item.isGraphOnly
+  )
+  const targetHashMap = new Map(
+    targetCommits.map((commit) => [commit.hash, commit])
+  )
+  const targetSubjectMap = new Map()
+
+  targetCommits.forEach((commit) => {
+    if (!targetSubjectMap.has(commit.subject)) {
+      targetSubjectMap.set(commit.subject, commit)
+    }
+  })
 
   // 先用提交哈希做精确合入判断，失败后再用标题做疑似匹配。
   for (const commit of commits) {
@@ -210,8 +250,7 @@ async function checkCommitsOnBranch(projectPath, branchName, commits) {
       continue
     }
 
-    try {
-      await runGit(["merge-base", "--is-ancestor", commit.hash, branchName], projectPath)
+    if (targetHashMap.has(commit.hash)) {
       checkedCommits.push({
         ...commit,
         checkStatus: "exists-hash",
@@ -229,32 +268,28 @@ async function checkCommitsOnBranch(projectPath, branchName, commits) {
         }
       })
       continue
-    } catch (error) {
-      const matchedCommit = await findCommitBySubject(
-        projectPath,
-        branchName,
-        commit.subject
-      )
+    }
 
-      checkedCommits.push({
-        ...commit,
-        checkStatus: matchedCommit ? "exists-subject" : "missing",
-        checkTargetBranch: branchName
+    const matchedCommit = targetSubjectMap.get(commit.subject)
+
+    checkedCommits.push({
+      ...commit,
+      checkStatus: matchedCommit ? "exists-subject" : "missing",
+      checkTargetBranch: branchName
+    })
+
+    if (matchedCommit) {
+      matchedCommits.push({
+        commitHash: commit.hash,
+        subject: commit.subject,
+        targetBranchName: branchName,
+        matchedBy: "subject",
+        matchedCommit: {
+          ...matchedCommit,
+          checkStatus: "exists-subject",
+          checkTargetBranch: branchName
+        }
       })
-
-      if (matchedCommit) {
-        matchedCommits.push({
-          commitHash: commit.hash,
-          subject: commit.subject,
-          targetBranchName: branchName,
-          matchedBy: "subject",
-          matchedCommit: {
-            ...matchedCommit,
-            checkStatus: "exists-subject",
-            checkTargetBranch: branchName
-          }
-        })
-      }
     }
   }
 
@@ -641,8 +676,10 @@ class GitToolService {
 
   async resolveProject(repoId) {
     const project = await this.getRepoProject(repoId)
-    const gitPath = await readGitPath(project.projectPath)
-    const originUrl = await getOriginUrl(project.projectPath)
+    const [gitPath, originUrl] = await Promise.all([
+      readGitPath(project.projectPath),
+      getOriginUrl(project.projectPath)
+    ])
 
     return this.saveProjectPatch(repoId, {
       gitPath,
@@ -652,24 +689,32 @@ class GitToolService {
   }
 
   async scanBranches(repoId) {
-    const project = await this.resolveProject(repoId)
-    const currentBranch = await getCurrentBranch(project.projectPath)
+    const project = await this.getRepoProject(repoId)
+    const [branchScan, archives, stashArchives] = await Promise.all([
+      getLocalBranchScan(project.projectPath),
+      this.listArchives(repoId),
+      this.listStashArchives(repoId)
+    ])
 
     return {
       project,
-      currentBranch,
-      branches: await getLocalBranches(project.projectPath, currentBranch),
-      archives: await this.listArchives(repoId),
-      stashes: await this.listStashes(repoId),
-      stashArchives: await this.listStashArchives(repoId)
+      currentBranch: branchScan.currentBranch,
+      branches: branchScan.branches,
+      archives,
+      stashes: [],
+      stashArchives
     }
   }
 
-  async listCommits(repoId, branchName) {
+  async listCommits(repoId, branchName, options = {}) {
     const project = await this.getRepoProject(repoId)
     const commits = await getCommits(project.projectPath, branchName)
 
-    if (!project.checkBranchName || project.checkBranchName === branchName) {
+    if (
+      options.skipCheck ||
+      !project.checkBranchName ||
+      project.checkBranchName === branchName
+    ) {
       return commits
     }
 
