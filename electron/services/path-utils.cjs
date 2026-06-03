@@ -106,6 +106,7 @@ function resolveAppPaths(userDataPath) {
     sessionRecycleMetadataDir: path.join(sessionRecycleDir, "metadata"),
     storageDir,
     storageFiles: {
+      skillRepositories: path.join(storageDir, "skill-repositories.json"),
       repos: path.join(storageDir, "repos.json"),
       skills: path.join(storageDir, "skills.json"),
       installs: path.join(storageDir, "installs.json"),

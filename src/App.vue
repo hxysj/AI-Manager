@@ -330,14 +330,19 @@
           v-if="activeView === 'skills'"
           :cli-targets="state.cliTargets"
           :paths="state.paths"
+          :skill-repositories="state.skillRepositories"
           :skills="state.skills"
+          @add-skill-repository="addSkillRepository"
           @create-skill="showCreateSkill = true"
           @import-skills="importSkillsFromCli"
           @import-zip-skill="importSkillFromZip"
+          @install-repository-skill="installSkillFromRepository"
           @install-skill="installSkill"
           @open-path="openPath"
           @open-usage="activeView = 'skill-usage'"
           @refresh="refreshState"
+          @refresh-skill-repository="refreshSkillRepository"
+          @remove-skill-repository="removeSkillRepository"
           @select-skill="selectSkill"
           @uninstall-skill="uninstallSkill"
         />
@@ -1229,6 +1234,7 @@ const placeholderMap = {
 const state = reactive({
   cliTargets: [],
   skills: [],
+  skillRepositories: [],
   repos: [],
   sessions: [],
   usage: {},
@@ -1835,6 +1841,7 @@ async function bootstrap() {
 function updateState(nextState) {
   state.cliTargets = nextState.cliTargets || []
   state.skills = nextState.skills || []
+  state.skillRepositories = nextState.skillRepositories || []
   state.repos = nextState.repos || []
   state.sessions = nextState.sessions || []
   state.usage = nextState.usage || {}
@@ -2902,6 +2909,47 @@ async function confirmImportSkills(payload) {
 
 async function installSkill(payload) {
   await runAction(() => window.aiManager.installSkill(payload))
+}
+
+async function addSkillRepository(payload) {
+  const success = await runAction(() =>
+    window.aiManager.addSkillRepository(payload)
+  )
+
+  if (success) {
+    activeView.value = "skills"
+    showSuccessMessage("Skill 仓库已添加。")
+  }
+}
+
+async function refreshSkillRepository(payload) {
+  const success = await runAction(() =>
+    window.aiManager.refreshSkillRepository(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Skill 仓库已刷新。")
+  }
+}
+
+async function removeSkillRepository(payload) {
+  const success = await runAction(() =>
+    window.aiManager.removeSkillRepository(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("Skill 仓库已删除。")
+  }
+}
+
+async function installSkillFromRepository(payload) {
+  const success = await runAction(() =>
+    window.aiManager.installSkillFromRepository(payload)
+  )
+
+  if (success) {
+    showSuccessMessage("仓库 Skill 已安装到本地。")
+  }
 }
 
 async function uninstallSkill(payload) {
