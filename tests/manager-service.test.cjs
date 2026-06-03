@@ -368,6 +368,44 @@ test("恢复预览按新增目录标记分组路径", async () => {
   assert.deepEqual([...new Set(addedPaths)], ["skills/demo-skill"])
 })
 
+test("云端备份默认不包含 Git 管理缓存，本地备份包含", async () => {
+  const service = await createService()
+  const gitToolPath = path.join(
+    service.paths.workspaceRoot,
+    "git-tool",
+    "projects",
+    "repo-1"
+  )
+
+  await fs.mkdir(gitToolPath, { recursive: true })
+  await fs.writeFile(
+    path.join(gitToolPath, "commit-check-cache.json"),
+    "[]\n",
+    "utf8"
+  )
+
+  const cloudBackup = service.inspectDataBackup(await service.createDataBackup())
+  const localBackup = service.inspectDataBackup(
+    await service.createDataBackup({ includeGitToolData: true })
+  )
+
+  assert.equal(
+    cloudBackup.entries.some(item => item.path.startsWith("git-tool")),
+    false
+  )
+  assert.equal(
+    localBackup.entries.some(item => item.path === "git-tool"),
+    true
+  )
+  assert.equal(
+    localBackup.entries.some(
+      item =>
+        item.path === "git-tool/projects/repo-1/commit-check-cache.json"
+    ),
+    true
+  )
+})
+
 test("Claude 代理接管写入 Anthropic base_url，不追加 /v1", async () => {
   const service = await createService()
   const provider = createProvider()

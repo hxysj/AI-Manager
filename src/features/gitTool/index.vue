@@ -30,7 +30,6 @@
             type="button"
             @click="selectGitWorkspace('branch')"
           >
-            <GitBranchIcon :size="15" />
             分支
           </button>
           <button
@@ -41,7 +40,6 @@
             type="button"
             @click="selectGitWorkspace('stash')"
           >
-            <Archive :size="15" />
             Stash
           </button>
         </div>
@@ -63,29 +61,6 @@
           添加项目
         </button>
       </div>
-
-      <div class="git-tool-status-list">
-        <div class="git-tool-status">
-          <span class="git-tool-label">当前分支</span>
-          <strong class="git-tool-status-value">{{
-            currentBranch || "-"
-          }}</strong>
-        </div>
-        <div class="git-tool-status">
-          <span class="git-tool-label">本地分支</span>
-          <strong class="git-tool-status-value">{{ branches.length }}</strong>
-        </div>
-        <div class="git-tool-status">
-          <span class="git-tool-label">Stash</span>
-          <strong class="git-tool-status-value">{{ stashes.length }}</strong>
-        </div>
-        <div class="git-tool-status">
-          <span class="git-tool-label">归档</span>
-          <strong class="git-tool-status-value">{{
-            archives.length + stashArchives.length
-          }}</strong>
-        </div>
-      </div>
     </section>
 
     <section v-if="!repos.length" class="git-tool-empty">
@@ -97,6 +72,14 @@
       >
         添加项目
       </button>
+    </section>
+
+    <section v-else-if="gitLoading" class="git-tool-loading">
+      <RefreshCw class="git-tool-loading-icon" :size="22" />
+      <strong class="git-tool-loading-title">正在加载 Git 数据</strong>
+      <span class="git-tool-loading-desc">{{
+        selectedRepo?.name || "当前项目"
+      }}</span>
     </section>
 
     <section v-else-if="gitWorkspace === 'branch'" class="git-tool-workbench">
@@ -111,7 +94,9 @@
           }}</span>
           <div class="git-tool-branch-summary-row">
             <span>
-              已选 {{ selectedBranchNames.length }}/{{ archivableBranches.length }}
+              已选 {{ selectedBranchNames.length }}/{{
+                archivableBranches.length
+              }}
             </span>
             <div class="git-tool-branch-toolbar">
               <button
@@ -140,12 +125,22 @@
             :key="group.id"
             class="git-tool-branch-group"
           >
-            <div class="git-tool-branch-group-head">
-              <ChevronDown :size="13" />
+            <button
+              class="git-tool-branch-group-head"
+              type="button"
+              @click="toggleBranchGroup(group.id)"
+            >
+              <component
+                :is="isBranchGroupClosed(group.id) ? ChevronRight : ChevronDown"
+                :size="13"
+              />
               <strong>{{ group.label }}</strong>
               <span>{{ group.branches.length }}</span>
-            </div>
-            <div class="git-tool-branch-group-body">
+            </button>
+            <div
+              v-if="!isBranchGroupClosed(group.id)"
+              class="git-tool-branch-group-body"
+            >
               <article
                 v-for="branch in group.branches"
                 :key="branch.name"
@@ -171,7 +166,9 @@
                   @click="selectBranch(branch.name)"
                 >
                   <GitBranchIcon :size="14" />
-                  <span class="git-tool-branch-name">{{ branch.name }}</span>
+                  <span class="git-tool-branch-name" :title="branch.name">{{
+                    branch.name
+                  }}</span>
                   <span v-if="branch.isCurrent" class="git-tool-branch-badge">
                     当前
                   </span>
@@ -280,7 +277,7 @@
                 </svg>
               </span>
               <span class="git-tool-commit-description">
-                <strong class="git-tool-commit-title">{{
+                <strong class="git-tool-commit-title" :title="commit.subject">{{
                   commit.subject
                 }}</strong>
                 <span
@@ -326,7 +323,7 @@
           <button
             class="git-tool-action"
             type="button"
-            :disabled="!selectedRepo"
+            :disabled="stashLoading || !selectedRepo"
             @click="loadStashes"
           >
             <RefreshCw :size="14" />
@@ -335,36 +332,44 @@
         </div>
 
         <div class="git-tool-stash-list">
-          <article
-            v-for="stash in stashes"
-            :key="stash.hash"
-            class="git-tool-stash"
-          >
-            <button
-              class="git-tool-stash-main"
-              type="button"
-              @click="openStashDetail(stash)"
-            >
-              <strong class="git-tool-stash-name">
-                {{ stash.stashRef }} {{ stash.subject }}
-              </strong>
-              <span class="git-tool-stash-meta">
-                {{ stash.shortHash }} · {{ stash.author }} ·
-                {{ formatDate(stash.date) }}
-              </span>
-            </button>
-            <button
-              class="git-tool-action"
-              type="button"
-              @click="archiveStash(stash)"
-            >
-              <ArchiveRestore :size="14" />
-              归档
-            </button>
-          </article>
-          <div v-if="!stashes.length" class="git-tool-list-empty">
-            暂无 stash
+          <div v-if="stashLoading" class="git-tool-list-empty">
+            正在读取 Stash
           </div>
+          <template v-else>
+            <article
+              v-for="stash in stashes"
+              :key="stash.hash"
+              class="git-tool-stash"
+            >
+              <button
+                class="git-tool-stash-main"
+                type="button"
+                @click="openStashDetail(stash)"
+              >
+                <strong
+                  class="git-tool-stash-name"
+                  :title="`${stash.stashRef} ${stash.subject}`"
+                >
+                  {{ stash.stashRef }} {{ stash.subject }}
+                </strong>
+                <span class="git-tool-stash-meta">
+                  {{ stash.shortHash }} · {{ stash.author }} ·
+                  {{ formatDate(stash.date) }}
+                </span>
+              </button>
+              <button
+                class="git-tool-action"
+                type="button"
+                @click="archiveStash(stash)"
+              >
+                <ArchiveRestore :size="14" />
+                归档
+              </button>
+            </article>
+            <div v-if="!stashes.length" class="git-tool-list-empty">
+              暂无 stash
+            </div>
+          </template>
         </div>
       </section>
 
@@ -379,46 +384,54 @@
         </div>
 
         <div class="git-tool-stash-list">
-          <article
-            v-for="archive in stashArchives"
-            :key="archive.stashArchiveId"
-            class="git-tool-stash"
-          >
-            <button
-              class="git-tool-stash-main"
-              type="button"
-              @click="openStashArchiveDetail(archive)"
-            >
-              <strong class="git-tool-stash-name">
-                {{ archive.stashRef }} {{ archive.message }}
-              </strong>
-              <span class="git-tool-stash-meta">
-                {{ formatHash(archive.commitHash) }} ·
-                {{ formatDate(archive.archivedAt) }}
-              </span>
-            </button>
-            <div class="git-tool-stash-actions">
-              <button
-                class="git-tool-icon-button"
-                type="button"
-                title="恢复 stash"
-                @click="restoreStashArchive(archive)"
-              >
-                <RotateCcw :size="14" />
-              </button>
-              <button
-                class="git-tool-icon-button git-tool-icon-danger"
-                type="button"
-                title="删除 stash 归档"
-                @click="deleteStashArchive(archive)"
-              >
-                <Trash2 :size="14" />
-              </button>
-            </div>
-          </article>
-          <div v-if="!stashArchives.length" class="git-tool-list-empty">
-            暂无 stash 归档
+          <div v-if="stashLoading" class="git-tool-list-empty">
+            正在读取 Stash 归档
           </div>
+          <template v-else>
+            <article
+              v-for="archive in stashArchives"
+              :key="archive.stashArchiveId"
+              class="git-tool-stash"
+            >
+              <button
+                class="git-tool-stash-main"
+                type="button"
+                @click="openStashArchiveDetail(archive)"
+              >
+                <strong
+                  class="git-tool-stash-name"
+                  :title="`${archive.stashRef} ${archive.message}`"
+                >
+                  {{ archive.stashRef }} {{ archive.message }}
+                </strong>
+                <span class="git-tool-stash-meta">
+                  {{ formatHash(archive.commitHash) }} ·
+                  {{ formatDate(archive.archivedAt) }}
+                </span>
+              </button>
+              <div class="git-tool-stash-actions">
+                <button
+                  class="git-tool-icon-button"
+                  type="button"
+                  title="恢复 stash"
+                  @click="restoreStashArchive(archive)"
+                >
+                  <RotateCcw :size="14" />
+                </button>
+                <button
+                  class="git-tool-icon-button git-tool-icon-danger"
+                  type="button"
+                  title="删除 stash 归档"
+                  @click="deleteStashArchive(archive)"
+                >
+                  <Trash2 :size="14" />
+                </button>
+              </div>
+            </article>
+            <div v-if="!stashArchives.length" class="git-tool-list-empty">
+              暂无 stash 归档
+            </div>
+          </template>
         </div>
       </section>
     </section>
@@ -428,10 +441,27 @@
       class="git-tool-drawer"
       @click="closeDetailDrawer"
     >
-      <div class="git-tool-drawer-panel" @click.stop>
+      <div
+        :class="[
+          'git-tool-drawer-panel',
+          {
+            'git-tool-drawer-panel-archives': detailDrawerType === 'archives'
+          }
+        ]"
+        @click.stop
+      >
         <header class="git-tool-drawer-head">
           <div>
-            <span class="git-tool-label">{{ detailDrawerEyebrow }}</span>
+            <button
+              v-if="detailDrawerType === 'archive'"
+              class="git-tool-drawer-back"
+              type="button"
+              @click="backToArchiveList"
+            >
+              <ChevronRight class="git-tool-drawer-back-icon" :size="14" />
+              <span class="git-tool-drawer-back-text">返回归档列表</span>
+            </button>
+            <span v-else class="git-tool-label">{{ detailDrawerEyebrow }}</span>
             <strong class="git-tool-drawer-title">{{
               detailDrawerTitle
             }}</strong>
@@ -468,12 +498,17 @@
                 type="button"
                 @click="openArchiveDetail(archive)"
               >
-                <strong class="git-tool-archive-name">{{
-                  archive.branchName
-                }}</strong>
+                <strong
+                  class="git-tool-archive-name"
+                  :title="archive.branchName"
+                  >{{ archive.branchName }}</strong
+                >
+                <span class="git-tool-archive-path">{{
+                  archive.projectPath
+                }}</span>
                 <span class="git-tool-archive-meta">
-                  {{ formatHash(archive.commitHash) }} ·
-                  {{ formatDate(archive.archivedAt) }}
+                  <code>{{ formatHash(archive.commitHash) }}</code>
+                  <span>{{ formatDate(archive.archivedAt) }}</span>
                 </span>
               </button>
               <div class="git-tool-archive-actions">
@@ -534,7 +569,9 @@
                 <span class="git-tool-archive-commit-title">{{
                   commit.subject
                 }}</span>
-                <span>{{ commit.isGraphOnly ? "" : formatFullDate(commit.date) }}</span>
+                <span>{{
+                  commit.isGraphOnly ? "" : formatFullDate(commit.date)
+                }}</span>
                 <span>{{ commit.isGraphOnly ? "" : commit.author }}</span>
                 <span class="git-tool-archive-commit-hash">{{
                   commit.isGraphOnly ? "" : commit.shortHash
@@ -612,6 +649,47 @@
         复制完整 Hash
       </button>
     </div>
+
+    <BaseModal
+      v-if="confirmDialog.visible"
+      :title="confirmDialog.title"
+      :description="confirmDialog.description"
+      @close="cancelConfirmDialog"
+    >
+      <section class="git-tool-confirm">
+        <div class="git-tool-confirm-icon">
+          <Archive :size="19" />
+        </div>
+        <div class="git-tool-confirm-content">
+          <strong>{{ confirmDialog.message }}</strong>
+          <span v-if="confirmDialog.detail">{{ confirmDialog.detail }}</span>
+          <label v-if="confirmDialog.input" class="git-tool-confirm-field">
+            <span>{{ confirmDialog.inputLabel }}</span>
+            <input
+              v-model.trim="confirmDialog.inputValue"
+              type="text"
+              @keydown.enter="resolveConfirmDialog"
+            />
+          </label>
+        </div>
+      </section>
+      <div class="git-tool-confirm-actions">
+        <button
+          class="git-tool-confirm-button"
+          type="button"
+          @click="cancelConfirmDialog"
+        >
+          取消
+        </button>
+        <button
+          class="git-tool-confirm-button git-tool-confirm-button-primary"
+          type="button"
+          @click="resolveConfirmDialog"
+        >
+          {{ confirmDialog.confirmText }}
+        </button>
+      </div>
+    </BaseModal>
   </section>
 </template>
 
@@ -641,6 +719,7 @@ import {
   Trash2,
   X
 } from "lucide-vue-next"
+import BaseModal from "@/components/BaseModal.vue"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
@@ -650,7 +729,7 @@ const props = defineProps({
   }
 })
 
-defineEmits(["add-repo"])
+const emit = defineEmits(["add-repo", "status-change"])
 
 const GitChangeDetail = defineComponent({
   props: {
@@ -961,6 +1040,7 @@ const commitDetailLoading = ref(false)
 const detailDrawerType = ref("")
 const archiveCommitDetailLoading = ref(false)
 const stashDetailLoading = ref(false)
+const stashLoading = ref(false)
 const project = ref(null)
 const branches = ref([])
 const commits = ref([])
@@ -979,6 +1059,19 @@ const selectedArchiveCommitDetail = ref(null)
 const selectedStash = ref(null)
 const selectedStashArchive = ref(null)
 const stashDetail = ref(null)
+const closedBranchGroups = ref(new Set())
+const confirmDialog = ref({
+  visible: false,
+  title: "操作确认",
+  description: "",
+  message: "",
+  detail: "",
+  input: false,
+  inputLabel: "",
+  inputValue: "",
+  confirmText: "确定",
+  resolve: null
+})
 let commitLoadSeq = 0
 let stashLoaded = false
 const graphColors = ["#d95c6a", "#d08a2f", "#3f8b62", "#4679b2", "#8a64b7"]
@@ -999,6 +1092,25 @@ const commitContextMenu = ref({
 const selectedRepo = computed(() => {
   return props.repos.find((item) => item.id === selectedRepoId.value) || null
 })
+
+const gitToolStatus = computed(() => [
+  {
+    label: "当前分支",
+    value: currentBranch.value || "-"
+  },
+  {
+    label: "本地分支",
+    value: branches.value.length
+  },
+  {
+    label: "Stash",
+    value: stashes.value.length
+  },
+  {
+    label: "归档",
+    value: archives.value.length + stashArchives.value.length
+  }
+])
 
 const archivableBranches = computed(() => {
   return branches.value.filter((item) => !item.isCurrent)
@@ -1040,6 +1152,22 @@ const branchGroups = computed(() => {
     }
   ].filter((item) => item.branches.length)
 })
+
+function isBranchGroupClosed(groupId) {
+  return closedBranchGroups.value.has(groupId)
+}
+
+function toggleBranchGroup(groupId) {
+  const nextGroups = new Set(closedBranchGroups.value)
+
+  if (nextGroups.has(groupId)) {
+    nextGroups.delete(groupId)
+  } else {
+    nextGroups.add(groupId)
+  }
+
+  closedBranchGroups.value = nextGroups
+}
 
 const stashDetailTitle = computed(() => {
   if (selectedStash.value) {
@@ -1112,6 +1240,14 @@ const activeDetailLoading = computed(() => {
 const visibleArchiveCommits = computed(() => {
   return archiveCommits.value.filter((item) => !item.isGraphOnly)
 })
+
+watch(
+  gitToolStatus,
+  (value) => {
+    emit("status-change", value)
+  },
+  { immediate: true }
+)
 
 watch(
   () => props.repos,
@@ -1462,6 +1598,54 @@ function selectAllBranches() {
   selectedBranchNames.value = archivableBranches.value.map((item) => item.name)
 }
 
+function confirmGitAction(options) {
+  return new Promise((resolve) => {
+    confirmDialog.value = {
+      visible: true,
+      title: options.title,
+      description: options.description || "",
+      message: options.message,
+      detail: options.detail || "",
+      input: Boolean(options.input),
+      inputLabel: options.inputLabel || "",
+      inputValue: options.inputValue || "",
+      confirmText: options.confirmText || "确定",
+      resolve
+    }
+  })
+}
+
+function closeConfirmDialog(result) {
+  const resolve = confirmDialog.value.resolve
+
+  confirmDialog.value = {
+    visible: false,
+    title: "操作确认",
+    description: "",
+    message: "",
+    detail: "",
+    input: false,
+    inputLabel: "",
+    inputValue: "",
+    confirmText: "确定",
+    resolve: null
+  }
+
+  if (resolve) {
+    resolve(result)
+  }
+}
+
+function cancelConfirmDialog() {
+  closeConfirmDialog(false)
+}
+
+function resolveConfirmDialog() {
+  closeConfirmDialog(
+    confirmDialog.value.input ? confirmDialog.value.inputValue : true
+  )
+}
+
 async function archiveSelectedBranches() {
   if (!selectedRepoId.value || !selectedBranchNames.value.length) {
     return
@@ -1470,9 +1654,13 @@ async function archiveSelectedBranches() {
   const branchNames = [...selectedBranchNames.value]
 
   if (
-    !window.confirm(
-      `归档成功后，${branchNames.length} 个本地分支会被删除，是否继续？`
-    )
+    !(await confirmGitAction({
+      title: "归档本地分支",
+      description: "归档后会清理本地分支，请确认后继续。",
+      message: `归档成功后，${branchNames.length} 个本地分支会被删除。`,
+      detail: `已选 ${branchNames.length}/${archivableBranches.value.length}`,
+      confirmText: "确认归档"
+    }))
   ) {
     return
   }
@@ -1568,6 +1756,14 @@ function closeDetailDrawer() {
   selectedCommitDetail.value = null
 }
 
+function backToArchiveList() {
+  detailDrawerType.value = "archives"
+  selectedArchive.value = null
+  archiveCommits.value = []
+  selectedArchiveCommit.value = null
+  selectedArchiveCommitDetail.value = null
+}
+
 async function selectArchiveCommit(commit) {
   if (commit.isGraphOnly) {
     return
@@ -1605,10 +1801,16 @@ async function selectArchiveCommitFile(filePath) {
 }
 
 async function restoreArchive(archive) {
-  const targetBranchName = window.prompt(
-    "请输入恢复后的分支名",
-    archive.branchName
-  )
+  const targetBranchName = await confirmGitAction({
+    title: "恢复分支归档",
+    description: "输入恢复后的本地分支名。",
+    message: `恢复归档「${archive.branchName}」到本地分支。`,
+    detail: formatHash(archive.commitHash),
+    input: true,
+    inputLabel: "分支名",
+    inputValue: archive.branchName,
+    confirmText: "恢复"
+  })
 
   if (!targetBranchName) {
     return
@@ -1629,7 +1831,14 @@ async function restoreArchive(archive) {
 }
 
 async function deleteArchive(archive) {
-  if (!window.confirm(`确认删除归档「${archive.branchName}」吗？`)) {
+  if (
+    !(await confirmGitAction({
+      title: "删除分支归档",
+      description: "删除后无法在归档列表中恢复。",
+      message: `确认删除归档「${archive.branchName}」吗？`,
+      confirmText: "删除"
+    }))
+  ) {
     return
   }
 
@@ -1648,6 +1857,8 @@ async function loadStashes() {
     return
   }
 
+  stashLoading.value = true
+
   try {
     stashes.value = await window.aiManager.listGitToolStashes({
       repoId: selectedRepoId.value
@@ -1658,6 +1869,8 @@ async function loadStashes() {
     stashLoaded = true
   } catch (error) {
     showErrorMessage(error)
+  } finally {
+    stashLoading.value = false
   }
 }
 
@@ -1744,9 +1957,13 @@ async function openStashArchiveDetailFile(filePath) {
 
 async function archiveStash(stash) {
   if (
-    !window.confirm(
-      `归档成功后，项目中的「${stash.stashRef}」会从 stash list 中删除，是否继续？`
-    )
+    !(await confirmGitAction({
+      title: "归档 Stash",
+      description: "归档后会从当前 stash list 中移除。",
+      message: `归档成功后，项目中的「${stash.stashRef}」会从 stash list 中删除。`,
+      detail: stash.subject,
+      confirmText: "确认归档"
+    }))
   ) {
     return
   }
@@ -1767,7 +1984,15 @@ async function archiveStash(stash) {
 }
 
 async function restoreStashArchive(archive) {
-  if (!window.confirm(`确认恢复「${archive.stashRef}」到 stash list 吗？`)) {
+  if (
+    !(await confirmGitAction({
+      title: "恢复 Stash",
+      description: "恢复后会重新写入当前项目的 stash list。",
+      message: `确认恢复「${archive.stashRef}」到 stash list 吗？`,
+      detail: archive.message,
+      confirmText: "恢复"
+    }))
+  ) {
     return
   }
 
@@ -1785,7 +2010,15 @@ async function restoreStashArchive(archive) {
 }
 
 async function deleteStashArchive(archive) {
-  if (!window.confirm(`确认删除 stash 归档「${archive.stashRef}」吗？`)) {
+  if (
+    !(await confirmGitAction({
+      title: "删除 Stash 归档",
+      description: "删除后无法在归档列表中恢复。",
+      message: `确认删除 stash 归档「${archive.stashRef}」吗？`,
+      detail: archive.message,
+      confirmText: "删除"
+    }))
+  ) {
     return
   }
 
@@ -1982,6 +2215,149 @@ function showErrorMessage(error) {
 </script>
 
 <style scoped lang="less">
+.git-tool :deep(.base-modal) {
+  z-index: 96;
+}
+
+.git-tool :deep(.base-modal__panel) {
+  width: 420px;
+  border-color: #cbddec;
+  box-shadow: 0 20px 52px rgba(15, 23, 42, 0.2);
+}
+
+.git-tool :deep(.base-modal__header) {
+  align-items: center;
+  padding: 15px 16px 8px;
+}
+
+.git-tool :deep(.base-modal__header h2) {
+  color: var(--color-text);
+  font-size: 0.98rem;
+}
+
+.git-tool :deep(.base-modal__header p) {
+  margin-top: 4px;
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+}
+
+.git-tool :deep(.base-modal__close) {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  font-size: 1.1rem;
+}
+
+.git-tool :deep(.base-modal__content) {
+  padding: 0 16px 16px;
+}
+
+.git-tool-confirm {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #d8e4ee;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.git-tool-confirm-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  border: 1px solid #c4d8ea;
+  border-radius: 8px;
+  background: #eef6ff;
+  color: var(--color-primary);
+}
+
+.git-tool-confirm-content {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.git-tool-confirm-content strong {
+  color: var(--color-text);
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.git-tool-confirm-content span {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-tool-confirm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 5px;
+}
+
+.git-tool-confirm-field span {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.git-tool-confirm-field input {
+  height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--color-line);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--color-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.git-tool-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+}
+
+.git-tool-confirm-button {
+  display: inline-flex;
+  min-width: 74px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-line);
+  border-radius: 7px;
+  background: #ffffff;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.git-tool-confirm-button:hover {
+  border-color: #b9ccda;
+  background: #f7f9fc;
+}
+
+.git-tool-confirm-button-primary {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+.git-tool-confirm-button-primary:hover {
+  border-color: var(--color-primary);
+  background: #284f79;
+}
+
 .git-tool-action,
 .git-tool-icon-button {
   display: inline-flex;
@@ -2029,6 +2405,48 @@ function showErrorMessage(error) {
   flex-direction: column;
   gap: 10px;
   overflow: hidden;
+
+  .git-tool-loading {
+    display: flex;
+    min-height: 180px;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 8px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #ffffff;
+    color: var(--color-text-muted);
+
+    .git-tool-loading-icon {
+      color: var(--color-primary);
+      animation: git-tool-loading-spin 0.9s linear infinite;
+    }
+
+    .git-tool-loading-title {
+      color: var(--color-text);
+      font-size: 0.94rem;
+    }
+
+    .git-tool-loading-desc {
+      max-width: 420px;
+      overflow: hidden;
+      font-size: 0.76rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+}
+
+@keyframes git-tool-loading-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .git-tool-top {
@@ -2084,66 +2502,38 @@ function showErrorMessage(error) {
   font-size: 0.82rem;
 }
 
-.git-tool-status-list {
-  display: flex;
-  min-width: 0;
-  gap: 0;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.git-tool-status {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 34px;
-  padding: 0 11px;
-  border-right: 1px solid var(--color-line);
-  background: #ffffff;
-}
-
-.git-tool-status:last-child {
-  border-right: 0;
-}
-
-.git-tool-status-value {
-  overflow: hidden;
-  color: var(--color-primary);
-  font-size: 0.88rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .git-tool-tabs {
   display: flex;
   flex: none;
-  gap: 6px;
-}
-
-.git-tool-tab {
-  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
+  gap: 3px;
   height: 34px;
-  padding: 0 12px;
-  border: 1px solid var(--color-line);
-  border-radius: 7px;
-  background: #ffffff;
-  color: var(--color-text-muted);
-  cursor: pointer;
-  font-size: 0.82rem;
-  font-weight: 700;
-}
+  padding: 3px;
+  border: 1px solid #e4edf5;
+  border-radius: 17px;
+  background: #f5f8fb;
 
-.git-tool-tab-active {
-  border-color: var(--color-primary);
-  background: var(--color-primary);
-  color: #ffffff;
+  .git-tool-tab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 68px;
+    height: 28px;
+    padding: 0 13px;
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    color: #2c4667;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 800;
+  }
+
+  .git-tool-tab-active {
+    background: #ffffff;
+    color: #11395f;
+    box-shadow: 0 1px 4px rgba(47, 95, 145, 0.12);
+  }
 }
 
 .git-tool-empty {
@@ -2338,6 +2728,7 @@ function showErrorMessage(error) {
 .git-tool-branch-group-head {
   display: flex;
   align-items: center;
+  width: 100%;
   gap: 7px;
   height: 30px;
   padding: 0 9px;
@@ -2345,6 +2736,13 @@ function showErrorMessage(error) {
   border-radius: 7px;
   background: #eef5fb;
   color: #2f5f91;
+  cursor: pointer;
+  text-align: left;
+}
+
+.git-tool-branch-group-head:hover {
+  border-color: #bad4ea;
+  background: #e6f1fa;
 }
 
 .git-tool-branch-group-head strong {
@@ -2741,6 +3139,15 @@ function showErrorMessage(error) {
   text-align: left;
 }
 
+.git-tool-archive-path {
+  width: 100%;
+  overflow: hidden;
+  color: var(--color-text-soft);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .git-tool-archive-actions,
 .git-tool-stash-actions {
   display: flex;
@@ -2750,14 +3157,19 @@ function showErrorMessage(error) {
 
 .git-tool-stash-workbench {
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex: 1;
   gap: 12px;
 }
 
 .git-tool-stash-panel {
-  width: 330px;
-  flex: 0 0 330px;
+  flex: 1;
+  min-width: 0;
+}
+
+.git-tool-stash-list {
+  flex: 1;
 }
 
 .git-tool-drawer {
@@ -2771,7 +3183,6 @@ function showErrorMessage(error) {
 
 .git-tool-drawer-panel {
   display: flex;
-  width: 1040px;
   height: 100%;
   flex-direction: column;
   border-left: 1px solid var(--color-line);
@@ -2794,6 +3205,37 @@ function showErrorMessage(error) {
   margin-top: 3px;
   color: var(--color-text);
   font-size: 0.96rem;
+}
+
+.git-tool-drawer-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1;
+
+  .git-tool-drawer-back-icon {
+    display: block;
+    flex: none;
+    transform: rotate(180deg);
+  }
+
+  .git-tool-drawer-back-text {
+    display: inline-flex;
+    align-items: center;
+    height: 24px;
+  }
+}
+
+.git-tool-drawer-back:hover {
+  color: #1f4f7e;
 }
 
 .git-tool-drawer-actions {
@@ -2837,7 +3279,48 @@ function showErrorMessage(error) {
 }
 
 .git-tool-drawer-archives {
-  flex: 1;
+  width: 520px;
+  flex: 0 0 520px;
+  align-self: flex-start;
+  gap: 8px;
+  padding: 10px;
+  background: #f8fafc;
+
+  .git-tool-archive {
+    min-height: 66px;
+    padding: 10px 11px;
+    border-color: #d9e5ee;
+    background: #ffffff;
+  }
+
+  .git-tool-archive:hover {
+    border-color: #bfd5e8;
+    background: #f7fbff;
+  }
+
+  .git-tool-archive-main {
+    gap: 5px;
+  }
+
+  .git-tool-archive-name {
+    font-size: 0.9rem;
+  }
+
+  .git-tool-archive-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    code {
+      padding: 2px 6px;
+      border-radius: 5px;
+      background: #eef6ff;
+      color: var(--color-primary);
+      font-family: "JetBrains Mono", "Consolas", monospace;
+      font-size: 0.72rem;
+      font-weight: 700;
+    }
+  }
 }
 
 .git-tool-archive-detail-meta {
