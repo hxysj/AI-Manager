@@ -133,6 +133,17 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("skill:repair", toPlainPayload(payload)),
   getSkillFiles: payload =>
     ipcRenderer.invoke("skill:files", toPlainPayload(payload)),
+  addSkillRepository: payload =>
+    ipcRenderer.invoke("skill-repository:add", toPlainPayload(payload)),
+  refreshSkillRepository: payload =>
+    ipcRenderer.invoke("skill-repository:refresh", toPlainPayload(payload)),
+  removeSkillRepository: payload =>
+    ipcRenderer.invoke("skill-repository:remove", toPlainPayload(payload)),
+  installSkillFromRepository: payload =>
+    ipcRenderer.invoke(
+      "skill-repository:install-skill",
+      toPlainPayload(payload)
+    ),
   addRepo: payload => ipcRenderer.invoke("repo:add", toPlainPayload(payload)),
   syncRepo: payload => ipcRenderer.invoke("repo:sync", toPlainPayload(payload)),
   syncAllRepos: () => ipcRenderer.invoke("repo:sync-all"),

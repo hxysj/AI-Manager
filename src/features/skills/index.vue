@@ -1,106 +1,133 @@
 <template>
   <section class="skills-view">
-    <header class="skills-view__toolbar">
-      <div>
-        <p class="skills-view__eyebrow">Skill Registry</p>
-        <h1>Skills 管理</h1>
+    <section v-if="viewMode === 'local'" class="skills-view-local-page">
+      <header class="skills-view-head">
+        <div class="skills-view-title">
+          <p class="skills-view-mark">Skill Registry</p>
+          <h1 class="skills-view-title-text">Skills 管理</h1>
+        </div>
+        <div class="skills-view-actions">
+          <button
+            class="skills-view-button primary"
+            type="button"
+            @click="viewMode = 'repository-skills'"
+          >
+            <Library :size="16" />
+            Skill 仓库
+          </button>
+          <button
+            class="skills-view-button primary"
+            type="button"
+            @click="$emit('create-skill')"
+          >
+            <Plus :size="16" />
+            新建 Skill
+          </button>
+          <button
+            class="skills-view-button"
+            type="button"
+            @click="$emit('import-skills')"
+          >
+            <Download :size="16" />
+            导入Skill
+          </button>
+          <button
+            class="skills-view-button"
+            type="button"
+            @click="$emit('import-zip-skill')"
+          >
+            <Archive :size="16" />
+            导入 zip
+          </button>
+          <button
+            class="skills-view-button"
+            type="button"
+            @click="$emit('open-usage')"
+          >
+            <BarChart3 :size="16" />
+            使用统计
+          </button>
+          <button
+            class="skills-view-button"
+            type="button"
+            @click="$emit('open-path', paths.skillsDir)"
+          >
+            <FolderOpen :size="16" />
+            打开 Skills 目录
+          </button>
+          <button class="skills-view-button" type="button" @click="$emit('refresh')">
+            <RefreshCw :size="16" />
+            刷新扫描
+          </button>
+        </div>
+      </header>
+
+      <section class="skills-view-filter-card">
+        <label class="skills-view-field search">
+          <span class="skills-view-field-label">搜索</span>
+          <input
+            v-model.trim="searchQuery"
+            class="skills-view-field-control"
+            type="text"
+            placeholder="name / tags / description / repo"
+          />
+        </label>
+        <label class="skills-view-field status">
+          <span class="skills-view-field-label">状态</span>
+          <select v-model="statusFilter" class="skills-view-field-control">
+            <option value="all">全部</option>
+            <option value="installed">已安装</option>
+            <option value="not-installed">未安装</option>
+            <option value="broken-link">链接损坏</option>
+            <option value="disabled">不可用</option>
+          </select>
+        </label>
+      </section>
+
+      <div class="skills-view-result-head">
+        <span>{{ filteredSkills.length }} / {{ skills.length }} 个 Skill</span>
+        <span>Centralized Skill Source + Junction Mount</span>
       </div>
 
-      <div class="skills-view__toolbar-actions">
-        <button
-          class="action-button action-button--primary"
-          type="button"
-          @click="$emit('create-skill')"
-        >
-          <Plus class="action-button__icon" :size="16" />
-          新建 Skill
-        </button>
-        <button
-          class="action-button"
-          type="button"
-          @click="$emit('import-skills')"
-        >
-          <Download class="action-button__icon" :size="16" />
-          导入Skill
-        </button>
-        <button
-          class="action-button"
-          type="button"
-          @click="$emit('import-zip-skill')"
-        >
-          <Archive class="action-button__icon" :size="16" />
-          导入 zip
-        </button>
-        <button
-          class="action-button"
-          type="button"
-          @click="$emit('open-usage')"
-        >
-          <BarChart3 class="action-button__icon" :size="16" />
-          使用统计
-        </button>
-        <button
-          class="action-button"
-          type="button"
-          @click="$emit('open-path', paths.skillsDir)"
-        >
-          <FolderOpen class="action-button__icon" :size="16" />
-          打开 Skills 目录
-        </button>
-        <button class="action-button" type="button" @click="$emit('refresh')">
-          <RefreshCw class="action-button__icon" :size="16" />
-          刷新扫描
-        </button>
-      </div>
-    </header>
-
-    <div class="skills-view__filters">
-      <label class="skills-view__search">
-        <span>搜索</span>
-        <input
-          v-model.trim="searchQuery"
-          type="text"
-          placeholder="name / tags / description / repo"
+      <div v-if="filteredSkills.length" class="skills-view-list">
+        <SkillCard
+          v-for="skill in filteredSkills"
+          :key="skill.id"
+          :cli-targets="cliTargets"
+          :skill="skill"
+          @select="$emit('select-skill', skill)"
+          @open-source="$emit('open-path', skill.sourcePath)"
+          @install="$emit('install-skill', $event)"
+          @uninstall="$emit('uninstall-skill', $event)"
         />
-      </label>
+      </div>
 
-      <label class="skills-view__select">
-        <span>状态</span>
-        <select v-model="statusFilter">
-          <option value="all">全部</option>
-          <option value="installed">已安装</option>
-          <option value="not-installed">未安装</option>
-          <option value="broken-link">链接损坏</option>
-          <option value="disabled">不可用</option>
-        </select>
-      </label>
-    </div>
+      <div v-else class="skills-view-empty">
+        <strong class="skills-view-empty-title">没有匹配的 Skill</strong>
+        <span class="skills-view-empty-desc">
+          可以先在本地 skills 目录创建 Skill，或者调整搜索条件。
+        </span>
+      </div>
+    </section>
 
-    <div class="skills-view__meta">
-      <span>{{ filteredSkills.length }} / {{ skills.length }} 个 Skill</span>
-      <span>Centralized Skill Source + Junction Mount</span>
-    </div>
+    <SkillRepositoryList
+      v-else-if="viewMode === 'repository-skills'"
+      :repositories="skillRepositories"
+      :skills="skills"
+      @back="viewMode = 'local'"
+      @install-skill="installRepositorySkill"
+      @open-manager="viewMode = 'repositories'"
+      @refresh="$emit('refresh')"
+    />
 
-    <div v-if="filteredSkills.length" class="skills-view__list">
-      <SkillCard
-        v-for="skill in filteredSkills"
-        :key="skill.id"
-        :cli-targets="cliTargets"
-        :skill="skill"
-        @select="$emit('select-skill', skill)"
-        @open-source="$emit('open-path', skill.sourcePath)"
-        @install="$emit('install-skill', $event)"
-        @uninstall="$emit('uninstall-skill', $event)"
-      />
-    </div>
-
-    <div v-else class="skills-view__empty">
-      <h2>没有匹配的 Skill</h2>
-      <p>
-        可以先在本地 `skills/` 目录创建 Skill，或者添加一个 Repo
-        让系统自动扫描。
-      </p>
-    </div>
+    <SkillRepositoryManager
+      v-else
+      :repositories="skillRepositories"
+      @add-repository="$emit('add-skill-repository', $event)"
+      @back="viewMode = 'repository-skills'"
+      @refresh-repository="refreshRepository"
+      @remove-repository="removeRepository"
+    />
   </section>
 </template>
 
@@ -111,10 +138,13 @@ import {
   BarChart3,
   Download,
   FolderOpen,
+  Library,
   Plus,
   RefreshCw
 } from "lucide-vue-next"
 import SkillCard from "./components/SkillCard.vue"
+import SkillRepositoryList from "./components/SkillRepositoryList.vue"
+import SkillRepositoryManager from "./components/SkillRepositoryManager.vue"
 
 const props = defineProps({
   cliTargets: {
@@ -125,31 +155,40 @@ const props = defineProps({
     type: Object,
     required: true
   },
+  skillRepositories: {
+    type: Array,
+    default: () => []
+  },
   skills: {
     type: Array,
     required: true
   }
 })
 
-defineEmits([
+const emit = defineEmits([
+  "add-skill-repository",
   "create-skill",
   "import-skills",
   "import-zip-skill",
+  "install-repository-skill",
   "install-skill",
   "open-path",
   "open-usage",
   "refresh",
+  "refresh-skill-repository",
+  "remove-skill-repository",
   "select-skill",
   "uninstall-skill"
 ])
 
+const viewMode = ref("local")
 const searchQuery = ref("")
 const statusFilter = ref("all")
 
 const filteredSkills = computed(() => {
   const keyword = searchQuery.value.toLowerCase()
 
-  return props.skills.filter((skill) => {
+  return props.skills.filter(skill => {
     const matchStatus =
       statusFilter.value === "all" || skill.status === statusFilter.value
     const searchSource = [
@@ -160,11 +199,30 @@ const filteredSkills = computed(() => {
     ]
       .join(" ")
       .toLowerCase()
-
     const matchKeyword = !keyword || searchSource.includes(keyword)
+
     return matchStatus && matchKeyword
   })
 })
+
+function refreshRepository(repository) {
+  emit("refresh-skill-repository", {
+    repositoryId: repository.id
+  })
+}
+
+function removeRepository(repository) {
+  emit("remove-skill-repository", {
+    repositoryId: repository.id
+  })
+}
+
+function installRepositorySkill(skill) {
+  emit("install-repository-skill", {
+    repositoryId: skill.repositoryId,
+    skillId: skill.id
+  })
+}
 </script>
 
 <style scoped lang="less">
@@ -173,18 +231,34 @@ const filteredSkills = computed(() => {
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  gap: 10px;
   overflow: hidden;
 
-  &__toolbar {
+  .skills-view-local-page {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
   }
 
-  &__eyebrow {
-    margin: 0 0 5px;
+  .skills-view-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .skills-view-title {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .skills-view-mark {
+    margin: 0;
     color: var(--color-text-soft);
     font-size: 0.72rem;
     font-weight: 700;
@@ -192,132 +266,152 @@ const filteredSkills = computed(() => {
     text-transform: uppercase;
   }
 
-  &__toolbar h1 {
+  .skills-view-title-text {
     margin: 0;
-    font-size: 1.38rem;
+    color: var(--color-text);
+    font-size: 1.26rem;
     line-height: 1.2;
   }
 
-  &__toolbar-actions {
+  .skills-view-actions {
     display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: flex-end;
     gap: 8px;
     flex-wrap: wrap;
-    justify-content: flex-end;
   }
 
-  &__filters {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 220px;
+  .skills-view-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: #ffffff;
+    color: var(--color-primary);
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .skills-view-button:hover {
+    border-color: #b9ccda;
+    background: #f7f9fc;
+  }
+
+  .skills-view-button.primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #ffffff;
+  }
+
+  .skills-view-button.primary:hover {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+  }
+
+  .skills-view-filter-card {
+    display: flex;
+    flex: none;
     gap: 10px;
-    padding: 10px;
+    padding: 12px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: var(--color-panel);
+    background: #ffffff;
     box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
   }
 
-  &__search,
-  &__select {
+  .skills-view-field {
     display: flex;
+    min-width: 0;
     flex-direction: column;
     gap: 6px;
   }
 
-  &__search span,
-  &__select span {
+  .skills-view-field.search {
+    flex: 1;
+  }
+
+  .skills-view-field.status {
+    width: 220px;
+    flex: none;
+  }
+
+  .skills-view-field-label {
     color: var(--color-text-muted);
     font-size: 0.74rem;
     font-weight: 700;
   }
 
-  &__search input,
-  &__select select {
-    height: 38px;
+  .skills-view-field-control {
+    height: 36px;
+    min-width: 0;
+    padding: 0 10px;
     border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    padding: 0 11px;
+    border-radius: 7px;
+    background: #fbfcfd;
     color: var(--color-text);
     font: inherit;
-    font-size: 0.88rem;
+    font-size: 0.84rem;
+    outline: none;
   }
 
-  &__meta {
+  .skills-view-field-control:focus {
+    border-color: #8eb6d9;
+    box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.1);
+  }
+
+  .skills-view-result-head {
     display: flex;
+    flex: none;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
     font-size: 0.8rem;
+    font-weight: 700;
   }
 
-  &__list {
+  .skills-view-list {
     display: flex;
-    flex: 1;
     min-height: 0;
+    flex: 1;
     flex-direction: column;
+    overflow: auto;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    overflow: auto;
     background: var(--color-panel);
     box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
   }
 
-  &__empty {
-    display: grid;
-    flex: 1;
+  .skills-view-empty {
+    display: flex;
     min-height: 0;
-    place-items: center;
+    flex: 1;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
     border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
-    background: var(--color-panel);
+    background: #ffffff;
+    color: var(--color-text-muted);
     text-align: center;
   }
 
-  &__empty h2 {
-    margin: 0 0 10px;
-    font-size: 1.28rem;
+  .skills-view-empty-title {
+    color: var(--color-text);
+    font-size: 0.98rem;
   }
 
-  &__empty p {
-    margin: 0;
-    color: var(--color-text-muted);
-    font-size: 0.88rem;
-  }
-}
-
-.action-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: #fbfcfd;
-  color: var(--color-primary);
-  cursor: pointer;
-  font-size: 0.88rem;
-  font-weight: 600;
-
-  &:hover {
-    border-color: #b9ccda;
-    background: var(--color-primary-soft);
-  }
-
-  &__icon {
-    flex: 0 0 auto;
-  }
-
-  &--primary {
-    border-color: var(--color-primary);
-    background: var(--color-primary);
-    color: #fff;
-  }
-
-  &--primary:hover {
-    border-color: #2a4f6f;
-    background: #2a4f6f;
+  .skills-view-empty-desc {
+    font-size: 0.82rem;
+    line-height: 1.45;
   }
 }
 </style>

@@ -2406,6 +2406,29 @@ function registerIpc() {
     return managerService.getSkillFiles(payload.skillName)
   })
 
+  registerLoggedIpc("skill-repository:add", async (_, payload) => {
+    await managerService.addSkillRepository(payload)
+    return managerService.getState()
+  })
+
+  registerLoggedIpc("skill-repository:refresh", async (_, payload) => {
+    await managerService.refreshSkillRepository(payload.repositoryId)
+    return managerService.getState()
+  })
+
+  registerLoggedIpc("skill-repository:remove", async (_, payload) => {
+    await managerService.removeSkillRepository(payload.repositoryId)
+    return managerService.getState()
+  })
+
+  registerLoggedIpc("skill-repository:install-skill", async (_, payload) => {
+    await managerService.installSkillFromRepository(
+      payload.repositoryId,
+      payload.skillId
+    )
+    return managerService.getState()
+  })
+
   registerLoggedIpc("repo:add", async (_, payload) => {
     await managerService.addRepo(payload)
     return managerService.getState()

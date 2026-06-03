@@ -383,10 +383,20 @@ test("云端备份默认不包含 Git 管理缓存，本地备份包含", async 
     "[]\n",
     "utf8"
   )
+  await writeJson(service.paths.storageFiles.skillRepositories, [
+    {
+      id: "skill-repo-1",
+      name: "测试仓库",
+      source: "https://github.com/example/skills"
+    }
+  ])
 
   const cloudBackup = service.inspectDataBackup(await service.createDataBackup())
   const localBackup = service.inspectDataBackup(
     await service.createDataBackup({ includeGitToolData: true })
+  )
+  const skillRepositoryEntry = cloudBackup.entries.find(
+    item => item.path === "storage/skill-repositories.json"
   )
 
   assert.equal(
@@ -404,6 +414,7 @@ test("云端备份默认不包含 Git 管理缓存，本地备份包含", async 
     ),
     true
   )
+  assert.equal(skillRepositoryEntry.typeName, "Skill 仓库")
 })
 
 test("Claude 代理接管写入 Anthropic base_url，不追加 /v1", async () => {

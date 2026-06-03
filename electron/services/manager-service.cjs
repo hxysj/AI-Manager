@@ -28,6 +28,9 @@ const { RuntimeProviderService } = require("./runtime-provider-service.cjs")
 const { CodexProxyService } = require("./codex-proxy-service.cjs")
 const { PromptRuntimeService } = require("./prompt-runtime-service.cjs")
 const { GitToolService } = require("./tools/git-tool-service.cjs")
+const {
+  SkillRepositoryService
+} = require("./skills/skill-repository-service.cjs")
 
 const execFileAsync = promisify(execFile)
 const BACKUP_SECRET = crypto
@@ -346,6 +349,7 @@ function isIgnoredBackupPath(entryPath) {
 }
 
 const restoreStorageNames = {
+  "storage/skill-repositories.json": "Skill 仓库",
   "storage/skills.json": "Skill 索引",
   "storage/installs.json": "Skill 挂载",
   "storage/usage-logs.json": "用量日志",
@@ -359,6 +363,7 @@ const restoreStorageNames = {
 }
 
 const mergeableRestoreJsonPaths = new Set([
+  "storage/skill-repositories.json",
   "storage/skills.json",
   "storage/installs.json",
   "storage/providers.json",
@@ -912,6 +917,7 @@ function mergeRestoreValue(entryPath, currentValue, backupValue) {
 
 async function collectBackupEntries(paths, options = {}) {
   const storageFiles = [
+    [paths.storageFiles.skillRepositories, "storage/skill-repositories.json"],
     [paths.storageFiles.skills, "storage/skills.json"],
     [paths.storageFiles.installs, "storage/installs.json"],
     [paths.storageFiles.usageLogs, "storage/usage-logs.json"],
@@ -1466,6 +1472,12 @@ class ManagerService extends EventEmitter {
     this.skillScanner = new SkillScanner()
     this.linkManager = new LinkManager(this.cliDetectionService)
     this.repoService = new RepoService(this.paths, this.storage)
+    this.skillRepositoryService = new SkillRepositoryService(
+      this.paths,
+      this.storage,
+      this.skillScanner,
+      this.metadataParser
+    )
     this.gitToolService = new GitToolService(this.paths, () =>
       this.repoService.listRepos()
     )
@@ -1494,6 +1506,7 @@ class ManagerService extends EventEmitter {
     this.state = {
       cliTargets: [],
       skills: [],
+      skillRepositories: [],
       repos: [],
       sessions: [],
       usage: this.usageService.getStats().data,
@@ -1517,6 +1530,7 @@ class ManagerService extends EventEmitter {
   async init() {
     await ensureAppDirectories(this.paths)
     await this.repoService.init()
+    await this.skillRepositoryService.init()
     await this.gitToolService.init()
     await this.sessionService.init()
     await this.usageService.init()
@@ -1874,6 +1888,7 @@ class ManagerService extends EventEmitter {
       ...repo,
       skillCount: 0
     }))
+    const skillRepositories = this.skillRepositoryService.listRepositories()
     await this.runtimeProviderService.refreshDrift(cliTargets)
     const runtimeState = this.runtimeProviderService.getState()
     const codexAccounts = this.codexAccountService.getState()
@@ -1995,6 +2010,7 @@ class ManagerService extends EventEmitter {
     this.state = {
       cliTargets,
       skills,
+      skillRepositories,
       repos,
       sessions,
       usage: this.usageService.getStats().data,
@@ -2306,6 +2322,35 @@ class ManagerService extends EventEmitter {
     } finally {
       await fs.rm(tempRoot, { recursive: true, force: true })
     }
+  }
+
+  async addSkillRepository(input) {
+    await this.skillRepositoryService.addRepository(input)
+    await this.refreshAll()
+  }
+
+  async refreshSkillRepository(repositoryId) {
+    await this.skillRepositoryService.refreshRepository(repositoryId)
+    await this.refreshAll()
+  }
+
+  async removeSkillRepository(repositoryId) {
+    await this.skillRepositoryService.removeRepository(repositoryId)
+    await this.refreshAll()
+  }
+
+  async installSkillFromRepository(repositoryId, skillId) {
+    const { skill } = this.skillRepositoryService.findRepositorySkill(
+      repositoryId,
+      skillId
+    )
+
+    if (this.state.skills.find((item) => item.name === skill.name)) {
+      throw new Error(`Skill 名称已存在：${skill.name}`)
+    }
+
+    await this.skillRepositoryService.installSkill(repositoryId, skillId)
+    await this.refreshAll()
   }
 
   async collectCliSkillImports(targetId) {
