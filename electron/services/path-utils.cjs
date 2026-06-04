@@ -115,6 +115,7 @@ function resolveAppPaths(userDataPath) {
       usageLogs: path.join(storageDir, "usage-logs.json"),
       usageRequestRecords: path.join(storageDir, "usage-request-records.json"),
       usagePricing: path.join(storageDir, "usage-pricing.json"),
+      codexProviderInstances: path.join(storageDir, "codex-provider-instances.json"),
       providers: path.join(storageDir, "providers.json"),
       rules: path.join(storageDir, "rules.json"),
       promptRuntimeState: path.join(storageDir, "prompt-runtime-state.json"),

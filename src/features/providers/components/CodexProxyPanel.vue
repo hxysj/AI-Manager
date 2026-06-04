@@ -249,6 +249,7 @@
               <div class="codex-proxy-panel-log-title">
                 <strong>{{ logProviderName(log) }}</strong>
                 <span>{{ formatTargetType(log.targetType) }}</span>
+                <span>{{ formatProxyLogSource(log) }}</span>
               </div>
               <div class="codex-proxy-panel-log-meta">
                 <span>{{ log.method || "POST" }}</span>
@@ -325,6 +326,17 @@
       <div class="codex-proxy-panel-log-detail-row">
         <span>Provider ID</span>
         <strong>{{ selectedProxyLog.providerId }}</strong>
+      </div>
+      <div
+        v-if="selectedProxyLog.instanceProviderId"
+        class="codex-proxy-panel-log-detail-row"
+      >
+        <span>实例 Provider</span>
+        <strong>{{ instanceProviderName(selectedProxyLog) }}</strong>
+      </div>
+      <div class="codex-proxy-panel-log-detail-row">
+        <span>请求来源</span>
+        <strong>{{ formatProxyLogSource(selectedProxyLog) }}</strong>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>类型</span>
@@ -676,6 +688,14 @@ function formatTargetType(value) {
   return value === "account" ? "官方账号" : "Provider"
 }
 
+function formatProxyLogSource(log) {
+  if (log.requestSource === "provider-instance" || log.instanceProviderId) {
+    return `独立实例：${instanceProviderName(log)}`
+  }
+
+  return "代理接管"
+}
+
 function formatActivateText(provider) {
   if (provider.disabled) {
     return "禁用中"
@@ -694,6 +714,15 @@ function logProviderName(log) {
     targetItems.value.find(item => item.id === log.providerId)?.name ||
     log.providerId ||
     "未知目标"
+  )
+}
+
+function instanceProviderName(log) {
+  return (
+    log.instanceProviderName ||
+    targetItems.value.find(item => item.id === log.instanceProviderId)?.name ||
+    log.instanceProviderId ||
+    "未知 Provider"
   )
 }
 

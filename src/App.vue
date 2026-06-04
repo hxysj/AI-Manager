@@ -397,6 +397,7 @@
           @codex-proxy-provider-remove="removeCodexProxyProvider"
           @codex-proxy-provider-activate="activateCodexProxyProvider"
           @codex-proxy-account-model-save="saveCodexProxyAccountModel"
+          @codex-provider-instance-launch="launchCodexProviderInstance"
           @cancel-codex-official-login="cancelCodexOfficialLogin"
           @delete-provider="deleteProvider"
           @save-model="saveRuntimeModel"
@@ -3327,6 +3328,18 @@ async function saveCodexProxyAccountModel(payload) {
   if (success) {
     showSuccessMessage("官方账号接管模型已保存。")
   }
+}
+
+async function launchCodexProviderInstance(payload) {
+  await withGlobalLoading(async () => {
+    try {
+      const result = await window.aiManager.launchCodexProviderInstance(payload)
+
+      showSuccessMessage(`Codex 实例已启动：${result.providerName}`)
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
 }
 
 async function saveRuntimeModel(payload) {

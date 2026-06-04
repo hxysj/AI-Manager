@@ -70,6 +70,19 @@
         </select>
       </label>
       <label class="usage-view__field">
+        <span>请求来源</span>
+        <select v-model="requestSource">
+          <option value="all">全部</option>
+          <option
+            v-for="item in requestSourceOptions"
+            :key="item"
+            :value="item"
+          >
+            {{ formatRequestSourceOption(item) }}
+          </option>
+        </select>
+      </label>
+      <label class="usage-view__field">
         <span>模型</span>
         <select v-model="model">
           <option value="all">全部</option>
@@ -264,6 +277,7 @@
             <span>时间</span>
             <span>应用</span>
             <span>Provider</span>
+            <span>请求来源</span>
             <span>来源</span>
             <span>Session</span>
             <span>模型</span>
@@ -281,6 +295,9 @@
             <span>{{ formatDateTime(item.createdAt) }}</span>
             <span>{{ formatAppName(item.appType) }}</span>
             <span :title="item.providerName">{{ item.providerName }}</span>
+            <span :title="formatRequestSource(item)">
+              {{ formatRequestSource(item) }}
+            </span>
             <span>{{ formatDataSource(item.dataSource) }}</span>
             <span :title="item.sessionId || item.sessionTitle">
               {{ formatSessionLabel(item) }}
@@ -682,6 +699,7 @@ const rangeType = ref(usageSearchParams.get("rangeType") || "today")
 const dateTimeRange = ref(createInitialDateTimeRange())
 const appType = ref(usageSearchParams.get("appType") || "all")
 const providerId = ref(usageSearchParams.get("providerId") || "all")
+const requestSource = ref(usageSearchParams.get("requestSource") || "all")
 const model = ref(usageSearchParams.get("model") || "all")
 const displayCurrency = ref(usageSearchParams.get("displayCurrency") || "USD")
 const logPage = ref(1)
@@ -732,6 +750,7 @@ const usageLogCsvColumns = [
   ["时间", (item) => formatExportDateTime(item.createdAt)],
   ["应用", (item) => formatAppName(item.appType)],
   ["Provider", (item) => item.providerName],
+  ["请求来源", (item) => formatRequestSource(item)],
   ["来源", (item) => formatDataSource(item.dataSource)],
   ["Session", (item) => formatSessionLabel(item)],
   ["模型", (item) => item.model || "未识别模型"],
@@ -930,6 +949,9 @@ const paginatedLogs = computed(() =>
 )
 const appOptions = computed(() => stats.value.filters?.appTypes || [])
 const providerOptions = computed(() => stats.value.filters?.providers || [])
+const requestSourceOptions = computed(
+  () => stats.value.filters?.requestSources || []
+)
 const modelOptions = computed(() => stats.value.filters?.models || [])
 const rangeTypeLabel = computed(() => {
   const [start, end] = dateTimeRange.value || []
@@ -951,6 +973,11 @@ const selectedProviderLabel = computed(() => {
       ?.providerName || providerId.value
   )
 })
+const selectedRequestSourceLabel = computed(() =>
+  requestSource.value === "all"
+    ? "全部请求来源"
+    : formatRequestSourceOption(requestSource.value)
+)
 const selectedModelLabel = computed(() =>
   model.value === "all" ? "全部模型" : model.value
 )
@@ -1012,7 +1039,7 @@ const pagedPricingItems = computed(() => {
   )
 })
 
-watch([dateTimeRange, appType, providerId, model], () => {
+watch([dateTimeRange, appType, providerId, requestSource, model], () => {
   logPage.value = 1
   loadStats()
 })
@@ -1165,6 +1192,7 @@ function createFilterPayload() {
   return {
     appType: appType.value,
     providerId: providerId.value,
+    requestSource: requestSource.value,
     model: model.value,
     trendMode: trendMode.value,
     startAt: start ? start.getTime() : 0,
@@ -1887,12 +1915,14 @@ async function exportUsageReport() {
       endAt: filterPayload.endAt,
       appType: appType.value,
       providerId: providerId.value,
+      requestSource: requestSource.value,
       model: model.value,
       displayCurrency: displayCurrency.value,
       filters: [
         rangeTypeLabel.value,
         selectedAppLabel.value,
         selectedProviderLabel.value,
+        selectedRequestSourceLabel.value,
         selectedModelLabel.value
       ]
     })
@@ -2154,6 +2184,33 @@ function formatDataSource(value) {
   return names[value] || "旧数据"
 }
 
+function formatRequestSourceOption(value) {
+  const names = {
+    "proxy-managed": "代理接管",
+    "provider-instance": "独立实例",
+    session: "会话日志"
+  }
+
+  return names[value] || value || "会话日志"
+}
+
+function formatRequestSource(item) {
+  if (item.requestSource === "provider-instance" || item.instanceProviderId) {
+    return `独立实例：${
+      item.instanceProviderName ||
+      item.providerName ||
+      item.instanceProviderId ||
+      "未知 Provider"
+    }`
+  }
+
+  if (item.requestSource === "proxy-managed") {
+    return "代理接管"
+  }
+
+  return "会话日志"
+}
+
 function formatSessionLabel(item) {
   return item.sessionTitle || item.sessionId || "-"
 }
@@ -2306,7 +2363,7 @@ function formatSessionLabel(item) {
 
   &__filters {
     display: grid;
-    grid-template-columns: 320px 150px minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: 320px 120px 160px 150px minmax(0, 1fr);
     flex: none;
     gap: 10px;
     padding: 10px;
@@ -2591,9 +2648,9 @@ function formatSessionLabel(item) {
   &__table-row {
     display: grid;
     grid-template-columns:
-      100px 72px 150px 92px 130px minmax(160px, 1fr)
+      100px 72px 150px 150px 92px 130px minmax(160px, 1fr)
       86px 86px 86px 92px 92px;
-    min-width: 1260px;
+    min-width: 1420px;
     gap: 10px;
     align-items: center;
     min-height: 34px;

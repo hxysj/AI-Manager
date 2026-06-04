@@ -337,6 +337,13 @@ function createUsageLog(session, providerInfo, input) {
     projectName: session.projectName || "",
     rawPath: session.rawPath,
     dataSource: input.dataSource,
+    requestSource: input.requestSource || session.requestSource || "",
+    instanceProviderId:
+      input.instanceProviderId || session.instanceProviderId || "",
+    instanceProviderName:
+      input.instanceProviderName || session.instanceProviderName || "",
+    instanceProviderType:
+      input.instanceProviderType || session.instanceProviderType || "",
     createdAt: input.createdAt
   }
 }
@@ -347,6 +354,18 @@ function createLogProviderInfo(log) {
     providerName: log.providerName || formatAppProviderName(log.appType),
     providerType: log.providerType || ""
   }
+}
+
+function createSessionProviderInfo(session, fallback) {
+  if (session.requestSource === "provider-instance") {
+    return {
+      providerId: session.instanceProviderId,
+      providerName: session.instanceProviderName,
+      providerType: session.instanceProviderType || fallback.providerType || ""
+    }
+  }
+
+  return fallback
 }
 
 function createRequestRecord(log, providerInfo) {
@@ -368,6 +387,10 @@ function createRequestRecord(log, providerInfo) {
     sessionTitle: log.sessionTitle || "",
     projectName: log.projectName || "",
     rawPath: log.rawPath || "",
+    requestSource: log.requestSource || "",
+    instanceProviderId: log.instanceProviderId || "",
+    instanceProviderName: log.instanceProviderName || "",
+    instanceProviderType: log.instanceProviderType || "",
     requestTime: log.createdAt,
     createdAt: log.createdAt
   }
@@ -378,7 +401,11 @@ function applyRequestRecord(log, record) {
     ...log,
     providerId: record.providerId,
     providerName: record.providerName,
-    providerType: record.providerType || ""
+    providerType: record.providerType || "",
+    requestSource: record.requestSource || "",
+    instanceProviderId: record.instanceProviderId || "",
+    instanceProviderName: record.instanceProviderName || "",
+    instanceProviderType: record.instanceProviderType || ""
   }
 }
 
@@ -609,6 +636,14 @@ function inRange(log, filters) {
     return false
   }
 
+  if (
+    filters.requestSource &&
+    filters.requestSource !== "all" &&
+    (log.requestSource || "session") !== filters.requestSource
+  ) {
+    return false
+  }
+
   if (filters.startAt && log.createdAt < filters.startAt) {
     return false
   }
@@ -822,16 +857,28 @@ class UsageService {
       }
 
       try {
-        const providerInfo = resolveProvider(appType, input)
-        const content = await fs.readFile(session.rawPath, "utf8")
-        const extension = path.extname(session.rawPath).toLowerCase()
+        const requestSource =
+          session.requestSource ||
+          (input.proxyStates?.[`${appType}ProxyState`]?.enabled
+            ? "proxy-managed"
+            : "")
+        const usageSession = {
+          ...session,
+          requestSource
+        }
+        const providerInfo = createSessionProviderInfo(
+          usageSession,
+          resolveProvider(appType, input)
+        )
+        const content = await fs.readFile(usageSession.rawPath, "utf8")
+        const extension = path.extname(usageSession.rawPath).toLowerCase()
 
         if (appType === "claude") {
-          logs.push(...extractClaudeLogs(session, content, providerInfo))
+          logs.push(...extractClaudeLogs(usageSession, content, providerInfo))
         } else if (appType === "codex" && extension !== ".json") {
-          logs.push(...extractCodexLogs(session, content, providerInfo))
+          logs.push(...extractCodexLogs(usageSession, content, providerInfo))
         } else if (appType === "gemini") {
-          logs.push(...extractGeminiLogs(session, content, providerInfo))
+          logs.push(...extractGeminiLogs(usageSession, content, providerInfo))
         }
       } catch (error) {
         diagnostics.push({
@@ -849,8 +896,12 @@ class UsageService {
       const shouldRefreshProxyRecord =
         input.proxyStates?.[`${log.appType}ProxyState`]?.enabled &&
         record?.providerId === log.appType
+      const shouldRefreshInstanceRecord =
+        log.requestSource === "provider-instance" &&
+        (record?.providerId !== log.providerId ||
+          record?.requestSource !== log.requestSource)
       const providerInfo =
-        record && !shouldRefreshProxyRecord
+        record && !shouldRefreshProxyRecord && !shouldRefreshInstanceRecord
           ? {
               providerId: record.providerId,
               providerName:
@@ -865,7 +916,18 @@ class UsageService {
               providerName: log.providerName,
               providerType: log.providerType
             }
-      const requestRecord = createRequestRecord(log, providerInfo)
+      const requestRecord = createRequestRecord(
+        record && !shouldRefreshProxyRecord && !shouldRefreshInstanceRecord
+          ? {
+              ...log,
+              requestSource: record.requestSource || "",
+              instanceProviderId: record.instanceProviderId || "",
+              instanceProviderName: record.instanceProviderName || "",
+              instanceProviderType: record.instanceProviderType || ""
+            }
+          : log,
+        providerInfo
+      )
 
       recordMap.set(log.requestId, requestRecord)
       mergedLogs.push(applyRequestRecord(log, requestRecord))
@@ -891,6 +953,7 @@ class UsageService {
       appType: normalizeAppType(input.appType || "all"),
       providerId: String(input.providerId || "all"),
       model: String(input.model || "all"),
+      requestSource: String(input.requestSource || "all"),
       startAt: Number(input.startAt || 0),
       endAt: Number(input.endAt || 0),
       trendMode:
@@ -906,6 +969,7 @@ class UsageService {
         inRange(item, {
           ...filters,
           providerId: "all",
+          requestSource: "all",
           model: "all"
         })
       )
@@ -952,6 +1016,9 @@ class UsageService {
           ),
           models: Array.from(
             new Set(optionLogs.map((item) => item.model).filter(Boolean))
+          ),
+          requestSources: Array.from(
+            new Set(optionLogs.map((item) => item.requestSource || "session"))
           )
         },
         pricingConfig: this.getPricingConfig()

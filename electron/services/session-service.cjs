@@ -58,6 +58,24 @@ function getCliType(cliTarget) {
   return cliTarget.type || cliTarget.cli || cliTarget.id
 }
 
+function findCodexInstanceProvider(cliTarget, rawPath) {
+  const providerMap = cliTarget.codexInstanceProviderMap || {}
+  const normalizedRawPath = path.normalize(rawPath)
+
+  for (const [rootPath, providerInfo] of Object.entries(providerMap)) {
+    const normalizedRootPath = path.normalize(rootPath)
+
+    if (
+      normalizedRawPath === normalizedRootPath ||
+      normalizedRawPath.startsWith(`${normalizedRootPath}${path.sep}`)
+    ) {
+      return providerInfo
+    }
+  }
+
+  return null
+}
+
 function normalizeContent(content) {
   if (typeof content === "string") {
     return content
@@ -547,6 +565,10 @@ class SessionService {
     const title =
       parsed.metadata.title ||
       truncateText(createTitleContent(firstUserMessage?.content), 50)
+    const instanceProvider =
+      getCliType(cliTarget) === "codex"
+        ? findCodexInstanceProvider(cliTarget, rawPath)
+        : null
 
     return {
       id,
@@ -558,6 +580,10 @@ class SessionService {
       projectName: projectPath ? path.basename(projectPath) : undefined,
       model: parsed.metadata.model,
       rawPath,
+      requestSource: instanceProvider ? "provider-instance" : "",
+      instanceProviderId: instanceProvider?.providerId || "",
+      instanceProviderName: instanceProvider?.providerName || "",
+      instanceProviderType: instanceProvider?.providerType || "",
       createdAt: stat.birthtimeMs,
       updatedAt: stat.mtimeMs,
       messageCount: parsed.messages.length,
@@ -628,6 +654,10 @@ class SessionService {
     )
     const title =
       parsed.metadata.title || truncateText(parsed.firstUserContent, 50)
+    const instanceProvider =
+      getCliType(cliTarget) === "codex"
+        ? findCodexInstanceProvider(cliTarget, rawPath)
+        : null
 
     return {
       id,
@@ -639,6 +669,10 @@ class SessionService {
       projectName: projectPath ? path.basename(projectPath) : undefined,
       model: parsed.metadata.model,
       rawPath,
+      requestSource: instanceProvider ? "provider-instance" : "",
+      instanceProviderId: instanceProvider?.providerId || "",
+      instanceProviderName: instanceProvider?.providerName || "",
+      instanceProviderType: instanceProvider?.providerType || "",
       createdAt: stat.birthtimeMs,
       updatedAt: stat.mtimeMs,
       messageCount: parsed.messageCount,

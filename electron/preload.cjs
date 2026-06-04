@@ -291,6 +291,11 @@ contextBridge.exposeInMainWorld("aiManager", {
       "codex-proxy:save-account-model",
       toPlainPayload(payload)
     ),
+  launchCodexProviderInstance: payload =>
+    ipcRenderer.invoke(
+      "codex:launch-provider-instance",
+      toPlainPayload(payload)
+    ),
   saveRuntimeModel: payload =>
     ipcRenderer.invoke("runtime-model:save", toPlainPayload(payload)),
   switchRuntime: payload =>
