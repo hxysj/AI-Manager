@@ -417,6 +417,60 @@ test("云端备份默认不包含 Git 管理缓存，本地备份包含", async 
   assert.equal(skillRepositoryEntry.typeName, "Skill 仓库")
 })
 
+test("启动读取旧 Skill 缓存时会补齐运行状态", async () => {
+  const service = await createService()
+  const claudePath = path.join(service.paths.userDataPath, ".claude")
+  const codexPath = path.join(service.paths.userDataPath, ".codex")
+
+  await writeJson(service.paths.storageFiles.cliTargets, [
+    {
+      id: "claude",
+      name: "Claude",
+      installed: true,
+      configPath: claudePath,
+      skillsPath: path.join(claudePath, "skills")
+    },
+    {
+      id: "codex",
+      name: "Codex",
+      installed: true,
+      configPath: codexPath,
+      skillsPath: path.join(codexPath, "skills")
+    }
+  ])
+  await writeJson(service.paths.storageFiles.skills, [
+    {
+      id: "skill-alpha",
+      name: "skill-alpha",
+      description: "Alpha",
+      sourcePath: path.join(service.paths.skillsDir, "skill-alpha")
+    }
+  ])
+  await writeJson(service.paths.storageFiles.installs, {
+    "skill-alpha": ["claude"]
+  })
+
+  await service.repoService.init()
+  await service.skillRepositoryService.init()
+  await service.gitToolService.init()
+  await service.sessionService.init()
+  await service.usageService.init()
+  await service.codexAccountService.init()
+  await service.promptRuntimeService.init()
+  await service.runtimeProviderService.init()
+  await service.claudeProxyService.init()
+  await service.codexProxyService.init()
+  await service.loadCachedState()
+
+  const skill = service.state.skills[0]
+
+  assert.equal(skill.installStates.claude.state, "installed")
+  assert.equal(skill.installStates.codex.state, "not-installed")
+  assert.deepEqual(skill.installedTargets, ["claude"])
+  assert.equal(skill.status, "installed")
+  assert.equal(skill.repoName, "Managed")
+})
+
 test("Claude 代理接管写入 Anthropic base_url，不追加 /v1", async () => {
   const service = await createService()
   const provider = createProvider()
