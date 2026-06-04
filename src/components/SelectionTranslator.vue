@@ -39,6 +39,9 @@ const position = reactive({
   x: 420,
   y: 120
 })
+const translatorWidth = 360
+const translatorMaxHeight = 420
+const viewportPadding = 18
 
 let unsubscribe = null
 
@@ -60,8 +63,7 @@ async function showTranslator(payload) {
   errorMessage.value = ''
   loading.value = true
   visible.value = true
-  position.x = Math.max(18, payload.x)
-  position.y = Math.max(18, payload.y)
+  updatePosition(payload)
 
   try {
     const result = await window.aiManager.translateText({ text: payload.text })
@@ -71,6 +73,14 @@ async function showTranslator(payload) {
   } finally {
     loading.value = false
   }
+}
+
+function updatePosition(payload) {
+  const maxX = window.innerWidth - translatorWidth - viewportPadding
+  const maxY = window.innerHeight - translatorMaxHeight - viewportPadding
+
+  position.x = Math.min(Math.max(viewportPadding, payload.x), maxX)
+  position.y = Math.min(Math.max(viewportPadding, payload.y), maxY)
 }
 
 function closeTranslator() {
