@@ -187,6 +187,47 @@ function isPathInsideDirectory(filePath, directoryPath) {
   return filePath === directoryPath || filePath.startsWith(`${directoryPath}/`)
 }
 
+function createRepositoryStorageItem(repository) {
+  return {
+    id: repository.id,
+    type: repository.type,
+    name: repository.name,
+    source: repository.source,
+    owner: repository.owner,
+    repository: repository.repository,
+    branch: repository.branch,
+    rootPath: repository.rootPath,
+    htmlUrl: repository.htmlUrl,
+    createdAt: repository.createdAt,
+    updatedAt: repository.updatedAt
+  }
+}
+
+function createRepositoryRuntimeItem(repository) {
+  return {
+    ...createRepositoryStorageItem(repository),
+    status: "ready",
+    skills: [],
+    error: "",
+    lastSyncedAt: 0
+  }
+}
+
+function applyRepositoryCache(repository, cache) {
+  if (!cache) {
+    return repository
+  }
+
+  return {
+    ...repository,
+    status: cache.status || "ready",
+    skills: Array.isArray(cache.skills) ? cache.skills : [],
+    error: cache.error || "",
+    lastSyncedAt: Number(cache.lastSyncedAt || 0),
+    updatedAt: Number(cache.updatedAt || repository.updatedAt || 0)
+  }
+}
+
 class SkillRepositoryService {
   constructor(paths, storage) {
     this.paths = paths
@@ -195,7 +236,16 @@ class SkillRepositoryService {
   }
 
   async init() {
-    this.repositories = await this.storage.read("skillRepositories", [])
+    const caches = await this.storage.read("skillRepositoryCache", [])
+    const cacheMap = new Map(caches.map(item => [item.id, item]))
+
+    this.repositories = (await this.storage.read("skillRepositories", [])).map(
+      item => applyRepositoryCache(createRepositoryRuntimeItem(item), cacheMap.get(item.id))
+    )
+
+    if (this.repositories.some(item => !item.lastSyncedAt)) {
+      await this.refreshRepositories()
+    }
   }
 
   listRepositories() {
@@ -203,7 +253,43 @@ class SkillRepositoryService {
   }
 
   async persist() {
-    this.storage.scheduleWrite("skillRepositories", this.repositories)
+    this.storage.scheduleWrite(
+      "skillRepositories",
+      this.repositories.map(item => createRepositoryStorageItem(item))
+    )
+    this.storage.scheduleWrite(
+      "skillRepositoryCache",
+      this.repositories.map(item => ({
+        id: item.id,
+        status: item.status,
+        skills: item.skills,
+        error: item.error,
+        lastSyncedAt: item.lastSyncedAt,
+        updatedAt: item.updatedAt
+      }))
+    )
+  }
+
+  async refreshRepositories() {
+    for (const repository of this.repositories) {
+      try {
+        const scanned = await this.scanRepository(repository)
+
+        repository.branch = scanned.branch
+        repository.skills = scanned.skills
+        repository.status = "ready"
+        repository.error = ""
+      } catch (error) {
+        repository.status = "error"
+        repository.skills = []
+        repository.error = error.message || String(error)
+      }
+
+      repository.lastSyncedAt = Date.now()
+      repository.updatedAt = Date.now()
+    }
+
+    await this.persist()
   }
 
   async addRepository(input) {

@@ -324,11 +324,153 @@ async function collectFileEntry(sourcePath, relativePath) {
   }
 }
 
+async function migrateJsonArrayFile(sourcePath, targetPath, keySelector) {
+  if (!(await pathExists(sourcePath))) {
+    return
+  }
+
+  await fs.mkdir(path.dirname(targetPath), { recursive: true })
+
+  if (!(await pathExists(targetPath))) {
+    await fs.rename(sourcePath, targetPath)
+    return
+  }
+
+  const sourceItems = JSON.parse(await fs.readFile(sourcePath, "utf8"))
+  const targetItems = JSON.parse(await fs.readFile(targetPath, "utf8"))
+
+  if (!Array.isArray(sourceItems) || !Array.isArray(targetItems)) {
+    await fs.rm(sourcePath)
+    return
+  }
+
+  const itemMap = new Map()
+
+  for (const item of [...targetItems, ...sourceItems]) {
+    itemMap.set(keySelector(item), item)
+  }
+
+  await fs.writeFile(
+    targetPath,
+    `${JSON.stringify(Array.from(itemMap.values()), null, 2)}\n`,
+    "utf8"
+  )
+  await fs.rm(sourcePath)
+}
+
+function createSkillRepositoryStorageItem(repository) {
+  return {
+    id: repository.id,
+    type: repository.type,
+    name: repository.name,
+    source: repository.source,
+    owner: repository.owner,
+    repository: repository.repository,
+    branch: repository.branch,
+    rootPath: repository.rootPath,
+    htmlUrl: repository.htmlUrl,
+    createdAt: repository.createdAt,
+    updatedAt: repository.updatedAt
+  }
+}
+
+function createSkillRepositoryCacheItem(repository) {
+  return {
+    id: repository.id,
+    status: repository.status || "ready",
+    skills: Array.isArray(repository.skills) ? repository.skills : [],
+    error: repository.error || "",
+    lastSyncedAt: Number(repository.lastSyncedAt || 0),
+    updatedAt: Number(repository.updatedAt || 0)
+  }
+}
+
+function hasSkillRepositoryCache(repository) {
+  return (
+    Array.isArray(repository.skills) &&
+    repository.skills.length &&
+    Number(repository.lastSyncedAt || 0)
+  )
+}
+
+async function migrateSkillRepositoryStorage(paths) {
+  const storagePath = paths.storageFiles.skillRepositories
+  const cachePath = paths.storageFiles.skillRepositoryCache
+
+  if (!(await pathExists(storagePath))) {
+    return
+  }
+
+  const repositories = JSON.parse(await fs.readFile(storagePath, "utf8"))
+
+  if (!Array.isArray(repositories)) {
+    return
+  }
+
+  const hasRuntimeFields = repositories.some(
+    (repository) =>
+      "skills" in repository ||
+      "status" in repository ||
+      "error" in repository ||
+      "lastSyncedAt" in repository
+  )
+
+  if (!hasRuntimeFields) {
+    return
+  }
+
+  await fs.mkdir(path.dirname(cachePath), { recursive: true })
+  await fs.writeFile(
+    storagePath,
+    `${JSON.stringify(
+      repositories.map((repository) =>
+        createSkillRepositoryStorageItem(repository)
+      ),
+      null,
+      2
+    )}\n`,
+    "utf8"
+  )
+  const cachedRepositories = repositories
+    .filter((repository) => hasSkillRepositoryCache(repository))
+    .map((repository) => createSkillRepositoryCacheItem(repository))
+
+  if (cachedRepositories.length) {
+    await fs.writeFile(
+      cachePath,
+      `${JSON.stringify(cachedRepositories, null, 2)}\n`,
+      "utf8"
+    )
+  }
+}
+
+async function migrateWorkspaceData(paths) {
+  await migrateJsonArrayFile(
+    path.join(paths.storageDir, "usage-logs.json"),
+    paths.storageFiles.usageLogs,
+    (item) => item.requestId || item.id
+  )
+  await migrateJsonArrayFile(
+    path.join(paths.storageDir, "usage-request-records.json"),
+    paths.storageFiles.usageRequestRecords,
+    (item) => item.requestId
+  )
+  await migrateJsonArrayFile(
+    path.join(paths.storageDir, "sessions.json"),
+    paths.storageFiles.sessions,
+    (item) => item.id
+  )
+  await migrateSkillRepositoryStorage(paths)
+}
+
 const ignoredRuntimeBackupPaths = new Set([
   "storage/installs.json",
   "storage/runtime-profiles.json",
   "storage/runtime-provider-state.json",
   "storage/runtime-provider-keys.json",
+  "storage/sessions.json",
+  "storage/usage-logs.json",
+  "storage/usage-request-records.json",
   "storage/codex-active-account-id.json",
   "storage/codex-provider-instances.json"
 ])
@@ -922,7 +1064,6 @@ async function collectBackupEntries(paths, options = {}) {
     [paths.storageFiles.skillRepositories, "storage/skill-repositories.json"],
     [paths.storageFiles.skills, "storage/skills.json"],
     [paths.storageFiles.installs, "storage/installs.json"],
-    [paths.storageFiles.usageLogs, "storage/usage-logs.json"],
     [paths.storageFiles.usagePricing, "storage/usage-pricing.json"],
     [paths.storageFiles.providers, "storage/providers.json"],
     [paths.storageFiles.runtimeModels, "storage/runtime-models.json"],
@@ -1532,6 +1673,7 @@ class ManagerService extends EventEmitter {
 
   async init() {
     await ensureAppDirectories(this.paths)
+    await migrateWorkspaceData(this.paths)
     await this.repoService.init()
     await this.skillRepositoryService.init()
     await this.gitToolService.init()
@@ -1682,6 +1824,7 @@ class ManagerService extends EventEmitter {
       backup.workspaceEntries,
       choices
     )
+    await migrateWorkspaceData(this.paths)
     await this.storage.writeNow("cliTargets", [])
     if (backup.runtimeProviderKeys) {
       await this.runtimeProviderService.mergeProviderKeys(
