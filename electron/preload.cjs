@@ -88,6 +88,8 @@ contextBridge.exposeInMainWorld("aiManager", {
   installUpdate: payload =>
     ipcRenderer.invoke("app:update-install", toPlainPayload(payload)),
   dismissUpdate: () => ipcRenderer.invoke("app:update-dismiss"),
+  uninstallWithoutTrace: () =>
+    ipcRenderer.invoke("app:uninstall-without-trace"),
   showMainPanel: () => ipcRenderer.invoke("quick-switch:show-main"),
   setQuickSwitchCollapsed: payload =>
     ipcRenderer.invoke("quick-switch:set-collapsed", toPlainPayload(payload)),
