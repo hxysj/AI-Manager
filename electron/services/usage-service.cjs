@@ -826,8 +826,6 @@ class UsageService {
     this.requestRecords = Array.from(recordMap.values()).sort(
       (left, right) => right.createdAt - left.createdAt
     )
-    this.storage.scheduleWrite("usageLogs", this.logs)
-    this.storage.scheduleWrite("usageRequestRecords", this.requestRecords)
   }
 
   async refresh(input) {

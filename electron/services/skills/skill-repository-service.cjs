@@ -167,7 +167,6 @@ function parseSkillContent(content, skillFilePath) {
     description: metadata.description
       ? String(metadata.description).trim()
       : "",
-    content: parsed.content.trim(),
     version: metadata.version ? String(metadata.version).trim() : "",
     author: metadata.author ? String(metadata.author).trim() : "",
     tags: Array.isArray(metadata.tags)
@@ -243,9 +242,6 @@ class SkillRepositoryService {
       item => applyRepositoryCache(createRepositoryRuntimeItem(item), cacheMap.get(item.id))
     )
 
-    if (this.repositories.some(item => !item.lastSyncedAt)) {
-      await this.refreshRepositories()
-    }
   }
 
   listRepositories() {
@@ -431,7 +427,7 @@ class SkillRepositoryService {
       .filter(item => path.posix.basename(item.path) === "SKILL.md")
       .filter(item => isPathInsideDirectory(item.path, rootPath))
     const skills = []
-    const batchSize = 16
+    const batchSize = 4
 
     for (let index = 0; index < skillFiles.length; index += batchSize) {
       const batch = skillFiles.slice(index, index + batchSize)
@@ -454,7 +450,6 @@ class SkillRepositoryService {
               .slice(0, 16),
             name: parsed.name,
             description: parsed.description,
-            content: parsed.content,
             version: parsed.version,
             author: parsed.author,
             tags: parsed.tags,
