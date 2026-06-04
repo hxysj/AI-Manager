@@ -57,6 +57,8 @@ let updateStatus = {
 }
 let appCallLogs = []
 let appCallLogWriteTimer = null
+const appCallTraceEnabled = process.env.AI_MANAGER_TRACE_LOGS === "1"
+const appCallLogLimit = appCallTraceEnabled ? 500 : 200
 const appCallTraceStorage = new AsyncLocalStorage()
 const instrumentedServices = new WeakSet()
 const restoreBackupDrafts = new Map()
@@ -324,43 +326,41 @@ function getLegacyAppCallLogPath() {
   )
 }
 
-function sanitizeLogValue(value) {
+function summarizeLogValue(value) {
   if (value === undefined) {
     return undefined
   }
 
-  try {
-    return JSON.parse(
-      JSON.stringify(value, (key, item) =>
-        /password|token|key|secret/i.test(key) ? item ? "***" : item : item
-      )
-    )
-  } catch (error) {
-    return {
-      uncloneable: true,
-      message: error.message
-    }
+  if (value === null || ["number", "boolean"].includes(typeof value)) {
+    return value
   }
-}
 
-function summarizeLogValue(value) {
-  const draft = sanitizeLogValue(value)
+  if (typeof value === "string") {
+    return value.length > 500 ? `${value.slice(0, 500)}...` : value
+  }
 
-  if (Array.isArray(draft)) {
+  if (Array.isArray(value)) {
     return {
       type: "array",
-      length: draft.length
+      length: value.length
     }
   }
 
-  if (draft && typeof draft === "object") {
+  if (value && typeof value === "object") {
     return {
       type: "object",
-      keys: Object.keys(draft).slice(0, 30)
+      keys: Object.keys(value).slice(0, 30)
     }
   }
 
-  return draft
+  if (typeof value === "function") {
+    return {
+      type: "function",
+      name: value.name || ""
+    }
+  }
+
+  return String(value)
 }
 
 function splitIpcTraceArgs(args) {
@@ -383,7 +383,10 @@ async function initAppCallLogs() {
   await migrateAppCallLogs()
 
   try {
-    appCallLogs = JSON.parse(await fsp.readFile(getAppCallLogPath(), "utf8"))
+    const storedLogs = JSON.parse(await fsp.readFile(getAppCallLogPath(), "utf8"))
+    appCallLogs = Array.isArray(storedLogs)
+      ? storedLogs.slice(0, appCallLogLimit)
+      : []
   } catch {
     appCallLogs = []
   }
@@ -456,11 +459,11 @@ function appendAppCallLog(input = {}) {
     status: String(input.status || ""),
     durationMs: Number(input.durationMs || 0),
     message: String(input.message || ""),
-    payload: sanitizeLogValue(input.payload),
+    payload: summarizeLogValue(input.payload),
     result: summarizeLogValue(input.result),
     createdAt: Date.now()
   })
-  appCallLogs = appCallLogs.slice(0, 1000)
+  appCallLogs = appCallLogs.slice(0, appCallLogLimit)
   scheduleAppCallLogWrite()
 }
 
@@ -514,7 +517,9 @@ function registerLoggedIpc(channel, handler) {
         handler(event, ...businessArgs)
       )
 
-      assertIpcResultCloneable(channel, trace.traceId, result)
+      if (appCallTraceEnabled) {
+        assertIpcResultCloneable(channel, trace.traceId, result)
+      }
       appendAppCallLog({
         traceId: trace.traceId,
         scope: "backend",
@@ -546,7 +551,7 @@ function registerLoggedIpc(channel, handler) {
 }
 
 function instrumentBackendService(serviceName, service) {
-  if (!service || instrumentedServices.has(service)) {
+  if (!appCallTraceEnabled || !service || instrumentedServices.has(service)) {
     return
   }
 
@@ -680,7 +685,7 @@ function sendUpdateStatus(patch = {}) {
     isDev: !app.isPackaged,
     updatedAt: Date.now()
   }
-  const payload = JSON.parse(JSON.stringify(updateStatus))
+  const payload = { ...updateStatus }
 
   for (const targetWindow of [mainWindow, quickSwitchWindow]) {
     if (targetWindow && !targetWindow.isDestroyed()) {
@@ -692,13 +697,11 @@ function sendUpdateStatus(patch = {}) {
 }
 
 function getUpdateStatus() {
-  return JSON.parse(
-    JSON.stringify({
-      ...updateStatus,
-      configured: updateConfigured,
-      isDev: !app.isPackaged
-    })
-  )
+  return {
+    ...updateStatus,
+    configured: updateConfigured,
+    isDev: !app.isPackaged
+  }
 }
 
 async function restartManagerService(nextSettings = appSettings) {

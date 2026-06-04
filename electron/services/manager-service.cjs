@@ -1898,7 +1898,6 @@ class ManagerService extends EventEmitter {
   }
 
   startWatcher() {
-    const repoPaths = this.repoService.listRepos().map((item) => item.localPath)
     const promptRuntimePaths = this.promptRuntimeService.getRuntimeWatchPaths(
       this.state.cliTargets
     )
@@ -1910,8 +1909,6 @@ class ManagerService extends EventEmitter {
         this.paths.skillsDir,
         this.paths.promptsDir,
         this.paths.promptProfilesDir,
-        this.paths.reposDir,
-        ...repoPaths,
         ...promptRuntimePaths,
         ...runtimeProviderPaths
       ],
