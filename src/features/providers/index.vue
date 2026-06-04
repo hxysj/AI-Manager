@@ -524,6 +524,19 @@
                   <Eye :size="16" />
                 </button>
                 <button
+                  v-if="
+                    activeCli === 'codex' && item.provider.enabled !== false
+                  "
+                  class="providers-view__icon-button"
+                  type="button"
+                  title="启动 Codex 实例"
+                  aria-label="启动 Codex 实例"
+                  :disabled="pending"
+                  @click.stop="launchCodexProviderInstance(item.provider)"
+                >
+                  <SquareTerminal :size="16" />
+                </button>
+                <button
                   v-if="item.provider.enabled !== false"
                   class="providers-view__icon-button"
                   type="button"
@@ -1656,6 +1669,7 @@ import {
   Server,
   ShieldCheck,
   SlidersHorizontal,
+  SquareTerminal,
   SquarePen,
   Trash2,
   Upload,
@@ -1750,6 +1764,7 @@ const emit = defineEmits([
   "codex-proxy-provider-remove",
   "codex-proxy-provider-activate",
   "codex-proxy-account-model-save",
+  "codex-provider-instance-launch",
   "clear-runtime",
   "cancel-codex-official-login",
   "delete-provider",
@@ -2716,6 +2731,16 @@ function enableProvider(provider) {
     cli: activeCli.value,
     providerId: provider.id,
     model
+  })
+}
+
+function launchCodexProviderInstance(provider) {
+  if (activeCli.value !== "codex" || provider.enabled === false) {
+    return
+  }
+
+  emit("codex-provider-instance-launch", {
+    providerId: provider.id
   })
 }
 

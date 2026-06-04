@@ -2601,6 +2601,7 @@ function registerIpc() {
       endAt: String(payload.endAt || ""),
       appType: String(payload.appType || "all"),
       providerId: String(payload.providerId || "all"),
+      requestSource: String(payload.requestSource || "all"),
       model: String(payload.model || "all"),
       displayCurrency: String(payload.displayCurrency || "USD")
     })
@@ -2854,6 +2855,10 @@ function registerIpc() {
 
   registerLoggedIpc("codex-proxy:save-account-model", async (_, payload) => {
     return managerService.saveCodexProxyAccountModel(payload)
+  })
+
+  registerLoggedIpc("codex:launch-provider-instance", async (_, payload) => {
+    return managerService.launchCodexProviderInstance(payload)
   })
 
   registerLoggedIpc("runtime-model:save", async (_, payload) => {

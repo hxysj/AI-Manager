@@ -37,33 +37,91 @@ async function resolveBinaryCandidates(binaryName) {
   }
 }
 
+async function resolveNpmGlobalCandidates(binaryName) {
+  let prefix = ""
+
+  try {
+    const { stdout } = await execFileAsync("npm", ["prefix", "-g"], {
+      windowsHide: true,
+      shell: process.platform === "win32"
+    })
+    prefix = stdout
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .find(Boolean) || ""
+  } catch {
+    return []
+  }
+
+  if (!prefix) {
+    return []
+  }
+
+  const candidatePaths = process.platform === "win32"
+    ? [
+        path.join(prefix, `${binaryName}.cmd`),
+        path.join(prefix, binaryName)
+      ]
+    : [path.join(prefix, binaryName)]
+
+  if (binaryName === "codex") {
+    candidatePaths.push(
+      path.join(prefix, "node_modules", "@openai", "codex", "bin", "codex.js")
+    )
+  }
+
+  const candidates = []
+
+  for (const candidatePath of candidatePaths) {
+    if (await pathExists(candidatePath)) {
+      candidates.push(candidatePath)
+    }
+  }
+
+  return [...new Set(candidates)]
+}
+
 async function runVersionCommand(binaryPath) {
+  if (/\.js$/i.test(binaryPath)) {
+    return execFileAsync("node", [binaryPath, "--version"], {
+      windowsHide: true,
+      shell: process.platform === "win32"
+    })
+  }
+
   return execFileAsync(binaryPath, ["--version"], {
     windowsHide: true,
     shell: process.platform === "win32"
   })
 }
 
-async function detectVersion(binaryPaths) {
-  if (!binaryPaths.length) {
-    return undefined
+async function detectExecutable(binaryPaths) {
+  const executablePath = binaryPaths[0] || ""
+
+  if (!executablePath) {
+    return {
+      executablePath: "",
+      version: undefined
+    }
   }
 
-  for (const binaryPath of binaryPaths) {
-    try {
-      const { stdout, stderr } = await runVersionCommand(binaryPath)
-      const output = `${stdout}\n${stderr}`
-        .split(/\r?\n/)
-        .map((item) => item.trim())
-        .find(Boolean)
+  try {
+    const { stdout, stderr } = await runVersionCommand(executablePath)
+    const output = `${stdout}\n${stderr}`
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .find(Boolean)
 
-      if (output) {
-        return output
-      }
-    } catch {}
+    return {
+      executablePath,
+      version: output
+    }
+  } catch {}
+
+  return {
+    executablePath,
+    version: undefined
   }
-
-  return undefined
 }
 
 class BaseCliAdapter {
@@ -76,7 +134,8 @@ class BaseCliAdapter {
     configDirName,
     configPath,
     sessionsDirName,
-    sessionScanRules
+    sessionScanRules,
+    preferNpmGlobal
   }) {
     this.id = id
     this.type = type
@@ -86,6 +145,7 @@ class BaseCliAdapter {
     this.configDirName = configDirName
     this.configPath = configPath
     this.sessionsDirName = sessionsDirName
+    this.preferNpmGlobal = Boolean(preferNpmGlobal)
     this.sessionScanRules = sessionScanRules || {
       extensions: [".json", ".jsonl", ".transcript"],
       names: []
@@ -118,10 +178,12 @@ class BaseCliAdapter {
 
   async detect() {
     const configPath = this.getConfigPath()
-    const executablePaths = await resolveBinaryCandidates(this.binaryName)
-    const executablePath = executablePaths[0]
+    const executablePaths = this.preferNpmGlobal
+      ? await resolveNpmGlobalCandidates(this.binaryName)
+      : await resolveBinaryCandidates(this.binaryName)
+    const executable = await detectExecutable(executablePaths)
     const configExists = await pathExists(configPath)
-    const installed = Boolean(configExists || executablePath)
+    const installed = Boolean(configExists || executable.executablePath)
 
     return {
       id: this.id,
@@ -129,13 +191,13 @@ class BaseCliAdapter {
       name: this.name,
       icon: this.icon,
       installed,
-      executablePath: executablePath || undefined,
+      executablePath: executable.executablePath || undefined,
       configPath,
       skillsPath: this.getSkillsPath(),
       sessionsPath: this.getSessionsPath(),
       sessionPaths: this.getSessionPaths(),
       sessionScanRules: this.getSessionScanRules(),
-      version: await detectVersion(executablePaths),
+      version: executable.version,
       detectedAt: Date.now()
     }
   }
@@ -180,6 +242,7 @@ class CodexAdapter extends BaseCliAdapter {
       configDirName: ".codex",
       configPath,
       sessionsDirName: "sessions",
+      preferNpmGlobal: true,
       sessionScanRules: {
         extensions: [".json", ".jsonl", ".transcript"],
         names: []

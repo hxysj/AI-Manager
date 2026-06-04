@@ -5,6 +5,7 @@ const { EventEmitter } = require("node:events")
 const { fetchWithProxy } = require("./codex-account-service.cjs")
 
 const proxyManagedApiKey = "PROXY_MANAGED"
+const proxyProviderInstanceTokenPrefix = "AI_MANAGER_PROVIDER:"
 const codexAccountPrefix = "account:"
 const codexOfficialBaseUrl = "https://chatgpt.com/backend-api/codex"
 const proxyCliDefaults = {
@@ -411,6 +412,7 @@ class CodexProxyService extends EventEmitter {
     this.liveBackup = null
     this.logs = []
     this.server = null
+    this.providerInstanceServerRequired = false
   }
 
   async init() {
@@ -490,6 +492,35 @@ class CodexProxyService extends EventEmitter {
       this.server.close(error => (error ? reject(error) : resolve()))
     })
     this.server = null
+  }
+
+  async startProviderInstanceServer() {
+    this.providerInstanceServerRequired = true
+    await this.startServer()
+  }
+
+  createProviderInstanceToken(providerId) {
+    return `${proxyProviderInstanceTokenPrefix}${String(providerId || "").trim()}`
+  }
+
+  getProviderIdFromInstanceToken(token) {
+    const text = String(token || "").trim()
+
+    if (!text.startsWith(proxyProviderInstanceTokenPrefix)) {
+      return ""
+    }
+
+    return text.slice(proxyProviderInstanceTokenPrefix.length)
+  }
+
+  getRequestInstanceProviderId(request) {
+    const authorization = String(request.headers.authorization || "").trim()
+    const bearerMatch = authorization.match(/^Bearer\s+(.+)$/i)
+    const token = bearerMatch
+      ? bearerMatch[1]
+      : String(request.headers["x-api-key"] || "").trim()
+
+    return this.getProviderIdFromInstanceToken(token)
   }
 
   getCodexPaths(cliTarget) {
@@ -800,7 +831,9 @@ class CodexProxyService extends EventEmitter {
       updatedAt: Date.now()
     }, this.defaultConfig)
     await this.persistConfig()
-    await this.stopServer()
+    if (!this.providerInstanceServerRequired) {
+      await this.stopServer()
+    }
     this.emitChanged()
     return {
       state: this.getState(),
@@ -1039,7 +1072,12 @@ class CodexProxyService extends EventEmitter {
       return
     }
 
-    if (!this.config.enabled) {
+    const instanceProviderId = this.getRequestInstanceProviderId(request)
+    const requestSource = instanceProviderId
+      ? "provider-instance"
+      : "proxy-managed"
+
+    if (!this.config.enabled && !instanceProviderId) {
       createJsonResponse(response, 503, {
         error: {
           message: `${this.cliName} 代理未开启接管`
@@ -1049,14 +1087,16 @@ class CodexProxyService extends EventEmitter {
     }
 
     const body = await this.readBody(request)
-    const providerIds = this.getForwardProviderIds()
+    const providerIds = instanceProviderId
+      ? [instanceProviderId]
+      : this.getForwardProviderIds()
     let lastError = null
 
     for (const providerId of providerIds) {
       const target = this.getTarget(providerId)
 
       try {
-        if (this.config.activeProviderId !== providerId) {
+        if (!instanceProviderId && this.config.activeProviderId !== providerId) {
           this.config = normalizeProxyConfig({
             ...this.config,
             activeProviderId: providerId,
@@ -1092,7 +1132,7 @@ class CodexProxyService extends EventEmitter {
           }
         }
         response.end()
-        if (this.config.activeProviderId !== providerId) {
+        if (!instanceProviderId && this.config.activeProviderId !== providerId) {
           this.config = normalizeProxyConfig({
             ...this.config,
             activeProviderId: providerId,
@@ -1109,6 +1149,9 @@ class CodexProxyService extends EventEmitter {
           requestUrl: request.url,
           upstreamUrl: result.upstreamUrl,
           endpoint: route.endpoint,
+          instanceProviderId,
+          instanceProviderName: instanceProviderId ? result.target.name : "",
+          requestSource,
           statusCode: result.response.status,
           ok: result.response.ok,
           latencyMs: result.latencyMs,
@@ -1126,6 +1169,9 @@ class CodexProxyService extends EventEmitter {
           requestUrl: request.url,
           upstreamUrl: error.upstreamUrl || "",
           endpoint: route.endpoint,
+          instanceProviderId,
+          instanceProviderName: instanceProviderId ? target.name : "",
+          requestSource,
           statusCode: error.status || 0,
           ok: false,
           latencyMs: 0,

@@ -2,7 +2,7 @@ const fs = require("node:fs/promises")
 const os = require("node:os")
 const path = require("node:path")
 const crypto = require("node:crypto")
-const { execFile } = require("node:child_process")
+const { execFile, spawn } = require("node:child_process")
 const { EventEmitter } = require("node:events")
 const { promisify } = require("node:util")
 const {
@@ -329,7 +329,8 @@ const ignoredRuntimeBackupPaths = new Set([
   "storage/runtime-profiles.json",
   "storage/runtime-provider-state.json",
   "storage/runtime-provider-keys.json",
-  "storage/codex-active-account-id.json"
+  "storage/codex-active-account-id.json",
+  "storage/codex-provider-instances.json"
 ])
 
 function isIgnoredBackupPath(entryPath) {
@@ -354,6 +355,7 @@ const restoreStorageNames = {
   "storage/installs.json": "Skill 挂载",
   "storage/usage-logs.json": "用量日志",
   "storage/usage-pricing.json": "模型费用",
+  "storage/codex-provider-instances.json": "Codex 独立实例",
   "storage/providers.json": "Provider",
   "storage/runtime-models.json": "模型",
   "storage/codex-accounts.json": "Codex 官方账号",
@@ -1489,6 +1491,7 @@ class ManagerService extends EventEmitter {
     this.skillUsageService = new SkillUsageService(this.sessionService)
     this.codexAccountService = new CodexAccountService(this.storage)
     this.runtimeProviderService = new RuntimeProviderService(this.storage)
+    this.codexProviderInstances = []
     this.claudeProxyService = new CodexProxyService(
       this.storage,
       this.runtimeProviderService,
@@ -1534,6 +1537,10 @@ class ManagerService extends EventEmitter {
     await this.gitToolService.init()
     await this.sessionService.init()
     await this.usageService.init()
+    this.codexProviderInstances = await this.storage.read(
+      "codexProviderInstances",
+      []
+    )
     await this.codexAccountService.init()
     await this.promptRuntimeService.init()
     this.codexAccountService.on("changed", (codexAccounts) => {
@@ -1771,10 +1778,64 @@ class ManagerService extends EventEmitter {
     )
   }
 
+  getCodexProviderInstances() {
+    return this.codexProviderInstances.filter(
+      (item) => item.providerId && item.profileDir && item.sessionsPath
+    )
+  }
+
+  getUsageCliTargets(cliTargets = this.state.cliTargets) {
+    const instances = this.getCodexProviderInstances()
+
+    if (!instances.length) {
+      return cliTargets
+    }
+
+    return cliTargets.map((item) => {
+      if (item.id !== "codex") {
+        return item
+      }
+
+      return {
+        ...item,
+        codexInstanceProviderMap: this.createCodexInstanceProviderMap(),
+        sessionPaths: Array.from(new Set([
+          ...(Array.isArray(item.sessionPaths)
+            ? item.sessionPaths
+            : [item.sessionsPath].filter(Boolean)),
+          ...instances.map((instance) => instance.sessionsPath)
+        ]))
+      }
+    })
+  }
+
+  createCodexInstanceProviderMap() {
+    const entries = this.getCodexProviderInstances().flatMap((item) => [
+      [
+        path.normalize(item.sessionsPath),
+        {
+          providerId: item.providerId,
+          providerName: item.providerName,
+          providerType: item.providerType || ""
+        }
+      ],
+      [
+        path.normalize(item.profileDir),
+        {
+          providerId: item.providerId,
+          providerName: item.providerName,
+          providerType: item.providerType || ""
+        }
+      ]
+    ])
+
+    return Object.fromEntries(entries)
+  }
+
   startSessionWatcher() {
-    this.sessionService.startWatcher(this.state.cliTargets, async () => {
+    this.sessionService.startWatcher(this.getUsageCliTargets(), async () => {
       const { sessions, diagnostics } = await this.sessionService.refresh(
-        this.state.cliTargets
+        this.getUsageCliTargets()
       )
       const runtimeState = this.getRuntimeStateWithProxy()
       const codexAccounts = this.codexAccountService.getState()
@@ -1882,8 +1943,9 @@ class ManagerService extends EventEmitter {
       detectedCliTargets,
       { preferDetectedPaths }
     )
+    const usageCliTargets = this.getUsageCliTargets(cliTargets)
     const { sessions, diagnostics: sessionDiagnostics } =
-      await this.sessionService.refresh(cliTargets)
+      await this.sessionService.refresh(usageCliTargets)
     const repos = this.repoService.listRepos().map((repo) => ({
       ...repo,
       skillCount: 0
@@ -2863,7 +2925,9 @@ class ManagerService extends EventEmitter {
   }
 
   async syncUsage(input = {}) {
-    const { sessions } = await this.sessionService.refresh(this.state.cliTargets)
+    const { sessions } = await this.sessionService.refresh(
+      this.getUsageCliTargets()
+    )
     const runtimeState = this.getRuntimeStateWithProxy()
     const codexAccounts = this.codexAccountService.getState()
     const { diagnostics: usageDiagnostics } = await this.usageService.refresh({
@@ -2909,7 +2973,7 @@ class ManagerService extends EventEmitter {
   async restoreSession(sessionId) {
     await this.sessionService.restoreFromRecycle(sessionId)
     const { sessions, diagnostics } = await this.sessionService.refresh(
-      this.state.cliTargets
+      this.getUsageCliTargets()
     )
     this.state = {
       ...this.state,
@@ -3354,6 +3418,188 @@ class ManagerService extends EventEmitter {
       status: "ok",
       data: account,
       message: ""
+    }
+  }
+
+  async launchCodexProviderInstance(input) {
+    const providerId = String(input.providerId || "").trim()
+    const provider = this.runtimeProviderService.providers.find(
+      (item) => item.id === providerId && item.cli === "codex"
+    )
+
+    if (!provider) {
+      throw new Error("Codex Provider 不存在")
+    }
+
+    if (provider.enabled === false) {
+      throw new Error("Codex Provider 已禁用")
+    }
+
+    if (!this.runtimeProviderService.keyManager.getProviderKey(provider.id)) {
+      throw new Error("当前 Codex Provider 缺少 API Key")
+    }
+
+    if (!String(provider.baseUrl || "").trim()) {
+      throw new Error("当前 Codex Provider 缺少请求地址")
+    }
+
+    const model =
+      provider.runtimeConfig?.mainModel ||
+      this.runtimeProviderService.models.find(
+        (item) => item.providerId === provider.id
+      )?.name ||
+      ""
+
+    if (!model) {
+      throw new Error("当前 Codex Provider 缺少模型名称")
+    }
+
+    const cliTarget = await this.cliDetectionService.getAdapter("codex").detect()
+
+    if (!cliTarget?.executablePath) {
+      throw new Error("未检测到 Codex CLI 可执行文件")
+    }
+
+    await this.codexProxyService.startProviderInstanceServer()
+
+    const profileDir = path.join(
+      this.paths.workspaceRoot,
+      "codex-instances",
+      `${slugifyName(provider.name) || "provider"}-${
+        slugifyName(provider.id) || provider.id
+      }`
+    )
+    const token = this.codexProxyService.createProviderInstanceToken(
+      provider.id
+    )
+    const proxyState = this.codexProxyService.getState()
+    const runtimeConfig = provider.runtimeConfig || {}
+    const configLines = [
+      'model_provider = "custom"',
+      `model = ${JSON.stringify(model)}`,
+      `model_reasoning_effort = ${JSON.stringify(
+        runtimeConfig.modelReasoningEffort || "low"
+      )}`,
+      "disable_response_storage = true"
+    ]
+
+    if (runtimeConfig.serviceTierFast) {
+      configLines.push('service_tier = "fast"')
+    }
+
+    if (runtimeConfig.modelContextWindowEnabled) {
+      configLines.push("model_context_window = 1000000")
+      configLines.push(
+        `model_auto_compact_token_limit = ${
+          Number(runtimeConfig.modelAutoCompactTokenLimit) || 900000
+        }`
+      )
+    }
+
+    configLines.push(
+      "",
+      "[model_providers]",
+      "[model_providers.custom]",
+      'name = "custom"',
+      'wire_api = "responses"',
+      "requires_openai_auth = true",
+      `base_url = ${JSON.stringify(proxyState.localBaseUrl)}`
+    )
+
+    await fs.mkdir(profileDir, { recursive: true })
+    await fs.writeFile(
+      path.join(profileDir, "auth.json"),
+      `${JSON.stringify({ OPENAI_API_KEY: token }, null, 2)}\n`,
+      "utf8"
+    )
+    await fs.writeFile(
+      path.join(profileDir, "config.toml"),
+      `${configLines.join("\n")}\n`,
+      "utf8"
+    )
+    const sessionsPath = path.join(profileDir, "sessions")
+    await fs.mkdir(sessionsPath, { recursive: true })
+    const nextInstance = {
+      id: provider.id,
+      providerId: provider.id,
+      providerName: provider.name,
+      providerType: provider.type || "",
+      profileDir,
+      sessionsPath,
+      updatedAt: Date.now()
+    }
+    this.codexProviderInstances = [
+      nextInstance,
+      ...this.codexProviderInstances.filter(
+        (item) => item.providerId !== provider.id
+      )
+    ]
+    this.storage.scheduleWrite(
+      "codexProviderInstances",
+      this.codexProviderInstances
+    )
+
+    let codexExecutablePath = cliTarget.executablePath
+    if (
+      !path.extname(codexExecutablePath) &&
+      await pathExists(`${codexExecutablePath}.cmd`)
+    ) {
+      codexExecutablePath = `${codexExecutablePath}.cmd`
+    }
+
+    try {
+      await execFileAsync(codexExecutablePath, ["--version"], {
+        windowsHide: true,
+        shell: process.platform === "win32"
+      })
+    } catch (error) {
+      throw new Error(
+        `全局 Codex 启动失败，请重新安装 npm 全局 Codex：${error.stderr || error.message}`
+      )
+    }
+
+    const launcherPath = path.join(profileDir, "launch.cmd")
+    let codexRunCommand = `"${codexExecutablePath}"`
+    if (/\.(cmd|bat)$/i.test(codexExecutablePath)) {
+      codexRunCommand = `call "${codexExecutablePath}"`
+    } else if (/\.js$/i.test(codexExecutablePath)) {
+      codexRunCommand = `node "${codexExecutablePath}"`
+    }
+    await fs.writeFile(
+      launcherPath,
+      [
+        "@echo off",
+        "title Codex 实例",
+        `set "CODEX_HOME=${profileDir}"`,
+        `set "OPENAI_API_KEY=${token}"`,
+        `set "OPENAI_BASE_URL=${proxyState.localBaseUrl}"`,
+        `set "OPENAI_MODEL=${model}"`,
+        `cd /d "${this.paths.workspaceRoot}"`,
+        codexRunCommand,
+        ""
+      ].join("\r\n"),
+      "utf8"
+    )
+
+    spawn("cmd.exe", ["/d", "/c", "start", "", "cmd.exe", "/d", "/k", launcherPath], {
+      cwd: this.paths.workspaceRoot,
+      detached: true,
+      env: {
+        ...process.env,
+        CODEX_HOME: profileDir,
+        OPENAI_API_KEY: token,
+        OPENAI_BASE_URL: proxyState.localBaseUrl,
+        OPENAI_MODEL: model
+      },
+      stdio: "ignore",
+      windowsHide: false
+    }).unref()
+    this.startSessionWatcher()
+
+    return {
+      providerId: provider.id,
+      providerName: provider.name,
+      profileDir
     }
   }
 
