@@ -142,6 +142,8 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("skill-repository:add", toPlainPayload(payload)),
   refreshSkillRepository: payload =>
     ipcRenderer.invoke("skill-repository:refresh", toPlainPayload(payload)),
+  refreshSkillRepositories: () =>
+    ipcRenderer.invoke("skill-repository:refresh-all"),
   removeSkillRepository: payload =>
     ipcRenderer.invoke("skill-repository:remove", toPlainPayload(payload)),
   installSkillFromRepository: payload =>
@@ -208,6 +210,8 @@ contextBridge.exposeInMainWorld("aiManager", {
     ipcRenderer.invoke("session:search", toPlainPayload(payload)),
   loadSessionMessages: payload =>
     ipcRenderer.invoke("session:messages", toPlainPayload(payload)),
+  startSessionUsageWatch: () => ipcRenderer.invoke("session:watch-start"),
+  stopSessionUsageWatch: () => ipcRenderer.invoke("session:watch-stop"),
   getUsageStats: payload =>
     ipcRenderer.invoke("usage:stats", toPlainPayload(payload)),
   getSkillUsageStats: payload =>

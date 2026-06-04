@@ -275,12 +275,14 @@ class CodexAccountService extends EventEmitter {
 
     this.getCodexCliTarget = getCodexCliTarget
 
-    this.refreshExpiringAccounts().catch(error => {
-      this.emit("login-state", {
-        status: "failed",
-        message: `Codex 自动刷新失败：${error.message || String(error)}`
+    setTimeout(() => {
+      this.refreshExpiringAccounts().catch(error => {
+        this.emit("login-state", {
+          status: "failed",
+          message: `Codex 自动刷新失败：${error.message || String(error)}`
+        })
       })
-    })
+    }, 10000)
 
     this.autoRefreshTimer = setInterval(() => {
       this.refreshExpiringAccounts().catch(error => {

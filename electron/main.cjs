@@ -308,6 +308,21 @@ function saveAppSettings(nextSettings) {
   )
 }
 
+function appRuntimePathSettingsChanged(previousSettings, nextSettings) {
+  if (
+    path.resolve(previousSettings.dataPath) !== path.resolve(nextSettings.dataPath)
+  ) {
+    return true
+  }
+
+  return ["claude", "codex"].some(key => {
+    return (
+      path.resolve(previousSettings.cliConfigPaths?.[key] || "") !==
+      path.resolve(nextSettings.cliConfigPaths?.[key] || "")
+    )
+  })
+}
+
 function getAppCallLogPath() {
   return path.join(
     app.getPath("userData"),
@@ -2184,6 +2199,10 @@ function registerIpc() {
 
   registerLoggedIpc("settings:save", async (_, payload) => {
     const nextSettings = normalizeAppSettings(payload)
+    const runtimePathChanged = appRuntimePathSettingsChanged(
+      appSettings,
+      nextSettings
+    )
     fs.mkdirSync(nextSettings.dataPath, { recursive: true })
     applyAutoLaunchSetting(nextSettings)
     saveAppSettings(nextSettings)
@@ -2201,7 +2220,11 @@ function registerIpc() {
       return managerService.getState()
     }
 
-    await managerService.updateAppSettings(appSettings)
+    if (runtimePathChanged) {
+      await managerService.updateAppSettings(appSettings)
+    } else {
+      managerService.setAppSettings(appSettings)
+    }
     await pruneLocalBackups()
     restartLocalBackupTimer()
     return managerService.getState()
@@ -2467,6 +2490,11 @@ function registerIpc() {
     return managerService.getState()
   })
 
+  registerLoggedIpc("skill-repository:refresh-all", async () => {
+    await managerService.refreshSkillRepositories()
+    return managerService.getState()
+  })
+
   registerLoggedIpc("skill-repository:remove", async (_, payload) => {
     await managerService.removeSkillRepository(payload.repositoryId)
     return managerService.getState()
@@ -2582,6 +2610,16 @@ function registerIpc() {
 
   registerLoggedIpc("session:messages", async (_, payload) => {
     return managerService.loadSessionMessages(payload?.sessionId)
+  })
+
+  registerLoggedIpc("session:watch-start", async () => {
+    await managerReadyPromise
+    return managerService.startSessionUsageWatcher()
+  })
+
+  registerLoggedIpc("session:watch-stop", async () => {
+    await managerReadyPromise
+    return managerService.stopSessionUsageWatcher()
   })
 
   registerLoggedIpc("usage:stats", async (_, payload) => {
