@@ -310,6 +310,15 @@ function getAppCallLogPath() {
   return path.join(
     app.getPath("userData"),
     "workspace",
+    "logs",
+    "app-call-logs.json"
+  )
+}
+
+function getLegacyAppCallLogPath() {
+  return path.join(
+    app.getPath("userData"),
+    "workspace",
     "storage",
     "app-call-logs.json"
   )
@@ -371,11 +380,50 @@ function splitIpcTraceArgs(args) {
 }
 
 async function initAppCallLogs() {
+  await migrateAppCallLogs()
+
   try {
     appCallLogs = JSON.parse(await fsp.readFile(getAppCallLogPath(), "utf8"))
   } catch {
     appCallLogs = []
   }
+}
+
+async function migrateAppCallLogs() {
+  const sourcePath = getLegacyAppCallLogPath()
+  const targetPath = getAppCallLogPath()
+
+  if (!fs.existsSync(sourcePath)) {
+    return
+  }
+
+  await fsp.mkdir(path.dirname(targetPath), { recursive: true })
+
+  if (!fs.existsSync(targetPath)) {
+    await fsp.rename(sourcePath, targetPath)
+    return
+  }
+
+  const sourceItems = JSON.parse(await fsp.readFile(sourcePath, "utf8"))
+  const targetItems = JSON.parse(await fsp.readFile(targetPath, "utf8"))
+
+  if (!Array.isArray(sourceItems) || !Array.isArray(targetItems)) {
+    await fsp.rm(sourcePath)
+    return
+  }
+
+  const itemMap = new Map()
+
+  for (const item of [...targetItems, ...sourceItems]) {
+    itemMap.set(item.id, item)
+  }
+
+  await fsp.writeFile(
+    targetPath,
+    `${JSON.stringify(Array.from(itemMap.values()), null, 2)}\n`,
+    "utf8"
+  )
+  await fsp.rm(sourcePath)
 }
 
 function scheduleAppCallLogWrite() {

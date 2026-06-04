@@ -88,6 +88,8 @@ function serializeAppSettingsPaths(input = {}) {
 function resolveAppPaths(userDataPath) {
   const workspaceRoot = path.join(userDataPath, "workspace")
   const storageDir = path.join(workspaceRoot, "storage")
+  const logsDir = path.join(workspaceRoot, "logs")
+  const tempDir = path.join(workspaceRoot, "temp")
   const sessionsDir = path.join(workspaceRoot, "sessions")
   const sessionRecycleDir = path.join(sessionsDir, "recycle")
   const promptsDir = path.join(workspaceRoot, "prompts")
@@ -104,16 +106,19 @@ function resolveAppPaths(userDataPath) {
     sessionRecycleDir,
     sessionRecycleSessionsDir: path.join(sessionRecycleDir, "sessions"),
     sessionRecycleMetadataDir: path.join(sessionRecycleDir, "metadata"),
+    logsDir,
+    tempDir,
     storageDir,
     storageFiles: {
       skillRepositories: path.join(storageDir, "skill-repositories.json"),
+      skillRepositoryCache: path.join(tempDir, "skill-repositories-cache.json"),
       repos: path.join(storageDir, "repos.json"),
       skills: path.join(storageDir, "skills.json"),
       installs: path.join(storageDir, "installs.json"),
       cliTargets: path.join(storageDir, "cli-targets.json"),
-      sessions: path.join(storageDir, "sessions.json"),
-      usageLogs: path.join(storageDir, "usage-logs.json"),
-      usageRequestRecords: path.join(storageDir, "usage-request-records.json"),
+      sessions: path.join(tempDir, "sessions.json"),
+      usageLogs: path.join(logsDir, "usage-logs.json"),
+      usageRequestRecords: path.join(logsDir, "usage-request-records.json"),
       usagePricing: path.join(storageDir, "usage-pricing.json"),
       codexProviderInstances: path.join(storageDir, "codex-provider-instances.json"),
       providers: path.join(storageDir, "providers.json"),
@@ -161,6 +166,8 @@ async function ensureAppDirectories(paths) {
     fs.mkdir(paths.reposDir, { recursive: true }),
     fs.mkdir(paths.sessionRecycleSessionsDir, { recursive: true }),
     fs.mkdir(paths.sessionRecycleMetadataDir, { recursive: true }),
+    fs.mkdir(paths.logsDir, { recursive: true }),
+    fs.mkdir(paths.tempDir, { recursive: true }),
     fs.mkdir(paths.storageDir, { recursive: true })
   ])
 }

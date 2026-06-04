@@ -40,6 +40,24 @@ git commit -m "feat: 中文摘要" -m "- 修改内容一。" -m "- 修改内容�
 - 当前项目以 Electron + Vue 3 + Less 桌面端应用为主，不再按网页端交互处理。
 - `electron/services` 旧文件保持现状不强制迁移，后续新增 service 必须按业务分类放入子目录。
 
+## 工作区数据目录规则
+
+- 所有工作区路径统一以 `electron/services/path-utils.cjs` 中的 `resolveAppPaths()` 为准，新增数据路径必须先在这里明确目录归属。
+- `workspace/` 是应用业务数据根目录，只负责承载下级业务目录，不直接散放业务文件。
+- `workspace/storage/` 只放可以云备份、跨设备恢复后仍然有意义的持久化配置和索引数据，例如 Provider 配置、模型费用配置、Skill 仓库地址、Prompt 索引等。
+- `workspace/storage/` 不允许新增日志、运行时扫描结果、临时缓存、会话快照、机器相关状态、可重新拉取的数据或只对当前设备有效的数据。
+- `workspace/logs/` 只放日志类数据，例如请求日志、用量请求记录、应用调用日志等；该目录不进入云备份。
+- `workspace/temp/` 只放运行时缓存和可重新生成的数据，例如 GitHub Skill 扫描结果、会话索引缓存等；该目录不进入云备份，代码必须允许它被删除后重新生成。
+- `workspace/skills/` 放已安装到本地的 Skill 实际内容，属于用户可保留数据，可以进入云备份。
+- `workspace/prompts/` 放 Prompt 内容和按 CLI 分类的 Prompt 数据，属于用户可保留数据，可以进入云备份。
+- `workspace/profiles/` 放 Prompt 配置档案，属于用户可保留数据，可以进入云备份。
+- `workspace/repos/` 放仓库管理使用的本地仓库目录或仓库工作数据，不进入云备份；需要同步的仓库配置应写入 `storage` 中的配置文件。
+- `workspace/sessions/` 放 CLI 原始会话、会话回收站和相关本地会话文件，不进入云备份。
+- `workspace/git-tool/` 放 Git 工具归档、检查缓存等本地数据，不进入坚果云等云备份；只有本地备份明确包含 Git Tool 数据时才允许打包。
+- 新增持久化文件前必须先判断它是“可云备份配置”、“日志”还是“可重新生成缓存”，不要为了读取方便把所有 JSON 都放进 `storage`。
+- 新增云备份内容必须在 `collectBackupEntries()` 中显式加入；新增非云备份内容不得加入 `collectBackupEntries()`，也不得依赖后续迁移来修正目录放错的问题。
+- 如果确实要调整已有数据文件目录，必须同时补充启动兼容迁移和备份恢复后的兼容迁移；但新增数据文件必须一开始就放在正确目录，避免后续再做迁移补救。
+
 ## 前端规则
 
 - Vue 代码使用现有项目风格，避免全局格式化无关文件。
