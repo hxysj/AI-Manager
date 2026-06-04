@@ -1749,7 +1749,13 @@ class ManagerService extends EventEmitter {
       ...repo,
       skillCount: 0
     }))
-    const skills = await this.storage.read("skills", [])
+    const installIndex = await this.storage.read("installs", {})
+    const skills = this.hydrateCachedSkills(
+      await this.storage.read("skills", []),
+      cliTargets,
+      repos,
+      installIndex
+    )
 
     for (const skill of skills) {
       if (skill.repoId) {
@@ -1778,6 +1784,66 @@ class ManagerService extends EventEmitter {
       appSettings: this.toPublicSettings(false),
       refreshedAt: Date.now()
     }
+  }
+
+  hydrateCachedSkills(skills, cliTargets, repos, installIndex) {
+    const repoMap = new Map(repos.map((item) => [item.id, item]))
+
+    return skills.map((skill) => {
+      const cachedInstallStates = skill.installStates || {}
+      const indexedTargetIds = Array.isArray(installIndex[skill.name])
+        ? installIndex[skill.name]
+        : []
+      const cachedInstalledTargets = Array.isArray(skill.installedTargets)
+        ? skill.installedTargets
+        : indexedTargetIds
+      const installStates = {}
+      const installedTargets = []
+
+      for (const cliTarget of cliTargets) {
+        const cachedState = cachedInstallStates[cliTarget.id]
+
+        if (cachedState) {
+          installStates[cliTarget.id] = cachedState
+        } else if (cachedInstalledTargets.includes(cliTarget.id)) {
+          installStates[cliTarget.id] = {
+            targetId: cliTarget.id,
+            state: "installed",
+            targetPath: path.join(cliTarget.skillsPath || "", skill.name)
+          }
+        } else if (cliTarget.installed) {
+          installStates[cliTarget.id] = {
+            targetId: cliTarget.id,
+            state: "not-installed",
+            targetPath: path.join(cliTarget.skillsPath || "", skill.name)
+          }
+        } else {
+          installStates[cliTarget.id] = {
+            targetId: cliTarget.id,
+            state: "disabled",
+            targetPath: path.join(cliTarget.skillsPath || "", skill.name),
+            reason: "CLI 未安装"
+          }
+        }
+
+        if (["installed", "broken-link"].includes(
+          installStates[cliTarget.id].state
+        )) {
+          installedTargets.push(cliTarget.id)
+        }
+      }
+
+      return {
+        ...skill,
+        installedTargets,
+        installStates,
+        status: this.resolveSkillStatus(installStates),
+        repoName:
+          skill.repoId && repoMap.has(skill.repoId)
+            ? repoMap.get(skill.repoId).name
+            : skill.repoName || "Managed"
+      }
+    })
   }
 
   scheduleStartupRefresh() {
