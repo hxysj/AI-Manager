@@ -12,3 +12,5 @@ tests
 !tests/manager-service.test.cjs
 docs
 release
+backup/
+tests/
