@@ -448,6 +448,7 @@
           @quit-app="quitApp"
           @restore-data="restoreDataBackup"
           @save="saveSettings"
+          @uninstall-without-trace="uninstallWithoutTrace"
         />
 
         <section v-else-if="activeView === 'logs'" class="app-logs">
@@ -1124,7 +1125,7 @@
       </section>
     </div>
 
-    <SelectionTranslator />
+    <SelectionTranslator :active-view="activeView" />
     <GlobalLoading />
   </div>
 </template>
@@ -1840,37 +1841,95 @@ async function bootstrap() {
 }
 
 function updateState(nextState) {
-  state.cliTargets = nextState.cliTargets || []
-  state.skills = nextState.skills || []
-  state.skillRepositories = nextState.skillRepositories || []
-  state.repos = nextState.repos || []
-  state.sessions = nextState.sessions || []
-  state.usage = nextState.usage || {}
-  state.codexAccounts = nextState.codexAccounts || []
-  state.codexLoginState = nextState.codexLoginState || null
-  state.claudeProxyState = nextState.claudeProxyState || {
+  if ("cliTargets" in nextState) {
+    state.cliTargets = nextState.cliTargets || []
+  }
+  if ("skills" in nextState) {
+    state.skills = nextState.skills || []
+  }
+  if ("skillRepositories" in nextState) {
+    state.skillRepositories = nextState.skillRepositories || []
+  }
+  if ("repos" in nextState) {
+    state.repos = nextState.repos || []
+  }
+  if ("sessions" in nextState) {
+    state.sessions = nextState.sessions || []
+  }
+  if ("usage" in nextState) {
+    state.usage = nextState.usage || {}
+  }
+  if ("codexAccounts" in nextState) {
+    state.codexAccounts = nextState.codexAccounts || []
+  }
+  if ("codexLoginState" in nextState) {
+    state.codexLoginState = nextState.codexLoginState || null
+  }
+  if ("claudeProxyState" in nextState) {
+    state.claudeProxyState = nextState.claudeProxyState || {
+      enabled: false,
+      localBaseUrl: "",
+      activeProviderId: "",
+      failoverProviderIds: []
+    }
+  }
+  if ("codexProxyState" in nextState) {
+    state.codexProxyState = nextState.codexProxyState || {
+      enabled: false,
+      localBaseUrl: "",
+      activeProviderId: "",
+      failoverProviderIds: [],
+      accountModel: ""
+    }
+  }
+  if ("providers" in nextState) {
+    state.providers = nextState.providers || []
+  }
+  if ("rules" in nextState) {
+    state.rules = nextState.rules || state.rules
+  }
+  if ("runtimeConfigSchemas" in nextState) {
+    state.runtimeConfigSchemas = nextState.runtimeConfigSchemas || {}
+  }
+  if ("runtimeModels" in nextState) {
+    state.runtimeModels = nextState.runtimeModels || []
+  }
+  if ("runtimeProviderState" in nextState) {
+    state.runtimeProviderState = nextState.runtimeProviderState || {}
+  }
+  if ("runtimeProfiles" in nextState) {
+    state.runtimeProfiles = nextState.runtimeProfiles || []
+  }
+  if ("diagnostics" in nextState) {
+    state.diagnostics = nextState.diagnostics || []
+  }
+  if ("paths" in nextState) {
+    state.paths = nextState.paths || state.paths
+  }
+  if ("appSettings" in nextState) {
+    state.appSettings = nextState.appSettings || state.appSettings
+  }
+  if ("refreshedAt" in nextState) {
+    state.refreshedAt = nextState.refreshedAt || 0
+  }
+
+  if (!("claudeProxyState" in nextState) && !state.claudeProxyState) {
+    state.claudeProxyState = {
     enabled: false,
     localBaseUrl: "",
     activeProviderId: "",
     failoverProviderIds: []
   }
-  state.codexProxyState = nextState.codexProxyState || {
+  }
+  if (!("codexProxyState" in nextState) && !state.codexProxyState) {
+    state.codexProxyState = {
     enabled: false,
     localBaseUrl: "",
     activeProviderId: "",
     failoverProviderIds: [],
     accountModel: ""
   }
-  state.providers = nextState.providers || []
-  state.rules = nextState.rules || state.rules
-  state.runtimeConfigSchemas = nextState.runtimeConfigSchemas || {}
-  state.runtimeModels = nextState.runtimeModels || []
-  state.runtimeProviderState = nextState.runtimeProviderState || {}
-  state.runtimeProfiles = nextState.runtimeProfiles || []
-  state.diagnostics = nextState.diagnostics || []
-  state.paths = nextState.paths || state.paths
-  state.appSettings = nextState.appSettings || state.appSettings
-  state.refreshedAt = nextState.refreshedAt || 0
+  }
   ensureQuickSelectedCli()
 
   if (
@@ -3424,6 +3483,14 @@ async function quitApp() {
       action: "quit",
       remember: false
     })
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function uninstallWithoutTrace() {
+  try {
+    await window.aiManager.uninstallWithoutTrace()
   } catch (error) {
     showErrorMessage(error)
   }

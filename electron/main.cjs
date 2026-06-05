@@ -344,23 +344,33 @@ function sanitizeLogValue(value) {
 }
 
 function summarizeLogValue(value) {
-  const draft = sanitizeLogValue(value)
+  if (value === undefined || value === null) {
+    return value
+  }
 
-  if (Array.isArray(draft)) {
+  if (["number", "boolean"].includes(typeof value)) {
+    return value
+  }
+
+  if (typeof value === "string") {
+    return value.length > 500 ? `${value.slice(0, 500)}...` : value
+  }
+
+  if (Array.isArray(value)) {
     return {
       type: "array",
-      length: draft.length
+      length: value.length
     }
   }
 
-  if (draft && typeof draft === "object") {
+  if (value && typeof value === "object") {
     return {
       type: "object",
-      keys: Object.keys(draft).slice(0, 30)
+      keys: Object.keys(value).slice(0, 30)
     }
   }
 
-  return draft
+  return String(value)
 }
 
 function splitIpcTraceArgs(args) {
@@ -1284,6 +1294,85 @@ function installAppUpdate(payload = {}) {
   return getUpdateStatus()
 }
 
+async function findAppUninstaller() {
+  const installDirectory = path.dirname(app.getPath("exe"))
+  const entries = await fsp.readdir(installDirectory, { withFileTypes: true })
+  const uninstaller = entries.find(item => {
+    return item.isFile() && /^uninstall.*\.exe$/i.test(item.name)
+  })
+
+  if (!uninstaller) {
+    throw new Error("未找到应用卸载程序")
+  }
+
+  return path.join(installDirectory, uninstaller.name)
+}
+
+function toPowerShellLiteral(value) {
+  return `'${String(value || "").replace(/'/g, "''")}'`
+}
+
+async function uninstallWithoutTrace() {
+  if (!app.isPackaged) {
+    throw new Error("开发环境不执行无痕卸载")
+  }
+
+  const uninstallerPath = await findAppUninstaller()
+  const dataPath = path.resolve(app.getPath("userData"))
+  const configuredDataPath = path.resolve(appSettings.dataPath)
+
+  if (dataPath !== configuredDataPath) {
+    throw new Error("当前运行数据目录与配置不一致，已拒绝无痕卸载")
+  }
+
+  if (dataPath === path.parse(dataPath).root) {
+    throw new Error("数据目录不能是磁盘根目录")
+  }
+
+  if (!path.relative(dataPath, uninstallerPath).startsWith("..")) {
+    throw new Error("数据目录不能包含应用卸载程序")
+  }
+
+  const cleanupScript = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    `$processId = ${process.pid}`,
+    `$dataPath = ${toPowerShellLiteral(dataPath)}`,
+    `$settingsPath = ${toPowerShellLiteral(settingsFilePath)}`,
+    `$uninstallerPath = ${toPowerShellLiteral(uninstallerPath)}`,
+    "Wait-Process -Id $processId",
+    "Remove-Item -LiteralPath $dataPath -Recurse -Force",
+    "Remove-Item -LiteralPath $settingsPath -Force",
+    "Start-Process -FilePath $uninstallerPath -ArgumentList '/S'"
+  ].join("; ")
+
+  if (localBackupTimer) {
+    clearInterval(localBackupTimer)
+    localBackupTimer = null
+  }
+
+  spawn(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-WindowStyle",
+      "Hidden",
+      "-Command",
+      cleanupScript
+    ],
+    {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true
+    }
+  ).unref()
+
+  isQuitting = true
+  app.quit()
+  return true
+}
+
 function dismissAppUpdate() {
   updatePromptOpen = false
 
@@ -2162,6 +2251,9 @@ function registerIpc() {
     installAppUpdate(payload)
   )
   registerLoggedIpc("app:update-dismiss", async () => dismissAppUpdate())
+  registerLoggedIpc("app:uninstall-without-trace", async () =>
+    uninstallWithoutTrace()
+  )
   registerLoggedIpc("app:close-action", async (_, payload) => {
     handleCloseAction(payload)
     return true
@@ -2455,18 +2547,15 @@ function registerIpc() {
   })
 
   registerLoggedIpc("skill-repository:add", async (_, payload) => {
-    await managerService.addSkillRepository(payload)
-    return managerService.getState()
+    return managerService.addSkillRepository(payload)
   })
 
   registerLoggedIpc("skill-repository:refresh", async (_, payload) => {
-    await managerService.refreshSkillRepository(payload.repositoryId)
-    return managerService.getState()
+    return managerService.refreshSkillRepository(payload.repositoryId)
   })
 
   registerLoggedIpc("skill-repository:remove", async (_, payload) => {
-    await managerService.removeSkillRepository(payload.repositoryId)
-    return managerService.getState()
+    return managerService.removeSkillRepository(payload.repositoryId)
   })
 
   registerLoggedIpc("skill-repository:install-skill", async (_, payload) => {
