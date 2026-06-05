@@ -2244,6 +2244,15 @@ function registerIpc() {
     return managerService.getState()
   })
   registerLoggedIpc("app:refresh", async () => managerService.refreshAll())
+  registerLoggedIpc("app:ensure-sessions-ready", async () =>
+    managerService.ensureSessionServiceReady()
+  )
+  registerLoggedIpc("app:ensure-tools-ready", async () =>
+    managerService.ensureToolsServiceReady()
+  )
+  registerLoggedIpc("app:ensure-skills-ready", async () =>
+    managerService.ensureSkillsServiceReady()
+  )
   registerLoggedIpc("app:check-updates", async () => checkForAppUpdates(true))
   registerLoggedIpc("app:update-status", async () => getUpdateStatus())
   registerLoggedIpc("app:update-download", async () => downloadAppUpdate())

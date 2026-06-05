@@ -1647,6 +1647,12 @@ class ManagerService extends EventEmitter {
       () => this.state.cliTargets.find((item) => item.id === "codex")
     )
     this.promptRuntimeService = new PromptRuntimeService(this.paths)
+
+    // 按需加载标志位
+    this.sessionServiceReady = false
+    this.toolsServiceReady = false
+    this.skillsServiceReady = false
+
     this.state = {
       cliTargets: [],
       skills: [],
@@ -1674,10 +1680,8 @@ class ManagerService extends EventEmitter {
   async init() {
     await ensureAppDirectories(this.paths)
     await migrateWorkspaceData(this.paths)
-    await this.repoService.init()
-    await this.skillRepositoryService.init()
-    await this.gitToolService.init()
-    await this.sessionService.init()
+
+    // 核心服务 - 启动时必须加载
     await this.usageService.init()
     this.codexProviderInstances = await this.storage.read(
       "codexProviderInstances",
@@ -1727,7 +1731,38 @@ class ManagerService extends EventEmitter {
       this.state.cliTargets.find((item) => item.id === "codex")
     )
     this.startWatcher()
+  }
+
+  async ensureSessionServiceReady() {
+    if (this.sessionServiceReady) {
+      return this.state
+    }
+    this.sessionServiceReady = true
+    await this.sessionService.init()
     this.startSessionWatcher()
+    await this.refreshAll({ emit: false })
+    return this.state
+  }
+
+  async ensureToolsServiceReady() {
+    if (this.toolsServiceReady) {
+      return this.state
+    }
+    this.toolsServiceReady = true
+    await this.repoService.init()
+    await this.gitToolService.init()
+    await this.refreshAll({ emit: false })
+    return this.state
+  }
+
+  async ensureSkillsServiceReady() {
+    if (this.skillsServiceReady) {
+      return this.state
+    }
+    this.skillsServiceReady = true
+    await this.skillRepositoryService.init()
+    await this.refreshAll({ emit: false })
+    return this.state
   }
 
   toPublicPaths() {
