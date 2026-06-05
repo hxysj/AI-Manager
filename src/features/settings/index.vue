@@ -87,7 +87,7 @@
           <div class="settings-view__panel-header">
             <div>
               <h2>CLI 配置目录</h2>
-              <span>修改后会重新检测 CLI、Skill 挂载和运行路径。</span>
+              <span>保存后会重新检测 CLI、Skill 挂载和 Session 索引。</span>
             </div>
           </div>
 

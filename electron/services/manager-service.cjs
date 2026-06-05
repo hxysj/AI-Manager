@@ -1633,9 +1633,6 @@ class ManagerService extends EventEmitter {
     this.codexAccountService = new CodexAccountService(this.storage)
     this.runtimeProviderService = new RuntimeProviderService(this.storage)
     this.codexProviderInstances = []
-    this.startupRefreshTimer = null
-    this.sessionUsageWatcherActive = false
-    this.sessionUsageWatchToken = 0
     this.claudeProxyService = new CodexProxyService(
       this.storage,
       this.runtimeProviderService,
@@ -1725,142 +1722,12 @@ class ManagerService extends EventEmitter {
     await this.runtimeProviderService.init()
     await this.claudeProxyService.init()
     await this.codexProxyService.init()
-    await this.loadCachedState()
-    this.scheduleStartupRefresh()
+    await this.refreshAll({ emit: false })
     this.codexAccountService.startAutoRefresh(() =>
       this.state.cliTargets.find((item) => item.id === "codex")
     )
     this.startWatcher()
-  }
-
-  async loadCachedState() {
-    const cliTargets = (await this.storage.read("cliTargets", [])).map(
-      (item) => ({
-        ...item,
-        configPath: resolvePortablePath(item.configPath),
-        skillsPath: resolvePortablePath(item.skillsPath),
-        sessionsPath: resolvePortablePath(item.sessionsPath),
-        sessionPaths: Array.isArray(item.sessionPaths)
-          ? item.sessionPaths.map((value) => resolvePortablePath(value))
-          : item.sessionPaths
-      })
-    )
-    const repos = this.repoService.listRepos().map((repo) => ({
-      ...repo,
-      skillCount: 0
-    }))
-    const skills = await this.storage.read("skills", [])
-
-    for (const skill of skills) {
-      if (skill.repoId) {
-        const repo = repos.find((item) => item.id === skill.repoId)
-
-        if (repo) {
-          repo.skillCount += 1
-        }
-      }
-    }
-
-    this.state = {
-      ...this.state,
-      cliTargets,
-      skills,
-      skillRepositories: this.skillRepositoryService.listRepositories(),
-      repos,
-      sessions: this.sessionService.sessions,
-      usage: this.usageService.getStats().data,
-      codexAccounts: this.codexAccountService.getState(),
-      codexLoginState: this.codexAccountService.getLoginState(),
-      ...this.runtimeProviderService.getState(),
-      ...this.getProxyStatePatch(),
-      rules: this.promptRuntimeService.getState(),
-      paths: this.toPublicPaths(),
-      appSettings: this.toPublicSettings(false),
-      refreshedAt: Date.now()
-    }
-  }
-
-  scheduleStartupRefresh() {
-    clearTimeout(this.startupRefreshTimer)
-    this.startupRefreshTimer = setTimeout(() => {
-      this.startupRefreshTimer = null
-      this.refreshStartupState().catch((error) => {
-        this.state = {
-          ...this.state,
-          diagnostics: [
-            ...this.state.diagnostics,
-            {
-              type: "startup-refresh-error",
-              message: error.message,
-              sourcePath: this.paths.workspaceRoot
-            }
-          ],
-          refreshedAt: Date.now()
-        }
-        this.emit("state-changed", this.state)
-      })
-    }, 200)
-  }
-
-  async refreshStartupState() {
-    const previousCliTargets = (await this.storage.read("cliTargets", [])).map(
-      (item) => ({
-        ...item,
-        configPath: resolvePortablePath(item.configPath),
-        skillsPath: resolvePortablePath(item.skillsPath),
-        sessionsPath: resolvePortablePath(item.sessionsPath),
-        sessionPaths: Array.isArray(item.sessionPaths)
-          ? item.sessionPaths.map((value) => resolvePortablePath(value))
-          : item.sessionPaths
-      })
-    )
-    const detectedCliTargets = await this.cliDetectionService.detectAll()
-    const cliTargets = this.mergeCliTargets(
-      previousCliTargets,
-      detectedCliTargets,
-      {}
-    )
-    const repos = this.repoService.listRepos().map((repo) => ({
-      ...repo,
-      skillCount: 0
-    }))
-
-    for (const skill of this.state.skills) {
-      if (skill.repoId) {
-        const repo = repos.find((item) => item.id === skill.repoId)
-
-        if (repo) {
-          repo.skillCount += 1
-        }
-      }
-    }
-
-    await this.runtimeProviderService.refreshDrift(cliTargets)
-    await this.promptRuntimeService.refreshDrift(cliTargets)
-
-    this.state = {
-      ...this.state,
-      cliTargets,
-      repos,
-      skillRepositories: this.skillRepositoryService.listRepositories(),
-      ...this.runtimeProviderService.getState(),
-      ...this.getProxyStatePatch(),
-      rules: this.promptRuntimeService.getState(),
-      refreshedAt: Date.now()
-    }
-    this.storage.scheduleWrite(
-      "cliTargets",
-      cliTargets.map((item) => ({
-        ...item,
-        configPath: serializePortablePath(item.configPath),
-        skillsPath: serializePortablePath(item.skillsPath),
-        sessionsPath: serializePortablePath(item.sessionsPath),
-        sessionPaths: Array.isArray(item.sessionPaths)
-          ? item.sessionPaths.map((value) => serializePortablePath(value))
-          : item.sessionPaths
-      }))
-    )
-    this.emit("state-changed", this.state)
+    this.startSessionWatcher()
   }
 
   toPublicPaths() {
@@ -2143,29 +2010,6 @@ class ManagerService extends EventEmitter {
     })
   }
 
-  async startSessionUsageWatcher() {
-    const watchToken = this.sessionUsageWatchToken + 1
-
-    this.sessionUsageWatchToken = watchToken
-    await this.syncUsage()
-
-    if (this.sessionUsageWatchToken !== watchToken) {
-      return this.state
-    }
-
-    this.sessionUsageWatcherActive = true
-    this.startSessionWatcher()
-
-    return this.state
-  }
-
-  stopSessionUsageWatcher() {
-    this.sessionUsageWatchToken += 1
-    this.sessionUsageWatcherActive = false
-    this.sessionService.stopWatcher()
-    return this.state
-  }
-
   getState() {
     return this.state
   }
@@ -2216,11 +2060,7 @@ class ManagerService extends EventEmitter {
     return runtimeState
   }
 
-  async refreshAll({
-    emit = true,
-    preferDetectedPaths = false,
-    includeSessionUsage = this.sessionUsageWatcherActive
-  } = {}) {
+  async refreshAll({ emit = true, preferDetectedPaths = false } = {}) {
     const previousSkills = await this.storage.read("skills", [])
     const previousCliTargets = (await this.storage.read("cliTargets", [])).map(
       (item) => ({
@@ -2243,9 +2083,9 @@ class ManagerService extends EventEmitter {
       detectedCliTargets,
       { preferDetectedPaths }
     )
-    let sessions = this.sessionService.sessions
-    let sessionDiagnostics = []
-    let usageDiagnostics = []
+    const usageCliTargets = this.getUsageCliTargets(cliTargets)
+    const { sessions, diagnostics: sessionDiagnostics } =
+      await this.sessionService.refresh(usageCliTargets)
     const repos = this.repoService.listRepos().map((repo) => ({
       ...repo,
       skillCount: 0
@@ -2254,24 +2094,15 @@ class ManagerService extends EventEmitter {
     await this.runtimeProviderService.refreshDrift(cliTargets)
     const runtimeState = this.runtimeProviderService.getState()
     const codexAccounts = this.codexAccountService.getState()
-
-    if (includeSessionUsage) {
-      const refreshedSessions = await this.sessionService.refresh(
-        this.getUsageCliTargets(cliTargets)
-      )
-      sessions = refreshedSessions.sessions
-      sessionDiagnostics = refreshedSessions.diagnostics
-      const refreshedUsage = await this.usageService.refresh({
-        sessions,
-        providers: runtimeState.providers,
-        runtimeProfiles: runtimeState.runtimeProfiles,
-        runtimeProviderState: runtimeState.runtimeProviderState,
-        codexAccounts,
-        proxyStates: this.getProxyStatePatch(),
-        codexProxyState: this.codexProxyService.getState()
-      })
-      usageDiagnostics = refreshedUsage.diagnostics
-    }
+    const { diagnostics: usageDiagnostics } = await this.usageService.refresh({
+      sessions,
+      providers: runtimeState.providers,
+      runtimeProfiles: runtimeState.runtimeProfiles,
+      runtimeProviderState: runtimeState.runtimeProviderState,
+      codexAccounts,
+      proxyStates: this.getProxyStatePatch(),
+      codexProxyState: this.codexProxyService.getState()
+    })
     await this.promptRuntimeService.refreshDrift(cliTargets)
     const rules = this.promptRuntimeService.getState()
     const scannedItems = await this.skillScanner.scanMany([
@@ -2390,24 +2221,13 @@ class ManagerService extends EventEmitter {
       ...runtimeState,
       ...this.getProxyStatePatch(),
       rules,
-      diagnostics: includeSessionUsage
-        ? [...diagnostics, ...sessionDiagnostics, ...usageDiagnostics]
-        : [
-            ...diagnostics,
-            ...this.state.diagnostics.filter(
-              (item) =>
-                item.type === "session-parse-error" ||
-                item.type === "usage-parse-error"
-            )
-          ],
+      diagnostics: [...diagnostics, ...sessionDiagnostics, ...usageDiagnostics],
       paths: this.toPublicPaths(),
       appSettings: this.toPublicSettings(false),
       refreshedAt: Date.now()
     }
 
-    if (this.sessionUsageWatcherActive) {
-      this.startSessionWatcher()
-    }
+    this.startSessionWatcher()
 
     if (emit) {
       this.emit("state-changed", this.state)
@@ -2708,42 +2528,17 @@ class ManagerService extends EventEmitter {
 
   async addSkillRepository(input) {
     await this.skillRepositoryService.addRepository(input)
-    this.state = {
-      ...this.state,
-      skillRepositories: this.skillRepositoryService.listRepositories(),
-      refreshedAt: Date.now()
-    }
-    this.emit("state-changed", this.state)
+    await this.refreshAll()
   }
 
   async refreshSkillRepository(repositoryId) {
     await this.skillRepositoryService.refreshRepository(repositoryId)
-    this.state = {
-      ...this.state,
-      skillRepositories: this.skillRepositoryService.listRepositories(),
-      refreshedAt: Date.now()
-    }
-    this.emit("state-changed", this.state)
-  }
-
-  async refreshSkillRepositories() {
-    await this.skillRepositoryService.refreshRepositories()
-    this.state = {
-      ...this.state,
-      skillRepositories: this.skillRepositoryService.listRepositories(),
-      refreshedAt: Date.now()
-    }
-    this.emit("state-changed", this.state)
+    await this.refreshAll()
   }
 
   async removeSkillRepository(repositoryId) {
     await this.skillRepositoryService.removeRepository(repositoryId)
-    this.state = {
-      ...this.state,
-      skillRepositories: this.skillRepositoryService.listRepositories(),
-      refreshedAt: Date.now()
-    }
-    this.emit("state-changed", this.state)
+    await this.refreshAll()
   }
 
   async installSkillFromRepository(repositoryId, skillId) {
@@ -3939,9 +3734,7 @@ class ManagerService extends EventEmitter {
       stdio: "ignore",
       windowsHide: false
     }).unref()
-    if (this.sessionUsageWatcherActive) {
-      this.startSessionWatcher()
-    }
+    this.startSessionWatcher()
 
     return {
       providerId: provider.id,
@@ -4231,10 +4024,6 @@ class ManagerService extends EventEmitter {
   }
 
   async dispose() {
-    clearTimeout(this.startupRefreshTimer)
-    this.startupRefreshTimer = null
-    this.sessionUsageWatchToken += 1
-    this.sessionUsageWatcherActive = false
     this.codexAccountService.stopAutoRefresh()
     this.fileWatcherService.stop()
     await this.claudeProxyService.dispose()

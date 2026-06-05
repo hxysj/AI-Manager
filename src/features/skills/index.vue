@@ -117,7 +117,7 @@
       @back="viewMode = 'local'"
       @install-skill="installRepositorySkill"
       @open-manager="viewMode = 'repositories'"
-      @refresh="$emit('refresh-skill-repositories')"
+      @refresh="$emit('refresh')"
     />
 
     <SkillRepositoryManager
@@ -176,7 +176,6 @@ const emit = defineEmits([
   "open-usage",
   "refresh",
   "refresh-skill-repository",
-  "refresh-skill-repositories",
   "remove-skill-repository",
   "select-skill",
   "uninstall-skill"
