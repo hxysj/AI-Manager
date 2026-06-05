@@ -2362,8 +2362,8 @@ function formatSessionLabel(item) {
   }
 
   &__filters {
-    display: grid;
-    grid-template-columns: 320px 120px 160px 150px minmax(0, 1fr);
+    display: flex;
+    align-items: flex-end;
     flex: none;
     gap: 10px;
     padding: 10px;
