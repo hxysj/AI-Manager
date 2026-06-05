@@ -1,0 +1,41 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Monkey Thief",
+  "version": "1.0.24",
+  "identifier": "com.monkeythief.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev:renderer",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build:renderer",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Monkey Thief",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 1120,
+        "minHeight": 720
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "../build/icon.png",
+      "../build/icon.ico"
+    ],
+    "resources": {
+      "../src/assets/ai-manager-logo.svg": "assets/ai-manager-logo.svg",
+      "../build/icon.png": "assets/icon.png",
+      "node/translation-service.mjs": "node/translation-service.mjs",
+      "../node_modules/@xenova/transformers": "node_modules/@xenova/transformers",
+      "../node_modules/onnxruntime-node": "node_modules/onnxruntime-node"
+    }
+  }
+}
