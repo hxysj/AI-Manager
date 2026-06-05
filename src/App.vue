@@ -3503,6 +3503,22 @@ onMounted(() => {
   }
 
   bootstrap()
+
+  // 视图切换按需加载
+  watch(activeView, async (view) => {
+    try {
+      if (view === 'sessions') {
+        updateState(await window.aiManager.ensureSessionsReady())
+      } else if (view === 'tools') {
+        updateState(await window.aiManager.ensureToolsReady())
+      } else if (view === 'skills') {
+        updateState(await window.aiManager.ensureSkillsReady())
+      }
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
+
   unsubscribeUpdate = window.aiManager.onUpdateStatus(applyUpdateStatus)
   window.aiManager
     .getUpdateStatus()

@@ -77,6 +77,12 @@ ipcRenderer.invoke = async (channel, ...args) => {
 contextBridge.exposeInMainWorld("aiManager", {
   bootstrap: () => ipcRenderer.invoke("app:bootstrap"),
   refresh: () => ipcRenderer.invoke("app:refresh"),
+
+  // 按需加载接口
+  ensureSessionsReady: () => ipcRenderer.invoke("app:ensure-sessions-ready"),
+  ensureToolsReady: () => ipcRenderer.invoke("app:ensure-tools-ready"),
+  ensureSkillsReady: () => ipcRenderer.invoke("app:ensure-skills-ready"),
+
   checkForUpdates: () => ipcRenderer.invoke("app:check-updates"),
   getUpdateStatus: () => ipcRenderer.invoke("app:update-status"),
   downloadUpdate: () => ipcRenderer.invoke("app:update-download"),
