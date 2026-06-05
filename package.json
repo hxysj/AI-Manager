@@ -1,6 +1,6 @@
 {
   "name": "monkey-thief",
-  "version": "1.0.24",
+  "version": "2.0.0",
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "dev:renderer": "vite",
     "build": "tauri build",
     "build:renderer": "vite build",
+    "dist:win": "tauri build --bundles nsis --ci",
     "preview": "vite preview"
   },
   "dependencies": {

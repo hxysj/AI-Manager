@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Monkey Thief",
-  "version": "1.0.24",
+  "version": "2.0.0",
   "identifier": "com.monkeythief.desktop",
   "build": {
     "beforeDevCommand": "npm run dev:renderer",
@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Monkey Thief",
-        "width": 1280,
-        "height": 860,
+        "width": 1180,
+        "height": 760,
         "minWidth": 1120,
         "minHeight": 720
       }
@@ -26,10 +26,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "icon": [
-      "../build/icon.png",
-      "../build/icon.ico"
-    ],
+    "icon": ["../build/icon.png", "../build/icon.ico"],
     "resources": {
       "../src/assets/ai-manager-logo.svg": "assets/ai-manager-logo.svg",
       "../build/icon.png": "assets/icon.png",

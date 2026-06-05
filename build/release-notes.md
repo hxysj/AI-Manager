@@ -1,6 +1,8 @@
 ## 变更说明
 
-- 优化启动性能。
-  启动阶段改为按需加载管理服务，延后目录扫描、会话索引和非必要状态刷新，减少应用打开时的主进程阻塞。
-- 优化用量筛选行布局。
-  调整用量页面筛选控件间距和排布，让筛选行在当前桌面端布局中更紧凑，减少视觉拥挤。
+- 完成 Tauri 2 桌面端发布配置。
+  支持通过 `v*` tag 触发 GitHub Actions，自动打包 Windows NSIS setup 安装程序并上传到 GitHub Release。
+- 同步应用版本号为 `2.0.0`。
+  统一更新 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`。
+- 调整默认启动窗口尺寸。
+  缩小应用初始化窗口，保留现有最小窗口尺寸限制。
