@@ -2531,17 +2531,30 @@ class ManagerService extends EventEmitter {
 
   async addSkillRepository(input) {
     await this.skillRepositoryService.addRepository(input)
-    await this.refreshAll()
+    return this.updateSkillRepositoryState()
   }
 
   async refreshSkillRepository(repositoryId) {
     await this.skillRepositoryService.refreshRepository(repositoryId)
-    await this.refreshAll()
+    return this.updateSkillRepositoryState()
   }
 
   async removeSkillRepository(repositoryId) {
     await this.skillRepositoryService.removeRepository(repositoryId)
-    await this.refreshAll()
+    return this.updateSkillRepositoryState()
+  }
+
+  updateSkillRepositoryState() {
+    this.state = {
+      ...this.state,
+      skillRepositories: this.skillRepositoryService.listRepositories(),
+      refreshedAt: Date.now()
+    }
+
+    return {
+      skillRepositories: this.state.skillRepositories,
+      refreshedAt: this.state.refreshedAt
+    }
   }
 
   async installSkillFromRepository(repositoryId, skillId) {

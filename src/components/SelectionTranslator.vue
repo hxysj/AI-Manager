@@ -28,7 +28,14 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+
+const props = defineProps({
+  activeView: {
+    type: String,
+    default: ''
+  }
+})
 
 const visible = ref(false)
 const loading = ref(false)
@@ -44,6 +51,7 @@ const translatorMaxHeight = 420
 const viewportPadding = 18
 
 let unsubscribe = null
+let requestId = 0
 
 onMounted(() => {
   unsubscribe = window.aiManager.onTranslateSelection(payload => {
@@ -57,7 +65,17 @@ onBeforeUnmount(() => {
   }
 })
 
+watch(
+  () => props.activeView,
+  () => {
+    closeTranslator()
+  }
+)
+
 async function showTranslator(payload) {
+  const currentRequestId = requestId + 1
+
+  requestId = currentRequestId
   sourceText.value = payload.text
   translatedText.value = ''
   errorMessage.value = ''
@@ -67,11 +85,21 @@ async function showTranslator(payload) {
 
   try {
     const result = await window.aiManager.translateText({ text: payload.text })
+    if (currentRequestId !== requestId || !visible.value) {
+      return
+    }
+
     translatedText.value = result.translatedText
   } catch (error) {
+    if (currentRequestId !== requestId || !visible.value) {
+      return
+    }
+
     errorMessage.value = error.message || String(error)
   } finally {
-    loading.value = false
+    if (currentRequestId === requestId) {
+      loading.value = false
+    }
   }
 }
 
@@ -84,7 +112,9 @@ function updatePosition(payload) {
 }
 
 function closeTranslator() {
+  requestId += 1
   visible.value = false
+  loading.value = false
 }
 </script>
 
