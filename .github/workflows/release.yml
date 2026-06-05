@@ -25,6 +25,9 @@ jobs:
           node-version: 20
           cache: npm
 
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: 安装依赖
         run: npm ci
 
@@ -48,6 +51,4 @@ jobs:
         with:
           body_path: build/release-notes.md
           files: |
-            release/*.exe
-            release/*.yml
-            release/*.blockmap
+            src-tauri/target/release/bundle/nsis/*.exe
