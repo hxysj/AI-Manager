@@ -1,7 +1,6 @@
 const { contextBridge, ipcRenderer } = require("electron")
 
 const rawInvoke = ipcRenderer.invoke.bind(ipcRenderer)
-const appCallTraceEnabled = process.env.AI_MANAGER_TRACE_LOGS === "1"
 
 function toPlainPayload(payload) {
   try {
@@ -23,10 +22,6 @@ function appendCallLog(input) {
 
 ipcRenderer.invoke = async (channel, ...args) => {
   if (String(channel).startsWith("app-log:")) {
-    return rawInvoke(channel, ...args)
-  }
-
-  if (!appCallTraceEnabled) {
     return rawInvoke(channel, ...args)
   }
 
