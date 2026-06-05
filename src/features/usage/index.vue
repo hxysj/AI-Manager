@@ -723,6 +723,7 @@ const trendChartRef = ref(null)
 const providerPieRef = ref(null)
 let trendChart = null
 let providerPie = null
+let usageSyncTimer = null
 const trendModeLevels = ["day", "hour", "minute"]
 const pricingPageSizeOptions = [8, 12, 20, 50]
 const pricingImportPlaceholder = `[
@@ -1087,10 +1088,20 @@ onMounted(() => {
   }
 
   loadStats()
+  if (!isReportExportWindow) {
+    usageSyncTimer = window.setInterval(() => {
+      if (!pending.value && !reportExporting.value) {
+        syncUsage()
+      }
+    }, 60000)
+  }
   window.addEventListener("resize", resizeCharts)
 })
 
 onBeforeUnmount(() => {
+  if (usageSyncTimer) {
+    window.clearInterval(usageSyncTimer)
+  }
   window.removeEventListener("resize", resizeCharts)
   if (isReportExportWindow) {
     document.body.classList.remove("usage-report-exporting")

@@ -1448,6 +1448,7 @@ class CodexAccountService extends EventEmitter {
     )
 
     const usage = await readJson(response)
+    console.log("[Codex 刷新额度接口返回]", JSON.stringify(usage, null, 2))
     return usage
   }
 }

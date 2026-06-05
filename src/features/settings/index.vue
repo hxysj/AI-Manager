@@ -511,20 +511,6 @@
               关闭程序
             </button>
           </article>
-          <article class="settings-view__system-card">
-            <div class="settings-view__data-copy">
-              <strong>无痕卸载</strong>
-              <span>删除所有本地用户数据，并自动启动静默卸载。</span>
-            </div>
-            <button
-              class="settings-view__danger-button"
-              type="button"
-              @click="$emit('uninstall-without-trace')"
-            >
-              <Trash2 :size="16" />
-              无痕卸载
-            </button>
-          </article>
         </div>
       </section>
     </div>
@@ -543,7 +529,6 @@ import {
   RotateCcw,
   Save,
   Settings,
-  Trash2,
   Upload,
   UploadCloud
 } from "lucide-vue-next"
@@ -583,8 +568,7 @@ const emit = defineEmits([
   "quit-app",
   "push-cloud-data",
   "inspect-cloud-data",
-  "pull-cloud-data",
-  "uninstall-without-trace"
+  "pull-cloud-data"
 ])
 
 const activeTab = ref("directories")
