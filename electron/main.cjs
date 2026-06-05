@@ -3314,10 +3314,6 @@ if (singleInstanceLock) {
     if (managerService) {
       await managerService.dispose()
     }
-
-    if (translationService) {
-      await translationService.dispose()
-    }
   })
 }
 
