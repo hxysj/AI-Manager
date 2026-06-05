@@ -1,0 +1,40 @@
+[package]
+name = "monkey-thief"
+version = "1.0.24"
+description = "Desktop manager for AI CLI skills, repos and runtime metadata"
+authors = ["Monkey Thief"]
+edition = "2021"
+
+[lib]
+name = "monkey_thief_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
+bytes = "1"
+chrono = "0.4"
+futures-util = "0.3"
+getrandom = "0.2"
+http = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+regex = "1"
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha1 = "0.10"
+sha2 = "0.10"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "process", "sync"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
