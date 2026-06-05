@@ -449,7 +449,6 @@
           @quit-app="quitApp"
           @restore-data="restoreDataBackup"
           @save="saveSettings"
-          @uninstall-without-trace="uninstallWithoutTrace"
         />
 
         <section v-else-if="activeView === 'logs'" class="app-logs">
@@ -1697,10 +1696,6 @@ const quickActiveName = computed(() => {
   return quickActiveProvider.value?.name || "未启用"
 })
 
-const quickUsageBucket = computed(() => {
-  return state.usage.quickByApp?.[quickActiveCli.value?.id] || null
-})
-
 const quickItems = computed(() => {
   if (!quickActiveCli.value) {
     return []
@@ -1751,20 +1746,12 @@ const quickItems = computed(() => {
 })
 
 const quickUsageLogs = computed(() => {
-  if (quickUsageBucket.value) {
-    return []
-  }
-
   return (state.usage.logs || []).filter((item) => {
     return item.appType === quickActiveCli.value?.id
   })
 })
 
 const quickUsageSummary = computed(() => {
-  if (quickUsageBucket.value) {
-    return quickUsageBucket.value.summary
-  }
-
   return quickUsageLogs.value.reduce(
     (result, item) => {
       result.requestCount += 1
@@ -1781,10 +1768,6 @@ const quickUsageSummary = computed(() => {
 })
 
 const quickUsageTrend = computed(() => {
-  if (quickUsageBucket.value) {
-    return quickUsageBucket.value.trend || []
-  }
-
   const groups = new Map()
 
   for (const item of quickUsageLogs.value) {
@@ -1816,10 +1799,6 @@ const quickUsageTrend = computed(() => {
 })
 
 const quickUsageProviders = computed(() => {
-  if (quickUsageBucket.value) {
-    return quickUsageBucket.value.providers || []
-  }
-
   const groups = new Map()
 
   for (const item of quickUsageLogs.value) {
@@ -1858,16 +1837,11 @@ async function bootstrap() {
         const nextLocalBackupAt =
           state.appSettings.localBackup?.lastBackupAt || 0
 
-        if (
-          !isQuickSwitchPanel &&
-          nextLocalBackupAt !== previousLocalBackupAt
-        ) {
+        if (nextLocalBackupAt !== previousLocalBackupAt) {
           refreshLocalBackups(false)
         }
       })
-      if (!isQuickSwitchPanel) {
-        await refreshLocalBackups(false)
-      }
+      await refreshLocalBackups(false)
     } catch (error) {
       showErrorMessage(error)
     }
@@ -3496,14 +3470,6 @@ async function quitApp() {
       action: "quit",
       remember: false
     })
-  } catch (error) {
-    showErrorMessage(error)
-  }
-}
-
-async function uninstallWithoutTrace() {
-  try {
-    await window.aiManager.uninstallWithoutTrace()
   } catch (error) {
     showErrorMessage(error)
   }

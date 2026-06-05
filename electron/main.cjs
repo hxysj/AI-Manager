@@ -528,10 +528,9 @@ function registerLoggedIpc(channel, handler) {
     })
 
     try {
-      const rawResult = await appCallTraceStorage.run(trace, () =>
+      const result = await appCallTraceStorage.run(trace, () =>
         handler(event, ...businessArgs)
       )
-      const result = toWindowIpcResult(event, rawResult)
 
       if (appCallTraceEnabled) {
         assertIpcResultCloneable(channel, trace.traceId, result)
@@ -683,173 +682,13 @@ function instrumentBackendServices(service) {
   }
 }
 
-function createQuickUsageState(usage = {}) {
-  const quickByApp = {}
-
-  for (const item of usage.logs || []) {
-    const appType = item.appType || ""
-
-    if (!quickByApp[appType]) {
-      quickByApp[appType] = {
-        summary: {
-          requestCount: 0,
-          actualTokens: 0,
-          totalCostUsd: 0
-        },
-        trends: {},
-        providers: {}
-      }
-    }
-
-    const target = quickByApp[appType]
-    const actualTokens = Number(item.actualTokens || 0)
-    const totalCostUsd = Number(item.totalCostUsd || 0)
-    const date = new Date(Number(item.createdAt || 0))
-    const trendKey = date.toLocaleDateString("zh-CN")
-    const providerKey = item.providerId || item.providerName || "unknown"
-
-    target.summary.requestCount += 1
-    target.summary.actualTokens += actualTokens
-    target.summary.totalCostUsd += totalCostUsd
-    target.trends[trendKey] = {
-      date: trendKey,
-      label: `${date.getMonth() + 1}/${date.getDate()}`,
-      timestamp: new Date(
-        date.getFullYear(),
-        date.getMonth(),
-        date.getDate()
-      ).getTime(),
-      actualTokens: (target.trends[trendKey]?.actualTokens || 0) + actualTokens
-    }
-    target.providers[providerKey] = {
-      providerId: providerKey,
-      providerName:
-        target.providers[providerKey]?.providerName ||
-        item.providerName ||
-        "未知 Provider",
-      actualTokens:
-        (target.providers[providerKey]?.actualTokens || 0) + actualTokens,
-      totalCostUsd:
-        (target.providers[providerKey]?.totalCostUsd || 0) + totalCostUsd
-    }
-  }
-
-  return Object.fromEntries(
-    Object.entries(quickByApp).map(([appType, item]) => {
-      const trendRows = Object.values(item.trends)
-        .sort((left, right) => left.timestamp - right.timestamp)
-        .slice(-7)
-      const trendMaxTokens = Math.max(
-        ...trendRows.map((row) => row.actualTokens),
-        1
-      )
-      const providerRows = Object.values(item.providers)
-        .sort((left, right) => right.actualTokens - left.actualTokens)
-        .slice(0, 2)
-      const providerMaxTokens = Math.max(
-        ...providerRows.map((row) => row.actualTokens),
-        1
-      )
-
-      return [
-        appType,
-        {
-          summary: {
-            ...item.summary,
-            totalCostUsd: Number(item.summary.totalCostUsd.toFixed(8))
-          },
-          trend: trendRows.map((row) => ({
-            ...row,
-            percent: Math.max(
-              8,
-              Math.round((row.actualTokens / trendMaxTokens) * 100)
-            )
-          })),
-          providers: providerRows.map((row) => ({
-            ...row,
-            totalCostUsd: Number(row.totalCostUsd.toFixed(8)),
-            percent: Math.max(
-              4,
-              Math.round((row.actualTokens / providerMaxTokens) * 100)
-            )
-          }))
-        }
-      ]
-    })
-  )
-}
-
-function createQuickSwitchState(state) {
-  return {
-    cliTargets: state.cliTargets,
-    usage: {
-      quickByApp: createQuickUsageState(state.usage)
-    },
-    codexAccounts: state.codexAccounts,
-    claudeProxyState: state.claudeProxyState,
-    codexProxyState: state.codexProxyState,
-    providers: state.providers,
-    runtimeConfigSchemas: state.runtimeConfigSchemas,
-    runtimeModels: state.runtimeModels,
-    runtimeProfiles: state.runtimeProfiles,
-    runtimeProviderState: state.runtimeProviderState,
-    appSettings: {
-      system: state.appSettings?.system || {}
-    },
-    refreshedAt: state.refreshedAt
-  }
-}
-
-function isQuickSwitchSender(event) {
-  return (
-    quickSwitchWindow &&
-    !quickSwitchWindow.isDestroyed() &&
-    event.sender === quickSwitchWindow.webContents
-  )
-}
-
-function isManagerState(value) {
-  return (
-    value &&
-    typeof value === "object" &&
-    Array.isArray(value.cliTargets) &&
-    value.appSettings &&
-    value.paths
-  )
-}
-
-function toWindowIpcResult(event, result) {
-  if (!isQuickSwitchSender(event)) {
-    return result
-  }
-
-  if (isManagerState(result)) {
-    return createQuickSwitchState(result)
-  }
-
-  if (isManagerState(result?.state)) {
-    return {
-      ...result,
-      state: createQuickSwitchState(result.state)
-    }
-  }
-
-  return result
-}
-
 function sendStateChanged(state) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(
-      "state:changed",
-      JSON.parse(JSON.stringify(state))
-    )
-  }
+  const payload = JSON.parse(JSON.stringify(state))
 
-  if (quickSwitchWindow && !quickSwitchWindow.isDestroyed()) {
-    quickSwitchWindow.webContents.send(
-      "state:changed",
-      JSON.parse(JSON.stringify(createQuickSwitchState(state)))
-    )
+  for (const targetWindow of [mainWindow, quickSwitchWindow]) {
+    if (targetWindow && !targetWindow.isDestroyed()) {
+      targetWindow.webContents.send("state:changed", payload)
+    }
   }
 }
 
@@ -1461,85 +1300,6 @@ function installAppUpdate(payload = {}) {
   require("electron").autoUpdater.emit("before-quit-for-update")
   app.quit()
   return getUpdateStatus()
-}
-
-async function findAppUninstaller() {
-  const installDirectory = path.dirname(app.getPath("exe"))
-  const entries = await fsp.readdir(installDirectory, { withFileTypes: true })
-  const uninstaller = entries.find(item => {
-    return item.isFile() && /^uninstall.*\.exe$/i.test(item.name)
-  })
-
-  if (!uninstaller) {
-    throw new Error("未找到应用卸载程序")
-  }
-
-  return path.join(installDirectory, uninstaller.name)
-}
-
-function toPowerShellLiteral(value) {
-  return `'${String(value || "").replace(/'/g, "''")}'`
-}
-
-async function uninstallWithoutTrace() {
-  if (!app.isPackaged) {
-    throw new Error("开发环境不执行无痕卸载")
-  }
-
-  const uninstallerPath = await findAppUninstaller()
-  const dataPath = path.resolve(app.getPath("userData"))
-  const configuredDataPath = path.resolve(appSettings.dataPath)
-
-  if (dataPath !== configuredDataPath) {
-    throw new Error("当前运行数据目录与配置不一致，已拒绝无痕卸载")
-  }
-
-  if (dataPath === path.parse(dataPath).root) {
-    throw new Error("数据目录不能是磁盘根目录")
-  }
-
-  if (!path.relative(dataPath, uninstallerPath).startsWith("..")) {
-    throw new Error("数据目录不能包含应用卸载程序")
-  }
-
-  const cleanupScript = [
-    "$ErrorActionPreference = 'SilentlyContinue'",
-    `$processId = ${process.pid}`,
-    `$dataPath = ${toPowerShellLiteral(dataPath)}`,
-    `$settingsPath = ${toPowerShellLiteral(settingsFilePath)}`,
-    `$uninstallerPath = ${toPowerShellLiteral(uninstallerPath)}`,
-    "Wait-Process -Id $processId",
-    "Remove-Item -LiteralPath $dataPath -Recurse -Force",
-    "Remove-Item -LiteralPath $settingsPath -Force",
-    "Start-Process -FilePath $uninstallerPath -ArgumentList '/S'"
-  ].join("; ")
-
-  if (localBackupTimer) {
-    clearInterval(localBackupTimer)
-    localBackupTimer = null
-  }
-
-  spawn(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-WindowStyle",
-      "Hidden",
-      "-Command",
-      cleanupScript
-    ],
-    {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true
-    }
-  ).unref()
-
-  isQuitting = true
-  app.quit()
-  return true
 }
 
 function dismissAppUpdate() {
@@ -2420,9 +2180,6 @@ function registerIpc() {
     installAppUpdate(payload)
   )
   registerLoggedIpc("app:update-dismiss", async () => dismissAppUpdate())
-  registerLoggedIpc("app:uninstall-without-trace", async () =>
-    uninstallWithoutTrace()
-  )
   registerLoggedIpc("app:close-action", async (_, payload) => {
     handleCloseAction(payload)
     return true
