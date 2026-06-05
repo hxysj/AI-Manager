@@ -342,7 +342,6 @@
           @open-usage="activeView = 'skill-usage'"
           @refresh="refreshState"
           @refresh-skill-repository="refreshSkillRepository"
-          @refresh-skill-repositories="refreshSkillRepositories"
           @remove-skill-repository="removeSkillRepository"
           @select-skill="selectSkill"
           @uninstall-skill="uninstallSkill"
@@ -1214,8 +1213,6 @@ const baseNavItems = [
 const queryParams = new URLSearchParams(window.location.search)
 const queryView = queryParams.get("view")
 const isQuickSwitchPanel = queryParams.get("panel") === "quick-switch"
-const shouldControlSessionUsageWatch =
-  !isQuickSwitchPanel && queryParams.get("export") !== "usage-report"
 
 const placeholderMap = {
   sessions: {
@@ -1320,7 +1317,6 @@ const state = reactive({
 const activeView = ref(
   baseNavItems.some((item) => item.id === queryView) ? queryView : "providers"
 )
-const sessionUsageWatchViews = new Set(["usage", "sessions", "skill-usage"])
 const showLogsTab = ref(false)
 const sidebarTitleClickCount = ref(0)
 const appLogs = ref([])
@@ -1377,7 +1373,6 @@ const { loading: pending, withGlobalLoading } = useGlobalLoading()
 let unsubscribe = null
 let unsubscribeClose = null
 let unsubscribeUpdate = null
-let sessionUsageWatchActive = false
 let syncingRestoreCompareScroll = false
 
 const navItems = computed(() =>
@@ -1489,10 +1484,6 @@ watch(
     appLogPage.value = 1
   }
 )
-
-watch(activeView, view => {
-  syncSessionUsageWatch(view)
-})
 
 const selectedSkill = computed(() => {
   return (
@@ -1830,6 +1821,7 @@ async function bootstrap() {
   await withGlobalLoading(async () => {
     try {
       updateState(await window.aiManager.bootstrap())
+      await refreshLocalBackups(false)
       unsubscribe = window.aiManager.onStateChanged((nextState) => {
         const previousLocalBackupAt =
           state.appSettings.localBackup?.lastBackupAt || 0
@@ -1841,39 +1833,10 @@ async function bootstrap() {
           refreshLocalBackups(false)
         }
       })
-      await refreshLocalBackups(false)
     } catch (error) {
       showErrorMessage(error)
     }
   })
-  syncSessionUsageWatch()
-}
-
-async function syncSessionUsageWatch(view = activeView.value) {
-  if (!shouldControlSessionUsageWatch) {
-    return
-  }
-
-  const shouldWatch = sessionUsageWatchViews.has(view)
-
-  if (shouldWatch === sessionUsageWatchActive) {
-    return
-  }
-
-  sessionUsageWatchActive = shouldWatch
-
-  try {
-    const nextState = shouldWatch
-      ? await window.aiManager.startSessionUsageWatch()
-      : await window.aiManager.stopSessionUsageWatch()
-
-    if (nextState && typeof nextState === "object") {
-      updateState(nextState)
-    }
-  } catch (error) {
-    sessionUsageWatchActive = !shouldWatch
-    showErrorMessage(error)
-  }
 }
 
 function updateState(nextState) {
@@ -2395,7 +2358,7 @@ async function saveSettings(payload) {
     showSuccessMessage(
       state.appSettings.restartRequired
         ? "设置已保存，数据目录将在重启后生效。"
-        : "设置已保存。"
+        : "设置已保存并重新刷新。"
     )
   }
 }
@@ -2955,6 +2918,7 @@ async function addSkillRepository(payload) {
   )
 
   if (success) {
+    activeView.value = "skills"
     showSuccessMessage("Skill 仓库已添加。")
   }
 }
@@ -2965,16 +2929,6 @@ async function refreshSkillRepository(payload) {
   )
 
   if (success) {
-    showSuccessMessage("Skill 仓库已刷新。")
-  }
-}
-
-async function refreshSkillRepositories(payload = {}) {
-  const success = await runAction(() =>
-    window.aiManager.refreshSkillRepositories()
-  )
-
-  if (success && !payload.silent) {
     showSuccessMessage("Skill 仓库已刷新。")
   }
 }
@@ -3495,13 +3449,6 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopQuickLogoDrag()
-
-  if (sessionUsageWatchActive) {
-    sessionUsageWatchActive = false
-    window.aiManager.stopSessionUsageWatch().catch(error => {
-      showErrorMessage(error)
-    })
-  }
 
   if (typeof unsubscribe === "function") {
     unsubscribe()

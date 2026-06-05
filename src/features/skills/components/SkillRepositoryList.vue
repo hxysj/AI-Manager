@@ -437,7 +437,7 @@ const emptyTitle = computed(() => {
 
 const emptyDescription = computed(() => {
   if (!props.repositories.length) {
-    return "进入仓库管理添加 GitHub 仓库后，点击刷新重新扫描。"
+    return "进入仓库管理添加 GitHub 仓库后会自动扫描。"
   }
 
   return "调整搜索内容、仓库或安装状态后再试。"
