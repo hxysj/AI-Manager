@@ -316,7 +316,7 @@ pub async fn import_skill_from_zip(
         return Err(ManagerError::System("zip 压缩包不存在".to_string()));
     }
 
-    let temp_root = create_temp_dir("monkey-thief-skill").await?;
+    let temp_root = create_temp_dir(&paths.temp_dir, "monkey-thief-skill").await?;
 
     let result = async {
         extract_zip(&source_zip_path, &temp_root).await?;
@@ -1816,8 +1816,8 @@ async fn extract_zip(zip_path: &str, target_path: &Path) -> Result<(), ManagerEr
     Ok(())
 }
 
-async fn create_temp_dir(prefix: &str) -> Result<PathBuf, ManagerError> {
-    let temp_root = std::env::temp_dir().join(format!("{}-{}", prefix, now_millis()));
+async fn create_temp_dir(root_path: &str, prefix: &str) -> Result<PathBuf, ManagerError> {
+    let temp_root = Path::new(root_path).join(format!("{}-{}", prefix, now_millis()));
 
     tokio::fs::create_dir_all(&temp_root).await?;
     Ok(temp_root)
