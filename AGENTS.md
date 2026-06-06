@@ -42,6 +42,7 @@ git commit -m "feat: 中文摘要" -m "- 修改内容一。" -m "- 修改内容�
 
 ## 工作区数据目录规则
 
+- 用户数据和应用运行数据必须统一写入配置的数据目录（默认 `D:\ai-manager-data`），不得散落到 Tauri / Electron 的 Roaming 应用私有目录。
 - 所有工作区路径统一以 `electron/services/path-utils.cjs` 中的 `resolveAppPaths()` 为准，新增数据路径必须先在这里明确目录归属。
 - `workspace/` 是应用业务数据根目录，只负责承载下级业务目录，不直接散放业务文件。
 - `workspace/storage/` 只放可以云备份、跨设备恢复后仍然有意义的持久化配置和索引数据，例如 Provider 配置、模型费用配置、Skill 仓库地址、Prompt 索引等。

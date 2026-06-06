@@ -143,24 +143,20 @@
             </button>
           </div>
         </div>
-        <div
-          v-show="tokenTrendSeries.length"
-          ref="trendChartRef"
-          class="usage-view__chart"
-          @wheel="handleTrendWheel"
-        ></div>
-        <div
-          v-if="chartLoading && !tokenTrendSeries.length"
-          class="usage-view__chart-loading"
-        >
-          <span></span>
-          <strong>图表加载中</strong>
-        </div>
-        <div
-          v-else-if="!tokenTrendSeries.length"
-          class="usage-view__empty"
-        >
-          {{ tokenTrendEmptyText }}
+        <div class="usage-view__chart-box">
+          <div
+            v-show="tokenTrendSeries.length"
+            ref="trendChartRef"
+            class="usage-view__chart"
+            @wheel="handleTrendWheel"
+          ></div>
+          <div v-if="chartLoading" class="usage-view__chart-loading">
+            <span></span>
+            <strong>图表加载中</strong>
+          </div>
+          <div v-else-if="!tokenTrendSeries.length" class="usage-view__empty">
+            {{ tokenTrendEmptyText }}
+          </div>
         </div>
       </section>
 
@@ -187,20 +183,19 @@
             </button>
           </div>
         </div>
-        <div
-          v-show="usagePieStats.length"
-          ref="providerPieRef"
-          class="usage-view__chart"
-        ></div>
-        <div
-          v-if="chartLoading && !usagePieStats.length"
-          class="usage-view__chart-loading"
-        >
-          <span></span>
-          <strong>图表加载中</strong>
-        </div>
-        <div v-else-if="!usagePieStats.length" class="usage-view__empty">
-          {{ usagePieEmptyText }}
+        <div class="usage-view__chart-box">
+          <div
+            v-show="usagePieStats.length"
+            ref="providerPieRef"
+            class="usage-view__chart"
+          ></div>
+          <div v-if="chartLoading" class="usage-view__chart-loading">
+            <span></span>
+            <strong>图表加载中</strong>
+          </div>
+          <div v-else-if="!usagePieStats.length" class="usage-view__empty">
+            {{ usagePieEmptyText }}
+          </div>
         </div>
       </section>
     </section>
@@ -2504,16 +2499,31 @@ function formatSessionLabel(item) {
     min-width: 0;
   }
 
-  &__chart-loading {
-    display: grid;
+  &__chart-box {
+    position: relative;
     height: 260px;
     min-width: 0;
-    place-items: center;
+  }
+
+  &__chart-box &__empty {
+    height: 260px;
+    min-height: 0;
+  }
+
+  &__chart-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
     border: 1px dashed var(--color-line);
     border-radius: 8px;
     background: #fbfcfd;
     color: var(--color-text-muted);
-    gap: 10px;
   }
 
   &__chart-loading span {

@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex;
 
 pub struct ManagerState {
-    app_data_path: PathBuf,
+    user_data_path: PathBuf,
     workspace_root: PathBuf,
     resource_dir: PathBuf,
     paths: AppPaths,
@@ -47,10 +47,10 @@ impl AppState {
         manager.dispatch(app, channel, payload).await
     }
 
-    pub async fn app_data_path(&self) -> PathBuf {
+    pub async fn user_data_path(&self) -> PathBuf {
         let manager = self.manager.lock().await;
 
-        manager.app_data_path.clone()
+        manager.user_data_path.clone()
     }
 
     pub async fn close_action(&self) -> String {
@@ -67,14 +67,14 @@ impl AppState {
 
     pub async fn create_local_backup_if_due(&self) -> Result<(), ManagerError> {
         let mut manager = self.manager.lock().await;
-        let app_data_path = manager.app_data_path.clone();
+        let user_data_path = manager.user_data_path.clone();
         let paths = manager.paths.clone();
 
         if !manager.data_backup_cache.begin_local_backup() {
             return Ok(());
         }
         let backup_result =
-            data::create_local_backup_if_due(&app_data_path, &paths, &mut manager.app_settings)
+            data::create_local_backup_if_due(&user_data_path, &paths, &mut manager.app_settings)
                 .await;
         manager.data_backup_cache.finish_local_backup();
         backup_result?;
@@ -112,13 +112,15 @@ impl AppState {
 
 impl ManagerState {
     pub fn new(app: &AppHandle) -> Result<Self, ManagerError> {
-        let app_data_path = app
+        let tauri_app_data_path = app
             .path()
             .app_data_dir()
             .map_err(|error| ManagerError::Path(error.to_string()))?;
         let settings_file_path = PathBuf::from(DEFAULT_USER_DATA_PATH).join("app-settings.json");
         let app_settings = load_app_settings(settings_file_path)?;
-        let paths = resolve_app_paths(Path::new(&app_settings.data_path));
+        let user_data_path = PathBuf::from(&app_settings.data_path);
+        migrate_tauri_app_data(&tauri_app_data_path, &user_data_path)?;
+        let paths = resolve_app_paths(&user_data_path);
         let state = create_initial_state(&paths, &app_settings)?;
         let workspace_root = translation::workspace_root_from_current_dir()?;
         let resource_dir = app
@@ -126,10 +128,10 @@ impl ManagerState {
             .resource_dir()
             .map_err(|error| ManagerError::Path(error.to_string()))?;
 
-        std::fs::create_dir_all(&app_data_path)?;
+        std::fs::create_dir_all(&user_data_path)?;
 
         Ok(Self {
-            app_data_path,
+            user_data_path,
             workspace_root,
             resource_dir,
             paths,
@@ -178,11 +180,11 @@ impl ManagerState {
                 )
                 .await?;
                 app::apply_auto_launch_setting(&app, &self.app_settings)?;
-                let app_data_path = self.app_data_path.clone();
+                let user_data_path = self.user_data_path.clone();
                 let paths = self.paths.clone();
                 if self.data_backup_cache.begin_local_backup() {
                     let backup_result = data::create_local_backup_if_due(
-                        &app_data_path,
+                        &user_data_path,
                         &paths,
                         &mut self.app_settings,
                     )
@@ -250,9 +252,7 @@ impl ManagerState {
             "quick-switch:move-by" => {
                 app::move_quick_switch_by(&app, payload.unwrap_or_else(|| json!({})))
             }
-            "data:export" => {
-                data::export_data_backup(&app, &self.paths, &self.app_settings).await
-            }
+            "data:export" => data::export_data_backup(&app, &self.paths, &self.app_settings).await,
             "data:preview-restore" => {
                 data::preview_data_backup_restore(&app, &self.paths, &mut self.data_backup_cache)
                     .await
@@ -267,10 +267,10 @@ impl ManagerState {
                 )
                 .await
             }
-            "data:local-backups" => data::list_local_backups(&self.app_data_path).await,
+            "data:local-backups" => data::list_local_backups(&self.user_data_path).await,
             "data:local-backup-now" => {
                 data::create_local_backup_now(
-                    &self.app_data_path,
+                    &self.user_data_path,
                     &self.paths,
                     &mut self.app_settings,
                     &mut self.state,
@@ -280,7 +280,7 @@ impl ManagerState {
             }
             "data:local-backup-preview" => {
                 data::preview_local_backup_restore(
-                    &self.app_data_path,
+                    &self.user_data_path,
                     &self.paths,
                     &mut self.data_backup_cache,
                     payload.unwrap_or_else(|| json!({})),
@@ -289,7 +289,7 @@ impl ManagerState {
             }
             "data:local-backup-restore" => {
                 data::restore_local_backup(
-                    &self.app_data_path,
+                    &self.user_data_path,
                     &self.paths,
                     &self.app_settings,
                     &mut self.state,
@@ -315,7 +315,9 @@ impl ManagerState {
                 )
                 .await
             }
-            "data:cloud-inspect" => data::inspect_cloud_backup(payload.unwrap_or_else(|| json!({}))).await,
+            "data:cloud-inspect" => {
+                data::inspect_cloud_backup(payload.unwrap_or_else(|| json!({}))).await
+            }
             "data:cloud-pull" => {
                 data::pull_cloud_backup(
                     &self.paths,
@@ -326,8 +328,8 @@ impl ManagerState {
                 )
                 .await
             }
-            "app-log:list" => app_logs::list_logs(&self.app_data_path).await,
-            "app-log:clear" => app_logs::clear_logs(&self.app_data_path).await,
+            "app-log:list" => app_logs::list_logs(&self.user_data_path).await,
+            "app-log:clear" => app_logs::clear_logs(&self.user_data_path).await,
             "repo:add" => {
                 repos::add_repo(&self.paths, payload.unwrap_or_else(|| json!({}))).await?;
                 self.refresh_state().await?;
@@ -501,7 +503,7 @@ impl ManagerState {
                 .await
             }
             "codex-account:login" => {
-                let result = codex_account::start_login(
+                codex_account::start_login(
                     &app,
                     &self.paths,
                     &self.codex_login_cache,
@@ -515,10 +517,11 @@ impl ManagerState {
                         ["codexLoginState"]
                         .clone();
                 self.emit_state_changed(&app)?;
-                Ok(result)
+                Ok(self.state.clone())
             }
             "codex-account:cancel" => {
-                let patch = codex_account::cancel_login(&self.paths, &self.codex_login_cache).await?;
+                let patch =
+                    codex_account::cancel_login(&self.paths, &self.codex_login_cache).await?;
                 self.refresh_state().await?;
                 self.state["codexLoginState"] = patch["codexLoginState"].clone();
                 self.emit_state_changed(&app)?;
@@ -605,7 +608,8 @@ impl ManagerState {
                 Ok(self.state.clone())
             }
             "codex-account:detail" => {
-                codex_account::account_detail(&self.paths, payload.unwrap_or_else(|| json!({}))).await
+                codex_account::account_detail(&self.paths, payload.unwrap_or_else(|| json!({})))
+                    .await
             }
             "codex-account:delete" => {
                 codex_account::delete_account(
@@ -1175,7 +1179,7 @@ impl ManagerState {
             "system:open-external" => system::open_external(&app, payload),
             "translation:translate" => {
                 translation::translate_text(
-                    &self.app_data_path,
+                    &self.user_data_path,
                     &self.workspace_root,
                     &self.resource_dir,
                     payload.unwrap_or_else(|| json!({})),
@@ -1313,9 +1317,9 @@ impl ManagerState {
             .get("runtimeModels")
             .and_then(Value::as_array)
             .and_then(|items| {
-                items
-                    .iter()
-                    .find(|item| item.get("providerId").and_then(Value::as_str) == Some(provider_id))
+                items.iter().find(|item| {
+                    item.get("providerId").and_then(Value::as_str) == Some(provider_id)
+                })
             })
             .and_then(|model| model.get("name"))
             .and_then(Value::as_str)
@@ -1389,7 +1393,10 @@ impl ManagerState {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let previous_profile = result.get("previousProfile").cloned().unwrap_or(Value::Null);
+        let previous_profile = result
+            .get("previousProfile")
+            .cloned()
+            .unwrap_or(Value::Null);
 
         if cli == "codex" && !previous_account_id.is_empty() {
             codex_account::enable_account(
@@ -1421,5 +1428,180 @@ impl ManagerState {
         }
 
         runtime_provider::refresh_drift(&self.paths, &self.state["cliTargets"]).await
+    }
+}
+
+fn migrate_tauri_app_data(
+    tauri_app_data_path: &Path,
+    user_data_path: &Path,
+) -> Result<(), ManagerError> {
+    if tauri_app_data_path == user_data_path {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(user_data_path)?;
+    migrate_directory_children(
+        &tauri_app_data_path.join("local-backups"),
+        &user_data_path.join("local-backups"),
+    )?;
+    migrate_json_array_file(
+        &tauri_app_data_path
+            .join("workspace")
+            .join("logs")
+            .join("app-call-logs.json"),
+        &user_data_path
+            .join("workspace")
+            .join("logs")
+            .join("app-call-logs.json"),
+    )?;
+    migrate_json_array_file(
+        &tauri_app_data_path
+            .join("workspace")
+            .join("storage")
+            .join("app-call-logs.json"),
+        &user_data_path
+            .join("workspace")
+            .join("logs")
+            .join("app-call-logs.json"),
+    )?;
+    migrate_directory_children(
+        &tauri_app_data_path.join("models"),
+        &user_data_path.join("models"),
+    )?;
+    Ok(())
+}
+
+fn migrate_directory_children(source_dir: &Path, target_dir: &Path) -> Result<(), ManagerError> {
+    if !source_dir.exists() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(target_dir)?;
+
+    for entry in std::fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target_dir.join(entry.file_name());
+        let stat = std::fs::metadata(&source_path)?;
+
+        if stat.is_dir() && target_path.exists() {
+            migrate_directory_children(&source_path, &target_path)?;
+            remove_empty_dir(&source_path)?;
+            continue;
+        }
+
+        if target_path.exists() && stat.is_file() {
+            std::fs::remove_file(&source_path)?;
+            continue;
+        }
+
+        move_path(&source_path, &target_path)?;
+    }
+
+    remove_empty_dir(source_dir)?;
+    Ok(())
+}
+
+fn migrate_json_array_file(source_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
+    if !source_path.exists() {
+        return Ok(());
+    }
+
+    if let Some(parent) = target_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    if !target_path.exists() {
+        move_path(source_path, target_path)?;
+        remove_empty_parent_dirs(source_path);
+        return Ok(());
+    }
+
+    let source_content = std::fs::read_to_string(source_path)?;
+    let target_content = std::fs::read_to_string(target_path)?;
+    let source_items = serde_json::from_str::<Value>(&source_content)
+        .ok()
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    let mut target_items = serde_json::from_str::<Value>(&target_content)
+        .ok()
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+
+    for item in source_items {
+        let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+
+        if id.is_empty()
+            || !target_items
+                .iter()
+                .any(|target| target.get("id").and_then(Value::as_str) == Some(id))
+        {
+            target_items.push(item);
+        }
+    }
+
+    std::fs::write(
+        target_path,
+        format!("{}\n", serde_json::to_string_pretty(&json!(target_items))?),
+    )?;
+    std::fs::remove_file(source_path)?;
+    remove_empty_parent_dirs(source_path);
+    Ok(())
+}
+
+fn remove_empty_parent_dirs(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+
+    remove_empty_dir(parent).ok();
+}
+
+fn move_path(source_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
+    let stat = std::fs::metadata(source_path)?;
+
+    if stat.is_dir() {
+        copy_directory(source_path, target_path)?;
+        std::fs::remove_dir_all(source_path)?;
+        return Ok(());
+    }
+
+    std::fs::copy(source_path, target_path)?;
+    std::fs::remove_file(source_path)?;
+    Ok(())
+}
+
+fn copy_directory(source_dir: &Path, target_dir: &Path) -> Result<(), ManagerError> {
+    std::fs::create_dir_all(target_dir)?;
+
+    for entry in std::fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target_dir.join(entry.file_name());
+        let stat = std::fs::metadata(&source_path)?;
+
+        if stat.is_dir() && target_path.exists() {
+            migrate_directory_children(&source_path, &target_path)?;
+            remove_empty_dir(&source_path)?;
+            continue;
+        }
+
+        if target_path.exists() && stat.is_file() {
+            std::fs::remove_file(&source_path)?;
+            continue;
+        }
+
+        move_path(&source_path, &target_path)?;
+    }
+
+    Ok(())
+}
+
+fn remove_empty_dir(path: &Path) -> Result<(), ManagerError> {
+    match std::fs::remove_dir(path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
+        Err(error) => Err(ManagerError::Io(error)),
     }
 }

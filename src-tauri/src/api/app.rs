@@ -150,18 +150,7 @@ pub async fn uninstall_without_trace(
         .parent()
         .ok_or_else(|| ManagerError::Path("无法解析安装目录".to_string()))?;
     let uninstaller_path = find_app_uninstaller(install_directory).await?;
-    let data_path = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| ManagerError::Path(error.to_string()))?
-        .canonicalize()?;
-    let configured_data_path = PathBuf::from(&app_settings.data_path).canonicalize()?;
-
-    if data_path != configured_data_path {
-        return Err(ManagerError::System(
-            "当前运行数据目录与配置不一致，已拒绝无痕卸载".to_string(),
-        ));
-    }
+    let data_path = PathBuf::from(&app_settings.data_path).canonicalize()?;
 
     if data_path.parent().is_none() {
         return Err(ManagerError::System("数据目录不能是磁盘根目录".to_string()));
@@ -176,7 +165,10 @@ pub async fn uninstall_without_trace(
     let cleanup_script = [
         "$ErrorActionPreference = 'SilentlyContinue'".to_string(),
         format!("$processId = {}", std::process::id()),
-        format!("$dataPath = {}", to_powershell_literal(&data_path.to_string_lossy())),
+        format!(
+            "$dataPath = {}",
+            to_powershell_literal(&data_path.to_string_lossy())
+        ),
         format!(
             "$settingsPath = {}",
             to_powershell_literal(&app_settings.settings_file_path)

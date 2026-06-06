@@ -27,8 +27,8 @@ async fn dispatch_api(
             .map_err(|error| error.to_string());
     }
 
-    let app_data_path = state.app_data_path().await;
-    let started = app_logs::record_start(&app_data_path, &channel, payload.as_ref())
+    let user_data_path = state.user_data_path().await;
+    let started = app_logs::record_start(&user_data_path, &channel, payload.as_ref())
         .await
         .ok();
     let result = state
@@ -37,7 +37,7 @@ async fn dispatch_api(
         .map_err(|error| error.to_string());
 
     if let Some(started) = started {
-        let _ = app_logs::record_finish(&app_data_path, &channel, started, &result).await;
+        let _ = app_logs::record_finish(&user_data_path, &channel, started, &result).await;
     }
 
     if result.is_ok() {

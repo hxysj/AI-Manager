@@ -11,16 +11,16 @@ pub struct AppLogStart {
     pub started_at: std::time::Instant,
 }
 
-pub fn log_path(app_data_path: &Path) -> PathBuf {
-    app_data_path
+pub fn log_path(user_data_path: &Path) -> PathBuf {
+    user_data_path
         .join("workspace")
         .join("logs")
         .join("app-call-logs.json")
 }
 
-pub async fn list_logs(app_data_path: &Path) -> Result<Value, ManagerError> {
-    let file_path = log_path(app_data_path);
-    migrate_legacy_logs(app_data_path, &file_path).await?;
+pub async fn list_logs(user_data_path: &Path) -> Result<Value, ManagerError> {
+    let file_path = log_path(user_data_path);
+    migrate_legacy_logs(user_data_path, &file_path).await?;
     let logs = read_logs(&file_path).await?;
 
     Ok(json!({
@@ -29,10 +29,10 @@ pub async fn list_logs(app_data_path: &Path) -> Result<Value, ManagerError> {
     }))
 }
 
-pub async fn clear_logs(app_data_path: &Path) -> Result<Value, ManagerError> {
-    let file_path = log_path(app_data_path);
+pub async fn clear_logs(user_data_path: &Path) -> Result<Value, ManagerError> {
+    let file_path = log_path(user_data_path);
 
-    migrate_legacy_logs(app_data_path, &file_path).await?;
+    migrate_legacy_logs(user_data_path, &file_path).await?;
     write_logs(&file_path, &json!([])).await?;
     Ok(json!({
       "logs": [],
@@ -41,7 +41,7 @@ pub async fn clear_logs(app_data_path: &Path) -> Result<Value, ManagerError> {
 }
 
 pub async fn record_start(
-    app_data_path: &Path,
+    user_data_path: &Path,
     channel: &str,
     payload: Option<&Value>,
 ) -> Result<AppLogStart, ManagerError> {
@@ -49,7 +49,7 @@ pub async fn record_start(
     let started_at = std::time::Instant::now();
 
     append_log(
-        app_data_path,
+        user_data_path,
         json!({
           "id": create_log_id(),
           "traceId": trace_id,
@@ -75,7 +75,7 @@ pub async fn record_start(
 }
 
 pub async fn record_finish(
-    app_data_path: &Path,
+    user_data_path: &Path,
     channel: &str,
     started: AppLogStart,
     result: &Result<Value, String>,
@@ -83,7 +83,7 @@ pub async fn record_finish(
     match result {
         Ok(value) => {
             append_log(
-                app_data_path,
+                user_data_path,
                 json!({
                   "id": create_log_id(),
                   "traceId": started.trace_id,
@@ -104,7 +104,7 @@ pub async fn record_finish(
         }
         Err(message) => {
             append_log(
-                app_data_path,
+                user_data_path,
                 json!({
                   "id": create_log_id(),
                   "traceId": started.trace_id,
@@ -126,15 +126,15 @@ pub async fn record_finish(
     }
 }
 
-fn legacy_log_path(app_data_path: &Path) -> PathBuf {
-    app_data_path
+fn legacy_log_path(user_data_path: &Path) -> PathBuf {
+    user_data_path
         .join("workspace")
         .join("storage")
         .join("app-call-logs.json")
 }
 
-async fn migrate_legacy_logs(app_data_path: &Path, file_path: &Path) -> Result<(), ManagerError> {
-    let source_path = legacy_log_path(app_data_path);
+async fn migrate_legacy_logs(user_data_path: &Path, file_path: &Path) -> Result<(), ManagerError> {
+    let source_path = legacy_log_path(user_data_path);
 
     if !source_path.exists() {
         return Ok(());
@@ -175,10 +175,10 @@ async fn migrate_legacy_logs(app_data_path: &Path, file_path: &Path) -> Result<(
     Ok(())
 }
 
-async fn append_log(app_data_path: &Path, entry: Value) -> Result<(), ManagerError> {
-    let file_path = log_path(app_data_path);
+async fn append_log(user_data_path: &Path, entry: Value) -> Result<(), ManagerError> {
+    let file_path = log_path(user_data_path);
 
-    migrate_legacy_logs(app_data_path, &file_path).await?;
+    migrate_legacy_logs(user_data_path, &file_path).await?;
 
     let mut logs = read_logs(&file_path)
         .await?

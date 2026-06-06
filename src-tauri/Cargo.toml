@@ -1,6 +1,6 @@
 [package]
 name = "monkey-thief"
-version = "2.0.0"
+version = "2.0.1"
 description = "Desktop manager for AI CLI skills, repos and runtime metadata"
 authors = ["Monkey Thief"]
 edition = "2021"
