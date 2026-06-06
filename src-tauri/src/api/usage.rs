@@ -2564,7 +2564,7 @@ fn create_pricing_id() -> String {
 fn slash_skill_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
 
-    REGEX.get_or_init(|| Regex::new(r#"(?:^|[\s`"'([{<])/([A-Za-z0-9][A-Za-z0-9._-]*)"#).unwrap())
+    REGEX.get_or_init(|| Regex::new(r#"(?:^|[\s`"'(\[\{<])/([A-Za-z0-9][A-Za-z0-9._-]*)"#).unwrap())
 }
 
 fn path_skill_regex() -> &'static Regex {
@@ -2574,6 +2574,17 @@ fn path_skill_regex() -> &'static Regex {
         Regex::new(r#"(?i)(?:^|[\\/])skills[\\/](?:\.system[\\/])?([^\\/]+)[\\/]SKILL\.md"#)
             .unwrap()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{path_skill_regex, slash_skill_regex};
+
+    #[test]
+    fn skill_usage_regexes_are_valid() {
+        assert!(slash_skill_regex().is_match("/frontend-design"));
+        assert!(path_skill_regex().is_match(r"C:\Users\readboy\.codex\skills\frontend-design\SKILL.md"));
+    }
 }
 
 fn read_array(path: &str) -> Result<Vec<Value>, ManagerError> {

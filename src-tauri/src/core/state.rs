@@ -92,6 +92,22 @@ impl AppState {
         )
         .await
     }
+
+    pub async fn state_snapshot(&self) -> Value {
+        let manager = self.manager.lock().await;
+
+        manager.state.clone()
+    }
+
+    pub async fn handle_tray_action(
+        &self,
+        app: AppHandle,
+        item_id: &str,
+    ) -> Result<Value, ManagerError> {
+        let mut manager = self.manager.lock().await;
+
+        manager.handle_tray_action(app, item_id).await
+    }
 }
 
 impl ManagerState {
@@ -161,6 +177,7 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
+                app::apply_auto_launch_setting(&app, &self.app_settings)?;
                 let app_data_path = self.app_data_path.clone();
                 let paths = self.paths.clone();
                 if self.data_backup_cache.begin_local_backup() {
@@ -194,6 +211,7 @@ impl ManagerState {
                 app::uninstall_without_trace(&app, &self.app_settings).await
             }
             "app:close-action" => {
+                crate::reset_close_dialog_open();
                 let payload = payload.unwrap_or_else(|| json!({}));
                 let should_emit = payload
                     .get("remember")
@@ -1177,6 +1195,151 @@ impl ManagerState {
     fn emit_state_changed(&self, app: &AppHandle) -> Result<(), ManagerError> {
         app.emit("state:changed", self.state.clone())
             .map_err(|error| ManagerError::Path(error.to_string()))
+    }
+
+    async fn handle_tray_action(
+        &mut self,
+        app: AppHandle,
+        item_id: &str,
+    ) -> Result<Value, ManagerError> {
+        let parts = item_id.split(':').collect::<Vec<_>>();
+
+        match parts.as_slice() {
+            ["tray", "runtime", "clear", cli] => {
+                runtime_provider::clear_runtime(
+                    &self.paths,
+                    json!({ "cli": *cli }),
+                    &self.state["cliTargets"],
+                )
+                .await?;
+            }
+            ["tray", "runtime", "switch", cli, provider_id] => {
+                if *cli == "codex" {
+                    self.disable_codex_proxy_for_tray().await?;
+                }
+                if *cli == "codex" {
+                    codex_account::clear_account(&self.paths).await?;
+                }
+                let model = self.tray_runtime_model(provider_id, cli);
+                runtime_provider::switch_runtime(
+                    &self.paths,
+                    json!({
+                      "cli": *cli,
+                      "providerId": *provider_id,
+                      "model": model
+                    }),
+                    &self.state["cliTargets"],
+                )
+                .await?;
+            }
+            ["tray", "codex", "account", "enable", account_id] => {
+                self.disable_codex_proxy_for_tray().await?;
+                runtime_provider::clear_runtime(
+                    &self.paths,
+                    json!({ "cli": "codex" }),
+                    &self.state["cliTargets"],
+                )
+                .await?;
+                codex_account::enable_account(
+                    &self.paths,
+                    &self.state["cliTargets"],
+                    json!({ "accountId": *account_id }),
+                )
+                .await?;
+            }
+            ["tray", "codex", "account", "clear"] => {
+                self.disable_codex_proxy_for_tray().await?;
+                codex_account::clear_account(&self.paths).await?;
+            }
+            ["tray", "codex", "account", "refresh", account_id] => {
+                codex_account::refresh_account(
+                    &self.paths,
+                    &self.state["cliTargets"],
+                    json!({ "accountId": *account_id, "syncAuth": false }),
+                )
+                .await?;
+            }
+            ["tray", "codex", "proxy", "disable"] => {
+                self.disable_codex_proxy_for_tray().await?;
+            }
+            _ => return Err(ManagerError::UnknownChannel(item_id.to_string())),
+        }
+
+        runtime_provider::refresh_drift(&self.paths, &self.state["cliTargets"]).await?;
+        self.refresh_state().await?;
+        self.emit_state_changed(&app)?;
+        Ok(self.state.clone())
+    }
+
+    fn tray_runtime_model(&self, provider_id: &str, cli: &str) -> String {
+        let provider_model = self
+            .state
+            .get("providers")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("id").and_then(Value::as_str) == Some(provider_id))
+            })
+            .and_then(|provider| provider.get("runtimeConfig"))
+            .and_then(|runtime_config| runtime_config.get("mainModel"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
+        if !provider_model.is_empty() {
+            return provider_model.to_string();
+        }
+
+        let profile_model = self
+            .state
+            .get("runtimeProfiles")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("cli").and_then(Value::as_str) == Some(cli))
+            })
+            .and_then(|profile| profile.get("model"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
+        if !profile_model.is_empty() {
+            return profile_model.to_string();
+        }
+
+        self.state
+            .get("runtimeModels")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|item| item.get("providerId").and_then(Value::as_str) == Some(provider_id))
+            })
+            .and_then(|model| model.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    }
+
+    async fn disable_codex_proxy_for_tray(&self) -> Result<(), ManagerError> {
+        if self
+            .state
+            .get("codexProxyState")
+            .and_then(|state| state.get("enabled"))
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Ok(());
+        }
+
+        proxy::disable_proxy(
+            &self.proxy_server_registry,
+            &self.paths,
+            &self.state["cliTargets"],
+            "codex",
+        )
+        .await?;
+        Ok(())
     }
 
     fn build_proxy_enable_payload(&self, cli: &str, payload: Option<Value>) -> Value {

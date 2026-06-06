@@ -8,6 +8,7 @@ use tauri::{
     Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
     WebviewWindowBuilder,
 };
+use tauri_plugin_autostart::ManagerExt;
 
 const QUICK_SWITCH_LABEL: &str = "quick-switch";
 const QUICK_SWITCH_EXPANDED_WIDTH: u32 = 360;
@@ -40,6 +41,30 @@ pub async fn update_status() -> Result<Value, ManagerError> {
       "isDev": true,
       "updatedAt": 0
     }))
+}
+
+pub fn apply_auto_launch_setting(
+    app: &tauri::AppHandle,
+    app_settings: &AppSettings,
+) -> Result<(), ManagerError> {
+    let autostart_manager = app.autolaunch();
+    let auto_launch_enabled = autostart_manager
+        .is_enabled()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+
+    if app_settings.system.auto_launch_enabled && !auto_launch_enabled {
+        autostart_manager
+            .enable()
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+    }
+
+    if !app_settings.system.auto_launch_enabled && auto_launch_enabled {
+        autostart_manager
+            .disable()
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+    }
+
+    Ok(())
 }
 
 pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError> {

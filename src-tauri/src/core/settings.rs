@@ -198,7 +198,7 @@ fn normalize_close_action(value: Option<&Value>) -> String {
     }
 }
 
-fn resolve_portable_path(value: &str) -> String {
+pub(crate) fn resolve_portable_path(value: &str) -> String {
     let text = value.trim();
 
     if text.is_empty() {

@@ -1,5 +1,6 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::{path_text, AppPaths};
+use crate::core::settings::serialize_portable_path;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
@@ -1715,7 +1716,28 @@ async fn remove_managed_link(target_path: &Path) -> Result<(), ManagerError> {
 async fn create_junction(source_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
     #[cfg(windows)]
     {
-        std::os::windows::fs::symlink_dir(source_path, target_path)?;
+        let output = Command::new("cmd")
+            .args([
+                "/C",
+                "mklink",
+                "/J",
+                &path_text(target_path),
+                &path_text(source_path),
+            ])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let output_message = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let message = first_non_empty(&[
+                message,
+                output_message,
+                "创建 junction 失败".to_string(),
+            ]);
+
+            return Err(ManagerError::System(message));
+        }
     }
 
     #[cfg(not(windows))]
@@ -2030,11 +2052,40 @@ async fn persist_skills(
     }
 
     write_json(&paths.storage_files.skills, &json!(skills)).await?;
-    write_json(&paths.storage_files.cli_targets, &json!(cli_targets)).await?;
+    write_json(
+        &paths.storage_files.cli_targets,
+        &json!(serialize_cli_targets(cli_targets)),
+    )
+    .await?;
     write_json(&paths.storage_files.installs, &json!(install_index)).await
 }
 
-fn load_repositories(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
+fn serialize_cli_targets(cli_targets: &[Value]) -> Vec<Value> {
+    cli_targets
+        .iter()
+        .cloned()
+        .map(|mut target| {
+            for key in ["configPath", "skillsPath", "sessionsPath"] {
+                let value = string_value(target.get(key));
+
+                if !value.is_empty() {
+                    target[key] = json!(serialize_portable_path(&value));
+                }
+            }
+
+            if let Some(items) = target.get("sessionPaths").and_then(Value::as_array) {
+                target["sessionPaths"] = json!(items
+                    .iter()
+                    .map(|item| serialize_portable_path(&string_value(Some(item))))
+                    .collect::<Vec<_>>());
+            }
+
+            target
+        })
+        .collect()
+}
+
+pub(crate) fn load_repositories(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     let caches = read_array(&paths.storage_files.skill_repository_cache)?;
     let cache_map = caches
         .into_iter()
@@ -2121,7 +2172,11 @@ fn apply_repository_cache(mut repository: Value, cache: Option<&Value>) -> Value
         string_value(cache.get("status")),
         "ready".to_string(),
     ]));
-    repository["skills"] = cache.get("skills").cloned().unwrap_or_else(|| json!([]));
+    repository["skills"] = cache
+        .get("skills")
+        .filter(|value| value.is_array())
+        .cloned()
+        .unwrap_or_else(|| json!([]));
     repository["error"] = json!(string_value(cache.get("error")));
     repository["lastSyncedAt"] = json!(cache
         .get("lastSyncedAt")

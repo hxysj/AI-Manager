@@ -1,8 +1,8 @@
-use crate::api::{codex_account, rules, runtime_provider, usage};
+use crate::api::{codex_account, rules, runtime_provider, skills, usage};
 use crate::core::error::ManagerError;
 use crate::core::paths::{public_paths, AppPaths};
 use crate::core::settings::{
-    bool_value, non_empty_string, number_value, string_value, AppSettings,
+    bool_value, non_empty_string, number_value, resolve_portable_path, string_value, AppSettings,
 };
 use serde_json::{json, Value};
 use std::path::Path;
@@ -44,9 +44,9 @@ pub fn create_initial_state(
     apply_proxy_runtime_state(&mut runtime_provider_state, "codex", &codex_proxy_state);
 
     Ok(json!({
-      "cliTargets": read_json_file(&files.cli_targets, json!([]))?,
+      "cliTargets": read_cli_targets(&files.cli_targets)?,
       "skills": read_json_file(&files.skills, json!([]))?,
-      "skillRepositories": read_json_file(&files.skill_repositories, json!([]))?,
+      "skillRepositories": skills::load_repositories(paths)?,
       "repos": read_json_file(&files.repos, json!([]))?,
       "sessions": read_json_file(&files.sessions, json!([]))?,
       "usage": usage::build_state(paths)?,
@@ -170,6 +170,37 @@ fn read_json_file(path: impl AsRef<Path>, fallback: Value) -> Result<Value, Mana
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(fallback),
         Err(error) => Err(ManagerError::Io(error)),
     }
+}
+
+fn read_cli_targets(path: &str) -> Result<Value, ManagerError> {
+    let targets = read_json_file(path, json!([]))?
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(resolve_cli_target_paths)
+        .collect::<Vec<_>>();
+
+    Ok(json!(targets))
+}
+
+fn resolve_cli_target_paths(mut target: Value) -> Value {
+    for key in ["configPath", "skillsPath", "sessionsPath"] {
+        let value = string_value(target.get(key));
+
+        if !value.is_empty() {
+            target[key] = json!(resolve_portable_path(&value));
+        }
+    }
+
+    if let Some(items) = target.get("sessionPaths").and_then(Value::as_array) {
+        target["sessionPaths"] = json!(items
+            .iter()
+            .map(|item| resolve_portable_path(&string_value(Some(item))))
+            .collect::<Vec<_>>());
+    }
+
+    target
 }
 
 fn now_millis() -> u128 {
