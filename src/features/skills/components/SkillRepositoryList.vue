@@ -310,7 +310,7 @@ const repositoryDetailSkill = ref(null)
 
 const repositorySkillItems = computed(() => {
   return props.repositories.flatMap((repository) =>
-    repository.skills.map((skill) => ({
+    (Array.isArray(repository.skills) ? repository.skills : []).map((skill) => ({
       ...skill,
       repositoryId: repository.id,
       repositoryName: repository.name,

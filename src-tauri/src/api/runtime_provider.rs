@@ -1,7 +1,7 @@
 use crate::api::proxy;
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
-use crate::core::settings::number_value;
+use crate::core::settings::{number_value, resolve_portable_path};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
@@ -1012,7 +1012,7 @@ fn normalize_profile(input: &Value, previous: Option<&Value>) -> Result<Value, M
 }
 
 pub(crate) fn find_cli_target(cli_targets: &Value, cli: &str) -> Result<Value, ManagerError> {
-    cli_targets
+    let mut cli_target = cli_targets
         .as_array()
         .and_then(|items| {
             items
@@ -1020,7 +1020,12 @@ pub(crate) fn find_cli_target(cli_targets: &Value, cli: &str) -> Result<Value, M
                 .find(|item| item.get("id").and_then(Value::as_str) == Some(cli))
                 .cloned()
         })
-        .ok_or_else(|| ManagerError::System("CLI 配置目录不存在".to_string()))
+        .ok_or_else(|| ManagerError::System("CLI 配置目录不存在".to_string()))?;
+
+    cli_target["configPath"] = json!(resolve_portable_path(&string_value(
+        cli_target.get("configPath"),
+    )));
+    Ok(cli_target)
 }
 
 fn find_runtime_profile(paths: &AppPaths, cli: &str) -> Result<Value, ManagerError> {
@@ -1137,14 +1142,65 @@ fn build_claude_config_files(
     profile: &Value,
 ) -> Result<Vec<Value>, ManagerError> {
     let api_key = get_provider_api_key(paths, &string_value(provider.get("id")))?;
-    let template = runtime_config_schemas()["claude"]["configFiles"][0]["template"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let values = create_template_values(provider, profile, &api_key);
+    let mut env = Map::new();
+    let auth_field = string_value(values.get("authField"));
+    let base_url = string_value(values.get("baseUrl"));
+    let main_model = string_value(values.get("mainModel"));
+    let haiku_model = string_value(values.get("haikuModel"));
+    let sonnet_model = string_value(values.get("sonnetModel"));
+    let opus_model = string_value(values.get("opusModel"));
+    let mut settings = Map::new();
+
+    if !api_key.is_empty() {
+        env.insert(auth_field, json!(api_key));
+    }
+    if !base_url.is_empty() {
+        env.insert("ANTHROPIC_BASE_URL".to_string(), json!(base_url));
+    }
+    if !main_model.is_empty() {
+        env.insert("ANTHROPIC_MODEL".to_string(), json!(main_model));
+    }
+    if !haiku_model.is_empty() {
+        env.insert("ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(), json!(haiku_model));
+    }
+    if !opus_model.is_empty() {
+        env.insert("ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(), json!(opus_model));
+    }
+    if !sonnet_model.is_empty() {
+        env.insert("ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(), json!(sonnet_model));
+    }
+    if values.get("toolSearch").and_then(Value::as_bool) == Some(true) {
+        env.insert("ENABLE_TOOL_SEARCH".to_string(), json!("true"));
+    }
+    if values.get("disableUpgrade").and_then(Value::as_bool) == Some(true) {
+        env.insert("DISABLE_AUTOUPDATER".to_string(), json!("1"));
+    }
+
+    settings.insert("env".to_string(), Value::Object(env));
+    settings.insert("enabledPlugins".to_string(), json!({}));
+    settings.insert(
+        "includeCoAuthoredBy".to_string(),
+        json!(values.get("hideAiSignature").and_then(Value::as_bool) != Some(true)),
+    );
+    settings.insert("pluginConfigs".to_string(), json!({}));
+    if values.get("teammatesMode").and_then(Value::as_bool) == Some(true) {
+        settings.insert("teammateMode".to_string(), json!("tmux"));
+    }
+    settings.insert("effortLevel".to_string(), values["effortLevel"].clone());
+    if values.get("hideAiSignature").and_then(Value::as_bool) == Some(true) {
+        settings.insert(
+            "attribution".to_string(),
+            json!({
+              "commit": "",
+              "pr": ""
+            }),
+        );
+    }
 
     Ok(vec![json!({
       "name": "settings.json",
-      "content": format!("{}\n", apply_template(&template, &create_template_values(provider, profile, &api_key)))
+      "content": format!("{}\n", serde_json::to_string_pretty(&Value::Object(settings))?)
     })])
 }
 
@@ -1155,22 +1211,52 @@ fn build_codex_config_files(
 ) -> Result<Vec<Value>, ManagerError> {
     let api_key = get_provider_api_key(paths, &string_value(provider.get("id")))?;
     let values = create_template_values(provider, profile, &api_key);
-    let schemas = runtime_config_schemas();
-    let auth_template = schemas["codex"]["configFiles"][0]["template"]
-        .as_str()
-        .unwrap_or("");
-    let config_template = schemas["codex"]["configFiles"][1]["template"]
-        .as_str()
-        .unwrap_or("");
+    let mut config_lines = vec![
+        "model_provider = \"custom\"".to_string(),
+        format!("model = {}", to_toml_string(string_value(values.get("mainModel")))),
+        format!(
+            "model_reasoning_effort = {}",
+            to_toml_string(string_value(values.get("modelReasoningEffort")))
+        ),
+        "disable_response_storage = true".to_string(),
+    ];
+
+    if values.get("serviceTierFast").and_then(Value::as_bool) == Some(true) {
+        config_lines.push("service_tier = \"fast\"".to_string());
+    }
+
+    if values
+        .get("modelContextWindowEnabled")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        config_lines.push("model_context_window = 1000000".to_string());
+        config_lines.push(format!(
+            "model_auto_compact_token_limit = {}",
+            number_value(values.get("modelAutoCompactTokenLimit"), 900000)
+        ));
+    }
+
+    config_lines.extend([
+        String::new(),
+        "[model_providers]".to_string(),
+        "[model_providers.custom]".to_string(),
+        "name = \"custom\"".to_string(),
+        "wire_api = \"responses\"".to_string(),
+        "requires_openai_auth = true".to_string(),
+        format!("base_url = {}", to_toml_string(string_value(values.get("baseUrl")))),
+    ]);
 
     Ok(vec![
         json!({
           "name": "auth.json",
-          "content": format!("{}\n", apply_template(auth_template, &values))
+          "content": format!("{}\n", serde_json::to_string_pretty(&json!({
+            "OPENAI_API_KEY": api_key
+          }))?)
         }),
         json!({
           "name": "config.toml",
-          "content": format!("{}\n", apply_template(config_template, &values))
+          "content": format!("{}\n", config_lines.join("\n"))
         }),
     ])
 }
@@ -1283,80 +1369,6 @@ fn create_template_values(provider: &Value, profile: &Value, api_key: &str) -> M
     values
 }
 
-fn apply_template(template: &str, values: &Map<String, Value>) -> String {
-    let mut output = template.to_string();
-
-    while let Some(start) = output.find("{{#") {
-        let key_start = start + 3;
-        let Some(key_end) = output[key_start..]
-            .find("}}")
-            .map(|index| key_start + index)
-        else {
-            break;
-        };
-        let key = &output[key_start..key_end];
-        let close_tag = format!("{{{{/{}}}}}", key);
-        let content_start = key_end + 2;
-        let Some(close_start) = output[content_start..]
-            .find(&close_tag)
-            .map(|index| content_start + index)
-        else {
-            break;
-        };
-        let content_end = close_start + close_tag.len();
-        let content = if values.get(key).is_some_and(value_is_truthy) {
-            output[content_start..close_start].to_string()
-        } else {
-            String::new()
-        };
-
-        output.replace_range(start..content_end, &content);
-    }
-
-    for (key, value) in values {
-        output = output.replace(&format!("{{{{{}}}}}", key), &template_value_text(value));
-    }
-
-    remove_empty_lines(&remove_trailing_json_commas(&output))
-}
-
-fn remove_trailing_json_commas(value: &str) -> String {
-    value
-        .replace(",\n  }", "\n  }")
-        .replace(",\n  ]", "\n  ]")
-        .replace(",\r\n  }", "\r\n  }")
-        .replace(",\r\n  ]", "\r\n  ]")
-}
-
-fn remove_empty_lines(value: &str) -> String {
-    value
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn value_is_truthy(value: &Value) -> bool {
-    match value {
-        Value::Bool(value) => *value,
-        Value::Number(value) => value.as_u64().unwrap_or(0) != 0,
-        Value::String(value) => !value.is_empty(),
-        Value::Array(value) => !value.is_empty(),
-        Value::Object(value) => !value.is_empty(),
-        Value::Null => false,
-    }
-}
-
-fn template_value_text(value: &Value) -> String {
-    match value {
-        Value::String(value) => value.clone(),
-        Value::Bool(value) => value.to_string(),
-        Value::Number(value) => value.to_string(),
-        Value::Null => String::new(),
-        _ => value.to_string(),
-    }
-}
-
 pub(crate) async fn read_runtime_config_files(
     cli: &str,
     cli_target: &Value,
@@ -1437,18 +1449,47 @@ pub(crate) fn combine_managed_config_contents(cli: &str, files: &[Value]) -> Res
 }
 
 fn normalize_claude_settings_content(content: String) -> Result<String, ManagerError> {
-    let mut settings = if content.trim().is_empty() {
+    let settings = if content.trim().is_empty() {
         json!({})
     } else {
         serde_json::from_str(&content)?
     };
+    let mut normalized = Map::new();
+    let mut normalized_env = Map::new();
+    let managed_env_keys = [
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ENABLE_TOOL_SEARCH",
+        "DISABLE_AUTOUPDATER",
+    ];
 
-    if let Some(map) = settings.as_object_mut() {
-        map.remove("effortLevel");
-        map.remove("model");
+    if let Some(env) = settings.get("env").and_then(Value::as_object) {
+        for key in managed_env_keys {
+            if let Some(value) = env.get(key) {
+                normalized_env.insert(key.to_string(), value.clone());
+            }
+        }
     }
 
-    Ok(format!("{}\n", serde_json::to_string_pretty(&settings)?))
+    normalized.insert("env".to_string(), Value::Object(normalized_env));
+
+    if let Some(value) = settings.get("includeCoAuthoredBy") {
+        normalized.insert("includeCoAuthoredBy".to_string(), value.clone());
+    }
+
+    if let Some(value) = settings.get("teammateMode") {
+        normalized.insert("teammateMode".to_string(), value.clone());
+    }
+
+    Ok(format!(
+        "{}\n",
+        serde_json::to_string_pretty(&Value::Object(normalized))?
+    ))
 }
 
 fn normalize_codex_config_file(file: &Value) -> Result<Value, ManagerError> {

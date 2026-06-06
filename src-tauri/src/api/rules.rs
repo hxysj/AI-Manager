@@ -1,6 +1,6 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
-use crate::core::settings::string_value;
+use crate::core::settings::{resolve_portable_path, string_value};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -706,6 +706,8 @@ fn get_runtime_path(cli: &str, cli_target: Option<&Value>) -> String {
     } else {
         "AGENTS.md"
     };
+
+    let config_path = resolve_portable_path(&config_path);
 
     Path::new(&config_path)
         .join(file_name)
