@@ -149,7 +149,17 @@
           class="usage-view__chart"
           @wheel="handleTrendWheel"
         ></div>
-        <div v-if="!tokenTrendSeries.length" class="usage-view__empty">
+        <div
+          v-if="chartLoading && !tokenTrendSeries.length"
+          class="usage-view__chart-loading"
+        >
+          <span></span>
+          <strong>图表加载中</strong>
+        </div>
+        <div
+          v-else-if="!tokenTrendSeries.length"
+          class="usage-view__empty"
+        >
           {{ tokenTrendEmptyText }}
         </div>
       </section>
@@ -182,7 +192,14 @@
           ref="providerPieRef"
           class="usage-view__chart"
         ></div>
-        <div v-if="!usagePieStats.length" class="usage-view__empty">
+        <div
+          v-if="chartLoading && !usagePieStats.length"
+          class="usage-view__chart-loading"
+        >
+          <span></span>
+          <strong>图表加载中</strong>
+        </div>
+        <div v-else-if="!usagePieStats.length" class="usage-view__empty">
           {{ usagePieEmptyText }}
         </div>
       </section>
@@ -695,6 +712,7 @@ const isReportExportWindow = usageSearchParams.get("export") === "usage-report"
 const pending = ref(false)
 const reportExporting = ref(false)
 const pricingSaving = ref(false)
+const chartLoading = computed(() => pending.value && !isReportExportWindow)
 const stats = ref(props.usage || {})
 const rangeType = ref(usageSearchParams.get("rangeType") || "today")
 const dateTimeRange = ref(createInitialDateTimeRange())
@@ -1088,8 +1106,10 @@ onMounted(() => {
     document.body.classList.add("usage-report-exporting")
   }
 
-  loadStats()
-  if (!isReportExportWindow) {
+  if (isReportExportWindow) {
+    loadStats()
+  } else {
+    syncUsage()
     usageSyncTimer = window.setInterval(() => {
       if (!pending.value && !reportExporting.value) {
         syncUsage()
@@ -2484,6 +2504,32 @@ function formatSessionLabel(item) {
     min-width: 0;
   }
 
+  &__chart-loading {
+    display: grid;
+    height: 260px;
+    min-width: 0;
+    place-items: center;
+    border: 1px dashed var(--color-line);
+    border-radius: 8px;
+    background: #fbfcfd;
+    color: var(--color-text-muted);
+    gap: 10px;
+  }
+
+  &__chart-loading span {
+    width: 28px;
+    height: 28px;
+    border: 3px solid #d7e2ee;
+    border-top-color: var(--color-primary);
+    border-radius: 50%;
+    animation: usage-chart-loading 0.8s linear infinite;
+  }
+
+  &__chart-loading strong {
+    color: var(--color-text-muted);
+    font-size: 0.82rem;
+  }
+
   &__section-header {
     display: flex;
     align-items: center;
@@ -3054,6 +3100,12 @@ function formatSessionLabel(item) {
     color: #b42318;
     font-size: 0.82rem;
     font-weight: 700;
+  }
+}
+
+@keyframes usage-chart-loading {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>
