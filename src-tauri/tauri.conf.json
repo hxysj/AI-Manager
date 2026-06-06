@@ -33,6 +33,13 @@
       "node/translation-service.mjs": "node/translation-service.mjs",
       "../node_modules/@xenova/transformers": "node_modules/@xenova/transformers",
       "../node_modules/onnxruntime-node": "node_modules/onnxruntime-node"
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "../build/icon.ico",
+        "uninstallerIcon": "../build/icon.ico",
+        "installerHooks": "../build/installer.nsh"
+      }
     }
   }
 }

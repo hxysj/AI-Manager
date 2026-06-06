@@ -44,6 +44,59 @@ jobs:
           AI_MANAGER_GITHUB_TOKEN: ${{ secrets.AI_MANAGER_GITHUB_TOKEN }}
         run: npm run dist:win
 
+      - name: 规范安装包文件名
+        shell: pwsh
+        run: |
+          $bundleDir = 'src-tauri/target/release/bundle/nsis'
+          $targetName = 'Monkey-Thief-windows-setup.exe'
+          $targetPath = Join-Path $bundleDir $targetName
+          $installer = Get-ChildItem $bundleDir -Filter '*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) {
+            throw '未找到 Windows NSIS 安装程序。'
+          }
+
+          if ($installer.Name -ne $targetName) {
+            if (Test-Path $targetPath) {
+              Remove-Item -LiteralPath $targetPath -Force
+            }
+            Move-Item -LiteralPath $installer.FullName -Destination $targetPath
+          }
+
+      - name: 生成旧版 Electron 更新元数据
+        shell: pwsh
+        run: |
+          $bundleDir = 'src-tauri/target/release/bundle/nsis'
+          $installer = Get-ChildItem $bundleDir -Filter '*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) {
+            throw '未找到 Windows NSIS 安装程序。'
+          }
+
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = [string]$package.version
+          $sha512 = [Convert]::ToBase64String([System.Security.Cryptography.SHA512]::HashData([System.IO.File]::ReadAllBytes($installer.FullName)))
+          $releaseDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
+          $notes = Get-Content build/release-notes.md -Raw
+          $notes = $notes -replace "`r`n", "`n"
+          $notesLines = $notes.TrimEnd("`n").Split("`n")
+
+          $latest = @(
+            "version: $version"
+            'files:'
+            "  - url: $($installer.Name)"
+            "    sha512: $sha512"
+            "    size: $($installer.Length)"
+            "path: $($installer.Name)"
+            "sha512: $sha512"
+            'releaseNotes: |'
+          )
+
+          foreach ($line in $notesLines) {
+            $latest += "  $line"
+          }
+
+          $latest += "releaseDate: '$releaseDate'"
+          Set-Content -Path (Join-Path $bundleDir 'latest.yml') -Value ($latest -join "`n") -Encoding utf8
+
       - name: 上传 GitHub Release
         uses: softprops/action-gh-release@v2
         env:
@@ -52,3 +105,4 @@ jobs:
           body_path: build/release-notes.md
           files: |
             src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/latest.yml
