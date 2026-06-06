@@ -1189,6 +1189,8 @@ impl ManagerState {
     async fn refresh_state(&mut self) -> Result<(), ManagerError> {
         ensure_app_directories(&self.paths).await?;
         self.state = create_initial_state(&self.paths, &self.app_settings)?;
+        runtime_provider::refresh_drift(&self.paths, &self.state["cliTargets"]).await?;
+        self.state = create_initial_state(&self.paths, &self.app_settings)?;
         Ok(())
     }
 

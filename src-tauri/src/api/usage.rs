@@ -329,6 +329,11 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
 async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
     let mut logs = Vec::new();
     let mut diagnostics = Vec::new();
+    let workspace_created_at = std::fs::metadata(&paths.workspace_root)?
+        .created()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .as_millis() as u64;
     let mut record_map = read_array(&paths.storage_files.usage_request_records)?
         .into_iter()
         .map(|item| (string_value(item.get("requestId")), item))
@@ -359,7 +364,29 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         }
 
         let parse_result = async {
-            let request_source = if !string_value(session.get("requestSource")).is_empty() {
+            let content = tokio::fs::read_to_string(&raw_path).await?;
+            let extension = Path::new(&raw_path)
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            let mut session_created_at =
+                session_content_created_at(&app_type, &extension, &content)?;
+
+            if session_created_at == 0 {
+                session_created_at = std::fs::metadata(&raw_path)?
+                    .created()?
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|error| ManagerError::System(error.to_string()))?
+                    .as_millis() as u64;
+            }
+
+            let is_legacy_unbound_session = session_created_at < workspace_created_at
+                && string_value(session.get("requestSource")).is_empty()
+                && string_value(session.get("instanceProviderId")).is_empty();
+            let request_source = if is_legacy_unbound_session {
+                String::new()
+            } else if !string_value(session.get("requestSource")).is_empty() {
                 string_value(session.get("requestSource"))
             } else if proxy_state_enabled(state, &app_type) {
                 "proxy-managed".to_string()
@@ -369,14 +396,17 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
             let mut usage_session = session.clone();
 
             usage_session["requestSource"] = json!(request_source);
-            let provider_info =
-                create_session_provider_info(&usage_session, &resolve_provider(&app_type, state));
-            let content = tokio::fs::read_to_string(&raw_path).await?;
-            let extension = Path::new(&raw_path)
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or("")
-                .to_lowercase();
+            usage_session["sessionCreatedAt"] = json!(session_created_at);
+            let fallback_provider = if is_legacy_unbound_session {
+                json!({
+                  "providerId": app_type,
+                  "providerName": format_app_provider_name(&app_type),
+                  "providerType": ""
+                })
+            } else {
+                resolve_provider(&app_type, state)
+            };
+            let provider_info = create_session_provider_info(&usage_session, &fallback_provider);
 
             if app_type == "claude" {
                 return extract_claude_logs(&usage_session, &content, &provider_info);
@@ -415,19 +445,37 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         let request_id = string_value(log.get("requestId"));
         let record = record_map.get(&request_id).cloned();
         let app_type = string_value(log.get("appType"));
-        let should_refresh_proxy_record = proxy_state_enabled(state, &app_type)
+        let log_session_created_at = number_value(
+            log.get("sessionCreatedAt"),
+            number_value(log.get("createdAt"), 0),
+        );
+        let is_legacy_unbound_log = log_session_created_at > 0
+            && log_session_created_at < workspace_created_at
+            && string_value(log.get("requestSource")).is_empty()
+            && string_value(log.get("instanceProviderId")).is_empty();
+        let should_refresh_proxy_record = is_legacy_unbound_log
+            && proxy_state_enabled(state, &app_type)
             && record
                 .as_ref()
                 .is_some_and(|item| string_value(item.get("providerId")) == app_type);
-        let should_refresh_instance_record = string_value(log.get("requestSource"))
-            == "provider-instance"
+        let should_refresh_instance_record = is_legacy_unbound_log
+            && string_value(log.get("requestSource")) == "provider-instance"
             && record.as_ref().is_some_and(|item| {
                 string_value(item.get("providerId")) != string_value(log.get("providerId"))
                     || string_value(item.get("requestSource"))
                         != string_value(log.get("requestSource"))
             });
+        let should_refresh_legacy_record = is_legacy_unbound_log
+            && record.as_ref().is_some_and(|item| {
+                string_value(item.get("providerId")) != app_type
+                    || !string_value(item.get("requestSource")).is_empty()
+                    || !string_value(item.get("instanceProviderId")).is_empty()
+            });
         let provider_info = if let Some(record) = record.as_ref() {
-            if !should_refresh_proxy_record && !should_refresh_instance_record {
+            if !should_refresh_proxy_record
+                && !should_refresh_instance_record
+                && !should_refresh_legacy_record
+            {
                 let provider_id = string_value(record.get("providerId"));
                 let provider = providers
                     .iter()
@@ -445,7 +493,10 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
             create_log_provider_info(&log)
         };
         let request_record = if let Some(record) = record.as_ref() {
-            if !should_refresh_proxy_record && !should_refresh_instance_record {
+            if !should_refresh_proxy_record
+                && !should_refresh_instance_record
+                && !should_refresh_legacy_record
+            {
                 let mut log_with_record = log.clone();
 
                 log_with_record["requestSource"] = json!(string_value(record.get("requestSource")));
@@ -828,6 +879,7 @@ fn create_usage_log(
       "instanceProviderId": string_value(session.get("instanceProviderId")),
       "instanceProviderName": string_value(session.get("instanceProviderName")),
       "instanceProviderType": string_value(session.get("instanceProviderType")),
+      "sessionCreatedAt": number_value(session.get("sessionCreatedAt"), 0),
       "createdAt": created_at
     })
 }
@@ -1173,6 +1225,7 @@ fn create_request_record(log: &Value, provider_info: &Value) -> Value {
       "instanceProviderId": string_value(log.get("instanceProviderId")),
       "instanceProviderName": string_value(log.get("instanceProviderName")),
       "instanceProviderType": string_value(log.get("instanceProviderType")),
+      "sessionCreatedAt": number_value(log.get("sessionCreatedAt"), 0),
       "requestTime": log.get("createdAt").cloned().unwrap_or(Value::Null),
       "createdAt": log.get("createdAt").cloned().unwrap_or(Value::Null)
     })
@@ -1188,6 +1241,10 @@ fn apply_request_record(log: &Value, record: &Value) -> Value {
     next["instanceProviderId"] = json!(string_value(record.get("instanceProviderId")));
     next["instanceProviderName"] = json!(string_value(record.get("instanceProviderName")));
     next["instanceProviderType"] = json!(string_value(record.get("instanceProviderType")));
+    next["sessionCreatedAt"] = record
+        .get("sessionCreatedAt")
+        .cloned()
+        .unwrap_or(Value::Null);
     next
 }
 
@@ -2094,6 +2151,58 @@ fn collect_gemini_usage_items<'a>(source: &'a Value, output: &mut Vec<&'a Value>
     }
 }
 
+fn session_content_created_at(
+    app_type: &str,
+    extension: &str,
+    content: &str,
+) -> Result<u64, ManagerError> {
+    let mut session_created_at = 0;
+
+    if app_type == "gemini" {
+        let payload: Value = serde_json::from_str(content)?;
+        let mut items = Vec::new();
+
+        collect_gemini_usage_items(&payload, &mut items);
+
+        for item in items {
+            let created_at = to_timestamp(
+                item.get("createTime")
+                    .or_else(|| item.get("timestamp"))
+                    .or_else(|| payload.get("updatedAt")),
+                0,
+            );
+
+            if created_at > 0 && (session_created_at == 0 || created_at < session_created_at) {
+                session_created_at = created_at;
+            }
+        }
+    } else if !(app_type == "codex" && extension == "json") {
+        for line in content.lines() {
+            let text = line.trim();
+
+            if text.is_empty() {
+                continue;
+            }
+
+            let record: Value = serde_json::from_str(text)?;
+            let payload = record.get("payload").unwrap_or(&record);
+            let created_at = to_timestamp(
+                record
+                    .get("timestamp")
+                    .or_else(|| payload.get("timestamp"))
+                    .or_else(|| payload.get("createdAt")),
+                0,
+            );
+
+            if created_at > 0 && (session_created_at == 0 || created_at < session_created_at) {
+                session_created_at = created_at;
+            }
+        }
+    }
+
+    Ok(session_created_at)
+}
+
 fn normalize_codex_token_usage(usage: Option<&Value>) -> Map<String, Value> {
     let mut map = Map::new();
 
@@ -2453,10 +2562,22 @@ fn value_to_text(value: Option<&Value>) -> String {
 
 fn to_timestamp(value: Option<&Value>, fallback: u64) -> u64 {
     match value {
-        Some(Value::Number(number)) => number.as_u64().unwrap_or(fallback),
+        Some(Value::Number(number)) => {
+            let number = number.as_u64().unwrap_or(fallback);
+
+            if number > 1_000_000_000_000 {
+                number
+            } else {
+                number * 1000
+            }
+        }
         Some(Value::String(text)) => {
             if let Ok(number) = text.parse::<u64>() {
-                return number;
+                return if number > 1_000_000_000_000 {
+                    number
+                } else {
+                    number * 1000
+                };
             }
 
             chrono::DateTime::parse_from_rfc3339(text)

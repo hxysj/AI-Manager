@@ -1486,6 +1486,10 @@ fn normalize_claude_settings_content(content: String) -> Result<String, ManagerE
         normalized.insert("teammateMode".to_string(), value.clone());
     }
 
+    if let Some(value) = settings.get("effortLevel") {
+        normalized.insert("effortLevel".to_string(), value.clone());
+    }
+
     Ok(format!(
         "{}\n",
         serde_json::to_string_pretty(&Value::Object(normalized))?
