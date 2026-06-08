@@ -1736,8 +1736,13 @@ fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>,
 }
 
 fn usage_session_scan_start_at(paths: &AppPaths) -> u64 {
-    file_modified_at(&paths.storage_files.sessions)
-        .saturating_sub(2 * 24 * 60 * 60 * 1000)
+    let cache_updated_at = file_modified_at(&paths.storage_files.sessions);
+
+    if cache_updated_at == 0 {
+        return 0;
+    }
+
+    local_sort_at(cache_updated_at, false, false)
 }
 
 fn create_scanned_usage_session(item: &Value, raw_path: &str) -> Value {

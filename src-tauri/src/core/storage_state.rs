@@ -1,18 +1,26 @@
 use crate::api::{codex_account, rules, runtime_provider, skills, usage};
 use crate::core::error::ManagerError;
-use crate::core::paths::{public_paths, AppPaths};
+use crate::core::paths::{path_text, public_paths, AppPaths};
 use crate::core::settings::{
-    bool_value, non_empty_string, number_value, resolve_portable_path, string_value, AppSettings,
+    bool_value, non_empty_string, number_value, resolve_portable_path, serialize_portable_path,
+    string_value, AppSettings,
 };
 use serde_json::{json, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub fn create_initial_state(
     paths: &AppPaths,
     app_settings: &AppSettings,
 ) -> Result<Value, ManagerError> {
     let files = &paths.storage_files;
-    let cli_targets = read_cli_targets(&files.cli_targets)?;
+    let cli_targets = read_cli_targets(paths, app_settings)?;
     let runtime_state = read_json_file(&files.runtime_provider_state, json!({}))?;
     let claude_proxy_config = normalize_proxy_config(
         read_json_file(&files.claude_proxy_config, json!({}))?,
@@ -173,16 +181,93 @@ fn read_json_file(path: impl AsRef<Path>, fallback: Value) -> Result<Value, Mana
     }
 }
 
-fn read_cli_targets(path: &str) -> Result<Value, ManagerError> {
-    let targets = read_json_file(path, json!([]))?
+fn read_cli_targets(paths: &AppPaths, app_settings: &AppSettings) -> Result<Value, ManagerError> {
+    let stored_targets = read_json_file(&paths.storage_files.cli_targets, json!([]))?
         .as_array()
         .cloned()
         .unwrap_or_default()
         .into_iter()
         .map(resolve_cli_target_paths)
         .collect::<Vec<_>>();
+    let mut targets = Vec::new();
+
+    for (id, name, icon, command_name) in [
+        ("claude", "Claude", "claude.svg", "claude"),
+        ("codex", "Codex", "codex.svg", "codex"),
+    ] {
+        let mut target = stored_targets
+            .iter()
+            .find(|item| item.get("id").and_then(Value::as_str) == Some(id))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        let config_path = string_value(app_settings.cli_config_paths.get(id));
+        let config_dir = PathBuf::from(&config_path);
+        let executable_path = detect_executable_path(command_name);
+        let version = executable_path
+            .as_deref()
+            .and_then(detect_cli_version)
+            .unwrap_or_default();
+        let skills_path = path_text(config_dir.join("skills"));
+        let sessions_path = if id == "claude" {
+            path_text(config_dir.join("projects"))
+        } else {
+            path_text(config_dir.join("sessions"))
+        };
+        let session_paths = if id == "claude" {
+            json!([
+                sessions_path.clone(),
+                path_text(config_dir.join("sessions"))
+            ])
+        } else {
+            json!([sessions_path.clone()])
+        };
+
+        target["id"] = json!(id);
+        target["type"] = json!(id);
+        target["name"] = json!(name);
+        target["icon"] = json!(icon);
+        target["configPath"] = json!(config_path.clone());
+        target["skillsPath"] = json!(skills_path);
+        target["sessionsPath"] = json!(sessions_path);
+        target["sessionPaths"] = session_paths;
+        target["executablePath"] = json!(executable_path.unwrap_or_default());
+        target["version"] = json!(version);
+        target["installed"] = json!(
+            Path::new(&config_path).exists()
+                || !string_value(target.get("executablePath")).is_empty()
+        );
+        targets.push(target);
+    }
+
+    for target in stored_targets {
+        let id = string_value(target.get("id"));
+
+        if id != "claude" && id != "codex" {
+            targets.push(target);
+        }
+    }
+
+    persist_cli_targets(&paths.storage_files.cli_targets, &targets)?;
 
     Ok(json!(targets))
+}
+
+fn persist_cli_targets(path: &str, targets: &[Value]) -> Result<(), ManagerError> {
+    let payload = targets
+        .iter()
+        .cloned()
+        .map(serialize_cli_target_paths)
+        .collect::<Vec<_>>();
+
+    if let Some(parent) = Path::new(path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(&json!(payload))?),
+    )?;
+    Ok(())
 }
 
 fn resolve_cli_target_paths(mut target: Value) -> Value {
@@ -202,6 +287,90 @@ fn resolve_cli_target_paths(mut target: Value) -> Value {
     }
 
     target
+}
+
+fn serialize_cli_target_paths(mut target: Value) -> Value {
+    for key in ["configPath", "skillsPath", "sessionsPath"] {
+        let value = string_value(target.get(key));
+
+        if !value.is_empty() {
+            target[key] = json!(serialize_portable_path(&value));
+        }
+    }
+
+    if let Some(items) = target.get("sessionPaths").and_then(Value::as_array) {
+        target["sessionPaths"] = json!(items
+            .iter()
+            .map(|item| serialize_portable_path(&string_value(Some(item))))
+            .collect::<Vec<_>>());
+    }
+
+    target
+}
+
+fn detect_executable_path(command_name: &str) -> Option<String> {
+    let mut command = if cfg!(windows) {
+        let mut command = Command::new("where.exe");
+        command.arg(command_name);
+        command
+    } else {
+        let mut command = Command::new("which");
+        command.arg(command_name);
+        command
+    };
+    let output = command_output(&mut command).ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let paths = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    if cfg!(windows) {
+        for extension in [".cmd", ".exe", ".bat"] {
+            if let Some(path) = paths
+                .iter()
+                .find(|item| item.to_lowercase().ends_with(extension))
+            {
+                return Some(path.clone());
+            }
+        }
+    }
+
+    paths.first().cloned()
+}
+
+fn detect_cli_version(executable_path: &str) -> Option<String> {
+    let mut command = Command::new(executable_path);
+    command.arg("--version");
+    let output = command_output(&mut command).ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = if output.stdout.is_empty() {
+        String::from_utf8_lossy(&output.stderr).to_string()
+    } else {
+        String::from_utf8_lossy(&output.stdout).to_string()
+    };
+
+    text.lines()
+        .map(str::trim)
+        .find(|item| !item.is_empty())
+        .map(ToString::to_string)
+}
+
+fn command_output(command: &mut Command) -> std::io::Result<Output> {
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command.output()
 }
 
 fn now_millis() -> u128 {
