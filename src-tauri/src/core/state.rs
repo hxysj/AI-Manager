@@ -204,7 +204,7 @@ impl ManagerState {
             }
             "app:update-status" => app::update_status().await,
             "app:check-updates" => app::check_updates(&app).await,
-            "app:update-download" => app::download_update().await,
+            "app:update-download" => app::download_update(&app).await,
             "app:update-install" => {
                 app::install_update(&app, payload.unwrap_or_else(|| json!({}))).await
             }
