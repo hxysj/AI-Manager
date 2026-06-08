@@ -372,12 +372,7 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         }
     }
 
-    for session in state
-        .get("sessions")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-    {
+    for session in collect_usage_sessions(paths, state)? {
         let app_type = normalize_app_type(&string_value(session.get("cli")));
         let raw_path = string_value(session.get("rawPath"));
 
@@ -1701,6 +1696,84 @@ fn collect_skill_usage_files(cli_targets: &[Value]) -> Result<Vec<Value>, Manage
     }
 
     Ok(files)
+}
+
+fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
+    let mut sessions = state
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let scan_start_at = usage_session_scan_start_at(paths);
+    let mut seen_paths = sessions
+        .iter()
+        .map(|item| string_value(item.get("rawPath")))
+        .filter(|item| !item.is_empty())
+        .map(|item| (item, true))
+        .collect::<HashMap<_, _>>();
+    let cli_targets = state
+        .get("cliTargets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    for item in collect_skill_usage_files(&cli_targets)? {
+        let raw_path = string_value(item.get("filePath"));
+
+        if raw_path.is_empty() || seen_paths.contains_key(&raw_path) {
+            continue;
+        }
+
+        if scan_start_at > 0 && file_modified_at(&raw_path) < scan_start_at {
+            continue;
+        }
+
+        seen_paths.insert(raw_path.clone(), true);
+        sessions.push(create_scanned_usage_session(&item, &raw_path));
+    }
+
+    Ok(sessions)
+}
+
+fn usage_session_scan_start_at(paths: &AppPaths) -> u64 {
+    file_modified_at(&paths.storage_files.sessions)
+        .saturating_sub(2 * 24 * 60 * 60 * 1000)
+}
+
+fn create_scanned_usage_session(item: &Value, raw_path: &str) -> Value {
+    let updated_at = file_modified_at(raw_path);
+    let title = Path::new(raw_path)
+        .file_stem()
+        .and_then(|item| item.to_str())
+        .unwrap_or(raw_path)
+        .to_string();
+    let cli = string_value(item.get("cli"));
+
+    json!({
+      "id": create_hash_id(&[
+        cli.clone(),
+        raw_path.to_string()
+      ]),
+      "cli": cli,
+      "cliName": non_empty_text(item.get("cliName"), &string_value(item.get("cli"))),
+      "title": title,
+      "summary": "",
+      "projectName": "",
+      "projectPath": "",
+      "model": "",
+      "rawPath": raw_path,
+      "updatedAt": updated_at,
+      "archived": false
+    })
+}
+
+fn file_modified_at(path: &str) -> u64 {
+    std::fs::metadata(path)
+        .ok()
+        .and_then(|item| item.modified().ok())
+        .and_then(|item| item.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|item| item.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn read_session_records(item: &Value) -> Result<Vec<Value>, ManagerError> {

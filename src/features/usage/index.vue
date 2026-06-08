@@ -1,5 +1,5 @@
 <template>
-  <section class="usage-view">
+  <section :class="['usage-view', { 'usage-view-loading-active': pageLoading }]">
     <div v-if="pageLoading" class="usage-view-loading">
       <RefreshCw class="usage-view-loading-icon" :size="22" />
       <span>正在加载用量数据...</span>
@@ -1058,7 +1058,7 @@ onMounted(() => {
   if (isReportExportWindow) {
     loadStats()
   } else {
-    loadStats()
+    syncUsage()
     usageSyncTimer = window.setInterval(() => {
       if (!pending.value && !reportExporting.value) {
         loadStats()
@@ -2261,6 +2261,10 @@ function formatSessionLabel(item) {
   overflow-y: auto;
   padding-right: 4px;
   color: var(--color-text);
+
+  &.usage-view-loading-active {
+    overflow-y: hidden;
+  }
 
   &__toolbar {
     position: sticky;

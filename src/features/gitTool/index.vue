@@ -521,14 +521,34 @@
         >
           <div class="git-tool-drawer-archives">
             <div v-if="archives.length" class="git-tool-archive-tools">
-              <span>共 {{ archives.length }} 条归档</span>
-              <button
-                class="git-tool-branch-toolbar-button"
-                type="button"
-                @click="restoreArchives(archives)"
-              >
-                全部恢复
-              </button>
+              <span>
+                已选 {{ selectedArchiveIds.length }}/{{ archives.length }}
+              </span>
+              <div class="git-tool-archive-toolbar">
+                <button
+                  class="git-tool-branch-toolbar-button"
+                  type="button"
+                  :disabled="!archives.length"
+                  @click="selectAllArchives"
+                >
+                  全选
+                </button>
+                <button
+                  class="git-tool-branch-toolbar-button"
+                  type="button"
+                  :disabled="!selectedArchives.length"
+                  @click="restoreArchives(selectedArchives)"
+                >
+                  恢复选中
+                </button>
+                <button
+                  class="git-tool-branch-toolbar-button"
+                  type="button"
+                  @click="restoreArchives(archives)"
+                >
+                  全部恢复
+                </button>
+              </div>
             </div>
             <section
               v-for="group in archiveGroups"
@@ -569,6 +589,13 @@
                   :key="archive.archiveId"
                   class="git-tool-archive"
                 >
+                  <input
+                    class="git-tool-archive-check"
+                    type="checkbox"
+                    :checked="isArchiveChecked(archive.archiveId)"
+                    @click.stop
+                    @change="toggleArchiveChecked(archive, $event)"
+                  />
                   <button
                     class="git-tool-archive-main"
                     type="button"
@@ -1148,6 +1175,7 @@ const stashArchives = ref([])
 const currentBranch = ref("")
 const selectedBranch = ref("")
 const selectedBranchNames = ref([])
+const selectedArchiveIds = ref([])
 const selectedStashHashes = ref([])
 const selectedCommit = ref(null)
 const selectedCommitDetail = ref(null)
@@ -1299,6 +1327,12 @@ const archiveGroups = computed(() => {
   }
 
   return groups
+})
+
+const selectedArchives = computed(() => {
+  return archives.value.filter((item) =>
+    selectedArchiveIds.value.includes(item.archiveId)
+  )
 })
 
 function isBranchGroupClosed(groupId) {
@@ -1483,6 +1517,9 @@ async function refreshGitProject() {
     stashLoaded = false
     selectedBranchNames.value = selectedBranchNames.value.filter((branchName) =>
       branches.value.find((item) => item.name === branchName && !item.isCurrent)
+    )
+    selectedArchiveIds.value = selectedArchiveIds.value.filter((archiveId) =>
+      archives.value.find((item) => item.archiveId === archiveId)
     )
     selectedStashHashes.value = selectedStashHashes.value.filter((stashHash) =>
       stashes.value.find((item) => item.hash === stashHash)
@@ -1813,6 +1850,25 @@ function selectAllBranches() {
   selectedBranchNames.value = archivableBranches.value.map((item) => item.name)
 }
 
+function isArchiveChecked(archiveId) {
+  return selectedArchiveIds.value.includes(archiveId)
+}
+
+function toggleArchiveChecked(archive, event) {
+  if (event.target.checked) {
+    selectedArchiveIds.value = [...selectedArchiveIds.value, archive.archiveId]
+    return
+  }
+
+  selectedArchiveIds.value = selectedArchiveIds.value.filter(
+    (item) => item !== archive.archiveId
+  )
+}
+
+function selectAllArchives() {
+  selectedArchiveIds.value = archives.value.map((item) => item.archiveId)
+}
+
 function isStashChecked(stashHash) {
   return selectedStashHashes.value.includes(stashHash)
 }
@@ -2062,6 +2118,9 @@ async function restoreArchive(archive) {
       targetBranchName: targetBranchName.trim()
     })
     createMessage.success("分支已恢复。")
+    selectedArchiveIds.value = selectedArchiveIds.value.filter(
+      (item) => item !== archive.archiveId
+    )
     closeDetailDrawer()
     selectedBranch.value = targetBranchName.trim()
     await refreshGitProject()
@@ -2100,6 +2159,10 @@ async function restoreArchives(targetArchives) {
     }
 
     createMessage.success("分支归档已恢复。")
+    selectedArchiveIds.value = selectedArchiveIds.value.filter(
+      (archiveId) =>
+        !targetArchives.find((archive) => archive.archiveId === archiveId)
+    )
     closeDetailDrawer()
     selectedBranch.value = targetArchives[0].branchName
     await refreshGitProject()
@@ -2128,6 +2191,9 @@ async function deleteArchive(archive) {
     archives.value = await gitToolApi.deleteGitToolArchive({
       archiveId: archive.archiveId
     })
+    selectedArchiveIds.value = selectedArchiveIds.value.filter(
+      (item) => item !== archive.archiveId
+    )
     createMessage.success("归档已删除。")
   } catch (error) {
     showErrorMessage(error)
@@ -3668,6 +3734,20 @@ function showErrorMessage(error) {
     padding: 0 2px 2px;
     color: #2f5f91;
     font-size: 0.76rem;
+  }
+
+  .git-tool-archive-toolbar {
+    display: flex;
+    flex: none;
+    gap: 7px;
+  }
+
+  .git-tool-archive-check {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    margin: 0;
+    accent-color: var(--color-primary);
   }
 
   .git-tool-archive-group {
