@@ -3,7 +3,7 @@
     <header class="rules-view__toolbar">
       <div class="rules-view__cli-tabs">
         <button
-          v-for="cli in visibleCliTargets"
+          v-for="cli in ruleTabs"
           :key="cli.id"
           :class="[
             'rules-view__cli-tab',
@@ -26,7 +26,7 @@
         <button
           class="rules-view__secondary"
           type="button"
-          :disabled="pending || !activeCli"
+          :disabled="pending || !activeRuntimeCli || isCommonTab"
           @click="openImportDialog"
         >
           导入全局 Prompt
@@ -44,10 +44,11 @@
 
     <section class="rules-view__runtime">
       <div>
-        <strong>{{ activeCliName }} Runtime</strong>
-        <span>{{ runtimePath || "尚未发现全局 Prompt 文件路径" }}</span>
+        <strong>{{ runtimeTitle }}</strong>
+        <span>{{ runtimePathText }}</span>
       </div>
       <span
+        v-if="!isCommonTab"
         :class="['rules-view__status', `rules-view__status--${runtimeStatus}`]"
       >
         {{ runtimeStatusText }}
@@ -61,9 +62,9 @@
         :class="[
           'rules-view__prompt-card',
           {
-            'rules-view__prompt-card--active': prompt.id === activePromptId,
+            'rules-view__prompt-card--active': isPromptEnabledInCurrentScope(prompt),
             'rules-view__prompt-card--modified':
-              isModifiedExternally && prompt.id === activePromptId,
+              isPromptModifiedInCurrentScope(prompt),
             'rules-view__prompt-card--selected': prompt.id === selectedPromptId
           }
         ]"
@@ -75,14 +76,43 @@
           <small>{{ formatTime(prompt.updatedAt) }}</small>
         </div>
         <div class="rules-view__prompt-actions">
+          <div v-if="isCommonTab" class="rules-view__target-buttons">
+            <button
+              v-for="cli in visibleCliTargets"
+              :key="cli.id"
+              :class="[
+                'rules-view__target-button',
+                {
+                  'rules-view__target-button--active': isPromptEnabledOnRuntime(
+                    prompt,
+                    cli.id
+                  ),
+                  'rules-view__target-button--modified':
+                    isPromptModifiedOnRuntime(prompt, cli.id)
+                }
+              ]"
+              type="button"
+              :title="promptTargetTitle(prompt, cli)"
+              :disabled="pending"
+              @click.stop="togglePromptTarget(prompt, cli.id)"
+            >
+              <AiIcon
+                v-if="cli.icon"
+                class="rules-view__target-icon"
+                :name="cli.icon"
+                :alt="`${cli.name} 图标`"
+              />
+              <span v-else>{{ cli.name.slice(0, 1) }}</span>
+            </button>
+          </div>
           <span
-            v-if="prompt.id === activePromptId"
+            v-if="!isCommonTab && isPromptEnabledOnRuntime(prompt)"
             class="rules-view__active-tag"
           >
-            Active
+            已启用
           </span>
           <button
-            v-if="isModifiedExternally && prompt.id === activePromptId"
+            v-if="showPromptCompareButton(prompt)"
             class="rules-view__compare-button"
             type="button"
             :disabled="pending"
@@ -91,12 +121,13 @@
             对比
           </button>
           <button
+            v-if="!isCommonTab"
             class="rules-view__state-button"
             type="button"
-            :disabled="pending"
+            :disabled="pending || !activeRuntimeCli"
             @click.stop="togglePrompt(prompt)"
           >
-            {{ prompt.id === activePromptId ? "取消启用" : "启用" }}
+            {{ promptActionText(prompt) }}
           </button>
           <button
             class="rules-view__icon-button"
@@ -120,7 +151,7 @@
             class="rules-view__icon-button rules-view__icon-button--danger"
             type="button"
             title="删除 Prompt"
-            :disabled="pending || prompt.id === activePromptId"
+            :disabled="pending || isPromptActive(prompt)"
             @click.stop="deletePrompt(prompt)"
           >
             <Trash2 :size="15" />
@@ -129,14 +160,14 @@
       </article>
 
       <div v-if="!scopedPrompts.length" class="rules-view__empty">
-        当前 CLI 还没有 Prompt，先新建或导入全局 Prompt。
+        {{ emptyText }}
       </div>
     </section>
 
     <BaseModal
       v-if="showEditor"
       :title="draft.id ? '编辑 Prompt' : '新增 Prompt'"
-      :description="`当前配置到 ${cliNameMap[activeCli] || activeCli}`"
+      :description="editorDescription"
       @close="closeEditor"
     >
       <form class="rules-view__editor" @submit.prevent="submitPrompt">
@@ -145,7 +176,7 @@
             <span>CLI</span>
             <select v-model="draft.cli" :disabled="Boolean(draft.id)">
               <option
-                v-for="cli in visibleCliTargets"
+                v-for="cli in promptScopeOptions"
                 :key="cli.id"
                 :value="cli.id"
               >
@@ -205,7 +236,7 @@
         <header class="rules-drawer__header">
           <div class="rules-drawer__hero">
             <div class="rules-drawer__title-wrap">
-              <p>{{ activeCliName }}</p>
+              <p>{{ activeScopeName }}</p>
               <h2>{{ drawerPrompt.name }}</h2>
               <span>{{ drawerPrompt.description || "未填写描述" }}</span>
             </div>
@@ -241,7 +272,7 @@
           >
             <div class="rules-drawer__block">
               <span>状态</span>
-              <p>{{ runtimeStatusText }}</p>
+              <p>{{ drawerRuntimeStatusText }}</p>
             </div>
 
             <div class="rules-drawer__block">
@@ -263,11 +294,11 @@
           >
             <div class="rules-drawer__block">
               <span>全局文件路径</span>
-              <p>{{ runtimePath || "未找到全局文件路径" }}</p>
+              <p>{{ drawerRuntimePathText }}</p>
             </div>
             <div class="rules-drawer__block">
               <span>运行状态</span>
-              <p>{{ runtimeStatusText }}</p>
+              <p>{{ drawerRuntimeStatusText }}</p>
             </div>
             <div class="rules-drawer__block">
               <span>管理器版本</span>
@@ -281,7 +312,7 @@
             <div class="rules-drawer__grid">
               <article>
                 <span>CLI</span>
-                <strong>{{ drawerPrompt.cli }}</strong>
+                <strong>{{ promptScopeName(drawerPrompt.cli) }}</strong>
               </article>
               <article>
                 <span>ID</span>
@@ -313,15 +344,42 @@
         </div>
 
         <footer class="rules-drawer__footer">
+          <div v-if="isCommonTab" class="rules-view__target-buttons">
+            <button
+              v-for="cli in visibleCliTargets"
+              :key="cli.id"
+              :class="[
+                'rules-view__target-button',
+                {
+                  'rules-view__target-button--active': isPromptEnabledOnRuntime(drawerPrompt, cli.id),
+                  'rules-view__target-button--modified': isPromptModifiedOnRuntime(drawerPrompt, cli.id)
+                }
+              ]"
+              type="button"
+              :title="promptTargetTitle(drawerPrompt, cli)"
+              :disabled="pending"
+              @click="togglePromptTarget(drawerPrompt, cli.id)"
+            >
+              <AiIcon
+                v-if="cli.icon"
+                class="rules-view__target-icon"
+                :name="cli.icon"
+                :alt="`${cli.name} 图标`"
+              />
+              <span v-else>{{ cli.name.slice(0, 1) }}</span>
+            </button>
+          </div>
           <button
+            v-if="!isCommonTab"
             class="rules-drawer__primary"
             type="button"
-            :disabled="pending"
+            :disabled="pending || !activeRuntimeCli"
             @click="togglePrompt(drawerPrompt)"
           >
-            {{ drawerPrompt.id === activePromptId ? "取消启用" : "启用并同步" }}
+            {{ promptActionText(drawerPrompt) }}
           </button>
           <button
+            v-if="!isCommonTab"
             class="rules-drawer__secondary"
             type="button"
             :disabled="pending"
@@ -340,7 +398,7 @@
           <button
             class="rules-drawer__danger"
             type="button"
-            :disabled="pending || drawerPrompt.id === activePromptId"
+            :disabled="pending || isPromptActive(drawerPrompt)"
             @click="deletePrompt(drawerPrompt)"
           >
             删除
@@ -424,6 +482,11 @@ const emit = defineEmits([
 ])
 
 const { withGlobalLoading } = useGlobalLoading()
+const COMMON_PROMPT_CLI = "common"
+const commonPromptTab = {
+  id: COMMON_PROMPT_CLI,
+  name: "通用"
+}
 const activeCli = ref("")
 const selectedPromptId = ref("")
 const activeTab = ref("overview")
@@ -474,11 +537,11 @@ const canResolveDiff = computed(() => {
 })
 
 const supportedCliIds = computed(() => {
-  return new Set((props.rules.supportedClis || []).map(item => item.id))
+  return new Set((props.rules.supportedClis || []).map((item) => item.id))
 })
 
 const visibleCliTargets = computed(() => {
-  const installedTargets = props.cliTargets.filter(item =>
+  const installedTargets = props.cliTargets.filter((item) =>
     supportedCliIds.value.has(item.id)
   )
 
@@ -489,28 +552,78 @@ const visibleCliTargets = computed(() => {
   return props.rules.supportedClis || []
 })
 
+const ruleTabs = computed(() => {
+  return [...visibleCliTargets.value, commonPromptTab]
+})
+
+const promptScopeOptions = computed(() => {
+  return [...visibleCliTargets.value, commonPromptTab]
+})
+
 const cliNameMap = computed(() => {
   return Object.fromEntries(
-    visibleCliTargets.value.map(item => [item.id, item.name])
+    promptScopeOptions.value.map((item) => [item.id, item.name])
   )
+})
+
+const isCommonTab = computed(() => {
+  return activeCli.value === COMMON_PROMPT_CLI
+})
+
+const activeRuntimeCli = computed(() => {
+  return isCommonTab.value ? "" : activeCli.value
 })
 
 const activeCliName = computed(() => {
   return cliNameMap.value[activeCli.value] || activeCli.value || "Prompt"
 })
 
+const activeScopeName = computed(() => {
+  if (!isCommonTab.value) {
+    return activeCliName.value
+  }
+
+  return "通用"
+})
+
+const runtimeTitle = computed(() => {
+  if (!isCommonTab.value) {
+    return `${activeCliName.value} Runtime`
+  }
+
+  return "通用 Prompt"
+})
+
+const runtimePathText = computed(() => {
+  if (isCommonTab.value) {
+    return "点击 Prompt 右侧 CLI 图标，直接挂载或取消对应 CLI 的全局 Prompt。"
+  }
+
+  return runtimePath.value || "尚未发现全局 Prompt 文件路径"
+})
+
+const editorDescription = computed(() => {
+  return `当前配置到 ${cliNameMap.value[draft.cli] || draft.cli || activeCliName.value}`
+})
+
+const emptyText = computed(() => {
+  return isCommonTab.value
+    ? "当前还没有通用 Prompt，先新建一个可挂载到 CLI 的 Prompt。"
+    : "当前 CLI 还没有 Prompt，先新建或导入全局 Prompt。"
+})
+
 const scopedPrompts = computed(() => {
   return (props.rules.prompts || []).filter(
-    item => item.cli === activeCli.value
+    (item) => item.cli === activeCli.value
   )
 })
 
 const activePromptId = computed(() => {
-  return props.rules.profiles?.[activeCli.value]?.activePromptId || ""
+  return props.rules.profiles?.[activeRuntimeCli.value]?.activePromptId || ""
 })
 
 const runtimeState = computed(() => {
-  return props.rules.runtimeState?.[activeCli.value] || {}
+  return props.rules.runtimeState?.[activeRuntimeCli.value] || {}
 })
 
 const runtimePath = computed(() => {
@@ -537,6 +650,37 @@ const runtimeStatusText = computed(() => {
   return statusMap[runtimeStatus.value] || runtimeStatus.value
 })
 
+const drawerRuntimePathText = computed(() => {
+  if (isCommonTab.value) {
+    return "通用 Prompt 通过 CLI 图标挂载到对应全局文件。"
+  }
+
+  return runtimePath.value || "未找到全局文件路径"
+})
+
+const drawerRuntimeStatusText = computed(() => {
+  if (!isCommonTab.value || !drawerPrompt.value) {
+    return runtimeStatusText.value
+  }
+
+  const enabledTargets = visibleCliTargets.value.filter((cli) =>
+    isPromptEnabledOnRuntime(drawerPrompt.value, cli.id)
+  )
+  const modifiedTargets = enabledTargets.filter((cli) =>
+    isPromptModifiedOnRuntime(drawerPrompt.value, cli.id)
+  )
+
+  if (modifiedTargets.length) {
+    return `${modifiedTargets.map((cli) => cli.name).join("、")} 与全局 Prompt 有差异`
+  }
+
+  if (enabledTargets.length) {
+    return `已挂载到 ${enabledTargets.map((cli) => cli.name).join("、")}`
+  }
+
+  return "未挂载到 CLI"
+})
+
 function selectCli(cli) {
   activeCli.value = cli
   selectedPromptId.value = ""
@@ -544,7 +688,7 @@ function selectCli(cli) {
 }
 
 function ensureActiveCli() {
-  if (visibleCliTargets.value.find(item => item.id === activeCli.value)) {
+  if (ruleTabs.value.find((item) => item.id === activeCli.value)) {
     return
   }
 
@@ -552,12 +696,12 @@ function ensureActiveCli() {
 }
 
 function ensureSelectedPrompt() {
-  if (scopedPrompts.value.find(item => item.id === selectedPromptId.value)) {
+  if (scopedPrompts.value.find((item) => item.id === selectedPromptId.value)) {
     return
   }
 
   selectedPromptId.value =
-    scopedPrompts.value.find(item => item.id === activePromptId.value)?.id ||
+    scopedPrompts.value.find((item) => item.id === activePromptId.value)?.id ||
     scopedPrompts.value[0]?.id ||
     ""
 }
@@ -567,7 +711,7 @@ function hasDuplicatePromptName(name, cli, promptId = "") {
     .trim()
     .toLowerCase()
 
-  return scopedPrompts.value.some(item => {
+  return (props.rules.prompts || []).some((item) => {
     return (
       item.cli === cli &&
       item.id !== promptId &&
@@ -576,10 +720,92 @@ function hasDuplicatePromptName(name, cli, promptId = "") {
   })
 }
 
+function targetActivePromptId(cli) {
+  return props.rules.profiles?.[cli]?.activePromptId || ""
+}
+
+function targetRuntimeState(cli) {
+  return props.rules.runtimeState?.[cli] || {}
+}
+
+function isPromptEnabledOnRuntime(prompt, cli = activeRuntimeCli.value) {
+  return prompt.id === targetActivePromptId(cli)
+}
+
+function isPromptModifiedOnRuntime(prompt, cli = activeRuntimeCli.value) {
+  return (
+    isPromptEnabledOnRuntime(prompt, cli) &&
+    ["MODIFIED_EXTERNALLY", "DIRTY_MANAGER", "CONFLICT"].includes(
+      targetRuntimeState(cli).status
+    )
+  )
+}
+
+function isPromptEnabledInCurrentScope(prompt) {
+  if (!isCommonTab.value) {
+    return isPromptEnabledOnRuntime(prompt)
+  }
+
+  return visibleCliTargets.value.some((cli) =>
+    isPromptEnabledOnRuntime(prompt, cli.id)
+  )
+}
+
+function isPromptModifiedInCurrentScope(prompt) {
+  if (!isCommonTab.value) {
+    return isModifiedExternally.value && isPromptEnabledOnRuntime(prompt)
+  }
+
+  return visibleCliTargets.value.some((cli) =>
+    isPromptModifiedOnRuntime(prompt, cli.id)
+  )
+}
+
+function isPromptActive(prompt) {
+  return Object.values(props.rules.profiles || {}).some((profile) => {
+    return profile?.activePromptId === prompt.id
+  })
+}
+
+function promptActionText(prompt) {
+  if (isPromptEnabledOnRuntime(prompt)) {
+    return isCommonTab.value ? "取消挂载" : "取消启用"
+  }
+
+  return isCommonTab.value ? "挂载并同步" : "启用并同步"
+}
+
+function promptTargetTitle(prompt, cli) {
+  const active = isPromptEnabledOnRuntime(prompt, cli.id)
+  const modified = isPromptModifiedOnRuntime(prompt, cli.id)
+
+  if (active && modified) {
+    return `${cli.name}：已挂载，和全局 Prompt 有差异`
+  }
+
+  if (active) {
+    return `${cli.name}：已挂载，点击取消`
+  }
+
+  return `${cli.name}：点击挂载并同步`
+}
+
+function promptScopeName(cli) {
+  return cliNameMap.value[cli] || cli
+}
+
+function showPromptCompareButton(prompt) {
+  return (
+    !isCommonTab.value &&
+    isModifiedExternally.value &&
+    isPromptEnabledOnRuntime(prompt)
+  )
+}
+
 function openDrawer(promptId) {
   selectedPromptId.value = promptId
   drawerPrompt.value =
-    scopedPrompts.value.find(item => item.id === promptId) || null
+    scopedPrompts.value.find((item) => item.id === promptId) || null
   activeTab.value = "overview"
 }
 
@@ -636,9 +862,9 @@ function deletePrompt(prompt) {
 }
 
 function togglePrompt(prompt) {
-  if (prompt.id === activePromptId.value) {
+  if (isPromptEnabledOnRuntime(prompt)) {
     emit("toggle-rule", {
-      cli: prompt.cli,
+      cli: activeRuntimeCli.value,
       ruleId: prompt.id,
       enabled: false
     })
@@ -646,6 +872,23 @@ function togglePrompt(prompt) {
   }
 
   emit("enable-rule", {
+    cli: activeRuntimeCli.value,
+    ruleId: prompt.id
+  })
+}
+
+function togglePromptTarget(prompt, cli) {
+  if (isPromptEnabledOnRuntime(prompt, cli)) {
+    emit("toggle-rule", {
+      cli,
+      ruleId: prompt.id,
+      enabled: false
+    })
+    return
+  }
+
+  emit("enable-rule", {
+    cli,
     ruleId: prompt.id
   })
 }
@@ -655,6 +898,10 @@ function openPromptDirectory(prompt) {
 }
 
 async function openImportDialog() {
+  if (isCommonTab.value) {
+    return
+  }
+
   await withGlobalLoading(async () => {
     try {
       const result = await ruleApi.previewImportGlobalRule({
@@ -700,7 +947,7 @@ async function openCompareDialog(prompt) {
   await withGlobalLoading(async () => {
     try {
       const result = await ruleApi.compareRule({
-        cli: prompt.cli,
+        cli: activeRuntimeCli.value,
         ruleId: prompt.id
       })
 
@@ -766,7 +1013,7 @@ function renderDiff(managerContent, runtimeContent) {
 
 function resolveDrift(source) {
   emit("resolve-drift", {
-    cli: activeCli.value,
+    cli: activeRuntimeCli.value,
     source
   })
   closeDiffDialog()
@@ -801,7 +1048,7 @@ watch(
     ensureSelectedPrompt()
     if (drawerPrompt.value) {
       const nextPrompt = scopedPrompts.value.find(
-        item => item.id === drawerPrompt.value.id
+        (item) => item.id === drawerPrompt.value.id
       )
 
       drawerPrompt.value = nextPrompt || null
@@ -968,6 +1215,50 @@ onBeforeUnmount(() => {
   &__prompt-actions {
     flex: none;
     gap: 8px;
+  }
+
+  &__target-buttons {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__target-button {
+    display: inline-grid;
+    width: 32px;
+    height: 32px;
+    place-items: center;
+    overflow: hidden;
+    border: 1px solid transparent;
+    border-radius: 50%;
+    background: #ffffff;
+    color: #667085;
+    cursor: pointer;
+    font-size: 0.74rem;
+    font-weight: 700;
+  }
+
+  &__target-button--active {
+    border-color: #cbd6e4;
+    background: #e8f8ee;
+    color: #17803d;
+  }
+
+  &__target-button--modified {
+    border-color: #f7c879;
+    background: #fff4e5;
+    color: #c25a00;
+  }
+
+  &__target-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  &__target-icon {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
   }
 
   &__icon-button {
