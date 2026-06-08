@@ -28,6 +28,37 @@ jobs:
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: 缓存 Cargo 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      - name: 缓存 Rust release 产物
+        uses: actions/cache@v4
+        with:
+          path: |
+            src-tauri/target/release/.fingerprint
+            src-tauri/target/release/build
+            src-tauri/target/release/deps
+            src-tauri/target/release/incremental
+          key: ${{ runner.os }}-cargo-target-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ hashFiles('src-tauri/src/**', 'src-tauri/Cargo.toml', 'src-tauri/build.rs') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-target-${{ hashFiles('src-tauri/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-target-
+
+      - name: 缓存 Tauri 打包工具
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/target/.tauri
+          key: ${{ runner.os }}-tauri-tools-${{ hashFiles('src-tauri/tauri.conf.json', 'package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-tauri-tools-
+
       - name: 安装依赖
         run: npm ci
 
@@ -41,6 +72,7 @@ jobs:
 
       - name: 打包 Windows 安装程序
         env:
+          CARGO_INCREMENTAL: 1
           AI_MANAGER_GITHUB_TOKEN: ${{ secrets.AI_MANAGER_GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}

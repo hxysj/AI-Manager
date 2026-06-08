@@ -1,12 +1,12 @@
 ## 变更说明
 
-- 增强用量数据同步。
-  用量页进入后会先触发同步，并在已有会话基础上补充扫描 Skill 会话文件，让新增的可用记录能纳入统计。
-- 优化用量页加载状态。
-  用量页刷新期间锁定滚动，避免加载遮罩展示时页面内容继续滚动造成视觉干扰。
-- 增强 Git 工具归档恢复。
-  归档抽屉支持勾选、全选和恢复选中归档，批量恢复后会同步清理已选状态。
-- 补齐应用更新配置。
-  安装包会生成 Tauri 更新元数据和签名更新包，并通过 GitHub Release 的 `latest.json` 检查、下载和安装新版本。
-- 同步应用版本号为 `2.0.2`。
-  统一更新 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `src-tauri/tauri.conf.json`。
+- 增强 Prompt 规则启用能力。
+  Rule 模块新增通用 Prompt tab，可把通用 Prompt 直接挂载到 Claude 或 Codex；挂载通用 Prompt 时会取消对应 CLI tab 下已启用的 Prompt，并在启动和刷新时检查全局 Prompt 与当前启用配置是否存在差异。
+- 优化 Prompt 规则页面交互。
+  通用 Prompt 列表和抽屉增加 Claude、Codex 目标按钮，支持直接启用、取消启用和查看差异状态，不再依赖下拉框切换目标 CLI。
+- 修复坚果云备份路径问题。
+  WebDAV 文件地址组装会移除目录末尾空路径段，避免推送或下载时生成 `//ai-manager.aimbackup` 这类非法路径；失败时会显示坚果云返回的具体错误内容，便于定位配置问题。
+- 优化 Windows 发布构建。
+  Release workflow 增加 Cargo 缓存、Rust release target 缓存和 Tauri 本地工具缓存，减少重复下载 NSIS 与重复编译耗时。
+- 更新自动更新签名配置。
+  重新配置 Tauri updater 公钥，并启用本地工具目录缓存，保持安装包更新产物可签名发布。

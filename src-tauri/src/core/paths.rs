@@ -128,6 +128,7 @@ pub async fn ensure_app_directories(paths: &AppPaths) -> Result<(), std::io::Err
         &paths.workspace_root,
         &paths.skills_dir,
         &paths.prompts_dir,
+        &path_text(Path::new(&paths.prompts_dir).join("common")),
         &path_text(Path::new(&paths.prompts_dir).join("claude")),
         &path_text(Path::new(&paths.prompts_dir).join("codex")),
         &paths.prompt_profiles_dir,

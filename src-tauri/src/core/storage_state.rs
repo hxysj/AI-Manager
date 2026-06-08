@@ -12,6 +12,7 @@ pub fn create_initial_state(
     app_settings: &AppSettings,
 ) -> Result<Value, ManagerError> {
     let files = &paths.storage_files;
+    let cli_targets = read_cli_targets(&files.cli_targets)?;
     let runtime_state = read_json_file(&files.runtime_provider_state, json!({}))?;
     let claude_proxy_config = normalize_proxy_config(
         read_json_file(&files.claude_proxy_config, json!({}))?,
@@ -44,7 +45,7 @@ pub fn create_initial_state(
     apply_proxy_runtime_state(&mut runtime_provider_state, "codex", &codex_proxy_state);
 
     Ok(json!({
-      "cliTargets": read_cli_targets(&files.cli_targets)?,
+      "cliTargets": cli_targets.clone(),
       "skills": read_json_file(&files.skills, json!([]))?,
       "skillRepositories": skills::load_repositories(paths)?,
       "repos": read_json_file(&files.repos, json!([]))?,
@@ -53,7 +54,7 @@ pub fn create_initial_state(
       "codexAccounts": codex_account::read_public_accounts(paths)?,
       "codexLoginState": null,
       "providers": runtime_provider::read_public_providers(paths)?,
-      "rules": rules::build_state(paths)?,
+      "rules": rules::build_state(paths, &cli_targets)?,
       "runtimeConfigSchemas": runtime_provider::runtime_config_schemas(),
       "runtimeModels": read_json_file(&files.runtime_models, json!([]))?,
       "runtimeProfiles": runtime_provider::read_public_profiles(paths)?,

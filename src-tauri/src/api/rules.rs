@@ -7,11 +7,18 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static PROMPT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+const COMMON_PROMPT_CLI: &str = "common";
 
-pub fn build_state(paths: &AppPaths) -> Result<Value, ManagerError> {
+pub fn build_state(paths: &AppPaths, cli_targets: &Value) -> Result<Value, ManagerError> {
+    let runtime_state = refresh_drift_state(paths, cli_targets)?;
+
+    write_json_sync(
+        &paths.storage_files.prompt_runtime_state,
+        &Value::Object(runtime_state.clone()),
+    )?;
+
     let prompts = load_prompts(paths)?;
     let profiles = load_profiles(paths)?;
-    let runtime_state = read_json_file(&paths.storage_files.prompt_runtime_state, json!({}))?;
 
     Ok(json!({
       "supportedClis": supported_clis(),
@@ -27,15 +34,21 @@ pub async fn save_rule(
     cli_targets: &Value,
 ) -> Result<(), ManagerError> {
     let prompt = save_prompt(paths, payload).await?;
-    let state = build_state(paths)?;
-    let active_prompt_id = state["profiles"][string_value(prompt.get("cli"))]["activePromptId"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
+    let state = build_state(paths, cli_targets)?;
+    let prompt_id = string_value(prompt.get("id"));
+    let prompt_cli = string_value(prompt.get("cli"));
+    let mut synced_active_prompt = false;
 
-    if active_prompt_id == string_value(prompt.get("id")) {
-        enable_prompt(paths, &string_value(prompt.get("id")), cli_targets).await?;
-    } else {
+    for cli in ["claude", "codex"] {
+        let active_prompt_id = string_value(state["profiles"][cli].get("activePromptId"));
+
+        if active_prompt_id == prompt_id && (prompt_cli == COMMON_PROMPT_CLI || prompt_cli == cli) {
+            enable_prompt(paths, &prompt_id, cli, cli_targets).await?;
+            synced_active_prompt = true;
+        }
+    }
+
+    if !synced_active_prompt {
         refresh_drift(paths, cli_targets).await?;
     }
 
@@ -73,8 +86,16 @@ pub async fn enable_rule(
     cli_targets: &Value,
 ) -> Result<(), ManagerError> {
     let rule_id = string_value(payload.get("ruleId").or(Some(&payload)));
+    let prompt = find_prompt(paths, &rule_id)?
+        .ok_or_else(|| ManagerError::System("Prompt 不存在".to_string()))?;
+    let prompt_cli = string_value(prompt.get("cli"));
+    let cli = if prompt_cli == COMMON_PROMPT_CLI {
+        normalize_runtime_cli(payload.get("targetCli").or_else(|| payload.get("cli")))?
+    } else {
+        normalize_runtime_cli(prompt.get("cli"))?
+    };
 
-    enable_prompt(paths, &rule_id, cli_targets).await
+    enable_prompt(paths, &rule_id, &cli, cli_targets).await
 }
 
 pub async fn import_global_rule(
@@ -82,7 +103,7 @@ pub async fn import_global_rule(
     payload: Value,
     cli_targets: &Value,
 ) -> Result<(), ManagerError> {
-    let cli = normalize_cli(payload.get("cli"))?;
+    let cli = normalize_runtime_cli(payload.get("cli"))?;
     let cli_target = find_cli_target(cli_targets, &cli);
     let content = read_global_prompt_content(paths, &cli, cli_target.as_ref()).await?;
 
@@ -110,7 +131,7 @@ pub async fn preview_import_global_rule(
     payload: Value,
     cli_targets: &Value,
 ) -> Result<Value, ManagerError> {
-    let cli = normalize_cli(payload.get("cli"))?;
+    let cli = normalize_runtime_cli(payload.get("cli"))?;
     let cli_target = find_cli_target(cli_targets, &cli);
     let runtime_path = get_runtime_path(&cli, cli_target.as_ref());
     let content = read_global_prompt_content(paths, &cli, cli_target.as_ref()).await?;
@@ -198,7 +219,12 @@ pub async fn compare_rule(
     let rule_id = string_value(payload.get("ruleId"));
     let prompt = find_prompt(paths, &rule_id)?
         .ok_or_else(|| ManagerError::System("Prompt 不存在".to_string()))?;
-    let cli = string_value(prompt.get("cli"));
+    let prompt_cli = string_value(prompt.get("cli"));
+    let cli = if prompt_cli == COMMON_PROMPT_CLI {
+        normalize_runtime_cli(payload.get("targetCli").or_else(|| payload.get("cli")))?
+    } else {
+        normalize_runtime_cli(prompt.get("cli"))?
+    };
     let cli_target = find_cli_target(cli_targets, &cli);
     let runtime_path = get_runtime_path(&cli, cli_target.as_ref());
     let runtime_content = if runtime_path.is_empty() || !Path::new(&runtime_path).exists() {
@@ -220,8 +246,8 @@ pub async fn resolve_rule_drift(
     payload: Value,
     cli_targets: &Value,
 ) -> Result<(), ManagerError> {
-    let cli = normalize_cli(payload.get("cli"))?;
-    let state = build_state(paths)?;
+    let cli = normalize_runtime_cli(payload.get("cli"))?;
+    let state = build_state(paths, cli_targets)?;
     let active_prompt_id = string_value(state["profiles"][&cli].get("activePromptId"));
 
     if active_prompt_id.is_empty() {
@@ -251,7 +277,7 @@ pub async fn resolve_rule_drift(
         .await?;
     }
 
-    enable_prompt(paths, &active_prompt_id, cli_targets).await
+    enable_prompt(paths, &active_prompt_id, &cli, cli_targets).await
 }
 
 pub async fn move_rule(_: &AppPaths) -> Result<(), ManagerError> {
@@ -259,6 +285,19 @@ pub async fn move_rule(_: &AppPaths) -> Result<(), ManagerError> {
 }
 
 pub async fn refresh_drift(paths: &AppPaths, cli_targets: &Value) -> Result<(), ManagerError> {
+    let runtime_state = refresh_drift_state(paths, cli_targets)?;
+
+    write_json(
+        &paths.storage_files.prompt_runtime_state,
+        &Value::Object(runtime_state),
+    )
+    .await
+}
+
+fn refresh_drift_state(
+    paths: &AppPaths,
+    cli_targets: &Value,
+) -> Result<serde_json::Map<String, Value>, ManagerError> {
     let prompts = load_prompts(paths)?;
     let profiles = load_profiles(paths)?;
     let mut runtime_state = read_json_object(&paths.storage_files.prompt_runtime_state)?;
@@ -296,7 +335,7 @@ pub async fn refresh_drift(paths: &AppPaths, cli_targets: &Value) -> Result<(), 
             continue;
         }
 
-        let runtime_content = tokio::fs::read_to_string(&runtime_path).await?;
+        let runtime_content = std::fs::read_to_string(&runtime_path)?;
         let manager_hash = sha256_text(&manager_content);
         let runtime_hash = sha256_text(&runtime_content);
         let previous_hash = previous_state
@@ -326,11 +365,7 @@ pub async fn refresh_drift(paths: &AppPaths, cli_targets: &Value) -> Result<(), 
         runtime_state.insert(cli.to_string(), Value::Object(next_state));
     }
 
-    write_json(
-        &paths.storage_files.prompt_runtime_state,
-        &Value::Object(runtime_state),
-    )
-    .await
+    Ok(runtime_state)
 }
 
 async fn save_prompt(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
@@ -417,7 +452,9 @@ async fn delete_prompt(paths: &AppPaths, prompt_id: &str) -> Result<(), ManagerE
     let profiles = load_profiles(paths)?;
     let cli = string_value(prompt.get("cli"));
 
-    if string_value(profiles[&cli].get("activePromptId")) == string_value(prompt.get("id")) {
+    if ["claude", "codex"].iter().any(|cli| {
+        string_value(profiles[*cli].get("activePromptId")) == string_value(prompt.get("id"))
+    }) {
         return Err(ManagerError::System(
             "当前 Prompt 已启用，请先切换到其他 Prompt 后再删除".to_string(),
         ));
@@ -436,11 +473,11 @@ async fn delete_prompt(paths: &AppPaths, prompt_id: &str) -> Result<(), ManagerE
 async fn enable_prompt(
     paths: &AppPaths,
     prompt_id: &str,
+    cli: &str,
     cli_targets: &Value,
 ) -> Result<(), ManagerError> {
     let prompt = find_prompt(paths, prompt_id)?
         .ok_or_else(|| ManagerError::System("Prompt 不存在".to_string()))?;
-    let cli = string_value(prompt.get("cli"));
     let cli_target = find_cli_target(cli_targets, &cli);
     let runtime_path = get_runtime_path(&cli, cli_target.as_ref());
 
@@ -465,7 +502,7 @@ async fn enable_prompt(
     let mut runtime_state = read_json_object(&paths.storage_files.prompt_runtime_state)?;
 
     runtime_state.insert(
-        cli,
+        cli.to_string(),
         json!({
           "activePromptId": prompt_id,
           "runtimeHash": sha256_text(&runtime_content),
@@ -492,11 +529,20 @@ async fn disable_prompt(
         .iter()
         .find(|item| item.get("id").and_then(Value::as_str) == Some(prompt_id.as_str()))
         .cloned();
-    let cli = normalize_cli(
-        payload
-            .get("cli")
-            .or_else(|| prompt.as_ref().and_then(|item| item.get("cli"))),
-    )?;
+    let prompt_cli = prompt
+        .as_ref()
+        .map(|item| string_value(item.get("cli")))
+        .unwrap_or_default();
+    let cli = if prompt_cli == COMMON_PROMPT_CLI {
+        normalize_runtime_cli(payload.get("targetCli").or_else(|| payload.get("cli")))?
+    } else {
+        normalize_runtime_cli(
+            payload
+                .get("targetCli")
+                .or_else(|| payload.get("cli"))
+                .or_else(|| prompt.as_ref().and_then(|item| item.get("cli"))),
+        )?
+    };
     let profiles = load_profiles(paths)?;
 
     if prompt.is_some() && string_value(profiles[&cli].get("activePromptId")) != prompt_id {
@@ -557,7 +603,7 @@ async fn read_global_prompt_content(
 fn load_prompts(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     let mut prompts = Vec::new();
 
-    for cli in ["claude", "codex"] {
+    for cli in [COMMON_PROMPT_CLI, "claude", "codex"] {
         let prompt_dir = prompt_dir(paths, cli);
 
         if !prompt_dir.exists() {
@@ -682,9 +728,21 @@ fn find_similar_content_prompt(
 fn normalize_cli(value: Option<&Value>) -> Result<String, ManagerError> {
     let cli = string_value(value);
 
+    if ![COMMON_PROMPT_CLI, "claude", "codex"].contains(&cli.as_str()) {
+        return Err(ManagerError::System(
+            "Prompt 仅支持通用、Claude 和 Codex".to_string(),
+        ));
+    }
+
+    Ok(cli)
+}
+
+fn normalize_runtime_cli(value: Option<&Value>) -> Result<String, ManagerError> {
+    let cli = string_value(value);
+
     if !["claude", "codex"].contains(&cli.as_str()) {
         return Err(ManagerError::System(
-            "Prompt 仅支持 Claude 和 Codex".to_string(),
+            "请选择要挂载的 Claude 或 Codex".to_string(),
         ));
     }
 
@@ -884,6 +942,18 @@ async fn write_json(path: impl AsRef<Path>, payload: &Value) -> Result<(), Manag
         format!("{}\n", serde_json::to_string_pretty(payload)?),
     )
     .await?;
+    Ok(())
+}
+
+fn write_json_sync(path: impl AsRef<Path>, payload: &Value) -> Result<(), ManagerError> {
+    if let Some(parent) = path.as_ref().parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    std::fs::write(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(payload)?),
+    )?;
     Ok(())
 }
 

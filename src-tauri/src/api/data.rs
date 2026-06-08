@@ -1415,10 +1415,14 @@ async fn ensure_webdav_directory(config: &CloudSyncSettings) -> Result<(), Manag
         .await
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
-    if ![201, 405].contains(&response.status().as_u16()) {
+    let status = response.status().as_u16();
+
+    if ![201, 405].contains(&status) {
+        let detail = read_webdav_error_detail(response).await?;
+
         return Err(ManagerError::System(format!(
-            "坚果云目录创建失败：{}",
-            response.status().as_u16()
+            "坚果云目录创建失败：{}{}",
+            status, detail
         )));
     }
 
@@ -1440,10 +1444,14 @@ async fn upload_webdav_backup(
         .await
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
-    if ![200, 201, 204].contains(&response.status().as_u16()) {
+    let status = response.status().as_u16();
+
+    if ![200, 201, 204].contains(&status) {
+        let detail = read_webdav_error_detail(response).await?;
+
         return Err(ManagerError::System(format!(
-            "坚果云上传失败：{}",
-            response.status().as_u16()
+            "坚果云上传失败：{}{}",
+            status, detail
         )));
     }
 
@@ -1464,13 +1472,37 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
     }
 
     if status != 200 {
-        return Err(ManagerError::System(format!("坚果云下载失败：{}", status)));
+        let detail = read_webdav_error_detail(response).await?;
+
+        return Err(ManagerError::System(format!(
+            "坚果云下载失败：{}{}",
+            status, detail
+        )));
     }
 
     response
         .text()
         .await
         .map_err(|error| ManagerError::System(error.to_string()))
+}
+
+async fn read_webdav_error_detail(response: reqwest::Response) -> Result<String, ManagerError> {
+    let status = response.status().as_u16();
+    let body = response
+        .text()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let body = body.trim();
+
+    if body.is_empty() {
+        if status == 400 {
+            return Ok("，请确认 WebDAV 地址是坚果云目录地址，备份文件名没有包含非法路径，并且云端备份文件已存在".to_string());
+        }
+
+        return Ok(String::new());
+    }
+
+    Ok(format!("，{}", body.chars().take(300).collect::<String>()))
 }
 
 fn build_webdav_file_url(config: &CloudSyncSettings) -> Result<String, ManagerError> {
@@ -1484,6 +1516,7 @@ fn build_webdav_file_url(config: &CloudSyncSettings) -> Result<String, ManagerEr
     let mut segments = url
         .path_segments_mut()
         .map_err(|_| ManagerError::System("WebDAV 地址非法".to_string()))?;
+    segments.pop_if_empty();
 
     for segment in config.file_name.split('/').filter(|item| !item.is_empty()) {
         segments.push(segment);
