@@ -8,10 +8,12 @@ use base64::Engine;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use tokio::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::process::Command;
 
 static PROVIDER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
     let mut providers = read_array(&paths.storage_files.providers)?;
@@ -553,7 +555,12 @@ pub async fn launch_codex_provider_instance(
 
     let codex_executable_path = resolve_codex_executable_path(&executable_path).await;
 
-    match Command::new(&codex_executable_path)
+    let mut version_command = Command::new(&codex_executable_path);
+
+    #[cfg(windows)]
+    version_command.creation_flags(CREATE_NO_WINDOW);
+
+    match version_command
         .arg("--version")
         .kill_on_drop(true)
         .output()

@@ -1,5 +1,10 @@
 <template>
   <section class="usage-view">
+    <div v-if="pageLoading" class="usage-view-loading">
+      <RefreshCw class="usage-view-loading-icon" :size="22" />
+      <span>正在加载用量数据...</span>
+    </div>
+
     <header class="usage-view__toolbar">
       <div>
         <p class="usage-view__eyebrow">Token Usage</p>
@@ -28,7 +33,7 @@
         </button>
         <button type="button" :disabled="pending" @click="syncUsage">
           <RefreshCw :size="16" />
-          {{ pending ? "同步中..." : "同步会话日志" }}
+          {{ syncing ? "同步中..." : "同步会话日志" }}
         </button>
       </div>
     </header>
@@ -41,6 +46,7 @@
           type="datetimerange"
           :shortcuts="dateTimeShortcuts"
           :default-time="defaultDateTimeRange"
+          :show-confirm="false"
           clearable
           end-placeholder="结束时间"
           range-separator="至"
@@ -150,11 +156,7 @@
             class="usage-view__chart"
             @wheel="handleTrendWheel"
           ></div>
-          <div v-if="chartLoading" class="usage-view__chart-loading">
-            <span></span>
-            <strong>图表加载中</strong>
-          </div>
-          <div v-else-if="!tokenTrendSeries.length" class="usage-view__empty">
+          <div v-if="!tokenTrendSeries.length" class="usage-view__empty">
             {{ tokenTrendEmptyText }}
           </div>
         </div>
@@ -189,11 +191,7 @@
             ref="providerPieRef"
             class="usage-view__chart"
           ></div>
-          <div v-if="chartLoading" class="usage-view__chart-loading">
-            <span></span>
-            <strong>图表加载中</strong>
-          </div>
-          <div v-else-if="!usagePieStats.length" class="usage-view__empty">
+          <div v-if="!usagePieStats.length" class="usage-view__empty">
             {{ usagePieEmptyText }}
           </div>
         </div>
@@ -269,12 +267,12 @@
       <div class="usage-view__section-header">
         <div>
           <h2>请求日志</h2>
-          <span>{{ logs.length }} 条记录</span>
+          <span>{{ logTotalCount }} 条记录</span>
         </div>
         <div class="usage-view__section-actions">
           <button
             type="button"
-            :disabled="!logs.length"
+            :disabled="pending || !logTotalCount"
             @click="exportUsageLogsCsv"
           >
             <Download :size="15" />
@@ -325,7 +323,7 @@
         <div class="usage-view__pager">
           <div>
             <span>
-              {{ logStartIndex + 1 }}-{{ logEndIndex }} / {{ logs.length }}
+              {{ logStartIndex + 1 }}-{{ logEndIndex }} / {{ logTotalCount }}
             </span>
             <select v-model.number="logPageSize">
               <option :value="20">20 条/页</option>
@@ -705,9 +703,10 @@ const props = defineProps({
 const usageSearchParams = new URLSearchParams(window.location.search)
 const isReportExportWindow = usageSearchParams.get("export") === "usage-report"
 const pending = ref(false)
+const syncing = ref(false)
 const reportExporting = ref(false)
 const pricingSaving = ref(false)
-const chartLoading = computed(() => pending.value && !isReportExportWindow)
+const pageLoading = computed(() => pending.value && !isReportExportWindow)
 const stats = ref(props.usage || {})
 const rangeType = ref(usageSearchParams.get("rangeType") || "today")
 const dateTimeRange = ref(createInitialDateTimeRange())
@@ -880,60 +879,11 @@ const trendLabel = computed(() => {
     : `${trendStats.value.length} 个本地日`
 })
 const logs = computed(() => stats.value.logs || [])
-const modelTrendSeries = computed(() => {
-  const labels = trendStats.value.map((item) => item.date)
-  const labelIndex = new Map(labels.map((label, index) => [label, index]))
-  const seriesMap = new Map()
-
-  for (const item of modelStats.value) {
-    const name = `${item.model} · ${formatAppName(item.appType)}`
-
-    seriesMap.set(`${item.appType}:${item.model}`, {
-      name,
-      data: labels.map(() => 0)
-    })
-  }
-
-  for (const item of logs.value) {
-    const label = createTrendLogLabel(item.createdAt)
-    const series = seriesMap.get(`${item.appType}:${item.model || "未识别模型"}`)
-    const index = labelIndex.get(label)
-
-    if (series && index !== undefined) {
-      series.data[index] += actualTokens(item)
-    }
-  }
-
-  return Array.from(seriesMap.values()).filter((item) =>
-    item.data.some((value) => value > 0)
-  )
-})
-const providerTrendSeries = computed(() => {
-  const labels = trendStats.value.map((item) => item.date)
-  const labelIndex = new Map(labels.map((label, index) => [label, index]))
-  const seriesMap = new Map()
-
-  for (const item of providerStats.value) {
-    seriesMap.set(item.providerId, {
-      name: item.providerName,
-      data: labels.map(() => 0)
-    })
-  }
-
-  for (const item of logs.value) {
-    const label = createTrendLogLabel(item.createdAt)
-    const series = seriesMap.get(item.providerId)
-    const index = labelIndex.get(label)
-
-    if (series && index !== undefined) {
-      series.data[index] += actualTokens(item)
-    }
-  }
-
-  return Array.from(seriesMap.values()).filter((item) =>
-    item.data.some((value) => value > 0)
-  )
-})
+const logTotalCount = computed(() => Number(stats.value.logTotalCount || 0))
+const modelTrendSeries = computed(() => stats.value.trendSeries?.models || [])
+const providerTrendSeries = computed(
+  () => stats.value.trendSeries?.providers || []
+)
 const tokenTrendSeries = computed(() =>
   tokenTrendMode.value === "provider"
     ? providerTrendSeries.value
@@ -952,15 +902,13 @@ const tokenTrendEmptyText = computed(
       : "暂无模型用量趋势。"
 )
 const totalLogPages = computed(() =>
-  Math.max(1, Math.ceil(logs.value.length / logPageSize.value))
+  Math.max(1, Math.ceil(logTotalCount.value / logPageSize.value))
 )
 const logStartIndex = computed(() => (logPage.value - 1) * logPageSize.value)
 const logEndIndex = computed(() =>
-  Math.min(logStartIndex.value + logPageSize.value, logs.value.length)
+  Math.min(logStartIndex.value + logs.value.length, logTotalCount.value)
 )
-const paginatedLogs = computed(() =>
-  logs.value.slice(logStartIndex.value, logEndIndex.value)
-)
+const paginatedLogs = computed(() => logs.value)
 const appOptions = computed(() => stats.value.filters?.appTypes || [])
 const providerOptions = computed(() => stats.value.filters?.providers || [])
 const requestSourceOptions = computed(
@@ -1065,7 +1013,13 @@ watch(() => props.usage, () => {
 })
 
 watch(logPageSize, () => {
+  if (logPage.value === 1) {
+    loadStats()
+    return
+  }
+
   logPage.value = 1
+  loadStats()
 })
 
 watch(pricingPageSize, () => {
@@ -1104,10 +1058,10 @@ onMounted(() => {
   if (isReportExportWindow) {
     loadStats()
   } else {
-    syncUsage()
+    loadStats()
     usageSyncTimer = window.setInterval(() => {
       if (!pending.value && !reportExporting.value) {
-        syncUsage()
+        loadStats()
       }
     }, 60000)
   }
@@ -1202,7 +1156,7 @@ function createInitialDateTimeRange() {
   return createPresetDateTimeRange(rangeType.value)
 }
 
-function createFilterPayload() {
+function createFilterPayload(options = {}) {
   const [start, end] = dateTimeRange.value || []
 
   return {
@@ -1211,28 +1165,12 @@ function createFilterPayload() {
     requestSource: requestSource.value,
     model: model.value,
     trendMode: trendMode.value,
+    logPage: options.logPage || logPage.value,
+    logPageSize: options.logPageSize || logPageSize.value,
+    includeAllLogs: options.includeAllLogs === true,
     startAt: start ? start.getTime() : 0,
     endAt: end ? end.getTime() : 0
   }
-}
-
-function createTrendLogLabel(createdAt) {
-  const date = new Date(createdAt)
-  const hour = String(date.getHours()).padStart(2, "0")
-  const minute = String(date.getMinutes()).padStart(2, "0")
-  const localDate = date.toLocaleDateString("zh-CN")
-
-  if (trendMode.value === "minute") {
-    return isSingleDayTrendRange.value
-      ? `${hour}:${minute}`
-      : `${localDate} ${hour}:${minute}`
-  }
-
-  if (trendMode.value === "hour") {
-    return isSingleDayTrendRange.value ? `${hour}:00` : `${localDate} ${hour}:00`
-  }
-
-  return localDate
 }
 
 function handleTrendWheel(event) {
@@ -1278,14 +1216,23 @@ function normalizePricingCurrency(value) {
 
 function prevLogPage() {
   logPage.value = Math.max(1, logPage.value - 1)
+  loadStats()
 }
 
 function nextLogPage() {
   logPage.value = Math.min(totalLogPages.value, logPage.value + 1)
+  loadStats()
 }
 
 function clampLogPage() {
-  logPage.value = Math.min(logPage.value, totalLogPages.value)
+  const nextPage = Math.min(logPage.value, totalLogPages.value)
+
+  if (nextPage === logPage.value) {
+    return false
+  }
+
+  logPage.value = nextPage
+  return true
 }
 
 function prevPricingPage() {
@@ -1791,18 +1738,29 @@ function exportPricingFile() {
   )
 }
 
-function exportUsageLogsCsv() {
-  if (!logs.value.length) {
+async function exportUsageLogsCsv() {
+  if (!logTotalCount.value) {
     createMessage.warning("没有可导出的请求日志。")
     return
   }
 
-  downloadUsageFile(
-    `usage-request-logs-${createExportTimestamp()}.csv`,
-    `\uFEFF${createUsageLogCsvText(logs.value)}`,
-    "text/csv;charset=utf-8"
-  )
-  createMessage.success(`已导出 ${logs.value.length} 条请求日志。`)
+  pending.value = true
+
+  try {
+    const result = await usageApi.getUsageStats(
+      createFilterPayload({ includeAllLogs: true })
+    )
+    const exportLogs = result?.data?.logs || []
+
+    downloadUsageFile(
+      `usage-request-logs-${createExportTimestamp()}.csv`,
+      `\uFEFF${createUsageLogCsvText(exportLogs)}`,
+      "text/csv;charset=utf-8"
+    )
+    createMessage.success(`已导出 ${exportLogs.length} 条请求日志。`)
+  } finally {
+    pending.value = false
+  }
 }
 
 async function savePricingItem(item) {
@@ -1886,7 +1844,10 @@ async function loadStats() {
   try {
     const result = await usageApi.getUsageStats(createFilterPayload())
     stats.value = result?.data || createEmptySummary()
-    clampLogPage()
+    if (clampLogPage()) {
+      await loadStats()
+      return
+    }
     await nextTick()
     renderCharts()
   } finally {
@@ -1902,15 +1863,20 @@ async function loadStats() {
 
 async function syncUsage() {
   pending.value = true
+  syncing.value = true
 
   try {
     const result = await usageApi.syncUsage(createFilterPayload())
     stats.value = result?.data || createEmptySummary()
-    clampLogPage()
+    if (clampLogPage()) {
+      await loadStats()
+      return
+    }
     await nextTick()
     renderCharts()
   } finally {
     pending.value = false
+    syncing.value = false
   }
 }
 
@@ -2285,6 +2251,7 @@ function formatSessionLabel(item) {
 }
 
 .usage-view {
+  position: relative;
   display: flex;
   height: 100%;
   min-height: 0;
@@ -2378,7 +2345,8 @@ function formatSessionLabel(item) {
   }
 
   &__filters {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(390px, 1.65fr) repeat(4, minmax(0, 1fr));
     align-items: flex-end;
     flex: none;
     gap: 10px;
@@ -2403,6 +2371,7 @@ function formatSessionLabel(item) {
   }
 
   &__field select {
+    width: 100%;
     min-width: 0;
     padding: 0 10px;
     color: var(--color-text);
@@ -2510,34 +2479,24 @@ function formatSessionLabel(item) {
     min-height: 0;
   }
 
-  &__chart-loading {
+  .usage-view-loading {
     position: absolute;
     inset: 0;
-    z-index: 1;
+    z-index: 20;
     display: flex;
-    min-width: 0;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
     gap: 10px;
-    border: 1px dashed var(--color-line);
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
-    color: var(--color-text-muted);
-  }
+    background: rgba(248, 251, 255, 0.82);
+    color: var(--color-primary);
+    font-size: 0.92rem;
+    font-weight: 700;
 
-  &__chart-loading span {
-    width: 28px;
-    height: 28px;
-    border: 3px solid #d7e2ee;
-    border-top-color: var(--color-primary);
-    border-radius: 50%;
-    animation: usage-chart-loading 0.8s linear infinite;
-  }
-
-  &__chart-loading strong {
-    color: var(--color-text-muted);
-    font-size: 0.82rem;
+    .usage-view-loading-icon {
+      animation: usage-loading-spin 0.8s linear infinite;
+    }
   }
 
   &__section-header {
@@ -3113,7 +3072,7 @@ function formatSessionLabel(item) {
   }
 }
 
-@keyframes usage-chart-loading {
+@keyframes usage-loading-spin {
   to {
     transform: rotate(360deg);
   }

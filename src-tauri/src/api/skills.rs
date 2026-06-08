@@ -10,6 +10,8 @@ use url::Url;
 
 const IGNORE_DIRS: [&str; 6] = [".git", "node_modules", "dist", "build", ".cache", "temp"];
 const SKILL_PREVIEW_MAX_SIZE: u64 = 512 * 1024;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result<(), ManagerError> {
     let cli_targets = state
@@ -1716,7 +1718,12 @@ async fn remove_managed_link(target_path: &Path) -> Result<(), ManagerError> {
 async fn create_junction(source_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
     #[cfg(windows)]
     {
-        let output = Command::new("cmd")
+        let mut command = Command::new("cmd");
+
+        #[cfg(windows)]
+        command.creation_flags(CREATE_NO_WINDOW);
+
+        let output = command
             .args([
                 "/C",
                 "mklink",
@@ -1791,7 +1798,12 @@ async fn remove_dir_all_if_exists(target_path: impl AsRef<Path>) -> Result<(), M
 }
 
 async fn extract_zip(zip_path: &str, target_path: &Path) -> Result<(), ManagerError> {
-    let output = Command::new("powershell.exe")
+    let mut command = Command::new("powershell.exe");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command
         .args([
             "-NoProfile",
             "-NonInteractive",
