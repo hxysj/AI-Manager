@@ -28,28 +28,14 @@ jobs:
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: 缓存 Cargo 依赖
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-registry-
+      - name: 启用 Rust 编译缓存
+        uses: mozilla-actions/sccache-action@v0.0.9
 
-      - name: 缓存 Rust release 产物
-        uses: actions/cache@v4
+      - name: 缓存 Rust 依赖和产物
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            src-tauri/target/release/.fingerprint
-            src-tauri/target/release/build
-            src-tauri/target/release/deps
-            src-tauri/target/release/incremental
-          key: ${{ runner.os }}-cargo-target-${{ hashFiles('src-tauri/Cargo.lock') }}-${{ hashFiles('src-tauri/src/**', 'src-tauri/Cargo.toml', 'src-tauri/build.rs') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-target-${{ hashFiles('src-tauri/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-target-
+          workspaces: |
+            src-tauri -> target
 
       - name: 缓存 Tauri 打包工具
         uses: actions/cache@v4
@@ -72,7 +58,9 @@ jobs:
 
       - name: 打包 Windows 安装程序
         env:
-          CARGO_INCREMENTAL: 1
+          CARGO_INCREMENTAL: 0
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: sccache
           AI_MANAGER_GITHUB_TOKEN: ${{ secrets.AI_MANAGER_GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
