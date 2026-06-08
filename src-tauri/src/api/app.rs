@@ -11,6 +11,8 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
+use tokio::sync::Mutex;
 
 const QUICK_SWITCH_LABEL: &str = "quick-switch";
 const QUICK_SWITCH_EXPANDED_WIDTH: u32 = 360;
@@ -19,6 +21,13 @@ const QUICK_SWITCH_COLLAPSED_WIDTH: u32 = 44;
 const QUICK_SWITCH_COLLAPSED_HEIGHT: u32 = 44;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+struct DownloadedUpdate {
+    update: Update,
+    bytes: Vec<u8>,
+}
+
+static DOWNLOADED_UPDATE: Mutex<Option<DownloadedUpdate>> = Mutex::const_new(None);
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,49 +90,156 @@ pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError
           "isDev": true
         })
     } else {
-        json!({
-          "phase": "unconfigured",
-          "message": "当前安装包未包含更新配置。",
-          "manual": true,
-          "configured": false,
-          "isDev": false
-        })
+        let updater = app
+            .updater()
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        let update = updater
+            .check()
+            .await
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+
+        *DOWNLOADED_UPDATE.lock().await = None;
+
+        match update {
+            Some(update) => json!({
+              "phase": "available",
+              "message": format!("发现新版本 {}。", update.version),
+              "version": update.version,
+              "releaseNotes": update.body.unwrap_or_default(),
+              "manual": true,
+              "configured": true,
+              "isDev": false
+            }),
+            None => json!({
+              "phase": "not-available",
+              "message": "当前已是最新版本。",
+              "manual": true,
+              "configured": true,
+              "isDev": false
+            })
+        }
     };
 
     emit_update_status(app, status)
 }
 
-pub async fn download_update() -> Result<Value, ManagerError> {
-    Ok(json!({
-      "phase": "unconfigured",
-      "message": "当前安装包未包含更新配置。",
-      "manual": true,
-      "configured": false,
-      "isDev": cfg!(debug_assertions),
-      "percent": 0,
-      "transferred": 0,
-      "total": 0,
-      "bytesPerSecond": 0,
-      "installDirectory": "",
-      "updatedAt": now_millis()
-    }))
+pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerError> {
+    if cfg!(debug_assertions) {
+        return emit_update_status(
+            app,
+            json!({
+              "phase": "dev-disabled",
+              "message": "开发模式没有打包后的更新元数据和安装器上下文，无法使用 Tauri 更新器完整检查并安装更新。请使用打包安装版验证更新流程。",
+              "manual": true,
+              "configured": false,
+              "isDev": true
+            }),
+        );
+    }
+
+    let updater = app
+        .updater()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let Some(update) = updater
+        .check()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?
+    else {
+        return emit_update_status(
+            app,
+            json!({
+              "phase": "not-available",
+              "message": "当前已是最新版本。",
+              "manual": true,
+              "configured": true,
+              "isDev": false
+            }),
+        );
+    };
+    let mut transferred = 0_u64;
+    let started_at = now_millis();
+    let app_handle = app.clone();
+    let version = update.version.clone();
+    let bytes = update
+        .download(
+            |chunk_length, total| {
+                transferred += chunk_length as u64;
+                let elapsed = now_millis().saturating_sub(started_at).max(1);
+                let percent = total
+                    .filter(|item| *item > 0)
+                    .map(|item| transferred as f64 * 100.0 / item as f64)
+                    .unwrap_or(0.0);
+                let _ = emit_update_status(
+                    &app_handle,
+                    json!({
+                      "phase": "downloading",
+                      "message": format!("正在下载新版本 {}。", version),
+                      "version": version,
+                      "manual": true,
+                      "configured": true,
+                      "isDev": false,
+                      "percent": percent,
+                      "transferred": transferred,
+                      "total": total.unwrap_or(0),
+                      "bytesPerSecond": transferred * 1000 / elapsed
+                    }),
+                );
+            },
+            || {},
+        )
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+
+    let version = update.version.clone();
+    let release_notes = update.body.clone().unwrap_or_default();
+    *DOWNLOADED_UPDATE.lock().await = Some(DownloadedUpdate { update, bytes });
+
+    emit_update_status(
+        app,
+        json!({
+          "phase": "downloaded",
+          "message": format!("新版本 {} 已下载完成。", version),
+          "version": version,
+          "releaseNotes": release_notes,
+          "manual": true,
+          "configured": true,
+          "isDev": false,
+          "percent": 100,
+          "transferred": transferred,
+          "total": transferred,
+          "bytesPerSecond": 0
+        }),
+    )
 }
 
 pub async fn install_update(
-    _app: &tauri::AppHandle,
-    payload: Value,
+    app: &tauri::AppHandle,
+    _payload: Value,
 ) -> Result<Value, ManagerError> {
-    let install_directory = payload
-        .get("installDirectory")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
+    let downloaded_update = DOWNLOADED_UPDATE.lock().await.take();
+    let Some(downloaded_update) = downloaded_update else {
+        return Err(ManagerError::System("更新安装包未下载完成".to_string()));
+    };
 
-    if install_directory.is_empty() {
-        return Err(ManagerError::System("安装目录不能为空".to_string()));
-    }
+    let version = downloaded_update.update.version.clone();
 
-    Err(ManagerError::System("更新安装包未下载完成".to_string()))
+    emit_update_status(
+        app,
+        json!({
+          "phase": "installing",
+          "message": "正在打开更新安装程序。",
+          "version": version,
+          "manual": true,
+          "configured": true,
+          "isDev": false
+        }),
+    )?;
+
+    downloaded_update
+        .update
+        .install(downloaded_update.bytes)
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    Ok(json!(true))
 }
 
 pub async fn dismiss_update() -> Result<Value, ManagerError> {

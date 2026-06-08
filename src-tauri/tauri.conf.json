@@ -26,6 +26,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
     "icon": ["../build/icon.png", "../build/icon.ico"],
     "resources": {
       "../src/assets/ai-manager-logo.svg": "assets/ai-manager-logo.svg",
@@ -39,6 +40,17 @@
         "installerIcon": "../build/icon.ico",
         "uninstallerIcon": "../build/icon.ico",
         "installerHooks": "../build/installer.nsh"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDcxNzdBNTNFQkU0Q0VFRUUKUldUdTdreStQcVYzY2NCSDdnUzZlQTBPOVhmenlYRFYreEVHNHhlWmlWQURoMXZVSmNMbjN4ekMK",
+      "endpoints": [
+        "https://github.com/hxysj/AI-Manager/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

@@ -5,6 +5,8 @@ src-tauri/target/
 .env.*
 !.env.example
 electron/update-config.generated.cjs
+build/updater-private.key
+build/updater-private.key.pub
 .history/
 .DS_Store
 Thumbs.db
