@@ -6,6 +6,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::process::Command;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 static REPO_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Deserialize)]
@@ -257,7 +260,12 @@ async fn remove_dir_all_if_exists(target_path: &str) -> Result<(), ManagerError>
 }
 
 async fn run_git<const N: usize>(args: [&str; N]) -> Result<(), ManagerError> {
-    let output = Command::new("git").args(args).output().await?;
+    let mut command = Command::new("git");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command.args(args).output().await?;
 
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr).trim().to_string();

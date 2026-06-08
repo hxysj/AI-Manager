@@ -2340,7 +2340,7 @@ async function handleQuickLogoClick() {
     return
   }
 
-  await toggleQuickCollapsed()
+  await showMainPanel()
 }
 
 async function refreshQuickCodexAccount(item) {

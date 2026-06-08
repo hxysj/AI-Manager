@@ -8,10 +8,11 @@ use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 const DEFAULT_EXCHANGE_RATE: f64 = 7.2;
 static PRICING_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+static USAGE_LOG_CACHE: OnceLock<Mutex<Option<UsageLogCache>>> = OnceLock::new();
 
 #[derive(Clone)]
 struct Summary {
@@ -47,6 +48,13 @@ struct SkillInvocation {
     cli: String,
     raw_path: String,
     created_at: u64,
+}
+
+struct UsageLogCache {
+    path: String,
+    len: u64,
+    modified_at: u128,
+    logs: Arc<Vec<Value>>,
 }
 
 pub fn build_state(paths: &AppPaths) -> Result<Value, ManagerError> {
@@ -250,7 +258,10 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
       "endAt": number_value(input.get("endAt"), 0),
       "trendMode": normalize_usage_trend_mode(input.get("trendMode"))
     });
-    let raw_logs = read_array(&paths.storage_files.usage_logs)?;
+    let log_page = number_value(input.get("logPage"), 1).max(1) as usize;
+    let log_page_size = number_value(input.get("logPageSize"), 20).max(1) as usize;
+    let include_all_logs = input.get("includeAllLogs").and_then(Value::as_bool) == Some(true);
+    let raw_logs = read_usage_logs(&paths.storage_files.usage_logs)?;
     let logs = raw_logs
         .iter()
         .filter(|item| in_range(item, &filters))
@@ -272,13 +283,29 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
                 }),
             )
         })
-        .map(|item| enrich_usage_log(item, &pricing_config))
+        .cloned()
         .collect::<Vec<_>>();
     let mut summary = create_empty_summary();
 
     for log in &logs {
         append_usage_summary(&mut summary, log);
     }
+
+    let trend_mode = string_value(filters.get("trendMode"));
+    let trends = create_usage_trend_stats(&logs, &trend_mode, &filters);
+    let model_trend_series = create_usage_model_trend_series(&logs, &trend_mode, &filters, &trends);
+    let provider_trend_series =
+        create_usage_provider_trend_series(&logs, &trend_mode, &filters, &trends);
+    let log_total_count = logs.len();
+    let response_logs = if include_all_logs {
+        logs.clone()
+    } else {
+        logs.iter()
+            .skip((log_page - 1) * log_page_size)
+            .take(log_page_size)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
 
     Ok(json!({
       "summary": finalize_summary(summary),
@@ -304,25 +331,20 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
           base
         }
       ),
-      "trends": create_usage_trend_stats(&logs, &string_value(filters.get("trendMode")), &filters),
-      "logs": logs,
+      "trends": trends,
+      "trendSeries": {
+        "models": model_trend_series,
+        "providers": provider_trend_series
+      },
+      "logs": response_logs,
+      "logTotalCount": log_total_count,
       "filters": {
         "appTypes": unique_strings(raw_logs.iter().map(|item| string_value(item.get("appType"))).collect()),
-        "providers": create_group_stats(
-          &option_logs,
-          |log| string_value(log.get("providerId")),
-          |log| {
-            let mut base = Map::new();
-            base.insert("providerId".to_string(), log.get("providerId").cloned().unwrap_or(Value::Null));
-            base.insert("providerName".to_string(), log.get("providerName").cloned().unwrap_or(Value::Null));
-            base.insert("providerType".to_string(), log.get("providerType").cloned().unwrap_or(Value::Null));
-            base
-          }
-        ),
+        "providers": create_provider_filter_options(&option_logs),
         "models": unique_strings(option_logs.iter().map(|item| string_value(item.get("model"))).filter(|item| !item.is_empty()).collect()),
         "requestSources": unique_strings(option_logs.iter().map(|item| non_empty_text(item.get("requestSource"), "session")).collect())
       },
-      "pricingConfig": read_pricing(paths)?
+      "pricingConfig": pricing_config
     }))
 }
 
@@ -339,7 +361,7 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         .map(|item| (string_value(item.get("requestId")), item))
         .collect::<HashMap<_, _>>();
 
-    for log in read_array(&paths.storage_files.usage_logs)? {
+    for log in read_usage_logs(&paths.storage_files.usage_logs)?.iter() {
         let request_id = string_value(log.get("requestId"));
 
         if !record_map.contains_key(&request_id) {
@@ -1057,6 +1079,29 @@ fn create_group_stats(
     items
 }
 
+fn create_provider_filter_options(logs: &[Value]) -> Vec<Value> {
+    let mut items = Vec::new();
+    let mut seen = HashMap::new();
+
+    for log in logs {
+        let app_type = string_value(log.get("appType"));
+        let provider_id = non_empty_text(log.get("providerId"), &app_type);
+
+        if seen.contains_key(&provider_id) {
+            continue;
+        }
+
+        seen.insert(provider_id.clone(), true);
+        items.push(json!({
+          "providerId": provider_id,
+          "providerName": non_empty_text(log.get("providerName"), &format_app_provider_name(&app_type)),
+          "providerType": string_value(log.get("providerType"))
+        }));
+    }
+
+    items
+}
+
 fn create_usage_trend_stats(logs: &[Value], trend_mode: &str, filters: &Value) -> Vec<Value> {
     let mut groups: HashMap<String, GroupStat> = HashMap::new();
     let is_single_day = is_single_day(filters);
@@ -1099,29 +1144,7 @@ fn create_usage_trend_stats(logs: &[Value], trend_mode: &str, filters: &Value) -
 
     for log in logs {
         let created_at = number_value(log.get("createdAt"), 0);
-        let date = local_datetime(created_at);
-        let day = format_zh_cn_date(created_at);
-        let (label, sort_at) = if trend_mode == "minute" {
-            let label = if is_single_day {
-                format!("{:02}:{:02}", date.hour(), date.minute())
-            } else {
-                format!("{} {:02}:{:02}", day, date.hour(), date.minute())
-            };
-            let sort_at = local_sort_at(created_at, true, true);
-
-            (label, sort_at)
-        } else if trend_mode == "hour" {
-            let label = if is_single_day {
-                format!("{:02}:00", date.hour())
-            } else {
-                format!("{} {:02}:00", day, date.hour())
-            };
-            let sort_at = local_sort_at(created_at, true, false);
-
-            (label, sort_at)
-        } else {
-            (day, local_sort_at(created_at, false, false))
-        };
+        let (label, sort_at) = create_usage_trend_label(created_at, trend_mode, is_single_day);
 
         groups.entry(label.clone()).or_insert_with(|| {
             let mut base = Map::new();
@@ -1163,6 +1186,163 @@ fn create_usage_trend_stats(logs: &[Value], trend_mode: &str, filters: &Value) -
             item
         })
         .collect()
+}
+
+fn create_usage_model_trend_series(
+    logs: &[Value],
+    trend_mode: &str,
+    filters: &Value,
+    trends: &[Value],
+) -> Vec<Value> {
+    create_usage_group_trend_series(
+        logs,
+        trend_mode,
+        filters,
+        trends,
+        |log| {
+            format!(
+                "{}:{}",
+                string_value(log.get("appType")),
+                non_empty_text(log.get("model"), "未识别模型")
+            )
+        },
+        |log| {
+            format!(
+                "{} · {}",
+                non_empty_text(log.get("model"), "未识别模型"),
+                format_app_provider_name(&string_value(log.get("appType")))
+            )
+        },
+    )
+}
+
+fn create_usage_provider_trend_series(
+    logs: &[Value],
+    trend_mode: &str,
+    filters: &Value,
+    trends: &[Value],
+) -> Vec<Value> {
+    create_usage_group_trend_series(
+        logs,
+        trend_mode,
+        filters,
+        trends,
+        |log| string_value(log.get("providerId")),
+        |log| string_value(log.get("providerName")),
+    )
+}
+
+fn create_usage_group_trend_series(
+    logs: &[Value],
+    trend_mode: &str,
+    filters: &Value,
+    trends: &[Value],
+    key_selector: impl Fn(&Value) -> String,
+    name_selector: impl Fn(&Value) -> String,
+) -> Vec<Value> {
+    let labels = trends
+        .iter()
+        .map(|item| string_value(item.get("date")))
+        .collect::<Vec<_>>();
+    let label_index = labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| (label.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let is_single_day = is_single_day(filters);
+    let mut groups: HashMap<String, Value> = HashMap::new();
+
+    for log in logs {
+        let key = non_empty_owned(key_selector(log), "unknown");
+
+        groups.entry(key.clone()).or_insert_with(|| {
+            json!({
+              "name": name_selector(log),
+              "data": labels.iter().map(|_| 0).collect::<Vec<u64>>()
+            })
+        });
+
+        let (label, _) = create_usage_trend_label(
+            number_value(log.get("createdAt"), 0),
+            trend_mode,
+            is_single_day,
+        );
+        let Some(index) = label_index.get(&label).cloned() else {
+            continue;
+        };
+        let Some(data) = groups
+            .get_mut(&key)
+            .and_then(|item| item.get_mut("data"))
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        let value = data.get(index).and_then(Value::as_u64).unwrap_or(0) + to_actual_tokens(log);
+
+        data[index] = json!(value);
+    }
+
+    let mut items = groups.into_values().collect::<Vec<_>>();
+
+    items.retain(|item| {
+        item.get("data")
+            .and_then(Value::as_array)
+            .is_some_and(|data| data.iter().any(|value| value.as_u64().unwrap_or(0) > 0))
+    });
+    items.sort_by(|left, right| {
+        let left_total = left
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|data| {
+                data.iter()
+                    .map(|value| value.as_u64().unwrap_or(0))
+                    .sum::<u64>()
+            })
+            .unwrap_or(0);
+        let right_total = right
+            .get("data")
+            .and_then(Value::as_array)
+            .map(|data| {
+                data.iter()
+                    .map(|value| value.as_u64().unwrap_or(0))
+                    .sum::<u64>()
+            })
+            .unwrap_or(0);
+
+        right_total.cmp(&left_total)
+    });
+    items
+}
+
+fn create_usage_trend_label(
+    created_at: u64,
+    trend_mode: &str,
+    is_single_day: bool,
+) -> (String, u64) {
+    let date = local_datetime(created_at);
+    let day = format_zh_cn_date(created_at);
+
+    if trend_mode == "minute" {
+        let label = if is_single_day {
+            format!("{:02}:{:02}", date.hour(), date.minute())
+        } else {
+            format!("{} {:02}:{:02}", day, date.hour(), date.minute())
+        };
+
+        return (label, local_sort_at(created_at, true, true));
+    }
+
+    if trend_mode == "hour" {
+        let label = if is_single_day {
+            format!("{:02}:00", date.hour())
+        } else {
+            format!("{} {:02}:00", day, date.hour())
+        };
+
+        return (label, local_sort_at(created_at, true, false));
+    }
+
+    (day, local_sort_at(created_at, false, false))
 }
 
 fn in_range(log: &Value, filters: &Value) -> bool {
@@ -2714,6 +2894,41 @@ fn read_array(path: &str) -> Result<Vec<Value>, ManagerError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(ManagerError::Io(error)),
     }
+}
+
+fn read_usage_logs(path: &str) -> Result<Arc<Vec<Value>>, ManagerError> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Arc::new(Vec::new()));
+        }
+        Err(error) => return Err(ManagerError::Io(error)),
+    };
+    let modified_at = metadata
+        .modified()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .as_millis();
+    let cache = USAGE_LOG_CACHE.get_or_init(|| Mutex::new(None));
+    let mut cache = cache
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+
+    if let Some(cache) = cache.as_ref() {
+        if cache.path == path && cache.len == metadata.len() && cache.modified_at == modified_at {
+            return Ok(cache.logs.clone());
+        }
+    }
+
+    let logs: Arc<Vec<Value>> = Arc::new(serde_json::from_str(&std::fs::read_to_string(path)?)?);
+
+    *cache = Some(UsageLogCache {
+        path: path.to_string(),
+        len: metadata.len(),
+        modified_at,
+        logs: logs.clone(),
+    });
+    Ok(logs)
 }
 
 async fn write_json(path: &str, payload: &Value) -> Result<(), ManagerError> {

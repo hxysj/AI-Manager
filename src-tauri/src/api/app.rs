@@ -2,6 +2,8 @@ use crate::core::error::ManagerError;
 use crate::core::settings::{serialize_app_settings, write_json_file, AppSettings};
 use serde::Deserialize;
 use serde_json::{json, Value};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use tauri::window::Color;
 use tauri::{
@@ -15,6 +17,8 @@ const QUICK_SWITCH_EXPANDED_WIDTH: u32 = 360;
 const QUICK_SWITCH_EXPANDED_HEIGHT: u32 = 238;
 const QUICK_SWITCH_COLLAPSED_WIDTH: u32 = 44;
 const QUICK_SWITCH_COLLAPSED_HEIGHT: u32 = 44;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,9 +188,15 @@ pub async fn uninstall_without_trace(
     ]
     .join("; ");
 
-    std::process::Command::new("powershell.exe")
+    let mut command = std::process::Command::new("powershell.exe");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    command
         .args([
             "-NoProfile",
+            "-NonInteractive",
             "-ExecutionPolicy",
             "Bypass",
             "-WindowStyle",
@@ -243,8 +253,8 @@ pub async fn handle_close_action(
 
 pub fn show_main_panel(
     app: &tauri::AppHandle,
-    app_settings: &AppSettings,
-    quick_switch_collapsed: bool,
+    _app_settings: &AppSettings,
+    _quick_switch_collapsed: bool,
 ) -> Result<Value, ManagerError> {
     let window = match app.get_webview_window("main") {
         Some(window) => window,
@@ -266,7 +276,7 @@ pub fn show_main_panel(
     window
         .set_focus()
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    sync_quick_switch_window(app, app_settings, quick_switch_collapsed)?;
+    destroy_quick_switch_window(app)?;
     Ok(json!(true))
 }
 

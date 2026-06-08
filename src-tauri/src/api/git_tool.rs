@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::process::Command;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 const EMPTY_TREE_HASH: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 pub async fn scan_branches(
@@ -1666,7 +1669,12 @@ async fn run_git(args: &[&str], cwd: &str) -> Result<String, ManagerError> {
 }
 
 async fn run_git_raw(args: &[&str], cwd: &str) -> Result<String, ManagerError> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command
         .args(args)
         .current_dir(cwd)
         .output()
@@ -1690,7 +1698,12 @@ async fn run_git_vec(args: &[String], cwd: &str) -> Result<String, ManagerError>
 }
 
 async fn run_git_raw_vec(args: &[String], cwd: &str) -> Result<String, ManagerError> {
-    let output = Command::new("git")
+    let mut command = Command::new("git");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command
         .args(args)
         .current_dir(cwd)
         .output()

@@ -4,6 +4,9 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 pub async fn translate_text(
     user_data_path: &Path,
     workspace_root: &Path,
@@ -28,7 +31,12 @@ pub async fn translate_text(
         workspace_root.join("src-tauri/node/translation-service.mjs")
     };
     let node_command = if cfg!(windows) { "node.exe" } else { "node" };
-    let output = Command::new(node_command)
+    let mut command = Command::new(node_command);
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = command
         .arg(&script_path)
         .arg(serde_json::to_string(&json!({
           "text": source_text,
