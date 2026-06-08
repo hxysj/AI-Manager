@@ -89,11 +89,21 @@ jobs:
             throw '未找到 Windows NSIS 安装程序。'
           }
 
+          $signature = Get-Item -LiteralPath "$($installer.FullName).sig" -ErrorAction SilentlyContinue
+          if (-not $signature) {
+            throw '未找到 Tauri 更新签名文件。'
+          }
+
+          $targetSignaturePath = "$targetPath.sig"
           if ($installer.Name -ne $targetName) {
             if (Test-Path $targetPath) {
               Remove-Item -LiteralPath $targetPath -Force
             }
             Move-Item -LiteralPath $installer.FullName -Destination $targetPath
+            if (Test-Path $targetSignaturePath) {
+              Remove-Item -LiteralPath $targetSignaturePath -Force
+            }
+            Move-Item -LiteralPath $signature.FullName -Destination $targetSignaturePath
           }
 
       - name: 生成旧版 Electron 更新元数据
@@ -135,9 +145,9 @@ jobs:
         shell: pwsh
         run: |
           $bundleDir = 'src-tauri/target/release/bundle/nsis'
-          $updatePackage = Get-ChildItem $bundleDir -Filter '*.exe.zip' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $updatePackage = Get-ChildItem $bundleDir -Filter '*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $updatePackage) {
-            throw '未找到 Tauri NSIS 更新包。'
+            throw '未找到 Tauri NSIS 更新安装程序。'
           }
 
           $signatureFile = Get-Item -LiteralPath "$($updatePackage.FullName).sig" -ErrorAction SilentlyContinue
