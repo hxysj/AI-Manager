@@ -314,6 +314,7 @@ pub async fn archive_branch(
     let archive_id = create_archive_id(&repo_id, &branch_name, &commit_hash);
     let archive_ref = format!("refs/archive/branches/{}", archive_id);
     let data_dir = git_tool_data_dir(paths);
+    let project_git_remote = git_local_remote_path(&project_path);
 
     run_git(
         &[
@@ -321,7 +322,7 @@ pub async fn archive_branch(
             &archive_git_dir,
             "fetch",
             "--no-tags",
-            &project_path,
+            &project_git_remote,
             &format!("refs/heads/{}:{}", branch_name, archive_ref),
         ],
         &data_dir,
@@ -439,12 +440,13 @@ pub async fn restore_archive(
     }
 
     let archive_git_dir = get_archive_git_dir(paths, &repo_id);
+    let archive_git_remote = git_local_remote_path(&archive_git_dir);
 
     run_git(
         &[
             "fetch",
             "--no-tags",
-            &archive_git_dir,
+            &archive_git_remote,
             &format!(
                 "{}:refs/heads/{}",
                 string_value(archive.get("archiveRef")),
@@ -625,6 +627,7 @@ pub async fn archive_stash(
     let stash_archive_id = create_stash_archive_id(&repo_id, &commit_hash);
     let archive_ref = format!("refs/archive/stashes/{}", stash_archive_id);
     let data_dir = git_tool_data_dir(paths);
+    let project_git_remote = git_local_remote_path(&project_path);
 
     run_git(
         &[
@@ -632,7 +635,7 @@ pub async fn archive_stash(
             &archive_git_dir,
             "fetch",
             "--no-tags",
-            &project_path,
+            &project_git_remote,
             &format!("{}:{}", commit_hash, archive_ref),
         ],
         &data_dir,
@@ -683,6 +686,7 @@ pub async fn restore_stash_archive(
     let (repo_id, project, stash_archive) =
         find_stash_archive_with_project(paths, repos, &stash_archive_id)?;
     let archive_git_dir = get_archive_git_dir(paths, &repo_id);
+    let archive_git_remote = git_local_remote_path(&archive_git_dir);
     let project_path = string_value(project.get("projectPath"));
     let restore_ref = format!("refs/git-tool/stash-restore/{}", stash_archive_id);
 
@@ -690,7 +694,7 @@ pub async fn restore_stash_archive(
         &[
             "fetch",
             "--no-tags",
-            &archive_git_dir,
+            &archive_git_remote,
             &format!(
                 "{}:{}",
                 string_value(stash_archive.get("archiveRef")),
@@ -913,7 +917,8 @@ async fn save_project_patch(
 fn normalize_project_path(project_path: &str) -> String {
     std::fs::canonicalize(project_path)
         .map(path_text)
-        .unwrap_or_else(|_| path_text(project_path))
+        .map(|path| strip_windows_verbatim_prefix(&path))
+        .unwrap_or_else(|_| strip_windows_verbatim_prefix(&path_text(project_path)))
 }
 
 async fn branch_exists(project_path: &str, branch_name: &str) -> Result<bool, ManagerError> {
@@ -1766,9 +1771,40 @@ fn string_value(value: Option<&Value>) -> String {
         .to_string()
 }
 
+fn git_local_remote_path(path: &str) -> String {
+    strip_windows_verbatim_prefix(path).replace('\\', "/")
+}
+
+fn strip_windows_verbatim_prefix(path: &str) -> String {
+    if let Some(value) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{}", value);
+    }
+
+    if let Some(value) = path.strip_prefix(r"\\?\") {
+        return value.to_string();
+    }
+
+    path.to_string()
+}
+
 fn now_millis() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{git_local_remote_path, strip_windows_verbatim_prefix};
+
+    #[test]
+    fn strips_windows_drive_verbatim_prefix() {
+        assert_eq!(strip_windows_verbatim_prefix(r"\\?\D:\repo"), r"D:\repo");
+    }
+
+    #[test]
+    fn converts_windows_drive_verbatim_path_for_git_remote() {
+        assert_eq!(git_local_remote_path(r"\\?\D:\repo"), "D:/repo");
+    }
 }

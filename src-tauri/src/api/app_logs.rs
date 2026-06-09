@@ -2,9 +2,14 @@ use crate::core::error::ManagerError;
 use crate::core::paths::path_text;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    OnceLock,
+};
+use tokio::sync::Mutex;
 
 static LOG_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub struct AppLogStart {
     pub trace_id: String,
@@ -19,6 +24,7 @@ pub fn log_path(user_data_path: &Path) -> PathBuf {
 }
 
 pub async fn list_logs(user_data_path: &Path) -> Result<Value, ManagerError> {
+    let _guard = log_file_lock().lock().await;
     let file_path = log_path(user_data_path);
     migrate_legacy_logs(user_data_path, &file_path).await?;
     let logs = read_logs(&file_path).await?;
@@ -30,6 +36,7 @@ pub async fn list_logs(user_data_path: &Path) -> Result<Value, ManagerError> {
 }
 
 pub async fn clear_logs(user_data_path: &Path) -> Result<Value, ManagerError> {
+    let _guard = log_file_lock().lock().await;
     let file_path = log_path(user_data_path);
 
     migrate_legacy_logs(user_data_path, &file_path).await?;
@@ -176,6 +183,7 @@ async fn migrate_legacy_logs(user_data_path: &Path, file_path: &Path) -> Result<
 }
 
 async fn append_log(user_data_path: &Path, entry: Value) -> Result<(), ManagerError> {
+    let _guard = log_file_lock().lock().await;
     let file_path = log_path(user_data_path);
 
     migrate_legacy_logs(user_data_path, &file_path).await?;
@@ -241,10 +249,29 @@ fn is_sensitive_key(key: &str) -> bool {
 
 async fn read_logs(file_path: &Path) -> Result<Value, ManagerError> {
     match tokio::fs::read_to_string(file_path).await {
-        Ok(content) => Ok(serde_json::from_str(&content)?),
+        Ok(content) => {
+            let (logs, has_trailing_content) = parse_log_content(&content)?;
+
+            if has_trailing_content && logs.is_array() {
+                write_logs(file_path, &logs).await?;
+            }
+
+            Ok(logs)
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(json!([])),
         Err(error) => Err(ManagerError::Io(error)),
     }
+}
+
+fn parse_log_content(content: &str) -> Result<(Value, bool), serde_json::Error> {
+    let mut stream = serde_json::Deserializer::from_str(content).into_iter::<Value>();
+    let value = match stream.next() {
+        Some(result) => result?,
+        None => Value::Null,
+    };
+    let trailing = !content[stream.byte_offset()..].trim().is_empty();
+
+    Ok((value, trailing))
 }
 
 fn create_log_id() -> String {
@@ -274,4 +301,29 @@ async fn write_logs(file_path: &Path, logs: &Value) -> Result<(), ManagerError> 
     )
     .await?;
     Ok(())
+}
+
+fn log_file_lock() -> &'static Mutex<()> {
+    LOG_FILE_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_log_content;
+
+    #[test]
+    fn parses_log_content_without_trailing_text() {
+        let (value, trailing) = parse_log_content("[{\"id\":1}]").unwrap();
+
+        assert!(value.is_array());
+        assert!(!trailing);
+    }
+
+    #[test]
+    fn parses_log_content_with_trailing_text() {
+        let (value, trailing) = parse_log_content("[{\"id\":1}]\n\"").unwrap();
+
+        assert!(value.is_array());
+        assert!(trailing);
+    }
 }
