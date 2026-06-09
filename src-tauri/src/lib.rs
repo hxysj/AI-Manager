@@ -28,16 +28,22 @@ async fn dispatch_api(
     }
 
     let user_data_path = state.user_data_path().await;
-    let started = app_logs::record_start(&user_data_path, &channel, payload.as_ref())
-        .await
-        .ok();
+    let started = match app_logs::record_start(&user_data_path, &channel, payload.as_ref()).await {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("[日志错误] 无法记录操作开始: {}", e);
+            None
+        }
+    };
     let result = state
         .dispatch(app.clone(), &channel, payload)
         .await
         .map_err(|error| error.to_string());
 
     if let Some(started) = started {
-        let _ = app_logs::record_finish(&user_data_path, &channel, started, &result).await;
+        if let Err(e) = app_logs::record_finish(&user_data_path, &channel, started, &result).await {
+            eprintln!("[日志错误] 无法记录操作结束: {}", e);
+        }
     }
 
     if result.is_ok() {

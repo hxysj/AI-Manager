@@ -2619,7 +2619,9 @@ function getDiffLineClass(line) {
 }
 
 function showErrorMessage(error) {
-  createMessage.error(error?.message || "操作失败")
+  console.error('[GitTool] 操作失败:', error)
+  const message = error?.data?.message || error?.message || error?.toString() || "操作失败"
+  createMessage.error(message)
 }
 </script>
 
