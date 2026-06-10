@@ -1,4 +1,4 @@
-use crate::api::proxy;
+use crate::api::{codex_account, proxy};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use crate::core::settings::{number_value, resolve_portable_path};
@@ -413,48 +413,6 @@ pub async fn launch_codex_provider_instance(
     proxy_server_registry: &proxy::ProxyServerRegistry,
     payload: Value,
 ) -> Result<Value, ManagerError> {
-    let provider_id = string_value(payload.get("providerId"));
-    let provider = read_array(&paths.storage_files.providers)?
-        .into_iter()
-        .find(|item| {
-            item.get("id").and_then(Value::as_str) == Some(provider_id.as_str())
-                && item.get("cli").and_then(Value::as_str) == Some("codex")
-        })
-        .ok_or_else(|| ManagerError::System("Codex Provider 不存在".to_string()))?;
-
-    if provider.get("enabled").and_then(Value::as_bool) == Some(false) {
-        return Err(ManagerError::System("Codex Provider 已禁用".to_string()));
-    }
-
-    let api_key = get_provider_api_key(paths, &provider_id)?;
-
-    if api_key.is_empty() {
-        return Err(ManagerError::System(
-            "当前 Codex Provider 缺少 API Key".to_string(),
-        ));
-    }
-
-    if string_value(provider.get("baseUrl")).is_empty() {
-        return Err(ManagerError::System(
-            "当前 Codex Provider 缺少请求地址".to_string(),
-        ));
-    }
-
-    let runtime_config = provider.get("runtimeConfig").cloned().unwrap_or_else(|| json!({}));
-    let model = first_string(
-        runtime_config.get("mainModel"),
-        read_array(&paths.storage_files.runtime_models)?
-            .iter()
-            .find(|item| item.get("providerId").and_then(Value::as_str) == Some(provider_id.as_str()))
-            .and_then(|item| item.get("name")),
-    );
-
-    if model.is_empty() {
-        return Err(ManagerError::System(
-            "当前 Codex Provider 缺少模型名称".to_string(),
-        ));
-    }
-
     let cli_target = find_cli_target(cli_targets, "codex")?;
     let executable_path = string_value(cli_target.get("executablePath"));
 
@@ -466,17 +424,116 @@ pub async fn launch_codex_provider_instance(
 
     proxy::start_provider_instance_server(proxy_server_registry, paths, cli_targets).await?;
 
+    let account_id = string_value(payload.get("accountId"));
+    let provider_id = string_value(payload.get("providerId"));
+    let proxy_state = proxy::read_proxy_state(paths, "codex")?;
+    let local_base_url = string_value(proxy_state.get("localBaseUrl"));
+    let mut target_id = provider_id.clone();
+    let mut target_name = String::new();
+    let mut target_type = String::new();
+    let mut model = String::new();
+    let mut runtime_config = json!({});
+
+    if !account_id.is_empty() {
+        let auth = codex_account::get_proxy_auth(paths, &account_id, &cli_target).await?;
+        let config_path = string_value(cli_target.get("configPath"));
+        let runtime_model = if config_path.is_empty() {
+            String::new()
+        } else {
+            let config_file = Path::new(&config_path).join("config.toml");
+
+            match tokio::fs::read_to_string(config_file).await {
+                Ok(content) => {
+                    let parsed = parse_simple_toml(&content);
+
+                    parsed
+                        .get("root")
+                        .and_then(Value::as_object)
+                        .and_then(|root| root.get("model"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .trim()
+                        .to_string()
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(error) => return Err(ManagerError::Io(error)),
+            }
+        };
+
+        model = first_string(proxy_state.get("accountModel"), Some(&json!(runtime_model)));
+
+        if model.is_empty() {
+            return Err(ManagerError::System(
+                "当前 Codex 官方账号缺少模型名称".to_string(),
+            ));
+        }
+
+        target_id = format!("account:{}", account_id);
+        target_name = first_string(auth.get("name"), Some(&json!(account_id.clone())));
+        target_type = "codex".to_string();
+    } else {
+        let provider = read_array(&paths.storage_files.providers)?
+            .into_iter()
+            .find(|item| {
+                item.get("id").and_then(Value::as_str) == Some(provider_id.as_str())
+                    && item.get("cli").and_then(Value::as_str) == Some("codex")
+            })
+            .ok_or_else(|| ManagerError::System("Codex Provider 不存在".to_string()))?;
+
+        if provider.get("enabled").and_then(Value::as_bool) == Some(false) {
+            return Err(ManagerError::System("Codex Provider 已禁用".to_string()));
+        }
+
+        let api_key = get_provider_api_key(paths, &provider_id)?;
+
+        if api_key.is_empty() {
+            return Err(ManagerError::System(
+                "当前 Codex Provider 缺少 API Key".to_string(),
+            ));
+        }
+
+        if string_value(provider.get("baseUrl")).is_empty() {
+            return Err(ManagerError::System(
+                "当前 Codex Provider 缺少请求地址".to_string(),
+            ));
+        }
+
+        runtime_config = provider.get("runtimeConfig").cloned().unwrap_or_else(|| json!({}));
+
+        model = first_string(
+            runtime_config.get("mainModel"),
+            read_array(&paths.storage_files.runtime_models)?
+                .iter()
+                .find(|item| {
+                    item.get("providerId").and_then(Value::as_str) == Some(provider_id.as_str())
+                })
+                .and_then(|item| item.get("name")),
+        );
+
+        if model.is_empty() {
+            return Err(ManagerError::System(
+                "当前 Codex Provider 缺少模型名称".to_string(),
+            ));
+        }
+
+        target_name = string_value(provider.get("name"));
+        target_type = string_value(provider.get("type"));
+    }
+
     let profile_dir = Path::new(&paths.workspace_root)
         .join("codex-instances")
         .join(format!(
             "{}-{}",
-            slugify_name(&string_value(provider.get("name")))
-                .if_empty_then(|| "provider".to_string()),
-            slugify_name(&provider_id).if_empty_then(|| provider_id.clone())
+            slugify_name(&target_name).if_empty_then(|| {
+                if account_id.is_empty() {
+                    "provider".to_string()
+                } else {
+                    "account".to_string()
+                }
+            }),
+            slugify_name(&target_id).if_empty_then(|| target_id.clone())
         ));
-    let token = proxy::create_provider_instance_token(&provider_id);
-    let proxy_state = proxy::read_proxy_state(paths, "codex")?;
-    let local_base_url = string_value(proxy_state.get("localBaseUrl"));
+    let token = proxy::create_provider_instance_token(&target_id);
     let mut config_lines = vec![
         "model_provider = \"custom\"".to_string(),
         format!("model = {}", to_toml_string(model.clone())),
@@ -539,17 +596,17 @@ pub async fn launch_codex_provider_instance(
     tokio::fs::create_dir_all(&sessions_path).await?;
 
     let next_instance = json!({
-      "id": provider["id"],
-      "providerId": provider["id"],
-      "providerName": provider["name"],
-      "providerType": string_value(provider.get("type")),
+      "id": target_id.clone(),
+      "providerId": target_id.clone(),
+      "providerName": target_name.clone(),
+      "providerType": target_type.clone(),
       "profileDir": profile_dir.to_string_lossy().to_string(),
       "sessionsPath": sessions_path.to_string_lossy().to_string(),
       "updatedAt": now_millis()
     });
     let mut instances = read_array(&paths.storage_files.codex_provider_instances)?;
 
-    instances.retain(|item| item.get("providerId").and_then(Value::as_str) != Some(provider_id.as_str()));
+    instances.retain(|item| item.get("providerId").and_then(Value::as_str) != Some(target_id.as_str()));
     instances.insert(0, next_instance);
     write_json(&paths.storage_files.codex_provider_instances, &json!(instances)).await?;
 
@@ -622,8 +679,8 @@ pub async fn launch_codex_provider_instance(
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
     Ok(json!({
-      "providerId": provider_id,
-      "providerName": provider["name"],
+      "providerId": target_id,
+      "providerName": target_name,
       "profileDir": profile_dir.to_string_lossy().to_string()
     }))
 }
