@@ -381,6 +381,7 @@
           @claude-proxy-provider-add="addClaudeProxyProvider"
           @claude-proxy-provider-remove="removeClaudeProxyProvider"
           @claude-proxy-provider-activate="activateClaudeProxyProvider"
+          @claude-provider-instance-launch="launchClaudeProviderInstance"
           @codex-official-login="startCodexOfficialLogin"
           @codex-auth-json-import="importCodexAuthJson"
           @codex-account-enable="enableCodexAccount"
@@ -3409,6 +3410,18 @@ async function launchCodexProviderInstance(payload) {
       const result = await runtimeApi.launchCodexProviderInstance(payload)
 
       showSuccessMessage(`Codex 实例已启动：${result.providerName}`)
+    } catch (error) {
+      showErrorMessage(error)
+    }
+  })
+}
+
+async function launchClaudeProviderInstance(payload) {
+  await withGlobalLoading(async () => {
+    try {
+      const result = await runtimeApi.launchClaudeProviderInstance(payload)
+
+      showSuccessMessage(`Claude 实例已启动：${result.providerName}`)
     } catch (error) {
       showErrorMessage(error)
     }

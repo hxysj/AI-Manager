@@ -26,7 +26,7 @@ const CODEX_OFFICIAL_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 #[derive(Clone)]
 pub struct ProxyServerRegistry {
     inner: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
-    provider_instance_required: Arc<Mutex<bool>>,
+    provider_instance_required: Arc<Mutex<HashMap<String, bool>>>,
 }
 
 #[derive(Clone)]
@@ -57,7 +57,7 @@ impl ProxyServerRegistry {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
-            provider_instance_required: Arc::new(Mutex::new(false)),
+            provider_instance_required: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -113,7 +113,13 @@ impl ProxyServerRegistry {
     }
 
     pub async fn stop(&self, cli: &str) {
-        if cli == "codex" && *self.provider_instance_required.lock().await {
+        if *self
+            .provider_instance_required
+            .lock()
+            .await
+            .get(cli)
+            .unwrap_or(&false)
+        {
             return;
         }
 
@@ -122,8 +128,11 @@ impl ProxyServerRegistry {
         }
     }
 
-    pub async fn require_provider_instance_server(&self) {
-        *self.provider_instance_required.lock().await = true;
+    pub async fn require_provider_instance_server(&self, cli: &str) {
+        self.provider_instance_required
+            .lock()
+            .await
+            .insert(cli.to_string(), true);
     }
 }
 
@@ -513,9 +522,10 @@ pub async fn start_provider_instance_server(
     registry: &ProxyServerRegistry,
     paths: &AppPaths,
     cli_targets: &Value,
+    cli: &str,
 ) -> Result<(), ManagerError> {
-    registry.require_provider_instance_server().await;
-    registry.ensure_started(paths, cli_targets, "codex").await
+    registry.require_provider_instance_server(cli).await;
+    registry.ensure_started(paths, cli_targets, cli).await
 }
 
 pub fn create_provider_instance_token(provider_id: &str) -> String {
@@ -783,7 +793,7 @@ async fn forward_request(
         )?
     };
     let mut request_body = body.to_vec();
-    let model = if target.model.is_empty() {
+    let model = if target.model.is_empty() && cli == "codex" {
         read_toml_root_value(&string_value(read_live_backup(paths, cli)?.get("config")), "model")
     } else {
         target.model.clone()
