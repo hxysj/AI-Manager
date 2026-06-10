@@ -549,6 +549,19 @@
                   <SquareTerminal :size="16" />
                 </button>
                 <button
+                  v-if="
+                    activeCli === 'claude' && item.provider.enabled !== false
+                  "
+                  class="providers-view__icon-button"
+                  type="button"
+                  title="启动 Claude 实例"
+                  aria-label="启动 Claude 实例"
+                  :disabled="pending"
+                  @click.stop="launchClaudeProviderInstance(item.provider)"
+                >
+                  <SquareTerminal :size="16" />
+                </button>
+                <button
                   v-if="item.provider.enabled !== false"
                   class="providers-view__icon-button"
                   type="button"
@@ -1761,6 +1774,7 @@ const emit = defineEmits([
   "claude-proxy-provider-activate",
   "claude-proxy-provider-add",
   "claude-proxy-provider-remove",
+  "claude-provider-instance-launch",
   "codex-auth-json-import",
   "codex-account-clear",
   "codex-account-enable",
@@ -2764,6 +2778,16 @@ function launchCodexProviderInstance(target) {
       : {
           providerId: target.id
         })
+  })
+}
+
+function launchClaudeProviderInstance(provider) {
+  if (activeCli.value !== "claude" || provider.enabled === false) {
+    return
+  }
+
+  emit("claude-provider-instance-launch", {
+    providerId: provider.id
   })
 }
 

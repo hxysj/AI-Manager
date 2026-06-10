@@ -1,6 +1,8 @@
 import { request } from '../request'
 
 export const runtimeApi = {
+  launchClaudeProviderInstance: payload =>
+    request('claude:launch-provider-instance', payload),
   launchCodexProviderInstance: payload =>
     request('codex:launch-provider-instance', payload),
   saveRuntimeModel: payload => request('runtime-model:save', payload),

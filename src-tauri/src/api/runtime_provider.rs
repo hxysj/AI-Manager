@@ -422,16 +422,17 @@ pub async fn launch_codex_provider_instance(
         ));
     }
 
-    proxy::start_provider_instance_server(proxy_server_registry, paths, cli_targets).await?;
+    proxy::start_provider_instance_server(proxy_server_registry, paths, cli_targets, "codex")
+        .await?;
 
     let account_id = string_value(payload.get("accountId"));
     let provider_id = string_value(payload.get("providerId"));
     let proxy_state = proxy::read_proxy_state(paths, "codex")?;
     let local_base_url = string_value(proxy_state.get("localBaseUrl"));
     let mut target_id = provider_id.clone();
-    let mut target_name = String::new();
-    let mut target_type = String::new();
-    let mut model = String::new();
+    let target_name;
+    let target_type;
+    let model;
     let mut runtime_config = json!({});
 
     if !account_id.is_empty() {
@@ -681,6 +682,238 @@ pub async fn launch_codex_provider_instance(
     Ok(json!({
       "providerId": target_id,
       "providerName": target_name,
+      "profileDir": profile_dir.to_string_lossy().to_string()
+    }))
+}
+
+pub async fn launch_claude_provider_instance(
+    paths: &AppPaths,
+    cli_targets: &Value,
+    proxy_server_registry: &proxy::ProxyServerRegistry,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let cli_target = find_cli_target(cli_targets, "claude")?;
+    let executable_path = string_value(cli_target.get("executablePath"));
+
+    if executable_path.is_empty() {
+        return Err(ManagerError::System(
+            "未检测到 Claude CLI 可执行文件".to_string(),
+        ));
+    }
+
+    proxy::start_provider_instance_server(proxy_server_registry, paths, cli_targets, "claude")
+        .await?;
+
+    let provider_id = string_value(payload.get("providerId"));
+    let provider = read_array(&paths.storage_files.providers)?
+        .into_iter()
+        .find(|item| {
+            item.get("id").and_then(Value::as_str) == Some(provider_id.as_str())
+                && item.get("cli").and_then(Value::as_str) == Some("claude")
+        })
+        .ok_or_else(|| ManagerError::System("Claude Provider 不存在".to_string()))?;
+
+    if provider.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return Err(ManagerError::System("Claude Provider 已禁用".to_string()));
+    }
+
+    let api_key = get_provider_api_key(paths, &provider_id)?;
+
+    if api_key.is_empty() {
+        return Err(ManagerError::System(
+            "当前 Claude Provider 缺少 API Key".to_string(),
+        ));
+    }
+
+    if string_value(provider.get("baseUrl")).is_empty() {
+        return Err(ManagerError::System(
+            "当前 Claude Provider 缺少请求地址".to_string(),
+        ));
+    }
+
+    let proxy_state = proxy::read_proxy_state(paths, "claude")?;
+    let local_base_url = string_value(proxy_state.get("localBaseUrl"));
+    let target_name = string_value(provider.get("name"));
+    let target_type = string_value(provider.get("type"));
+    let runtime_config = provider.get("runtimeConfig").cloned().unwrap_or_else(|| json!({}));
+    let profile_dir = Path::new(&paths.workspace_root)
+        .join("claude-instances")
+        .join(format!(
+            "{}-{}",
+            slugify_name(&target_name).if_empty_then(|| "provider".to_string()),
+            slugify_name(&provider_id).if_empty_then(|| provider_id.clone())
+        ));
+    let token = proxy::create_provider_instance_token(&provider_id);
+    let mut env = Map::new();
+
+    env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), json!(token));
+    env.insert("ANTHROPIC_BASE_URL".to_string(), json!(local_base_url.clone()));
+    for (config_key, env_key) in [
+        ("mainModel", "ANTHROPIC_MODEL"),
+        ("haikuModel", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+        ("sonnetModel", "ANTHROPIC_DEFAULT_SONNET_MODEL"),
+        ("opusModel", "ANTHROPIC_DEFAULT_OPUS_MODEL"),
+    ] {
+        let value = string_value(runtime_config.get(config_key));
+
+        if !value.is_empty() {
+            env.insert(env_key.to_string(), json!(value));
+        }
+    }
+    if runtime_config
+        .get("toolSearch")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        env.insert("ENABLE_TOOL_SEARCH".to_string(), json!("true"));
+    }
+    if runtime_config
+        .get("disableUpgrade")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        env.insert("DISABLE_AUTOUPDATER".to_string(), json!("1"));
+    }
+
+    let mut settings = Map::new();
+    settings.insert("env".to_string(), Value::Object(env.clone()));
+    settings.insert("enabledPlugins".to_string(), json!({}));
+    settings.insert(
+        "includeCoAuthoredBy".to_string(),
+        json!(runtime_config
+            .get("hideAiSignature")
+            .and_then(Value::as_bool)
+            != Some(true)),
+    );
+    settings.insert("pluginConfigs".to_string(), json!({}));
+    if runtime_config
+        .get("teammatesMode")
+        .and_then(Value::as_bool)
+        != Some(false)
+    {
+        settings.insert("teammateMode".to_string(), json!("tmux"));
+    }
+    settings.insert(
+        "effortLevel".to_string(),
+        json!(if runtime_config
+            .get("maxThinking")
+            .and_then(Value::as_bool)
+            != Some(false)
+        {
+            "max"
+        } else {
+            "default"
+        }),
+    );
+    if runtime_config
+        .get("hideAiSignature")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        settings.insert(
+            "attribution".to_string(),
+            json!({
+              "commit": "",
+              "pr": ""
+            }),
+        );
+    }
+
+    tokio::fs::create_dir_all(&profile_dir).await?;
+    tokio::fs::write(
+        profile_dir.join("settings.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&Value::Object(settings))?
+        ),
+    )
+    .await?;
+
+    let sessions_path = profile_dir.join("projects");
+    tokio::fs::create_dir_all(&sessions_path).await?;
+
+    let mut version_command = Command::new(&executable_path);
+
+    #[cfg(windows)]
+    version_command.creation_flags(CREATE_NO_WINDOW);
+
+    match version_command
+        .arg("--version")
+        .kill_on_drop(true)
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            let message = String::from_utf8_lossy(&output.stderr).to_string();
+            return Err(ManagerError::System(format!(
+                "Claude CLI 启动失败，请重新安装 Claude CLI：{}",
+                message
+            )));
+        }
+        Err(error) => {
+            return Err(ManagerError::System(format!(
+                "Claude CLI 启动失败，请重新安装 Claude CLI：{}",
+                error
+            )));
+        }
+    }
+
+    let launcher_path = profile_dir.join("launch.cmd");
+    let claude_run_command = cli_run_command(&executable_path);
+    let mut launcher_lines = vec![
+        "@echo off".to_string(),
+        "title Claude 实例".to_string(),
+        format!("set \"CLAUDE_CONFIG_DIR={}\"", profile_dir.to_string_lossy()),
+        format!("set \"ANTHROPIC_AUTH_TOKEN={}\"", token),
+        format!("set \"ANTHROPIC_BASE_URL={}\"", local_base_url),
+    ];
+
+    for key in [
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "ENABLE_TOOL_SEARCH",
+        "DISABLE_AUTOUPDATER",
+    ] {
+        let value = string_value(env.get(key));
+
+        if !value.is_empty() {
+            launcher_lines.push(format!("set \"{}={}\"", key, value));
+        }
+    }
+
+    launcher_lines.extend([
+        format!("cd /d \"{}\"", paths.workspace_root),
+        claude_run_command,
+        String::new(),
+    ]);
+
+    tokio::fs::write(&launcher_path, launcher_lines.join("\r\n")).await?;
+
+    std::process::Command::new("cmd.exe")
+        .args([
+            "/d",
+            "/c",
+            "start",
+            "",
+            "cmd.exe",
+            "/d",
+            "/k",
+            &launcher_path.to_string_lossy(),
+        ])
+        .current_dir(&paths.workspace_root)
+        .env("CLAUDE_CONFIG_DIR", &profile_dir)
+        .env("ANTHROPIC_AUTH_TOKEN", &token)
+        .env("ANTHROPIC_BASE_URL", &local_base_url)
+        .spawn()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+
+    Ok(json!({
+      "providerId": provider_id,
+      "providerName": target_name,
+      "providerType": target_type,
       "profileDir": profile_dir.to_string_lossy().to_string()
     }))
 }
@@ -2319,6 +2552,10 @@ async fn resolve_codex_executable_path(executable_path: &str) -> String {
 }
 
 fn codex_run_command(executable_path: &str) -> String {
+    cli_run_command(executable_path)
+}
+
+fn cli_run_command(executable_path: &str) -> String {
     let lower = executable_path.to_lowercase();
 
     if lower.ends_with(".cmd") || lower.ends_with(".bat") {

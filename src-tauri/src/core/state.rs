@@ -775,6 +775,18 @@ impl ManagerState {
                 self.emit_state_changed(&app)?;
                 Ok(result)
             }
+            "claude:launch-provider-instance" => {
+                let result = runtime_provider::launch_claude_provider_instance(
+                    &self.paths,
+                    &self.state["cliTargets"],
+                    &self.proxy_server_registry,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                self.refresh_state().await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
             "provider:save" => {
                 runtime_provider::save_provider(&self.paths, payload.unwrap_or_else(|| json!({})))
                     .await?;
