@@ -40,11 +40,11 @@
         :key="cli.id"
         :class="[
           'skill-card__target-pill',
-          `skill-card__target-pill--${skill.installStates[cli.id]?.state || 'not-installed'}`
+          `skill-card__target-pill--${skill.installStates?.[cli.id]?.state || 'not-installed'}`
         ]"
         type="button"
-        :title="`${cli.name}：${formatStatusLabel(skill.installStates[cli.id]?.state)}`"
-        :disabled="skill.installStates[cli.id]?.state === 'disabled'"
+        :title="`${cli.name}：${formatStatusLabel(skill.installStates?.[cli.id]?.state)}`"
+        :disabled="skill.installStates?.[cli.id]?.state === 'disabled'"
         @click.stop="toggleCliSkill(cli)"
       >
         <AiIcon
@@ -86,7 +86,7 @@ const props = defineProps({
 const emit = defineEmits(["select", "open-source", "install", "uninstall"])
 
 function toggleCliSkill(cli) {
-  const state = props.skill.installStates[cli.id]?.state
+  const state = props.skill.installStates?.[cli.id]?.state
   const payload = {
     skillName: props.skill.name,
     targetId: cli.id

@@ -393,6 +393,18 @@
                   v-if="!item.account.disabled"
                   class="providers-view__icon-button"
                   type="button"
+                  title="启动官方账号实例"
+                  aria-label="启动官方账号实例"
+                  :disabled="pending"
+                  @click="launchCodexProviderInstance(item.account)"
+                >
+                  <SquareTerminal :size="15" />
+                </button>
+
+                <button
+                  v-if="!item.account.disabled"
+                  class="providers-view__icon-button"
+                  type="button"
                   title="编辑代理"
                   aria-label="编辑代理"
                   @click="openCodexAccountProxy(item.account)"
@@ -2735,13 +2747,23 @@ function enableProvider(provider) {
   })
 }
 
-function launchCodexProviderInstance(provider) {
-  if (activeCli.value !== "codex" || provider.enabled === false) {
+function launchCodexProviderInstance(target) {
+  if (activeCli.value !== "codex") {
+    return
+  }
+
+  if (target.enabled === false || target.disabled === true) {
     return
   }
 
   emit("codex-provider-instance-launch", {
-    providerId: provider.id
+    ...(target.accountId
+      ? {
+          accountId: target.id
+        }
+      : {
+          providerId: target.id
+        })
   })
 }
 
