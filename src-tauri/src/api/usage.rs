@@ -58,7 +58,7 @@ struct UsageLogCache {
 }
 
 pub fn build_state(paths: &AppPaths) -> Result<Value, ManagerError> {
-    get_stats_data(paths, json!({}))
+    get_initial_state_data(paths)
 }
 
 pub async fn get_stats(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
@@ -249,6 +249,7 @@ pub async fn export_report_image(_payload: Value) -> Result<Value, ManagerError>
 
 fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError> {
     let pricing_config = read_pricing(paths)?;
+    let pricing_index = create_pricing_index(&pricing_config);
     let filters = json!({
       "appType": normalize_app_type(&non_empty_text(input.get("appType"), "all")),
       "providerId": non_empty_text(input.get("providerId"), "all"),
@@ -265,7 +266,7 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
     let logs = raw_logs
         .iter()
         .filter(|item| in_range(item, &filters))
-        .map(|item| enrich_usage_log(item, &pricing_config))
+        .map(|item| enrich_usage_log(item, &pricing_config, &pricing_index))
         .collect::<Vec<_>>();
     let option_logs = raw_logs
         .iter()
@@ -348,35 +349,124 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
     }))
 }
 
+fn get_initial_state_data(paths: &AppPaths) -> Result<Value, ManagerError> {
+    let pricing_config = read_pricing(paths)?;
+    let pricing_index = create_pricing_index(&pricing_config);
+    let raw_logs = read_usage_logs(&paths.storage_files.usage_logs)?;
+    let logs = raw_logs
+        .iter()
+        .take(200)
+        .map(|item| enrich_usage_log(item, &pricing_config, &pricing_index))
+        .collect::<Vec<_>>();
+    let mut summary = create_empty_summary();
+
+    for log in raw_logs.iter() {
+        append_priced_usage_summary(&mut summary, log, &pricing_config, &pricing_index);
+    }
+
+    Ok(json!({
+      "summary": finalize_summary(summary),
+      "providerStats": create_group_stats(
+        &logs,
+        |log| string_value(log.get("providerId")),
+        |log| {
+          let mut base = Map::new();
+          base.insert("providerId".to_string(), log.get("providerId").cloned().unwrap_or(Value::Null));
+          base.insert("providerName".to_string(), log.get("providerName").cloned().unwrap_or(Value::Null));
+          base.insert("providerType".to_string(), log.get("providerType").cloned().unwrap_or(Value::Null));
+          base
+        }
+      ),
+      "modelStats": create_group_stats(
+        &logs,
+        |log| format!("{}:{}", string_value(log.get("appType")), non_empty_text(log.get("model"), "unknown")),
+        |log| {
+          let mut base = Map::new();
+          base.insert("appType".to_string(), log.get("appType").cloned().unwrap_or(Value::Null));
+          base.insert("model".to_string(), json!(non_empty_text(log.get("model"), "未识别模型")));
+          base.insert("providerName".to_string(), log.get("providerName").cloned().unwrap_or(Value::Null));
+          base
+        }
+      ),
+      "trends": [],
+      "trendSeries": {
+        "models": [],
+        "providers": []
+      },
+      "logs": logs,
+      "logTotalCount": raw_logs.len(),
+      "filters": {
+        "appTypes": unique_strings(logs.iter().map(|item| string_value(item.get("appType"))).collect()),
+        "providers": create_provider_filter_options(&logs),
+        "models": unique_strings(logs.iter().map(|item| string_value(item.get("model"))).filter(|item| !item.is_empty()).collect()),
+        "requestSources": unique_strings(logs.iter().map(|item| non_empty_text(item.get("requestSource"), "session")).collect())
+      },
+      "pricingConfig": pricing_config,
+      "initialLite": true
+    }))
+}
+
 async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
     let mut logs = Vec::new();
     let mut diagnostics = Vec::new();
+    let mut changed_session_found = false;
+    let mut usage_sessions = Vec::new();
+    let mut changed_session_paths = HashMap::new();
     let workspace_created_at = std::fs::metadata(&paths.workspace_root)?
         .created()?
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| ManagerError::System(error.to_string()))?
         .as_millis() as u64;
-    let mut record_map = read_array(&paths.storage_files.usage_request_records)?
-        .into_iter()
-        .map(|item| (string_value(item.get("requestId")), item))
-        .collect::<HashMap<_, _>>();
-
-    for log in read_usage_logs(&paths.storage_files.usage_logs)?.iter() {
-        let request_id = string_value(log.get("requestId"));
-
-        if !record_map.contains_key(&request_id) {
-            record_map.insert(
-                request_id,
-                create_request_record(&log, &create_log_provider_info(&log)),
-            );
-        }
-    }
+    let cached_logs = read_usage_logs(&paths.storage_files.usage_logs)?;
+    let cached_session_logs = create_cached_session_log_map(&cached_logs);
+    let usage_logs_updated_at = file_modified_at(&paths.storage_files.usage_logs);
 
     for session in collect_usage_sessions(paths, state)? {
         let app_type = normalize_app_type(&string_value(session.get("cli")));
         let raw_path = string_value(session.get("rawPath"));
 
         if !["claude", "codex", "gemini"].contains(&app_type.as_str()) || raw_path.is_empty() {
+            continue;
+        }
+
+        if let Some(cached_indexes) = cached_session_logs.get(&raw_path) {
+            if cached_session_logs_match(
+                &cached_logs,
+                cached_indexes,
+                &session,
+                usage_logs_updated_at,
+            ) {
+                usage_sessions.push(session);
+                continue;
+            }
+        } else if number_value(session.get("updatedAt"), 0) > 0
+            && usage_logs_updated_at >= number_value(session.get("updatedAt"), 0)
+        {
+            usage_sessions.push(session);
+            continue;
+        }
+
+        changed_session_found = true;
+        changed_session_paths.insert(raw_path, true);
+        usage_sessions.push(session);
+    }
+
+    if !changed_session_found && diagnostics.is_empty() {
+        return Ok(diagnostics);
+    }
+
+    for session in usage_sessions {
+        let app_type = normalize_app_type(&string_value(session.get("cli")));
+        let raw_path = string_value(session.get("rawPath"));
+
+        if !changed_session_paths.contains_key(&raw_path) {
+            if let Some(cached_indexes) = cached_session_logs.get(&raw_path) {
+                logs.extend(
+                    cached_indexes
+                        .iter()
+                        .filter_map(|index| cached_logs.get(*index).cloned()),
+                );
+            }
             continue;
         }
 
@@ -448,6 +538,22 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
               "message": error.to_string(),
               "sourcePath": raw_path
             })),
+        }
+    }
+
+    let mut record_map = read_array(&paths.storage_files.usage_request_records)?
+        .into_iter()
+        .map(|item| (string_value(item.get("requestId")), item))
+        .collect::<HashMap<_, _>>();
+
+    for log in cached_logs.iter() {
+        let request_id = string_value(log.get("requestId"));
+
+        if !record_map.contains_key(&request_id) {
+            record_map.insert(
+                request_id,
+                create_request_record(&log, &create_log_provider_info(&log)),
+            );
         }
     }
 
@@ -558,6 +664,50 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
     write_json(&paths.storage_files.usage_logs, &json!(unique_logs)).await?;
     write_json(&paths.storage_files.usage_request_records, &json!(records)).await?;
     Ok(diagnostics)
+}
+
+fn create_cached_session_log_map(logs: &[Value]) -> HashMap<String, Vec<usize>> {
+    let mut map: HashMap<String, Vec<usize>> = HashMap::new();
+
+    for (index, log) in logs.iter().enumerate() {
+        let raw_path = string_value(log.get("rawPath"));
+
+        if raw_path.is_empty() {
+            continue;
+        }
+
+        map.entry(raw_path).or_default().push(index);
+    }
+
+    map
+}
+
+fn cached_session_logs_match(
+    logs: &[Value],
+    indexes: &[usize],
+    session: &Value,
+    usage_logs_updated_at: u64,
+) -> bool {
+    if indexes.is_empty() {
+        return false;
+    }
+
+    let session_updated_at = number_value(session.get("updatedAt"), 0);
+
+    if session_updated_at == 0 {
+        return false;
+    }
+
+    if indexes.iter().all(|index| {
+        logs.get(*index).is_some_and(|log| {
+            number_value(log.get("sessionUpdatedAt"), 0) > 0
+                && number_value(log.get("sessionUpdatedAt"), 0) == session_updated_at
+        })
+    }) {
+        return true;
+    }
+
+    usage_logs_updated_at >= session_updated_at
 }
 
 fn read_pricing(paths: &AppPaths) -> Result<Value, ManagerError> {
@@ -897,11 +1047,16 @@ fn create_usage_log(
       "instanceProviderName": string_value(session.get("instanceProviderName")),
       "instanceProviderType": string_value(session.get("instanceProviderType")),
       "sessionCreatedAt": number_value(session.get("sessionCreatedAt"), 0),
+      "sessionUpdatedAt": number_value(session.get("updatedAt"), 0),
       "createdAt": created_at
     })
 }
 
-fn enrich_usage_log(log: &Value, pricing_config: &Value) -> Value {
+fn enrich_usage_log(
+    log: &Value,
+    pricing_config: &Value,
+    pricing_index: &HashMap<String, Value>,
+) -> Value {
     let mut source_log = log.clone();
     let app_type = string_value(source_log.get("appType"));
 
@@ -917,7 +1072,7 @@ fn enrich_usage_log(log: &Value, pricing_config: &Value) -> Value {
         source_log["providerType"] = json!("");
     }
 
-    let costs = calculate_cost_usd(&source_log, pricing_config);
+    let costs = calculate_cost_usd(&source_log, pricing_config, pricing_index);
 
     source_log["actualTokens"] = json!(to_actual_tokens(&source_log));
     source_log["inputCostUsd"] = costs["inputCostUsd"].clone();
@@ -928,8 +1083,12 @@ fn enrich_usage_log(log: &Value, pricing_config: &Value) -> Value {
     source_log
 }
 
-fn calculate_cost_usd(log: &Value, pricing_config: &Value) -> Value {
-    let pricing = find_model_pricing(log, pricing_config);
+fn calculate_cost_usd(
+    log: &Value,
+    pricing_config: &Value,
+    pricing_index: &HashMap<String, Value>,
+) -> Value {
+    let pricing = find_model_pricing(log, pricing_index);
 
     if pricing.is_none() {
         return json!({
@@ -990,6 +1149,27 @@ fn append_usage_summary(summary: &mut Summary, log: &Value) {
     summary.cache_creation_tokens += to_number(log.get("cacheCreationTokens"));
     summary.actual_tokens += to_actual_tokens(log);
     summary.total_cost_usd += price_number(log.get("totalCostUsd"), 0.0);
+    summary.last_used_at = summary
+        .last_used_at
+        .max(number_value(log.get("createdAt"), 0));
+}
+
+fn append_priced_usage_summary(
+    summary: &mut Summary,
+    log: &Value,
+    pricing_config: &Value,
+    pricing_index: &HashMap<String, Value>,
+) {
+    summary.request_count += 1;
+    summary.input_tokens += normalize_billable_input(log);
+    summary.output_tokens += to_number(log.get("outputTokens"));
+    summary.cache_read_tokens += to_number(log.get("cacheReadTokens"));
+    summary.cache_creation_tokens += to_number(log.get("cacheCreationTokens"));
+    summary.actual_tokens += to_actual_tokens(log);
+    summary.total_cost_usd += price_number(
+        calculate_cost_usd(log, pricing_config, pricing_index).get("totalCostUsd"),
+        0.0,
+    );
     summary.last_used_at = summary
         .last_used_at
         .max(number_value(log.get("createdAt"), 0));
@@ -1401,6 +1581,7 @@ fn create_request_record(log: &Value, provider_info: &Value) -> Value {
       "instanceProviderName": string_value(log.get("instanceProviderName")),
       "instanceProviderType": string_value(log.get("instanceProviderType")),
       "sessionCreatedAt": number_value(log.get("sessionCreatedAt"), 0),
+      "sessionUpdatedAt": number_value(log.get("sessionUpdatedAt"), 0),
       "requestTime": log.get("createdAt").cloned().unwrap_or(Value::Null),
       "createdAt": log.get("createdAt").cloned().unwrap_or(Value::Null)
     })
@@ -1418,6 +1599,10 @@ fn apply_request_record(log: &Value, record: &Value) -> Value {
     next["instanceProviderType"] = json!(string_value(record.get("instanceProviderType")));
     next["sessionCreatedAt"] = record
         .get("sessionCreatedAt")
+        .cloned()
+        .unwrap_or(Value::Null);
+    next["sessionUpdatedAt"] = record
+        .get("sessionUpdatedAt")
         .cloned()
         .unwrap_or(Value::Null);
     next
@@ -2540,7 +2725,26 @@ fn to_actual_tokens(log: &Value) -> u64 {
         + to_number(log.get("cacheCreationTokens"))
 }
 
-fn find_model_pricing(log: &Value, pricing_config: &Value) -> Option<Value> {
+fn create_pricing_index(pricing_config: &Value) -> HashMap<String, Value> {
+    let mut index = HashMap::new();
+
+    for item in pricing_config
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let model_id = string_value(item.get("modelId")).trim().to_lowercase();
+
+        if !model_id.is_empty() && !index.contains_key(&model_id) {
+            index.insert(model_id, item.clone());
+        }
+    }
+
+    index
+}
+
+fn find_model_pricing(log: &Value, pricing_index: &HashMap<String, Value>) -> Option<Value> {
     let model_keys = [
         string_value(log.get("model")),
         string_value(log.get("requestModel")),
@@ -2550,15 +2754,9 @@ fn find_model_pricing(log: &Value, pricing_config: &Value) -> Option<Value> {
     .filter(|item| !item.is_empty())
     .collect::<Vec<_>>();
 
-    pricing_config
-        .get("items")
-        .and_then(Value::as_array)
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|item| model_keys.contains(&string_value(item.get("modelId")).to_lowercase()))
-                .cloned()
-        })
+    model_keys
+        .into_iter()
+        .find_map(|model_key| pricing_index.get(&model_key).cloned())
 }
 
 fn price_to_usd(value: f64, currency: &str, exchange_rate: f64) -> f64 {

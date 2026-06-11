@@ -1145,7 +1145,6 @@ impl ManagerState {
                     &self.state,
                 )
                 .await?;
-                self.refresh_state().await?;
                 self.state["usage"] = result.get("data").cloned().unwrap_or_else(|| json!({}));
 
                 let mut diagnostics = self
