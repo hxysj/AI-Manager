@@ -89,6 +89,14 @@ pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError
           "configured": false,
           "isDev": true
         })
+    } else if !update_configured() {
+        json!({
+          "phase": "unconfigured",
+          "message": "当前安装包未包含更新配置。",
+          "manual": true,
+          "configured": false,
+          "isDev": false
+        })
     } else {
         let updater = app
             .updater()
@@ -133,6 +141,19 @@ pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerErr
               "manual": true,
               "configured": false,
               "isDev": true
+            }),
+        );
+    }
+
+    if !update_configured() {
+        return emit_update_status(
+            app,
+            json!({
+              "phase": "unconfigured",
+              "message": "当前安装包未包含更新配置。",
+              "manual": true,
+              "configured": false,
+              "isDev": false
             }),
         );
     }
@@ -651,6 +672,10 @@ fn emit_update_status(app: &tauri::AppHandle, patch: Value) -> Result<Value, Man
     app.emit("app:update-status", payload.clone())
         .map_err(|error| ManagerError::System(error.to_string()))?;
     Ok(payload)
+}
+
+fn update_configured() -> bool {
+    !crate::update_config::GITHUB_TOKEN.trim().is_empty()
 }
 
 async fn find_app_uninstaller(install_directory: &Path) -> Result<PathBuf, ManagerError> {
