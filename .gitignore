@@ -5,6 +5,7 @@ src-tauri/target/
 .env.*
 !.env.example
 electron/update-config.generated.cjs
+src-tauri/update-config.generated.rs
 build/updater-private.key
 build/updater-private.key.pub
 .history/
