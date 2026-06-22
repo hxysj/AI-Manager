@@ -40,9 +40,11 @@ pub async fn list_commits(
     let repo_id = string_value(payload.get("repoId"));
     let branch_name = string_value(payload.get("branchName"));
     let skip_check = payload.get("skipCheck").and_then(Value::as_bool) == Some(true);
+    let offset = payload.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let limit = payload.get("limit").and_then(Value::as_u64).unwrap_or(80) as usize;
     let project = get_repo_project(paths, repos, &repo_id)?;
     let project_path = string_value(project.get("projectPath"));
-    let commits = get_commits(&project_path, &branch_name).await?;
+    let commits = get_commits(&project_path, &branch_name, offset, limit).await?;
     let check_branch_name = string_value(project.get("checkBranchName"));
 
     if skip_check || check_branch_name.is_empty() || check_branch_name == branch_name {
@@ -995,7 +997,14 @@ async fn get_local_branch_scan(project_path: &str) -> Result<Value, ManagerError
     }))
 }
 
-async fn get_commits(project_path: &str, branch_name: &str) -> Result<Vec<Value>, ManagerError> {
+async fn get_commits(
+    project_path: &str,
+    branch_name: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<Vec<Value>, ManagerError> {
+    let limit_text = limit.to_string();
+    let skip_arg = format!("--skip={}", offset);
     let output = run_git(
         &[
             "log",
@@ -1004,13 +1013,22 @@ async fn get_commits(project_path: &str, branch_name: &str) -> Result<Vec<Value>
             "--date=iso-strict",
             "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ad",
             "-n",
-            "80",
+            &limit_text,
+            &skip_arg,
         ],
         project_path,
     )
     .await?;
 
-    parse_commit_log(&output)
+    let mut commits = parse_commit_log(&output)?;
+
+    for (index, commit) in commits.iter_mut().enumerate() {
+        if commit.get("isGraphOnly").and_then(Value::as_bool) == Some(true) {
+            commit["rowId"] = json!(format!("graph-{}-{}", offset, index));
+        }
+    }
+
+    Ok(commits)
 }
 
 fn parse_commit_log(output: &str) -> Result<Vec<Value>, ManagerError> {

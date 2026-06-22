@@ -1,37 +1,38 @@
 <template>
   <section class="sessions-view">
-    <header class="sessions-view__toolbar">
-      <div>
-        <p class="sessions-view__eyebrow">AI Workflow Sessions</p>
-        <h1>Sessions 管理</h1>
+    <header class="sessions-view-toolbar">
+      <div class="sessions-view-heading">
+        <p class="sessions-view-eyebrow">AI Workflow Sessions</p>
+        <h1 class="sessions-view-title">Sessions 管理</h1>
       </div>
 
-      <div class="sessions-view__toolbar-actions">
+      <div class="sessions-view-toolbar-actions">
         <button class="action-button" type="button" @click="openRecycle">
-          <RotateCcw class="action-button__icon" :size="16" />
+          <RotateCcw class="action-button-icon" :size="16" />
           回收站
         </button>
         <button class="action-button" type="button" @click="$emit('refresh')">
-          <RefreshCw class="action-button__icon" :size="16" />
+          <RefreshCw class="action-button-icon" :size="16" />
           刷新扫描
         </button>
       </div>
     </header>
 
-    <div class="sessions-view__filters">
-      <label class="sessions-view__search">
-        <span>搜索</span>
+    <div class="sessions-view-filters">
+      <label class="sessions-view-search">
+        <span class="sessions-view-filter-label">搜索</span>
         <input
           v-model.trim="searchQuery"
+          class="sessions-view-search-input"
           type="text"
           placeholder="title / messages / project / tool calls / files"
           @keydown.enter="searchRemoteSessions"
         />
       </label>
 
-      <label class="sessions-view__select">
-        <span>CLI</span>
-        <select v-model="cliFilter">
+      <label class="sessions-view-select">
+        <span class="sessions-view-filter-label">CLI</span>
+        <select v-model="cliFilter" class="sessions-view-select-control">
           <option value="all">全部</option>
           <option v-for="item in cliOptions" :key="item" :value="item">
             {{ item }}
@@ -40,12 +41,12 @@
       </label>
 
       <div
-        class="sessions-view__project-filter"
+        class="sessions-view-project-filter"
         @click.stop
       >
-        <span>项目</span>
+        <span class="sessions-view-filter-label">项目</span>
         <button
-          class="sessions-view__project-button"
+          class="sessions-view-project-button"
           type="button"
           @click="projectDropdownOpen = !projectDropdownOpen"
         >
@@ -53,73 +54,90 @@
         </button>
         <div
           v-if="projectDropdownOpen"
-          class="sessions-view__project-menu"
+          class="sessions-view-project-menu"
         >
           <button
-            class="sessions-view__project-item"
+            class="sessions-view-project-item"
             type="button"
             @click="selectProjectFilter('all')"
           >
-            <strong>全部项目</strong>
-            <span>显示当前范围内的全部 Session</span>
+            <strong class="sessions-view-project-name">全部项目</strong>
+            <span class="sessions-view-project-path">
+              显示当前范围内的全部 Session
+            </span>
           </button>
           <button
             v-for="item in projectOptions"
             :key="item.value"
-            class="sessions-view__project-item"
+            class="sessions-view-project-item"
             type="button"
             @click="selectProjectFilter(item.value)"
           >
-            <strong>{{ item.name }}</strong>
-            <span>{{ item.path }}</span>
+            <strong class="sessions-view-project-name">{{ item.name }}</strong>
+            <span class="sessions-view-project-path">{{ item.path }}</span>
           </button>
         </div>
       </div>
     </div>
 
-    <div class="sessions-view__meta">
+    <div class="sessions-view-meta">
       <span
+        class="sessions-view-meta-text"
         >{{ filteredSessions.length }} / {{ sessions.length }} 个 Session</span
       >
-      <span v-if="filteredSessions.length"
+      <span v-if="filteredSessions.length" class="sessions-view-meta-text"
         >第 {{ currentPage }} / {{ pageCount }} 页 · 当前 {{ pageStart }}-{{
           pageEnd
         }}</span
       >
-      <span v-else>Filesystem Aggregation + 按需加载 Messages</span>
+      <span v-else class="sessions-view-meta-text">
+        Filesystem Aggregation + 按需加载 Messages
+      </span>
     </div>
 
-    <div v-if="filteredSessions.length" class="sessions-view__layout">
-      <div class="sessions-view__list">
+    <div v-if="filteredSessions.length" class="sessions-view-layout">
+      <div class="sessions-view-list">
         <article
           v-for="session in pagedSessions"
           :key="session.id"
-          class="sessions-view__card"
+          class="sessions-view-card"
           @click="selectSession(session)"
         >
-          <div class="sessions-view__card-main">
-            <div class="sessions-view__title-row">
+          <div class="sessions-view-card-main">
+            <div class="sessions-view-title-row">
               <AiIcon
                 v-if="iconMap[session.cli]"
-                class="sessions-view__cli-icon"
+                class="sessions-view-cli-icon"
                 :name="iconMap[session.cli]"
                 :alt="`${session.cliName} 图标`"
               />
-              <h3>{{ session.title }}</h3>
-              <span>{{ session.cliName || session.cli }}</span>
+              <h3 class="sessions-view-card-title">{{ session.title }}</h3>
+              <span class="sessions-view-card-cli">
+                {{ session.cliName || session.cli }}
+              </span>
             </div>
-            <p>{{ session.summary || "暂无摘要，点击查看工作流消息。" }}</p>
-            <div class="sessions-view__card-meta">
-              <span>{{ session.projectName || "未识别项目" }}</span>
-              <span>{{ session.model || "未识别模型" }}</span>
-              <span>{{ session.messageCount }} messages</span>
-              <span>{{ formatDateTime(session.updatedAt) }}</span>
+            <p class="sessions-view-card-summary">
+              {{ session.summary || "暂无摘要，点击查看工作流消息。" }}
+            </p>
+            <div class="sessions-view-card-meta">
+              <span class="sessions-view-card-meta-text">
+                {{ session.projectName || "未识别项目" }}
+              </span>
+              <span class="sessions-view-card-meta-text">
+                {{ session.model || "未识别模型" }}
+              </span>
+              <span class="sessions-view-card-meta-text">
+                {{ session.messageCount }} messages
+              </span>
+              <span class="sessions-view-card-meta-text">
+                {{ formatDateTime(session.updatedAt) }}
+              </span>
             </div>
           </div>
 
-          <div class="sessions-view__card-actions">
+          <div class="sessions-view-card-actions">
             <button
-              class="icon-button icon-button--danger"
+              class="icon-button icon-button-danger"
               type="button"
               title="移动到回收站"
               @click.stop="deleteSession(session)"
@@ -139,17 +157,17 @@
       />
     </div>
 
-    <div v-if="filteredSessions.length" class="sessions-view__pagination">
-      <label class="sessions-view__page-size">
-        <span>每页</span>
-        <select v-model.number="pageSize">
+    <div v-if="filteredSessions.length" class="sessions-view-pagination">
+      <label class="sessions-view-page-size">
+        <span class="sessions-view-page-label">每页</span>
+        <select v-model.number="pageSize" class="sessions-view-page-select">
           <option v-for="item in pageSizeOptions" :key="item" :value="item">
             {{ item }}
           </option>
         </select>
       </label>
 
-      <div class="sessions-view__page-actions">
+      <div class="sessions-view-page-actions">
         <button
           class="icon-button"
           type="button"
@@ -159,7 +177,7 @@
         >
           <ChevronLeft :size="15" />
         </button>
-        <span>{{ currentPage }} / {{ pageCount }}</span>
+        <span class="sessions-view-page-label">{{ currentPage }} / {{ pageCount }}</span>
         <button
           class="icon-button"
           type="button"
@@ -172,84 +190,179 @@
       </div>
     </div>
 
-    <div v-else class="sessions-view__empty">
-      <h2>没有匹配的 Session</h2>
-      <p>系统会扫描已检测 CLI 的本地 Session 目录，生成统一索引。</p>
+    <div v-else class="sessions-view-empty">
+      <h2 class="sessions-view-empty-title">没有匹配的 Session</h2>
+      <p class="sessions-view-empty-desc">
+        系统会扫描已检测 CLI 的本地 Session 目录，生成统一索引。
+      </p>
     </div>
 
-    <div v-if="showRecycle" class="sessions-view__modal">
+    <div v-if="showRecycle" class="sessions-view-modal">
       <div
-        class="sessions-view__modal-overlay"
+        class="sessions-view-modal-overlay"
         @click="showRecycle = false"
       ></div>
-      <section class="sessions-view__modal-panel">
-        <header class="sessions-view__modal-header">
-          <div>
-            <h2>Session 回收站</h2>
-            <p>{{ recycledSessions.length }} 个已移动的 Session</p>
+      <section class="sessions-view-modal-panel">
+        <header class="sessions-view-modal-header">
+          <div class="sessions-view-modal-title">
+            <span class="sessions-view-modal-eyebrow">Recycle Bin</span>
+            <h2 class="sessions-view-modal-heading">Session 回收站</h2>
+            <p class="sessions-view-modal-count">
+              <strong class="sessions-view-modal-count-value">
+                {{ filteredRecycledSessions.length }}
+              </strong>
+              / {{ recycledSessions.length }} 个已移动的 Session
+            </p>
           </div>
-          <div class="sessions-view__modal-actions">
+          <div class="sessions-view-modal-actions">
             <button
               v-if="paths.sessionRecycleDir"
               class="action-button"
               type="button"
               @click="$emit('open-path', paths.sessionRecycleDir)"
             >
+              <FolderOpen class="action-button-icon" :size="15" />
               打开目录
             </button>
             <button
               class="icon-button"
               type="button"
+              title="关闭"
               @click="showRecycle = false"
             >
-              ×
+              <X :size="15" />
             </button>
           </div>
         </header>
 
-        <div v-if="recyclePending" class="sessions-view__recycle-empty">
-          正在读取回收站...
+        <div
+          v-if="!recyclePending && recycledSessions.length"
+          class="sessions-view-recycle-tools"
+        >
+          <label class="sessions-view-recycle-search">
+            <span class="sessions-view-recycle-filter-label">搜索</span>
+            <input
+              v-model.trim="recycleSearchQuery"
+              class="sessions-view-recycle-search-input"
+              type="text"
+              placeholder="title / project / path / cli"
+            />
+          </label>
+
+          <label class="sessions-view-recycle-select">
+            <span class="sessions-view-recycle-filter-label">CLI</span>
+            <select
+              v-model="recycleCliFilter"
+              class="sessions-view-recycle-select-control"
+            >
+              <option value="all">全部</option>
+              <option
+                v-for="item in recycleCliOptions"
+                :key="item"
+                :value="item"
+              >
+                {{ item }}
+              </option>
+            </select>
+          </label>
+
+          <label class="sessions-view-recycle-select">
+            <span class="sessions-view-recycle-filter-label">项目</span>
+            <select
+              v-model="recycleProjectFilter"
+              class="sessions-view-recycle-select-control"
+            >
+              <option value="all">全部项目</option>
+              <option
+                v-for="item in recycleProjectOptions"
+                :key="item.value"
+                :value="item.value"
+              >
+                {{ item.name }}
+              </option>
+            </select>
+          </label>
+
+          <button
+            class="action-button"
+            type="button"
+            @click="resetRecycleFilters"
+          >
+            <RefreshCw class="action-button-icon" :size="15" />
+            重置
+          </button>
+        </div>
+
+        <div v-if="recyclePending" class="sessions-view-recycle-empty">
+          <RotateCcw class="sessions-view-recycle-empty-icon" :size="24" />
+          <span class="sessions-view-recycle-empty-text">
+            正在读取回收站...
+          </span>
         </div>
         <div
           v-else-if="!recycledSessions.length"
-          class="sessions-view__recycle-empty"
+          class="sessions-view-recycle-empty"
         >
-          回收站为空。
+          <RotateCcw class="sessions-view-recycle-empty-icon" :size="24" />
+          <span class="sessions-view-recycle-empty-text">回收站为空。</span>
         </div>
-        <div v-else class="sessions-view__recycle-list">
+        <div
+          v-else-if="!filteredRecycledSessions.length"
+          class="sessions-view-recycle-empty"
+        >
+          <RotateCcw class="sessions-view-recycle-empty-icon" :size="24" />
+          <span class="sessions-view-recycle-empty-text">
+            没有匹配的回收站 Session。
+          </span>
+        </div>
+        <div v-else class="sessions-view-recycle-list">
           <article
-            v-for="session in recycledSessions"
+            v-for="session in pagedRecycledSessions"
             :key="session.id"
-            class="sessions-view__recycle-card"
+            class="sessions-view-recycle-card"
           >
-            <div>
-              <div class="sessions-view__title-row">
+            <div class="sessions-view-recycle-main">
+              <div class="sessions-view-recycle-title">
                 <AiIcon
                   v-if="iconMap[session.cli]"
-                  class="sessions-view__cli-icon"
+                  class="sessions-view-cli-icon"
                   :name="iconMap[session.cli]"
                   :alt="`${session.cliName} 图标`"
                 />
-                <h3>{{ session.title }}</h3>
-                <span>{{ session.cliName || session.cli }}</span>
+                <h3 class="sessions-view-recycle-heading">
+                  {{ session.title }}
+                </h3>
+                <span class="sessions-view-recycle-cli">{{
+                  session.cliName || session.cli
+                }}</span>
               </div>
-              <p>{{ session.originalPath }}</p>
-              <div class="sessions-view__card-meta">
-                <span>{{ session.projectName || "未识别项目" }}</span>
-                <span>{{ formatDateTime(session.recycledAt) }}</span>
+              <p
+                class="sessions-view-recycle-path"
+                :title="session.originalPath"
+              >
+                {{ session.originalPath }}
+              </p>
+              <div class="sessions-view-recycle-meta">
+                <span class="sessions-view-recycle-meta-text">
+                  {{ session.projectName || "未识别项目" }}
+                </span>
+                <span class="sessions-view-recycle-meta-text">
+                  删除于 {{ formatDateTime(session.recycledAt) }}
+                </span>
               </div>
             </div>
 
-            <div class="sessions-view__card-actions">
+            <div class="sessions-view-recycle-actions">
               <button
                 class="action-button"
                 type="button"
                 @click="restoreRecycledSession(session)"
               >
+                <RotateCcw class="action-button-icon" :size="15" />
                 还原
               </button>
               <button
-                class="icon-button icon-button--danger"
+                class="icon-button icon-button-danger"
                 type="button"
                 title="永久删除"
                 @click="purgeRecycledSession(session)"
@@ -258,6 +371,58 @@
               </button>
             </div>
           </article>
+        </div>
+
+        <div
+          v-if="!recyclePending && filteredRecycledSessions.length"
+          class="sessions-view-recycle-pagination"
+        >
+          <span class="sessions-view-recycle-page-info">
+            第 {{ recycleCurrentPage }} / {{ recyclePageCount }} 页 · 当前
+            {{ recyclePageStart }}-{{ recyclePageEnd }}
+          </span>
+
+          <div class="sessions-view-recycle-page-controls">
+            <label class="sessions-view-recycle-page-size">
+              <span class="sessions-view-recycle-page-label">每页</span>
+              <select
+                v-model.number="recyclePageSize"
+                class="sessions-view-recycle-page-select"
+              >
+                <option
+                  v-for="item in pageSizeOptions"
+                  :key="item"
+                  :value="item"
+                >
+                  {{ item }}
+                </option>
+              </select>
+            </label>
+
+            <div class="sessions-view-recycle-page-actions">
+              <button
+                class="icon-button"
+                type="button"
+                title="上一页"
+                :disabled="recycleCurrentPage === 1"
+                @click="recycleCurrentPage -= 1"
+              >
+                <ChevronLeft :size="15" />
+              </button>
+              <span class="sessions-view-recycle-page-label">
+                {{ recycleCurrentPage }} / {{ recyclePageCount }}
+              </span>
+              <button
+                class="icon-button"
+                type="button"
+                title="下一页"
+                :disabled="recycleCurrentPage === recyclePageCount"
+                @click="recycleCurrentPage += 1"
+              >
+                <ChevronRight :size="15" />
+              </button>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -270,9 +435,11 @@ import { computed, onBeforeUnmount, ref, watch } from "vue"
 import {
   ChevronLeft,
   ChevronRight,
+  FolderOpen,
   RefreshCw,
   RotateCcw,
-  Trash2
+  Trash2,
+  X
 } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import { sessionApi } from "@/api"
@@ -311,6 +478,11 @@ const detailPending = ref(false)
 const showRecycle = ref(false)
 const recyclePending = ref(false)
 const recycledSessions = ref([])
+const recycleSearchQuery = ref("")
+const recycleCliFilter = ref("all")
+const recycleProjectFilter = ref("all")
+const recycleCurrentPage = ref(1)
+const recyclePageSize = ref(20)
 const currentPage = ref(1)
 const pageSize = ref(20)
 const pageSizeOptions = [10, 20, 50, 100]
@@ -365,7 +537,7 @@ const projectOptions = computed(() => {
       options.set(value, {
         value,
         name: resolveProjectName(session.projectPath),
-        path: value === "__unknown__" ? "未识别项目路径" : value
+        path: value === "unknown-project" ? "未识别项目路径" : value
       })
     }
   }
@@ -420,6 +592,103 @@ const pagedSessions = computed(() => {
   return filteredSessions.value.slice(pageStart.value - 1, pageEnd.value)
 })
 
+const recycleCliOptions = computed(() => {
+  return Array.from(
+    new Set(recycledSessions.value.map(item => item.cliName || item.cli))
+  )
+})
+
+const searchedRecycledSessions = computed(() => {
+  if (!recycleSearchQuery.value) {
+    return recycledSessions.value
+  }
+
+  return new Fuse(recycledSessions.value, {
+    keys: [
+      "title",
+      "summary",
+      "projectName",
+      "projectPath",
+      "originalPath",
+      "model",
+      "cliName",
+      "cli"
+    ],
+    threshold: 0.36
+  })
+    .search(recycleSearchQuery.value)
+    .map(item => item.item)
+})
+
+const cliFilteredRecycledSessions = computed(() => {
+  return searchedRecycledSessions.value.filter(item => {
+    if (recycleCliFilter.value === "all") {
+      return true
+    }
+
+    return (item.cliName || item.cli) === recycleCliFilter.value
+  })
+})
+
+const recycleProjectOptions = computed(() => {
+  const options = new Map()
+
+  for (const session of cliFilteredRecycledSessions.value) {
+    const value = getProjectFilterValue(session)
+
+    if (!options.has(value)) {
+      options.set(value, {
+        value,
+        name: resolveProjectName(session.projectPath),
+        path: value === "unknown-project" ? "未识别项目路径" : value
+      })
+    }
+  }
+
+  return Array.from(options.values()).sort((left, right) =>
+    left.name.localeCompare(right.name, "zh-Hans-CN")
+  )
+})
+
+const filteredRecycledSessions = computed(() => {
+  return cliFilteredRecycledSessions.value.filter(item => {
+    if (recycleProjectFilter.value === "all") {
+      return true
+    }
+
+    return getProjectFilterValue(item) === recycleProjectFilter.value
+  })
+})
+
+const recyclePageCount = computed(() => {
+  return Math.max(
+    1,
+    Math.ceil(filteredRecycledSessions.value.length / recyclePageSize.value)
+  )
+})
+
+const recyclePageStart = computed(() => {
+  if (!filteredRecycledSessions.value.length) {
+    return 0
+  }
+
+  return (recycleCurrentPage.value - 1) * recyclePageSize.value + 1
+})
+
+const recyclePageEnd = computed(() => {
+  return Math.min(
+    recycleCurrentPage.value * recyclePageSize.value,
+    filteredRecycledSessions.value.length
+  )
+})
+
+const pagedRecycledSessions = computed(() => {
+  return filteredRecycledSessions.value.slice(
+    recyclePageStart.value - 1,
+    recyclePageEnd.value
+  )
+})
+
 watch(searchQuery, (value) => {
   remoteSessions.value = null
   currentPage.value = 1
@@ -456,11 +725,38 @@ watch(pageSize, () => {
   currentPage.value = 1
 })
 
+watch([recycleSearchQuery, recycleCliFilter, recycleProjectFilter], () => {
+  recycleCurrentPage.value = 1
+})
+
+watch(recycleProjectOptions, options => {
+  if (recycleProjectFilter.value === "all") {
+    return
+  }
+
+  if (!options.some(item => item.value === recycleProjectFilter.value)) {
+    recycleProjectFilter.value = "all"
+  }
+})
+
+watch(recyclePageSize, () => {
+  recycleCurrentPage.value = 1
+})
+
 watch(
   () => filteredSessions.value.length,
   () => {
     if (currentPage.value > pageCount.value) {
       currentPage.value = pageCount.value
+    }
+  }
+)
+
+watch(
+  () => filteredRecycledSessions.value.length,
+  () => {
+    if (recycleCurrentPage.value > recyclePageCount.value) {
+      recycleCurrentPage.value = recyclePageCount.value
     }
   }
 )
@@ -500,7 +796,7 @@ function normalizeProjectPath(value) {
 }
 
 function getProjectFilterValue(session) {
-  return normalizeProjectPath(session.projectPath) || "__unknown__"
+  return normalizeProjectPath(session.projectPath) || "unknown-project"
 }
 
 function resolveProjectName(projectPath) {
@@ -554,6 +850,13 @@ async function loadRecycle() {
   }
 }
 
+function resetRecycleFilters() {
+  recycleSearchQuery.value = ""
+  recycleCliFilter.value = "all"
+  recycleProjectFilter.value = "all"
+  recycleCurrentPage.value = 1
+}
+
 async function restoreRecycledSession(session) {
   await sessionApi.restoreSession({ sessionId: session.id })
   await loadRecycle()
@@ -591,36 +894,38 @@ onBeforeUnmount(() => {
   gap: 10px;
   overflow: hidden;
 
-  &__toolbar {
+  .sessions-view-toolbar {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 18px;
+
+    .sessions-view-heading {
+      .sessions-view-eyebrow {
+        margin: 0 0 5px;
+        color: var(--color-text-soft);
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+      }
+
+      .sessions-view-title {
+        margin: 0;
+        font-size: 1.38rem;
+        line-height: 1.2;
+      }
+    }
+
+    .sessions-view-toolbar-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
   }
 
-  &__eyebrow {
-    margin: 0 0 5px;
-    color: var(--color-text-soft);
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-
-  &__toolbar h1 {
-    margin: 0;
-    font-size: 1.38rem;
-    line-height: 1.2;
-  }
-
-  &__toolbar-actions {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-  }
-
-  &__filters {
+  .sessions-view-filters {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 180px 280px;
     gap: 10px;
@@ -629,98 +934,98 @@ onBeforeUnmount(() => {
     border-radius: 8px;
     background: var(--color-panel);
     box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
+
+    .sessions-view-search,
+    .sessions-view-select,
+    .sessions-view-project-filter {
+      display: flex;
+      position: relative;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .sessions-view-filter-label {
+      color: var(--color-text-muted);
+      font-size: 0.74rem;
+      font-weight: 700;
+    }
+
+    .sessions-view-search-input,
+    .sessions-view-select-control,
+    .sessions-view-project-button {
+      height: 38px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      padding: 0 11px;
+      color: var(--color-text);
+      font: inherit;
+      font-size: 0.88rem;
+    }
+
+    .sessions-view-project-filter {
+      .sessions-view-project-button {
+        overflow: hidden;
+        cursor: pointer;
+        text-align: left;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .sessions-view-project-menu {
+        position: absolute;
+        top: 64px;
+        right: 0;
+        z-index: 20;
+        display: flex;
+        width: 420px;
+        max-height: 320px;
+        flex-direction: column;
+        overflow: auto;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        background: var(--color-panel);
+        box-shadow: var(--shadow-panel);
+
+        .sessions-view-project-item {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          padding: 10px 12px;
+          border: 0;
+          border-bottom: 1px solid var(--color-line);
+          background: transparent;
+          color: var(--color-text);
+          cursor: pointer;
+          text-align: left;
+
+          .sessions-view-project-name {
+            font-size: 0.86rem;
+            line-height: 1.3;
+          }
+
+          .sessions-view-project-path {
+            color: var(--color-text-muted);
+            font-family: "Cascadia Code", Consolas, monospace;
+            font-size: 0.76rem;
+            line-height: 1.45;
+            white-space: normal;
+            word-break: break-all;
+          }
+        }
+
+        .sessions-view-project-item:last-child {
+          border-bottom: 0;
+        }
+
+        .sessions-view-project-item:hover {
+          background: var(--color-panel-soft);
+        }
+      }
+    }
   }
 
-  &__search,
-  &__select,
-  &__project-filter {
-    display: flex;
-    position: relative;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  &__search span,
-  &__select span,
-  &__project-filter > span {
-    color: var(--color-text-muted);
-    font-size: 0.74rem;
-    font-weight: 700;
-  }
-
-  &__search input,
-  &__select select,
-  &__project-button {
-    height: 38px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    padding: 0 11px;
-    color: var(--color-text);
-    font: inherit;
-    font-size: 0.88rem;
-  }
-
-  &__project-button {
-    overflow: hidden;
-    cursor: pointer;
-    text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__project-menu {
-    position: absolute;
-    top: 64px;
-    right: 0;
-    z-index: 20;
-    display: flex;
-    width: 420px;
-    max-height: 320px;
-    flex-direction: column;
-    overflow: auto;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    box-shadow: var(--shadow-panel);
-  }
-
-  &__project-item {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-    padding: 10px 12px;
-    border: 0;
-    border-bottom: 1px solid var(--color-line);
-    background: transparent;
-    color: var(--color-text);
-    cursor: pointer;
-    text-align: left;
-  }
-
-  &__project-item:last-child {
-    border-bottom: 0;
-  }
-
-  &__project-item:hover {
-    background: var(--color-panel-soft);
-  }
-
-  &__project-item strong {
-    font-size: 0.86rem;
-    line-height: 1.3;
-  }
-
-  &__project-item span {
-    color: var(--color-text-muted);
-    font-family: "Cascadia Code", Consolas, monospace;
-    font-size: 0.76rem;
-    line-height: 1.45;
-    white-space: normal;
-    word-break: break-all;
-  }
-
-  &__meta {
+  .sessions-view-meta {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -729,98 +1034,98 @@ onBeforeUnmount(() => {
     font-size: 0.8rem;
   }
 
-  &__layout {
+  .sessions-view-layout {
     flex: 1;
     min-height: 0;
     overflow: auto;
+
+    .sessions-view-list {
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--color-panel);
+      box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
+
+      .sessions-view-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 14px;
+        align-items: center;
+        min-height: 62px;
+        padding: 9px 14px;
+        border-bottom: 1px solid var(--color-line);
+        background: var(--color-panel);
+        cursor: pointer;
+
+        .sessions-view-card-main {
+          display: flex;
+          min-width: 0;
+          flex-direction: column;
+          gap: 5px;
+
+          .sessions-view-title-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+
+            .sessions-view-cli-icon {
+              width: 20px;
+              height: 20px;
+              flex: 0 0 20px;
+            }
+
+            .sessions-view-card-title {
+              overflow: hidden;
+              margin: 0;
+              color: var(--color-text);
+              font-size: 0.92rem;
+              line-height: 1.2;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+
+            .sessions-view-card-cli {
+              flex: 0 0 auto;
+              color: var(--color-text-soft);
+              font-size: 0.76rem;
+            }
+          }
+
+          .sessions-view-card-summary {
+            overflow: hidden;
+            margin: 0;
+            color: var(--color-text-muted);
+            font-size: 0.78rem;
+            line-height: 1.35;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .sessions-view-card-meta {
+            display: flex;
+            gap: 10px;
+            overflow: hidden;
+            color: var(--color-text-soft);
+            font-size: 0.76rem;
+            white-space: nowrap;
+          }
+        }
+
+        .sessions-view-card-actions {
+          display: flex;
+          gap: 6px;
+        }
+      }
+
+      .sessions-view-card:hover {
+        background: var(--color-panel-soft);
+      }
+    }
   }
 
-  &__list {
-    display: flex;
-    flex-direction: column;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    overflow: hidden;
-    background: var(--color-panel);
-    box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
-  }
-
-  &__card {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 14px;
-    align-items: center;
-    min-height: 62px;
-    padding: 9px 14px;
-    border-bottom: 1px solid var(--color-line);
-    background: var(--color-panel);
-    cursor: pointer;
-  }
-
-  &__card:hover {
-    background: var(--color-panel-soft);
-  }
-
-  &__card-main {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 5px;
-  }
-
-  &__title-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  &__title-row h3 {
-    overflow: hidden;
-    margin: 0;
-    color: var(--color-text);
-    font-size: 0.92rem;
-    line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__title-row span {
-    flex: 0 0 auto;
-    color: var(--color-text-soft);
-    font-size: 0.76rem;
-  }
-
-  &__cli-icon {
-    width: 20px;
-    height: 20px;
-    flex: 0 0 20px;
-  }
-
-  &__card p {
-    overflow: hidden;
-    margin: 0;
-    color: var(--color-text-muted);
-    font-size: 0.78rem;
-    line-height: 1.35;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__card-meta {
-    display: flex;
-    gap: 10px;
-    overflow: hidden;
-    color: var(--color-text-soft);
-    font-size: 0.76rem;
-    white-space: nowrap;
-  }
-
-  &__card-actions {
-    display: flex;
-    gap: 6px;
-  }
-
-  &__pagination {
+  .sessions-view-pagination {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -829,120 +1134,314 @@ onBeforeUnmount(() => {
     border: 1px solid var(--color-line);
     border-radius: 8px;
     background: var(--color-panel);
+
+    .sessions-view-page-size,
+    .sessions-view-page-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--color-text-muted);
+      font-size: 0.8rem;
+    }
+
+    .sessions-view-page-label {
+      font-weight: 700;
+    }
+
+    .sessions-view-page-size {
+      .sessions-view-page-select {
+        height: 30px;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        background: var(--color-panel);
+        padding: 0 8px;
+        color: var(--color-text);
+        font: inherit;
+      }
+    }
   }
 
-  &__page-size,
-  &__page-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--color-text-muted);
-    font-size: 0.8rem;
-  }
-
-  &__page-size span,
-  &__page-actions span {
-    font-weight: 700;
-  }
-
-  &__page-size select {
-    height: 30px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    padding: 0 8px;
-    color: var(--color-text);
-    font: inherit;
-  }
-
-  &__modal {
+  .sessions-view-modal {
     position: fixed;
     inset: 0;
     z-index: 34;
+
+    .sessions-view-modal-overlay {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.28);
+      backdrop-filter: blur(2px);
+    }
+
+    .sessions-view-modal-panel {
+      position: absolute;
+      top: 58px;
+      left: 50%;
+      display: flex;
+      width: 780px;
+      max-height: 680px;
+      flex-direction: column;
+      overflow: hidden;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      box-shadow: var(--shadow-panel);
+      transform: translateX(-50%);
+
+      .sessions-view-modal-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 16px 18px 14px;
+        border-bottom: 1px solid var(--color-line);
+        background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+
+        .sessions-view-modal-title {
+          display: flex;
+          min-width: 0;
+          flex-direction: column;
+          gap: 4px;
+
+          .sessions-view-modal-eyebrow {
+            color: var(--color-text-soft);
+            font-size: 0.68rem;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            line-height: 1;
+            text-transform: uppercase;
+          }
+
+          .sessions-view-modal-heading {
+            margin: 0;
+            color: var(--color-text);
+            font-size: 1.16rem;
+            line-height: 1.2;
+          }
+
+          .sessions-view-modal-count {
+            margin: 0;
+            color: var(--color-text-muted);
+            font-size: 0.82rem;
+
+            .sessions-view-modal-count-value {
+              color: var(--color-primary);
+              font-weight: 800;
+            }
+          }
+        }
+
+        .sessions-view-modal-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+      }
+
+      .sessions-view-recycle-tools {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 140px 180px auto;
+        gap: 10px;
+        align-items: end;
+        padding: 12px;
+        border-bottom: 1px solid var(--color-line);
+        background: #fbfdff;
+
+        .sessions-view-recycle-search,
+        .sessions-view-recycle-select {
+          display: flex;
+          min-width: 0;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .sessions-view-recycle-filter-label {
+          color: var(--color-text-muted);
+          font-size: 0.72rem;
+          font-weight: 700;
+        }
+
+        .sessions-view-recycle-search-input,
+        .sessions-view-recycle-select-control {
+          height: 34px;
+          min-width: 0;
+          border: 1px solid var(--color-line);
+          border-radius: 8px;
+          background: var(--color-panel);
+          padding: 0 10px;
+          color: var(--color-text);
+          font: inherit;
+          font-size: 0.82rem;
+        }
+      }
+
+      .sessions-view-recycle-list {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px;
+
+        .sessions-view-recycle-card {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+          padding: 12px 14px;
+          border: 1px solid #dbe7f3;
+          border-radius: 8px;
+          background: #ffffff;
+
+          .sessions-view-recycle-main {
+            display: flex;
+            min-width: 0;
+            flex: 1;
+            flex-direction: column;
+            gap: 6px;
+
+            .sessions-view-recycle-title {
+              display: flex;
+              min-width: 0;
+              align-items: center;
+              gap: 7px;
+
+              .sessions-view-cli-icon {
+                width: 20px;
+                height: 20px;
+                flex: 0 0 20px;
+              }
+
+              .sessions-view-recycle-heading {
+                overflow: hidden;
+                margin: 0;
+                color: var(--color-text);
+                font-size: 0.9rem;
+                line-height: 1.2;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
+
+              .sessions-view-recycle-cli {
+                display: inline-flex;
+                height: 20px;
+                flex: none;
+                align-items: center;
+                padding: 0 7px;
+                border-radius: 6px;
+                background: #edf4ff;
+                color: var(--color-primary);
+                font-size: 0.7rem;
+                font-weight: 700;
+              }
+            }
+
+            .sessions-view-recycle-path {
+              overflow: hidden;
+              margin: 0;
+              color: var(--color-text-muted);
+              font-size: 0.8rem;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+
+            .sessions-view-recycle-meta {
+              display: flex;
+              min-width: 0;
+              gap: 12px;
+              overflow: hidden;
+              color: var(--color-text-soft);
+              font-size: 0.74rem;
+              font-weight: 600;
+              white-space: nowrap;
+
+              .sessions-view-recycle-meta-text {
+                overflow: hidden;
+                text-overflow: ellipsis;
+              }
+            }
+          }
+
+          .sessions-view-recycle-actions {
+            display: flex;
+            flex: none;
+            align-items: center;
+            gap: 8px;
+          }
+        }
+
+        .sessions-view-recycle-card:hover {
+          border-color: #b8d5f2;
+          background: #f8fbff;
+        }
+      }
+
+      .sessions-view-recycle-pagination {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 12px;
+        border-top: 1px solid var(--color-line);
+        background: #fbfdff;
+
+        .sessions-view-recycle-page-info {
+          color: var(--color-text-muted);
+          font-size: 0.78rem;
+          white-space: nowrap;
+        }
+
+        .sessions-view-recycle-page-controls {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+
+          .sessions-view-recycle-page-size,
+          .sessions-view-recycle-page-actions {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--color-text-muted);
+            font-size: 0.78rem;
+          }
+
+          .sessions-view-recycle-page-label {
+            font-weight: 700;
+          }
+
+          .sessions-view-recycle-page-size {
+            .sessions-view-recycle-page-select {
+              height: 30px;
+              border: 1px solid var(--color-line);
+              border-radius: 8px;
+              background: var(--color-panel);
+              padding: 0 8px;
+              color: var(--color-text);
+              font: inherit;
+            }
+          }
+        }
+      }
+
+      .sessions-view-recycle-empty {
+        display: flex;
+        min-height: 220px;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 10px;
+        color: var(--color-text-muted);
+        font-size: 0.86rem;
+
+        .sessions-view-recycle-empty-icon {
+          color: #9ab0c8;
+        }
+      }
+    }
   }
 
-  &__modal-overlay {
-    position: absolute;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.2);
-  }
-
-  &__modal-panel {
-    position: absolute;
-    top: 72px;
-    left: 50%;
-    display: flex;
-    width: 760px;
-    max-height: 720px;
-    flex-direction: column;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    box-shadow: var(--shadow-panel);
-    transform: translateX(-50%);
-  }
-
-  &__modal-header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 18px;
-    border-bottom: 1px solid var(--color-line);
-  }
-
-  &__modal-header h2 {
-    margin: 0 0 6px;
-    font-size: 1.22rem;
-  }
-
-  &__modal-header p {
-    margin: 0;
-    color: var(--color-text-muted);
-  }
-
-  &__modal-actions {
-    display: flex;
-    gap: 8px;
-  }
-
-  &__recycle-list {
-    display: flex;
-    overflow: auto;
-    flex-direction: column;
-    padding: 12px;
-  }
-
-  &__recycle-card {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 16px;
-    align-items: center;
-    padding: 14px;
-    border-bottom: 1px solid var(--color-line);
-  }
-
-  &__recycle-card:last-child {
-    border-bottom: 0;
-  }
-
-  &__recycle-card p {
-    overflow: hidden;
-    margin: 6px 0;
-    color: var(--color-text-muted);
-    font-size: 0.8rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__recycle-empty {
-    display: grid;
-    min-height: 220px;
-    place-items: center;
-    color: var(--color-text-muted);
-  }
-
-  &__empty {
+  .sessions-view-empty {
     display: grid;
     flex: 1;
     min-height: 0;
@@ -951,63 +1450,63 @@ onBeforeUnmount(() => {
     border-radius: 8px;
     background: var(--color-panel);
     text-align: center;
+
+    .sessions-view-empty-title {
+      margin: 0 0 10px;
+      font-size: 1.28rem;
+    }
+
+    .sessions-view-empty-desc {
+      margin: 0;
+      color: var(--color-text-muted);
+      font-size: 0.88rem;
+    }
   }
 
-  &__empty h2 {
-    margin: 0 0 10px;
-    font-size: 1.28rem;
-  }
-
-  &__empty p {
-    margin: 0;
-    color: var(--color-text-muted);
+  .action-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 36px;
+    padding: 0 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #fbfcfd;
+    color: var(--color-primary);
+    cursor: pointer;
     font-size: 0.88rem;
+    font-weight: 600;
+
+    .action-button-icon {
+      flex: 0 0 auto;
+    }
   }
-}
 
-.action-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: #fbfcfd;
-  color: var(--color-primary);
-  cursor: pointer;
-  font-size: 0.88rem;
-  font-weight: 600;
-
-  &__icon {
-    flex: 0 0 auto;
+  .icon-button {
+    display: inline-grid;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
+    cursor: pointer;
   }
-}
 
-.icon-button {
-  display: inline-grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel);
-  color: var(--color-text-muted);
-  cursor: pointer;
-
-  &--danger {
+  .icon-button.icon-button-danger {
     color: var(--color-danger);
   }
-}
 
-.icon-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
+  .icon-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
 
-.action-button:hover,
-.icon-button:not(:disabled):hover {
-  border-color: #b9ccda;
-  background: var(--color-primary-soft);
+  .action-button:hover,
+  .icon-button:not(:disabled):hover {
+    border-color: #b9ccda;
+    background: var(--color-primary-soft);
+  }
 }
 </style>

@@ -230,7 +230,10 @@
         </div>
 
         <div class="git-tool-commit-layout">
-          <div class="git-tool-commit-list git-tool-commit-table">
+          <div
+            class="git-tool-commit-list git-tool-commit-table"
+            @scroll="handleCommitListScroll"
+          >
             <div class="git-tool-commit-table-head">
               <span class="git-tool-commit-table-head-cell">图谱</span>
               <span class="git-tool-commit-table-head-cell">描述</span>
@@ -303,6 +306,9 @@
             </button>
             <div v-if="commitsLoading" class="git-tool-list-empty">
               正在读取提交
+            </div>
+            <div v-else-if="commitsLoadingMore" class="git-tool-list-empty">
+              正在加载更多提交
             </div>
             <div v-else-if="!commits.length" class="git-tool-list-empty">
               暂无提交记录
@@ -1161,6 +1167,9 @@ const selectedRepoId = ref("")
 const gitWorkspace = ref("branch")
 const gitLoading = ref(false)
 const commitsLoading = ref(false)
+const commitsLoadingMore = ref(false)
+const commitsHasMore = ref(false)
+const commitsCheckEnabled = ref(false)
 const commitDetailLoading = ref(false)
 const detailDrawerType = ref("")
 const archiveCommitDetailLoading = ref(false)
@@ -1202,6 +1211,7 @@ const confirmDialog = ref({
 })
 let commitLoadSeq = 0
 let stashLoaded = false
+const commitPageSize = 80
 const graphColors = ["#d95c6a", "#d08a2f", "#3f8b62", "#4679b2", "#8a64b7"]
 const graphTrackOffset = 14
 const graphColumnWidth = 4
@@ -1560,15 +1570,20 @@ async function loadCommits(options = {}) {
 
   if (!selectedRepoId.value || !selectedBranch.value) {
     commits.value = []
+    commitsHasMore.value = false
+    commitsCheckEnabled.value = false
     return
   }
 
   commitsLoading.value = true
+  commitsLoadingMore.value = false
   const loadSeq = commitLoadSeq + 1
   commitLoadSeq = loadSeq
   const repoId = selectedRepoId.value
   const branchName = selectedBranch.value
   commits.value = []
+  commitsHasMore.value = false
+  commitsCheckEnabled.value = false
   selectedCommit.value = null
   selectedCommitDetail.value = null
 
@@ -1576,7 +1591,9 @@ async function loadCommits(options = {}) {
     const quickCommits = await gitToolApi.listGitToolCommits({
       repoId,
       branchName,
-      skipCheck: true
+      skipCheck: true,
+      offset: 0,
+      limit: commitPageSize
     })
 
     if (
@@ -1588,6 +1605,9 @@ async function loadCommits(options = {}) {
     }
 
     commits.value = quickCommits
+    commitsHasMore.value =
+      quickCommits.filter((item) => !item.isGraphOnly).length ===
+      commitPageSize
 
     if (
       options.checkCommits === false ||
@@ -1597,10 +1617,14 @@ async function loadCommits(options = {}) {
       return
     }
 
+    commitsCheckEnabled.value = true
+
     const checkedCommits = await gitToolApi.listGitToolCommits({
       repoId,
       branchName,
-      skipCheck: false
+      skipCheck: false,
+      offset: 0,
+      limit: commitPageSize
     })
 
     if (
@@ -1612,11 +1636,109 @@ async function loadCommits(options = {}) {
     }
 
     commits.value = checkedCommits
+    commitsHasMore.value =
+      checkedCommits.filter((item) => !item.isGraphOnly).length ===
+      commitPageSize
   } catch (error) {
     showErrorMessage(error)
   } finally {
     if (loadSeq === commitLoadSeq) {
       commitsLoading.value = false
+    }
+  }
+}
+
+function handleCommitListScroll(event) {
+  const target = event.currentTarget
+
+  if (
+    commitsLoading.value ||
+    commitsLoadingMore.value ||
+    !commitsHasMore.value ||
+    !selectedRepoId.value ||
+    !selectedBranch.value
+  ) {
+    return
+  }
+
+  if (target.scrollTop + target.clientHeight >= target.scrollHeight - 24) {
+    loadMoreCommits()
+  }
+}
+
+async function loadMoreCommits() {
+  if (
+    commitsLoading.value ||
+    commitsLoadingMore.value ||
+    !commitsHasMore.value ||
+    !selectedRepoId.value ||
+    !selectedBranch.value
+  ) {
+    return
+  }
+
+  commitsLoadingMore.value = true
+  const loadSeq = commitLoadSeq
+  const repoId = selectedRepoId.value
+  const branchName = selectedBranch.value
+  const offset = commits.value.filter((item) => !item.isGraphOnly).length
+  const currentLength = commits.value.length
+
+  try {
+    const moreCommits = await gitToolApi.listGitToolCommits({
+      repoId,
+      branchName,
+      skipCheck: true,
+      offset,
+      limit: commitPageSize
+    })
+
+    if (
+      loadSeq !== commitLoadSeq ||
+      repoId !== selectedRepoId.value ||
+      branchName !== selectedBranch.value
+    ) {
+      return
+    }
+
+    commits.value = commits.value.concat(moreCommits)
+    commitsHasMore.value =
+      moreCommits.filter((item) => !item.isGraphOnly).length === commitPageSize
+
+    if (
+      !moreCommits.length ||
+      !commitsCheckEnabled.value
+    ) {
+      return
+    }
+
+    const checkedMoreCommits = await gitToolApi.listGitToolCommits({
+      repoId,
+      branchName,
+      skipCheck: false,
+      offset,
+      limit: commitPageSize
+    })
+
+    if (
+      loadSeq !== commitLoadSeq ||
+      repoId !== selectedRepoId.value ||
+      branchName !== selectedBranch.value
+    ) {
+      return
+    }
+
+    commits.value = commits.value
+      .slice(0, currentLength)
+      .concat(checkedMoreCommits)
+    commitsHasMore.value =
+      checkedMoreCommits.filter((item) => !item.isGraphOnly).length ===
+      commitPageSize
+  } catch (error) {
+    showErrorMessage(error)
+  } finally {
+    if (loadSeq === commitLoadSeq) {
+      commitsLoadingMore.value = false
     }
   }
 }

@@ -1,5 +1,6 @@
 use crate::core::error::ManagerError;
 use crate::core::settings::{serialize_app_settings, write_json_file, AppSettings};
+use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::Deserialize;
 use serde_json::{json, Value};
 #[cfg(windows)]
@@ -11,9 +12,15 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::ManagerExt;
-use tauri_plugin_updater::{Update, UpdaterExt};
+use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 use tokio::sync::Mutex;
+use url::Url;
 
+const GITHUB_LATEST_RELEASE_API_URL: &str =
+    "https://api.github.com/repos/hxysj/AI-Manager/releases/latest";
+const GITHUB_RELEASE_ASSET_API_URL_PREFIX: &str =
+    "https://api.github.com/repos/hxysj/AI-Manager/releases/assets";
+const GITHUB_UPDATER_METADATA_ASSET: &str = "latest.json";
 const QUICK_SWITCH_LABEL: &str = "quick-switch";
 const QUICK_SWITCH_EXPANDED_WIDTH: u32 = 360;
 const QUICK_SWITCH_EXPANDED_HEIGHT: u32 = 238;
@@ -36,6 +43,17 @@ struct CloseActionPayload {
     action: String,
     #[serde(default)]
     remember: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    assets: Vec<GithubReleaseAsset>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubReleaseAsset {
+    id: u64,
+    name: String,
 }
 
 pub async fn update_status() -> Result<Value, ManagerError> {
@@ -81,26 +99,22 @@ pub fn apply_auto_launch_setting(
 }
 
 pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError> {
-    let status = if cfg!(debug_assertions) {
-        json!({
-          "phase": "dev-disabled",
-          "message": "开发模式没有打包后的更新元数据和安装器上下文，无法使用 Tauri 更新器完整检查并安装更新。请使用打包安装版验证更新流程。",
-          "manual": true,
-          "configured": false,
-          "isDev": true
-        })
-    } else if !update_configured() {
+    let status = if !update_configured() {
+        let message = if cfg!(debug_assertions) {
+            "测试环境未配置 AI_MANAGER_GITHUB_TOKEN，无法访问私有 GitHub Release。"
+        } else {
+            "当前安装包未包含更新配置。"
+        };
         json!({
           "phase": "unconfigured",
-          "message": "当前安装包未包含更新配置。",
+          "message": message,
           "manual": true,
           "configured": false,
-          "isDev": false
+          "isDev": cfg!(debug_assertions)
         })
     } else {
-        let updater = app
-            .updater()
-            .map_err(|error| ManagerError::System(error.to_string()))?;
+        let release = fetch_latest_github_release().await?;
+        let updater = create_github_release_updater(app, &release)?;
         let update = updater
             .check()
             .await
@@ -116,15 +130,15 @@ pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError
               "releaseNotes": update.body.unwrap_or_default(),
               "manual": true,
               "configured": true,
-              "isDev": false
+              "isDev": cfg!(debug_assertions)
             }),
             None => json!({
               "phase": "not-available",
               "message": "当前已是最新版本。",
               "manual": true,
               "configured": true,
-              "isDev": false
-            })
+              "isDev": cfg!(debug_assertions)
+            }),
         }
     };
 
@@ -132,36 +146,27 @@ pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError
 }
 
 pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerError> {
-    if cfg!(debug_assertions) {
-        return emit_update_status(
-            app,
-            json!({
-              "phase": "dev-disabled",
-              "message": "开发模式没有打包后的更新元数据和安装器上下文，无法使用 Tauri 更新器完整检查并安装更新。请使用打包安装版验证更新流程。",
-              "manual": true,
-              "configured": false,
-              "isDev": true
-            }),
-        );
-    }
-
     if !update_configured() {
+        let message = if cfg!(debug_assertions) {
+            "测试环境未配置 AI_MANAGER_GITHUB_TOKEN，无法访问私有 GitHub Release。"
+        } else {
+            "当前安装包未包含更新配置。"
+        };
         return emit_update_status(
             app,
             json!({
               "phase": "unconfigured",
-              "message": "当前安装包未包含更新配置。",
+              "message": message,
               "manual": true,
               "configured": false,
-              "isDev": false
+              "isDev": cfg!(debug_assertions)
             }),
         );
     }
 
-    let updater = app
-        .updater()
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-    let Some(update) = updater
+    let release = fetch_latest_github_release().await?;
+    let updater = create_github_release_updater(app, &release)?;
+    let Some(mut update) = updater
         .check()
         .await
         .map_err(|error| ManagerError::System(error.to_string()))?
@@ -173,10 +178,11 @@ pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerErr
               "message": "当前已是最新版本。",
               "manual": true,
               "configured": true,
-              "isDev": false
+              "isDev": cfg!(debug_assertions)
             }),
         );
     };
+    apply_github_release_download_url(&release, &mut update)?;
     let mut transferred = 0_u64;
     let started_at = now_millis();
     let app_handle = app.clone();
@@ -198,7 +204,7 @@ pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerErr
                       "version": version,
                       "manual": true,
                       "configured": true,
-                      "isDev": false,
+                      "isDev": cfg!(debug_assertions),
                       "percent": percent,
                       "transferred": transferred,
                       "total": total.unwrap_or(0),
@@ -224,7 +230,7 @@ pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerErr
           "releaseNotes": release_notes,
           "manual": true,
           "configured": true,
-          "isDev": false,
+          "isDev": cfg!(debug_assertions),
           "percent": 100,
           "transferred": transferred,
           "total": transferred,
@@ -482,8 +488,8 @@ pub fn sync_quick_switch_window(
 fn create_main_window(app: &tauri::AppHandle) -> Result<WebviewWindow, ManagerError> {
     let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Monkey Thief")
-        .inner_size(1280.0, 860.0)
-        .min_inner_size(1120.0, 720.0)
+        .inner_size(1024.0, 688.0)
+        .min_inner_size(896.0, 576.0)
         .background_color(Color(255, 255, 255, 255))
         .build()
         .map_err(|error| ManagerError::System(error.to_string()))?;
@@ -674,8 +680,159 @@ fn emit_update_status(app: &tauri::AppHandle, patch: Value) -> Result<Value, Man
     Ok(payload)
 }
 
+async fn fetch_latest_github_release() -> Result<GithubRelease, ManagerError> {
+    let token = update_token();
+    let response = reqwest::Client::new()
+        .get(GITHUB_LATEST_RELEASE_API_URL)
+        .header(USER_AGENT, "Monkey-Thief-Updater")
+        .header(AUTHORIZATION, format!("Bearer {}", token))
+        .header(ACCEPT, "application/vnd.github+json")
+        .send()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+
+    if !response.status().is_success() {
+        return Err(ManagerError::System(format!(
+            "获取 GitHub 最新版本失败：{}",
+            response.status()
+        )));
+    }
+
+    response
+        .json::<GithubRelease>()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))
+}
+
+fn create_github_release_updater(
+    app: &tauri::AppHandle,
+    release: &GithubRelease,
+) -> Result<Updater, ManagerError> {
+    let metadata_url = github_release_asset_api_url(release, GITHUB_UPDATER_METADATA_ASSET)?;
+    let token = update_token();
+
+    app.updater_builder()
+        .endpoints(vec![metadata_url])
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .header(AUTHORIZATION, format!("Bearer {}", token))
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .header(ACCEPT, "application/octet-stream")
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .build()
+        .map_err(|error| ManagerError::System(error.to_string()))
+}
+
+fn apply_github_release_download_url(
+    release: &GithubRelease,
+    update: &mut Update,
+) -> Result<(), ManagerError> {
+    let download_file_name = update
+        .download_url
+        .path_segments()
+        .and_then(|segments| segments.last())
+        .unwrap_or_default()
+        .to_string();
+
+    update.download_url = github_release_asset_api_url(release, &download_file_name)?;
+    Ok(())
+}
+
+fn github_release_asset_api_url(
+    release: &GithubRelease,
+    asset_name: &str,
+) -> Result<Url, ManagerError> {
+    let asset_id = release
+        .assets
+        .iter()
+        .find(|asset| asset.name == asset_name)
+        .map(|asset| asset.id)
+        .ok_or_else(|| {
+            ManagerError::System(format!("GitHub Release 缺少 {} 资产。", asset_name))
+        })?;
+
+    Url::parse(&format!(
+        "{}/{}",
+        GITHUB_RELEASE_ASSET_API_URL_PREFIX, asset_id
+    ))
+    .map_err(|error| ManagerError::System(error.to_string()))
+}
+
 fn update_configured() -> bool {
-    !crate::update_config::GITHUB_TOKEN.trim().is_empty()
+    !update_token().is_empty()
+}
+
+fn update_token() -> String {
+    let built_in_token = crate::update_config::GITHUB_TOKEN.trim();
+
+    if !built_in_token.is_empty() {
+        return built_in_token.to_string();
+    }
+
+    let env_token = std::env::var("AI_MANAGER_GITHUB_TOKEN")
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if !env_token.is_empty() {
+        return env_token;
+    }
+
+    read_env_file_update_token()
+}
+
+fn read_env_file_update_token() -> String {
+    let mut env_paths = Vec::new();
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        env_paths.push(current_dir.join(".env"));
+        env_paths.push(current_dir.join("..").join(".env"));
+    }
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    env_paths.push(manifest_dir.join(".env"));
+    env_paths.push(manifest_dir.join("..").join(".env"));
+
+    for env_path in env_paths {
+        if let Ok(content) = std::fs::read_to_string(env_path) {
+            let token = parse_env_update_token(&content);
+
+            if !token.is_empty() {
+                return token;
+            }
+        }
+    }
+
+    String::new()
+}
+
+fn parse_env_update_token(content: &str) -> String {
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+
+        if key.trim() != "AI_MANAGER_GITHUB_TOKEN" {
+            continue;
+        }
+
+        let value = value.trim();
+        let quoted = (value.starts_with('"') && value.ends_with('"'))
+            || (value.starts_with('\'') && value.ends_with('\''));
+
+        return if quoted && value.len() >= 2 {
+            value[1..value.len() - 1].trim().to_string()
+        } else {
+            value.to_string()
+        };
+    }
+
+    String::new()
 }
 
 async fn find_app_uninstaller(install_directory: &Path) -> Result<PathBuf, ManagerError> {
