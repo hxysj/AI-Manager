@@ -89,9 +89,6 @@
             <strong>本地分支</strong>
             <span>{{ currentBranch || "-" }}</span>
           </div>
-          <span class="git-tool-branch-path">{{
-            selectedRepo?.localPath || ""
-          }}</span>
           <div class="git-tool-branch-summary-row">
             <span>
               已选 {{ selectedBranchNames.length }}/{{
@@ -224,7 +221,7 @@
               @click="openArchiveListDrawer"
             >
               <Archive :size="14" />
-              归档列表
+              归档
             </button>
           </div>
         </div>
@@ -260,7 +257,7 @@
               <span class="git-tool-commit-graph-cell">
                 <svg
                   class="git-tool-commit-graph-svg"
-                  viewBox="0 0 48 32"
+                  :viewBox="`0 0 ${graphSvgWidth} 32`"
                   preserveAspectRatio="none"
                 >
                   <path
@@ -274,13 +271,38 @@
                     v-if="getCommitGraphNode(commit)"
                     class="git-tool-commit-graph-node"
                     :cx="getCommitGraphNode(commit)?.x"
-                    cy="16"
-                    r="4"
+                    :cy="graphNodeY"
+                    :r="graphNodeRadius"
                     :fill="getCommitGraphNode(commit)?.color"
                   />
                 </svg>
               </span>
               <span class="git-tool-commit-description">
+                <span
+                  v-for="badge in getVisibleCommitRefBadges(commit)"
+                  :key="`${commit.rowId}:${badge.type}:${badge.name}`"
+                  :class="[
+                    'git-tool-commit-ref',
+                    `git-tool-commit-ref-${badge.type}`
+                  ]"
+                  :title="badge.title"
+                >
+                  <component
+                    :is="badge.type === 'tag' ? Tag : GitBranchIcon"
+                    class="git-tool-commit-ref-icon"
+                    :size="11"
+                  />
+                  <span class="git-tool-commit-ref-name">
+                    {{ badge.name }}
+                  </span>
+                </span>
+                <span
+                  v-if="getHiddenCommitRefBadgeCount(commit)"
+                  class="git-tool-commit-ref git-tool-commit-ref-more"
+                  :title="commit.refs"
+                >
+                  +{{ getHiddenCommitRefBadgeCount(commit) }}
+                </span>
                 <strong class="git-tool-commit-title" :title="commit.subject">{{
                   commit.subject
                 }}</strong>
@@ -295,7 +317,7 @@
                 </span>
               </span>
               <span class="git-tool-commit-date">
-                {{ commit.isGraphOnly ? "" : formatFullDate(commit.date) }}
+                {{ commit.isGraphOnly ? "" : formatGitGraphDate(commit.date) }}
               </span>
               <span class="git-tool-commit-author">
                 {{ commit.isGraphOnly ? "" : commit.author }}
@@ -846,6 +868,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Tag,
   Trash2,
   X
 } from "lucide-vue-next"
@@ -1212,11 +1235,19 @@ const confirmDialog = ref({
 let commitLoadSeq = 0
 let stashLoaded = false
 const commitPageSize = 80
-const graphColors = ["#d95c6a", "#d08a2f", "#3f8b62", "#4679b2", "#8a64b7"]
-const graphTrackOffset = 14
-const graphColumnWidth = 4
+const graphColors = [
+  "#19a5ff",
+  "#22c55e",
+  "#d946ef",
+  "#f59e0b",
+  "#ef4444",
+  "#14b8a6"
+]
+const graphColumnWidth = 8
+const graphSvgWidth = 144
+const graphTrackOffset = 12
 const graphNodeY = 16
-const graphNodeRadius = 4
+const graphNodeRadius = 3.6
 const graphLineStart = -1
 const graphLineEnd = 33
 let refreshTimer = 0
@@ -2595,6 +2626,35 @@ function formatFullDate(value) {
   return `${year}/${month}/${day} ${hour}:${minute}`
 }
 
+function formatGitGraphDate(value) {
+  if (!value) {
+    return "-"
+  }
+
+  const date = new Date(value)
+  const monthNames = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec"
+  ]
+  const day = date.getDate()
+  const month = monthNames[date.getMonth()]
+  const year = date.getFullYear()
+  const hour = String(date.getHours()).padStart(2, "0")
+  const minute = String(date.getMinutes()).padStart(2, "0")
+
+  return `${day} ${month} ${year} ${hour}:${minute}`
+}
+
 function formatCheckStatus(status) {
   const statusMap = {
     "exists-hash": "已合入",
@@ -2626,6 +2686,43 @@ function getCommitGraphLines(commit) {
 
 function getCommitGraphNode(commit) {
   return commitGraphMap.value.get(commit.rowId)?.node || null
+}
+
+function getCommitRefBadges(commit) {
+  if (commit.isGraphOnly) {
+    return []
+  }
+
+  return String(commit.refs || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((refText) => {
+      if (refText.startsWith("tag: ")) {
+        return {
+          type: "tag",
+          name: refText.replace(/^tag:\s*/, ""),
+          title: refText
+        }
+      }
+
+      const isCurrent = refText.startsWith("HEAD -> ")
+      const name = refText.replace(/^HEAD ->\s*/, "")
+
+      return {
+        type: isCurrent ? "current" : name.includes("/") ? "remote" : "branch",
+        name,
+        title: refText
+      }
+    })
+}
+
+function getVisibleCommitRefBadges(commit) {
+  return getCommitRefBadges(commit).slice(0, 2)
+}
+
+function getHiddenCommitRefBadgeCount(commit) {
+  return Math.max(getCommitRefBadges(commit).length - 2, 0)
 }
 
 // 按 git --graph 的字符轨道绘制，同一轨道颜色固定绑定。
@@ -2986,22 +3083,22 @@ function showErrorMessage(error) {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 8px;
-  padding: 0 0 10px;
+  gap: 7px;
+  padding: 0 0 8px;
   border-bottom: 1px solid var(--color-line);
 }
 
 .git-tool-command-row {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
-  min-height: 42px;
+  gap: 7px;
+  min-height: 40px;
 }
 
 .git-tool-picker {
   display: flex;
-  width: 280px;
-  flex: 0 0 280px;
+  width: 260px;
+  flex: 0 0 260px;
   flex-direction: column;
   gap: 5px;
 }
@@ -3016,7 +3113,7 @@ function showErrorMessage(error) {
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  padding: 0 8px 7px;
+  padding: 0 7px 7px;
   color: var(--color-text-muted);
   font-size: 0.76rem;
   text-overflow: ellipsis;
@@ -3040,7 +3137,7 @@ function showErrorMessage(error) {
   flex: none;
   align-items: center;
   gap: 3px;
-  height: 34px;
+  height: 32px;
   padding: 3px;
   border: 1px solid #e4edf5;
   border-radius: 17px;
@@ -3051,8 +3148,8 @@ function showErrorMessage(error) {
     align-items: center;
     justify-content: center;
     min-width: 68px;
-    height: 28px;
-    padding: 0 13px;
+    height: 26px;
+    padding: 0 12px;
     border: 0;
     border-radius: 14px;
     background: transparent;
@@ -3107,8 +3204,8 @@ function showErrorMessage(error) {
 }
 
 .git-tool-branch-panel {
-  width: 280px;
-  flex: 0 0 280px;
+  width: 240px;
+  flex: 0 0 240px;
   background: #ffffff;
 }
 
@@ -3180,8 +3277,8 @@ function showErrorMessage(error) {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 8px;
-  padding: 14px 12px 10px;
+  gap: 7px;
+  padding: 12px 10px 9px;
   background: #ffffff;
 }
 
@@ -3223,12 +3320,12 @@ function showErrorMessage(error) {
 .git-tool-branch-toolbar {
   display: flex;
   flex: none;
-  gap: 7px;
+  gap: 5px;
 }
 
 .git-tool-branch-toolbar-button {
-  height: 30px;
-  padding: 0 12px;
+  height: 28px;
+  padding: 0 9px;
   border: 1px solid #c9dff2;
   border-radius: 7px;
   background: #eef6ff;
@@ -3248,7 +3345,7 @@ function showErrorMessage(error) {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
   overflow: auto;
   padding: 0 8px 10px;
 }
@@ -3262,9 +3359,9 @@ function showErrorMessage(error) {
   display: flex;
   align-items: center;
   width: 100%;
-  gap: 7px;
-  height: 30px;
-  padding: 0 9px;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
   border: 1px solid #cfe0ef;
   border-radius: 7px;
   background: #eef5fb;
@@ -3304,9 +3401,9 @@ function showErrorMessage(error) {
 
 .git-tool-branch {
   display: flex;
-  min-height: 34px;
+  min-height: 32px;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   padding: 2px 0 2px 8px;
   color: var(--color-text);
 }
@@ -3324,9 +3421,9 @@ function showErrorMessage(error) {
   min-width: 0;
   flex: 1;
   align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 9px;
+  gap: 7px;
+  height: 28px;
+  padding: 0 8px;
   border: 0;
   border-radius: 6px;
   background: transparent;
@@ -3401,114 +3498,178 @@ function showErrorMessage(error) {
   gap: 0;
   padding: 0;
   background: #ffffff;
-}
 
-.git-tool-commit-table-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: 64px minmax(320px, 1fr) 160px 110px 100px;
-  flex: none;
-  align-items: center;
-  min-width: 850px;
-  height: 30px;
-  border-bottom: 1px solid var(--color-line);
-  background: #edf3f8;
-  color: #3d5874;
-  font-size: 0.72rem;
-  font-weight: 700;
-}
+  .git-tool-commit-table-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: 156px minmax(420px, 1fr) 150px 86px 78px;
+    flex: none;
+    align-items: center;
+    min-width: 890px;
+    height: 28px;
+    border-bottom: 1px solid #dce7f1;
+    background: #f3f7fb;
+    color: #4d6680;
+    font-size: 0.72rem;
+    font-weight: 700;
 
-.git-tool-commit-table-head-cell {
-  min-width: 0;
-  overflow: hidden;
-  padding: 0 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+    .git-tool-commit-table-head-cell {
+      min-width: 0;
+      overflow: hidden;
+      padding: 0 10px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
 
-.git-tool-commit-table .git-tool-commit {
-  display: grid;
-  grid-template-columns: 64px minmax(320px, 1fr) 160px 110px 100px;
-  min-width: 850px;
-  min-height: 32px;
-  gap: 0;
-  padding: 0;
-  border: 0;
-  border-bottom: 1px solid var(--color-line);
-  border-radius: 0;
-  background: #ffffff;
-}
+  .git-tool-commit {
+    display: grid;
+    grid-template-columns: 156px minmax(420px, 1fr) 150px 86px 78px;
+    min-width: 890px;
+    min-height: 34px;
+    gap: 0;
+    padding: 0;
+    border: 0;
+    border-bottom: 1px solid #edf2f7;
+    border-radius: 0;
+    background: #ffffff;
 
-.git-tool-commit-table .git-tool-commit:hover {
-  background: #f7fbff;
-}
+    &:hover {
+      background: #f7fbff;
+    }
 
-.git-tool-commit-table .git-tool-commit-active {
-  background: #e8f2fb;
-}
+    .git-tool-commit-graph-cell {
+      position: relative;
+      display: block;
+      min-width: 0;
+      height: 100%;
+      overflow: visible;
+      padding: 0;
 
-.git-tool-commit-table .git-tool-commit-graph {
-  color: var(--color-text-soft);
-}
+      .git-tool-commit-graph-svg {
+        display: block;
+        width: 144px;
+        height: calc(100% + 2px);
+        margin-top: -1px;
+        margin-left: 4px;
+        overflow: visible;
 
-.git-tool-commit-graph-cell {
-  position: relative;
-  display: block;
-  min-width: 0;
-  height: 100%;
-  overflow: visible;
-  padding: 0;
-}
+        .git-tool-commit-graph-line {
+          fill: none;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+          stroke-width: 1.8;
+          vector-effect: non-scaling-stroke;
+        }
 
-.git-tool-commit-graph-svg {
-  display: block;
-  width: 48px;
-  height: calc(100% + 2px);
-  margin-top: -1px;
-  overflow: visible;
-}
+        .git-tool-commit-graph-node {
+          stroke: #ffffff;
+          stroke-width: 1.8;
+          vector-effect: non-scaling-stroke;
+        }
+      }
+    }
 
-.git-tool-commit-graph-line {
-  fill: none;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-}
+    .git-tool-commit-description,
+    .git-tool-commit-date,
+    .git-tool-commit-author,
+    .git-tool-commit-hash {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      height: 100%;
+      overflow: hidden;
+      padding: 0 10px;
+      color: #11395f;
+      font-size: 0.78rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
-.git-tool-commit-graph-node {
-  stroke: #ffffff;
-  stroke-width: 2;
-  vector-effect: non-scaling-stroke;
-}
+    .git-tool-commit-description {
+      gap: 5px;
+      color: var(--color-text);
 
-.git-tool-commit-description,
-.git-tool-commit-date,
-.git-tool-commit-author,
-.git-tool-commit-hash {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  height: 100%;
-  overflow: hidden;
-  padding: 0 10px;
-  color: #11395f;
-  font-size: 0.78rem;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+      .git-tool-commit-ref {
+        display: inline-flex;
+        max-width: 150px;
+        height: 18px;
+        flex: none;
+        align-items: center;
+        gap: 3px;
+        overflow: hidden;
+        padding: 0 6px;
+        border: 1px solid #91ccf7;
+        border-radius: 4px;
+        background: #e5f4ff;
+        color: #075985;
+        font-size: 0.68rem;
+        font-weight: 800;
+        line-height: 18px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
 
-.git-tool-commit-description {
-  gap: 7px;
-  color: var(--color-text);
-}
+        .git-tool-commit-ref-icon {
+          flex: none;
+        }
 
-.git-tool-commit-hash {
-  color: var(--color-primary);
-  font-family: "JetBrains Mono", "Consolas", monospace;
-  font-size: 0.74rem;
+        .git-tool-commit-ref-name {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        &.git-tool-commit-ref-current {
+          border-color: #31a8ff;
+          background: #1295e8;
+          color: #ffffff;
+        }
+
+        &.git-tool-commit-ref-remote {
+          border-color: #9dc4e8;
+          background: #f1f7fd;
+          color: #1e5f9c;
+        }
+
+        &.git-tool-commit-ref-tag {
+          border-color: #7dd3fc;
+          background: #dff6ff;
+          color: #006885;
+        }
+
+        &.git-tool-commit-ref-more {
+          border-color: #d7e3ee;
+          background: #f6f9fc;
+          color: var(--color-text-muted);
+        }
+      }
+
+      .git-tool-commit-title {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+
+    .git-tool-commit-hash {
+      color: var(--color-primary);
+      font-family: "JetBrains Mono", "Consolas", monospace;
+      font-size: 0.74rem;
+    }
+
+    &.git-tool-commit-active {
+      background: #e6f3ff;
+    }
+
+    &.git-tool-commit-graph {
+      min-height: 20px;
+      color: var(--color-text-soft);
+    }
+  }
 }
 
 .git-tool-commit {
@@ -3554,8 +3715,12 @@ function showErrorMessage(error) {
 
 .git-tool-commit-title {
   display: block;
+  min-width: 0;
+  overflow: hidden;
   color: var(--color-text);
   font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .git-tool-commit-meta,
