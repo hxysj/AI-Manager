@@ -126,7 +126,11 @@ const colorMap = {
 .app-sidebar {
   display: flex;
   width: 260px;
+  height: 100%;
+  min-height: 0;
   flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-right: 1px solid var(--color-line);
   background: var(--color-panel);
   transition: width 0.24s ease;

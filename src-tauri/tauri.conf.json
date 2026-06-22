@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "Monkey Thief",
-        "width": 1180,
-        "height": 760,
-        "minWidth": 1120,
-        "minHeight": 720
+        "width": 944,
+        "height": 608,
+        "minWidth": 896,
+        "minHeight": 576
       }
     ],
     "security": {

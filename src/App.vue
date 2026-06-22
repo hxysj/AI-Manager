@@ -4353,8 +4353,11 @@ onBeforeUnmount(() => {
 .app-shell {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  height: 100vh;
+  width: 125vw;
+  height: 125vh;
   min-height: 0;
+  transform: scale(0.8);
+  transform-origin: left top;
 
   &__main {
     display: flex;
@@ -4403,16 +4406,19 @@ onBeforeUnmount(() => {
 
 .app-logs {
   display: flex;
+  height: 100%;
   min-height: 0;
   flex-direction: column;
   gap: 14px;
+  overflow: hidden;
 
   &__header {
     display: flex;
+    flex: none;
     align-items: center;
     justify-content: space-between;
     gap: 18px;
-    padding: 18px;
+    padding: 12px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
     background: var(--color-panel);
@@ -4458,6 +4464,7 @@ onBeforeUnmount(() => {
 
   &__filters {
     display: flex;
+    flex: none;
     align-items: end;
     gap: 10px;
     padding: 14px;
@@ -4496,8 +4503,12 @@ onBeforeUnmount(() => {
 
   &__list {
     display: flex;
+    flex: 1;
+    min-height: 0;
     flex-direction: column;
     gap: 10px;
+    overflow: auto;
+    padding-right: 4px;
   }
 
   &__item {
@@ -4559,6 +4570,7 @@ onBeforeUnmount(() => {
 
   &__pagination {
     display: flex;
+    flex: none;
     align-items: center;
     justify-content: flex-end;
     gap: 10px;

@@ -1107,6 +1107,7 @@ defineExpose({
 
   &-logs {
     display: flex;
+    min-height: 0;
     flex-direction: column;
     gap: 8px;
   }
@@ -1173,6 +1174,7 @@ defineExpose({
 
   &-logs-body {
     display: flex;
+    flex: 1;
     min-height: 0;
     flex-direction: column;
     gap: 8px;
@@ -1180,6 +1182,7 @@ defineExpose({
 
   &-logs-list {
     display: flex;
+    min-height: 0;
     max-height: 260px;
     flex-direction: column;
     gap: 6px;

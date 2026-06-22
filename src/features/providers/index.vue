@@ -3053,6 +3053,7 @@ watch(
 
 .providers-view {
   display: flex;
+  height: 100%;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
@@ -3392,7 +3393,7 @@ watch(
 
   &__list-panel {
     display: flex;
-    height: calc(100vh - 76px);
+    height: auto;
     overflow-x: hidden;
     overflow-y: auto;
     flex: 1 1 auto;
@@ -3405,7 +3406,7 @@ watch(
   }
 
   :deep(.codex-proxy-panel) + &__list-panel {
-    height: calc(100vh - 260px);
+    height: auto;
   }
 
   &__runtime {
