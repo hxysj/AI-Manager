@@ -31,14 +31,33 @@
             </span>
           </div>
         </div>
-        <button
-          class="skill-drawer__close"
-          type="button"
-          title="关闭"
-          @click="$emit('close')"
-        >
-          <X :size="18" />
-        </button>
+        <div class="skill-drawer__header-actions">
+          <button
+            :class="[
+              'skill-drawer__enable-button',
+              { 'skill-drawer__enable-button--disabled': skill.disabled }
+            ]"
+            type="button"
+            @click="
+              $emit('set-enabled', {
+                skillName: skill.name,
+                enabled: skill.disabled
+              })
+            "
+          >
+            <Power v-if="skill.disabled" :size="15" />
+            <PowerOff v-else :size="15" />
+            {{ skill.disabled ? "恢复" : "禁用" }}
+          </button>
+          <button
+            class="skill-drawer__close"
+            type="button"
+            title="关闭"
+            @click="$emit('close')"
+          >
+            <X :size="18" />
+          </button>
+        </div>
       </header>
 
       <div class="skill-drawer__tabs">
@@ -138,6 +157,7 @@
                 v-else-if="skill.installStates[cli.id]?.state === 'broken-link'"
                 class="action-button action-button--alert"
                 type="button"
+                :disabled="skill.disabled"
                 @click="
                   $emit('repair', {
                     skillName: skill.name,
@@ -151,7 +171,7 @@
                 v-else
                 class="action-button action-button--primary"
                 type="button"
-                :disabled="!cli.installed"
+                :disabled="skill.disabled || !cli.installed"
                 @click="
                   $emit('install', {
                     skillName: skill.name,
@@ -161,6 +181,9 @@
               >
                 安装
               </button>
+              <span v-if="skill.disabled" class="skill-drawer__target-note">
+                已禁用，恢复后才能安装
+              </span>
               <button
                 class="action-button"
                 type="button"
@@ -295,7 +318,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue"
-import { FileText, Folder, Link2, X } from "lucide-vue-next"
+import { FileText, Folder, Link2, Power, PowerOff, X } from "lucide-vue-next"
 import { skillApi } from "@/api"
 import {
   formatDateTime,
@@ -315,7 +338,14 @@ const props = defineProps({
   }
 })
 
-defineEmits(["close", "install", "uninstall", "repair", "open-path"])
+defineEmits([
+  "close",
+  "install",
+  "uninstall",
+  "repair",
+  "open-path",
+  "set-enabled"
+])
 
 const tabs = [
   { id: "overview", label: "Overview" },
@@ -465,6 +495,13 @@ function formatSkillFileType(file) {
     gap: 14px;
   }
 
+  &__header-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+  }
+
   &__icon {
     display: grid;
     width: 56px;
@@ -560,6 +597,34 @@ function formatSkillFileType(file) {
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
+  }
+
+  &__enable-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    height: 34px;
+    padding: 0 11px;
+    border: 1px solid #ead1d1;
+    border-radius: 8px;
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  &__enable-button:hover {
+    border-color: #e3b7b7;
+    background: var(--color-danger-soft);
+  }
+
+  &__enable-button--disabled {
+    border-color: #d8e4ee;
+    background: #edf3f8;
+    color: var(--color-primary);
   }
 
   &__close:hover {
@@ -740,8 +805,15 @@ function formatSkillFileType(file) {
 
   &__target-actions {
     display: flex;
+    align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+  }
+
+  &__target-note {
+    color: var(--color-text-soft);
+    font-size: 0.76rem;
+    font-weight: 700;
   }
 
   &__path-button {

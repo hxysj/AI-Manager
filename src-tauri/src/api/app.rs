@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex as SyncMutex};
+use std::time::Duration;
 use tauri::window::Color;
 use tauri::{
     Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
@@ -13,7 +15,7 @@ use tauri::{
 };
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_updater::{Update, Updater, UpdaterExt};
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 
 const GITHUB_LATEST_RELEASE_API_URL: &str =
@@ -21,6 +23,8 @@ const GITHUB_LATEST_RELEASE_API_URL: &str =
 const GITHUB_RELEASE_ASSET_API_URL_PREFIX: &str =
     "https://api.github.com/repos/hxysj/AI-Manager/releases/assets";
 const GITHUB_UPDATER_METADATA_ASSET: &str = "latest.json";
+const UPDATE_REQUEST_TIMEOUT_SECS: u64 = 30;
+const UPDATE_DOWNLOAD_TIMEOUT_SECS: u64 = 300;
 const QUICK_SWITCH_LABEL: &str = "quick-switch";
 const QUICK_SWITCH_EXPANDED_WIDTH: u32 = 360;
 const QUICK_SWITCH_EXPANDED_HEIGHT: u32 = 238;
@@ -34,7 +38,10 @@ struct DownloadedUpdate {
     bytes: Vec<u8>,
 }
 
-static DOWNLOADED_UPDATE: Mutex<Option<DownloadedUpdate>> = Mutex::const_new(None);
+static DOWNLOADED_UPDATE: AsyncMutex<Option<DownloadedUpdate>> = AsyncMutex::const_new(None);
+static UPDATE_STATUS: LazyLock<SyncMutex<Value>> =
+    LazyLock::new(|| SyncMutex::new(default_update_status()));
+static UPDATE_BUSY: SyncMutex<bool> = SyncMutex::new(false);
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -57,21 +64,19 @@ struct GithubReleaseAsset {
 }
 
 pub async fn update_status() -> Result<Value, ManagerError> {
-    Ok(json!({
-      "phase": "idle",
-      "manual": false,
-      "message": "",
-      "version": "",
-      "releaseNotes": "",
-      "percent": 0,
-      "transferred": 0,
-      "total": 0,
-      "bytesPerSecond": 0,
-      "installDirectory": "",
-      "configured": false,
-      "isDev": true,
-      "updatedAt": 0
-    }))
+    let mut status = update_status_snapshot()?;
+
+    if status
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("idle")
+        == "idle"
+    {
+        status["configured"] = json!(update_configured());
+        status["isDev"] = json!(cfg!(debug_assertions));
+    }
+
+    Ok(status)
 }
 
 pub fn apply_auto_launch_setting(
@@ -99,20 +104,28 @@ pub fn apply_auto_launch_setting(
 }
 
 pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError> {
-    let status = if !update_configured() {
-        let message = if cfg!(debug_assertions) {
-            "测试环境未配置 AI_MANAGER_GITHUB_TOKEN，无法访问私有 GitHub Release。"
-        } else {
-            "当前安装包未包含更新配置。"
-        };
-        json!({
-          "phase": "unconfigured",
-          "message": message,
-          "manual": true,
-          "configured": false,
-          "isDev": cfg!(debug_assertions)
-        })
-    } else {
+    let _guard = begin_update_task(app, "checking", "正在检查更新。")?;
+    let status_result = async {
+        if !update_configured() {
+            let message = if cfg!(debug_assertions) {
+                "测试环境未配置 AI_MANAGER_GITHUB_TOKEN，无法访问私有 GitHub Release。"
+            } else {
+                "当前安装包未包含更新配置。"
+            };
+
+            return Ok(json!({
+              "phase": "unconfigured",
+              "message": message,
+              "manual": true,
+              "configured": false,
+              "isDev": cfg!(debug_assertions)
+            }));
+        }
+
+        if let Some(status) = downloaded_update_status(true).await {
+            return Ok(status);
+        }
+
         let release = fetch_latest_github_release().await?;
         let updater = create_github_release_updater(app, &release)?;
         let update = updater
@@ -122,7 +135,7 @@ pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError
 
         *DOWNLOADED_UPDATE.lock().await = None;
 
-        match update {
+        Ok(match update {
             Some(update) => json!({
               "phase": "available",
               "message": format!("发现新版本 {}。", update.version),
@@ -139,91 +152,98 @@ pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError
               "configured": true,
               "isDev": cfg!(debug_assertions)
             }),
-        }
-    };
+        })
+    }
+    .await;
 
-    emit_update_status(app, status)
+    match status_result {
+        Ok(status) => emit_update_status(app, status),
+        Err(error) => {
+            let _ = emit_update_status(app, update_error_status(&error));
+            Err(error)
+        }
+    }
 }
 
 pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerError> {
-    if !update_configured() {
-        let message = if cfg!(debug_assertions) {
-            "测试环境未配置 AI_MANAGER_GITHUB_TOKEN，无法访问私有 GitHub Release。"
-        } else {
-            "当前安装包未包含更新配置。"
-        };
-        return emit_update_status(
-            app,
-            json!({
+    let _guard = begin_update_task(app, "downloading", "正在准备下载更新。")?;
+    let status_result = async {
+        if !update_configured() {
+            let message = if cfg!(debug_assertions) {
+                "测试环境未配置 AI_MANAGER_GITHUB_TOKEN，无法访问私有 GitHub Release。"
+            } else {
+                "当前安装包未包含更新配置。"
+            };
+
+            return Ok(json!({
               "phase": "unconfigured",
               "message": message,
               "manual": true,
               "configured": false,
               "isDev": cfg!(debug_assertions)
-            }),
-        );
-    }
+            }));
+        }
 
-    let release = fetch_latest_github_release().await?;
-    let updater = create_github_release_updater(app, &release)?;
-    let Some(mut update) = updater
-        .check()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?
-    else {
-        return emit_update_status(
-            app,
-            json!({
+        if let Some(status) = downloaded_update_status(true).await {
+            return Ok(status);
+        }
+
+        let release = fetch_latest_github_release().await?;
+        let updater = create_github_release_updater(app, &release)?;
+        let Some(mut update) = updater
+            .check()
+            .await
+            .map_err(|error| ManagerError::System(error.to_string()))?
+        else {
+            return Ok(json!({
               "phase": "not-available",
               "message": "当前已是最新版本。",
               "manual": true,
               "configured": true,
               "isDev": cfg!(debug_assertions)
-            }),
-        );
-    };
-    apply_github_release_download_url(&release, &mut update)?;
-    let mut transferred = 0_u64;
-    let started_at = now_millis();
-    let app_handle = app.clone();
-    let version = update.version.clone();
-    let bytes = update
-        .download(
-            |chunk_length, total| {
-                transferred += chunk_length as u64;
-                let elapsed = now_millis().saturating_sub(started_at).max(1);
-                let percent = total
-                    .filter(|item| *item > 0)
-                    .map(|item| transferred as f64 * 100.0 / item as f64)
-                    .unwrap_or(0.0);
-                let _ = emit_update_status(
-                    &app_handle,
-                    json!({
-                      "phase": "downloading",
-                      "message": format!("正在下载新版本 {}。", version),
-                      "version": version,
-                      "manual": true,
-                      "configured": true,
-                      "isDev": cfg!(debug_assertions),
-                      "percent": percent,
-                      "transferred": transferred,
-                      "total": total.unwrap_or(0),
-                      "bytesPerSecond": transferred * 1000 / elapsed
-                    }),
-                );
-            },
-            || {},
-        )
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+            }));
+        };
+        apply_github_release_download_url(&release, &mut update)?;
+        update.timeout = Some(Duration::from_secs(UPDATE_DOWNLOAD_TIMEOUT_SECS));
+        let mut transferred = 0_u64;
+        let started_at = now_millis();
+        let app_handle = app.clone();
+        let version = update.version.clone();
+        let bytes = update
+            .download(
+                |chunk_length, total| {
+                    transferred += chunk_length as u64;
+                    let elapsed = now_millis().saturating_sub(started_at).max(1);
+                    let percent = total
+                        .filter(|item| *item > 0)
+                        .map(|item| transferred as f64 * 100.0 / item as f64)
+                        .unwrap_or(0.0);
+                    let _ = emit_update_status(
+                        &app_handle,
+                        json!({
+                          "phase": "downloading",
+                          "message": format!("正在下载新版本 {}。", version),
+                          "version": version,
+                          "manual": true,
+                          "configured": true,
+                          "isDev": cfg!(debug_assertions),
+                          "percent": percent,
+                          "transferred": transferred,
+                          "total": total.unwrap_or(0),
+                          "bytesPerSecond": transferred * 1000 / elapsed
+                        }),
+                    );
+                },
+                || {},
+            )
+            .await
+            .map_err(|error| ManagerError::System(error.to_string()))?;
 
-    let version = update.version.clone();
-    let release_notes = update.body.clone().unwrap_or_default();
-    *DOWNLOADED_UPDATE.lock().await = Some(DownloadedUpdate { update, bytes });
+        let version = update.version.clone();
+        let release_notes = update.body.clone().unwrap_or_default();
+        *DOWNLOADED_UPDATE.lock().await = Some(DownloadedUpdate { update, bytes });
 
-    emit_update_status(
-        app,
-        json!({
+        Ok(json!({
           "phase": "downloaded",
           "message": format!("新版本 {} 已下载完成。", version),
           "version": version,
@@ -235,22 +255,34 @@ pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerErr
           "transferred": transferred,
           "total": transferred,
           "bytesPerSecond": 0
-        }),
-    )
+        }))
+    }
+    .await;
+
+    match status_result {
+        Ok(status) => emit_update_status(app, status),
+        Err(error) => {
+            let _ = emit_update_status(app, update_error_status(&error));
+            Err(error)
+        }
+    }
 }
 
 pub async fn install_update(
     app: &tauri::AppHandle,
     _payload: Value,
 ) -> Result<Value, ManagerError> {
+    let _guard = begin_update_task(app, "installing", "正在打开更新安装程序。")?;
     let downloaded_update = DOWNLOADED_UPDATE.lock().await.take();
     let Some(downloaded_update) = downloaded_update else {
-        return Err(ManagerError::System("更新安装包未下载完成".to_string()));
+        let error = ManagerError::System("更新安装包未下载完成".to_string());
+        let _ = emit_update_status(app, update_error_status(&error));
+        return Err(error);
     };
 
     let version = downloaded_update.update.version.clone();
 
-    emit_update_status(
+    if let Err(error) = emit_update_status(
         app,
         json!({
           "phase": "installing",
@@ -260,28 +292,59 @@ pub async fn install_update(
           "configured": true,
           "isDev": false
         }),
-    )?;
+    ) {
+        *DOWNLOADED_UPDATE.lock().await = Some(downloaded_update);
+        return Err(error);
+    }
 
-    downloaded_update
-        .update
-        .install(downloaded_update.bytes)
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+    if let Err(error) = downloaded_update.update.install(&downloaded_update.bytes) {
+        let version = downloaded_update.update.version.clone();
+        let release_notes = downloaded_update.update.body.clone().unwrap_or_default();
+        let bytes = downloaded_update.bytes;
+        let transferred = bytes.len() as u64;
+        *DOWNLOADED_UPDATE.lock().await = Some(DownloadedUpdate {
+            update: downloaded_update.update,
+            bytes,
+        });
+        emit_update_status(
+            app,
+            json!({
+              "phase": "downloaded",
+              "message": format!("新版本 {} 已下载完成，可重新打开安装向导。", version),
+              "version": version,
+              "releaseNotes": release_notes,
+              "manual": true,
+              "configured": true,
+              "isDev": cfg!(debug_assertions),
+              "percent": 100,
+              "transferred": transferred,
+              "total": transferred,
+              "bytesPerSecond": 0
+            }),
+        )?;
+        return Err(ManagerError::System(error.to_string()));
+    }
+
     Ok(json!(true))
 }
 
 pub async fn dismiss_update() -> Result<Value, ManagerError> {
-    Ok(json!({
-      "phase": "idle",
-      "message": "",
-      "manual": false,
-      "configured": false,
-      "isDev": cfg!(debug_assertions),
-      "percent": 0,
-      "transferred": 0,
-      "total": 0,
-      "bytesPerSecond": 0,
-      "updatedAt": now_millis()
-    }))
+    let mut status = update_status_snapshot()?;
+
+    if status
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("idle")
+        == "downloaded"
+    {
+        status["manual"] = json!(false);
+        status["updatedAt"] = json!(now_millis());
+        store_update_status(&status)?;
+        return Ok(status);
+    }
+
+    store_update_status(&default_update_status())?;
+    update_status().await
 }
 
 pub async fn uninstall_without_trace(
@@ -653,6 +716,118 @@ fn set_quick_switch_size(
     Ok(())
 }
 
+fn default_update_status() -> Value {
+    json!({
+      "phase": "idle",
+      "manual": false,
+      "message": "",
+      "version": "",
+      "releaseNotes": "",
+      "percent": 0,
+      "transferred": 0,
+      "total": 0,
+      "bytesPerSecond": 0,
+      "installDirectory": "",
+      "configured": false,
+      "isDev": cfg!(debug_assertions),
+      "updatedAt": 0
+    })
+}
+
+fn update_status_snapshot() -> Result<Value, ManagerError> {
+    UPDATE_STATUS
+        .lock()
+        .map(|status| status.clone())
+        .map_err(|error| ManagerError::System(error.to_string()))
+}
+
+fn store_update_status(status: &Value) -> Result<(), ManagerError> {
+    let mut current = UPDATE_STATUS
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+
+    *current = status.clone();
+    Ok(())
+}
+
+fn update_error_status(error: &ManagerError) -> Value {
+    json!({
+      "phase": "error",
+      "message": error.to_string(),
+      "manual": true,
+      "configured": update_configured(),
+      "isDev": cfg!(debug_assertions)
+    })
+}
+
+struct UpdateTaskGuard;
+
+impl Drop for UpdateTaskGuard {
+    fn drop(&mut self) {
+        if let Ok(mut busy) = UPDATE_BUSY.lock() {
+            *busy = false;
+        }
+    }
+}
+
+fn begin_update_task(
+    app: &tauri::AppHandle,
+    phase: &str,
+    message: &str,
+) -> Result<UpdateTaskGuard, ManagerError> {
+    let mut busy = UPDATE_BUSY
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+
+    if *busy {
+        return Err(ManagerError::System(
+            "已有更新任务正在执行，请稍后再试。".to_string(),
+        ));
+    }
+
+    *busy = true;
+    drop(busy);
+    if let Err(error) = emit_update_status(
+        app,
+        json!({
+          "phase": phase,
+          "message": message,
+          "manual": true,
+          "configured": update_configured(),
+          "isDev": cfg!(debug_assertions)
+        }),
+    ) {
+        if let Ok(mut busy) = UPDATE_BUSY.lock() {
+            *busy = false;
+        }
+
+        return Err(error);
+    }
+
+    Ok(UpdateTaskGuard)
+}
+
+async fn downloaded_update_status(manual: bool) -> Option<Value> {
+    let downloaded_update = DOWNLOADED_UPDATE.lock().await;
+    let downloaded_update = downloaded_update.as_ref()?;
+    let transferred = downloaded_update.bytes.len() as u64;
+    let version = downloaded_update.update.version.clone();
+
+    Some(json!({
+      "phase": "downloaded",
+      "message": format!("新版本 {} 已下载完成。", version),
+      "version": version,
+      "releaseNotes": downloaded_update.update.body.clone().unwrap_or_default(),
+      "manual": manual,
+      "configured": true,
+      "isDev": cfg!(debug_assertions),
+      "percent": 100,
+      "transferred": transferred,
+      "total": transferred,
+      "bytesPerSecond": 0
+    }))
+}
+
 fn emit_update_status(app: &tauri::AppHandle, patch: Value) -> Result<Value, ManagerError> {
     let mut status = patch.as_object().cloned().unwrap_or_default();
 
@@ -674,6 +849,7 @@ fn emit_update_status(app: &tauri::AppHandle, patch: Value) -> Result<Value, Man
     }
 
     let payload = Value::Object(status);
+    store_update_status(&payload)?;
 
     app.emit("app:update-status", payload.clone())
         .map_err(|error| ManagerError::System(error.to_string()))?;
@@ -682,7 +858,10 @@ fn emit_update_status(app: &tauri::AppHandle, patch: Value) -> Result<Value, Man
 
 async fn fetch_latest_github_release() -> Result<GithubRelease, ManagerError> {
     let token = update_token();
-    let response = reqwest::Client::new()
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(UPDATE_REQUEST_TIMEOUT_SECS))
+        .build()
+        .map_err(|error| ManagerError::System(error.to_string()))?
         .get(GITHUB_LATEST_RELEASE_API_URL)
         .header(USER_AGENT, "Monkey-Thief-Updater")
         .header(AUTHORIZATION, format!("Bearer {}", token))
@@ -708,12 +887,13 @@ fn create_github_release_updater(
     app: &tauri::AppHandle,
     release: &GithubRelease,
 ) -> Result<Updater, ManagerError> {
-    let metadata_url = github_release_asset_api_url(release, GITHUB_UPDATER_METADATA_ASSET)?;
+    let metadata_url = github_release_asset_api_url(release, GITHUB_UPDATER_METADATA_ASSET, None)?;
     let token = update_token();
 
     app.updater_builder()
         .endpoints(vec![metadata_url])
         .map_err(|error| ManagerError::System(error.to_string()))?
+        .timeout(Duration::from_secs(UPDATE_REQUEST_TIMEOUT_SECS))
         .header(AUTHORIZATION, format!("Bearer {}", token))
         .map_err(|error| ManagerError::System(error.to_string()))?
         .header(ACCEPT, "application/octet-stream")
@@ -732,19 +912,26 @@ fn apply_github_release_download_url(
         .and_then(|segments| segments.last())
         .unwrap_or_default()
         .to_string();
+    let decoded_file_name = url::form_urlencoded::parse(download_file_name.as_bytes())
+        .map(|(value, _)| value.to_string())
+        .next()
+        .unwrap_or_else(|| download_file_name.clone());
 
-    update.download_url = github_release_asset_api_url(release, &download_file_name)?;
+    update.download_url =
+        github_release_asset_api_url(release, &download_file_name, Some(&decoded_file_name))?;
     Ok(())
 }
 
 fn github_release_asset_api_url(
     release: &GithubRelease,
     asset_name: &str,
+    fallback_asset_name: Option<&str>,
 ) -> Result<Url, ManagerError> {
+    let fallback_asset_name = fallback_asset_name.unwrap_or_default();
     let asset_id = release
         .assets
         .iter()
-        .find(|asset| asset.name == asset_name)
+        .find(|asset| asset.name == asset_name || asset.name == fallback_asset_name)
         .map(|asset| asset.id)
         .ok_or_else(|| {
             ManagerError::System(format!("GitHub Release 缺少 {} 资产。", asset_name))

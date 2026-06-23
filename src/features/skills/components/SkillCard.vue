@@ -36,6 +36,23 @@
         <span v-else>{{ iconLetters(skill.name) }}</span>
       </span> -->
       <button
+        :class="[
+          'skill-card__state-action',
+          { 'skill-card__state-action--disabled': skill.disabled }
+        ]"
+        type="button"
+        :title="skill.disabled ? '恢复 Skill' : '禁用 Skill'"
+        @click.stop="
+          $emit('set-enabled', {
+            skillName: skill.name,
+            enabled: skill.disabled
+          })
+        "
+      >
+        <Power v-if="skill.disabled" class="skill-card__action-icon" :size="15" />
+        <PowerOff v-else class="skill-card__action-icon" :size="15" />
+      </button>
+      <button
         v-for="cli in cliTargets"
         :key="cli.id"
         :class="[
@@ -44,7 +61,7 @@
         ]"
         type="button"
         :title="`${cli.name}：${formatStatusLabel(skill.installStates?.[cli.id]?.state)}`"
-        :disabled="skill.installStates?.[cli.id]?.state === 'disabled'"
+        :disabled="skill.disabled || skill.installStates?.[cli.id]?.state === 'disabled'"
         @click.stop="toggleCliSkill(cli)"
       >
         <AiIcon
@@ -68,7 +85,7 @@
 </template>
 
 <script setup>
-import { FolderOpen } from "lucide-vue-next"
+import { FolderOpen, Power, PowerOff } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import { formatDateTime, formatStatusLabel } from "@/utils/formatters"
 
@@ -83,9 +100,19 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(["select", "open-source", "install", "uninstall"])
+const emit = defineEmits([
+  "select",
+  "open-source",
+  "install",
+  "set-enabled",
+  "uninstall"
+])
 
 function toggleCliSkill(cli) {
+  if (props.skill.disabled) {
+    return
+  }
+
   const state = props.skill.installStates?.[cli.id]?.state
   const payload = {
     skillName: props.skill.name,
@@ -208,6 +235,7 @@ function toFileUrl(value) {
 
   &__icon,
   &__target-pill,
+  &__state-action,
   &__action {
     display: inline-grid;
     width: 28px;
@@ -230,6 +258,19 @@ function toFileUrl(value) {
   &__target-pill {
     background: var(--color-panel);
     cursor: pointer;
+  }
+
+  &__state-action {
+    border-color: #ead1d1;
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+    cursor: pointer;
+  }
+
+  &__state-action--disabled {
+    border-color: #d8e4ee;
+    background: #edf3f8;
+    color: var(--color-primary);
   }
 
   &__target-icon {

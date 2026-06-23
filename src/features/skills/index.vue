@@ -98,6 +98,7 @@
           @select="$emit('select-skill', skill)"
           @open-source="$emit('open-path', skill.sourcePath)"
           @install="$emit('install-skill', $event)"
+          @set-enabled="$emit('set-skill-enabled', $event)"
           @uninstall="$emit('uninstall-skill', $event)"
         />
       </div>
@@ -178,6 +179,7 @@ const emit = defineEmits([
   "refresh-skill-repository",
   "remove-skill-repository",
   "select-skill",
+  "set-skill-enabled",
   "uninstall-skill"
 ])
 
