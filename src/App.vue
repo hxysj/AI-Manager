@@ -344,6 +344,7 @@
           @refresh-skill-repository="refreshSkillRepository"
           @remove-skill-repository="removeSkillRepository"
           @select-skill="selectSkill"
+          @set-skill-enabled="setSkillEnabled"
           @uninstall-skill="uninstallSkill"
         />
 
@@ -591,6 +592,7 @@
       @uninstall="uninstallSkill"
       @repair="repairSkill"
       @open-path="openPath"
+      @set-enabled="setSkillEnabled"
     />
 
     <CreateSkillModal
@@ -2172,7 +2174,7 @@ function applyUpdateStatus(status = {}) {
 
   updateDialog.open =
     updateDialog.manual ||
-    ["available", "downloading", "downloaded", "error"].includes(
+    ["available", "downloading", "error"].includes(
       updateDialog.phase
     )
 }
@@ -2956,17 +2958,38 @@ async function importSkillFromZip() {
       return
     }
 
-    const success = await runAction(() =>
-      skillApi.importSkillFromZip({ zipPath })
-    )
+    let importResult = null
+    const success = await runAction(async () => {
+      const result = await skillApi.importSkillFromZip({ zipPath })
+
+      importResult = result.zipImport || null
+      return result.state || result
+    })
 
     if (success) {
       activeView.value = "skills"
-      showSuccessMessage("Skill zip 已导入。")
+      showSuccessMessage(formatZipImportMessage(importResult))
     }
   } catch (error) {
     showErrorMessage(error)
   }
+}
+
+function formatZipImportMessage(result) {
+  const imported = result?.imported || []
+  const skipped = result?.skipped || []
+
+  if (imported.length) {
+    const names = imported.map((item) => item.name).join("、")
+
+    return `Skill zip 已导入 ${imported.length} 个：${names}`
+  }
+
+  if (skipped.length) {
+    return "zip 中的 Skill 已存在，无需重复导入。"
+  }
+
+  return "Skill zip 已导入。"
 }
 
 async function confirmImportSkills(payload) {
@@ -2984,6 +3007,14 @@ async function confirmImportSkills(payload) {
 
 async function installSkill(payload) {
   await runAction(() => skillApi.installSkill(payload))
+}
+
+async function setSkillEnabled(payload) {
+  const success = await runAction(() => skillApi.setSkillEnabled(payload))
+
+  if (success) {
+    showSuccessMessage(payload.enabled ? "Skill 已恢复。" : "Skill 已禁用。")
+  }
 }
 
 async function addSkillRepository(payload) {

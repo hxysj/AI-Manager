@@ -6,14 +6,14 @@
         <h1>设置</h1>
       </div>
       <div class="settings-view__header-actions">
-        <div
+        <button
           class="settings-view__check-update"
           type="button"
           @click="$emit('check-update')"
         >
           <RefreshCw :size="16" />
           <div class="text">检查更新</div>
-        </div>
+        </button>
         <button
           class="settings-view__save"
           type="button"

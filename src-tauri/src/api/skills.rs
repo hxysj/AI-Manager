@@ -120,9 +120,15 @@ pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result
     for mut skill in parsed_skills {
         let mut install_states = serde_json::Map::new();
         let mut installed_targets = Vec::new();
+        let skill_name = string_value(skill.get("name"));
+        let disabled = previous_skill_map
+            .get(&skill_name)
+            .and_then(|item| item.get("disabled"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
 
         for cli_target in &cli_targets {
-            let state = get_install_state(&skill, cli_target).await;
+            let state = get_install_state(&skill, cli_target, disabled).await;
 
             if matches!(
                 state.get("state").and_then(Value::as_str),
@@ -147,7 +153,8 @@ pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result
 
         skill["installedTargets"] = json!(installed_targets);
         skill["installStates"] = Value::Object(install_states);
-        skill["status"] = json!(resolve_skill_status(skill.get("installStates")));
+        skill["disabled"] = json!(disabled);
+        skill["status"] = json!(resolve_skill_status(disabled, skill.get("installStates")));
         skill["repoName"] = json!(repo_name);
         skills.push(skill);
     }
@@ -262,8 +269,53 @@ pub async fn install_skill(state: &Value, payload: Value) -> Result<(), ManagerE
     let target_id = string_value(payload.get("targetId"));
     let skill = find_skill(state, &skill_name)?;
 
+    ensure_skill_enabled(&skill)?;
     install_skill_link(state, &skill, &target_id).await?;
     Ok(())
+}
+
+pub async fn set_skill_enabled(
+    paths: &AppPaths,
+    state: &mut Value,
+    payload: Value,
+) -> Result<(), ManagerError> {
+    let skill_name = string_value(payload.get("skillName"));
+    let enabled = payload
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| ManagerError::System("缺少 Skill 启用状态".to_string()))?;
+    let cli_targets = state
+        .get("cliTargets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut skills = state
+        .get("skills")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let Some(index) = skills
+        .iter()
+        .position(|item| item.get("name").and_then(Value::as_str) == Some(skill_name.as_str()))
+    else {
+        return Err(ManagerError::System("Skill 不存在".to_string()));
+    };
+
+    if !enabled {
+        for target_id in skills[index]
+            .get("installedTargets")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            uninstall_skill_link(&cli_targets, &skill_name, &string_value(Some(&target_id)))
+                .await?;
+        }
+    }
+
+    skills[index]["disabled"] = json!(!enabled);
+    write_json(&paths.storage_files.skills, &json!(skills)).await?;
+    refresh_skills_state(paths, state).await
 }
 
 pub async fn uninstall_skill(state: &Value, payload: Value) -> Result<(), ManagerError> {
@@ -284,6 +336,7 @@ pub async fn repair_skill(state: &Value, payload: Value) -> Result<(), ManagerEr
     let skill = find_skill(state, &skill_name)?;
     let source_path = string_value(skill.get("sourcePath"));
 
+    ensure_skill_enabled(&skill)?;
     if !Path::new(&source_path).exists() {
         return Err(ManagerError::System(
             "Skill 源目录不存在，当前无法修复".to_string(),
@@ -298,7 +351,7 @@ pub async fn import_skill_from_zip(
     paths: &AppPaths,
     state: &mut Value,
     payload: Value,
-) -> Result<(), ManagerError> {
+) -> Result<Value, ManagerError> {
     let source_zip_path = string_value(payload.get("zipPath").or(Some(&payload)));
 
     if source_zip_path.is_empty() {
@@ -350,6 +403,7 @@ pub async fn import_skill_from_zip(
         }
 
         let mut import_items = Vec::new();
+        let mut skipped_items = Vec::new();
 
         for parsed in parsed_skills {
             let skill_name = string_value(parsed.get("name"));
@@ -376,6 +430,10 @@ pub async fn import_skill_from_zip(
                 let existing_signature = create_skill_signature(existing_skill)?;
 
                 if incoming_signature == existing_signature {
+                    skipped_items.push(json!({
+                      "name": skill_name,
+                      "reason": "same-signature"
+                    }));
                     continue;
                 }
 
@@ -392,20 +450,33 @@ pub async fn import_skill_from_zip(
                 )));
             }
 
-            import_items.push((PathBuf::from(source_path), managed_path));
+            import_items.push((skill_name, PathBuf::from(source_path), managed_path));
         }
 
         if import_items.is_empty() {
-            return Err(ManagerError::System(
-                "zip 压缩包中的 Skill 已存在，无需重复导入".to_string(),
-            ));
+            refresh_skills_state(paths, state).await?;
+
+            return Ok(json!({
+              "imported": [],
+              "skipped": skipped_items
+            }));
         }
 
-        for (source_path, managed_path) in import_items {
+        let mut imported_items = Vec::new();
+
+        for (skill_name, source_path, managed_path) in import_items {
             copy_dir_all(&source_path, &managed_path).await?;
+            imported_items.push(json!({
+              "name": skill_name,
+              "sourcePath": path_text(&managed_path)
+            }));
         }
 
-        refresh_skills_state(paths, state).await
+        refresh_skills_state(paths, state).await?;
+        Ok(json!({
+          "imported": imported_items,
+          "skipped": skipped_items
+        }))
     }
     .await;
 
@@ -786,15 +857,17 @@ pub async fn install_skill_from_repository(
     };
     let skill_name = string_value(skill.get("name"));
 
-    if state
+    if let Some(existing_skill) = state
         .get("skills")
         .and_then(Value::as_array)
-        .is_some_and(|skills| {
+        .and_then(|skills| {
             skills
                 .iter()
-                .any(|item| item.get("name").and_then(Value::as_str) == Some(skill_name.as_str()))
+                .find(|item| item.get("name").and_then(Value::as_str) == Some(skill_name.as_str()))
         })
     {
+        ensure_skill_enabled(existing_skill)?;
+
         return Err(ManagerError::System(format!(
             "Skill 名称已存在：{}",
             skill_name
@@ -1556,10 +1629,19 @@ fn collect_cli_skill_imports(
     Ok((imports, mounts))
 }
 
-async fn get_install_state(skill: &Value, cli_target: &Value) -> Value {
+async fn get_install_state(skill: &Value, cli_target: &Value, skill_disabled: bool) -> Value {
     let target_id = string_value(cli_target.get("id"));
     let skills_path = string_value(cli_target.get("skillsPath"));
     let target_path = Path::new(&skills_path).join(string_value(skill.get("name")));
+
+    if skill_disabled {
+        return json!({
+          "targetId": target_id,
+          "state": "disabled",
+          "targetPath": path_text(target_path),
+          "reason": "Skill 已禁用"
+        });
+    }
 
     if cli_target.get("installed").and_then(Value::as_bool) != Some(true) {
         return json!({
@@ -1737,11 +1819,8 @@ async fn create_junction(source_path: &Path, target_path: &Path) -> Result<(), M
         if !output.status.success() {
             let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
             let output_message = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let message = first_non_empty(&[
-                message,
-                output_message,
-                "创建 junction 失败".to_string(),
-            ]);
+            let message =
+                first_non_empty(&[message, output_message, "创建 junction 失败".to_string()]);
 
             return Err(ManagerError::System(message));
         }
@@ -1804,14 +1883,7 @@ async fn extract_zip(zip_path: &str, target_path: &Path) -> Result<(), ManagerEr
     command.creation_flags(CREATE_NO_WINDOW);
 
     let output = command
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force",
-            zip_path,
-            &path_text(target_path),
-        ])
+        .args(extract_zip_command_args(zip_path, target_path))
         .output()
         .await?;
 
@@ -1826,6 +1898,20 @@ async fn extract_zip(zip_path: &str, target_path: &Path) -> Result<(), ManagerEr
     }
 
     Ok(())
+}
+
+fn extract_zip_command_args(zip_path: &str, target_path: &Path) -> Vec<String> {
+    vec![
+        "-NoProfile".to_string(),
+        "-NonInteractive".to_string(),
+        "-Command".to_string(),
+        "Expand-Archive".to_string(),
+        "-LiteralPath".to_string(),
+        zip_path.to_string(),
+        "-DestinationPath".to_string(),
+        path_text(target_path),
+        "-Force".to_string(),
+    ]
 }
 
 async fn create_temp_dir(root_path: &str, prefix: &str) -> Result<PathBuf, ManagerError> {
@@ -1860,7 +1946,22 @@ fn find_cli_target<'a>(state: &'a Value, target_id: &str) -> Result<&'a Value, M
         .ok_or_else(|| ManagerError::System(format!("Unsupported CLI target: {}", target_id)))
 }
 
-fn resolve_skill_status(install_states: Option<&Value>) -> String {
+fn ensure_skill_enabled(skill: &Value) -> Result<(), ManagerError> {
+    if skill.get("disabled").and_then(Value::as_bool) == Some(true) {
+        return Err(ManagerError::System(format!(
+            "Skill 已禁用，恢复后才能使用：{}",
+            string_value(skill.get("name"))
+        )));
+    }
+
+    Ok(())
+}
+
+fn resolve_skill_status(skill_disabled: bool, install_states: Option<&Value>) -> String {
+    if skill_disabled {
+        return "disabled".to_string();
+    }
+
     let states = install_states
         .and_then(Value::as_object)
         .map(|items| {
@@ -2427,4 +2528,47 @@ fn now_millis() -> u128 {
 
 fn same_path(left: &Path, right: &Path) -> bool {
     path_text(left).eq_ignore_ascii_case(&path_text(right))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ensure_skill_enabled, extract_zip_command_args, resolve_skill_status};
+    use serde_json::json;
+    use std::path::Path;
+
+    #[test]
+    fn disabled_skill_status_overrides_install_states() {
+        let install_states = json!({
+          "codex": {
+            "state": "installed"
+          }
+        });
+
+        assert_eq!(
+            resolve_skill_status(true, Some(&install_states)),
+            "disabled"
+        );
+    }
+
+    #[test]
+    fn disabled_skill_is_rejected_before_install() {
+        let error = ensure_skill_enabled(&json!({
+          "name": "demo-skill",
+          "disabled": true
+        }))
+        .unwrap_err();
+
+        assert!(error.to_string().contains("Skill 已禁用"));
+    }
+
+    #[test]
+    fn extract_zip_command_passes_paths_as_literal_parameters() {
+        let args = extract_zip_command_args("D:\\demo skill.zip", Path::new("D:\\target dir"));
+
+        assert!(args.contains(&"-LiteralPath".to_string()));
+        assert!(args.contains(&"D:\\demo skill.zip".to_string()));
+        assert!(args.contains(&"-DestinationPath".to_string()));
+        assert!(args.contains(&"D:\\target dir".to_string()));
+        assert!(!args.iter().any(|item| item.contains("$args")));
+    }
 }

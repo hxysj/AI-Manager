@@ -107,11 +107,12 @@
             :class="[
               'skill-repository-list-card-status',
               {
+                disabled: isRepositorySkillDisabled(skill),
                 installed: isRepositorySkillInstalled(skill)
               }
             ]"
           >
-            {{ isRepositorySkillInstalled(skill) ? "已安装" : "未安装" }}
+            {{ formatRepositorySkillStatus(skill) }}
           </span>
         </div>
         <p class="skill-repository-list-card-desc" :title="skill.description">
@@ -154,11 +155,13 @@
               }
             ]"
             type="button"
-            :disabled="isRepositorySkillInstalled(skill)"
+            :disabled="
+              isRepositorySkillInstalled(skill) || isRepositorySkillDisabled(skill)
+            "
             @click="$emit('install-skill', skill)"
           >
             <Download :size="15" />
-            {{ isRepositorySkillInstalled(skill) ? "已安装" : "安装" }}
+            {{ formatRepositorySkillAction(skill) }}
           </button>
         </div>
       </article>
@@ -204,15 +207,14 @@
               }
             ]"
             type="button"
-            :disabled="isRepositorySkillInstalled(repositoryDetailSkill)"
+            :disabled="
+              isRepositorySkillInstalled(repositoryDetailSkill) ||
+              isRepositorySkillDisabled(repositoryDetailSkill)
+            "
             @click="$emit('install-skill', repositoryDetailSkill)"
           >
             <Download :size="16" />
-            {{
-              isRepositorySkillInstalled(repositoryDetailSkill)
-                ? "已安装"
-                : "安装"
-            }}
+            {{ formatRepositorySkillAction(repositoryDetailSkill) }}
           </button>
         </header>
 
@@ -444,7 +446,27 @@ const emptyDescription = computed(() => {
 })
 
 function isRepositorySkillInstalled(skill) {
-  return props.skills.some((item) => item.name === skill.name)
+  return props.skills.some((item) => item.name === skill.name && !item.disabled)
+}
+
+function isRepositorySkillDisabled(skill) {
+  return props.skills.some((item) => item.name === skill.name && item.disabled)
+}
+
+function formatRepositorySkillStatus(skill) {
+  if (isRepositorySkillDisabled(skill)) {
+    return "已禁用"
+  }
+
+  return isRepositorySkillInstalled(skill) ? "已安装" : "未安装"
+}
+
+function formatRepositorySkillAction(skill) {
+  if (isRepositorySkillDisabled(skill)) {
+    return "已禁用"
+  }
+
+  return isRepositorySkillInstalled(skill) ? "已安装" : "安装"
 }
 </script>
 
@@ -694,6 +716,11 @@ function isRepositorySkillInstalled(skill) {
   .skill-repository-list-card-status.installed {
     background: var(--color-success-soft);
     color: var(--color-success);
+  }
+
+  .skill-repository-list-card-status.disabled {
+    background: #edf3f8;
+    color: var(--color-text-soft);
   }
 
   .skill-repository-list-card-desc {

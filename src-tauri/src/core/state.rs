@@ -1030,7 +1030,7 @@ impl ManagerState {
                 Ok(self.state.clone())
             }
             "skill:import-from-zip" => {
-                skills::import_skill_from_zip(
+                let result = skills::import_skill_from_zip(
                     &self.paths,
                     &mut self.state,
                     payload.unwrap_or_else(|| json!({})),
@@ -1038,7 +1038,10 @@ impl ManagerState {
                 .await?;
                 app.emit("state:changed", self.state.clone())
                     .map_err(|error| ManagerError::Path(error.to_string()))?;
-                Ok(self.state.clone())
+                Ok(json!({
+                  "state": self.state,
+                  "zipImport": result
+                }))
             }
             "skill:install" => {
                 skills::install_skill(&self.state, payload.unwrap_or_else(|| json!({}))).await?;
@@ -1057,6 +1060,17 @@ impl ManagerState {
             "skill:repair" => {
                 skills::repair_skill(&self.state, payload.unwrap_or_else(|| json!({}))).await?;
                 skills::refresh_skills_state(&self.paths, &mut self.state).await?;
+                app.emit("state:changed", self.state.clone())
+                    .map_err(|error| ManagerError::Path(error.to_string()))?;
+                Ok(self.state.clone())
+            }
+            "skill:set-enabled" => {
+                skills::set_skill_enabled(
+                    &self.paths,
+                    &mut self.state,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
                 app.emit("state:changed", self.state.clone())
                     .map_err(|error| ManagerError::Path(error.to_string()))?;
                 Ok(self.state.clone())

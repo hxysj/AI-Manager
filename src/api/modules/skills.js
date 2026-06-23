@@ -9,6 +9,7 @@ export const skillApi = {
   installSkill: payload => request('skill:install', payload),
   uninstallSkill: payload => request('skill:uninstall', payload),
   repairSkill: payload => request('skill:repair', payload),
+  setSkillEnabled: payload => request('skill:set-enabled', payload),
   getSkillFiles: payload => request('skill:files', payload),
   addSkillRepository: payload => request('skill-repository:add', payload),
   refreshSkillRepository: payload =>
