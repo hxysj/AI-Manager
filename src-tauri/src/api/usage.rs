@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 const DEFAULT_EXCHANGE_RATE: f64 = 7.2;
 static PRICING_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static USAGE_LOG_CACHE: OnceLock<Mutex<Option<UsageLogCache>>> = OnceLock::new();
+static USAGE_PROVIDER_STATS_CACHE: OnceLock<Mutex<HashMap<String, UsageProviderStatsCache>>> =
+    OnceLock::new();
 
 #[derive(Clone)]
 struct Summary {
@@ -55,6 +57,17 @@ struct UsageLogCache {
     len: u64,
     modified_at: u128,
     logs: Arc<Vec<Value>>,
+}
+
+struct UsageProviderStatsCache {
+    path: String,
+    logs: Arc<Vec<Value>>,
+    today_start_at: u64,
+    log_signatures: HashMap<String, String>,
+    summary: Summary,
+    today_summary: Summary,
+    model_stats: HashMap<String, GroupStat>,
+    today_model_stats: HashMap<String, GroupStat>,
 }
 
 pub fn build_state(paths: &AppPaths) -> Result<Value, ManagerError> {
@@ -253,12 +266,18 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
     let filters = json!({
       "appType": normalize_app_type(&non_empty_text(input.get("appType"), "all")),
       "providerId": non_empty_text(input.get("providerId"), "all"),
+      "providerIds": string_array(input.get("providerIds")),
       "model": non_empty_text(input.get("model"), "all"),
       "requestSource": non_empty_text(input.get("requestSource"), "all"),
       "startAt": number_value(input.get("startAt"), 0),
       "endAt": number_value(input.get("endAt"), 0),
       "trendMode": normalize_usage_trend_mode(input.get("trendMode"))
     });
+
+    if input.get("statsScope").and_then(Value::as_str) == Some("provider") {
+        return get_provider_stats_data(paths, &pricing_config, &pricing_index, &filters);
+    }
+
     let log_page = number_value(input.get("logPage"), 1).max(1) as usize;
     let log_page_size = number_value(input.get("logPageSize"), 20).max(1) as usize;
     let include_all_logs = input.get("includeAllLogs").and_then(Value::as_bool) == Some(true);
@@ -276,6 +295,7 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
                 &json!({
                   "appType": filters["appType"],
                   "providerId": "all",
+                  "providerIds": filters["providerIds"],
                   "model": "all",
                   "requestSource": "all",
                   "startAt": filters["startAt"],
@@ -323,9 +343,10 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
       ),
       "modelStats": create_group_stats(
         &logs,
-        |log| format!("{}:{}", string_value(log.get("appType")), non_empty_text(log.get("model"), "unknown")),
+        |log| format!("{}:{}:{}", string_value(log.get("providerId")), string_value(log.get("appType")), non_empty_text(log.get("model"), "unknown")),
         |log| {
           let mut base = Map::new();
+          base.insert("providerId".to_string(), log.get("providerId").cloned().unwrap_or(Value::Null));
           base.insert("appType".to_string(), log.get("appType").cloned().unwrap_or(Value::Null));
           base.insert("model".to_string(), json!(non_empty_text(log.get("model"), "未识别模型")));
           base.insert("providerName".to_string(), log.get("providerName").cloned().unwrap_or(Value::Null));
@@ -347,6 +368,111 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
       },
       "pricingConfig": pricing_config
     }))
+}
+
+fn get_provider_stats_data(
+    paths: &AppPaths,
+    pricing_config: &Value,
+    pricing_index: &HashMap<String, Value>,
+    filters: &Value,
+) -> Result<Value, ManagerError> {
+    let raw_logs = read_usage_logs(&paths.storage_files.usage_logs)?;
+    let today_start_at = today_start_at();
+    let cache_key = format!(
+        "{}|{}",
+        provider_stats_cache_key(filters),
+        create_hash_id(&[pricing_config.to_string()])
+    );
+    let cache = USAGE_PROVIDER_STATS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let cached = cache.entry(cache_key).or_insert_with(|| UsageProviderStatsCache {
+        path: paths.storage_files.usage_logs.clone(),
+        logs: Arc::new(Vec::new()),
+        today_start_at,
+        log_signatures: HashMap::new(),
+        summary: create_empty_summary(),
+        today_summary: create_empty_summary(),
+        model_stats: HashMap::new(),
+        today_model_stats: HashMap::new(),
+    });
+
+    if cached.path == paths.storage_files.usage_logs
+        && cached.today_start_at == today_start_at
+        && Arc::ptr_eq(&cached.logs, &raw_logs)
+    {
+        return Ok(provider_stats_cache_response(cached, pricing_config));
+    }
+
+    let current_log_signatures = raw_logs
+        .iter()
+        .map(|log| (usage_log_cache_id(log), usage_log_cache_signature(log)))
+        .collect::<HashMap<_, _>>();
+
+    if cached.path != paths.storage_files.usage_logs
+        || cached.today_start_at != today_start_at
+        || cached
+            .log_signatures
+            .iter()
+            .any(|(request_id, signature)| current_log_signatures.get(request_id) != Some(signature))
+    {
+        cached.path = paths.storage_files.usage_logs.clone();
+        cached.logs = raw_logs.clone();
+        cached.today_start_at = today_start_at;
+        cached.log_signatures.clear();
+        cached.summary = create_empty_summary();
+        cached.today_summary = create_empty_summary();
+        cached.model_stats.clear();
+        cached.today_model_stats.clear();
+    }
+
+    for log in raw_logs.iter() {
+        let request_id = usage_log_cache_id(log);
+
+        if cached.log_signatures.contains_key(&request_id) {
+            continue;
+        }
+
+        cached
+            .log_signatures
+            .insert(request_id, usage_log_cache_signature(log));
+
+        if !in_range(log, filters) {
+            continue;
+        }
+
+        let enriched_log = enrich_usage_log(log, pricing_config, pricing_index);
+
+        append_usage_summary(&mut cached.summary, &enriched_log);
+        append_usage_model_group(&mut cached.model_stats, &enriched_log);
+
+        if number_value(enriched_log.get("createdAt"), 0) >= today_start_at {
+            append_usage_summary(&mut cached.today_summary, &enriched_log);
+            append_usage_model_group(&mut cached.today_model_stats, &enriched_log);
+        }
+    }
+
+    cached.logs = raw_logs.clone();
+
+    Ok(provider_stats_cache_response(cached, pricing_config))
+}
+
+fn provider_stats_cache_response(cached: &UsageProviderStatsCache, pricing_config: &Value) -> Value {
+    json!({
+      "summary": finalize_summary(cached.summary.clone()),
+      "todaySummary": finalize_summary(cached.today_summary.clone()),
+      "modelStats": finalize_usage_model_groups(&cached.model_stats),
+      "todayModelStats": finalize_usage_model_groups(&cached.today_model_stats),
+      "logTotalCount": cached.summary.request_count,
+      "filters": {
+        "appTypes": [],
+        "providers": [],
+        "models": [],
+        "requestSources": []
+      },
+      "pricingConfig": pricing_config
+    })
 }
 
 fn get_initial_state_data(paths: &AppPaths) -> Result<Value, ManagerError> {
@@ -379,9 +505,10 @@ fn get_initial_state_data(paths: &AppPaths) -> Result<Value, ManagerError> {
       ),
       "modelStats": create_group_stats(
         &logs,
-        |log| format!("{}:{}", string_value(log.get("appType")), non_empty_text(log.get("model"), "unknown")),
+        |log| format!("{}:{}:{}", string_value(log.get("providerId")), string_value(log.get("appType")), non_empty_text(log.get("model"), "unknown")),
         |log| {
           let mut base = Map::new();
+          base.insert("providerId".to_string(), log.get("providerId").cloned().unwrap_or(Value::Null));
           base.insert("appType".to_string(), log.get("appType").cloned().unwrap_or(Value::Null));
           base.insert("model".to_string(), json!(non_empty_text(log.get("model"), "未识别模型")));
           base.insert("providerName".to_string(), log.get("providerName").cloned().unwrap_or(Value::Null));
@@ -1254,6 +1381,58 @@ fn create_group_stats(
     items
 }
 
+fn append_usage_model_group(groups: &mut HashMap<String, GroupStat>, log: &Value) {
+    let key = format!(
+        "{}:{}:{}",
+        string_value(log.get("providerId")),
+        string_value(log.get("appType")),
+        non_empty_text(log.get("model"), "unknown")
+    );
+
+    groups.entry(key.clone()).or_insert_with(|| {
+        let mut base = Map::new();
+
+        base.insert(
+            "providerId".to_string(),
+            log.get("providerId").cloned().unwrap_or(Value::Null),
+        );
+        base.insert(
+            "appType".to_string(),
+            log.get("appType").cloned().unwrap_or(Value::Null),
+        );
+        base.insert(
+            "model".to_string(),
+            json!(non_empty_text(log.get("model"), "未识别模型")),
+        );
+        base.insert(
+            "providerName".to_string(),
+            log.get("providerName").cloned().unwrap_or(Value::Null),
+        );
+
+        GroupStat {
+            base,
+            summary: create_empty_summary(),
+        }
+    });
+
+    if let Some(group) = groups.get_mut(&key) {
+        append_usage_summary(&mut group.summary, log);
+    }
+}
+
+fn finalize_usage_model_groups(groups: &HashMap<String, GroupStat>) -> Vec<Value> {
+    let mut items = groups
+        .values()
+        .cloned()
+        .map(|group| merge_summary(group.base, finalize_summary(group.summary)))
+        .collect::<Vec<_>>();
+
+    items.sort_by(|left, right| {
+        number_value(right.get("actualTokens"), 0).cmp(&number_value(left.get("actualTokens"), 0))
+    });
+    items
+}
+
 fn create_provider_filter_options(logs: &[Value]) -> Vec<Value> {
     let mut items = Vec::new();
     let mut seen = HashMap::new();
@@ -1523,6 +1702,10 @@ fn create_usage_trend_label(
 fn in_range(log: &Value, filters: &Value) -> bool {
     let app_type = string_value(filters.get("appType"));
     let provider_id = string_value(filters.get("providerId"));
+    let provider_ids = filters
+        .get("providerIds")
+        .and_then(Value::as_array)
+        .filter(|items| !items.is_empty());
     let model = string_value(filters.get("model"));
     let request_source = string_value(filters.get("requestSource"));
     let start_at = number_value(filters.get("startAt"), 0);
@@ -1532,7 +1715,16 @@ fn in_range(log: &Value, filters: &Value) -> bool {
         return false;
     }
 
-    if provider_id != "all" && string_value(log.get("providerId")) != provider_id {
+    let log_provider_id = string_value(log.get("providerId"));
+
+    if let Some(provider_ids) = provider_ids {
+        if !provider_ids
+            .iter()
+            .any(|item| string_value(Some(item)) == log_provider_id)
+        {
+            return false;
+        }
+    } else if provider_id != "all" && log_provider_id != provider_id {
         return false;
     }
 
@@ -2951,6 +3143,73 @@ fn non_empty_text(value: Option<&Value>, fallback: &str) -> String {
     non_empty_owned(string_value(value), fallback)
 }
 
+fn string_array(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| string_value(Some(item)))
+                .filter(|item| !item.trim().is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn provider_stats_cache_key(filters: &Value) -> String {
+    let mut provider_ids = filters
+        .get("providerIds")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| string_value(Some(&item)))
+        .filter(|item| !item.trim().is_empty())
+        .collect::<Vec<_>>();
+
+    provider_ids.sort();
+
+    format!(
+        "{}|{}|{}",
+        string_value(filters.get("appType")),
+        non_empty_owned(provider_ids.join(","), &string_value(filters.get("providerId"))),
+        string_value(filters.get("requestSource"))
+    )
+}
+
+fn usage_log_cache_id(log: &Value) -> String {
+    let request_id = string_value(log.get("requestId"));
+
+    if !request_id.is_empty() {
+        return request_id;
+    }
+
+    create_hash_id(&[
+        string_value(log.get("rawPath")),
+        string_value(log.get("createdAt")),
+        string_value(log.get("providerId")),
+        string_value(log.get("model")),
+    ])
+}
+
+fn usage_log_cache_signature(log: &Value) -> String {
+    create_hash_id(&[
+        string_value(log.get("createdAt")),
+        string_value(log.get("appType")),
+        string_value(log.get("providerId")),
+        string_value(log.get("providerName")),
+        string_value(log.get("providerType")),
+        string_value(log.get("model")),
+        string_value(log.get("requestSource")),
+        string_value(log.get("inputTokens")),
+        string_value(log.get("outputTokens")),
+        string_value(log.get("cacheReadTokens")),
+        string_value(log.get("cacheCreationTokens")),
+        string_value(log.get("actualTokens")),
+        string_value(log.get("totalCostUsd")),
+    ])
+}
+
 fn non_empty_owned(value: String, fallback: &str) -> String {
     if value.trim().is_empty() {
         fallback.to_string()
@@ -3084,6 +3343,16 @@ fn is_single_day(filters: &Value) -> bool {
     let end = local_datetime(end_at);
 
     start.year() == end.year() && start.month() == end.month() && start.day() == end.day()
+}
+
+fn today_start_at() -> u64 {
+    let now = Local::now();
+
+    Local
+        .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 0, 0)
+        .single()
+        .map(|date| date.timestamp_millis().max(0) as u64)
+        .unwrap_or_else(|| local_sort_at(now.timestamp_millis().max(0) as u64, false, false))
 }
 
 fn local_datetime(timestamp: u64) -> chrono::DateTime<Local> {
