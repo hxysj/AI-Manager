@@ -1,312 +1,9 @@
 <template>
-  <section
+  <QuickSwitchPanel
     v-if="isQuickSwitchPanel"
-    :class="[
-      'quick-switch-panel',
-      { 'quick-switch-panel--collapsed': quickCollapsed }
-    ]"
-  >
-    <header class="quick-switch-panel__header" @dblclick="showMainPanel">
-      <button
-        v-if="quickCollapsed"
-        class="quick-switch-panel__logo-button"
-        type="button"
-        title="展开快速切换"
-        @click="handleQuickLogoClick"
-        @pointerdown="startQuickLogoDrag"
-      >
-        <svg
-          class="quick-switch-panel__logo-scene"
-          viewBox="0 0 44 44"
-          role="img"
-          aria-label="AI Manager"
-        >
-          <defs>
-            <clipPath id="quick-switch-logo-clip">
-              <circle cx="22" cy="21" r="14"></circle>
-            </clipPath>
-            <linearGradient
-              id="quick-switch-logo-ring"
-              x1="8"
-              x2="36"
-              y1="7"
-              y2="36"
-              gradientUnits="userSpaceOnUse"
-            >
-              <stop offset="0" stop-color="#4da3ff"></stop>
-              <stop offset="0.52" stop-color="#18a058"></stop>
-              <stop offset="1" stop-color="#ffb84d"></stop>
-            </linearGradient>
-          </defs>
-          <ellipse
-            class="quick-switch-panel__logo-shadow"
-            cx="22"
-            cy="36"
-            rx="10"
-            ry="3"
-          ></ellipse>
-          <g class="quick-switch-panel__logo-mascot">
-            <circle
-              class="quick-switch-panel__logo-orbit"
-              cx="22"
-              cy="21"
-              r="17"
-            ></circle>
-            <image
-              class="quick-switch-panel__logo-core"
-              :href="logoUrl"
-              x="8"
-              y="7"
-              width="28"
-              height="28"
-              clip-path="url(#quick-switch-logo-clip)"
-              preserveAspectRatio="xMidYMid slice"
-            ></image>
-            <path
-              class="quick-switch-panel__logo-scan"
-              d="M10 22a12 12 0 0 1 24 0"
-            ></path>
-            <circle
-              class="quick-switch-panel__logo-eye quick-switch-panel__logo-eye--left"
-              cx="18"
-              cy="20"
-              r="1.5"
-            ></circle>
-            <circle
-              class="quick-switch-panel__logo-eye quick-switch-panel__logo-eye--right"
-              cx="26"
-              cy="20"
-              r="1.5"
-            ></circle>
-          </g>
-          <g class="quick-switch-panel__logo-sparks">
-            <circle cx="8" cy="15" r="1.3"></circle>
-            <circle cx="35" cy="14" r="1.1"></circle>
-            <circle cx="33" cy="31" r="1.4"></circle>
-          </g>
-        </svg>
-      </button>
-      <template v-else>
-        <div class="quick-switch-panel__title">
-          <span class="quick-switch-panel__dot"></span>
-          <strong>{{ quickActiveCli?.name || "未选择" }}</strong>
-          <small>{{ quickActiveName }}</small>
-        </div>
-        <div class="quick-switch-panel__actions">
-          <button
-            class="quick-switch-panel__icon-button"
-            type="button"
-            title="打开主界面"
-            @click="showMainPanel"
-          >
-            <ExternalLink :size="14" />
-          </button>
-          <button
-            class="quick-switch-panel__icon-button"
-            type="button"
-            title="收起"
-            @click="toggleQuickCollapsed"
-          >
-            <ChevronDown :size="15" />
-          </button>
-        </div>
-      </template>
-    </header>
-
-    <template v-if="!quickCollapsed">
-      <nav class="quick-switch-panel__cli-tabs">
-        <button
-          v-for="cli in quickCliTargets"
-          :key="cli.id"
-          :class="[
-            'quick-switch-panel__cli-tab',
-            {
-              'quick-switch-panel__cli-tab--active':
-                cli.id === quickActiveCli?.id
-            }
-          ]"
-          type="button"
-          @click="quickSelectedCli = cli.id"
-        >
-          {{ cli.name }}
-        </button>
-      </nav>
-
-      <section v-if="quickMode === 'usage'" class="quick-switch-panel__usage">
-        <div class="quick-switch-panel__hero">
-          <div class="quick-switch-panel__hero-copy">
-            <span>当前用量</span>
-            <strong>{{ quickActiveCli?.name || "未选择" }}</strong>
-            <small>{{ quickActiveName }}</small>
-          </div>
-          <button
-            class="quick-switch-panel__manage-button"
-            type="button"
-            @click="quickMode = 'provider'"
-          >
-            管理
-          </button>
-        </div>
-
-        <div class="quick-switch-panel__metrics">
-          <article class="quick-switch-panel__metric">
-            <span>请求</span>
-            <strong>{{
-              formatQuickNumber(quickUsageSummary.requestCount)
-            }}</strong>
-          </article>
-          <article class="quick-switch-panel__metric">
-            <span>Token</span>
-            <strong>{{
-              formatQuickNumber(quickUsageSummary.actualTokens)
-            }}</strong>
-          </article>
-          <article class="quick-switch-panel__metric">
-            <span>费用</span>
-            <strong>{{
-              formatQuickCost(quickUsageSummary.totalCostUsd)
-            }}</strong>
-          </article>
-        </div>
-
-        <div class="quick-switch-panel__summary-row">
-          <section class="quick-switch-panel__usage-panel">
-            <div class="quick-switch-panel__usage-head">
-              <strong>最近用量</strong>
-              <span>{{ quickUsageTrend.length }} 天</span>
-            </div>
-            <div v-if="quickUsageTrend.length" class="quick-switch-panel__bars">
-              <div
-                v-for="item in quickUsageTrend"
-                :key="item.date"
-                class="quick-switch-panel__bar"
-                :title="`${item.date} · ${formatQuickNumber(item.actualTokens)} Token`"
-              >
-                <span
-                  class="quick-switch-panel__bar-fill"
-                  :style="{ height: `${item.percent}%` }"
-                ></span>
-                <small>{{ item.label }}</small>
-              </div>
-            </div>
-            <div v-else class="quick-switch-panel__empty">暂无用量统计</div>
-          </section>
-
-          <section
-            class="quick-switch-panel__usage-panel quick-switch-panel__usage-panel--providers"
-          >
-            <div class="quick-switch-panel__usage-head">
-              <strong>Provider</strong>
-              <span>{{ quickUsageProviders.length }} 个</span>
-            </div>
-            <div
-              v-if="quickUsageProviders.length"
-              class="quick-switch-panel__provider-bars"
-            >
-              <article
-                v-for="item in quickUsageProviders"
-                :key="item.providerId"
-                class="quick-switch-panel__provider-bar"
-              >
-                <div class="quick-switch-panel__provider-bar-head">
-                  <strong>{{ item.providerName }}</strong>
-                  <span>{{ formatQuickCost(item.totalCostUsd) }}</span>
-                </div>
-                <div class="quick-switch-panel__provider-track">
-                  <span
-                    class="quick-switch-panel__provider-fill"
-                    :style="{ width: `${item.percent}%` }"
-                  ></span>
-                </div>
-              </article>
-            </div>
-            <div v-else class="quick-switch-panel__empty">暂无 Provider</div>
-          </section>
-        </div>
-      </section>
-
-      <section v-else class="quick-switch-panel__list">
-        <div class="quick-switch-panel__manager-head">
-          <div>
-            <strong>Provider 管理</strong>
-            <span
-              >{{ quickActiveCli?.name || "未选择" }} ·
-              {{ quickActiveName }}</span
-            >
-          </div>
-          <button
-            class="quick-switch-panel__manage-button"
-            type="button"
-            @click="quickMode = 'usage'"
-          >
-            统计
-          </button>
-        </div>
-        <article
-          v-for="item in quickItems"
-          :key="item.key"
-          :class="[
-            'quick-switch-panel__item',
-            {
-              'quick-switch-panel__item--active': item.active,
-              'quick-switch-panel__item--account': item.type === 'account'
-            }
-          ]"
-        >
-          <span class="quick-switch-panel__item-copy">
-            <strong>{{ item.label }}</strong>
-            <small>{{ item.description }}</small>
-            <span
-              v-if="item.type === 'account' && item.quotas.length"
-              class="quick-switch-panel__quota-list"
-            >
-              <span
-                v-for="quota in item.quotas"
-                :key="quota.key"
-                class="quick-switch-panel__quota-item"
-                :title="quota.reset"
-              >
-                <span>{{ quota.label }}</span>
-                <strong>{{ quota.remaining }}%</strong>
-              </span>
-            </span>
-          </span>
-          <span class="quick-switch-panel__item-actions">
-            <button
-              v-if="item.type === 'account' && !item.disabled"
-              class="quick-switch-panel__item-icon-button"
-              type="button"
-              title="刷新额度"
-              aria-label="刷新额度"
-              @click.stop="refreshQuickCodexAccount(item)"
-            >
-              <RefreshCw :size="14" />
-            </button>
-            <button
-              class="quick-switch-panel__item-action"
-              type="button"
-              :disabled="item.active || item.disabled"
-              @click.stop="selectQuickItem(item)"
-            >
-              启用
-            </button>
-            <button
-              class="quick-switch-panel__item-action quick-switch-panel__item-action--danger"
-              type="button"
-              :disabled="!item.active"
-              @click.stop="clearQuickActive"
-            >
-              取消启用
-            </button>
-          </span>
-        </article>
-
-        <div v-if="!quickItems.length" class="quick-switch-panel__empty">
-          暂无可切换项
-        </div>
-      </section>
-    </template>
-  </section>
+    :state="state"
+    @state-updated="updateState"
+  />
 
   <div v-else class="app-shell">
     <AppSidebar
@@ -453,118 +150,13 @@
           @uninstall-without-trace="uninstallWithoutTrace"
         />
 
-        <section v-else-if="activeView === 'logs'" class="app-logs">
-          <header class="app-logs__header">
-            <div>
-              <span>调用日志</span>
-              <h1>调用日志</h1>
-              <p>{{ appLogPath || "记录所有后端服务调用过程。" }}</p>
-            </div>
-            <div class="app-logs__actions">
-              <button type="button" @click="loadAppLogs">
-                <RefreshCw :size="15" />
-                刷新
-              </button>
-              <button type="button" @click="clearAppLogs">清空</button>
-            </div>
-          </header>
-
-          <div class="app-logs__filters">
-            <label>
-              <span>分类</span>
-              <select v-model="appLogScopeFilter">
-                <option value="all">全部</option>
-                <option
-                  v-for="scope in appLogScopeOptions"
-                  :key="scope"
-                  :value="scope"
-                >
-                  {{ formatLogScope(scope) }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>服务</span>
-              <select v-model="appLogServiceFilter">
-                <option value="all">全部</option>
-                <option
-                  v-for="service in appLogServiceOptions"
-                  :key="service"
-                  :value="service"
-                >
-                  {{ service }}
-                </option>
-              </select>
-            </label>
-            <label>
-              <span>状态</span>
-              <select v-model="appLogStatusFilter">
-                <option value="all">全部</option>
-                <option value="success">成功</option>
-                <option value="error">失败</option>
-                <option value="pending">进行中</option>
-              </select>
-            </label>
-            <strong>{{ filteredAppLogs.length }} 条</strong>
-          </div>
-
-          <div v-if="filteredAppLogs.length" class="app-logs__list">
-            <article
-              v-for="item in pagedAppLogs"
-              :key="item.id"
-              :class="[
-                'app-logs__item',
-                { 'app-logs__item--error': item.status === 'error' }
-              ]"
-            >
-              <div class="app-logs__item-head">
-                <strong>{{ formatLogTitle(item) }}</strong>
-                <span>{{ formatLogStatus(item.status) }}</span>
-              </div>
-              <p v-if="item.message">{{ item.message }}</p>
-              <div class="app-logs__meta">
-                <span>{{ formatLogTime(item.createdAt) }}</span>
-                <span>{{ formatLogScope(item.scope) }}</span>
-                <span>{{ item.service || "未知服务" }}</span>
-                <span>{{ item.method || item.channel }}</span>
-                <span>{{ item.action }}</span>
-                <span>{{ item.durationMs || 0 }}ms</span>
-                <span>{{ item.traceId }}</span>
-              </div>
-              <pre v-if="item.payload">{{
-                formatLogPayload(item.payload)
-              }}</pre>
-              <pre v-if="item.result">{{ formatLogPayload(item.result) }}</pre>
-            </article>
-          </div>
-          <div v-if="filteredAppLogs.length" class="app-logs__pagination">
-            <span>
-              {{ appLogPageStart }}-{{ appLogPageEnd }} /
-              {{ filteredAppLogs.length }}
-            </span>
-            <select v-model.number="appLogPageSize">
-              <option :value="20">20 条/页</option>
-              <option :value="50">50 条/页</option>
-              <option :value="100">100 条/页</option>
-            </select>
-            <button
-              type="button"
-              :disabled="currentAppLogPage <= 1"
-              @click="goAppLogPage(currentAppLogPage - 1)"
-            >
-              上一页
-            </button>
-            <strong>{{ currentAppLogPage }} / {{ appLogPageCount }}</strong>
-            <button
-              type="button"
-              :disabled="currentAppLogPage >= appLogPageCount"
-              @click="goAppLogPage(currentAppLogPage + 1)"
-            >
-              下一页
-            </button>
-          </div>
-          <div v-else class="app-logs__empty">暂无调用日志。</div>
-        </section>
+        <LogsView
+          v-else-if="activeView === 'logs'"
+          :file-path="appLogPath"
+          :logs="appLogs"
+          @clear="clearAppLogs"
+          @refresh="loadAppLogs"
+        />
 
         <section v-else class="app-shell__placeholder">
           <h1>{{ currentPlaceholder.title }}</h1>
@@ -615,288 +207,14 @@
       @submit="addRepo"
     />
 
-    <BaseModal
+    <DataRestorePreviewModal
       v-if="restorePreview"
-      title="确认恢复配置"
+      :preview="restorePreview"
       :description="restorePreviewDescription"
+      :loading="pending"
       @close="closeRestorePreview"
-    >
-      <form class="restore-preview-modal" @submit.prevent="confirmRestore">
-        <div class="restore-preview-modal__summary">
-          <span class="restore-preview-modal__summary-pill"
-            >新增 {{ restoreAddedItems.length }} 项</span
-          >
-          <span class="restore-preview-modal__summary-pill"
-            >冲突 {{ restoreConflictItems.length }} 项</span
-          >
-        </div>
-
-        <p class="restore-preview-modal__notice">
-          新增项会合并到当前数据；Provider 和 Runtime Profile 恢复后保持未启用。
-        </p>
-
-        <div class="restore-preview-modal__body">
-          <section
-            v-if="restoreAddedItems.length"
-            class="restore-preview-modal__section"
-          >
-            <h3 class="restore-preview-modal__section-title">将新增</h3>
-            <section
-              v-for="group in restoreAddedGroups"
-              :key="group.path"
-              class="restore-preview-modal__group"
-            >
-              <div class="restore-preview-modal__group-head">
-                <strong>{{ group.path }}</strong>
-                <span>{{ group.items.length }} 项</span>
-              </div>
-              <div class="restore-preview-modal__tree">
-                <template v-for="row in group.rows" :key="row.key">
-                  <div
-                    v-if="row.kind === 'dir'"
-                    class="restore-preview-modal__tree-folder"
-                    :style="{ paddingLeft: `${row.depth * 18 + 10}px` }"
-                  >
-                    <strong>{{ row.name }}</strong>
-                    <span>{{ row.itemCount }} 项</span>
-                  </div>
-                  <article
-                    v-else
-                    class="restore-preview-modal__item restore-preview-modal__tree-item"
-                    :style="{ marginLeft: `${row.depth * 18}px` }"
-                  >
-                    <strong class="restore-preview-modal__item-name"
-                      >{{ row.item.type }}：{{ row.item.name }}</strong
-                    >
-                    <span class="restore-preview-modal__item-path">{{
-                      row.relativePath
-                    }}</span>
-                  </article>
-                </template>
-              </div>
-            </section>
-          </section>
-
-          <section
-            v-if="restoreConflictItems.length"
-            class="restore-preview-modal__section"
-          >
-            <h3 class="restore-preview-modal__section-title">需要选择</h3>
-            <section
-              v-for="group in restoreConflictGroups"
-              :key="group.path"
-              class="restore-preview-modal__group"
-            >
-              <div class="restore-preview-modal__group-head">
-                <strong>{{ group.path }}</strong>
-                <div class="restore-preview-modal__group-actions">
-                  <span>{{ group.items.length }} 项</span>
-                  <button
-                    class="restore-preview-modal__bulk-button"
-                    type="button"
-                    :disabled="pending"
-                    @click="chooseRestoreItems(group.items, 'current')"
-                  >
-                    保留当前
-                  </button>
-                  <button
-                    class="restore-preview-modal__bulk-button"
-                    type="button"
-                    :disabled="pending"
-                    @click="chooseRestoreItems(group.items, 'backup')"
-                  >
-                    使用备份
-                  </button>
-                </div>
-              </div>
-              <div class="restore-preview-modal__tree">
-                <template v-for="row in group.rows" :key="row.key">
-                  <div
-                    v-if="row.kind === 'dir'"
-                    class="restore-preview-modal__tree-folder"
-                    :style="{ paddingLeft: `${row.depth * 18 + 10}px` }"
-                  >
-                    <strong>{{ row.name }}</strong>
-                    <div class="restore-preview-modal__directory-actions">
-                      <span>{{ row.itemCount }} 项</span>
-                      <button
-                        class="restore-preview-modal__bulk-button"
-                        type="button"
-                        :disabled="pending"
-                        @click="chooseRestoreItems(row.items, 'current')"
-                      >
-                        保留当前
-                      </button>
-                      <button
-                        class="restore-preview-modal__bulk-button"
-                        type="button"
-                        :disabled="pending"
-                        @click="chooseRestoreItems(row.items, 'backup')"
-                      >
-                        使用备份
-                      </button>
-                    </div>
-                  </div>
-                  <article
-                    v-else
-                    class="restore-preview-modal__conflict restore-preview-modal__tree-item"
-                    :style="{ marginLeft: `${row.depth * 18}px` }"
-                  >
-                    <div class="restore-preview-modal__conflict-head">
-                      <div>
-                        <strong class="restore-preview-modal__item-name"
-                          >{{ row.item.type }}：{{ row.item.name }}</strong
-                        >
-                        <span class="restore-preview-modal__item-path">{{
-                          row.relativePath
-                        }}</span>
-                      </div>
-                      <button
-                        class="restore-preview-modal__compare-button"
-                        type="button"
-                        :disabled="pending"
-                        @click="toggleRestoreCompare(row.item)"
-                      >
-                        对比
-                      </button>
-                    </div>
-                    <label class="restore-preview-modal__choice">
-                      <input
-                        v-model="restoreChoices[row.item.key]"
-                        type="radio"
-                        :name="`restore-${row.item.key}`"
-                        value="current"
-                        :disabled="pending"
-                      />
-                      <span class="restore-preview-modal__choice-text"
-                        >保留当前版本</span
-                      >
-                    </label>
-                    <label class="restore-preview-modal__choice">
-                      <input
-                        v-model="restoreChoices[row.item.key]"
-                        type="radio"
-                        :name="`restore-${row.item.key}`"
-                        value="backup"
-                        :disabled="pending"
-                      />
-                      <span class="restore-preview-modal__choice-text"
-                        >使用备份版本</span
-                      >
-                    </label>
-                  </article>
-                </template>
-              </div>
-            </section>
-          </section>
-
-          <div
-            v-if="!restoreAddedItems.length && !restoreConflictItems.length"
-            class="restore-preview-modal__empty"
-          >
-            当前数据和备份没有差异。
-          </div>
-        </div>
-
-        <div class="restore-preview-modal__actions">
-          <button
-            class="status-button"
-            type="button"
-            :disabled="pending"
-            @click="closeRestorePreview"
-          >
-            取消
-          </button>
-          <button
-            class="status-button restore-preview-modal__primary"
-            type="submit"
-            :disabled="pending || !restoreCanSubmit"
-          >
-            {{ pending ? "恢复中..." : "确认恢复" }}
-          </button>
-        </div>
-      </form>
-    </BaseModal>
-
-    <BaseModal
-      v-if="restoreCompareItem"
-      title="检查恢复差异"
-      :description="restoreCompareDescription"
-      @close="closeRestoreCompare"
-    >
-      <div class="restore-preview-modal restore-preview-modal--compare">
-        <div class="restore-preview-modal__compare-summary">
-          已标记 {{ restoreCompareChangedCount }} 处不同
-        </div>
-        <div
-          class="restore-preview-modal__compare restore-preview-modal__compare--dialog"
-        >
-          <section class="restore-preview-modal__compare-panel">
-            <strong>当前内容</strong>
-            <div
-              ref="restoreCurrentCompareCodeRef"
-              class="restore-preview-modal__compare-code"
-              @scroll="syncRestoreCompareScroll('current')"
-            >
-              <div
-                v-for="row in restoreCompareRows"
-                :key="`current-${row.index}`"
-                :class="[
-                  'restore-preview-modal__compare-line',
-                  `restore-preview-modal__compare-line--${row.currentStatus}`
-                ]"
-              >
-                <span class="restore-preview-modal__compare-number">{{
-                  row.currentLineNumber
-                }}</span>
-                <span class="restore-preview-modal__compare-marker">{{
-                  row.currentMarker
-                }}</span>
-                <span class="restore-preview-modal__compare-text">{{
-                  row.currentText
-                }}</span>
-              </div>
-            </div>
-          </section>
-          <section class="restore-preview-modal__compare-panel">
-            <strong>备份内容</strong>
-            <div
-              ref="restoreBackupCompareCodeRef"
-              class="restore-preview-modal__compare-code"
-              @scroll="syncRestoreCompareScroll('backup')"
-            >
-              <div
-                v-for="row in restoreCompareRows"
-                :key="`backup-${row.index}`"
-                :class="[
-                  'restore-preview-modal__compare-line',
-                  `restore-preview-modal__compare-line--${row.backupStatus}`
-                ]"
-              >
-                <span class="restore-preview-modal__compare-number">{{
-                  row.backupLineNumber
-                }}</span>
-                <span class="restore-preview-modal__compare-marker">{{
-                  row.backupMarker
-                }}</span>
-                <span class="restore-preview-modal__compare-text">{{
-                  row.backupText
-                }}</span>
-              </div>
-            </div>
-          </section>
-        </div>
-        <div class="restore-preview-modal__actions">
-          <button
-            class="status-button restore-preview-modal__primary"
-            type="button"
-            @click="closeRestoreCompare"
-          >
-            确定
-          </button>
-        </div>
-      </div>
-    </BaseModal>
+      @submit="confirmRestore"
+    />
 
     <BaseModal
       v-if="cloudBackupView"
@@ -952,119 +270,12 @@
       </div>
     </BaseModal>
 
-    <div v-if="updateDialog.open" class="update-modal">
-      <div class="update-modal__overlay"></div>
-      <section class="update-modal__panel" role="dialog" aria-modal="true">
-        <header class="update-modal__header">
-          <div>
-            <span>应用更新</span>
-            <h2>{{ updateDialogTitle }}</h2>
-          </div>
-          <button
-            class="update-modal__icon-button"
-            type="button"
-            aria-label="关闭更新面板"
-            :disabled="
-              ['checking', 'downloading', 'installing'].includes(
-                updateDialog.phase
-              )
-            "
-            @click="closeUpdateDialog"
-          >
-            <X :size="17" />
-          </button>
-        </header>
-
-        <div class="update-modal__body">
-          <div class="update-modal__mark">
-            <Info :size="22" />
-          </div>
-          <div class="update-modal__copy">
-            <span>{{ updateDialogMessage }}</span>
-          </div>
-        </div>
-
-        <div
-          v-if="updateDialog.phase === 'downloading'"
-          class="update-modal__progress"
-        >
-          <div class="update-modal__progress-head">
-            <span>{{ updateTransferText }}</span>
-            <strong>{{ updateProgressText }}</strong>
-          </div>
-          <div class="update-modal__progress-track">
-            <div
-              class="update-modal__progress-bar"
-              :style="{ width: updateProgressWidth }"
-            ></div>
-          </div>
-        </div>
-
-        <pre
-          v-if="
-            updateDialog.releaseNotes && updateDialog.phase !== 'downloading'
-          "
-          class="update-modal__notes"
-          >{{ updateDialog.releaseNotes }}</pre
-        >
-
-        <footer class="update-modal__footer">
-          <button
-            v-if="updateDialog.phase === 'available'"
-            class="update-modal__button"
-            type="button"
-            @click="closeUpdateDialog"
-          >
-            稍后
-          </button>
-          <button
-            v-if="updateDialog.phase === 'available'"
-            class="update-modal__button update-modal__button--primary"
-            type="button"
-            @click="downloadAppUpdate"
-          >
-            <RefreshCw :size="15" />
-            立即下载
-          </button>
-          <button
-            v-else-if="updateDialog.phase === 'downloaded'"
-            class="update-modal__button"
-            type="button"
-            @click="closeUpdateDialog"
-          >
-            稍后
-          </button>
-          <button
-            v-if="updateDialog.phase === 'downloaded'"
-            class="update-modal__button update-modal__button--primary"
-            type="button"
-            @click="installAppUpdate"
-          >
-            打开安装向导
-          </button>
-          <button
-            v-else-if="updateDialog.phase === 'downloading'"
-            class="update-modal__button"
-            type="button"
-            disabled
-          >
-            下载中...
-          </button>
-          <button
-            v-else-if="
-              !['available', 'downloaded', 'downloading'].includes(
-                updateDialog.phase
-              )
-            "
-            class="update-modal__button update-modal__button--primary"
-            type="button"
-            @click="closeUpdateDialog"
-          >
-            确定
-          </button>
-        </footer>
-      </section>
-    </div>
+    <AppUpdateModal
+      :dialog="updateDialog"
+      @close="closeUpdateDialog"
+      @download="downloadAppUpdate"
+      @install="installAppUpdate"
+    />
 
     <div v-if="showCloseConfirm" class="close-confirm">
       <div class="close-confirm__overlay"></div>
@@ -1145,25 +356,24 @@ import {
 } from "vue"
 import {
   BarChart3,
-  ChevronDown,
   Compass,
-  ExternalLink,
   Gauge,
   Info,
   Minus,
   Network,
   Power,
-  RefreshCw,
   Settings,
   ShieldCheck,
   Wrench,
   X
 } from "lucide-vue-next"
 import AppSidebar from "@/components/AppSidebar.vue"
+import AppUpdateModal from "@/components/AppUpdateModal.vue"
 import BaseModal from "@/components/BaseModal.vue"
+import DataRestorePreviewModal from "@/components/DataRestorePreviewModal.vue"
 import GlobalLoading from "@/components/GlobalLoading.vue"
+import QuickSwitchPanel from "@/components/QuickSwitchPanel.vue"
 import SelectionTranslator from "@/components/SelectionTranslator.vue"
-import logoUrl from "@/assets/ai-manager-logo.svg?url"
 import {
   accountApi,
   appApi,
@@ -1207,6 +417,9 @@ const SkillUsageView = defineAsyncComponent(
 )
 const UsageView = defineAsyncComponent(
   () => import("@/features/usage/index.vue")
+)
+const LogsView = defineAsyncComponent(
+  () => import("@/features/logs/index.vue")
 )
 const CreateSkillModal = defineAsyncComponent(
   () => import("@/features/skills/components/CreateSkillModal.vue")
@@ -1339,22 +552,6 @@ const showLogsTab = ref(false)
 const sidebarTitleClickCount = ref(0)
 const appLogs = ref([])
 const appLogPath = ref("")
-const appLogScopeFilter = ref("all")
-const appLogServiceFilter = ref("all")
-const appLogStatusFilter = ref("all")
-const appLogPage = ref(1)
-const appLogPageSize = ref(20)
-const quickSelectedCli = ref("")
-const quickMode = ref("usage")
-const quickCollapsed = ref(false)
-const quickLogoDrag = {
-  active: false,
-  moved: false,
-  lastX: 0,
-  lastY: 0,
-  totalX: 0,
-  totalY: 0
-}
 const sidebarCollapsed = ref(false)
 const selectedSkillName = ref("")
 const showCreateSkill = ref(false)
@@ -1380,10 +577,6 @@ const localBackups = ref([])
 const localBackupDirectory = ref("")
 const restorePreview = ref(null)
 const restoreSource = ref(null)
-const restoreCompareKey = ref("")
-const restoreCurrentCompareCodeRef = ref(null)
-const restoreBackupCompareCodeRef = ref(null)
-const restoreChoices = reactive({})
 const cloudBackupView = ref(null)
 const selectedCloudBackupPath = ref("")
 const { loading: pending, withGlobalLoading } = useGlobalLoading()
@@ -1391,116 +584,11 @@ const { loading: pending, withGlobalLoading } = useGlobalLoading()
 let unsubscribe = null
 let unsubscribeClose = null
 let unsubscribeUpdate = null
-let syncingRestoreCompareScroll = false
 
 const navItems = computed(() =>
   showLogsTab.value
     ? [...baseNavItems, { id: "logs", label: "日志", icon: Info }]
     : baseNavItems
-)
-
-const appLogScopeOptions = computed(() =>
-  [...new Set(appLogs.value.map((item) => item.scope || "backend"))].sort()
-)
-
-const appLogServiceOptions = computed(() =>
-  [
-    ...new Set(
-      appLogs.value.map((item) => item.service || "未知服务").filter(Boolean)
-    )
-  ].sort()
-)
-
-const filteredAppLogs = computed(() =>
-  appLogs.value.filter((item) => {
-    const scope = item.scope || "backend"
-    const service = item.service || "未知服务"
-
-    return (
-      (appLogScopeFilter.value === "all" ||
-        appLogScopeFilter.value === scope) &&
-      (appLogServiceFilter.value === "all" ||
-        appLogServiceFilter.value === service) &&
-      (appLogStatusFilter.value === "all" ||
-        appLogStatusFilter.value === item.status)
-    )
-  })
-)
-
-const appLogPageCount = computed(() =>
-  Math.max(1, Math.ceil(filteredAppLogs.value.length / appLogPageSize.value))
-)
-
-const currentAppLogPage = computed(() =>
-  Math.min(appLogPage.value, appLogPageCount.value)
-)
-
-const appLogPageStart = computed(() => {
-  if (!filteredAppLogs.value.length) {
-    return 0
-  }
-
-  return (currentAppLogPage.value - 1) * appLogPageSize.value + 1
-})
-
-const appLogPageEnd = computed(() =>
-  Math.min(
-    currentAppLogPage.value * appLogPageSize.value,
-    filteredAppLogs.value.length
-  )
-)
-
-const pagedAppLogs = computed(() =>
-  filteredAppLogs.value.slice(appLogPageStart.value - 1, appLogPageEnd.value)
-)
-
-const updateDialogTitle = computed(() => {
-  const titleMap = {
-    checking: "正在检查更新",
-    available: "发现新版本",
-    downloading: "正在下载更新",
-    downloaded: "更新已下载",
-    installing: "正在安装更新",
-    "not-available": "当前已是最新版本",
-    unconfigured: "缺少更新配置",
-    "dev-disabled": "开发模式无法完整检查更新",
-    error: "检查更新失败"
-  }
-
-  return titleMap[updateDialog.phase] || "检查更新"
-})
-
-const updateDialogMessage = computed(() => {
-  return updateDialog.message || "正在准备更新状态。"
-})
-
-const updateProgressWidth = computed(() => {
-  const percent = Math.min(100, Math.max(0, Number(updateDialog.percent || 0)))
-
-  return `${percent}%`
-})
-
-const updateProgressText = computed(() => {
-  const percent = Math.min(100, Math.max(0, Number(updateDialog.percent || 0)))
-
-  return `${percent.toFixed(1)}%`
-})
-
-const updateTransferText = computed(() => {
-  if (!updateDialog.total) {
-    return "正在获取下载进度"
-  }
-
-  return `${formatUpdateBytes(updateDialog.transferred)} / ${formatUpdateBytes(
-    updateDialog.total
-  )}`
-})
-
-watch(
-  [appLogScopeFilter, appLogServiceFilter, appLogStatusFilter, appLogPageSize],
-  () => {
-    appLogPage.value = 1
-  }
 )
 
 const selectedSkill = computed(() => {
@@ -1511,54 +599,6 @@ const selectedSkill = computed(() => {
 
 const currentPlaceholder = computed(() => {
   return placeholderMap[activeView.value] || placeholderMap.sessions
-})
-
-const restoreAddedItems = computed(() => {
-  return restorePreview.value?.added || []
-})
-
-const restoreConflictItems = computed(() => {
-  return restorePreview.value?.conflicts || []
-})
-
-const restoreAddedGroups = computed(() => {
-  return groupRestoreItems(restoreAddedItems.value)
-})
-
-const restoreConflictGroups = computed(() => {
-  return groupRestoreItems(restoreConflictItems.value)
-})
-
-const restoreCompareItem = computed(() => {
-  return (
-    restoreConflictItems.value.find(
-      (item) => item.key === restoreCompareKey.value
-    ) || null
-  )
-})
-
-const restoreCompareRows = computed(() => {
-  if (!restoreCompareItem.value) {
-    return []
-  }
-
-  return createRestoreCompareRows(
-    restoreCompareItem.value.currentContent,
-    restoreCompareItem.value.backupContent
-  )
-})
-
-const restoreCompareChangedCount = computed(() => {
-  return restoreCompareRows.value.filter((item) => item.status !== "same")
-    .length
-})
-
-const restoreCompareDescription = computed(() => {
-  if (!restoreCompareItem.value) {
-    return ""
-  }
-
-  return `${restoreCompareItem.value.type}：${restoreCompareItem.value.name} · ${restoreCompareItem.value.path}`
 })
 
 const restorePreviewDescription = computed(() => {
@@ -1588,251 +628,6 @@ const selectedCloudBackupEntry = computed(() => {
       (entry) => entry.path === selectedCloudBackupPath.value
     ) || null
   )
-})
-
-const restoreCanSubmit = computed(() => {
-  return Boolean(
-    restoreAddedItems.value.length || restoreConflictItems.value.length
-  )
-})
-
-const quickCliTargets = computed(() => {
-  return state.cliTargets.filter((item) => {
-    return state.runtimeConfigSchemas[item.id]?.enabled
-  })
-})
-
-const quickActiveCli = computed(() => {
-  return (
-    quickCliTargets.value.find((item) => item.id === quickSelectedCli.value) ||
-    quickCliTargets.value[0] ||
-    null
-  )
-})
-
-const quickActiveProfile = computed(() => {
-  return (
-    state.runtimeProfiles.find(
-      (item) => item.cli === quickActiveCli.value?.id
-    ) || null
-  )
-})
-
-const quickActiveProxyState = computed(() => {
-  if (quickActiveCli.value?.id === "claude") {
-    return state.claudeProxyState
-  }
-
-  if (quickActiveCli.value?.id === "codex") {
-    return state.codexProxyState
-  }
-
-  return null
-})
-
-const quickProxyActiveTargetId = computed(() => {
-  if (!quickActiveProxyState.value?.enabled) {
-    return ""
-  }
-
-  return quickActiveProxyState.value.activeProviderId || ""
-})
-
-const quickProxyActiveProvider = computed(() => {
-  if (!quickProxyActiveTargetId.value.startsWith("account:")) {
-    return (
-      state.providers.find(
-        (item) => item.id === quickProxyActiveTargetId.value
-      ) || null
-    )
-  }
-
-  return null
-})
-
-const quickProxyActiveAccount = computed(() => {
-  if (!quickProxyActiveTargetId.value.startsWith("account:")) {
-    return null
-  }
-
-  const accountId = quickProxyActiveTargetId.value.slice("account:".length)
-
-  return state.codexAccounts.find((item) => item.id === accountId) || null
-})
-
-const quickActiveProvider = computed(() => {
-  if (quickProxyActiveTargetId.value) {
-    return quickProxyActiveProvider.value
-  }
-
-  return (
-    state.providers.find(
-      (item) => item.id === quickActiveProfile.value?.providerId
-    ) || null
-  )
-})
-
-const quickActiveAccount = computed(() => {
-  if (quickActiveCli.value?.id !== "codex") {
-    return null
-  }
-
-  if (quickProxyActiveTargetId.value) {
-    return quickProxyActiveAccount.value
-  }
-
-  return state.codexAccounts.find((item) => item.active) || null
-})
-
-const quickActiveName = computed(() => {
-  if (quickProxyActiveTargetId.value) {
-    return `Proxy 接管中：${
-      quickActiveProvider.value?.name ||
-      quickActiveAccount.value?.email ||
-      quickActiveAccount.value?.accountId ||
-      "未激活"
-    }`
-  }
-
-  if (quickActiveAccount.value) {
-    return (
-      quickActiveAccount.value.email ||
-      quickActiveAccount.value.accountId ||
-      "Codex 官方账号"
-    )
-  }
-
-  return quickActiveProvider.value?.name || "未启用"
-})
-
-const quickItems = computed(() => {
-  if (!quickActiveCli.value) {
-    return []
-  }
-
-  const providerItems = state.providers
-    .filter((item) => {
-      return item.cli === quickActiveCli.value.id && item.enabled !== false
-    })
-    .map((provider) => {
-      const model = firstQuickModelName(provider)
-      const active = quickProxyActiveTargetId.value
-        ? quickProxyActiveTargetId.value === provider.id
-        : !quickActiveAccount.value &&
-          quickActiveProvider.value?.id === provider.id
-
-      return {
-        key: `provider:${provider.id}`,
-        type: "provider",
-        provider,
-        model,
-        label: provider.name,
-        description: model || "缺少模型",
-        active,
-        disabled: !model || provider.enabled === false
-      }
-    })
-
-  if (quickActiveCli.value.id !== "codex") {
-    return providerItems
-  }
-
-  return [
-    ...providerItems,
-    ...state.codexAccounts.map((account) => ({
-      key: `account:${account.id}`,
-      type: "account",
-      account,
-      label: account.email || account.accountId || "Codex 官方账号",
-      description: formatQuickAccountDescription(account),
-      quotas: formatQuickAccountQuotas(account),
-      active: quickProxyActiveTargetId.value
-        ? quickProxyActiveTargetId.value === `account:${account.id}`
-        : account.active,
-      disabled: Boolean(account.disabled)
-    }))
-  ]
-})
-
-const quickUsageLogs = computed(() => {
-  return (state.usage.logs || []).filter((item) => {
-    return item.appType === quickActiveCli.value?.id
-  })
-})
-
-const quickUsageSummary = computed(() => {
-  return quickUsageLogs.value.reduce(
-    (result, item) => {
-      result.requestCount += 1
-      result.actualTokens += Number(item.actualTokens || 0)
-      result.totalCostUsd += Number(item.totalCostUsd || 0)
-      return result
-    },
-    {
-      requestCount: 0,
-      actualTokens: 0,
-      totalCostUsd: 0
-    }
-  )
-})
-
-const quickUsageTrend = computed(() => {
-  const groups = new Map()
-
-  for (const item of quickUsageLogs.value) {
-    const date = new Date(Number(item.createdAt || 0))
-    const key = date.toLocaleDateString("zh-CN")
-
-    groups.set(key, {
-      date: key,
-      label: `${date.getMonth() + 1}/${date.getDate()}`,
-      timestamp: new Date(
-        date.getFullYear(),
-        date.getMonth(),
-        date.getDate()
-      ).getTime(),
-      actualTokens:
-        (groups.get(key)?.actualTokens || 0) + Number(item.actualTokens || 0)
-    })
-  }
-
-  const rows = Array.from(groups.values())
-    .sort((left, right) => left.timestamp - right.timestamp)
-    .slice(-7)
-  const maxTokens = Math.max(...rows.map((item) => item.actualTokens), 1)
-
-  return rows.map((item) => ({
-    ...item,
-    percent: Math.max(8, Math.round((item.actualTokens / maxTokens) * 100))
-  }))
-})
-
-const quickUsageProviders = computed(() => {
-  const groups = new Map()
-
-  for (const item of quickUsageLogs.value) {
-    const key = item.providerId || item.providerName || "unknown"
-    const previous = groups.get(key) || {
-      providerId: key,
-      providerName: item.providerName || "未知 Provider",
-      actualTokens: 0,
-      totalCostUsd: 0
-    }
-
-    previous.actualTokens += Number(item.actualTokens || 0)
-    previous.totalCostUsd += Number(item.totalCostUsd || 0)
-    groups.set(key, previous)
-  }
-
-  const rows = Array.from(groups.values())
-    .sort((left, right) => right.actualTokens - left.actualTokens)
-    .slice(0, 2)
-  const maxTokens = Math.max(...rows.map((item) => item.actualTokens), 1)
-
-  return rows.map((item) => ({
-    ...item,
-    percent: Math.max(4, Math.round((item.actualTokens / maxTokens) * 100))
-  }))
 })
 
 async function bootstrap() {
@@ -1932,40 +727,27 @@ function updateState(nextState) {
 
   if (!("claudeProxyState" in nextState) && !state.claudeProxyState) {
     state.claudeProxyState = {
-    enabled: false,
-    localBaseUrl: "",
-    activeProviderId: "",
-    failoverProviderIds: []
-  }
+      enabled: false,
+      localBaseUrl: "",
+      activeProviderId: "",
+      failoverProviderIds: []
+    }
   }
   if (!("codexProxyState" in nextState) && !state.codexProxyState) {
     state.codexProxyState = {
-    enabled: false,
-    localBaseUrl: "",
-    activeProviderId: "",
-    failoverProviderIds: [],
-    accountModel: ""
+      enabled: false,
+      localBaseUrl: "",
+      activeProviderId: "",
+      failoverProviderIds: [],
+      accountModel: ""
+    }
   }
-  }
-  ensureQuickSelectedCli()
-
   if (
     selectedSkillName.value &&
     !state.skills.find((item) => item.name === selectedSkillName.value)
   ) {
     selectedSkillName.value = ""
   }
-}
-
-function ensureQuickSelectedCli() {
-  if (
-    quickSelectedCli.value &&
-    quickCliTargets.value.find((item) => item.id === quickSelectedCli.value)
-  ) {
-    return
-  }
-
-  quickSelectedCli.value = quickCliTargets.value[0]?.id || ""
 }
 
 async function handleSidebarTitleClick() {
@@ -1986,7 +768,6 @@ async function loadAppLogs() {
 
   appLogs.value = result.logs || []
   appLogPath.value = result.filePath || ""
-  appLogPage.value = 1
 }
 
 async function clearAppLogs() {
@@ -1994,17 +775,6 @@ async function clearAppLogs() {
 
   appLogs.value = result.logs || []
   appLogPath.value = result.filePath || ""
-  appLogPage.value = 1
-}
-
-function formatLogTime(value) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  }).format(new Date(Number(value || 0)))
 }
 
 function formatCloudBackupTime(value) {
@@ -2036,46 +806,6 @@ function formatBackupEntrySize(value) {
   }
 
   return `${(size / 1024 / 1024).toFixed(2)} MB`
-}
-
-function formatLogPayload(value) {
-  return JSON.stringify(value, null, 2)
-}
-
-function formatLogScope(value) {
-  if (value === "backend") {
-    return "后端"
-  }
-
-  if (value === "renderer") {
-    return "渲染进程"
-  }
-
-  return value || "未知"
-}
-
-function formatLogStatus(value) {
-  if (value === "success") {
-    return "成功"
-  }
-
-  if (value === "error") {
-    return "失败"
-  }
-
-  if (value === "pending") {
-    return "进行中"
-  }
-
-  return value || "未知"
-}
-
-function formatLogTitle(item) {
-  return [item.service, item.method || item.channel].filter(Boolean).join(".")
-}
-
-function goAppLogPage(page) {
-  appLogPage.value = Math.min(Math.max(page, 1), appLogPageCount.value)
 }
 
 async function runAction(action) {
@@ -2174,252 +904,7 @@ function applyUpdateStatus(status = {}) {
 
   updateDialog.open =
     updateDialog.manual ||
-    ["available", "downloading", "error"].includes(
-      updateDialog.phase
-    )
-}
-
-function formatUpdateBytes(value) {
-  const size = Number(value || 0)
-
-  if (size >= 1024 * 1024) {
-    return `${(size / 1024 / 1024).toFixed(1)} MB`
-  }
-
-  if (size >= 1024) {
-    return `${(size / 1024).toFixed(1)} KB`
-  }
-
-  return `${size} B`
-}
-
-function firstQuickModelName(provider) {
-  return (
-    provider.runtimeConfig?.mainModel ||
-    state.runtimeModels.find((item) => item.providerId === provider.id)?.name ||
-    ""
-  )
-}
-
-function formatQuickNumber(value) {
-  return new Intl.NumberFormat("zh-CN", {
-    maximumFractionDigits: 0
-  }).format(Number(value || 0))
-}
-
-function formatQuickCost(value) {
-  const cost = Number(value || 0)
-
-  if (!cost) {
-    return "$0"
-  }
-
-  return `$${cost >= 1 ? cost.toFixed(2) : cost.toFixed(6)}`
-}
-
-function formatQuickAccountDescription(account) {
-  const rateLimit = account.usage?.rate_limit
-  const primaryWindow = rateLimit?.primary_window
-  const remaining = primaryWindow
-    ? `${Math.max(0, 100 - Number(primaryWindow.used_percent || 0))}%`
-    : "额度未知"
-
-  return `${account.plan || "free"} · ${remaining}`
-}
-
-function formatQuickAccountQuotas(account) {
-  const rateLimit = account.usage?.rate_limit
-
-  if (!rateLimit) {
-    return []
-  }
-
-  return [
-    { key: "primary", window: rateLimit.primary_window },
-    { key: "secondary", window: rateLimit.secondary_window }
-  ]
-    .filter((item) => item.window)
-    .map((item) => {
-      return {
-        key: item.key,
-        label: formatQuickRateWindowName(item.key, item.window),
-        remaining: Math.max(0, 100 - Number(item.window.used_percent || 0)),
-        reset: formatQuickResetText(item.window.reset_at)
-      }
-    })
-}
-
-function formatQuickRateWindowName(key, window) {
-  const seconds = Number(window.limit_window_seconds || 0)
-
-  if (seconds === 604800) {
-    return key === "secondary" ? "7天额度" : "周额度"
-  }
-
-  if (seconds % 86400 === 0) {
-    return `${seconds / 86400}天额度`
-  }
-
-  if (seconds % 3600 === 0) {
-    return `${seconds / 3600}小时额度`
-  }
-
-  return `${seconds}秒额度`
-}
-
-function formatQuickResetText(value) {
-  const timestamp = Number(value || 0)
-
-  if (!timestamp) {
-    return "重置时间未知"
-  }
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(timestamp > 1e12 ? timestamp : timestamp * 1000))
-}
-
-async function showMainPanel() {
-  await appApi.showMainPanel()
-}
-
-async function toggleQuickCollapsed() {
-  quickCollapsed.value = !quickCollapsed.value
-  await appApi.setQuickSwitchCollapsed({
-    collapsed: quickCollapsed.value
-  })
-}
-
-function startQuickLogoDrag(event) {
-  if (event.button !== 0) {
-    return
-  }
-
-  event.preventDefault()
-  quickLogoDrag.active = true
-  quickLogoDrag.moved = false
-  quickLogoDrag.lastX = event.screenX
-  quickLogoDrag.lastY = event.screenY
-  quickLogoDrag.totalX = 0
-  quickLogoDrag.totalY = 0
-  window.addEventListener("pointermove", moveQuickLogoDrag)
-  window.addEventListener("pointerup", stopQuickLogoDrag)
-  window.addEventListener("pointercancel", stopQuickLogoDrag)
-}
-
-function moveQuickLogoDrag(event) {
-  if (!quickLogoDrag.active) {
-    return
-  }
-
-  const x = event.screenX - quickLogoDrag.lastX
-  const y = event.screenY - quickLogoDrag.lastY
-  quickLogoDrag.lastX = event.screenX
-  quickLogoDrag.lastY = event.screenY
-  quickLogoDrag.totalX += Math.abs(x)
-  quickLogoDrag.totalY += Math.abs(y)
-
-  if (quickLogoDrag.totalX + quickLogoDrag.totalY > 3) {
-    quickLogoDrag.moved = true
-  }
-
-  if (x || y) {
-    appApi.moveQuickSwitchBy({ x, y })
-  }
-}
-
-function stopQuickLogoDrag() {
-  quickLogoDrag.active = false
-  window.removeEventListener("pointermove", moveQuickLogoDrag)
-  window.removeEventListener("pointerup", stopQuickLogoDrag)
-  window.removeEventListener("pointercancel", stopQuickLogoDrag)
-}
-
-async function handleQuickLogoClick() {
-  if (quickLogoDrag.moved) {
-    return
-  }
-
-  await showMainPanel()
-}
-
-async function refreshQuickCodexAccount(item) {
-  await withGlobalLoading(async () => {
-    try {
-      updateState(
-        await accountApi.refreshCodexAccount({
-          accountId: item.account.id,
-          syncAuth: false
-        })
-      )
-    } catch (error) {
-      if (!isCodexAccountRefreshError(error)) {
-        showErrorMessage(error)
-      }
-    }
-  })
-}
-
-async function selectQuickItem(item) {
-  if (item.type === "provider") {
-    await runAction(async () => {
-      const proxyApi = getProxyApi(quickActiveCli.value?.id)
-      const proxyState = getProxyState(quickActiveCli.value?.id)
-
-      if (proxyState?.enabled) {
-        await proxyApi.disable()
-      }
-
-      if (quickActiveCli.value?.id === "codex") {
-        await accountApi.clearCodexAccount()
-      }
-
-      return runtimeApi.switchRuntime({
-        cli: quickActiveCli.value.id,
-        providerId: item.provider.id,
-        model: item.model
-      })
-    })
-    return
-  }
-
-  await runAction(async () => {
-    const proxyApi = getProxyApi(quickActiveCli.value?.id)
-    const proxyState = getProxyState(quickActiveCli.value?.id)
-
-    if (proxyState?.enabled) {
-      await proxyApi.disable()
-    }
-
-    await runtimeApi.clearRuntime({
-      cli: quickActiveCli.value.id
-    })
-    return accountApi.enableCodexAccount({
-      accountId: item.account.id
-    })
-  })
-}
-
-async function clearQuickActive() {
-  await runAction(async () => {
-    const proxyApi = getProxyApi(quickActiveCli.value?.id)
-    const proxyState = getProxyState(quickActiveCli.value?.id)
-
-    if (proxyState?.enabled) {
-      return proxyApi.disable()
-    }
-
-    if (quickActiveCli.value?.id === "codex") {
-      await accountApi.clearCodexAccount()
-    }
-
-    return runtimeApi.clearRuntime({
-      cli: quickActiveCli.value.id
-    })
-  })
+    ["available", "downloading", "error"].includes(updateDialog.phase)
 }
 
 async function refreshState() {
@@ -2653,206 +1138,6 @@ function openRestorePreview(result, type) {
     backupId: result.backupId || "",
     cloudSync: result.cloudSync || null
   }
-
-  for (const key of Object.keys(restoreChoices)) {
-    delete restoreChoices[key]
-  }
-
-  restoreCompareKey.value = ""
-
-  for (const item of result.preview?.conflicts || []) {
-    restoreChoices[item.key] =
-      item.path === "storage/usage-pricing.json" ? "backup" : "current"
-  }
-}
-
-function toggleRestoreCompare(item) {
-  restoreCompareKey.value = item.key
-}
-
-function closeRestoreCompare() {
-  restoreCompareKey.value = ""
-}
-
-function syncRestoreCompareScroll(source) {
-  if (syncingRestoreCompareScroll) {
-    return
-  }
-
-  const currentElement = restoreCurrentCompareCodeRef.value
-  const backupElement = restoreBackupCompareCodeRef.value
-  const sourceElement = source === "current" ? currentElement : backupElement
-  const targetElement = source === "current" ? backupElement : currentElement
-
-  if (!sourceElement || !targetElement) {
-    return
-  }
-
-  const sourceScrollHeight =
-    sourceElement.scrollHeight - sourceElement.clientHeight
-  const targetScrollHeight =
-    targetElement.scrollHeight - targetElement.clientHeight
-  const sourceScrollWidth =
-    sourceElement.scrollWidth - sourceElement.clientWidth
-  const targetScrollWidth =
-    targetElement.scrollWidth - targetElement.clientWidth
-
-  syncingRestoreCompareScroll = true
-  targetElement.scrollTop = sourceScrollHeight
-    ? (sourceElement.scrollTop / sourceScrollHeight) * targetScrollHeight
-    : sourceElement.scrollTop
-  targetElement.scrollLeft = sourceScrollWidth
-    ? (sourceElement.scrollLeft / sourceScrollWidth) * targetScrollWidth
-    : sourceElement.scrollLeft
-  requestAnimationFrame(() => {
-    syncingRestoreCompareScroll = false
-  })
-}
-
-function formatRestoreCompareContent(value) {
-  if (value === undefined || value === null || value === "") {
-    return "空内容"
-  }
-
-  return String(value)
-}
-
-function groupRestoreItems(items) {
-  const groups = new Map()
-
-  for (const item of items) {
-    const groupPath = item.groupPath || item.path || "根目录"
-
-    if (!groups.has(groupPath)) {
-      groups.set(groupPath, {
-        path: groupPath,
-        items: []
-      })
-    }
-
-    groups.get(groupPath).items.push(item)
-  }
-
-  return Array.from(groups.values()).map((group) => ({
-    ...group,
-    rows: createRestoreTreeRows(group.path, group.items)
-  }))
-}
-
-function createRestoreTreeRows(groupPath, items) {
-  const rows = []
-  const dirKeys = new Set()
-  const normalizedGroupPath = groupPath === "根目录" ? "" : groupPath
-  const itemInfos = items.map((item) => {
-    const normalizedPath = String(item.path || "").replace(/\\/g, "/")
-    const relativePath =
-      normalizedGroupPath &&
-      normalizedPath.startsWith(`${normalizedGroupPath}/`)
-        ? normalizedPath.slice(normalizedGroupPath.length + 1)
-        : normalizedPath
-
-    return {
-      item,
-      relativePath,
-      parts: relativePath.split("/").filter(Boolean)
-    }
-  })
-  const dirCounts = new Map()
-
-  for (const itemInfo of itemInfos) {
-    itemInfo.parts.slice(0, -1).forEach((part, index) => {
-      const key = itemInfo.parts.slice(0, index + 1).join("/")
-
-      dirCounts.set(key, (dirCounts.get(key) || 0) + 1)
-    })
-  }
-
-  for (const itemInfo of itemInfos) {
-    itemInfo.parts.slice(0, -1).forEach((part, index) => {
-      const key = itemInfo.parts.slice(0, index + 1).join("/")
-
-      if (dirKeys.has(key)) {
-        return
-      }
-
-      dirKeys.add(key)
-      rows.push({
-        key: `dir:${groupPath}:${key}`,
-        kind: "dir",
-        name: part,
-        depth: index,
-        itemCount: dirCounts.get(key) || 0,
-        items: itemInfos
-          .filter(
-            (targetInfo) =>
-              targetInfo.parts.slice(0, index + 1).join("/") === key
-          )
-          .map((targetInfo) => targetInfo.item)
-      })
-    })
-
-    rows.push({
-      key: itemInfo.item.key,
-      kind: "item",
-      item: itemInfo.item,
-      relativePath: itemInfo.relativePath,
-      depth: Math.max(itemInfo.parts.length - 1, 0)
-    })
-  }
-
-  return rows
-}
-
-function chooseRestoreItems(items, choice) {
-  for (const item of items) {
-    restoreChoices[item.key] = choice
-  }
-}
-
-function createRestoreCompareRows(currentContent, backupContent) {
-  const currentLines =
-    formatRestoreCompareContent(currentContent).split(/\r?\n/)
-  const backupLines = formatRestoreCompareContent(backupContent).split(/\r?\n/)
-  const maxLength = Math.max(currentLines.length, backupLines.length)
-  const rows = []
-
-  for (let index = 0; index < maxLength; index += 1) {
-    const currentText = currentLines[index]
-    const backupText = backupLines[index]
-    const hasCurrent = index < currentLines.length
-    const hasBackup = index < backupLines.length
-
-    if (hasCurrent && hasBackup && currentText === backupText) {
-      rows.push({
-        index: rows.length,
-        status: "same",
-        currentStatus: "same",
-        backupStatus: "same",
-        currentLineNumber: index + 1,
-        backupLineNumber: index + 1,
-        currentMarker: "",
-        backupMarker: "",
-        currentText,
-        backupText
-      })
-      continue
-    }
-
-    rows.push({
-      index: rows.length,
-      status: "changed",
-      currentStatus: hasCurrent ? "current-only" : "empty",
-      backupStatus: hasBackup ? "backup-only" : "empty",
-      currentLineNumber: hasCurrent ? index + 1 : "",
-      backupLineNumber: hasBackup ? index + 1 : "",
-      currentMarker: hasCurrent ? "当前" : "缺少",
-      backupMarker: hasBackup ? "备份" : "缺少",
-      currentText: hasCurrent ? currentText : "",
-      backupText: hasBackup ? backupText : ""
-    })
-  }
-
-  return rows
 }
 
 function closeRestorePreview(force = false) {
@@ -2862,14 +1147,9 @@ function closeRestorePreview(force = false) {
 
   restorePreview.value = null
   restoreSource.value = null
-  restoreCompareKey.value = ""
-
-  for (const key of Object.keys(restoreChoices)) {
-    delete restoreChoices[key]
-  }
 }
 
-async function confirmRestore() {
+async function confirmRestore(payload) {
   const source = restoreSource.value
 
   if (!source) {
@@ -2878,20 +1158,21 @@ async function confirmRestore() {
 
   await withGlobalLoading(async () => {
     try {
-      const payload = {
+      const choices = payload?.choices || {}
+      const restorePayload = {
         restoreId: source.restoreId,
-        choices: { ...restoreChoices }
+        choices
       }
       const result =
         source.type === "cloud"
           ? await dataApi.pullCloudBackup({
               restoreId: source.restoreId,
-              choices: { ...restoreChoices },
+              choices,
               cloudSync: { ...source.cloudSync }
             })
           : source.type === "local"
-            ? await dataApi.restoreLocalBackup(payload)
-            : await dataApi.restoreDataBackup(payload)
+            ? await dataApi.restoreLocalBackup(restorePayload)
+            : await dataApi.restoreDataBackup(restorePayload)
 
       updateState(result.state)
       if (result.backups) {
@@ -2993,9 +1274,7 @@ function formatZipImportMessage(result) {
 }
 
 async function confirmImportSkills(payload) {
-  const success = await runAction(() =>
-    skillApi.importSkillsFromCli(payload)
-  )
+  const success = await runAction(() => skillApi.importSkillsFromCli(payload))
 
   if (success) {
     showImportSkills.value = false
@@ -3018,9 +1297,7 @@ async function setSkillEnabled(payload) {
 }
 
 async function addSkillRepository(payload) {
-  const success = await runAction(() =>
-    skillApi.addSkillRepository(payload)
-  )
+  const success = await runAction(() => skillApi.addSkillRepository(payload))
 
   if (success) {
     activeView.value = "skills"
@@ -3039,9 +1316,7 @@ async function refreshSkillRepository(payload) {
 }
 
 async function removeSkillRepository(payload) {
-  const success = await runAction(() =>
-    skillApi.removeSkillRepository(payload)
-  )
+  const success = await runAction(() => skillApi.removeSkillRepository(payload))
 
   if (success) {
     showSuccessMessage("Skill 仓库已删除。")
@@ -3129,9 +1404,7 @@ async function toggleRule(payload) {
 }
 
 async function importRule(payload) {
-  const success = await runAction(() =>
-    ruleApi.importGlobalRule(payload)
-  )
+  const success = await runAction(() => ruleApi.importGlobalRule(payload))
 
   if (success) {
     showSuccessMessage("已导入当前全局 Prompt。")
@@ -3153,9 +1426,7 @@ async function resolveRuleImportConflict(payload) {
 }
 
 async function resolveRuleDrift(payload) {
-  const success = await runAction(() =>
-    ruleApi.resolveRuleDrift(payload)
-  )
+  const success = await runAction(() => ruleApi.resolveRuleDrift(payload))
 
   if (success) {
     showSuccessMessage("Prompt Drift 已处理。")
@@ -3187,9 +1458,7 @@ async function cancelCodexOfficialLogin() {
 }
 
 async function importCodexAuthJson(payload) {
-  const success = await runAction(() =>
-    accountApi.importCodexAuthJson(payload)
-  )
+  const success = await runAction(() => accountApi.importCodexAuthJson(payload))
 
   if (success) {
     showSuccessMessage("Codex 登录 JSON 已导入。")
@@ -3224,9 +1493,7 @@ async function clearCodexAccount() {
 }
 
 async function deleteCodexAccount(payload) {
-  const success = await runAction(() =>
-    accountApi.deleteCodexAccount(payload)
-  )
+  const success = await runAction(() => accountApi.deleteCodexAccount(payload))
 
   if (success) {
     showSuccessMessage("Codex 官方账号已删除。")
@@ -3234,9 +1501,7 @@ async function deleteCodexAccount(payload) {
 }
 
 async function disableCodexAccount(payload) {
-  const success = await runAction(() =>
-    accountApi.disableCodexAccount(payload)
-  )
+  const success = await runAction(() => accountApi.disableCodexAccount(payload))
 
   if (success) {
     showSuccessMessage("Codex 官方账号已禁用。")
@@ -3244,9 +1509,7 @@ async function disableCodexAccount(payload) {
 }
 
 async function restoreCodexAccount(payload) {
-  const success = await runAction(() =>
-    accountApi.restoreCodexAccount(payload)
-  )
+  const success = await runAction(() => accountApi.restoreCodexAccount(payload))
 
   if (success) {
     showSuccessMessage("Codex 官方账号已恢复。")
@@ -3311,9 +1574,7 @@ async function updateCodexAccountProxy(payload) {
 }
 
 async function enableCodexProxy(payload) {
-  const success = await runAction(() =>
-    proxyApi.enableCodexProxy(payload)
-  )
+  const success = await runAction(() => proxyApi.enableCodexProxy(payload))
 
   if (success) {
     showSuccessMessage("Codex 代理接管已开启。")
@@ -3321,9 +1582,7 @@ async function enableCodexProxy(payload) {
 }
 
 async function enableClaudeProxy(payload) {
-  const success = await runAction(() =>
-    proxyApi.enableClaudeProxy(payload)
-  )
+  const success = await runAction(() => proxyApi.enableClaudeProxy(payload))
 
   if (success) {
     showSuccessMessage("Claude 代理接管已开启。")
@@ -3361,8 +1620,7 @@ async function removeClaudeProxyProvider(payload) {
 async function activateClaudeProxyProvider(payload) {
   const shouldEnableProxy = !state.claudeProxyState.enabled
   const success = await runAction(async () => {
-    const nextState =
-      await proxyApi.activateClaudeProxyProvider(payload)
+    const nextState = await proxyApi.activateClaudeProxyProvider(payload)
 
     if (shouldEnableProxy) {
       return proxyApi.enableClaudeProxy({})
@@ -3387,9 +1645,7 @@ async function disableCodexProxy() {
 }
 
 async function addCodexProxyProvider(payload) {
-  const success = await runAction(() =>
-    proxyApi.addCodexProxyProvider(payload)
-  )
+  const success = await runAction(() => proxyApi.addCodexProxyProvider(payload))
 
   if (success) {
     showSuccessMessage("Provider 已加入代理接管列表。")
@@ -3460,9 +1716,7 @@ async function launchClaudeProviderInstance(payload) {
 }
 
 async function saveRuntimeModel(payload) {
-  const success = await runAction(() =>
-    runtimeApi.saveRuntimeModel(payload)
-  )
+  const success = await runAction(() => runtimeApi.saveRuntimeModel(payload))
 
   if (success) {
     showSuccessMessage("模型已保存。")
@@ -3499,9 +1753,7 @@ async function clearRuntime(payload) {
 }
 
 async function resolveRuntimeDrift(payload) {
-  const success = await runAction(() =>
-    runtimeApi.resolveRuntimeDrift(payload)
-  )
+  const success = await runAction(() => runtimeApi.resolveRuntimeDrift(payload))
 
   if (success) {
     showSuccessMessage("Runtime 配置差异已处理。")
@@ -3565,11 +1817,11 @@ onMounted(() => {
   // 视图切换按需加载
   watch(activeView, async (view) => {
     try {
-      if (view === 'sessions') {
+      if (view === "sessions") {
         updateState(await appApi.ensureSessionsReady())
-      } else if (view === 'tools') {
+      } else if (view === "tools") {
         updateState(await appApi.ensureToolsReady())
-      } else if (view === 'skills') {
+      } else if (view === "skills") {
         updateState(await appApi.ensureSkillsReady())
       }
     } catch (error) {
@@ -3589,8 +1841,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  stopQuickLogoDrag()
-
   if (typeof unsubscribe === "function") {
     unsubscribe()
   }
@@ -3632,753 +1882,6 @@ onBeforeUnmount(() => {
   box-shadow: 0 6px 14px rgba(34, 56, 83, 0.12);
   font-size: 12px;
   line-height: 1.25;
-}
-
-.quick-switch-panel {
-  display: flex;
-  height: 100vh;
-  min-height: 0;
-  flex-direction: column;
-  overflow: hidden;
-  border: 1px solid #b8cce5;
-  background: #eef4fb;
-  color: #101828;
-
-  &__header {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    height: 34px;
-    padding: 0 8px 0 10px;
-    border-bottom: 1px solid #d7e3f1;
-    background: #fbfdff;
-    -webkit-app-region: drag;
-  }
-
-  &__title {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    align-items: center;
-    gap: 7px;
-  }
-
-  &__dot {
-    width: 7px;
-    height: 7px;
-    flex: none;
-    border-radius: 999px;
-    background: #18a058;
-    box-shadow: 0 0 0 3px #e3f5ec;
-  }
-
-  &__title strong {
-    flex: none;
-    font-size: 13px;
-    line-height: 1;
-  }
-
-  &__title small {
-    overflow: hidden;
-    min-width: 0;
-    color: #667085;
-    font-size: 12px;
-    line-height: 1;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__actions {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: 4px;
-    -webkit-app-region: no-drag;
-  }
-
-  &__icon-button {
-    display: inline-flex;
-    width: 26px;
-    height: 26px;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: transparent;
-    color: #2d6cdf;
-    cursor: pointer;
-  }
-
-  &__icon-button:hover {
-    border-color: #bdd6f7;
-    background: #eef6ff;
-  }
-
-  &__logo-button {
-    display: inline-flex;
-    width: 44px;
-    height: 44px;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    background: transparent;
-    cursor: grab;
-    touch-action: none;
-    -webkit-app-region: no-drag;
-  }
-
-  &__logo-button:active {
-    cursor: grabbing;
-  }
-
-  &__logo-scene {
-    width: 42px;
-    height: 42px;
-    overflow: visible;
-  }
-
-  &__logo-shadow {
-    animation: quick-switch-logo-shadow 2.4s ease-in-out infinite;
-    fill: rgba(16, 24, 40, 0.2);
-    transform-origin: 22px 36px;
-  }
-
-  &__logo-mascot {
-    animation: quick-switch-logo-float 2.4s ease-in-out infinite;
-    transform-origin: 22px 26px;
-  }
-
-  &__logo-orbit {
-    animation: quick-switch-logo-pulse 2.4s ease-in-out infinite;
-    fill: rgba(255, 255, 255, 0.84);
-    stroke: url("#quick-switch-logo-ring");
-    stroke-width: 1.8;
-    transform-origin: 22px 21px;
-  }
-
-  &__logo-core {
-    animation: quick-switch-logo-breathe 2.4s ease-in-out infinite;
-    transform-origin: 22px 21px;
-  }
-
-  &__logo-scan {
-    animation: quick-switch-logo-scan 1.8s linear infinite;
-    fill: none;
-    stroke: #ffffff;
-    stroke-linecap: round;
-    stroke-width: 2.2;
-    transform-origin: 22px 22px;
-  }
-
-  &__logo-eye {
-    animation: quick-switch-logo-blink 3.6s ease-in-out infinite;
-    fill: #18a058;
-    transform-origin: center;
-  }
-
-  &__logo-sparks {
-    animation: quick-switch-logo-sparkle 2.2s ease-in-out infinite;
-    fill: #ffb84d;
-    transform-origin: 22px 22px;
-  }
-
-  &__cli-tabs {
-    display: flex;
-    flex: none;
-    gap: 4px;
-    padding: 6px 7px;
-    background: #fbfdff;
-  }
-
-  &__cli-tab {
-    height: 24px;
-    flex: 1;
-    border: 1px solid #dce6f2;
-    border-radius: 6px;
-    background: #f0f4f9;
-    color: #516070;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 700;
-  }
-
-  &__cli-tab--active {
-    border-color: #1677ff;
-    background: #1677ff;
-    color: #ffffff;
-  }
-
-  &__usage {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 4px;
-    overflow: hidden;
-    padding: 0 7px 6px;
-  }
-
-  &__hero {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    height: 34px;
-    padding: 0 8px;
-    border: 1px solid #d6e4f3;
-    border-radius: 7px;
-    background: #ffffff;
-  }
-
-  &__hero-copy {
-    display: grid;
-    min-width: 0;
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 2px 8px;
-  }
-
-  &__hero-copy span {
-    grid-row: 1 / 3;
-    align-self: center;
-    padding: 2px 6px;
-    border-radius: 5px;
-    background: #eef6ff;
-    color: #1677ff;
-    font-size: 10px;
-    font-weight: 800;
-  }
-
-  &__hero-copy strong,
-  &__hero-copy small {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__hero-copy strong {
-    font-size: 12px;
-    line-height: 1.15;
-  }
-
-  &__hero-copy small {
-    color: #667085;
-    font-size: 11px;
-    line-height: 1.15;
-  }
-
-  &__manage-button {
-    display: inline-flex;
-    height: 23px;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    padding: 0 10px;
-    border: 1px solid #b9d4f4;
-    border-radius: 6px;
-    background: #f7fbff;
-    color: #1769c2;
-    cursor: pointer;
-    font-size: 11px;
-    font-weight: 800;
-  }
-
-  &__manage-button:hover {
-    border-color: #7fb7f5;
-    background: #eaf5ff;
-  }
-
-  &__metrics {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 5px;
-  }
-
-  &__metric {
-    display: flex;
-    min-width: 0;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    height: 28px;
-    padding: 0 7px;
-    border: 1px solid #d8e6f4;
-    border-radius: 7px;
-    background: #ffffff;
-  }
-
-  &__metric span {
-    color: #667085;
-    font-size: 10px;
-    font-weight: 700;
-  }
-
-  &__metric strong {
-    overflow: hidden;
-    color: #101828;
-    font-size: 12px;
-    line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__summary-row {
-    display: grid;
-    min-height: 0;
-    flex: 1;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-    gap: 5px;
-  }
-
-  &__usage-panel {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-    gap: 4px;
-    overflow: hidden;
-    padding: 6px 7px;
-    border: 1px solid #d8e6f4;
-    border-radius: 7px;
-    background: #ffffff;
-  }
-
-  &__usage-panel--providers {
-    min-width: 0;
-  }
-
-  &__usage-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  &__usage-head strong {
-    color: #101828;
-    font-size: 11px;
-  }
-
-  &__usage-head span {
-    color: #667085;
-    font-size: 10px;
-    font-weight: 700;
-  }
-
-  &__bars {
-    display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-    gap: 4px;
-    height: 48px;
-    align-items: end;
-  }
-
-  &__bar {
-    display: flex;
-    min-width: 0;
-    height: 100%;
-    flex-direction: column;
-    justify-content: flex-end;
-    gap: 4px;
-  }
-
-  &__bar-fill {
-    display: block;
-    min-height: 6px;
-    border-radius: 4px 4px 2px 2px;
-    background: #1677ff;
-  }
-
-  &__bar small {
-    overflow: hidden;
-    color: #667085;
-    font-size: 9px;
-    line-height: 1;
-    text-align: center;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__provider-bars {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-    gap: 6px;
-    overflow: hidden;
-  }
-
-  &__provider-bar {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  &__provider-bar-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  &__provider-bar-head strong,
-  &__provider-bar-head span {
-    overflow: hidden;
-    font-size: 10px;
-    line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__provider-bar-head strong {
-    color: #101828;
-  }
-
-  &__provider-bar-head span {
-    flex: none;
-    color: #667085;
-    font-weight: 700;
-  }
-
-  &__provider-track {
-    height: 6px;
-    overflow: hidden;
-    border-radius: 999px;
-    background: #edf2f7;
-  }
-
-  &__provider-fill {
-    display: block;
-    height: 100%;
-    border-radius: inherit;
-    background: #18a058;
-  }
-
-  &__list {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 6px;
-    overflow-x: hidden;
-    overflow-y: auto;
-    padding: 0 7px 7px;
-  }
-
-  &__manager-head {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 8px 9px;
-    border: 1px solid #d8e6f4;
-    border-radius: 7px;
-    background: #ffffff;
-  }
-
-  &__manager-head div {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  &__manager-head strong,
-  &__manager-head span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__manager-head strong {
-    color: #101828;
-    font-size: 12px;
-    line-height: 1.2;
-  }
-
-  &__manager-head span {
-    color: #667085;
-    font-size: 11px;
-    line-height: 1.2;
-  }
-
-  &__item {
-    display: flex;
-    min-height: 50px;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 8px 9px;
-    border: 1px solid #dfe8f3;
-    border-radius: 7px;
-    background: #ffffff;
-    color: #101828;
-    text-align: left;
-    transition:
-      border-color 0.18s ease,
-      background 0.18s ease,
-      box-shadow 0.18s ease,
-      transform 0.18s ease;
-  }
-
-  &__item:hover {
-    border-color: #9dc9ff;
-    background: #fbfdff;
-    box-shadow: 0 7px 18px rgba(22, 119, 255, 0.12);
-    transform: translateY(-1px);
-  }
-
-  &__item--active {
-    border-color: #56a7ff;
-    background: #eef7ff;
-    box-shadow: inset 3px 0 0 #1677ff;
-  }
-
-  &__item--account {
-    min-height: 68px;
-  }
-
-  &__item-actions {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: 5px;
-  }
-
-  &__item-icon-button {
-    display: inline-flex;
-    width: 26px;
-    height: 26px;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid #d8e7f7;
-    border-radius: 6px;
-    background: #ffffff;
-    color: #2d6cdf;
-    cursor: pointer;
-  }
-
-  &__item-icon-button:hover {
-    border-color: #9dc9ff;
-    background: #eef6ff;
-  }
-
-  &__item-action {
-    display: inline-flex;
-    height: 26px;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    padding: 0 10px;
-    border: 1px solid #9dc9ff;
-    border-radius: 6px;
-    background: #f0f7ff;
-    color: #1677ff;
-    cursor: pointer;
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  &__item-action:hover {
-    border-color: #56a7ff;
-    background: #e4f1ff;
-  }
-
-  &__item-action:disabled {
-    border-color: #d0d5dd;
-    background: #f3f4f6;
-    color: #98a2b3;
-    cursor: not-allowed;
-  }
-
-  &__item-action--danger {
-    border-color: #ffc7be;
-    background: #fff6f4;
-    color: #b42318;
-  }
-
-  &__item-action--danger:hover {
-    border-color: #ffafa3;
-    background: #fff0ee;
-  }
-
-  &__item-copy {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  &__item-copy strong,
-  &__item-copy small {
-    overflow: hidden;
-    max-width: 230px;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__item-copy strong {
-    font-size: 13px;
-    line-height: 1.25;
-  }
-
-  &__item-copy small {
-    color: #667085;
-    font-size: 12px;
-  }
-
-  &__quota-list {
-    display: flex;
-    min-width: 0;
-    gap: 5px;
-    margin-top: 1px;
-  }
-
-  &__quota-item {
-    display: inline-flex;
-    height: 18px;
-    align-items: center;
-    gap: 4px;
-    padding: 0 6px;
-    border: 1px solid #d8e7f7;
-    border-radius: 5px;
-    background: #f7fbff;
-    color: #49627d;
-    font-size: 11px;
-    line-height: 18px;
-    white-space: nowrap;
-  }
-
-  &__quota-item strong {
-    color: #1677ff;
-    font-size: 11px;
-    line-height: 18px;
-  }
-
-  &__empty {
-    display: flex;
-    flex: 1;
-    align-items: center;
-    justify-content: center;
-    color: #667085;
-  }
-
-  &--collapsed {
-    border: 0;
-    background: transparent;
-  }
-
-  &--collapsed &__header {
-    height: 100vh;
-    justify-content: center;
-    padding: 0;
-    border-bottom: 0;
-    background: transparent;
-  }
-}
-
-@keyframes quick-switch-logo-float {
-  0% {
-    transform: translateY(0);
-  }
-
-  25% {
-    transform: translateY(-3px);
-  }
-
-  50% {
-    transform: translateY(1px);
-  }
-
-  75% {
-    transform: translateY(-2px);
-  }
-
-  100% {
-    transform: translateY(0);
-  }
-}
-
-@keyframes quick-switch-logo-shadow {
-  0%,
-  100% {
-    opacity: 0.42;
-    transform: scaleX(0.86);
-  }
-
-  50% {
-    opacity: 0.22;
-    transform: scaleX(1.08);
-  }
-}
-
-@keyframes quick-switch-logo-pulse {
-  0%,
-  100% {
-    opacity: 0.88;
-    transform: scale(0.95);
-  }
-
-  50% {
-    opacity: 1;
-    transform: scale(1.04);
-  }
-}
-
-@keyframes quick-switch-logo-breathe {
-  0%,
-  100% {
-    transform: scale(0.94);
-  }
-
-  50% {
-    transform: scale(1.03);
-  }
-}
-
-@keyframes quick-switch-logo-scan {
-  0% {
-    opacity: 0.2;
-    transform: rotate(0deg);
-  }
-
-  45% {
-    opacity: 0.78;
-  }
-
-  100% {
-    opacity: 0.2;
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes quick-switch-logo-blink {
-  0%,
-  88%,
-  100% {
-    transform: scaleY(1);
-  }
-
-  92%,
-  96% {
-    transform: scaleY(0.18);
-  }
-}
-
-@keyframes quick-switch-logo-sparkle {
-  0%,
-  100% {
-    opacity: 0.28;
-    transform: rotate(0deg) scale(0.9);
-  }
-
-  50% {
-    opacity: 0.95;
-    transform: rotate(18deg) scale(1.08);
-  }
 }
 
 .app-shell {
@@ -4432,213 +1935,6 @@ onBeforeUnmount(() => {
     margin: 0 0 18px;
     color: var(--color-text-muted);
     line-height: 1.7;
-  }
-}
-
-.app-logs {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-  flex-direction: column;
-  gap: 14px;
-  overflow: hidden;
-
-  &__header {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    padding: 12px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-  }
-
-  &__header span {
-    color: var(--color-text-soft);
-    font-size: 0.72rem;
-    font-weight: 700;
-    letter-spacing: 0.14em;
-  }
-
-  &__header h1 {
-    margin: 4px 0;
-    color: var(--color-primary);
-    font-size: 1.35rem;
-  }
-
-  &__header p {
-    margin: 0;
-    color: var(--color-text-muted);
-    font-size: 0.86rem;
-  }
-
-  &__actions {
-    display: flex;
-    gap: 8px;
-  }
-
-  &__actions button {
-    display: inline-flex;
-    height: 36px;
-    align-items: center;
-    gap: 6px;
-    padding: 0 12px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: #fbfcfd;
-    color: var(--color-primary);
-    cursor: pointer;
-    font-weight: 700;
-  }
-
-  &__filters {
-    display: flex;
-    flex: none;
-    align-items: end;
-    gap: 10px;
-    padding: 14px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-  }
-
-  &__filters label {
-    display: grid;
-    gap: 6px;
-  }
-
-  &__filters label span {
-    color: var(--color-text-muted);
-    font-size: 0.78rem;
-    font-weight: 700;
-  }
-
-  &__filters select {
-    width: 180px;
-    height: 34px;
-    padding: 0 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: #fbfcfd;
-    color: var(--color-primary);
-    font-weight: 700;
-  }
-
-  &__filters strong {
-    margin-left: auto;
-    color: var(--color-text-muted);
-    font-size: 0.84rem;
-  }
-
-  &__list {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-    flex-direction: column;
-    gap: 10px;
-    overflow: auto;
-    padding-right: 4px;
-  }
-
-  &__item {
-    padding: 14px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-  }
-
-  &__item--error {
-    border-color: #f3b7b7;
-    background: #fff7f7;
-  }
-
-  &__item-head,
-  &__meta {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-
-  &__item-head strong {
-    color: var(--color-primary);
-    font-size: 0.95rem;
-  }
-
-  &__item-head span {
-    color: var(--color-text-muted);
-    font-size: 0.82rem;
-    font-weight: 700;
-  }
-
-  &__item p {
-    margin: 8px 0 0;
-    color: #b42318;
-    font-size: 0.86rem;
-  }
-
-  &__meta {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    margin-top: 8px;
-    color: var(--color-text-soft);
-    font-size: 0.78rem;
-  }
-
-  &__item pre {
-    overflow: auto;
-    max-height: 220px;
-    margin: 10px 0 0;
-    padding: 10px;
-    border-radius: 8px;
-    background: #f5f7fa;
-    color: #2c3b4f;
-    font-size: 0.78rem;
-    line-height: 1.55;
-  }
-
-  &__pagination {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 10px;
-    padding: 12px 14px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
-    font-size: 0.84rem;
-    font-weight: 700;
-  }
-
-  &__pagination select,
-  &__pagination button {
-    height: 32px;
-    padding: 0 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: #fbfcfd;
-    color: var(--color-primary);
-    cursor: pointer;
-    font-weight: 700;
-  }
-
-  &__pagination button:disabled {
-    cursor: not-allowed;
-    opacity: 0.48;
-  }
-
-  &__empty {
-    display: grid;
-    min-height: 300px;
-    place-items: center;
-    border: 1px dashed var(--color-line-strong);
-    border-radius: 8px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
   }
 }
 
@@ -4795,588 +2091,6 @@ onBeforeUnmount(() => {
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
-  }
-}
-
-.restore-preview-modal {
-  display: flex;
-  height: min(640px, calc(100vh - 180px));
-  min-height: 0;
-  flex-direction: column;
-  gap: 12px;
-
-  &--compare {
-    height: min(680px, calc(100vh - 180px));
-  }
-
-  &__summary {
-    display: flex;
-    gap: 8px;
-    color: var(--color-text-muted);
-    font-size: 0.84rem;
-    font-weight: 700;
-  }
-
-  &__summary-pill {
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: var(--color-primary-soft);
-  }
-
-  &__notice {
-    margin: 0;
-    padding: 10px 12px;
-    border: 1px solid #d8e2ec;
-    border-radius: 8px;
-    background: #f6f9fc;
-    color: var(--color-text-muted);
-    font-size: 0.84rem;
-    line-height: 1.6;
-  }
-
-  &__body {
-    display: flex;
-    flex: 1;
-    min-height: 0;
-    flex-direction: column;
-    gap: 12px;
-    overflow: auto;
-    padding-right: 4px;
-  }
-
-  &__section {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  &__section-title {
-    margin: 0;
-    color: var(--color-text);
-    font-size: 0.94rem;
-  }
-
-  &__list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  &__group {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  &__group-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 7px 10px;
-    border: 1px solid #d8e2ec;
-    border-radius: 8px;
-    background: #f6f9fc;
-  }
-
-  &__group-head strong,
-  &__group-head span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__group-head strong {
-    min-width: 0;
-    color: var(--color-text);
-    font-size: 0.82rem;
-  }
-
-  &__group-head span {
-    flex: none;
-    color: var(--color-text-muted);
-    font-size: 0.76rem;
-    font-weight: 700;
-  }
-
-  &__group-actions,
-  &__directory-actions {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    gap: 6px;
-  }
-
-  &__bulk-button {
-    height: 24px;
-    padding: 0 8px;
-    border: 1px solid var(--color-line);
-    border-radius: 6px;
-    background: #ffffff;
-    color: var(--color-primary);
-    cursor: pointer;
-    font-size: 0.72rem;
-    font-weight: 700;
-  }
-
-  &__bulk-button:disabled {
-    cursor: not-allowed;
-    opacity: 0.52;
-  }
-
-  &__tree {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  &__tree-folder {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    min-height: 26px;
-    border-left: 2px solid #b7c7d9;
-    color: var(--color-text);
-    font-size: 0.8rem;
-  }
-
-  &__tree-folder strong {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  &__tree-folder span {
-    flex: none;
-    color: var(--color-text-muted);
-    font-size: 0.74rem;
-    font-weight: 700;
-  }
-
-  &__tree-item {
-    position: relative;
-  }
-
-  &__tree-item::before {
-    position: absolute;
-    top: -7px;
-    bottom: 12px;
-    left: -10px;
-    width: 8px;
-    border-bottom: 1px solid #b7c7d9;
-    border-left: 1px solid #b7c7d9;
-    content: "";
-  }
-
-  &__item,
-  &__conflict {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel-soft);
-  }
-
-  &__item-name {
-    color: var(--color-text);
-    font-size: 0.88rem;
-  }
-
-  &__item-path {
-    color: var(--color-text-muted);
-    font-size: 0.78rem;
-    line-height: 1.45;
-    word-break: break-all;
-  }
-
-  &__conflict-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 4px;
-  }
-
-  &__conflict-head div {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  &__compare-button {
-    flex: none;
-    height: 28px;
-    padding: 0 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: #ffffff;
-    color: var(--color-primary);
-    cursor: pointer;
-    font-size: 0.78rem;
-    font-weight: 700;
-  }
-
-  &__compare-button:disabled {
-    cursor: not-allowed;
-    opacity: 0.52;
-  }
-
-  &__choice {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    font-size: 0.82rem;
-    font-weight: 700;
-  }
-
-  &__choice input {
-    width: 15px;
-    height: 15px;
-    margin: 0;
-    accent-color: var(--color-primary);
-  }
-
-  &__choice-text {
-    line-height: 1.35;
-  }
-
-  &__compare {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-    margin-top: 4px;
-  }
-
-  &__compare--dialog {
-    flex: 1;
-    min-height: 0;
-    margin-top: 0;
-  }
-
-  &__compare-panel {
-    display: flex;
-    min-width: 0;
-    min-height: 0;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  &__compare-panel strong {
-    color: var(--color-text);
-    font-size: 0.78rem;
-  }
-
-  &__compare-summary {
-    grid-column: 1 / -1;
-    color: var(--color-text-muted);
-    font-size: 0.78rem;
-    font-weight: 700;
-  }
-
-  &__compare-code {
-    flex: 1;
-    max-height: 260px;
-    min-height: 0;
-    overflow: auto;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: #ffffff;
-    color: var(--color-text);
-    font-family: "JetBrains Mono", "Consolas", monospace;
-    font-size: 0.74rem;
-    line-height: 1.55;
-  }
-
-  &__compare--dialog &__compare-code {
-    max-height: none;
-  }
-
-  &__compare-line {
-    display: grid;
-    grid-template-columns: 38px 54px minmax(0, 1fr);
-    gap: 6px;
-    min-height: 22px;
-    padding: 2px 8px;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-
-  &__compare-line--current-only {
-    background: #fff2f0;
-  }
-
-  &__compare-line--backup-only {
-    background: #eff8ff;
-  }
-
-  &__compare-line--empty {
-    background: #f8fafc;
-    color: var(--color-text-soft);
-  }
-
-  &__compare-number {
-    color: var(--color-text-soft);
-    text-align: right;
-    user-select: none;
-  }
-
-  &__compare-marker {
-    color: var(--color-text-muted);
-    font-weight: 700;
-    user-select: none;
-  }
-
-  &__compare-text {
-    min-width: 0;
-  }
-
-  &__empty {
-    display: grid;
-    min-height: 120px;
-    place-items: center;
-    border: 1px dashed var(--color-line);
-    border-radius: 8px;
-    color: var(--color-text-muted);
-    font-size: 0.9rem;
-    font-weight: 700;
-  }
-
-  &__actions {
-    display: flex;
-    flex: none;
-    justify-content: flex-end;
-    gap: 10px;
-    padding-top: 4px;
-  }
-
-  &__primary {
-    border-color: var(--color-primary);
-    background: var(--color-primary);
-    color: #ffffff;
-  }
-
-  &__primary:hover {
-    border-color: var(--color-primary);
-    background: var(--color-primary);
-  }
-}
-
-.update-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 82;
-  display: grid;
-  place-items: center;
-  padding: 24px;
-
-  &__overlay {
-    position: absolute;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.28);
-    backdrop-filter: blur(2px);
-  }
-
-  &__panel {
-    position: relative;
-    width: 560px;
-    max-height: calc(100vh - 48px);
-    overflow: auto;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.2);
-  }
-
-  &__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 14px;
-    padding: 18px 18px 12px;
-    border-bottom: 1px solid var(--color-line);
-  }
-
-  &__header span {
-    display: block;
-    margin-bottom: 5px;
-    color: var(--color-text-soft);
-    font-size: 0.68rem;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    line-height: 1;
-    text-transform: uppercase;
-  }
-
-  &__header h2 {
-    margin: 0;
-    color: var(--color-text);
-    font-size: 1.05rem;
-    line-height: 1.25;
-  }
-
-  &__icon-button {
-    display: grid;
-    width: 30px;
-    height: 30px;
-    place-items: center;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: #ffffff;
-    color: var(--color-text-muted);
-    cursor: pointer;
-  }
-
-  &__icon-button:hover {
-    border-color: #c8d2df;
-    background: #f7f9fc;
-    color: var(--color-text);
-  }
-
-  &__icon-button:disabled {
-    cursor: default;
-    opacity: 0.55;
-  }
-
-  &__body {
-    display: flex;
-    gap: 14px;
-    padding: 18px;
-  }
-
-  &__mark {
-    display: grid;
-    width: 44px;
-    height: 44px;
-    flex: 0 0 auto;
-    place-items: center;
-    border: 1px solid #b7d9f6;
-    border-radius: 8px;
-    background: #e8f4ff;
-    color: #0b78d0;
-  }
-
-  &__copy {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 8px;
-    padding-top: 2px;
-  }
-
-  &__copy strong {
-    color: var(--color-primary);
-    font-size: 1rem;
-    line-height: 1.35;
-  }
-
-  &__copy span {
-    color: var(--color-text-muted);
-    font-size: 0.86rem;
-    line-height: 1.6;
-  }
-
-  &__progress {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin: 0 18px 16px;
-    padding: 12px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: #f8fbff;
-  }
-
-  &__progress-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    color: var(--color-text-muted);
-    font-size: 0.8rem;
-    font-weight: 700;
-  }
-
-  &__progress-head strong {
-    color: var(--color-primary);
-  }
-
-  &__progress-track {
-    height: 8px;
-    overflow: hidden;
-    border-radius: 999px;
-    background: #e6edf5;
-  }
-
-  &__progress-bar {
-    height: 100%;
-    border-radius: inherit;
-    background: var(--color-primary);
-  }
-
-  &__notes {
-    max-height: 160px;
-    margin: 0 18px 16px;
-    overflow: auto;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: #f8fafc;
-    color: var(--color-text);
-    font-family: "JetBrains Mono", "Consolas", monospace;
-    font-size: 0.76rem;
-    line-height: 1.55;
-    padding: 12px;
-    white-space: pre-wrap;
-  }
-
-  &__footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-    padding: 0 18px 18px;
-  }
-
-  &__button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 7px;
-    min-width: 88px;
-    height: 34px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: #ffffff;
-    color: var(--color-primary);
-    font-size: 0.86rem;
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  &__button:hover {
-    border-color: var(--color-primary);
-    background: #f7f9fc;
-  }
-
-  &__button:disabled {
-    cursor: default;
-    opacity: 0.68;
-  }
-
-  &__button--primary {
-    border-color: var(--color-primary);
-    background: var(--color-primary);
-    color: #ffffff;
-  }
-
-  &__button--primary:hover {
-    border-color: var(--color-primary);
-    background: var(--color-primary);
   }
 }
 
