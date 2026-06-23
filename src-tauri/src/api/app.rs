@@ -578,10 +578,15 @@ fn create_quick_switch_window(
         QUICK_SWITCH_EXPANDED_HEIGHT
     };
 
+    let quick_switch_url = format!(
+        "index.html?panel=quick-switch&collapsed={}",
+        if quick_switch_collapsed { "1" } else { "0" }
+    );
+
     let window = WebviewWindowBuilder::new(
         app,
         QUICK_SWITCH_LABEL,
-        WebviewUrl::App("index.html?panel=quick-switch".into()),
+        WebviewUrl::App(quick_switch_url.into()),
     )
     .title("Monkey Thief")
     .inner_size(width as f64, height as f64)
