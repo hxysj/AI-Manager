@@ -1,6 +1,6 @@
 use crate::api::{
-    app, app_logs, codex_account, data, git_tool, proxy, repos, rules, runtime_provider, sessions,
-    settings, skills, system, translation, usage,
+    app, app_logs, codex_account, data, git_tool, lan_share, proxy, repos, rules, runtime_provider,
+    sessions, settings, skills, system, translation, usage,
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
@@ -23,6 +23,7 @@ pub struct ManagerState {
     data_backup_cache: data::DataBackupCache,
     codex_login_cache: codex_account::CodexLoginCache,
     proxy_server_registry: proxy::ProxyServerRegistry,
+    lan_share_registry: lan_share::LanShareServerRegistry,
     state: Value,
 }
 
@@ -140,6 +141,7 @@ impl ManagerState {
             data_backup_cache: data::DataBackupCache::new(),
             codex_login_cache: codex_account::CodexLoginCache::new(),
             proxy_server_registry: proxy::ProxyServerRegistry::new(),
+            lan_share_registry: lan_share::LanShareServerRegistry::new(),
             state,
         })
     }
@@ -349,6 +351,104 @@ impl ManagerState {
                 repos::remove_repo(&self.paths, payload.unwrap_or_else(|| json!({}))).await?;
                 self.refresh_state().await?;
                 Ok(self.state.clone())
+            }
+            "lan-share:state" => lan_share::get_state(&self.lan_share_registry, &self.paths).await,
+            "lan-share:start" => {
+                lan_share::start_service(
+                    app.clone(),
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:stop" => {
+                lan_share::stop_service(app.clone(), &self.lan_share_registry, &self.paths).await
+            }
+            "lan-share:add-files" => {
+                let result = lan_share::add_files(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
+            "lan-share:remove-file" => {
+                let result = lan_share::remove_file(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
+            "lan-share:refresh-files" => {
+                let result =
+                    lan_share::refresh_files(&self.lan_share_registry, &self.paths).await?;
+                lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
+                Ok(result)
+            }
+            "lan-share:list-messages" => {
+                lan_share::list_messages(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:send-message" => {
+                lan_share::send_message(
+                    app.clone(),
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:create-session" => {
+                lan_share::create_session(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:activate-session" => {
+                lan_share::activate_session(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:delete-message" => {
+                lan_share::delete_message(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:clear-session" => {
+                lan_share::clear_session(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:delete-device-history" => {
+                lan_share::delete_device_history(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
             }
             "git-tool:branches" => {
                 git_tool::scan_branches(
@@ -1200,6 +1300,7 @@ impl ManagerState {
             }
             "system:select-directory" => system::select_directory(&app, payload),
             "system:select-file" => system::select_file(&app, payload),
+            "system:select-files" => system::select_files(&app, payload),
             "system:open-path" => system::open_path(&app, payload),
             "system:open-external" => system::open_external(&app, payload),
             "translation:translate" => {

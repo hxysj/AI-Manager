@@ -3,6 +3,7 @@ pub mod app_logs;
 pub mod codex_account;
 pub mod data;
 pub mod git_tool;
+pub mod lan_share;
 pub mod proxy;
 pub mod repos;
 pub mod rules;

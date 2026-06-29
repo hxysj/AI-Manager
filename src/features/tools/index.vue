@@ -63,14 +63,16 @@
         @add-repo="$emit('add-repo')"
         @status-change="gitToolStatus = $event"
       />
+      <LanShareView v-else-if="activeTool === 'lan-share'" />
     </section>
   </section>
 </template>
 
 <script setup>
 import { computed, ref } from "vue"
-import { ArrowLeft, GitBranchIcon } from "lucide-vue-next"
+import { ArrowLeft, GitBranchIcon, Share2 } from "lucide-vue-next"
 import GitToolView from "@/features/gitTool/index.vue"
+import LanShareView from "@/features/lanShare/index.vue"
 
 const props = defineProps({
   repos: {
@@ -91,6 +93,13 @@ const toolItems = computed(() => [
     summary: "管理项目的本地分支归档、提交检查和 stash 归档。",
     meta: `${props.repos.length} 个项目`,
     icon: GitBranchIcon
+  },
+  {
+    id: "lan-share",
+    label: "设备快传",
+    summary: "启动局域网服务，通过二维码向同网段设备共享文件并实时通信。",
+    meta: "手动启动",
+    icon: Share2
   }
 ])
 

@@ -1,0 +1,532 @@
+<template>
+  <section class="lan-share-messages-panel">
+    <header class="lan-share-messages-head">
+      <div class="lan-share-messages-title">
+        <strong class="lan-share-messages-name">消息通信</strong>
+        <span class="lan-share-messages-subtitle">
+          {{ sessionSummary }}
+        </span>
+      </div>
+      <div class="lan-share-messages-actions">
+        <input
+          v-model="keyword"
+          class="lan-share-messages-search"
+          placeholder="搜索消息"
+          type="search"
+        />
+        <select v-model="timeFilter" class="lan-share-messages-select">
+          <option value="all">全部时间</option>
+          <option value="today">今天</option>
+          <option value="week">最近 7 天</option>
+        </select>
+      </div>
+    </header>
+    <div ref="messageListRef" class="lan-share-messages-list">
+      <article
+        v-for="message in sortedMessages"
+        :key="message.id"
+        :class="[
+          'lan-share-messages-item',
+          {
+            'lan-share-messages-item-desktop':
+              message.direction === 'desktop-to-mobile',
+            'lan-share-messages-item-mobile':
+              message.direction !== 'desktop-to-mobile'
+          }
+        ]"
+      >
+        <div class="lan-share-messages-item-head">
+          <span class="lan-share-messages-sender">
+            {{ messageSenderName(message) }}
+          </span>
+          <button
+            class="lan-share-messages-delete"
+            type="button"
+            title="删除消息"
+            @click="deleteMessage(message)"
+          >
+            <Trash2 :size="12" />
+          </button>
+        </div>
+        <span class="lan-share-messages-meta">
+          {{ messageRelationText(message) }} ·
+          {{ formatDateTime(message.createdAt) }}
+        </span>
+        <p
+          class="lan-share-messages-content"
+          title="点击复制消息"
+          @click="copyMessageContent(message)"
+        >
+          {{ message.content }}
+        </p>
+      </article>
+      <div v-if="!messages.length" class="lan-share-messages-empty">
+        暂无消息。
+      </div>
+    </div>
+    <footer class="lan-share-messages-composer">
+      <input
+        v-model="messageDraft"
+        class="lan-share-messages-composer-input"
+        type="text"
+        placeholder="输入要发送到设备的消息"
+        @keydown.enter="sendMessage"
+      />
+      <button
+        class="lan-share-messages-button"
+        type="button"
+        :disabled="!currentSessionId || loading"
+        @click="clearCurrentSession"
+      >
+        <Eraser :size="14" />
+        清空会话
+      </button>
+      <button
+        class="lan-share-messages-button lan-share-messages-button-primary"
+        type="button"
+        :disabled="!messageDraft.trim() || !currentSession || loading"
+        @click="sendMessage"
+      >
+        <Send :size="14" />
+        发送
+      </button>
+    </footer>
+  </section>
+</template>
+
+<script setup>
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { Eraser, Send, Trash2 } from "lucide-vue-next"
+import { lanShareApi } from "@/api"
+import { formatDateTime } from "@/utils/formatters"
+import { createMessage } from "@/utils/message"
+
+const props = defineProps({
+  currentDevice: {
+    type: Object,
+    default: null
+  },
+  currentSessionId: {
+    type: String,
+    default: ""
+  },
+  currentSession: {
+    type: Object,
+    default: null
+  },
+  stateVersion: {
+    type: Number,
+    default: 0
+  }
+})
+
+const emit = defineEmits(["refresh-state"])
+
+const messageListRef = ref(null)
+const messages = ref([])
+const keyword = ref("")
+const timeFilter = ref("all")
+const messageDraft = ref("")
+const loading = ref(false)
+let stopMessageListener = null
+let loadSeed = 0
+
+const sessionSummary = computed(() => {
+  if (!props.currentSession) {
+    return "请选择设备和会话"
+  }
+
+  return `${messages.value.length} 条消息 · ${formatDateTime(
+    props.currentSession.updatedAt
+  )}`
+})
+
+const sortedMessages = computed(() => {
+  return [...messages.value].sort((left, right) => {
+    return Number(left.createdAt || 0) - Number(right.createdAt || 0)
+  })
+})
+
+onMounted(() => {
+  loadMessages()
+  stopMessageListener = lanShareApi.onMessageCreated((message) => {
+    if (message.sessionId === props.currentSessionId) {
+      loadMessages()
+      emit("refresh-state")
+    }
+  })
+})
+
+onBeforeUnmount(() => {
+  if (stopMessageListener) stopMessageListener()
+})
+
+watch(
+  () => [
+    props.currentDevice?.id || "",
+    props.currentSessionId,
+    props.stateVersion,
+    keyword.value,
+    timeFilter.value
+  ],
+  () => loadMessages()
+)
+
+watch(
+  () => sortedMessages.value,
+  () => scrollMessagesToBottom(),
+  { deep: true }
+)
+
+async function loadMessages() {
+  const seed = ++loadSeed
+
+  if (!props.currentSessionId) {
+    messages.value = []
+    return
+  }
+
+  try {
+    const result = unwrapData(
+      await lanShareApi.listMessages({
+        deviceId: props.currentDevice?.id || "",
+        sessionId: props.currentSessionId,
+        keyword: keyword.value,
+        from: filterStartAt(),
+        to: 0
+      })
+    )
+
+    if (seed === loadSeed) {
+      messages.value = Array.isArray(result) ? result : []
+    }
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
+  }
+}
+
+function unwrapData(result) {
+  return result?.status && "data" in result ? result.data : result
+}
+
+function scrollMessagesToBottom() {
+  nextTick(() => {
+    const messageList = messageListRef.value
+
+    if (messageList) {
+      messageList.scrollTop = messageList.scrollHeight
+    }
+  })
+}
+
+async function runMessageAction(action, successMessage) {
+  loading.value = true
+
+  try {
+    const result = unwrapData(await action())
+
+    if (successMessage) {
+      createMessage.success(successMessage)
+    }
+
+    await loadMessages()
+    emit("refresh-state")
+    return result
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
+    return null
+  } finally {
+    loading.value = false
+  }
+}
+
+async function sendMessage() {
+  const content = messageDraft.value.trim()
+
+  if (!content || !props.currentSessionId) {
+    if (content) {
+      createMessage.warning("请先选择会话后再发送消息。")
+    }
+    return
+  }
+
+  const result = await runMessageAction(async () =>
+    lanShareApi.sendMessage({
+      deviceId: props.currentDevice?.id || "",
+      sessionId: props.currentSessionId,
+      content
+    })
+  )
+
+  if (result) {
+    messageDraft.value = ""
+  }
+}
+
+async function deleteMessage(message) {
+  await runMessageAction(async () =>
+    lanShareApi.deleteMessage({ messageId: message.id })
+  )
+}
+
+async function clearCurrentSession() {
+  if (!props.currentSessionId) {
+    return
+  }
+
+  await runMessageAction(
+    async () => lanShareApi.clearSession({ sessionId: props.currentSessionId }),
+    "当前会话已清空。"
+  )
+}
+
+async function copyMessageContent(message) {
+  try {
+    await navigator.clipboard.writeText(message.content || "")
+    createMessage.success("消息已复制。")
+  } catch (error) {
+    createMessage.error(error?.message || "复制失败。")
+  }
+}
+
+function messageSenderName(message) {
+  if (message.direction === "desktop-to-mobile") {
+    return "电脑端"
+  }
+
+  return message.deviceName || "未知设备"
+}
+
+function messageRelationText(message) {
+  if (message.direction === "desktop-to-mobile") {
+    return `发给 ${message.deviceName || "未知设备"}`
+  }
+
+  return "设备发送"
+}
+
+function filterStartAt() {
+  const now = Date.now()
+
+  if (timeFilter.value === "today") {
+    return new Date().setHours(0, 0, 0, 0)
+  }
+  if (timeFilter.value === "week") {
+    return now - 7 * 24 * 60 * 60 * 1000
+  }
+
+  return 0
+}
+</script>
+
+<style scoped lang="less">
+.lan-share-messages-panel {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+
+  .lan-share-messages-head {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 48px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--color-line);
+    background: #f8fafc;
+
+    .lan-share-messages-title {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 2px;
+
+      .lan-share-messages-name {
+        color: var(--color-text);
+        font-size: 0.9rem;
+      }
+
+      .lan-share-messages-subtitle {
+        color: var(--color-text-muted);
+        font-size: 0.76rem;
+      }
+    }
+
+    .lan-share-messages-actions {
+      display: flex;
+      min-width: 0;
+      flex: none;
+      align-items: center;
+      gap: 8px;
+
+      .lan-share-messages-search,
+      .lan-share-messages-select {
+        height: 32px;
+        min-width: 0;
+        border: 1px solid var(--color-line);
+        border-radius: 7px;
+        background: #ffffff;
+        color: var(--color-text);
+      }
+
+      .lan-share-messages-search {
+        width: 180px;
+        padding: 0 10px;
+      }
+
+      .lan-share-messages-select {
+        width: 138px;
+        padding: 0 8px;
+      }
+    }
+  }
+
+  .lan-share-messages-list {
+    display: flex;
+    min-height: 0;
+    height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+    overflow: auto;
+    padding: 12px;
+    background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+
+    .lan-share-messages-item {
+      display: flex;
+      width: fit-content;
+      max-width: 72%;
+      min-width: 180px;
+      flex-direction: column;
+      gap: 5px;
+      padding: 9px 10px;
+      border: 1px solid #dce7f2;
+      border-radius: 8px;
+      background: #ffffff;
+      box-shadow: 0 6px 18px rgba(42, 67, 101, 0.08);
+
+      .lan-share-messages-item-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--color-text-muted);
+        font-size: 0.74rem;
+
+        .lan-share-messages-sender {
+          min-width: 0;
+          flex: 1;
+          overflow: hidden;
+          font-weight: 700;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .lan-share-messages-delete {
+          display: inline-flex;
+          width: 24px;
+          height: 24px;
+          flex: none;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid transparent;
+          border-radius: 7px;
+          background: transparent;
+          color: var(--color-text-muted);
+          cursor: pointer;
+        }
+      }
+
+      .lan-share-messages-meta {
+        color: var(--color-text-soft);
+        font-size: 0.7rem;
+      }
+
+      .lan-share-messages-content {
+        margin: 0;
+        color: var(--color-text);
+        cursor: pointer;
+        font-size: 0.84rem;
+        line-height: 1.55;
+        word-break: break-word;
+      }
+
+      .lan-share-messages-content:hover {
+        color: var(--color-primary);
+      }
+    }
+
+    .lan-share-messages-item-desktop {
+      align-self: flex-end;
+      border-color: #b9dec4;
+      background: #effaf2;
+    }
+
+    .lan-share-messages-item-mobile {
+      align-self: flex-start;
+    }
+
+    .lan-share-messages-empty {
+      display: flex;
+      min-height: 120px;
+      align-items: center;
+      justify-content: center;
+      border: 1px dashed var(--color-line);
+      border-radius: 8px;
+      color: var(--color-text-muted);
+      font-size: 0.82rem;
+    }
+  }
+
+  .lan-share-messages-composer {
+    display: flex;
+    flex: none;
+    gap: 8px;
+    padding: 10px;
+    border-top: 1px solid var(--color-line);
+    background: #f8fafc;
+
+    .lan-share-messages-composer-input {
+      height: 32px;
+      min-width: 0;
+      flex: 1;
+      padding: 0 10px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: #ffffff;
+      color: var(--color-text);
+    }
+
+    .lan-share-messages-button {
+      display: inline-flex;
+      height: 34px;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 12px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: #ffffff;
+      color: var(--color-primary);
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .lan-share-messages-button-primary {
+      border-color: var(--color-primary);
+      background: var(--color-primary);
+      color: #ffffff;
+    }
+
+    .lan-share-messages-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+  }
+}
+</style>
