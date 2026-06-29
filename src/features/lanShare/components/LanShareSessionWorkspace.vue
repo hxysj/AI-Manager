@@ -65,7 +65,7 @@
           </span>
         </header>
         <div class="lan-share-session-list">
-          <button
+          <article
             v-for="session in sortedSessions"
             :key="session.id"
             :class="[
@@ -75,21 +75,35 @@
                   selectedSessionId === session.id
               }
             ]"
-            type="button"
-            @click="emit('select-session', session.id)"
           >
-            <span class="lan-share-session-item-icon">
-              <MessagesSquare :size="15" />
+            <button
+              class="lan-share-session-item-select"
+              type="button"
+              @click="emit('select-session', session.id)"
+            >
+              <span class="lan-share-session-item-icon">
+                <MessagesSquare :size="15" />
+              </span>
+              <span class="lan-share-session-item-main">
+                <strong class="lan-share-session-item-title">
+                  {{ sessionTitle(session) }}
+                </strong>
+                <small class="lan-share-session-item-meta">
+                  {{ formatDateTime(session.updatedAt) }}
+                </small>
+              </span>
+            </button>
+            <span class="lan-share-session-item-actions">
+              <button
+                class="lan-share-session-item-delete"
+                type="button"
+                title="删除会话"
+                @click="emit('delete-session', session.id)"
+              >
+                <Trash2 :size="13" />
+              </button>
             </span>
-            <span class="lan-share-session-item-main">
-              <strong class="lan-share-session-item-title">
-                {{ sessionTitle(session) }}
-              </strong>
-              <small class="lan-share-session-item-meta">
-                {{ formatDateTime(session.updatedAt) }}
-              </small>
-            </span>
-          </button>
+          </article>
           <div v-if="!sortedSessions.length" class="lan-share-session-list-empty">
             当前设备还没有会话记录。
           </div>
@@ -101,17 +115,6 @@
           <button
             :class="[
               'lan-share-session-tab',
-              { 'lan-share-session-tab-active': detailTab === 'files' }
-            ]"
-            type="button"
-            @click="detailTab = 'files'"
-          >
-            <Database :size="15" />
-            共享文件
-          </button>
-          <button
-            :class="[
-              'lan-share-session-tab',
               { 'lan-share-session-tab-active': detailTab === 'messages' }
             ]"
             type="button"
@@ -120,10 +123,30 @@
             <MessagesSquare :size="15" />
             消息
           </button>
+          <button
+            :class="[
+              'lan-share-session-tab',
+              { 'lan-share-session-tab-active': detailTab === 'files' }
+            ]"
+            type="button"
+            @click="detailTab = 'files'"
+          >
+            <Database :size="15" />
+            共享文件
+          </button>
         </nav>
 
+        <LanShareMessagesPanel
+          v-if="detailTab === 'messages'"
+          class="lan-share-session-panel"
+          :current-device="currentDevice"
+          :current-session-id="currentSessionId"
+          :current-session="currentSession"
+          :state-version="stateVersion"
+          @refresh-state="emit('refresh-state')"
+        />
         <LanShareFilesPanel
-          v-if="detailTab === 'files'"
+          v-else-if="detailTab === 'files'"
           class="lan-share-session-panel"
           :current-session-id="currentSessionId"
           :can-manage-files="Boolean(currentSessionId)"
@@ -131,15 +154,6 @@
           :state-version="stateVersion"
           @refresh-state="emit('refresh-state')"
           @preview-file="emit('preview-file', $event)"
-        />
-        <LanShareMessagesPanel
-          v-else-if="detailTab === 'messages'"
-          class="lan-share-session-panel"
-          :current-device="currentDevice"
-          :current-session-id="currentSessionId"
-          :current-session="currentSession"
-          :state-version="stateVersion"
-          @refresh-state="emit('refresh-state')"
         />
       </section>
     </div>
@@ -200,13 +214,14 @@ const props = defineProps({
 const emit = defineEmits([
   "back-devices",
   "select-session",
+  "delete-session",
   "create-session",
   "delete-history",
   "refresh-state",
   "preview-file"
 ])
 
-const detailTab = ref("files")
+const detailTab = ref("messages")
 
 const sortedSessions = computed(() => {
   return [...props.sessions].sort((left, right) => {
@@ -410,50 +425,84 @@ function sessionTitle(session) {
           display: flex;
           width: 100%;
           align-items: center;
-          gap: 9px;
+          gap: 6px;
           min-height: 56px;
-          padding: 9px;
+          padding: 6px;
           border: 1px solid var(--color-line);
           border-radius: 8px;
           background: #ffffff;
           color: var(--color-text);
-          cursor: pointer;
           text-align: left;
 
-          .lan-share-session-item-icon {
-            display: inline-flex;
-            width: 32px;
-            height: 32px;
-            flex: 0 0 32px;
-            align-items: center;
-            justify-content: center;
-            border-radius: 7px;
-            background: #eef5fb;
-            color: #356b9b;
-          }
-
-          .lan-share-session-item-main {
+          .lan-share-session-item-select {
             display: flex;
+            align-items: center;
+            gap: 9px;
             min-width: 0;
             flex: 1;
-            flex-direction: column;
-            gap: 3px;
+            min-height: 42px;
+            padding: 3px;
+            border: 0;
+            background: transparent;
+            color: inherit;
+            cursor: pointer;
+            text-align: left;
 
-            .lan-share-session-item-title,
-            .lan-share-session-item-meta {
-              overflow: hidden;
-              text-overflow: ellipsis;
-              white-space: nowrap;
+            .lan-share-session-item-icon {
+              display: inline-flex;
+              width: 32px;
+              height: 32px;
+              flex: 0 0 32px;
+              align-items: center;
+              justify-content: center;
+              border-radius: 7px;
+              background: #eef5fb;
+              color: #356b9b;
             }
 
-            .lan-share-session-item-title {
-              color: var(--color-text);
-              font-size: 0.84rem;
-            }
+            .lan-share-session-item-main {
+              display: flex;
+              min-width: 0;
+              flex: 1;
+              flex-direction: column;
+              gap: 3px;
 
-            .lan-share-session-item-meta {
+              .lan-share-session-item-title,
+              .lan-share-session-item-meta {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
+
+              .lan-share-session-item-title {
+                color: var(--color-text);
+                font-size: 0.84rem;
+              }
+
+              .lan-share-session-item-meta {
+                color: var(--color-text-muted);
+                font-size: 0.72rem;
+              }
+            }
+          }
+
+          .lan-share-session-item-actions {
+            display: inline-flex;
+            flex: none;
+            align-items: center;
+            justify-content: center;
+
+            .lan-share-session-item-delete {
+              display: inline-flex;
+              width: 28px;
+              height: 28px;
+              align-items: center;
+              justify-content: center;
+              border: 1px solid var(--color-line);
+              border-radius: 7px;
+              background: #ffffff;
               color: var(--color-text-muted);
-              font-size: 0.72rem;
+              cursor: pointer;
             }
           }
         }

@@ -143,6 +143,46 @@ pub fn select_files(app: &AppHandle, payload: Option<Value>) -> Result<Value, Ma
     Ok(json!(selected_paths))
 }
 
+pub fn save_file(app: &AppHandle, payload: Option<Value>) -> Result<Value, ManagerError> {
+    let payload: SelectPathPayload = serde_json::from_value(payload.unwrap_or_else(|| json!({})))?;
+    let title = payload
+        .title
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "保存文件".to_string());
+    let default_path = payload
+        .default_path
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| path_text(home_path()));
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title(title)
+        .set_file_name(default_path);
+
+    if let Some(filters) = payload.filters {
+        for filter in filters {
+            let extensions = filter
+                .extensions
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            dialog = dialog.add_filter(filter.name, &extensions);
+        }
+    }
+
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+
+    let selected_path = dialog
+        .blocking_save_file()
+        .map(file_path_text)
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(json!(selected_path))
+}
+
 pub fn open_path(app: &AppHandle, payload: Option<Value>) -> Result<Value, ManagerError> {
     let payload: OpenPathPayload = serde_json::from_value(payload.unwrap_or_else(|| json!({})))?;
 

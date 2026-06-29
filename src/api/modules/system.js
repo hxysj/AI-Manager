@@ -4,6 +4,7 @@ export const systemApi = {
   selectDirectory: payload => request('system:select-directory', payload),
   selectFile: payload => request('system:select-file', payload),
   selectFiles: payload => request('system:select-files', payload),
+  saveFile: payload => request('system:save-file', payload),
   openPath: payload => request('system:open-path', payload),
   openExternal: payload => request('system:open-external', payload)
 }

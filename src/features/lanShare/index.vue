@@ -33,6 +33,7 @@
       :state-version="stateVersion"
       @back-devices="backToDevices"
       @select-session="selectSession"
+      @delete-session="deleteSession"
       @create-session="createNewSession"
       @delete-history="deleteSelectedDeviceHistory"
       @refresh-state="loadState"
@@ -300,6 +301,39 @@ async function selectSession(sessionId) {
   await runAction(async () =>
     lanShareApi.activateSession({ sessionId: selectedSessionId.value })
   )
+}
+
+async function deleteSession(sessionId) {
+  if (!sessionId) {
+    return
+  }
+
+  const deletedSession = state.sessions.find((session) => session.id === sessionId)
+  const result = await runAction(
+    async () => lanShareApi.deleteSession({ sessionId }),
+    "会话已删除。"
+  )
+
+  if (!result) {
+    return
+  }
+
+  const nextSessions = Array.isArray(result.sessions) ? result.sessions : state.sessions
+  const deviceId = deletedSession?.deviceId || selectedDeviceId.value
+
+  if (selectedSessionId.value === sessionId) {
+    const nextSessionId =
+      nextSessions.find((session) => session.deviceId === deviceId)?.id || ""
+
+    selectedSessionId.value = nextSessionId
+    if (nextSessionId) {
+      await runAction(async () =>
+        lanShareApi.activateSession({ sessionId: nextSessionId })
+      )
+    }
+  }
+
+  await loadState()
 }
 
 function openDeviceSessions(deviceId) {
