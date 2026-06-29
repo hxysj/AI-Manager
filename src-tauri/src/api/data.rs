@@ -472,6 +472,7 @@ async fn collect_backup_entries(
 ) -> Result<Vec<Value>, ManagerError> {
     let storage_files = vec![
         (&paths.storage_files.skill_repositories, "storage/skill-repositories.json"),
+        (&paths.storage_files.skill_groups, "storage/skill-groups.json"),
         (&paths.storage_files.skills, "storage/skills.json"),
         (&paths.storage_files.installs, "storage/installs.json"),
         (&paths.storage_files.usage_pricing, "storage/usage-pricing.json"),
