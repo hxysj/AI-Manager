@@ -825,14 +825,14 @@ fn mobile_page_html() -> String {
     .page-title strong { color: #172033; font-size: 19px; line-height: 1.2; }
     .page-title span { overflow: hidden; color: #697789; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
     .page-badge { display: inline-flex; height: 28px; align-items: center; justify-content: center; padding: 0 9px; border: 1px solid #c7d5e4; border-radius: 999px; background: #f8fbff; color: #315f8f; font-size: 12px; font-weight: 800; }
-    .page-main { display: flex; min-height: 0; flex: 1; flex-wrap: wrap; align-content: stretch; gap: 12px; overflow: hidden; padding: 12px; }
+    .page-main { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: hidden; padding: 12px; }
     .card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid #dbe4ee; border-radius: 8px; background: #ffffff; box-shadow: 0 8px 22px rgba(35, 55, 80, 0.05); }
-    .device-card { min-width: min(100%, 260px); flex: 1 1 260px; }
-    .content-shell { display: flex; min-width: min(100%, 520px); min-height: 0; flex: 999 1 520px; flex-direction: column; gap: 12px; overflow: hidden; }
+    .device-card { flex: none; }
+    .content-shell { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: hidden; }
     .view-tabs { display: flex; flex: none; gap: 8px; padding: 4px; border: 1px solid #dbe4ee; border-radius: 8px; background: #f7fafd; }
     .view-tab { display: inline-flex; height: 36px; flex: 1; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #607089; font-size: 14px; font-weight: 800; }
     .view-tab.active { border-color: #aac4df; background: #ffffff; color: #244f7c; box-shadow: 0 5px 14px rgba(35, 55, 80, 0.08); }
-    .view-panel { display: none; flex: 1; }
+    .view-panel { display: none; min-height: 0; flex: 1; }
     .view-panel.active { display: flex; }
     .card-head { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #edf2f7; background: #fbfcfe; }
     .card-head strong { color: #172033; font-size: 15px; }
