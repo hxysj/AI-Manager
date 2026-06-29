@@ -19,7 +19,9 @@ pub struct AppPaths {
     pub logs_dir: String,
     pub temp_dir: String,
     pub storage_dir: String,
+    pub lan_share_dir: String,
     pub storage_files: StorageFiles,
+    pub lan_share_files: LanShareFiles,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -55,6 +57,17 @@ pub struct StorageFiles {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LanShareFiles {
+    pub config: String,
+    pub files: String,
+    pub devices: String,
+    pub sessions: String,
+    pub messages: String,
+    pub downloads: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PublicPaths {
     pub workspace_root: String,
     pub skills_dir: String,
@@ -75,6 +88,7 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
     let session_recycle_dir = sessions_dir.join("recycle");
     let prompts_dir = workspace_root.join("prompts");
     let profiles_dir = workspace_root.join("profiles");
+    let lan_share_dir = workspace_root.join("lan-share");
 
     AppPaths {
         user_data_path: path_text(user_data_path),
@@ -90,6 +104,7 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
         logs_dir: path_text(&logs_dir),
         temp_dir: path_text(&temp_dir),
         storage_dir: path_text(&storage_dir),
+        lan_share_dir: path_text(&lan_share_dir),
         storage_files: StorageFiles {
             skill_repositories: path_text(storage_dir.join("skill-repositories.json")),
             skill_repository_cache: path_text(temp_dir.join("skill-repositories-cache.json")),
@@ -120,6 +135,14 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
             codex_accounts: path_text(storage_dir.join("codex-accounts.json")),
             codex_active_account_id: path_text(storage_dir.join("codex-active-account-id.json")),
         },
+        lan_share_files: LanShareFiles {
+            config: path_text(lan_share_dir.join("config.json")),
+            files: path_text(lan_share_dir.join("files.json")),
+            devices: path_text(lan_share_dir.join("devices.json")),
+            sessions: path_text(lan_share_dir.join("sessions.json")),
+            messages: path_text(lan_share_dir.join("messages.json")),
+            downloads: path_text(lan_share_dir.join("downloads.json")),
+        },
     }
 }
 
@@ -138,6 +161,7 @@ pub async fn ensure_app_directories(paths: &AppPaths) -> Result<(), std::io::Err
         &paths.logs_dir,
         &paths.temp_dir,
         &paths.storage_dir,
+        &paths.lan_share_dir,
     ] {
         tokio::fs::create_dir_all(dir).await?;
     }
@@ -175,4 +199,28 @@ pub fn home_path() -> PathBuf {
 
 pub fn path_text(path: impl AsRef<Path>) -> String {
     path.as_ref().to_string_lossy().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_app_paths;
+    use std::path::Path;
+
+    #[test]
+    fn resolves_lan_share_paths_under_workspace() {
+        let paths = resolve_app_paths(Path::new(r"D:\ai-manager-data"));
+
+        assert_eq!(
+            paths.lan_share_dir.replace('/', "\\"),
+            r"D:\ai-manager-data\workspace\lan-share"
+        );
+        assert_eq!(
+            paths.lan_share_files.files.replace('/', "\\"),
+            r"D:\ai-manager-data\workspace\lan-share\files.json"
+        );
+        assert_eq!(
+            paths.lan_share_files.messages.replace('/', "\\"),
+            r"D:\ai-manager-data\workspace\lan-share\messages.json"
+        );
+    }
 }
