@@ -387,6 +387,17 @@ impl ManagerState {
                 self.emit_state_changed(&app)?;
                 Ok(result)
             }
+            "lan-share:remove-files" => {
+                let result = lan_share::remove_files(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
             "lan-share:refresh-files" => {
                 let result =
                     lan_share::refresh_files(&self.lan_share_registry, &self.paths).await?;
@@ -434,6 +445,16 @@ impl ManagerState {
                 )
                 .await
             }
+            "lan-share:delete-messages" => {
+                let result = lan_share::delete_messages(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
             "lan-share:clear-session" => {
                 lan_share::clear_session(
                     &self.lan_share_registry,
@@ -442,8 +463,27 @@ impl ManagerState {
                 )
                 .await
             }
+            "lan-share:delete-session" => {
+                let result = lan_share::delete_session(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
             "lan-share:delete-device-history" => {
                 lan_share::delete_device_history(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:export-files-zip" => {
+                lan_share::export_files_zip(
                     &self.lan_share_registry,
                     &self.paths,
                     payload.unwrap_or_else(|| json!({})),
@@ -1301,6 +1341,7 @@ impl ManagerState {
             "system:select-directory" => system::select_directory(&app, payload),
             "system:select-file" => system::select_file(&app, payload),
             "system:select-files" => system::select_files(&app, payload),
+            "system:save-file" => system::save_file(&app, payload),
             "system:open-path" => system::open_path(&app, payload),
             "system:open-external" => system::open_external(&app, payload),
             "translation:translate" => {

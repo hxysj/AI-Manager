@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,6 +31,7 @@ use tokio_tungstenite::tungstenite::protocol::{Message, Role};
 use tokio_tungstenite::WebSocketStream;
 use tokio_util::io::ReaderStream;
 use url::Url;
+use zip::write::SimpleFileOptions;
 
 type BoxBody = http_body_util::combinators::BoxBody<Bytes, std::io::Error>;
 
@@ -165,6 +166,19 @@ pub fn string_value(value: Option<&Value>) -> String {
 
 pub fn number_value(value: Option<&Value>, fallback: u64) -> u64 {
     value.and_then(Value::as_u64).unwrap_or(fallback)
+}
+
+pub fn string_array_value(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| string_value(Some(item)))
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
 }
 
 pub fn normalize_device_name(value: &str) -> String {
@@ -416,6 +430,27 @@ pub async fn remove_file(
     get_state(registry, paths).await
 }
 
+pub async fn remove_files(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let file_ids = string_array_value(payload.get("fileIds"));
+
+    if file_ids.is_empty() {
+        return Err(ManagerError::System("请选择要删除的文件。".to_string()));
+    }
+
+    {
+        let _storage = registry.storage.lock().await;
+        let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
+        files.retain(|file| !file_ids.contains(&file.id));
+        write_json(&paths.lan_share_files.files, &json!(files)).await?;
+    }
+
+    get_state(registry, paths).await
+}
+
 pub async fn refresh_files(
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
@@ -492,6 +527,28 @@ pub async fn delete_message(
     list_messages(registry, paths, json!({})).await
 }
 
+pub async fn delete_messages(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let message_ids = string_array_value(payload.get("messageIds"));
+    let session_id = string_value(payload.get("sessionId"));
+
+    if message_ids.is_empty() {
+        return Err(ManagerError::System("请选择要删除的消息。".to_string()));
+    }
+
+    {
+        let _storage = registry.storage.lock().await;
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        messages.retain(|message| !message_ids.contains(&message.id));
+        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
+    }
+
+    list_messages(registry, paths, json!({ "sessionId": session_id, "to": 0 })).await
+}
+
 pub async fn clear_session(
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
@@ -510,6 +567,42 @@ pub async fn clear_session(
     }
 
     list_messages(registry, paths, json!({})).await
+}
+
+pub async fn delete_session(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let session_id = string_value(payload.get("sessionId"));
+
+    if session_id.is_empty() {
+        return Err(ManagerError::System("会话不能为空。".to_string()));
+    }
+
+    {
+        let _storage = registry.storage.lock().await;
+        let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
+
+        sessions.retain(|session| session.id != session_id);
+        messages.retain(|message| message.session_id != session_id);
+        files.retain(|file| file.session_id != session_id);
+
+        write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
+        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
+        write_json(&paths.lan_share_files.files, &json!(files)).await?;
+    }
+
+    {
+        let mut runtime = registry.inner.lock().await;
+        runtime
+            .active_sessions
+            .retain(|_, active_session_id| active_session_id != &session_id);
+    }
+
+    get_state(registry, paths).await
 }
 
 pub async fn delete_device_history(
@@ -540,6 +633,90 @@ pub async fn delete_device_history(
     }
 
     get_state(registry, paths).await
+}
+
+pub async fn export_files_zip(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let file_ids = string_array_value(payload.get("fileIds"));
+    let target_path = string_value(payload.get("targetPath"));
+
+    if file_ids.is_empty() {
+        return Err(ManagerError::System("请选择要打包的文件。".to_string()));
+    }
+    if target_path.is_empty() {
+        return Err(ManagerError::System("请选择 ZIP 保存路径。".to_string()));
+    }
+
+    let selected_files = {
+        let _storage = registry.storage.lock().await;
+        let files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
+
+        file_ids
+            .iter()
+            .filter_map(|file_id| files.iter().find(|file| &file.id == file_id).cloned())
+            .collect::<Vec<_>>()
+    };
+
+    if selected_files.len() != file_ids.len() {
+        return Err(ManagerError::System("部分文件记录不存在。".to_string()));
+    }
+
+    write_files_zip(&selected_files, &target_path)?;
+
+    Ok(lan_share_response(json!({
+        "targetPath": target_path,
+        "count": selected_files.len()
+    })))
+}
+
+fn write_files_zip(files: &[LanShareFile], target_path: &str) -> Result<(), ManagerError> {
+    if let Some(parent) = Path::new(target_path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let target = std::fs::File::create(target_path)?;
+    let mut archive = zip::ZipWriter::new(target);
+    let options =
+        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    for file in files {
+        let source_path = Path::new(&file.path);
+
+        if !source_path.is_file() {
+            return Err(ManagerError::System(format!(
+                "文件不存在或不可读取：{}",
+                file.name
+            )));
+        }
+
+        archive
+            .start_file(safe_zip_entry_name(&file.name), options)
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        let content = std::fs::read(source_path)?;
+        archive.write_all(&content)?;
+    }
+
+    archive
+        .finish()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    Ok(())
+}
+
+fn safe_zip_entry_name(name: &str) -> String {
+    let value = name
+        .replace('\\', "_")
+        .replace('/', "_")
+        .trim()
+        .to_string();
+
+    if value.is_empty() {
+        "file".to_string()
+    } else {
+        value
+    }
 }
 
 fn is_valid_token(expected: &str, actual: &str) -> bool {
@@ -708,20 +885,20 @@ fn mobile_page_html() -> String {
       </div>
     </section>
     <nav class="view-tabs" aria-label="设备快传详情">
-      <button class="view-tab active" data-view="files" type="button">共享文件</button>
-      <button class="view-tab" data-view="messages" type="button">消息</button>
+      <button class="view-tab active" data-view="messages" type="button">消息</button>
+      <button class="view-tab" data-view="files" type="button">共享文件</button>
     </nav>
-    <section id="filesView" class="card view-panel active">
-      <div class="card-head"><strong>共享文件</strong><button id="refreshFiles" class="text-button" type="button">刷新</button></div>
-      <div id="files" class="file-list"><div class="empty">正在读取文件列表</div></div>
-    </section>
-    <section id="messagesView" class="card view-panel">
+    <section id="messagesView" class="card view-panel active">
       <div class="card-head"><strong>消息</strong><button id="createSession" class="text-button" type="button">新会话</button></div>
       <div id="messages" class="message-list" aria-label="点击消息可复制"></div>
       <div class="composer">
         <input id="messageInput" class="field-input" maxlength="1000" placeholder="输入消息" />
         <button id="sendMessage" class="text-button primary-button" type="button">发送</button>
       </div>
+    </section>
+    <section id="filesView" class="card view-panel">
+      <div class="card-head"><strong>共享文件</strong><button id="refreshFiles" class="text-button" type="button">刷新</button></div>
+      <div id="files" class="file-list"><div class="empty">正在读取文件列表</div></div>
     </section>
   </main>
   <div id="previewDialog" class="preview-dialog" role="dialog" aria-modal="true">
@@ -2304,8 +2481,9 @@ mod message_tests {
 mod tests {
     use super::{
         activate_session, add_files, append_message, create_file_id, create_id, create_session,
-        device_id_from_ip, list_messages, mobile_files_payload, refresh_files, string_value,
-        upsert_device, LanShareDevice, LanShareFile, LanShareMessage, LanShareServerRegistry,
+        delete_messages, delete_session, device_id_from_ip, export_files_zip, list_messages,
+        mobile_files_payload, refresh_files, remove_files, string_value, upsert_device,
+        LanShareDevice, LanShareFile, LanShareMessage, LanShareServerRegistry, LanShareSession,
     };
     use crate::core::paths::resolve_app_paths;
     use serde_json::json;
@@ -2400,6 +2578,285 @@ mod tests {
 
             assert_eq!(messages.len(), 1);
             assert_eq!(messages[0]["id"], "message_2");
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
+    fn bulk_actions_delete_selected_messages_only() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let paths = resolve_app_paths(&root);
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
+            super::write_json(
+                &paths.lan_share_files.messages,
+                &json!([
+                    LanShareMessage {
+                        id: "message_1".to_string(),
+                        session_id: "session_1".to_string(),
+                        device_id: "device_1".to_string(),
+                        device_name: "设备一".to_string(),
+                        direction: "mobile-to-desktop".to_string(),
+                        message_type: "text".to_string(),
+                        content: "删除我".to_string(),
+                        created_at: 10,
+                        delivered: true,
+                        read: false,
+                    },
+                    LanShareMessage {
+                        id: "message_2".to_string(),
+                        session_id: "session_1".to_string(),
+                        device_id: "device_1".to_string(),
+                        device_name: "设备一".to_string(),
+                        direction: "desktop-to-mobile".to_string(),
+                        message_type: "text".to_string(),
+                        content: "保留我".to_string(),
+                        created_at: 20,
+                        delivered: true,
+                        read: false,
+                    }
+                ]),
+            )
+            .await
+            .unwrap();
+
+            let registry = LanShareServerRegistry::new();
+            delete_messages(
+                &registry,
+                &paths,
+                json!({ "messageIds": ["message_1"], "sessionId": "session_1" }),
+            )
+            .await
+            .unwrap();
+            let result = list_messages(
+                &registry,
+                &paths,
+                json!({ "sessionId": "session_1", "to": 0 }),
+            )
+            .await
+            .unwrap();
+            let messages = result["data"].as_array().unwrap();
+
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0]["id"], "message_2");
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
+    fn bulk_actions_delete_session_removes_related_records() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let paths = resolve_app_paths(&root);
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
+            super::write_json(
+                &paths.lan_share_files.sessions,
+                &json!([
+                    LanShareSession {
+                        id: "session_1".to_string(),
+                        device_id: "device_1".to_string(),
+                        device_name: "设备一".to_string(),
+                        ip: "192.168.1.8".to_string(),
+                        created_at: 10,
+                        updated_at: 20,
+                    },
+                    LanShareSession {
+                        id: "session_2".to_string(),
+                        device_id: "device_1".to_string(),
+                        device_name: "设备一".to_string(),
+                        ip: "192.168.1.8".to_string(),
+                        created_at: 30,
+                        updated_at: 40,
+                    }
+                ]),
+            )
+            .await
+            .unwrap();
+            super::write_json(
+                &paths.lan_share_files.messages,
+                &json!([
+                    {
+                        "id": "message_1",
+                        "sessionId": "session_1",
+                        "deviceId": "device_1",
+                        "deviceName": "设备一",
+                        "direction": "mobile-to-desktop",
+                        "messageType": "text",
+                        "content": "删除",
+                        "createdAt": 10,
+                        "delivered": true,
+                        "read": false
+                    },
+                    {
+                        "id": "message_2",
+                        "sessionId": "session_2",
+                        "deviceId": "device_1",
+                        "deviceName": "设备一",
+                        "direction": "mobile-to-desktop",
+                        "messageType": "text",
+                        "content": "保留",
+                        "createdAt": 20,
+                        "delivered": true,
+                        "read": false
+                    }
+                ]),
+            )
+            .await
+            .unwrap();
+            super::write_json(
+                &paths.lan_share_files.files,
+                &json!([
+                    {
+                        "id": "file_1",
+                        "sessionId": "session_1",
+                        "path": "a.txt",
+                        "name": "a.txt",
+                        "size": 1,
+                        "mimeType": "text/plain",
+                        "updatedAt": 10,
+                        "enabled": true
+                    },
+                    {
+                        "id": "file_2",
+                        "sessionId": "session_2",
+                        "path": "b.txt",
+                        "name": "b.txt",
+                        "size": 1,
+                        "mimeType": "text/plain",
+                        "updatedAt": 20,
+                        "enabled": true
+                    }
+                ]),
+            )
+            .await
+            .unwrap();
+
+            let registry = LanShareServerRegistry::new();
+            let state = delete_session(&registry, &paths, json!({ "sessionId": "session_1" }))
+                .await
+                .unwrap();
+
+            assert_eq!(state["data"]["sessions"].as_array().unwrap().len(), 1);
+            assert_eq!(state["data"]["sessions"][0]["id"], "session_2");
+            assert_eq!(state["data"]["messages"].as_array().unwrap().len(), 1);
+            assert_eq!(state["data"]["messages"][0]["id"], "message_2");
+            assert_eq!(state["data"]["files"].as_array().unwrap().len(), 1);
+            assert_eq!(state["data"]["files"][0]["id"], "file_2");
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
+    fn bulk_actions_remove_selected_files_only() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let paths = resolve_app_paths(&root);
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
+            super::write_json(
+                &paths.lan_share_files.files,
+                &json!([
+                    {
+                        "id": "file_1",
+                        "sessionId": "session_1",
+                        "path": "a.txt",
+                        "name": "a.txt",
+                        "size": 1,
+                        "mimeType": "text/plain",
+                        "updatedAt": 10,
+                        "enabled": true
+                    },
+                    {
+                        "id": "file_2",
+                        "sessionId": "session_1",
+                        "path": "b.txt",
+                        "name": "b.txt",
+                        "size": 1,
+                        "mimeType": "text/plain",
+                        "updatedAt": 20,
+                        "enabled": true
+                    }
+                ]),
+            )
+            .await
+            .unwrap();
+
+            let registry = LanShareServerRegistry::new();
+            let state = remove_files(&registry, &paths, json!({ "fileIds": ["file_1"] }))
+                .await
+                .unwrap();
+
+            assert_eq!(state["data"]["files"].as_array().unwrap().len(), 1);
+            assert_eq!(state["data"]["files"][0]["id"], "file_2");
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
+    fn bulk_actions_export_selected_files_to_zip() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let paths = resolve_app_paths(&root);
+            let first_file = root.join("first.txt");
+            let second_file = root.join("second.txt");
+            let archive_path = root.join("selected.zip");
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
+            tokio::fs::write(&first_file, "first").await.unwrap();
+            tokio::fs::write(&second_file, "second").await.unwrap();
+            super::write_json(
+                &paths.lan_share_files.files,
+                &json!([
+                    LanShareFile {
+                        id: "file_1".to_string(),
+                        session_id: "session_1".to_string(),
+                        path: first_file.to_string_lossy().to_string(),
+                        name: "first.txt".to_string(),
+                        size: 5,
+                        mime_type: "text/plain".to_string(),
+                        updated_at: 10,
+                        enabled: true,
+                    },
+                    LanShareFile {
+                        id: "file_2".to_string(),
+                        session_id: "session_1".to_string(),
+                        path: second_file.to_string_lossy().to_string(),
+                        name: "second.txt".to_string(),
+                        size: 6,
+                        mime_type: "text/plain".to_string(),
+                        updated_at: 20,
+                        enabled: true,
+                    }
+                ]),
+            )
+            .await
+            .unwrap();
+
+            let registry = LanShareServerRegistry::new();
+            let result = export_files_zip(
+                &registry,
+                &paths,
+                json!({
+                    "fileIds": ["file_1", "file_2"],
+                    "targetPath": archive_path.to_string_lossy().to_string()
+                }),
+            )
+            .await
+            .unwrap();
+            let archive = tokio::fs::read(&archive_path).await.unwrap();
+
+            assert_eq!(result["data"]["count"], 2);
+            assert!(archive.starts_with(&[0x50, 0x4b]));
 
             let _ = tokio::fs::remove_dir_all(root).await;
         });
@@ -3000,6 +3457,20 @@ mod service_tests {
         assert!(html.contains("view-panel active"));
         assert!(!html.contains("card card-files"));
         assert!(!html.contains("card card-messages"));
+    }
+
+    #[test]
+    fn mobile_page_defaults_to_message_view_first() {
+        let html = mobile_page_html();
+        let messages_tab_index = html.find("data-view=\"messages\"").unwrap();
+        let files_tab_index = html.find("data-view=\"files\"").unwrap();
+        let messages_panel_index = html.find("id=\"messagesView\"").unwrap();
+        let files_panel_index = html.find("id=\"filesView\"").unwrap();
+
+        assert!(messages_tab_index < files_tab_index);
+        assert!(messages_panel_index < files_panel_index);
+        assert!(html.contains("class=\"view-tab active\" data-view=\"messages\""));
+        assert!(html.contains("id=\"messagesView\" class=\"card view-panel active\""));
     }
 
     #[test]

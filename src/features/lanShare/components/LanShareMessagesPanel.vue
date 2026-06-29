@@ -19,6 +19,23 @@
           <option value="today">今天</option>
           <option value="week">最近 7 天</option>
         </select>
+        <button
+          class="lan-share-messages-mini-button"
+          type="button"
+          :disabled="!messages.length"
+          @click="toggleSelectAllMessages"
+        >
+          {{ allMessagesSelected ? "取消全选" : "全选" }}
+        </button>
+        <button
+          class="lan-share-messages-mini-button"
+          type="button"
+          :disabled="!selectedMessageIds.length || loading"
+          @click="deleteSelectedMessages"
+        >
+          <Trash2 :size="13" />
+          删除所选
+        </button>
       </div>
     </header>
     <div ref="messageListRef" class="lan-share-messages-list">
@@ -36,6 +53,15 @@
         ]"
       >
         <div class="lan-share-messages-item-head">
+          <label class="lan-share-messages-check">
+            <input
+              v-model="selectedMessageIds"
+              class="lan-share-messages-check-input"
+              type="checkbox"
+              :value="message.id"
+            />
+            <span class="lan-share-messages-check-mark"></span>
+          </label>
           <span class="lan-share-messages-sender">
             {{ messageSenderName(message) }}
           </span>
@@ -127,6 +153,7 @@ const messages = ref([])
 const keyword = ref("")
 const timeFilter = ref("all")
 const messageDraft = ref("")
+const selectedMessageIds = ref([])
 const loading = ref(false)
 let stopMessageListener = null
 let loadSeed = 0
@@ -145,6 +172,13 @@ const sortedMessages = computed(() => {
   return [...messages.value].sort((left, right) => {
     return Number(left.createdAt || 0) - Number(right.createdAt || 0)
   })
+})
+
+const allMessagesSelected = computed(() => {
+  return (
+    Boolean(messages.value.length) &&
+    messages.value.every((message) => selectedMessageIds.value.includes(message.id))
+  )
 })
 
 onMounted(() => {
@@ -183,6 +217,7 @@ async function loadMessages() {
 
   if (!props.currentSessionId) {
     messages.value = []
+    selectedMessageIds.value = []
     return
   }
 
@@ -199,6 +234,9 @@ async function loadMessages() {
 
     if (seed === loadSeed) {
       messages.value = Array.isArray(result) ? result : []
+      selectedMessageIds.value = selectedMessageIds.value.filter((messageId) => {
+        return messages.value.some((message) => message.id === messageId)
+      })
     }
   } catch (error) {
     createMessage.error(error?.message || String(error))
@@ -267,6 +305,35 @@ async function deleteMessage(message) {
   await runMessageAction(async () =>
     lanShareApi.deleteMessage({ messageId: message.id })
   )
+}
+
+async function deleteSelectedMessages() {
+  if (!selectedMessageIds.value.length) {
+    return
+  }
+
+  const messageIds = [...selectedMessageIds.value]
+  const result = await runMessageAction(
+    async () =>
+      lanShareApi.deleteMessages({
+        messageIds,
+        sessionId: props.currentSessionId
+      }),
+    "已删除所选消息。"
+  )
+
+  if (result) {
+    selectedMessageIds.value = []
+  }
+}
+
+function toggleSelectAllMessages() {
+  if (allMessagesSelected.value) {
+    selectedMessageIds.value = []
+    return
+  }
+
+  selectedMessageIds.value = messages.value.map((message) => message.id)
 }
 
 async function clearCurrentSession() {
@@ -383,6 +450,28 @@ function filterStartAt() {
         width: 138px;
         padding: 0 8px;
       }
+
+      .lan-share-messages-mini-button {
+        display: inline-flex;
+        height: 32px;
+        flex: none;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 0 10px;
+        border: 1px solid var(--color-line);
+        border-radius: 7px;
+        background: #ffffff;
+        color: var(--color-primary);
+        cursor: pointer;
+        font-size: 0.76rem;
+        font-weight: 700;
+      }
+
+      .lan-share-messages-mini-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
     }
   }
 
@@ -417,6 +506,40 @@ function filterStartAt() {
         gap: 12px;
         color: var(--color-text-muted);
         font-size: 0.74rem;
+
+        .lan-share-messages-check {
+          position: relative;
+          display: inline-flex;
+          width: 18px;
+          height: 18px;
+          flex: none;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+
+          .lan-share-messages-check-input {
+            position: absolute;
+            inset: 0;
+            margin: 0;
+            cursor: pointer;
+            opacity: 0;
+          }
+
+          .lan-share-messages-check-mark {
+            display: inline-flex;
+            width: 16px;
+            height: 16px;
+            border: 1px solid var(--color-line);
+            border-radius: 4px;
+            background: #ffffff;
+          }
+
+          .lan-share-messages-check-input:checked
+            + .lan-share-messages-check-mark {
+            border-color: var(--color-primary);
+            background: var(--color-primary);
+          }
+        }
 
         .lan-share-messages-sender {
           min-width: 0;

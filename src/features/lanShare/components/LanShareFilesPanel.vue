@@ -24,6 +24,32 @@
           <RefreshCw :size="13" />
           刷新
         </button>
+        <button
+          class="lan-share-files-mini-button"
+          type="button"
+          :disabled="!files.length"
+          @click="toggleSelectAllFiles"
+        >
+          {{ allFilesSelected ? "取消全选" : "全选" }}
+        </button>
+        <button
+          class="lan-share-files-mini-button"
+          type="button"
+          :disabled="!selectedFileIds.length || loading"
+          @click="removeSelectedFiles"
+        >
+          <Trash2 :size="13" />
+          删除所选
+        </button>
+        <button
+          class="lan-share-files-mini-button"
+          type="button"
+          :disabled="!selectedFileIds.length || loading"
+          @click="exportSelectedFiles"
+        >
+          <Archive :size="13" />
+          打包保存
+        </button>
       </div>
     </header>
     <div class="lan-share-files-list">
@@ -35,6 +61,15 @@
           { 'lan-share-files-item-disabled': !file.enabled }
         ]"
       >
+        <label class="lan-share-files-check">
+          <input
+            v-model="selectedFileIds"
+            class="lan-share-files-check-input"
+            type="checkbox"
+            :value="file.id"
+          />
+          <span class="lan-share-files-check-mark"></span>
+        </label>
         <span class="lan-share-files-icon">
           <FileText :size="16" />
         </span>
@@ -77,7 +112,7 @@
 
 <script setup>
 import { computed, ref, watch } from "vue"
-import { Eye, FileText, Plus, RefreshCw, Trash2 } from "lucide-vue-next"
+import { Archive, Eye, FileText, Plus, RefreshCw, Trash2 } from "lucide-vue-next"
 import { lanShareApi, systemApi } from "@/api"
 import { formatDateTime } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
@@ -104,6 +139,7 @@ const props = defineProps({
 const emit = defineEmits(["refresh-state", "preview-file"])
 
 const files = ref([])
+const selectedFileIds = ref([])
 const loading = ref(false)
 
 const emptyText = computed(() => {
@@ -112,6 +148,13 @@ const emptyText = computed(() => {
   }
 
   return "当前会话还没有共享文件。"
+})
+
+const allFilesSelected = computed(() => {
+  return (
+    Boolean(files.value.length) &&
+    files.value.every((file) => selectedFileIds.value.includes(file.id))
+  )
 })
 
 watch(
@@ -139,6 +182,7 @@ function formatSize(value) {
 async function loadFiles() {
   if (!props.currentSessionId) {
     files.value = []
+    selectedFileIds.value = []
     return
   }
 
@@ -148,6 +192,9 @@ async function loadFiles() {
 
     files.value = stateFiles.filter((file) => {
       return file.sessionId === props.currentSessionId
+    })
+    selectedFileIds.value = selectedFileIds.value.filter((fileId) => {
+      return files.value.some((file) => file.id === fileId)
     })
   } catch (error) {
     createMessage.error(error?.message || String(error))
@@ -215,6 +262,56 @@ async function removeFile(file) {
     async () => lanShareApi.removeFile({ fileId: file.id }),
     "共享文件已移除。"
   )
+}
+
+async function removeSelectedFiles() {
+  if (!selectedFileIds.value.length) {
+    return
+  }
+
+  const fileIds = [...selectedFileIds.value]
+  const result = await runFileAction(
+    async () => lanShareApi.removeFiles({ fileIds }),
+    "所选共享文件已移除。"
+  )
+
+  if (result) {
+    selectedFileIds.value = []
+  }
+}
+
+async function exportSelectedFiles() {
+  if (!selectedFileIds.value.length) {
+    return
+  }
+
+  const targetPath = await systemApi.saveFile({
+    title: "保存共享文件压缩包",
+    defaultPath: "lan-share-files.zip",
+    filters: [{ name: "ZIP 压缩包", extensions: ["zip"] }]
+  })
+
+  if (!targetPath) {
+    return
+  }
+
+  await runFileAction(
+    async () =>
+      lanShareApi.exportFilesZip({
+        fileIds: [...selectedFileIds.value],
+        targetPath
+      }),
+    "所选文件已打包保存。"
+  )
+}
+
+function toggleSelectAllFiles() {
+  if (allFilesSelected.value) {
+    selectedFileIds.value = []
+    return
+  }
+
+  selectedFileIds.value = files.value.map((file) => file.id)
 }
 </script>
 
@@ -304,6 +401,39 @@ async function removeFile(file) {
       border-radius: 8px;
       background: #ffffff;
       color: var(--color-text);
+
+      .lan-share-files-check {
+        position: relative;
+        display: inline-flex;
+        width: 18px;
+        height: 18px;
+        flex: none;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+
+        .lan-share-files-check-input {
+          position: absolute;
+          inset: 0;
+          margin: 0;
+          cursor: pointer;
+          opacity: 0;
+        }
+
+        .lan-share-files-check-mark {
+          display: inline-flex;
+          width: 16px;
+          height: 16px;
+          border: 1px solid var(--color-line);
+          border-radius: 4px;
+          background: #ffffff;
+        }
+
+        .lan-share-files-check-input:checked + .lan-share-files-check-mark {
+          border-color: var(--color-primary);
+          background: var(--color-primary);
+        }
+      }
 
       .lan-share-files-icon {
         display: inline-flex;

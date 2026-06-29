@@ -45,3 +45,4 @@ tokio-tungstenite = "0.26"
 tokio-util = { version = "0.7", features = ["io"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+zip = "2"
