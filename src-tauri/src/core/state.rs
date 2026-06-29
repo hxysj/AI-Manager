@@ -1197,6 +1197,34 @@ impl ManagerState {
                     .map_err(|error| ManagerError::Path(error.to_string()))?;
                 Ok(self.state.clone())
             }
+            "skill:batch-action" => {
+                let result = skills::batch_skill_action(
+                    &self.paths,
+                    &mut self.state,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                app.emit("state:changed", self.state.clone())
+                    .map_err(|error| ManagerError::Path(error.to_string()))?;
+                Ok(json!({
+                  "state": self.state,
+                  "batch": result
+                }))
+            }
+            "skill:delete" => {
+                let result = skills::delete_skills(
+                    &self.paths,
+                    &mut self.state,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                app.emit("state:changed", self.state.clone())
+                    .map_err(|error| ManagerError::Path(error.to_string()))?;
+                Ok(json!({
+                  "state": self.state,
+                  "delete": result
+                }))
+            }
             "skill:repair" => {
                 skills::repair_skill(&self.state, payload.unwrap_or_else(|| json!({}))).await?;
                 skills::refresh_skills_state(&self.paths, &mut self.state).await?;
@@ -1217,6 +1245,73 @@ impl ManagerState {
             }
             "skill:files" => {
                 skills::get_skill_files(&self.state, payload.unwrap_or_else(|| json!({})))
+            }
+            "skill-groups:list" => Ok(json!({
+              "groups": skills::load_skill_groups(&self.paths)?
+            })),
+            "skill-groups:save" => {
+                let result =
+                    skills::save_skill_group(&self.paths, payload.unwrap_or_else(|| json!({})))
+                        .await?;
+                self.state["skillGroups"] =
+                    result.get("groups").cloned().unwrap_or_else(|| json!([]));
+                app.emit("state:changed", self.state.clone())
+                    .map_err(|error| ManagerError::Path(error.to_string()))?;
+                Ok(json!({
+                  "state": self.state,
+                  "skillGroups": result
+                }))
+            }
+            "skill-groups:remove" => {
+                let result =
+                    skills::remove_skill_group(&self.paths, payload.unwrap_or_else(|| json!({})))
+                        .await?;
+                self.state["skillGroups"] =
+                    result.get("groups").cloned().unwrap_or_else(|| json!([]));
+                app.emit("state:changed", self.state.clone())
+                    .map_err(|error| ManagerError::Path(error.to_string()))?;
+                Ok(json!({
+                  "state": self.state,
+                  "skillGroups": result
+                }))
+            }
+            "skill-groups:remove-items" => {
+                let result = skills::remove_skill_group_items(
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                self.state["skillGroups"] =
+                    result.get("groups").cloned().unwrap_or_else(|| json!([]));
+                app.emit("state:changed", self.state.clone())
+                    .map_err(|error| ManagerError::Path(error.to_string()))?;
+                Ok(json!({
+                  "state": self.state,
+                  "skillGroups": result
+                }))
+            }
+            "skill-trash:list" => skills::get_skill_trash(&self.paths).await,
+            "skill-trash:restore" => {
+                let result = skills::restore_skill_trash(
+                    &self.paths,
+                    &mut self.state,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                app.emit("state:changed", self.state.clone())
+                    .map_err(|error| ManagerError::Path(error.to_string()))?;
+                Ok(json!({
+                  "state": self.state,
+                  "trash": result
+                }))
+            }
+            "skill-trash:purge" => {
+                let result =
+                    skills::purge_skill_trash(&self.paths, payload.unwrap_or_else(|| json!({})))
+                        .await?;
+                Ok(json!({
+                  "trash": result
+                }))
             }
             "skill-repository:add" => {
                 let result =

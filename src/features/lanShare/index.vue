@@ -308,7 +308,9 @@ async function deleteSession(sessionId) {
     return
   }
 
-  const deletedSession = state.sessions.find((session) => session.id === sessionId)
+  const deletedSession = state.sessions.find(
+    (session) => session.id === sessionId
+  )
   const result = await runAction(
     async () => lanShareApi.deleteSession({ sessionId }),
     "会话已删除。"
@@ -318,7 +320,9 @@ async function deleteSession(sessionId) {
     return
   }
 
-  const nextSessions = Array.isArray(result.sessions) ? result.sessions : state.sessions
+  const nextSessions = Array.isArray(result.sessions)
+    ? result.sessions
+    : state.sessions
   const deviceId = deletedSession?.deviceId || selectedDeviceId.value
 
   if (selectedSessionId.value === sessionId) {

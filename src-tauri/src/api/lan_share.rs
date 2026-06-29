@@ -819,13 +819,16 @@ fn mobile_page_html() -> String {
     body { min-height: 100vh; margin: 0; background: #eef2f7; color: #172033; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
     button, input { font: inherit; }
     button { cursor: pointer; }
-    .page-head { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #dbe4ee; background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px); }
+    .page-shell { display: flex; height: 100vh; min-height: 0; flex-direction: column; }
+    .page-head { position: sticky; top: 0; z-index: 4; display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #dbe4ee; background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px); }
     .page-title { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
     .page-title strong { color: #172033; font-size: 19px; line-height: 1.2; }
     .page-title span { overflow: hidden; color: #697789; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
     .page-badge { display: inline-flex; height: 28px; align-items: center; justify-content: center; padding: 0 9px; border: 1px solid #c7d5e4; border-radius: 999px; background: #f8fbff; color: #315f8f; font-size: 12px; font-weight: 800; }
-    .page-main { display: flex; height: calc(100vh - 57px); min-height: 0; flex-direction: column; gap: 12px; overflow: hidden; padding: 12px; }
+    .page-main { display: flex; min-height: 0; flex: 1; flex-wrap: wrap; align-content: stretch; gap: 12px; overflow: hidden; padding: 12px; }
     .card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid #dbe4ee; border-radius: 8px; background: #ffffff; box-shadow: 0 8px 22px rgba(35, 55, 80, 0.05); }
+    .device-card { min-width: min(100%, 260px); flex: 1 1 260px; }
+    .content-shell { display: flex; min-width: min(100%, 520px); min-height: 0; flex: 999 1 520px; flex-direction: column; gap: 12px; overflow: hidden; }
     .view-tabs { display: flex; flex: none; gap: 8px; padding: 4px; border: 1px solid #dbe4ee; border-radius: 8px; background: #f7fafd; }
     .view-tab { display: inline-flex; height: 36px; flex: 1; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #607089; font-size: 14px; font-weight: 800; }
     .view-tab.active { border-color: #aac4df; background: #ffffff; color: #244f7c; box-shadow: 0 5px 14px rgba(35, 55, 80, 0.08); }
@@ -869,38 +872,42 @@ fn mobile_page_html() -> String {
   </style>
 </head>
 <body>
-  <header class="page-head">
-    <div class="page-title">
-      <strong>设备快传</strong>
-      <span id="status">正在连接电脑端服务...</span>
-    </div>
-    <span class="page-badge">同网访问</span>
-  </header>
-  <main class="page-main">
-    <section class="card">
+  <div class="page-shell">
+    <header class="page-head">
+      <div class="page-title">
+        <strong>设备快传</strong>
+        <span id="status">正在连接电脑端服务...</span>
+      </div>
+      <span class="page-badge">同网访问</span>
+    </header>
+    <main class="page-main">
+    <section class="card device-card">
       <div class="card-head"><strong>设备名称</strong><span>用于电脑端识别</span></div>
       <div class="device-row">
         <input id="deviceName" class="field-input" maxlength="40" />
         <button id="saveDeviceName" class="text-button" type="button">保存</button>
       </div>
     </section>
-    <nav class="view-tabs" aria-label="设备快传详情">
-      <button class="view-tab active" data-view="messages" type="button">消息</button>
-      <button class="view-tab" data-view="files" type="button">共享文件</button>
-    </nav>
-    <section id="messagesView" class="card view-panel active">
-      <div class="card-head"><strong>消息</strong><button id="createSession" class="text-button" type="button">新会话</button></div>
-      <div id="messages" class="message-list" aria-label="点击消息可复制"></div>
-      <div class="composer">
-        <input id="messageInput" class="field-input" maxlength="1000" placeholder="输入消息" />
-        <button id="sendMessage" class="text-button primary-button" type="button">发送</button>
-      </div>
-    </section>
-    <section id="filesView" class="card view-panel">
-      <div class="card-head"><strong>共享文件</strong><button id="refreshFiles" class="text-button" type="button">刷新</button></div>
-      <div id="files" class="file-list"><div class="empty">正在读取文件列表</div></div>
-    </section>
-  </main>
+      <section class="content-shell">
+        <nav class="view-tabs" aria-label="设备快传详情">
+          <button class="view-tab active" data-view="messages" type="button">消息</button>
+          <button class="view-tab" data-view="files" type="button">共享文件</button>
+        </nav>
+        <section id="messagesView" class="card view-panel active">
+          <div class="card-head"><strong>消息</strong><button id="createSession" class="text-button" type="button">新会话</button></div>
+          <div id="messages" class="message-list" aria-label="点击消息可复制"></div>
+          <div class="composer">
+            <input id="messageInput" class="field-input" placeholder="输入消息" />
+            <button id="sendMessage" class="text-button primary-button" type="button">发送</button>
+          </div>
+        </section>
+        <section id="filesView" class="card view-panel">
+          <div class="card-head"><strong>共享文件</strong><button id="refreshFiles" class="text-button" type="button">刷新</button></div>
+          <div id="files" class="file-list"><div class="empty">正在读取文件列表</div></div>
+        </section>
+      </section>
+    </main>
+  </div>
   <div id="previewDialog" class="preview-dialog" role="dialog" aria-modal="true">
     <div id="previewOverlay" class="preview-overlay"></div>
     <section class="preview-panel">
@@ -1755,7 +1762,7 @@ pub async fn append_message(
     content: &str,
     delivered: bool,
 ) -> Result<LanShareMessage, ManagerError> {
-    let content = content.trim().chars().take(1000).collect::<String>();
+    let content = content.trim().to_string();
 
     if content.is_empty() {
         return Err(ManagerError::System("消息内容不能为空。".to_string()));
@@ -2528,6 +2535,35 @@ mod tests {
         assert_eq!(parts.len(), 3);
         assert_eq!(parts[0], "msg");
         uuid::Uuid::parse_str(parts[2]).expect("create_id should include a uuid suffix");
+    }
+
+    #[test]
+    fn appends_message_without_content_length_limit() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let paths = resolve_app_paths(&root);
+            let content = "长".repeat(1200);
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
+
+            let registry = LanShareServerRegistry::new();
+            let message = append_message(
+                &registry,
+                &paths,
+                "device_1",
+                "session_1",
+                "mobile-to-desktop",
+                &content,
+                true,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(message.content, content);
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
     }
 
     #[test]
@@ -3471,6 +3507,26 @@ mod service_tests {
         assert!(messages_panel_index < files_panel_index);
         assert!(html.contains("class=\"view-tab active\" data-view=\"messages\""));
         assert!(html.contains("id=\"messagesView\" class=\"card view-panel active\""));
+    }
+
+    #[test]
+    fn mobile_page_adapts_layout_for_desktop_width() {
+        let html = mobile_page_html();
+
+        assert!(html.contains("class=\"page-shell\""));
+        assert!(html.contains("class=\"card device-card\""));
+        assert!(html.contains("class=\"content-shell\""));
+        assert!(html.contains("flex-wrap: wrap"));
+        assert!(!html.contains("@media"));
+        assert!(!html.contains("@container"));
+    }
+
+    #[test]
+    fn mobile_page_message_input_has_no_length_limit() {
+        let html = mobile_page_html();
+
+        assert!(html.contains("id=\"messageInput\""));
+        assert!(!html.contains("id=\"messageInput\" class=\"field-input\" maxlength="));
     }
 
     #[test]

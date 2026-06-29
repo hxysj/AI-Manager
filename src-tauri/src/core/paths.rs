@@ -28,6 +28,7 @@ pub struct AppPaths {
 #[serde(rename_all = "camelCase")]
 pub struct StorageFiles {
     pub skill_repositories: String,
+    pub skill_groups: String,
     pub skill_repository_cache: String,
     pub repos: String,
     pub skills: String,
@@ -107,6 +108,7 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
         lan_share_dir: path_text(&lan_share_dir),
         storage_files: StorageFiles {
             skill_repositories: path_text(storage_dir.join("skill-repositories.json")),
+            skill_groups: path_text(storage_dir.join("skill-groups.json")),
             skill_repository_cache: path_text(temp_dir.join("skill-repositories-cache.json")),
             repos: path_text(storage_dir.join("repos.json")),
             skills: path_text(storage_dir.join("skills.json")),

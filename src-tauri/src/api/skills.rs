@@ -4,16 +4,22 @@ use crate::core::settings::serialize_portable_path;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::process::Command;
 use url::Url;
 
 const IGNORE_DIRS: [&str; 6] = [".git", "node_modules", "dist", "build", ".cache", "temp"];
 const SKILL_PREVIEW_MAX_SIZE: u64 = 512 * 1024;
+const SKILL_TRASH_RETENTION_MS: u128 = 10 * 24 * 60 * 60 * 1000;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result<(), ManagerError> {
+    cleanup_expired_skill_trash(paths).await?;
+
     let cli_targets = state
         .get("cliTargets")
         .and_then(Value::as_array)
@@ -274,6 +280,282 @@ pub async fn install_skill(state: &Value, payload: Value) -> Result<(), ManagerE
     Ok(())
 }
 
+pub async fn batch_skill_action(
+    paths: &AppPaths,
+    state: &mut Value,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let action = string_value(payload.get("action"));
+    let skill_names = payload
+        .get("skillNames")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| string_value(Some(&item)))
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    let cli_targets = state
+        .get("cliTargets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let installed_target_ids = cli_targets
+        .iter()
+        .filter(|item| item.get("installed").and_then(Value::as_bool) == Some(true))
+        .map(|item| string_value(item.get("id")))
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    let selected_target_ids = payload
+        .get("targetIds")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| string_value(Some(&item)))
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    let target_ids = if selected_target_ids.is_empty() {
+        installed_target_ids
+    } else {
+        selected_target_ids
+    };
+    let mut successes = Vec::new();
+    let mut errors = Vec::new();
+
+    if skill_names.is_empty() {
+        return Err(ManagerError::System("请选择 Skill".to_string()));
+    }
+    if action == "install-all" && target_ids.is_empty() {
+        return Err(ManagerError::System("请选择要安装到的 CLI".to_string()));
+    }
+
+    for skill_name in skill_names {
+        let error_count = errors.len();
+        let result = match action.as_str() {
+            "install-all" => {
+                let skill = find_skill(state, &skill_name);
+                let skill = skill.and_then(|skill| {
+                    ensure_skill_enabled(&skill)?;
+                    Ok(skill)
+                });
+                let skill = match skill {
+                    Ok(skill) => skill,
+                    Err(error) => {
+                        errors.push(json!({
+                          "name": skill_name,
+                          "message": error.to_string()
+                        }));
+                        continue;
+                    }
+                };
+
+                for target_id in &target_ids {
+                    if let Err(error) = install_skill_link(state, &skill, target_id).await {
+                        errors.push(json!({
+                          "name": skill_name,
+                          "targetId": target_id,
+                          "message": error.to_string()
+                        }));
+                    }
+                }
+
+                Ok(())
+            }
+            "uninstall-all" => {
+                for target_id in &target_ids {
+                    if let Err(error) =
+                        uninstall_skill_link(&cli_targets, &skill_name, target_id).await
+                    {
+                        errors.push(json!({
+                          "name": skill_name,
+                          "targetId": target_id,
+                          "message": error.to_string()
+                        }));
+                    }
+                }
+
+                Ok(())
+            }
+            "enable" => {
+                set_skill_enabled(
+                    paths,
+                    state,
+                    json!({
+                      "skillName": skill_name,
+                      "enabled": true
+                    }),
+                )
+                .await
+            }
+            "disable" => {
+                set_skill_enabled(
+                    paths,
+                    state,
+                    json!({
+                      "skillName": skill_name,
+                      "enabled": false
+                    }),
+                )
+                .await
+            }
+            _ => Err(ManagerError::System("不支持的批量操作".to_string())),
+        };
+
+        match result {
+            Ok(_) if errors.len() == error_count => successes.push(json!({ "name": skill_name })),
+            Ok(_) => {}
+            Err(error) => errors.push(json!({
+              "name": skill_name,
+              "message": error.to_string()
+            })),
+        }
+    }
+
+    refresh_skills_state(paths, state).await?;
+    Ok(json!({
+      "successes": successes,
+      "errors": errors
+    }))
+}
+
+pub(crate) fn load_skill_groups(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
+    Ok(read_array(&paths.storage_files.skill_groups)?
+        .into_iter()
+        .map(normalize_skill_group)
+        .filter(|item| !string_value(item.get("id")).is_empty())
+        .collect())
+}
+
+pub async fn save_skill_group(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+    let group_id = string_value(payload.get("groupId").or_else(|| payload.get("id")));
+    let group_name = string_value(payload.get("name"));
+    let skill_ids = unique_string_values(payload.get("skillIds"));
+    let now = now_millis();
+    let mut groups = load_skill_groups(paths)?;
+
+    if group_name.is_empty() {
+        return Err(ManagerError::System("分组名称不能为空".to_string()));
+    }
+    if groups.iter().any(|item| {
+        string_value(item.get("name")) == group_name && string_value(item.get("id")) != group_id
+    }) {
+        return Err(ManagerError::System(format!(
+            "Skill 分组已存在：{}",
+            group_name
+        )));
+    }
+
+    let next_group_id = if group_id.is_empty() {
+        format!("skill-group-{}", create_uuid_like_id())
+    } else {
+        group_id
+    };
+    let mut group = json!({
+      "id": next_group_id,
+      "name": group_name,
+      "skillIds": skill_ids,
+      "createdAt": now,
+      "updatedAt": now
+    });
+
+    remove_skill_ids_from_groups(
+        &mut groups,
+        group
+            .get("skillIds")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .map(|item| string_value(Some(item)))
+            .collect::<Vec<_>>()
+            .as_slice(),
+        group.get("id").and_then(Value::as_str).unwrap_or_default(),
+    );
+
+    if let Some(index) = groups
+        .iter()
+        .position(|item| {
+            item.get("id").and_then(Value::as_str) == group.get("id").and_then(Value::as_str)
+        })
+    {
+        group["createdAt"] = groups[index]
+            .get("createdAt")
+            .cloned()
+            .unwrap_or_else(|| json!(now));
+        groups[index] = group.clone();
+    } else {
+        groups.push(group.clone());
+    }
+
+    groups.sort_by(|left, right| string_value(left.get("name")).cmp(&string_value(right.get("name"))));
+    write_json(&paths.storage_files.skill_groups, &json!(groups)).await?;
+
+    Ok(json!({
+      "groups": groups,
+      "group": group
+    }))
+}
+
+pub async fn remove_skill_group(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+    let group_id = string_value(
+        payload
+            .get("groupId")
+            .or_else(|| payload.get("id"))
+            .or(Some(&payload)),
+    );
+    let mut groups = load_skill_groups(paths)?;
+    let before_count = groups.len();
+
+    if group_id.is_empty() {
+        return Err(ManagerError::System("缺少 Skill 分组 ID".to_string()));
+    }
+
+    groups.retain(|item| item.get("id").and_then(Value::as_str) != Some(group_id.as_str()));
+
+    if groups.len() == before_count {
+        return Err(ManagerError::System("Skill 分组不存在".to_string()));
+    }
+
+    write_json(&paths.storage_files.skill_groups, &json!(groups)).await?;
+    Ok(json!({
+      "groups": groups
+    }))
+}
+
+pub async fn remove_skill_group_items(
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let group_id = string_value(payload.get("groupId"));
+    let skill_ids = unique_string_values(payload.get("skillIds"));
+    let mut groups = load_skill_groups(paths)?;
+
+    if skill_ids.is_empty() {
+        return Err(ManagerError::System("请选择要移出的 Skill".to_string()));
+    }
+
+    for group in &mut groups {
+        if !group_id.is_empty() && group.get("id").and_then(Value::as_str) != Some(group_id.as_str())
+        {
+            continue;
+        }
+
+        let next_skill_ids = unique_string_values(group.get("skillIds"))
+            .into_iter()
+            .filter(|item| !skill_ids.contains(item))
+            .collect::<Vec<_>>();
+
+        group["skillIds"] = json!(next_skill_ids);
+        group["updatedAt"] = json!(now_millis());
+    }
+
+    write_json(&paths.storage_files.skill_groups, &json!(groups)).await?;
+    Ok(json!({
+      "groups": groups
+    }))
+}
+
 pub async fn set_skill_enabled(
     paths: &AppPaths,
     state: &mut Value,
@@ -328,6 +610,55 @@ pub async fn uninstall_skill(state: &Value, payload: Value) -> Result<(), Manage
         .unwrap_or_default();
 
     uninstall_skill_link(&cli_targets, &skill_name, &target_id).await
+}
+
+pub async fn delete_skills(
+    paths: &AppPaths,
+    state: &mut Value,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    cleanup_expired_skill_trash(paths).await?;
+
+    let skill_names = payload
+        .get("skillNames")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| string_value(Some(&item)))
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    let cli_targets = state
+        .get("cliTargets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut trash_items = read_skill_trash(paths)?;
+    let mut deleted_items = Vec::new();
+    let mut errors = Vec::new();
+
+    if skill_names.is_empty() {
+        return Err(ManagerError::System("请选择要删除的 Skill".to_string()));
+    }
+
+    for skill_name in skill_names {
+        match trash_skill(paths, state, &cli_targets, &mut trash_items, &skill_name).await {
+            Ok(item) => deleted_items.push(item),
+            Err(error) => errors.push(json!({
+              "name": skill_name,
+              "message": error.to_string()
+            })),
+        }
+    }
+
+    write_skill_trash(paths, &trash_items).await?;
+    refresh_skills_state(paths, state).await?;
+
+    Ok(json!({
+      "deleted": deleted_items,
+      "errors": errors,
+      "trash": trash_items
+    }))
 }
 
 pub async fn repair_skill(state: &Value, payload: Value) -> Result<(), ManagerError> {
@@ -758,7 +1089,7 @@ pub async fn add_skill_repository(paths: &AppPaths, payload: Value) -> Result<Va
       "lastSyncedAt": 0
     });
 
-    match scan_repository(&repository).await {
+    match scan_repository(paths, &repository).await {
         Ok(scanned) => {
             repository["branch"] = scanned["branch"].clone();
             repository["skills"] = scanned["skills"].clone();
@@ -795,7 +1126,7 @@ pub async fn refresh_skill_repository(
         return Err(ManagerError::System("Skill 仓库不存在".to_string()));
     };
 
-    match scan_repository(&repositories[index]).await {
+    match scan_repository(paths, &repositories[index]).await {
         Ok(scanned) => {
             repositories[index]["branch"] = scanned["branch"].clone();
             repositories[index]["skills"] = scanned["skills"].clone();
@@ -874,7 +1205,6 @@ pub async fn install_skill_from_repository(
         )));
     }
 
-    let tree_info = fetch_repository_tree(repository).await?;
     let skill_path = string_value(skill.get("skillPath"));
     let directory_name = non_empty_slug(
         &skill_name,
@@ -884,15 +1214,6 @@ pub async fn install_skill_from_repository(
             .as_str(),
     );
     let managed_path = Path::new(&paths.skills_dir).join(directory_name);
-    let files = tree_info
-        .tree
-        .iter()
-        .filter(|item| {
-            item.get("type").and_then(Value::as_str) == Some("blob")
-                && is_path_inside_directory(&string_value(item.get("path")), &skill_path)
-        })
-        .cloned()
-        .collect::<Vec<_>>();
 
     if managed_path.exists() {
         return Err(ManagerError::System(format!(
@@ -901,31 +1222,27 @@ pub async fn install_skill_from_repository(
         )));
     }
 
-    if files.is_empty() {
-        return Err(ManagerError::System(
-            "仓库 Skill 目录下没有可下载文件".to_string(),
-        ));
-    }
+    let archive = download_repository_archive(repository, paths, true).await?;
+    let install_result = async {
+        let source_path = resolve_archive_skill_source_dir(&archive.content_dir, &skill_path)?;
 
-    for file in files {
-        let file_path = string_value(file.get("path"));
-        let relative_path = if skill_path.is_empty() {
-            file_path.clone()
-        } else {
-            posix_relative(&skill_path, &file_path)
-        };
-        let target_path = managed_path.join(relative_path.replace('/', "\\"));
-
-        if let Some(parent) = target_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
+        if !source_path.join("SKILL.md").is_file() {
+            return Err(ManagerError::System(
+                "仓库 Skill 目录下没有 SKILL.md".to_string(),
+            ));
         }
 
-        download_file(
-            &create_raw_file_url(repository, &tree_info.ref_name, &file_path),
-            &target_path,
-        )
-        .await?;
+        copy_dir_all(&source_path, &managed_path).await
     }
+    .await;
+    let cleanup = remove_dir_all_if_exists(&archive.temp_root).await;
+
+    if install_result.is_err() {
+        let _ = remove_dir_all_if_exists(&managed_path).await;
+    }
+
+    install_result?;
+    cleanup?;
 
     refresh_skills_state(paths, state).await
 }
@@ -942,6 +1259,110 @@ pub fn get_skill_files(state: &Value, payload: Value) -> Result<Value, ManagerEr
     Ok(json!({
       "sourcePath": source_path,
       "entries": collect_skill_view_entries(Path::new(&source_path))?
+    }))
+}
+
+pub async fn get_skill_trash(paths: &AppPaths) -> Result<Value, ManagerError> {
+    cleanup_expired_skill_trash(paths).await?;
+
+    Ok(json!({
+      "items": read_skill_trash(paths)?
+    }))
+}
+
+pub async fn restore_skill_trash(
+    paths: &AppPaths,
+    state: &mut Value,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    cleanup_expired_skill_trash(paths).await?;
+
+    let item_ids = payload_item_ids(payload);
+    let mut trash_items = read_skill_trash(paths)?;
+    let mut restored_items = Vec::new();
+    let mut errors = Vec::new();
+
+    if item_ids.is_empty() {
+        return Err(ManagerError::System("请选择要恢复的 Skill".to_string()));
+    }
+
+    for item_id in item_ids {
+        let Some(index) = trash_items
+            .iter()
+            .position(|item| item.get("id").and_then(Value::as_str) == Some(item_id.as_str()))
+        else {
+            errors.push(json!({
+              "id": item_id,
+              "message": "回收站项目不存在"
+            }));
+            continue;
+        };
+
+        match restore_skill_trash_item(paths, &trash_items[index]).await {
+            Ok(restored) => {
+                trash_items.remove(index);
+                restored_items.push(restored);
+            }
+            Err(error) => errors.push(json!({
+              "id": item_id,
+              "message": error.to_string()
+            })),
+        }
+    }
+
+    write_skill_trash(paths, &trash_items).await?;
+    refresh_skills_state(paths, state).await?;
+
+    Ok(json!({
+      "restored": restored_items,
+      "errors": errors,
+      "trash": trash_items
+    }))
+}
+
+pub async fn purge_skill_trash(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+    cleanup_expired_skill_trash(paths).await?;
+
+    let item_ids = payload_item_ids(payload);
+    let mut trash_items = read_skill_trash(paths)?;
+    let mut purged_items = Vec::new();
+    let mut errors = Vec::new();
+
+    if item_ids.is_empty() {
+        return Err(ManagerError::System("请选择要永久删除的 Skill".to_string()));
+    }
+
+    for item_id in item_ids {
+        let Some(index) = trash_items
+            .iter()
+            .position(|item| item.get("id").and_then(Value::as_str) == Some(item_id.as_str()))
+        else {
+            errors.push(json!({
+              "id": item_id,
+              "message": "回收站项目不存在"
+            }));
+            continue;
+        };
+        let item = trash_items.remove(index);
+
+        match remove_skill_trash_path(paths, &item).await {
+            Ok(_) => purged_items.push(json!({
+              "id": item["id"],
+              "name": item["name"]
+            })),
+            Err(error) => errors.push(json!({
+              "id": item_id,
+              "message": error.to_string()
+            })),
+        }
+    }
+
+    write_skill_trash(paths, &trash_items).await?;
+
+    Ok(json!({
+      "purged": purged_items,
+      "errors": errors,
+      "trash": trash_items
     }))
 }
 
@@ -994,9 +1415,16 @@ struct GitHubSource {
     html_url: String,
 }
 
-struct RepositoryTree {
-    ref_name: String,
-    tree: Vec<Value>,
+struct RepositoryArchive {
+    branch: String,
+    temp_root: PathBuf,
+    content_dir: PathBuf,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RepositoryArchiveZipSource {
+    Cache,
+    Download,
 }
 
 fn scan_many(items: Vec<(String, Value)>) -> Result<Vec<ScannedSkill>, ManagerError> {
@@ -1192,48 +1620,58 @@ fn parse_github_source(value: &str) -> Result<GitHubSource, ManagerError> {
     })
 }
 
-async fn scan_repository(repository: &Value) -> Result<Value, ManagerError> {
-    let tree_info = fetch_repository_tree(repository).await?;
-    let root_path = normalize_repository_path(&string_value(repository.get("rootPath")));
-    let root_exists = root_path.is_empty()
-        || tree_info
-            .tree
-            .iter()
-            .any(|item| is_path_inside_directory(&string_value(item.get("path")), &root_path));
+async fn scan_repository(paths: &AppPaths, repository: &Value) -> Result<Value, ManagerError> {
+    let archive = download_repository_archive(repository, paths, false).await?;
+    let result = scan_repository_archive(repository, &archive);
+    let cleanup = remove_dir_all_if_exists(&archive.temp_root).await;
 
-    if !root_exists {
-        return Err(ManagerError::System("仓库链接下的目录不存在".to_string()));
+    match (result, cleanup) {
+        (Ok(scanned), Ok(_)) => Ok(scanned),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
     }
+}
 
-    let skill_files = tree_info
-        .tree
-        .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) == Some("blob"))
-        .filter(|item| {
-            posix_basename(&string_value(item.get("path"))).as_deref() == Some("SKILL.md")
-        })
-        .filter(|item| is_path_inside_directory(&string_value(item.get("path")), &root_path))
-        .cloned()
-        .collect::<Vec<_>>();
+fn scan_repository_archive(
+    repository: &Value,
+    archive: &RepositoryArchive,
+) -> Result<Value, ManagerError> {
+    let root_path = normalize_repository_path(&string_value(repository.get("rootPath")));
+    let scan_root = resolve_archive_skill_source_dir(&archive.content_dir, &root_path)?;
+    let scanned_items = scan_root_collect(&scan_root, Value::Null)?;
     let mut skills = Vec::new();
 
-    for skill_file in skill_files {
-        let skill_file_path = string_value(skill_file.get("path"));
-        let skill_path = posix_dirname(&skill_file_path);
-        let normalized_skill_path = if skill_path == "." {
-            String::new()
+    for scanned_item in scanned_items {
+        let parsed = parse_skill(&scanned_item.skill_root, Value::Null)?;
+        let skill_path =
+            archive_relative_path(&archive.content_dir, Path::new(&scanned_item.skill_root))?;
+        let display_path = if root_path.is_empty() {
+            if skill_path.is_empty() {
+                ".".to_string()
+            } else {
+                skill_path.clone()
+            }
         } else {
-            skill_path
+            let relative = posix_relative(&root_path, &skill_path);
+
+            if relative.is_empty() {
+                ".".to_string()
+            } else {
+                relative
+            }
         };
-        let content = fetch_raw_file(repository, &tree_info.ref_name, &skill_file_path).await?;
-        let parsed = parse_skill_content(&content, &skill_file_path)?;
+        let skill_file_path = if skill_path.is_empty() {
+            "SKILL.md".to_string()
+        } else {
+            format!("{}/SKILL.md", skill_path)
+        };
 
         skills.push(json!({
           "id": sha1_hex(&format!(
             "{}:{}:{}",
             string_value(repository.get("source")),
-            tree_info.ref_name,
-            normalized_skill_path
+            archive.branch,
+            skill_path
           ))[..16].to_string(),
           "name": parsed["name"],
           "description": parsed["description"],
@@ -1244,13 +1682,9 @@ async fn scan_repository(repository: &Value) -> Result<Value, ManagerError> {
           "entry": parsed["entry"],
           "homepage": parsed["homepage"],
           "repository": parsed["repository"],
-          "skillPath": normalized_skill_path,
-          "displayPath": if root_path.is_empty() {
-              if normalized_skill_path.is_empty() { ".".to_string() } else { normalized_skill_path.clone() }
-          } else {
-              let relative = posix_relative(&root_path, &normalized_skill_path);
-              if relative.is_empty() { ".".to_string() } else { relative }
-          },
+          "readmeUrl": create_github_blob_url(repository, &archive.branch, &skill_file_path),
+          "skillPath": skill_path,
+          "displayPath": display_path,
           "updatedAt": now_millis()
         }));
     }
@@ -1260,149 +1694,149 @@ async fn scan_repository(repository: &Value) -> Result<Value, ManagerError> {
     });
 
     Ok(json!({
-      "branch": tree_info.ref_name,
+      "branch": archive.branch,
       "skills": skills
     }))
 }
 
-fn parse_skill_content(content: &str, skill_file_path: &str) -> Result<Value, ManagerError> {
-    let (metadata, body) = parse_frontmatter(content);
-    let skill_name = metadata.get("name").cloned().unwrap_or_default();
+async fn download_repository_archive(
+    repository: &Value,
+    paths: &AppPaths,
+    use_cache: bool,
+) -> Result<RepositoryArchive, ManagerError> {
+    let temp_root = create_temp_dir(&paths.temp_dir, "skill-repo-archive").await?;
+    let zip_path = temp_root.join("repository.zip");
+    let extract_dir = temp_root.join("extract");
+    let branches = repository_branch_candidates(repository);
+    let mut errors = Vec::new();
 
-    if skill_name.is_empty() {
-        return Err(ManagerError::System(format!(
-            "Missing required frontmatter field \"name\" in {}",
-            skill_file_path
-        )));
+    tokio::fs::create_dir_all(&extract_dir).await?;
+
+    for branch in branches {
+        let cache_path = repository_archive_cache_path(paths, repository, &branch);
+
+        match load_repository_archive_zip(repository, &branch, &zip_path, &cache_path, use_cache)
+            .await
+        {
+            Ok(source) => {
+                let extract_result = extract_repository_archive(&zip_path, &extract_dir);
+                let extract_result = if extract_result.is_err()
+                    && source == RepositoryArchiveZipSource::Cache
+                {
+                    let _ = tokio::fs::remove_file(&cache_path).await;
+                    let _ = tokio::fs::remove_file(&zip_path).await;
+                    remove_dir_all_if_exists(&extract_dir).await?;
+                    tokio::fs::create_dir_all(&extract_dir).await?;
+                    load_repository_archive_zip(repository, &branch, &zip_path, &cache_path, false)
+                        .await
+                        .and_then(|_| extract_repository_archive(&zip_path, &extract_dir))
+                } else {
+                    extract_result
+                };
+
+                if let Err(error) = extract_result {
+                    errors.push(format!("{}: {}", branch, error));
+                    let _ = tokio::fs::remove_file(&cache_path).await;
+                    let _ = tokio::fs::remove_file(&zip_path).await;
+                    remove_dir_all_if_exists(&extract_dir).await?;
+                    tokio::fs::create_dir_all(&extract_dir).await?;
+                    continue;
+                }
+
+                let content_dir = resolve_archive_content_dir(&extract_dir)?;
+
+                return Ok(RepositoryArchive {
+                    branch,
+                    temp_root,
+                    content_dir,
+                });
+            }
+            Err(error) => errors.push(format!("{}: {}", branch, error)),
+        }
     }
 
-    Ok(json!({
-      "name": skill_name,
-      "description": metadata.get("description").cloned().unwrap_or_default(),
-      "content": body.trim(),
-      "version": metadata.get("version").cloned().unwrap_or_default(),
-      "author": metadata.get("author").cloned().unwrap_or_default(),
-      "tags": metadata
-        .get("tags")
-        .map(|value| parse_tags(value))
-        .unwrap_or_default(),
-      "entry": metadata
-        .get("entry")
-        .cloned()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "SKILL.md".to_string()),
-      "homepage": metadata.get("homepage").cloned().unwrap_or_default(),
-      "repository": metadata.get("repository").cloned().unwrap_or_default()
-    }))
+    let _ = remove_dir_all_if_exists(&temp_root).await;
+    Err(ManagerError::System(format!(
+        "GitHub 仓库 archive 下载失败：{}",
+        errors.join("；")
+    )))
 }
 
-async fn fetch_repository_tree(repository: &Value) -> Result<RepositoryTree, ManagerError> {
-    let ref_name = resolve_repository_ref(repository).await?;
-    let url = format!(
-        "https://api.github.com/repos/{}/{}/git/trees/{}?recursive=1",
-        string_value(repository.get("owner")),
-        string_value(repository.get("repository")),
-        normalize_path_segment(&ref_name)
-    );
-    let data = fetch_json(&url).await?;
-    let tree = data
-        .get("tree")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+async fn load_repository_archive_zip(
+    repository: &Value,
+    branch: &str,
+    zip_path: &Path,
+    cache_path: &Path,
+    use_cache: bool,
+) -> Result<RepositoryArchiveZipSource, ManagerError> {
+    if use_cache && try_load_cached_repository_archive_zip(cache_path, zip_path).await? {
+        return Ok(RepositoryArchiveZipSource::Cache);
+    }
 
-    if data.get("truncated").and_then(Value::as_bool) == Some(true) {
+    download_repository_archive_zip(repository, branch, zip_path).await?;
+
+    if !repository_archive_zip_is_valid(zip_path) {
         return Err(ManagerError::System(
-            "GitHub 返回的仓库文件树已截断，无法完整扫描".to_string(),
+            "GitHub 仓库 archive 不是有效 zip 文件".to_string(),
         ));
     }
 
-    Ok(RepositoryTree { ref_name, tree })
-}
-
-async fn resolve_repository_ref(repository: &Value) -> Result<String, ManagerError> {
-    let branch = string_value(repository.get("branch"));
-
-    if !branch.is_empty() {
-        return Ok(branch);
+    if let Some(parent) = cache_path.parent() {
+        if tokio::fs::create_dir_all(parent).await.is_ok() {
+            let _ = tokio::fs::copy(zip_path, cache_path).await;
+        }
     }
 
-    let data = fetch_json(&format!(
-        "https://api.github.com/repos/{}/{}",
-        string_value(repository.get("owner")),
-        string_value(repository.get("repository"))
-    ))
-    .await?;
-    let branch = string_value(data.get("default_branch"));
-
-    if branch.is_empty() {
-        return Err(ManagerError::System(
-            "GitHub 仓库默认分支不存在".to_string(),
-        ));
-    }
-
-    Ok(branch)
+    Ok(RepositoryArchiveZipSource::Download)
 }
 
-async fn fetch_json(url: &str) -> Result<Value, ManagerError> {
-    let response = reqwest::Client::new()
-        .get(url)
-        .header("Accept", "application/vnd.github+json")
+async fn try_load_cached_repository_archive_zip(
+    cache_path: &Path,
+    zip_path: &Path,
+) -> Result<bool, ManagerError> {
+    if !cache_path.is_file() {
+        return Ok(false);
+    }
+
+    if copy_cached_repository_archive_zip(cache_path, zip_path)
+        .await
+        .is_err()
+    {
+        let _ = tokio::fs::remove_file(cache_path).await;
+        return Ok(false);
+    }
+
+    if repository_archive_zip_is_valid(zip_path) {
+        return Ok(true);
+    }
+
+    let _ = tokio::fs::remove_file(cache_path).await;
+    let _ = tokio::fs::remove_file(zip_path).await;
+    Ok(false)
+}
+
+async fn copy_cached_repository_archive_zip(
+    cache_path: &Path,
+    zip_path: &Path,
+) -> Result<(), ManagerError> {
+    if let Some(parent) = zip_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    tokio::fs::copy(cache_path, zip_path).await?;
+    Ok(())
+}
+
+async fn download_repository_archive_zip(
+    repository: &Value,
+    branch: &str,
+    zip_path: &Path,
+) -> Result<(), ManagerError> {
+    let url = create_repository_archive_url(repository, branch);
+    let response = github_download_client()?
+        .get(&url)
         .header("User-Agent", "Monkey-Thief")
         .send()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-    let status = response.status();
-    let text = response
-        .text()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-
-    if !status.is_success() {
-        let payload = parse_json_text(&text);
-        let message = payload
-            .as_ref()
-            .and_then(|value| value.get("message"))
-            .and_then(Value::as_str)
-            .unwrap_or(url);
-
-        return Err(ManagerError::System(format!(
-            "GitHub 请求失败：{} {}",
-            status.as_u16(),
-            message
-        )));
-    }
-
-    Ok(parse_json_text(&text).unwrap_or(Value::Null))
-}
-
-async fn fetch_raw_file(
-    repository: &Value,
-    ref_name: &str,
-    file_path: &str,
-) -> Result<String, ManagerError> {
-    let url = create_raw_file_url(repository, ref_name, file_path);
-    let response = reqwest::get(&url)
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-    let status = response.status();
-
-    if !status.is_success() {
-        return Err(ManagerError::System(format!(
-            "GitHub 文件读取失败：{} {}",
-            status.as_u16(),
-            file_path
-        )));
-    }
-
-    response
-        .text()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))
-}
-
-async fn download_file(url: &str, target_path: &Path) -> Result<(), ManagerError> {
-    let response = reqwest::get(url)
         .await
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let status = response.status();
@@ -1416,7 +1850,7 @@ async fn download_file(url: &str, target_path: &Path) -> Result<(), ManagerError
     }
 
     tokio::fs::write(
-        target_path,
+        zip_path,
         response
             .bytes()
             .await
@@ -1426,22 +1860,241 @@ async fn download_file(url: &str, target_path: &Path) -> Result<(), ManagerError
     Ok(())
 }
 
-fn create_raw_file_url(repository: &Value, ref_name: &str, file_path: &str) -> String {
+fn repository_archive_zip_is_valid(zip_path: &Path) -> bool {
+    File::open(zip_path)
+        .ok()
+        .and_then(|file| zip::ZipArchive::new(file).ok())
+        .is_some()
+}
+
+fn github_download_client() -> Result<reqwest::Client, ManagerError> {
+    let mut builder = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .redirect(reqwest::redirect::Policy::limited(10));
+
+    if environment_proxy_points_to_local_app_proxy() {
+        builder = builder.no_proxy();
+    }
+
+    builder
+        .build()
+        .map_err(|error| ManagerError::System(error.to_string()))
+}
+
+fn extract_repository_archive(zip_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
+    std::fs::create_dir_all(target_path)?;
+
+    let file = File::open(zip_path)?;
+    let mut archive =
+        zip::ZipArchive::new(file).map_err(|error| ManagerError::System(error.to_string()))?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        let Some(enclosed_name) = entry.enclosed_name() else {
+            return Err(ManagerError::System(
+                "GitHub 仓库压缩包包含不安全路径".to_string(),
+            ));
+        };
+        let target = target_path.join(enclosed_name);
+
+        if entry.is_dir() {
+            std::fs::create_dir_all(&target)?;
+            continue;
+        }
+
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let mut output = File::create(&target)?;
+        io::copy(&mut entry, &mut output)?;
+    }
+
+    Ok(())
+}
+
+fn resolve_archive_content_dir(extract_dir: &Path) -> Result<PathBuf, ManagerError> {
+    let mut dirs = std::fs::read_dir(extract_dir)?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter_map(|entry| {
+            let path = entry.path();
+            let stat = std::fs::symlink_metadata(&path).ok()?;
+
+            (stat.is_dir() && !stat.file_type().is_symlink()).then_some(path)
+        })
+        .collect::<Vec<_>>();
+
+    dirs.sort();
+
+    if dirs.len() == 1 {
+        Ok(dirs.remove(0))
+    } else {
+        Ok(extract_dir.to_path_buf())
+    }
+}
+
+fn resolve_archive_skill_source_dir(
+    archive_root: &Path,
+    skill_path: &str,
+) -> Result<PathBuf, ManagerError> {
+    let source_path = join_safe_archive_path(archive_root, skill_path)?;
+
+    if !source_path.join("SKILL.md").is_file() && !skill_path.is_empty() && !source_path.is_dir() {
+        return Err(ManagerError::System("仓库链接下的目录不存在".to_string()));
+    }
+
+    if !source_path.is_dir() {
+        return Err(ManagerError::System("仓库链接下的目录不存在".to_string()));
+    }
+
+    Ok(source_path)
+}
+
+fn join_safe_archive_path(root_path: &Path, relative_path: &str) -> Result<PathBuf, ManagerError> {
+    let normalized_path = validate_archive_relative_path(relative_path)?;
+    let mut target_path = root_path.to_path_buf();
+
+    for segment in normalized_path.split('/').filter(|item| !item.is_empty()) {
+        target_path.push(segment);
+    }
+
+    let root_canonical = std::fs::canonicalize(root_path)?;
+    let target_canonical = std::fs::canonicalize(&target_path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            ManagerError::System("仓库链接下的目录不存在".to_string())
+        } else {
+            ManagerError::Io(error)
+        }
+    })?;
+
+    if !target_canonical.starts_with(&root_canonical) {
+        return Err(ManagerError::System(
+            "仓库 Skill 目录路径不安全".to_string(),
+        ));
+    }
+
+    Ok(target_canonical)
+}
+
+fn validate_archive_relative_path(value: &str) -> Result<String, ManagerError> {
+    let normalized_path = normalize_repository_path(value);
+
+    if normalized_path.is_empty() {
+        return Ok(String::new());
+    }
+
+    if Path::new(&normalized_path).is_absolute() {
+        return Err(ManagerError::System(
+            "仓库 Skill 目录路径不安全".to_string(),
+        ));
+    }
+
+    if normalized_path
+        .split('/')
+        .any(|item| item.is_empty() || item == "." || item == "..")
+    {
+        return Err(ManagerError::System(
+            "仓库 Skill 目录路径不安全".to_string(),
+        ));
+    }
+
+    Ok(normalized_path)
+}
+
+fn archive_relative_path(root_path: &Path, target_path: &Path) -> Result<String, ManagerError> {
+    let root_path = std::fs::canonicalize(root_path)?;
+    let target_path = std::fs::canonicalize(target_path)?;
+
+    target_path
+        .strip_prefix(root_path)
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .map_err(|_| ManagerError::System("仓库 Skill 目录路径不安全".to_string()))
+}
+
+fn repository_branch_candidates(repository: &Value) -> Vec<String> {
+    let mut branches = Vec::new();
+
+    for branch in [
+        string_value(repository.get("branch")),
+        "main".to_string(),
+        "master".to_string(),
+    ] {
+        if !branch.is_empty() && !branches.contains(&branch) {
+            branches.push(branch);
+        }
+    }
+
+    branches
+}
+
+fn create_repository_archive_url(repository: &Value, branch: &str) -> String {
     format!(
-        "https://raw.githubusercontent.com/{}/{}/{}/{}",
+        "https://github.com/{}/{}/archive/refs/heads/{}.zip",
         string_value(repository.get("owner")),
         string_value(repository.get("repository")),
-        normalize_path_segment(ref_name),
+        normalize_path_segment(branch)
+    )
+}
+
+fn repository_archive_cache_path(paths: &AppPaths, repository: &Value, branch: &str) -> PathBuf {
+    let cache_key = sha1_hex(&format!(
+        "{}:{}:{}",
+        string_value(repository.get("owner")).to_lowercase(),
+        string_value(repository.get("repository")).to_lowercase(),
+        branch
+    ));
+
+    Path::new(&paths.temp_dir)
+        .join("skill-repository-archives")
+        .join(format!("{}.zip", cache_key))
+}
+
+fn create_github_blob_url(repository: &Value, branch: &str, file_path: &str) -> String {
+    format!(
+        "https://github.com/{}/{}/blob/{}/{}",
+        string_value(repository.get("owner")),
+        string_value(repository.get("repository")),
+        normalize_path_segment(branch),
         normalize_path_segment(file_path)
     )
 }
 
-fn parse_json_text(text: &str) -> Option<Value> {
-    if text.trim().is_empty() {
-        return None;
+fn environment_proxy_points_to_local_app_proxy() -> bool {
+    [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    ]
+    .iter()
+    .filter_map(|key| std::env::var(key).ok())
+    .any(|value| proxy_points_to_local_app_proxy(&value))
+}
+
+fn proxy_points_to_local_app_proxy(value: &str) -> bool {
+    let proxy = value.trim();
+
+    if proxy.is_empty() {
+        return false;
     }
 
-    serde_json::from_str(text).ok()
+    let parsed = if proxy.contains("://") {
+        Url::parse(proxy)
+    } else {
+        Url::parse(&format!("http://{}", proxy))
+    };
+    let Ok(url) = parsed else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or("");
+    let port = url.port().unwrap_or(0);
+
+    matches!(host, "127.0.0.1" | "localhost" | "::1") && matches!(port, 15721 | 15722)
 }
 
 fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
@@ -1868,6 +2521,20 @@ async fn copy_dir_all(source_path: &Path, target_path: &Path) -> Result<(), Mana
     Ok(())
 }
 
+async fn move_dir_all(source_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
+    if let Some(parent) = target_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    match tokio::fs::rename(source_path, target_path).await {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            copy_dir_all(source_path, target_path).await?;
+            remove_dir_all_if_exists(source_path).await
+        }
+    }
+}
+
 async fn remove_dir_all_if_exists(target_path: impl AsRef<Path>) -> Result<(), ManagerError> {
     match tokio::fs::remove_dir_all(target_path.as_ref()).await {
         Ok(_) => Ok(()),
@@ -2143,6 +2810,250 @@ fn collect_skill_files_inner(
     Ok(())
 }
 
+async fn trash_skill(
+    paths: &AppPaths,
+    state: &Value,
+    cli_targets: &[Value],
+    trash_items: &mut Vec<Value>,
+    skill_name: &str,
+) -> Result<Value, ManagerError> {
+    let skill = find_skill(state, skill_name)?;
+    let source_path = PathBuf::from(string_value(skill.get("sourcePath")));
+
+    if !source_path.is_dir() {
+        return Err(ManagerError::System("Skill 源目录不存在".to_string()));
+    }
+
+    for target_id in skill
+        .get("installedTargets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        uninstall_skill_link(cli_targets, skill_name, &string_value(Some(&target_id))).await?;
+    }
+
+    let now = now_millis();
+    let trash_id = format!("skill-trash-{}", create_uuid_like_id());
+    let source_dir_name = source_path
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| non_empty_slug(skill_name, &trash_id));
+    let trash_path = skill_trash_root(paths).join(format!(
+        "{}-{}",
+        non_empty_slug(skill_name, &source_dir_name),
+        trash_id
+    ));
+
+    move_dir_all(&source_path, &trash_path).await?;
+
+    let item = json!({
+      "id": trash_id,
+      "name": skill_name,
+      "description": string_value(skill.get("description")),
+      "sourcePath": path_text(source_path),
+      "trashPath": path_text(&trash_path),
+      "deletedAt": now,
+      "expiresAt": now + SKILL_TRASH_RETENTION_MS
+    });
+
+    trash_items.push(item.clone());
+    Ok(item)
+}
+
+async fn restore_skill_trash_item(paths: &AppPaths, item: &Value) -> Result<Value, ManagerError> {
+    let trash_path = validate_skill_trash_path(paths, &string_value(item.get("trashPath")))?;
+    let skill_name = string_value(item.get("name"));
+    let original_source_path = PathBuf::from(string_value(item.get("sourcePath")));
+    let restore_path = if can_restore_skill_to_original_path(paths, &original_source_path)? {
+        original_source_path
+    } else {
+        let restore_dir_name = non_empty_slug(
+            &skill_name,
+            &trash_path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| format!("skill-{}", now_millis())),
+        );
+
+        Path::new(&paths.skills_dir).join(restore_dir_name)
+    };
+
+    if restore_path.exists() {
+        return Err(ManagerError::System(format!(
+            "集中目录已存在同名目录：{}",
+            path_text(&restore_path)
+        )));
+    }
+
+    if state_skill_name_exists(paths, &skill_name)? {
+        return Err(ManagerError::System(format!(
+            "Skill 名称已存在：{}",
+            skill_name
+        )));
+    }
+
+    move_dir_all(&trash_path, &restore_path).await?;
+
+    Ok(json!({
+      "id": item["id"],
+      "name": skill_name,
+      "sourcePath": path_text(restore_path)
+    }))
+}
+
+fn state_skill_name_exists(paths: &AppPaths, skill_name: &str) -> Result<bool, ManagerError> {
+    Ok(read_array(&paths.storage_files.skills)?.iter().any(|item| {
+        item.get("name").and_then(Value::as_str) == Some(skill_name)
+            && Path::new(&string_value(item.get("sourcePath"))).exists()
+    }))
+}
+
+fn can_restore_skill_to_original_path(
+    paths: &AppPaths,
+    source_path: &Path,
+) -> Result<bool, ManagerError> {
+    if source_path.as_os_str().is_empty() || source_path.exists() {
+        return Ok(false);
+    }
+
+    let skills_root = std::fs::canonicalize(&paths.skills_dir)?;
+    let Some(parent) = source_path.parent() else {
+        return Ok(false);
+    };
+
+    if !parent.exists() {
+        return Ok(false);
+    }
+
+    Ok(std::fs::canonicalize(parent)?.starts_with(skills_root))
+}
+
+async fn remove_skill_trash_path(paths: &AppPaths, item: &Value) -> Result<(), ManagerError> {
+    let trash_path = validate_skill_trash_path(paths, &string_value(item.get("trashPath")))?;
+
+    remove_dir_all_if_exists(trash_path).await
+}
+
+async fn cleanup_expired_skill_trash(paths: &AppPaths) -> Result<(), ManagerError> {
+    let now = now_millis();
+    let mut active_items = Vec::new();
+
+    for item in read_skill_trash(paths)? {
+        if item.get("expiresAt").and_then(Value::as_u64).unwrap_or(0) as u128 <= now {
+            let _ = remove_skill_trash_path(paths, &item).await;
+            continue;
+        }
+
+        if !Path::new(&string_value(item.get("trashPath"))).exists() {
+            continue;
+        }
+
+        active_items.push(item);
+    }
+
+    write_skill_trash(paths, &active_items).await
+}
+
+fn read_skill_trash(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
+    read_array(&path_text(skill_trash_index_path(paths)))
+}
+
+async fn write_skill_trash(paths: &AppPaths, items: &[Value]) -> Result<(), ManagerError> {
+    write_json(&path_text(skill_trash_index_path(paths)), &json!(items)).await
+}
+
+fn skill_trash_root(paths: &AppPaths) -> PathBuf {
+    Path::new(&paths.temp_dir).join("skill-trash")
+}
+
+fn skill_trash_index_path(paths: &AppPaths) -> PathBuf {
+    skill_trash_root(paths).join("trash.json")
+}
+
+fn validate_skill_trash_path(paths: &AppPaths, value: &str) -> Result<PathBuf, ManagerError> {
+    let trash_root = skill_trash_root(paths);
+    let trash_path = PathBuf::from(value);
+
+    if value.is_empty() || !trash_path.exists() {
+        return Err(ManagerError::System("回收站项目不存在".to_string()));
+    }
+
+    let root = std::fs::canonicalize(&trash_root)?;
+    let target = std::fs::canonicalize(&trash_path)?;
+
+    if !target.starts_with(root) {
+        return Err(ManagerError::System("回收站项目路径不安全".to_string()));
+    }
+
+    Ok(target)
+}
+
+fn payload_item_ids(payload: Value) -> Vec<String> {
+    payload
+        .get("ids")
+        .or_else(|| payload.get("itemIds"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| string_value(Some(&item)))
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn normalize_skill_group(item: Value) -> Value {
+    let now = now_millis();
+    let group_id = string_value(item.get("id"));
+    let name = string_value(item.get("name"));
+    let skill_ids = unique_string_values(item.get("skillIds"));
+
+    json!({
+      "id": group_id,
+      "name": name,
+      "skillIds": skill_ids,
+      "createdAt": item.get("createdAt").and_then(Value::as_u64).unwrap_or(now as u64),
+      "updatedAt": item.get("updatedAt").and_then(Value::as_u64).unwrap_or(now as u64)
+    })
+}
+
+fn remove_skill_ids_from_groups(groups: &mut [Value], skill_ids: &[String], except_group_id: &str) {
+    for group in groups {
+        if group.get("id").and_then(Value::as_str) == Some(except_group_id) {
+            continue;
+        }
+
+        let next_skill_ids = unique_string_values(group.get("skillIds"))
+            .into_iter()
+            .filter(|item| !skill_ids.contains(item))
+            .collect::<Vec<_>>();
+
+        group["skillIds"] = json!(next_skill_ids);
+    }
+}
+
+fn unique_string_values(value: Option<&Value>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut items = Vec::new();
+
+    for item in value
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let text = string_value(Some(&item));
+
+        if text.is_empty() || seen.contains(&text) {
+            continue;
+        }
+
+        seen.insert(text.clone());
+        items.push(text);
+    }
+
+    items
+}
+
 async fn persist_skills(
     paths: &AppPaths,
     skills: &[Value],
@@ -2396,17 +3307,19 @@ fn normalize_repository_path(value: &str) -> String {
 fn normalize_path_segment(value: &str) -> String {
     value
         .split('/')
-        .map(|item| url::form_urlencoded::byte_serialize(item.as_bytes()).collect::<String>())
+        .map(encode_path_segment)
         .collect::<Vec<_>>()
         .join("/")
 }
 
-fn is_path_inside_directory(file_path: &str, directory_path: &str) -> bool {
-    if directory_path.is_empty() {
-        return true;
-    }
+fn encode_path_segment(value: &str) -> String {
+    let mut url = Url::parse("https://example.com/").unwrap_or_else(|_| unreachable!());
 
-    file_path == directory_path || file_path.starts_with(&format!("{}/", directory_path))
+    url.path_segments_mut()
+        .unwrap_or_else(|_| unreachable!())
+        .push(value);
+
+    url.path().trim_start_matches('/').to_string()
 }
 
 fn posix_basename(value: &str) -> Option<String> {
@@ -2532,9 +3445,44 @@ fn same_path(left: &Path, right: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_skill_enabled, extract_zip_command_args, resolve_skill_status};
+    use crate::core::paths::{path_text, resolve_app_paths};
+
+    use super::{
+        batch_skill_action, cleanup_expired_skill_trash, create_github_blob_url,
+        create_repository_archive_url, delete_skills, ensure_skill_enabled,
+        extract_zip_command_args, load_skill_groups,
+        proxy_points_to_local_app_proxy, read_skill_trash, repository_archive_cache_path,
+        repository_archive_zip_is_valid, repository_branch_candidates, resolve_archive_content_dir,
+        resolve_archive_skill_source_dir, resolve_skill_status, save_skill_group,
+        remove_skill_group_items, scan_repository_archive, skill_trash_root,
+        try_load_cached_repository_archive_zip, RepositoryArchive,
+    };
     use serde_json::json;
+    use std::io::Write;
     use std::path::Path;
+
+    fn write_test_repository_archive(zip_path: &Path) {
+        let file = std::fs::File::create(zip_path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+
+        archive
+            .start_file("skills-main/skills/demo/SKILL.md", options)
+            .unwrap();
+        archive
+            .write_all(b"---\nname: demo\n---\nDemo skill")
+            .unwrap();
+        archive.finish().unwrap();
+    }
+
+    fn write_test_skill(root_path: &Path, name: &str) {
+        std::fs::create_dir_all(root_path).unwrap();
+        std::fs::write(
+            root_path.join("SKILL.md"),
+            format!("---\nname: {}\ndescription: test\n---\ncontent\n", name),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn disabled_skill_status_overrides_install_states() {
@@ -2570,5 +3518,610 @@ mod tests {
         assert!(args.contains(&"-DestinationPath".to_string()));
         assert!(args.contains(&"D:\\target dir".to_string()));
         assert!(!args.iter().any(|item| item.contains("$args")));
+    }
+
+    #[test]
+    fn repository_branch_candidates_try_configured_branch_before_defaults() {
+        let repository = json!({
+          "branch": "develop"
+        });
+
+        assert_eq!(
+            repository_branch_candidates(&repository),
+            vec![
+                "develop".to_string(),
+                "main".to_string(),
+                "master".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn repository_branch_candidates_deduplicates_default_branch() {
+        let repository = json!({
+          "branch": "main"
+        });
+
+        assert_eq!(
+            repository_branch_candidates(&repository),
+            vec!["main".to_string(), "master".to_string()]
+        );
+    }
+
+    #[test]
+    fn repository_archive_url_uses_github_zip_archive_endpoint() {
+        let repository = json!({
+          "owner": "vuejs-ai",
+          "repository": "skills"
+        });
+
+        assert_eq!(
+            create_repository_archive_url(&repository, "feature/test branch"),
+            "https://github.com/vuejs-ai/skills/archive/refs/heads/feature/test%20branch.zip"
+        );
+    }
+
+    #[test]
+    fn repository_archive_cache_path_uses_temp_archive_directory_and_hash_name() {
+        let root = std::env::temp_dir().join(format!(
+            "skill_archive_cache_path_test_{}",
+            super::create_uuid_like_id()
+        ));
+        let paths = resolve_app_paths(&root);
+        let repository = json!({
+          "owner": "VueJS-AI",
+          "repository": "skills"
+        });
+        let cache_path = repository_archive_cache_path(&paths, &repository, "feature/test branch");
+        let cache_dir = Path::new(&paths.temp_dir).join("skill-repository-archives");
+        let cache_file_name = cache_path.file_name().unwrap().to_string_lossy();
+
+        assert!(cache_path.starts_with(&cache_dir));
+        assert!(cache_file_name.ends_with(".zip"));
+        assert!(!cache_file_name.contains("feature"));
+        assert_ne!(
+            cache_path,
+            repository_archive_cache_path(&paths, &repository, "main")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn cached_repository_archive_zip_is_reused_when_valid() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_archive_cache_reuse_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let cache_path = root.join("cache.zip");
+            let zip_path = root.join("temp").join("repository.zip");
+
+            std::fs::create_dir_all(&root).unwrap();
+            write_test_repository_archive(&cache_path);
+
+            assert!(
+                try_load_cached_repository_archive_zip(&cache_path, &zip_path)
+                    .await
+                    .unwrap()
+            );
+            assert!(repository_archive_zip_is_valid(&zip_path));
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn invalid_cached_repository_archive_zip_is_removed() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_archive_bad_cache_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let cache_path = root.join("cache.zip");
+            let zip_path = root.join("temp").join("repository.zip");
+
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(&cache_path, "not a zip").unwrap();
+
+            assert!(
+                !try_load_cached_repository_archive_zip(&cache_path, &zip_path)
+                    .await
+                    .unwrap()
+            );
+            assert!(!cache_path.exists());
+            assert!(!zip_path.exists());
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn delete_skill_moves_source_directory_to_trash() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_delete_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+            let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
+            let mut state = json!({
+              "skills": [],
+              "repos": [],
+              "cliTargets": []
+            });
+
+            write_test_skill(&skill_root, "demo-skill");
+            super::refresh_skills_state(&paths, &mut state)
+                .await
+                .unwrap();
+
+            let result = delete_skills(
+                &paths,
+                &mut state,
+                json!({
+                  "skillNames": ["demo-skill"]
+                }),
+            )
+            .await
+            .unwrap();
+            let deleted = result
+                .get("deleted")
+                .and_then(serde_json::Value::as_array)
+                .unwrap();
+            let trash_items = read_skill_trash(&paths).unwrap();
+            let trash_source_path = Path::new(
+                trash_items[0]
+                    .get("trashPath")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap(),
+            );
+
+            assert_eq!(deleted.len(), 1);
+            assert!(!skill_root.exists());
+            assert!(trash_source_path.join("SKILL.md").exists());
+            assert_eq!(
+                state
+                    .get("skills")
+                    .and_then(serde_json::Value::as_array)
+                    .unwrap()
+                    .len(),
+                0
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn expired_skill_trash_items_are_removed_after_ten_days() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_trash_expired_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+            let trash_root = skill_trash_root(&paths);
+            let expired_path = trash_root.join("expired-skill");
+            let now = super::now_millis();
+
+            write_test_skill(&expired_path, "expired-skill");
+            super::write_json(
+                &path_text(trash_root.join("trash.json")),
+                &json!([
+                  {
+                    "id": "expired",
+                    "name": "expired-skill",
+                    "trashPath": path_text(&expired_path),
+                    "deletedAt": now - 11 * 24 * 60 * 60 * 1000,
+                    "expiresAt": now - 24 * 60 * 60 * 1000
+                  }
+                ]),
+            )
+            .await
+            .unwrap();
+
+            cleanup_expired_skill_trash(&paths).await.unwrap();
+
+            assert!(!expired_path.exists());
+            assert!(read_skill_trash(&paths).unwrap().is_empty());
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn skill_group_persists_unique_skill_ids() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_group_save_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+
+            save_skill_group(
+                &paths,
+                json!({
+                  "name": "debug suite",
+                  "skillIds": ["skill-a", "skill-b", "skill-a", ""]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let groups = load_skill_groups(&paths).unwrap();
+
+            assert_eq!(groups.len(), 1);
+            assert_eq!(
+                groups[0]
+                    .get("skillIds")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                vec![json!("skill-a"), json!("skill-b")]
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn moving_skill_to_group_removes_it_from_other_groups() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_group_move_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+
+            let first = save_skill_group(
+                &paths,
+                json!({
+                  "name": "first",
+                  "skillIds": ["skill-a", "skill-b"]
+                }),
+            )
+            .await
+            .unwrap();
+            save_skill_group(
+                &paths,
+                json!({
+                  "name": "second",
+                  "skillIds": ["skill-b", "skill-c"]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let groups = first
+                .get("groups")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let first_id = groups[0].get("id").and_then(serde_json::Value::as_str).unwrap();
+            let groups = load_skill_groups(&paths).unwrap();
+            let first_group = groups
+                .iter()
+                .find(|item| item.get("id").and_then(serde_json::Value::as_str) == Some(first_id))
+                .unwrap();
+
+            assert_eq!(
+                first_group
+                    .get("skillIds")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                vec![json!("skill-a")]
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn skill_group_items_can_be_removed() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_group_remove_items_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+            let result = save_skill_group(
+                &paths,
+                json!({
+                  "name": "debug suite",
+                  "skillIds": ["skill-a", "skill-b"]
+                }),
+            )
+            .await
+            .unwrap();
+            let group_id = result
+                .get("group")
+                .and_then(|item| item.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap();
+
+            remove_skill_group_items(
+                &paths,
+                json!({
+                  "groupId": group_id,
+                  "skillIds": ["skill-a"]
+                }),
+            )
+            .await
+            .unwrap();
+
+            let groups = load_skill_groups(&paths).unwrap();
+
+            assert_eq!(
+                groups[0]
+                    .get("skillIds")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default(),
+                vec![json!("skill-b")]
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn empty_skill_group_can_be_renamed_without_changing_id() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_group_rename_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+            let result = save_skill_group(
+                &paths,
+                json!({
+                  "name": "old name",
+                  "skillIds": ["skill-a"]
+                }),
+            )
+            .await
+            .unwrap();
+            let group_id = result
+                .get("group")
+                .and_then(|item| item.get("id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap();
+
+            remove_skill_group_items(
+                &paths,
+                json!({
+                  "groupId": group_id,
+                  "skillIds": ["skill-a"]
+                }),
+            )
+            .await
+            .unwrap();
+            save_skill_group(
+                &paths,
+                json!({
+                  "groupId": group_id,
+                  "name": "new name",
+                  "skillIds": []
+                }),
+            )
+            .await
+            .unwrap();
+
+            let groups = load_skill_groups(&paths).unwrap();
+
+            assert_eq!(groups[0].get("id").and_then(serde_json::Value::as_str), Some(group_id));
+            assert_eq!(
+                groups[0].get("name").and_then(serde_json::Value::as_str),
+                Some("new name")
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn batch_install_uses_selected_cli_targets() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_batch_target_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+            let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
+            let target_a = root.join("target-a");
+            let target_b = root.join("target-b");
+            let mut state = json!({
+              "skills": [],
+              "repos": [],
+              "cliTargets": [
+                {
+                  "id": "a",
+                  "name": "CLI A",
+                  "installed": true,
+                  "skillsPath": path_text(&target_a)
+                },
+                {
+                  "id": "b",
+                  "name": "CLI B",
+                  "installed": true,
+                  "skillsPath": path_text(&target_b)
+                }
+              ]
+            });
+
+            write_test_skill(&skill_root, "demo-skill");
+            super::refresh_skills_state(&paths, &mut state)
+                .await
+                .unwrap();
+
+            let result = batch_skill_action(
+                &paths,
+                &mut state,
+                json!({
+                  "action": "install-all",
+                  "skillNames": ["demo-skill"],
+                  "targetIds": ["a"]
+                }),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(
+                result
+                    .get("successes")
+                    .and_then(serde_json::Value::as_array)
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert!(target_a.join("demo-skill").exists());
+            assert!(!target_b.join("demo-skill").exists());
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn local_app_proxy_ports_are_detected_to_avoid_self_loop() {
+        assert!(proxy_points_to_local_app_proxy("http://127.0.0.1:15721"));
+        assert!(proxy_points_to_local_app_proxy("localhost:15722"));
+        assert!(!proxy_points_to_local_app_proxy("http://127.0.0.1:7890"));
+        assert!(!proxy_points_to_local_app_proxy(
+            "http://proxy.example.com:15721"
+        ));
+    }
+
+    #[test]
+    fn github_blob_url_is_for_readme_display_only() {
+        let repository = json!({
+          "owner": "vuejs-ai",
+          "repository": "skills"
+        });
+
+        assert_eq!(
+            create_github_blob_url(
+                &repository,
+                "main",
+                "skills/vue-debug-guides/reference/cleanup-side-effects.md"
+            ),
+            "https://github.com/vuejs-ai/skills/blob/main/skills/vue-debug-guides/reference/cleanup-side-effects.md"
+        );
+    }
+
+    #[test]
+    fn archive_content_dir_removes_single_archive_root_prefix() {
+        let root = std::env::temp_dir().join(format!(
+            "skill_archive_root_test_{}",
+            super::create_uuid_like_id()
+        ));
+        let archive_root = root.join("skills-main");
+
+        std::fs::create_dir_all(&archive_root).unwrap();
+
+        let resolved = resolve_archive_content_dir(&root).unwrap();
+
+        assert_eq!(resolved, archive_root);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archive_skill_source_dir_rejects_path_traversal() {
+        let root = std::env::temp_dir().join(format!(
+            "skill_archive_path_test_{}",
+            super::create_uuid_like_id()
+        ));
+
+        std::fs::create_dir_all(&root).unwrap();
+
+        let error = resolve_archive_skill_source_dir(&root, "../outside")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("路径不安全"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn archive_skill_source_dir_resolves_safe_nested_directory() {
+        let root = std::env::temp_dir().join(format!(
+            "skill_archive_safe_path_test_{}",
+            super::create_uuid_like_id()
+        ));
+        let skill_dir = root.join("skills").join("vue-debug-guides");
+
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(skill_dir.join("SKILL.md"), "---\nname: demo\n---\n").unwrap();
+
+        let resolved = resolve_archive_skill_source_dir(&root, "skills/vue-debug-guides").unwrap();
+
+        assert_eq!(resolved, std::fs::canonicalize(&skill_dir).unwrap());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_repository_archive_reads_skill_from_local_archive_content() {
+        let root = std::env::temp_dir().join(format!(
+            "skill_archive_scan_test_{}",
+            super::create_uuid_like_id()
+        ));
+        let content_dir = root.join("skills-main");
+        let skill_dir = content_dir.join("skills").join("vue-debug-guides");
+
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: vue-debug-guides\ndescription: Vue 调试指南\ntags:\n  - vue\n---\n正文内容\n",
+        )
+        .unwrap();
+
+        let repository = json!({
+          "source": "https://github.com/vuejs-ai/skills",
+          "owner": "vuejs-ai",
+          "repository": "skills",
+          "rootPath": "skills"
+        });
+        let archive = RepositoryArchive {
+            branch: "main".to_string(),
+            temp_root: root.clone(),
+            content_dir: content_dir.clone(),
+        };
+        let scanned = scan_repository_archive(&repository, &archive).unwrap();
+        let skills = scanned
+            .get("skills")
+            .and_then(serde_json::Value::as_array)
+            .unwrap();
+        let skill = &skills[0];
+
+        assert_eq!(
+            scanned.get("branch").and_then(serde_json::Value::as_str),
+            Some("main")
+        );
+        assert_eq!(
+            skill.get("name").and_then(serde_json::Value::as_str),
+            Some("vue-debug-guides")
+        );
+        assert_eq!(
+            skill.get("skillPath").and_then(serde_json::Value::as_str),
+            Some("skills/vue-debug-guides")
+        );
+        assert_eq!(
+            skill.get("displayPath").and_then(serde_json::Value::as_str),
+            Some("vue-debug-guides")
+        );
+        assert_eq!(
+            skill.get("content").and_then(serde_json::Value::as_str),
+            Some("正文内容")
+        );
+        assert_eq!(
+            skill.get("readmeUrl").and_then(serde_json::Value::as_str),
+            Some("https://github.com/vuejs-ai/skills/blob/main/skills/vue-debug-guides/SKILL.md")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

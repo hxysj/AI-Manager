@@ -55,6 +55,7 @@ pub fn create_initial_state(
     Ok(json!({
       "cliTargets": cli_targets.clone(),
       "skills": read_json_file(&files.skills, json!([]))?,
+      "skillGroups": skills::load_skill_groups(paths)?,
       "skillRepositories": skills::load_repositories(paths)?,
       "repos": read_json_file(&files.repos, json!([]))?,
       "sessions": read_json_file(&files.sessions, json!([]))?,

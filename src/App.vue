@@ -27,10 +27,14 @@
           v-if="activeView === 'skills'"
           :cli-targets="state.cliTargets"
           :paths="state.paths"
+          :skill-groups="state.skillGroups"
           :skill-repositories="state.skillRepositories"
+          :skill-trash-items="skillTrashItems"
           :skills="state.skills"
           @add-skill-repository="addSkillRepository"
+          @batch-skill-action="batchSkillAction"
           @create-skill="showCreateSkill = true"
+          @delete-skills="deleteSkills"
           @import-skills="importSkillsFromCli"
           @import-zip-skill="importSkillFromZip"
           @install-repository-skill="installSkillFromRepository"
@@ -40,8 +44,14 @@
           @refresh="refreshState"
           @refresh-skill-repository="refreshSkillRepository"
           @remove-skill-repository="removeSkillRepository"
+          @restore-skill-trash="restoreSkillTrash"
+          @remove-skill-group-items="removeSkillGroupItems"
+          @remove-skill-group="removeSkillGroup"
+          @save-skill-group="saveSkillGroup"
           @select-skill="selectSkill"
           @set-skill-enabled="setSkillEnabled"
+          @show-skill-trash="loadSkillTrash"
+          @purge-skill-trash="purgeSkillTrash"
           @uninstall-skill="uninstallSkill"
         />
 
@@ -466,6 +476,7 @@ const placeholderMap = {
 const state = reactive({
   cliTargets: [],
   skills: [],
+  skillGroups: [],
   skillRepositories: [],
   repos: [],
   sessions: [],
@@ -554,6 +565,7 @@ const appLogs = ref([])
 const appLogPath = ref("")
 const sidebarCollapsed = ref(false)
 const selectedSkillName = ref("")
+const skillTrashItems = ref([])
 const showCreateSkill = ref(false)
 const showImportSkills = ref(false)
 const showAddRepo = ref(false)
@@ -658,6 +670,9 @@ function updateState(nextState) {
   }
   if ("skills" in nextState) {
     state.skills = nextState.skills || []
+  }
+  if ("skillGroups" in nextState) {
+    state.skillGroups = nextState.skillGroups || []
   }
   if ("skillRepositories" in nextState) {
     state.skillRepositories = nextState.skillRepositories || []
@@ -1288,12 +1303,140 @@ async function installSkill(payload) {
   await runAction(() => skillApi.installSkill(payload))
 }
 
+async function batchSkillAction(payload) {
+  let batchResult = null
+  const success = await runAction(async () => {
+    const result = await skillApi.batchSkillAction(payload)
+
+    batchResult = result.batch || null
+    return result.state || result
+  })
+
+  if (success) {
+    showSuccessMessage(formatBatchSkillMessage(payload.action, batchResult))
+  }
+}
+
+async function saveSkillGroup(payload) {
+  const success = await runAction(async () => {
+    const result = await skillApi.saveSkillGroup(payload)
+
+    return result.state || result
+  })
+
+  if (success) {
+    showSuccessMessage("Skill 分组已保存。")
+  }
+}
+
+async function removeSkillGroup(payload) {
+  const success = await runAction(async () => {
+    const result = await skillApi.removeSkillGroup(payload)
+
+    return result.state || result
+  })
+
+  if (success) {
+    showSuccessMessage("Skill 分组已删除。")
+  }
+}
+
+async function removeSkillGroupItems(payload) {
+  const success = await runAction(async () => {
+    const result = await skillApi.removeSkillGroupItems(payload)
+
+    return result.state || result
+  })
+
+  if (success) {
+    showSuccessMessage("已移出 Skill 分组。")
+  }
+}
+
 async function setSkillEnabled(payload) {
   const success = await runAction(() => skillApi.setSkillEnabled(payload))
 
   if (success) {
     showSuccessMessage(payload.enabled ? "Skill 已恢复。" : "Skill 已禁用。")
   }
+}
+
+async function deleteSkills(payload) {
+  let deleteResult = null
+  const success = await runAction(async () => {
+    const result = await skillApi.deleteSkills(payload)
+
+    deleteResult = result.delete || null
+    return result.state || result
+  })
+
+  if (success) {
+    skillTrashItems.value = deleteResult?.trash || []
+    showSuccessMessage(formatDeleteSkillMessage(deleteResult))
+  }
+}
+
+async function loadSkillTrash() {
+  try {
+    const result = await skillApi.getSkillTrash()
+
+    skillTrashItems.value = result.items || []
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function restoreSkillTrash(payload) {
+  let trashResult = null
+  const success = await runAction(async () => {
+    const result = await skillApi.restoreSkillTrash(payload)
+
+    trashResult = result.trash || null
+    return result.state || result
+  })
+
+  if (success) {
+    skillTrashItems.value = trashResult?.trash || []
+    showSuccessMessage(formatTrashActionMessage("恢复", trashResult?.restored || []))
+  }
+}
+
+async function purgeSkillTrash(payload) {
+  try {
+    const result = await skillApi.purgeSkillTrash(payload)
+    const trashResult = result.trash || null
+
+    skillTrashItems.value = trashResult?.trash || []
+    showSuccessMessage(formatTrashActionMessage("永久删除", trashResult?.purged || []))
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+function formatBatchSkillMessage(action, result) {
+  const count = result?.successes?.length || 0
+  const errorCount = result?.errors?.length || 0
+  const actionLabel = {
+    "install-all": "安装",
+    "uninstall-all": "卸载",
+    enable: "恢复",
+    disable: "禁用"
+  }[action] || "处理"
+  const suffix = errorCount ? `，${errorCount} 个失败` : ""
+
+  return `已${actionLabel} ${count} 个 Skill${suffix}。`
+}
+
+function formatDeleteSkillMessage(result) {
+  const count = result?.deleted?.length || 0
+  const errorCount = result?.errors?.length || 0
+  const suffix = errorCount ? `，${errorCount} 个失败` : ""
+
+  return `已删除 ${count} 个 Skill 到回收站${suffix}。`
+}
+
+function formatTrashActionMessage(action, items) {
+  return `已${action} ${items.length} 个 Skill。`
 }
 
 async function addSkillRepository(payload) {
@@ -1823,6 +1966,7 @@ onMounted(() => {
         updateState(await appApi.ensureToolsReady())
       } else if (view === "skills") {
         updateState(await appApi.ensureSkillsReady())
+        await loadSkillTrash()
       }
     } catch (error) {
       showErrorMessage(error)

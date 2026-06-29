@@ -1,28 +1,37 @@
 <template>
   <article class="skill-card" @click="$emit('select', skill)">
-    <div class="skill-card__main">
-      <div class="skill-card__title-row">
-        <h3 class="skill-card__title">{{ skill.name }}</h3>
-        <span class="skill-card__repo">{{ skill.repoName }}</span>
+    <label class="skill-card-check" @click.stop>
+      <input
+        class="skill-card-check-input"
+        type="checkbox"
+        :checked="selected"
+        @change="$emit('toggle-select', skill)"
+      />
+    </label>
+    <div class="skill-card-main">
+      <div class="skill-card-title-row">
+        <h3 class="skill-card-title">{{ skill.name }}</h3>
+        <span v-if="groupName" class="skill-card-group">{{ groupName }}</span>
+        <span class="skill-card-repo">{{ skill.repoName }}</span>
         <span
-          :class="['skill-card__status', `skill-card__status--${skill.status}`]"
+          :class="['skill-card-status', `skill-card-status-${skill.status}`]"
         >
           {{ formatStatusLabel(skill.status) }}
         </span>
       </div>
 
-      <p class="skill-card__description">
+      <p class="skill-card-description">
         {{ skill.description || "未提供描述，点击查看详情。" }}
       </p>
 
-      <div class="skill-card__meta">
+      <div class="skill-card-meta">
         <span>{{ skill.entry }}</span>
         <span>{{ formatDateTime(skill.updatedAt) }}</span>
         <span v-for="tag in skill.tags.slice(0, 2)" :key="tag">{{ tag }}</span>
       </div>
     </div>
 
-    <div class="skill-card__indicators">
+    <div class="skill-card-indicators">
       <!-- <span
         class="skill-card__icon"
         :style="{ background: skill.icon ? '#ffffff' : hashColor(skill.name) }"
@@ -37,8 +46,8 @@
       </span> -->
       <button
         :class="[
-          'skill-card__state-action',
-          { 'skill-card__state-action--disabled': skill.disabled }
+          'skill-card-state-action',
+          { 'skill-card-state-action-disabled': skill.disabled }
         ]"
         type="button"
         :title="skill.disabled ? '恢复 Skill' : '禁用 Skill'"
@@ -49,15 +58,15 @@
           })
         "
       >
-        <Power v-if="skill.disabled" class="skill-card__action-icon" :size="15" />
-        <PowerOff v-else class="skill-card__action-icon" :size="15" />
+        <Power v-if="skill.disabled" class="skill-card-action-icon" :size="15" />
+        <PowerOff v-else class="skill-card-action-icon" :size="15" />
       </button>
       <button
         v-for="cli in cliTargets"
         :key="cli.id"
         :class="[
-          'skill-card__target-pill',
-          `skill-card__target-pill--${skill.installStates?.[cli.id]?.state || 'not-installed'}`
+          'skill-card-target-pill',
+          `skill-card-target-pill-${skill.installStates?.[cli.id]?.state || 'not-installed'}`
         ]"
         type="button"
         :title="`${cli.name}：${formatStatusLabel(skill.installStates?.[cli.id]?.state)}`"
@@ -66,19 +75,19 @@
       >
         <AiIcon
           v-if="cli.icon"
-          class="skill-card__target-icon"
+          class="skill-card-target-icon"
           :name="cli.icon"
           :alt="`${cli.name} 图标`"
         />
         <span v-else>{{ cli.name.slice(0, 1) }}</span>
       </button>
       <button
-        class="skill-card__action"
+        class="skill-card-action"
         type="button"
         title="打开源目录"
         @click.stop="$emit('open-source', skill)"
       >
-        <FolderOpen class="skill-card__action-icon" :size="15" />
+        <FolderOpen class="skill-card-action-icon" :size="15" />
       </button>
     </div>
   </article>
@@ -97,10 +106,19 @@ const props = defineProps({
   skill: {
     type: Object,
     required: true
+  },
+  selected: {
+    type: Boolean,
+    default: false
+  },
+  groupName: {
+    type: String,
+    default: ""
   }
 })
 
 const emit = defineEmits([
+  "toggle-select",
   "select",
   "open-source",
   "install",
@@ -134,8 +152,7 @@ function toFileUrl(value) {
 
 <style scoped lang="less">
 .skill-card {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   gap: 14px;
   align-items: center;
   padding: 8px 14px;
@@ -148,29 +165,43 @@ function toFileUrl(value) {
     background: var(--color-panel-soft);
   }
 
-  &__main {
+  .skill-card-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .skill-card-check-input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--color-primary);
+  }
+
+  .skill-card-main {
     display: flex;
     min-width: 0;
+    flex: 1;
     flex-direction: column;
     gap: 3px;
   }
 
-  &__title-row {
+  .skill-card-title-row {
     display: flex;
     align-items: center;
     gap: 6px;
     flex-wrap: wrap;
   }
 
-  &__title {
+  .skill-card-title {
     margin: 0;
     color: var(--color-text);
     font-size: 0.9rem;
     line-height: 1.2;
   }
 
-  &__repo,
-  &__status {
+  .skill-card-repo,
+  .skill-card-status,
+  .skill-card-group {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -178,37 +209,43 @@ function toFileUrl(value) {
     line-height: 1.2;
   }
 
-  &__repo {
+  .skill-card-repo {
     color: var(--color-text-soft);
   }
 
-  &__status {
+  .skill-card-group,
+  .skill-card-status {
     padding: 2px 7px;
     border-radius: 999px;
     font-weight: 600;
   }
 
-  &__status--installed {
+  .skill-card-group {
+    background: #edf3f8;
+    color: var(--color-primary);
+  }
+
+  .skill-card-status-installed {
     background: var(--color-success-soft);
     color: var(--color-success);
   }
 
-  &__status--not-installed {
+  .skill-card-status-not-installed {
     background: var(--color-primary-soft);
     color: var(--color-text-muted);
   }
 
-  &__status--broken-link {
+  .skill-card-status-broken-link {
     background: var(--color-danger-soft);
     color: var(--color-danger);
   }
 
-  &__status--disabled {
+  .skill-card-status-disabled {
     background: var(--color-primary-soft);
     color: var(--color-text-soft);
   }
 
-  &__description {
+  .skill-card-description {
     overflow: hidden;
     margin: 0;
     color: var(--color-text-muted);
@@ -218,7 +255,7 @@ function toFileUrl(value) {
     white-space: nowrap;
   }
 
-  &__meta {
+  .skill-card-meta {
     display: flex;
     gap: 8px;
     overflow: hidden;
@@ -227,16 +264,16 @@ function toFileUrl(value) {
     white-space: nowrap;
   }
 
-  &__indicators {
+  .skill-card-indicators {
     display: flex;
     align-items: center;
     gap: 8px;
   }
 
-  &__icon,
-  &__target-pill,
-  &__state-action,
-  &__action {
+  .skill-card-icon,
+  .skill-card-target-pill,
+  .skill-card-state-action,
+  .skill-card-action {
     display: inline-grid;
     width: 28px;
     height: 28px;
@@ -249,70 +286,70 @@ function toFileUrl(value) {
     overflow: hidden;
   }
 
-  &__icon-image {
+  .skill-card-icon-image {
     width: 100%;
     height: 100%;
     object-fit: cover;
   }
 
-  &__target-pill {
+  .skill-card-target-pill {
     background: var(--color-panel);
     cursor: pointer;
   }
 
-  &__state-action {
+  .skill-card-state-action {
     border-color: #ead1d1;
     background: var(--color-danger-soft);
     color: var(--color-danger);
     cursor: pointer;
   }
 
-  &__state-action--disabled {
+  .skill-card-state-action-disabled {
     border-color: #d8e4ee;
     background: #edf3f8;
     color: var(--color-primary);
   }
 
-  &__target-icon {
+  .skill-card-target-icon {
     width: 16px;
     height: 16px;
     object-fit: contain;
   }
 
-  &__target-pill--installed {
+  .skill-card-target-pill-installed {
     border-color: #cbd6e4;
     background: var(--color-success-soft);
     color: var(--color-success);
   }
 
-  &__target-pill--broken-link {
+  .skill-card-target-pill-broken-link {
     border-color: #ead1d1;
     background: var(--color-danger-soft);
     color: var(--color-danger);
   }
 
-  &__target-pill--disabled {
+  .skill-card-target-pill-disabled {
     background: var(--color-primary-soft);
     color: var(--color-text-soft);
   }
 
-  &__target-pill--not-installed {
+  .skill-card-target-pill-not-installed {
     border-color: transparent;
     background: var(--color-panel);
     color: var(--color-text-soft);
   }
 
-  &__target-pill:disabled {
+  .skill-card-target-pill:disabled {
     cursor: not-allowed;
     opacity: 0.48;
   }
 
-  &__action {
+  .skill-card-action {
     background: var(--color-panel);
     cursor: pointer;
   }
 
-  &__action-icon {
+  .skill-card-action-icon {
     flex: 0 0 auto;
   }
 }
