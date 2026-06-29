@@ -177,7 +177,9 @@ const sortedMessages = computed(() => {
 const allMessagesSelected = computed(() => {
   return (
     Boolean(messages.value.length) &&
-    messages.value.every((message) => selectedMessageIds.value.includes(message.id))
+    messages.value.every((message) =>
+      selectedMessageIds.value.includes(message.id)
+    )
   )
 })
 
@@ -234,9 +236,11 @@ async function loadMessages() {
 
     if (seed === loadSeed) {
       messages.value = Array.isArray(result) ? result : []
-      selectedMessageIds.value = selectedMessageIds.value.filter((messageId) => {
-        return messages.value.some((message) => message.id === messageId)
-      })
+      selectedMessageIds.value = selectedMessageIds.value.filter(
+        (messageId) => {
+          return messages.value.some((message) => message.id === messageId)
+        }
+      )
     }
   } catch (error) {
     createMessage.error(error?.message || String(error))
@@ -389,6 +393,7 @@ function filterStartAt() {
 <style scoped lang="less">
 .lan-share-messages-panel {
   display: flex;
+  height: 100%;
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
