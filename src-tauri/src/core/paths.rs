@@ -63,6 +63,7 @@ pub struct LanShareFiles {
     pub files: String,
     pub devices: String,
     pub sessions: String,
+    pub groups: String,
     pub messages: String,
     pub downloads: String,
 }
@@ -142,6 +143,7 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
             files: path_text(lan_share_dir.join("files.json")),
             devices: path_text(lan_share_dir.join("devices.json")),
             sessions: path_text(lan_share_dir.join("sessions.json")),
+            groups: path_text(lan_share_dir.join("groups.json")),
             messages: path_text(lan_share_dir.join("messages.json")),
             downloads: path_text(lan_share_dir.join("downloads.json")),
         },

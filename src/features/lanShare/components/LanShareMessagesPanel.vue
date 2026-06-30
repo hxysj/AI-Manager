@@ -48,7 +48,8 @@
             'lan-share-messages-item-desktop':
               message.direction === 'desktop-to-mobile',
             'lan-share-messages-item-mobile':
-              message.direction !== 'desktop-to-mobile'
+              message.direction !== 'desktop-to-mobile',
+            'lan-share-messages-item-file': message.messageType === 'file'
           }
         ]"
       >
@@ -83,6 +84,11 @@
           title="点击复制消息"
           @click="copyMessageContent(message)"
         >
+          <FileText
+            v-if="message.messageType === 'file'"
+            class="lan-share-messages-content-icon"
+            :size="14"
+          />
           {{ message.content }}
         </p>
       </article>
@@ -122,7 +128,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
-import { Eraser, Send, Trash2 } from "lucide-vue-next"
+import { Eraser, FileText, Send, Trash2 } from "lucide-vue-next"
 import { lanShareApi } from "@/api"
 import { formatDateTime } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
@@ -139,6 +145,10 @@ const props = defineProps({
   currentSession: {
     type: Object,
     default: null
+  },
+  chatMode: {
+    type: String,
+    default: "direct"
   },
   stateVersion: {
     type: Number,
@@ -186,7 +196,10 @@ const allMessagesSelected = computed(() => {
 onMounted(() => {
   loadMessages()
   stopMessageListener = lanShareApi.onMessageCreated((message) => {
-    if (message.sessionId === props.currentSessionId) {
+    if (
+      message.sessionId === props.currentSessionId ||
+      props.chatMode === "group"
+    ) {
       loadMessages()
       emit("refresh-state")
     }
@@ -201,6 +214,7 @@ watch(
   () => [
     props.currentDevice?.id || "",
     props.currentSessionId,
+    props.chatMode,
     props.stateVersion,
     keyword.value,
     timeFilter.value
@@ -226,7 +240,8 @@ async function loadMessages() {
   try {
     const result = unwrapData(
       await lanShareApi.listMessages({
-        deviceId: props.currentDevice?.id || "",
+        deviceId:
+          props.chatMode === "direct" ? props.currentDevice?.id || "" : "",
         sessionId: props.currentSessionId,
         keyword: keyword.value,
         from: filterStartAt(),
@@ -294,7 +309,8 @@ async function sendMessage() {
 
   const result = await runMessageAction(async () =>
     lanShareApi.sendMessage({
-      deviceId: props.currentDevice?.id || "",
+      deviceId:
+        props.chatMode === "direct" ? props.currentDevice?.id || "" : "",
       sessionId: props.currentSessionId,
       content
     })
@@ -597,6 +613,23 @@ function filterStartAt() {
 
     .lan-share-messages-item-mobile {
       align-self: flex-start;
+    }
+
+    .lan-share-messages-item-file {
+      border-color: #c7d9ea;
+      background: #f4f9ff;
+
+      .lan-share-messages-content {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 700;
+
+        .lan-share-messages-content-icon {
+          flex: none;
+          color: var(--color-primary);
+        }
+      }
     }
 
     .lan-share-messages-empty {
