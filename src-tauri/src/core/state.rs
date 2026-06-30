@@ -482,6 +482,57 @@ impl ManagerState {
                 )
                 .await
             }
+            "lan-share:create-group" => {
+                let result = lan_share::create_group(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
+            "lan-share:update-group" => {
+                let result = lan_share::update_group(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
+            "lan-share:remove-group-member" => {
+                let result = lan_share::remove_group_member(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
+            "lan-share:clear-group-messages" => {
+                let result = lan_share::clear_group_messages(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
+            "lan-share:delete-group" => {
+                let result = lan_share::delete_group(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
+            }
             "lan-share:export-files-zip" => {
                 lan_share::export_files_zip(
                     &self.lan_share_registry,

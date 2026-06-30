@@ -19,6 +19,13 @@ export const lanShareApi = {
   deleteSession: payload => request('lan-share:delete-session', payload),
   deleteDeviceHistory: payload =>
     request('lan-share:delete-device-history', payload),
+  createGroup: payload => request('lan-share:create-group', payload),
+  updateGroup: payload => request('lan-share:update-group', payload),
+  removeGroupMember: payload =>
+    request('lan-share:remove-group-member', payload),
+  clearGroupMessages: payload =>
+    request('lan-share:clear-group-messages', payload),
+  deleteGroup: payload => request('lan-share:delete-group', payload),
   onStateChanged: callback => subscribe('lan-share:state-changed', callback),
   onMessageCreated: callback =>
     subscribe('lan-share:message-created', callback),

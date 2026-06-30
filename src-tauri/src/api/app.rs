@@ -4,6 +4,8 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::Deserialize;
 use serde_json::{json, Value};
 #[cfg(windows)]
+use std::io::{Cursor, Read, Write};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex as SyncMutex};
@@ -32,6 +34,14 @@ const QUICK_SWITCH_COLLAPSED_WIDTH: u32 = 44;
 const QUICK_SWITCH_COLLAPSED_HEIGHT: u32 = 44;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(windows)]
+const AI_MANAGER_UNINSTALL_ROOT: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+#[cfg(windows)]
+const AI_MANAGER_UNINSTALL_KEYS: [&str; 3] = [
+    "a178c25c-9e1d-5bca-9cea-7f005c2da482",
+    "Monkey Thief",
+    "com.monkeythief.desktop",
+];
 
 struct DownloadedUpdate {
     update: Update,
@@ -297,7 +307,16 @@ pub async fn install_update(
         return Err(error);
     }
 
-    if let Err(error) = downloaded_update.update.install(&downloaded_update.bytes) {
+    #[cfg(windows)]
+    let install_result = install_update_on_windows(app, &downloaded_update).await;
+
+    #[cfg(not(windows))]
+    let install_result = downloaded_update
+        .update
+        .install(&downloaded_update.bytes)
+        .map_err(|error| ManagerError::System(error.to_string()));
+
+    if let Err(error) = install_result {
         let version = downloaded_update.update.version.clone();
         let release_notes = downloaded_update.update.body.clone().unwrap_or_default();
         let bytes = downloaded_update.bytes;
@@ -322,7 +341,7 @@ pub async fn install_update(
               "bytesPerSecond": 0
             }),
         )?;
-        return Err(ManagerError::System(error.to_string()));
+        return Err(error);
     }
 
     Ok(json!(true))
@@ -951,6 +970,340 @@ fn github_release_asset_api_url(
 
 fn update_configured() -> bool {
     !update_token().is_empty()
+}
+
+#[cfg(windows)]
+async fn install_update_on_windows(
+    app: &tauri::AppHandle,
+    downloaded_update: &DownloadedUpdate,
+) -> Result<(), ManagerError> {
+    let installer_path = persist_windows_update_installer(
+        &downloaded_update.update.version,
+        &downloaded_update.bytes,
+    )
+    .await?;
+    let current_process_id = std::process::id();
+    let current_exe_path = std::env::current_exe()?;
+    let install_info = detect_installed_windows_app().await?;
+    let script = build_windows_update_script(
+        current_process_id,
+        &current_exe_path,
+        &installer_path,
+        install_info.as_ref(),
+    );
+    let script_path = write_windows_update_script(&downloaded_update.update.version, &script)?;
+    let mut command = std::process::Command::new("powershell.exe");
+
+    command.creation_flags(CREATE_NO_WINDOW);
+    command.args([
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-WindowStyle",
+        "Hidden",
+        "-File",
+        &script_path.to_string_lossy(),
+    ]);
+    command
+        .spawn()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    app.exit(0);
+    Ok(())
+}
+
+#[cfg(windows)]
+struct InstalledWindowsApp {
+    uninstall_string: String,
+    install_location: String,
+}
+
+#[cfg(windows)]
+async fn detect_installed_windows_app() -> Result<Option<InstalledWindowsApp>, ManagerError> {
+    let query_script = build_windows_install_query_script();
+    let output = tokio::process::Command::new("powershell.exe")
+        .creation_flags(CREATE_NO_WINDOW)
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &query_script,
+        ])
+        .output()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(ManagerError::System(if message.is_empty() {
+            "检测旧版本安装状态失败".to_string()
+        } else {
+            message
+        }));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    if stdout.is_empty() || stdout == "null" {
+        return detect_installed_windows_app_from_current_exe().await;
+    }
+
+    let value: Value = serde_json::from_str(&stdout)?;
+    let uninstall_string = value
+        .get("uninstallString")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let install_location = value
+        .get("installLocation")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+
+    if uninstall_string.is_empty() {
+        return detect_installed_windows_app_from_current_exe().await;
+    }
+
+    Ok(Some(InstalledWindowsApp {
+        uninstall_string,
+        install_location,
+    }))
+}
+
+#[cfg(windows)]
+async fn detect_installed_windows_app_from_current_exe(
+) -> Result<Option<InstalledWindowsApp>, ManagerError> {
+    let current_exe = std::env::current_exe()?;
+    let Some(install_directory) = current_exe.parent() else {
+        return Ok(None);
+    };
+
+    let Ok(uninstaller_path) = find_app_uninstaller(install_directory).await else {
+        return Ok(None);
+    };
+
+    Ok(Some(InstalledWindowsApp {
+        uninstall_string: format!("\"{}\"", uninstaller_path.to_string_lossy()),
+        install_location: install_directory.to_string_lossy().to_string(),
+    }))
+}
+
+#[cfg(windows)]
+fn build_windows_install_query_script() -> String {
+    let keys = AI_MANAGER_UNINSTALL_KEYS
+        .iter()
+        .map(|key| to_powershell_literal(key))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+$root = {root}
+$keys = @({keys})
+$hives = @('HKCU', 'HKLM')
+foreach ($hive in $hives) {{
+  foreach ($key in $keys) {{
+    $regPath = "$hive`:\$root\$key"
+    if (-not (Test-Path -LiteralPath $regPath)) {{
+      continue
+    }}
+    $item = Get-ItemProperty -LiteralPath $regPath
+    $uninstallString = [string]$item.QuietUninstallString
+    if ([string]::IsNullOrWhiteSpace($uninstallString)) {{
+      $uninstallString = [string]$item.UninstallString
+    }}
+    if (-not [string]::IsNullOrWhiteSpace($uninstallString)) {{
+      [PSCustomObject]@{{
+        uninstallString = $uninstallString
+        installLocation = [string]$item.InstallLocation
+      }} | ConvertTo-Json -Compress
+      exit 0
+    }}
+  }}
+}}"#,
+        root = to_powershell_literal(AI_MANAGER_UNINSTALL_ROOT),
+        keys = keys
+    )
+}
+
+#[cfg(windows)]
+async fn persist_windows_update_installer(
+    version: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, ManagerError> {
+    let temp_dir = windows_update_temp_dir(version)?;
+    tokio::fs::create_dir_all(&temp_dir).await?;
+    let installer_path = temp_dir.join(format!(
+        "Monkey-Thief-{}-setup.exe",
+        safe_file_part(version)
+    ));
+    let installer_bytes = extract_windows_update_installer(bytes)?;
+
+    tokio::fs::write(&installer_path, installer_bytes).await?;
+    Ok(installer_path)
+}
+
+#[cfg(windows)]
+fn extract_windows_update_installer(bytes: &[u8]) -> Result<Vec<u8>, ManagerError> {
+    if bytes.len() >= 2 && &bytes[0..2] == b"MZ" {
+        return Ok(bytes.to_vec());
+    }
+
+    let cursor = Cursor::new(bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|error| ManagerError::System(error.to_string()))?;
+
+    for index in 0..archive.len() {
+        let mut file = archive
+            .by_index(index)
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        let name = file.name().to_lowercase();
+
+        if !name.ends_with(".exe") {
+            continue;
+        }
+
+        let mut output = Vec::new();
+        file.read_to_end(&mut output)?;
+        return Ok(output);
+    }
+
+    Err(ManagerError::System(
+        "更新包中未找到 Windows 安装程序".to_string(),
+    ))
+}
+
+#[cfg(windows)]
+fn write_windows_update_script(version: &str, script: &str) -> Result<PathBuf, ManagerError> {
+    let temp_dir = windows_update_temp_dir(version)?;
+    std::fs::create_dir_all(&temp_dir)?;
+    let script_path = temp_dir.join("install-after-uninstall.ps1");
+    let mut file = std::fs::File::create(&script_path)?;
+    file.write_all(script.as_bytes())?;
+    Ok(script_path)
+}
+
+#[cfg(windows)]
+fn windows_update_temp_dir(version: &str) -> Result<PathBuf, ManagerError> {
+    Ok(std::env::temp_dir().join(format!("monkey-thief-update-{}", safe_file_part(version))))
+}
+
+#[cfg(windows)]
+fn safe_file_part(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+}
+
+#[cfg(windows)]
+fn build_windows_update_script(
+    current_process_id: u32,
+    current_exe_path: &Path,
+    installer_path: &Path,
+    install_info: Option<&InstalledWindowsApp>,
+) -> String {
+    let uninstall_string = install_info
+        .map(|info| info.uninstall_string.as_str())
+        .unwrap_or("");
+    let install_location = install_info
+        .map(|info| info.install_location.as_str())
+        .unwrap_or("");
+    let registry_checks = AI_MANAGER_UNINSTALL_KEYS
+        .iter()
+        .map(|key| {
+            format!(
+                "    if (Test-Path -LiteralPath \"HKCU:\\$UninstallRoot\\{key}\") {{ return $true }}\n    if (Test-Path -LiteralPath \"HKLM:\\$UninstallRoot\\{key}\") {{ return $true }}",
+                key = key.replace('`', "``")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"$ErrorActionPreference = 'Stop'
+$ProcessId = {process_id}
+$CurrentExePath = {current_exe_path}
+$InstallerPath = {installer_path}
+$UninstallString = {uninstall_string}
+$InstallLocation = {install_location}
+$UninstallRoot = {uninstall_root}
+
+function Test-OldVersionExists {{
+{registry_checks}
+  if (-not [string]::IsNullOrWhiteSpace($InstallLocation)) {{
+    if (Test-Path -LiteralPath (Join-Path $InstallLocation 'Monkey Thief.exe')) {{ return $true }}
+    if (Test-Path -LiteralPath (Join-Path $InstallLocation 'monkey-thief.exe')) {{ return $true }}
+  }}
+  if (-not [string]::IsNullOrWhiteSpace($CurrentExePath)) {{
+    if (Test-Path -LiteralPath $CurrentExePath) {{ return $true }}
+  }}
+  return $false
+}}
+
+function Split-CommandLine {{
+  param([string]$CommandLine)
+  $trimmed = $CommandLine.Trim()
+  if ($trimmed.StartsWith('"')) {{
+    $end = $trimmed.IndexOf('"', 1)
+    if ($end -gt 0) {{
+      return @($trimmed.Substring(1, $end - 1), $trimmed.Substring($end + 1).Trim())
+    }}
+  }}
+  $parts = $trimmed.Split(' ', 2)
+  if ($parts.Count -eq 1) {{
+    return @($parts[0], '')
+  }}
+  return @($parts[0], $parts[1])
+}}
+
+Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
+
+if (-not [string]::IsNullOrWhiteSpace($UninstallString)) {{
+  $parts = Split-CommandLine $UninstallString
+  $uninstallerPath = $parts[0]
+  $uninstallerArgs = $parts[1]
+  if ($uninstallerArgs -notmatch '(^|\s)/S(\s|$)') {{
+    $uninstallerArgs = ($uninstallerArgs + ' /S').Trim()
+  }}
+  $process = Start-Process -FilePath $uninstallerPath -ArgumentList $uninstallerArgs -Wait -PassThru
+  if ($process.ExitCode -ne 0) {{
+    Add-Type -AssemblyName PresentationFramework
+    [System.Windows.MessageBox]::Show('旧版本卸载失败，安装已取消。', 'Monkey Thief 更新', 'OK', 'Warning') | Out-Null
+    exit 1
+  }}
+}}
+
+for ($index = 0; $index -lt 120; $index++) {{
+  if (-not (Test-OldVersionExists)) {{
+    break
+  }}
+  Start-Sleep -Seconds 1
+}}
+
+if (Test-OldVersionExists) {{
+  Add-Type -AssemblyName PresentationFramework
+  [System.Windows.MessageBox]::Show('旧版本未卸载完成，安装已取消。', 'Monkey Thief 更新', 'OK', 'Warning') | Out-Null
+  exit 1
+}}
+
+Start-Process -FilePath $InstallerPath -ArgumentList '/P /R /UPDATE'
+"#,
+        process_id = current_process_id,
+        current_exe_path = to_powershell_literal(&current_exe_path.to_string_lossy()),
+        installer_path = to_powershell_literal(&installer_path.to_string_lossy()),
+        uninstall_string = to_powershell_literal(uninstall_string),
+        install_location = to_powershell_literal(install_location),
+        uninstall_root = to_powershell_literal(AI_MANAGER_UNINSTALL_ROOT),
+        registry_checks = registry_checks
+    )
 }
 
 fn update_token() -> String {

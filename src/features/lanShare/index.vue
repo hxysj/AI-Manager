@@ -9,11 +9,34 @@
       @stop="stopService"
     />
 
+    <div class="lan-share-mode-switch">
+      <button
+        :class="[
+          'lan-share-mode-switch__button',
+          { 'lan-share-mode-switch__button--active': chatMode === 'direct' }
+        ]"
+        type="button"
+        @click="switchChatMode('direct')"
+      >
+        单聊模式
+      </button>
+      <button
+        :class="[
+          'lan-share-mode-switch__button',
+          { 'lan-share-mode-switch__button--active': chatMode === 'group' }
+        ]"
+        type="button"
+        @click="switchChatMode('group')"
+      >
+        群聊模式
+      </button>
+    </div>
+
     <LanShareDevicesPanel
-      v-if="navigationMode === 'devices'"
+      v-if="navigationMode === 'devices' && chatMode === 'direct'"
       class="lan-share-devices-area"
       :devices="state.devices"
-      :sessions="state.sessions"
+      :sessions="directSessions"
       :selected-device-id="selectedDeviceId"
       :online-devices="state.service.onlineDevices || 0"
       @open-device="openDeviceSessions"
@@ -24,7 +47,11 @@
     <LanShareSessionWorkspace
       v-else
       class="lan-share-detail-area"
+      :chat-mode="chatMode"
+      :groups="state.groups"
       :sessions="deviceSessions"
+      :group-sessions="groupSessions"
+      :current-group="currentGroup"
       :current-device="currentDevice"
       :selected-session-id="selectedSessionId"
       :current-session="currentSession"
@@ -32,12 +59,20 @@
       :service-running="state.service.running"
       :state-version="stateVersion"
       @back-devices="backToDevices"
+      @switch-mode="switchChatMode"
       @select-session="selectSession"
+      @select-group="selectGroup"
       @delete-session="deleteSession"
       @create-session="createNewSession"
+      @create-group="createGroup"
+      @update-group="updateGroup"
+      @remove-group-member="removeGroupMember"
+      @clear-group-messages="clearGroupMessages"
+      @delete-group="deleteGroup"
       @delete-history="deleteSelectedDeviceHistory"
       @refresh-state="loadState"
       @preview-file="openPreviewDialog"
+      @copy-text="copyText"
     />
 
     <LanShareAccessDialog
@@ -81,13 +116,16 @@ const state = reactive({
     onlineDevices: 0
   },
   devices: [],
-  sessions: []
+  sessions: [],
+  groups: []
 })
 const loading = ref(false)
 const accessDialogOpen = ref(false)
 const accessQrSvg = ref("")
 const selectedDeviceId = ref("")
 const selectedSessionId = ref("")
+const selectedGroupId = ref("")
+const chatMode = ref("direct")
 const navigationMode = ref("devices")
 const stateVersion = ref(0)
 const previewDialog = reactive({
@@ -116,10 +154,17 @@ const currentSessionId = computed(() => {
 })
 
 const currentSession = computed(() => {
-  return (
-    state.sessions.find((session) => session.id === selectedSessionId.value) ||
-    null
-  )
+  const session =
+    state.sessions.find((item) => item.id === selectedSessionId.value) || null
+
+  if (chatMode.value === "direct") {
+    return isDirectSession(session) ? session : null
+  }
+  if (chatMode.value === "group") {
+    return session?.mode === "group" ? session : null
+  }
+
+  return session
 })
 
 const currentDevice = computed(() => {
@@ -128,10 +173,22 @@ const currentDevice = computed(() => {
   )
 })
 
+const currentGroup = computed(() => {
+  return state.groups.find((group) => group.id === selectedGroupId.value) || null
+})
+
 const deviceSessions = computed(() => {
-  return state.sessions.filter((session) => {
-    return selectedDeviceId.value && session.deviceId === selectedDeviceId.value
+  return directSessions.value.filter((session) => {
+    return selectedDeviceId.value && isDirectDeviceSession(session)
   })
+})
+
+const directSessions = computed(() => {
+  return state.sessions.filter((session) => isDirectSession(session))
+})
+
+const groupSessions = computed(() => {
+  return state.sessions.filter((session) => session.mode === "group")
 })
 
 onMounted(() => {
@@ -143,25 +200,37 @@ onMounted(() => {
 })
 
 watch(selectedDeviceId, (deviceId) => {
+  if (chatMode.value !== "direct") {
+    return
+  }
+
   if (!deviceId) {
     selectedSessionId.value = ""
     return
   }
 
-  if (selectedSessionId.value && currentSession.value?.deviceId !== deviceId) {
+  if (
+    selectedSessionId.value &&
+    (!isDirectDeviceSession(currentSession.value) ||
+      currentSession.value?.deviceId !== deviceId)
+  ) {
     selectedSessionId.value = ""
   }
 
   if (!selectedSessionId.value) {
-    selectedSessionId.value =
-      state.sessions.find((session) => session.deviceId === deviceId)?.id || ""
+    selectedSessionId.value = findDirectSessionId(deviceId)
   }
 })
 
 watch(selectedSessionId, (sessionId) => {
   const session = state.sessions.find((item) => item.id === sessionId)
 
-  if (session && selectedDeviceId.value !== session.deviceId) {
+  if (
+    session &&
+    chatMode.value === "direct" &&
+    isDirectSession(session) &&
+    selectedDeviceId.value !== session.deviceId
+  ) {
     selectedDeviceId.value = session.deviceId
   }
 })
@@ -178,11 +247,22 @@ function applyState(payload) {
   accessQrSvg.value = state.service.qrSvg || accessQrSvg.value
   state.devices = nextState.devices || []
   state.sessions = nextState.sessions || []
+  state.groups = nextState.groups || []
   stateVersion.value += 1
 
   if (nextState.currentSession?.id) {
-    selectedSessionId.value = nextState.currentSession.id
-    selectedDeviceId.value = nextState.currentSession.deviceId || ""
+    if (nextState.currentSession.mode === "group") {
+      selectedGroupId.value = nextState.currentSession.groupId || ""
+      if (chatMode.value === "group") {
+        selectedSessionId.value = nextState.currentSession.id
+        selectedDeviceId.value = ""
+        navigationMode.value = "detail"
+      }
+    } else if (chatMode.value === "direct") {
+      selectedSessionId.value = nextState.currentSession.id
+      selectedDeviceId.value = nextState.currentSession.deviceId || ""
+      selectedGroupId.value = ""
+    }
     initialSessionResolved = true
   } else if (!initialSessionResolved) {
     initialSessionResolved = true
@@ -191,6 +271,26 @@ function applyState(payload) {
 
 function unwrapData(result) {
   return result?.status && "data" in result ? result.data : result
+}
+
+function isDirectSession(session) {
+  return Boolean(session) && session.mode !== "group"
+}
+
+function isDirectDeviceSession(session, deviceId = selectedDeviceId.value) {
+  return (
+    isDirectSession(session) &&
+    Boolean(deviceId) &&
+    session.deviceId === deviceId
+  )
+}
+
+function findDirectSessionId(deviceId) {
+  return (
+    state.sessions.find((session) => {
+      return isDirectDeviceSession(session, deviceId)
+    })?.id || ""
+  )
 }
 
 async function runAction(action, successMessage) {
@@ -274,6 +374,65 @@ async function createNewSession() {
   navigationMode.value = "detail"
 }
 
+async function createGroup(payload) {
+  const result = await runAction(
+    async () => lanShareApi.createGroup(payload),
+    "群聊已创建。"
+  )
+
+  if (result?.currentSession) {
+    selectedSessionId.value = result.currentSession.id
+    selectedGroupId.value = result.currentSession.groupId || ""
+  }
+  chatMode.value = "group"
+  navigationMode.value = "detail"
+}
+
+async function updateGroup(payload) {
+  await runAction(
+    async () => lanShareApi.updateGroup(payload),
+    "群聊设置已更新。"
+  )
+  await loadState()
+}
+
+async function removeGroupMember(payload) {
+  await runAction(
+    async () => lanShareApi.removeGroupMember(payload),
+    "群成员已移出。"
+  )
+  await loadState()
+}
+
+async function clearGroupMessages(groupId) {
+  if (!groupId || !window.confirm("确认清空该群聊的全部消息吗？")) {
+    return
+  }
+
+  await runAction(
+    async () => lanShareApi.clearGroupMessages({ groupId }),
+    "群消息已清空。"
+  )
+  await loadState()
+}
+
+async function deleteGroup(groupId) {
+  if (!groupId || !window.confirm("确认解散该群聊吗？")) {
+    return
+  }
+
+  const result = await runAction(
+    async () => lanShareApi.deleteGroup({ groupId }),
+    "群聊已解散。"
+  )
+
+  if (result) {
+    selectedGroupId.value = ""
+    selectedSessionId.value = ""
+  }
+  await loadState()
+}
+
 async function deleteSelectedDeviceHistory() {
   if (!selectedDeviceId.value) {
     return
@@ -283,9 +442,13 @@ async function deleteSelectedDeviceHistory() {
 }
 
 async function copyAccessUrl() {
+  await copyText(state.service.accessUrl)
+}
+
+async function copyText(text) {
   try {
-    await navigator.clipboard.writeText(state.service.accessUrl)
-    createMessage.success("访问地址已复制。")
+    await navigator.clipboard.writeText(text || "")
+    createMessage.success("已复制。")
   } catch (error) {
     createMessage.error(error?.message || "复制失败。")
   }
@@ -327,7 +490,9 @@ async function deleteSession(sessionId) {
 
   if (selectedSessionId.value === sessionId) {
     const nextSessionId =
-      nextSessions.find((session) => session.deviceId === deviceId)?.id || ""
+      nextSessions.find((session) => {
+        return session.mode !== "group" && session.deviceId === deviceId
+      })?.id || ""
 
     selectedSessionId.value = nextSessionId
     if (nextSessionId) {
@@ -344,16 +509,53 @@ function openDeviceSessions(deviceId) {
   selectedDeviceId.value = deviceId
   navigationMode.value = "detail"
 
-  if (currentSession.value?.deviceId === deviceId) {
+  if (isDirectDeviceSession(currentSession.value, deviceId)) {
     return
   }
 
-  selectedSessionId.value =
-    state.sessions.find((session) => session.deviceId === deviceId)?.id || ""
+  selectedSessionId.value = findDirectSessionId(deviceId)
 }
 
 function backToDevices() {
-  navigationMode.value = "devices"
+  navigationMode.value = chatMode.value === "group" ? "detail" : "devices"
+}
+
+function switchChatMode(mode) {
+  chatMode.value = mode
+  navigationMode.value = mode === "group" ? "detail" : "devices"
+
+  if (mode === "group") {
+    selectedDeviceId.value = ""
+    selectedGroupId.value = selectedGroupId.value || state.groups[0]?.id || ""
+    selectGroup(selectedGroupId.value)
+    return
+  }
+
+  selectedGroupId.value = ""
+  selectedSessionId.value = findDirectSessionId(selectedDeviceId.value)
+  if (selectedSessionId.value) {
+    selectSession(selectedSessionId.value)
+  }
+}
+
+async function selectGroup(groupId) {
+  selectedGroupId.value = groupId
+  chatMode.value = "group"
+  navigationMode.value = "detail"
+
+  const groupSession =
+    groupSessions.value.find((session) => {
+      return session.groupId === groupId && !session.deviceId
+    }) ||
+    groupSessions.value.find((session) => session.groupId === groupId)
+
+  selectedSessionId.value = groupSession?.id || ""
+
+  if (selectedSessionId.value) {
+    await runAction(async () =>
+      lanShareApi.activateSession({ sessionId: selectedSessionId.value })
+    )
+  }
 }
 
 async function createDeviceSession(deviceId) {
@@ -531,6 +733,38 @@ function isTextPreviewFile(name, mimeType) {
     min-height: 0;
     flex: 1;
     overflow: hidden;
+  }
+
+  .lan-share-mode-switch {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: #f8fafc;
+
+    &__button {
+      display: inline-flex;
+      height: 30px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 12px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--color-text-muted);
+      cursor: pointer;
+      font-weight: 800;
+    }
+
+    &__button--active {
+      border-color: #8db7dc;
+      background: #ffffff;
+      color: var(--color-primary);
+      box-shadow: 0 6px 18px rgba(42, 67, 101, 0.08);
+    }
   }
 }
 </style>

@@ -96,8 +96,42 @@ pub struct LanShareSession {
     pub device_name: String,
     #[serde(default)]
     pub ip: String,
+    #[serde(default = "default_session_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub group_id: String,
+    #[serde(default)]
+    pub group_name: String,
+    #[serde(default = "default_message_visibility")]
+    pub message_visibility: String,
+    #[serde(default)]
+    pub joined_at: u64,
     pub created_at: u64,
     pub updated_at: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanShareGroupMember {
+    pub device_id: String,
+    pub device_name: String,
+    pub ip: String,
+    pub joined_at: u64,
+    pub last_seen_at: u64,
+    pub active: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LanShareGroup {
+    pub id: String,
+    pub name: String,
+    pub invite_code: String,
+    #[serde(default = "default_message_visibility")]
+    pub message_visibility: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub members: Vec<LanShareGroupMember>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -181,8 +215,33 @@ pub fn string_array_value(value: Option<&Value>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn default_session_mode() -> String {
+    "direct".to_string()
+}
+
+fn default_message_visibility() -> String {
+    "all".to_string()
+}
+
+fn normalize_message_visibility(value: &str) -> String {
+    match value.trim() {
+        "afterJoin" | "recent10" | "all" => value.trim().to_string(),
+        _ => default_message_visibility(),
+    }
+}
+
 pub fn normalize_device_name(value: &str) -> String {
     value.trim().chars().take(40).collect()
+}
+
+fn normalize_group_name(value: &str) -> String {
+    let name = value.trim().chars().take(40).collect::<String>();
+
+    if name.is_empty() {
+        "未命名群聊".to_string()
+    } else {
+        name
+    }
 }
 
 pub fn auto_device_name(user_agent: &str, ip: &str) -> String {
@@ -249,6 +308,22 @@ pub fn file_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
+fn format_file_size(size: u64) -> String {
+    let size = size as f64;
+
+    if size >= 1024.0 * 1024.0 * 1024.0 {
+        return format!("{:.2} GB", size / 1024.0 / 1024.0 / 1024.0);
+    }
+    if size >= 1024.0 * 1024.0 {
+        return format!("{:.2} MB", size / 1024.0 / 1024.0);
+    }
+    if size >= 1024.0 {
+        return format!("{:.1} KB", size / 1024.0);
+    }
+
+    format!("{} B", size as u64)
+}
+
 pub fn create_file_id(path: &str) -> String {
     use sha1::{Digest, Sha1};
 
@@ -277,6 +352,26 @@ fn create_session_file_id(session_id: &str, path: &str) -> String {
     hasher.update(b":");
     hasher.update(path.as_bytes());
     format!("file_{:x}", hasher.finalize())
+}
+
+fn create_invite_code() -> String {
+    let value = uuid::Uuid::new_v4().simple().to_string();
+
+    value[..8].to_uppercase()
+}
+
+fn group_invite_url(access_url: &str, invite_code: &str) -> String {
+    if access_url.is_empty() || invite_code.is_empty() {
+        return String::new();
+    }
+
+    match Url::parse(access_url) {
+        Ok(mut url) => {
+            url.query_pairs_mut().append_pair("invite", invite_code);
+            url.to_string()
+        }
+        Err(_) => String::new(),
+    }
 }
 
 pub async fn file_payload(path: &str, session_id: &str) -> Result<LanShareFile, ManagerError> {
@@ -341,18 +436,51 @@ pub async fn add_files(
         };
 
         let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        let session = sessions[session_index].clone();
+        let now = now_millis();
 
         for next_file in selected_files {
+            let message_content = format!(
+                "共享文件：{}（{}）",
+                next_file.name,
+                format_file_size(next_file.size)
+            );
             if let Some(current) = files.iter_mut().find(|file| file.id == next_file.id) {
-                *current = next_file;
+                *current = next_file.clone();
             } else {
-                files.insert(0, next_file);
+                files.insert(0, next_file.clone());
             }
+            messages.insert(
+                0,
+                LanShareMessage {
+                    id: create_id("message"),
+                    session_id: session.id.clone(),
+                    device_id: if session.device_id.is_empty() {
+                        "desktop".to_string()
+                    } else {
+                        session.device_id.clone()
+                    },
+                    device_name: if session.device_name.is_empty() {
+                        "电脑端".to_string()
+                    } else {
+                        session.device_name.clone()
+                    },
+                    direction: "desktop-to-mobile".to_string(),
+                    message_type: "file".to_string(),
+                    content: message_content,
+                    created_at: now,
+                    delivered: false,
+                    read: false,
+                },
+            );
         }
 
-        sessions[session_index].updated_at = now_millis();
+        messages.truncate(1000);
+        sessions[session_index].updated_at = now;
         sort_sessions(&mut sessions);
         write_json(&paths.lan_share_files.files, &json!(files)).await?;
+        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
         write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
     }
 
@@ -363,19 +491,21 @@ pub async fn get_state(
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
 ) -> Result<Value, ManagerError> {
-    let (files, devices, mut sessions, messages) = {
+    let (files, devices, mut sessions, groups, messages) = {
         let _storage = registry.storage.lock().await;
         let files = read_array::<LanShareFile>(&paths.lan_share_files.files)?;
         let devices = read_array::<LanShareDevice>(&paths.lan_share_files.devices)?;
         let mut sessions = read_array::<LanShareSession>(&paths.lan_share_files.sessions)?;
+        let groups = read_array::<LanShareGroup>(&paths.lan_share_files.groups)?;
         let messages = read_array::<LanShareMessage>(&paths.lan_share_files.messages)?;
 
         fill_session_ips(paths, &devices, &mut sessions).await?;
-        (files, devices, sessions, messages)
+        (files, devices, sessions, groups, messages)
     };
     sort_sessions(&mut sessions);
     let runtime = registry.inner.lock().await;
     let online_device_ids = runtime.clients.keys().cloned().collect::<Vec<_>>();
+    let access_url = runtime.access_url.clone();
     let devices = devices
         .into_iter()
         .map(|device| {
@@ -388,6 +518,44 @@ pub async fn get_state(
                 "firstSeenAt": device.first_seen_at,
                 "lastSeenAt": device.last_seen_at,
                 "online": online_device_ids.contains(&device.id)
+            })
+        })
+        .collect::<Vec<_>>();
+    let groups = groups
+        .into_iter()
+        .map(|group| {
+            let invite_url = group_invite_url(&access_url, &group.invite_code);
+            let qr_svg = if invite_url.is_empty() {
+                String::new()
+            } else {
+                qr_svg(&invite_url).unwrap_or_default()
+            };
+            let members = group
+                .members
+                .into_iter()
+                .map(|member| {
+                    json!({
+                        "deviceId": member.device_id,
+                        "deviceName": member.device_name,
+                        "ip": member.ip,
+                        "joinedAt": member.joined_at,
+                        "lastSeenAt": member.last_seen_at,
+                        "active": member.active,
+                        "online": online_device_ids.contains(&member.device_id)
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            json!({
+                "id": group.id,
+                "name": group.name,
+                "inviteCode": group.invite_code,
+                "inviteUrl": invite_url,
+                "qrSvg": qr_svg,
+                "messageVisibility": group.message_visibility,
+                "createdAt": group.created_at,
+                "updatedAt": group.updated_at,
+                "members": members
             })
         })
         .collect::<Vec<_>>();
@@ -409,6 +577,7 @@ pub async fn get_state(
         "files": files,
         "devices": devices,
         "sessions": sessions,
+        "groups": groups,
         "messages": messages
     })))
 }
@@ -496,11 +665,17 @@ pub async fn list_messages(
         read_array(&paths.lan_share_files.messages)?
     };
 
+    let session_scope_ids = if session_id.is_empty() {
+        Vec::new()
+    } else {
+        visible_session_ids_for_session(paths, &session_id)?
+    };
+
     messages.retain(|message| {
         let matches_keyword =
             keyword.is_empty() || message.content.to_lowercase().contains(&keyword);
         let matches_device = device_id.is_empty() || message.device_id == device_id;
-        let matches_session = session_id.is_empty() || message.session_id == session_id;
+        let matches_session = session_id.is_empty() || session_scope_ids.contains(&message.session_id);
         let matches_time = message.created_at >= from && (to == 0 || message.created_at <= to);
 
         matches_keyword && matches_device && matches_session && matches_time
@@ -630,6 +805,196 @@ pub async fn delete_device_history(
         write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
         write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
         write_json(&paths.lan_share_files.files, &json!(files)).await?;
+    }
+
+    get_state(registry, paths).await
+}
+
+pub async fn create_group(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let name = normalize_group_name(&string_value(payload.get("name")));
+    let message_visibility =
+        normalize_message_visibility(&string_value(payload.get("messageVisibility")));
+    let now = now_millis();
+    let group_id = create_id("group");
+    let session = LanShareSession {
+        id: create_id("session"),
+        device_id: String::new(),
+        device_name: "群聊".to_string(),
+        ip: String::new(),
+        mode: "group".to_string(),
+        group_id: group_id.clone(),
+        group_name: name.clone(),
+        message_visibility: message_visibility.clone(),
+        joined_at: now,
+        created_at: now,
+        updated_at: now,
+    };
+    let group = LanShareGroup {
+        id: group_id,
+        name,
+        invite_code: create_invite_code(),
+        message_visibility,
+        created_at: now,
+        updated_at: now,
+        members: Vec::new(),
+    };
+
+    {
+        let _storage = registry.storage.lock().await;
+        let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
+        let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+
+        groups.insert(0, group.clone());
+        sessions.insert(0, session.clone());
+        sort_sessions(&mut sessions);
+        write_json(&paths.lan_share_files.groups, &json!(groups)).await?;
+        write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
+    }
+
+    let mut state = get_state(registry, paths).await?;
+    state["data"]["currentSession"] = json!(session);
+    Ok(state)
+}
+
+pub async fn update_group(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let group_id = string_value(payload.get("groupId"));
+    let name = normalize_group_name(&string_value(payload.get("name")));
+    let message_visibility =
+        normalize_message_visibility(&string_value(payload.get("messageVisibility")));
+
+    if group_id.is_empty() {
+        return Err(ManagerError::System("群聊不能为空。".to_string()));
+    }
+
+    {
+        let _storage = registry.storage.lock().await;
+        let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
+        let Some(group) = groups.iter_mut().find(|group| group.id == group_id) else {
+            return Err(ManagerError::System("群聊不存在。".to_string()));
+        };
+
+        group.name = name.clone();
+        group.message_visibility = message_visibility.clone();
+        group.updated_at = now_millis();
+
+        let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+        for session in sessions.iter_mut().filter(|session| session.group_id == group_id) {
+            session.group_name = name.clone();
+            session.message_visibility = message_visibility.clone();
+            session.updated_at = now_millis();
+        }
+
+        write_json(&paths.lan_share_files.groups, &json!(groups)).await?;
+        write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
+    }
+
+    get_state(registry, paths).await
+}
+
+pub async fn remove_group_member(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let group_id = string_value(payload.get("groupId"));
+    let device_id = string_value(payload.get("deviceId"));
+
+    if group_id.is_empty() || device_id.is_empty() {
+        return Err(ManagerError::System("群聊和成员不能为空。".to_string()));
+    }
+
+    {
+        let _storage = registry.storage.lock().await;
+        let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
+        let Some(group) = groups.iter_mut().find(|group| group.id == group_id) else {
+            return Err(ManagerError::System("群聊不存在。".to_string()));
+        };
+
+        group.members.retain(|member| member.device_id != device_id);
+        group.updated_at = now_millis();
+
+        let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+        sessions.retain(|session| {
+            !(session.group_id == group_id
+                && session.device_id == device_id
+                && session.mode == "group")
+        });
+
+        write_json(&paths.lan_share_files.groups, &json!(groups)).await?;
+        write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
+    }
+
+    get_state(registry, paths).await
+}
+
+pub async fn delete_group(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let group_id = string_value(payload.get("groupId"));
+
+    if group_id.is_empty() {
+        return Err(ManagerError::System("群聊不能为空。".to_string()));
+    }
+
+    {
+        let _storage = registry.storage.lock().await;
+        let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
+        let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
+        let group_session_ids = sessions
+            .iter()
+            .filter(|session| session.group_id == group_id)
+            .map(|session| session.id.clone())
+            .collect::<Vec<_>>();
+
+        groups.retain(|group| group.id != group_id);
+        sessions.retain(|session| session.group_id != group_id);
+        messages.retain(|message| !group_session_ids.contains(&message.session_id));
+        files.retain(|file| !group_session_ids.contains(&file.session_id));
+
+        write_json(&paths.lan_share_files.groups, &json!(groups)).await?;
+        write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
+        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
+        write_json(&paths.lan_share_files.files, &json!(files)).await?;
+    }
+
+    get_state(registry, paths).await
+}
+
+pub async fn clear_group_messages(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let group_id = string_value(payload.get("groupId"));
+
+    if group_id.is_empty() {
+        return Err(ManagerError::System("群聊不能为空。".to_string()));
+    }
+
+    {
+        let _storage = registry.storage.lock().await;
+        let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        let group_session_ids = sessions
+            .iter()
+            .filter(|session| session.group_id == group_id)
+            .map(|session| session.id.clone())
+            .collect::<Vec<_>>();
+
+        messages.retain(|message| !group_session_ids.contains(&message.session_id));
+        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
     }
 
     get_state(registry, paths).await
@@ -814,46 +1179,60 @@ fn mobile_page_html() -> String {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>设备快传</title>
   <style>
+    :root { --bg: #edf3f8; --panel: #ffffff; --panel-soft: #f7fafc; --line: #d8e3ee; --line-strong: #bed0e2; --text: #142033; --muted: #738195; --primary: #256aa8; --primary-soft: #eaf4ff; --success: #dff5e9; --shadow: 0 12px 34px rgba(38, 62, 88, 0.08); }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
-    body { min-height: 100vh; margin: 0; background: #eef2f7; color: #172033; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
+    body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 20% 0%, #f8fbff 0, var(--bg) 42%, #e8eff6 100%); color: var(--text); font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
     button, input { font: inherit; }
     button { cursor: pointer; }
     .page-shell { display: flex; height: 100vh; min-height: 0; flex-direction: column; }
-    .page-head { position: sticky; top: 0; z-index: 4; display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #dbe4ee; background: rgba(255, 255, 255, 0.96); backdrop-filter: blur(10px); }
-    .page-title { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-    .page-title strong { color: #172033; font-size: 19px; line-height: 1.2; }
-    .page-title span { overflow: hidden; color: #697789; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-    .page-badge { display: inline-flex; height: 28px; align-items: center; justify-content: center; padding: 0 9px; border: 1px solid #c7d5e4; border-radius: 999px; background: #f8fbff; color: #315f8f; font-size: 12px; font-weight: 800; }
+    .page-head { position: sticky; top: 0; z-index: 4; display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid rgba(216, 227, 238, 0.72); background: rgba(247, 251, 255, 0.94); backdrop-filter: blur(14px); box-shadow: 0 8px 28px rgba(35, 55, 80, 0.06); }
+    .page-title { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+    .page-title strong { color: var(--text); font-size: 20px; line-height: 1.15; letter-spacing: 0; }
+    .page-title span { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .page-badge { display: inline-flex; height: 30px; flex: none; align-items: center; justify-content: center; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 999px; background: #ffffff; color: var(--primary); font-size: 12px; font-weight: 800; box-shadow: 0 6px 16px rgba(37, 106, 168, 0.08); }
     .page-main { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: hidden; padding: 12px; }
-    .card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid #dbe4ee; border-radius: 8px; background: #ffffff; box-shadow: 0 8px 22px rgba(35, 55, 80, 0.05); }
+    .card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid rgba(216, 227, 238, 0.92); border-radius: 8px; background: rgba(255, 255, 255, 0.96); box-shadow: var(--shadow); }
     .device-card { flex: none; }
     .content-shell { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: hidden; }
-    .view-tabs { display: flex; flex: none; gap: 8px; padding: 4px; border: 1px solid #dbe4ee; border-radius: 8px; background: #f7fafd; }
-    .view-tab { display: inline-flex; height: 36px; flex: 1; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #607089; font-size: 14px; font-weight: 800; }
-    .view-tab.active { border-color: #aac4df; background: #ffffff; color: #244f7c; box-shadow: 0 5px 14px rgba(35, 55, 80, 0.08); }
+    .content-detail { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: hidden; }
+    .content-detail.hidden { display: none; }
+    .view-tabs { display: flex; flex: none; gap: 6px; padding: 4px; border: 1px solid rgba(198, 213, 228, 0.9); border-radius: 8px; background: rgba(247, 250, 253, 0.9); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8); }
+    .view-tab, .mode-tab { display: inline-flex; height: 34px; flex: 1; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #5f6f83; font-size: 14px; font-weight: 800; }
+    .view-tab.active, .mode-tab.active { border-color: var(--line-strong); background: #ffffff; color: var(--primary); box-shadow: 0 8px 18px rgba(37, 106, 168, 0.12); }
     .view-panel { display: none; min-height: 0; flex: 1; }
     .view-panel.active { display: flex; }
-    .card-head { display: flex; min-height: 48px; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #edf2f7; background: #fbfcfe; }
-    .card-head strong { color: #172033; font-size: 15px; }
-    .card-head span { color: #8793a4; font-size: 12px; }
-    .device-row { display: flex; gap: 8px; padding: 12px; }
-    .field-input { min-width: 0; height: 38px; flex: 1; padding: 0 10px; border: 1px solid #cbd6e2; border-radius: 7px; background: #ffffff; color: #172033; font-size: 14px; }
-    .text-button, .icon-button { display: inline-flex; height: 36px; align-items: center; justify-content: center; gap: 5px; border: 1px solid #c7d5e4; border-radius: 7px; background: #f8fbff; color: #244f7c; font-size: 13px; font-weight: 800; text-decoration: none; }
-    .primary-button { border-color: #2f6fa9; background: #2f6fa9; color: #ffffff; }
+    .card-head { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-bottom: 1px solid rgba(237, 242, 247, 0.95); background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%); }
+    .card-head strong { color: var(--text); font-size: 15px; }
+    .card-head span { color: var(--muted); font-size: 12px; }
+    .device-row { display: flex; gap: 8px; padding: 10px 12px; }
+    .group-list-view { display: none; min-height: 0; flex: 1; }
+    .group-list-view.active { display: flex; }
+    .group-join-row { display: flex; flex: none; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(237, 242, 247, 0.95); background: var(--panel-soft); }
+    .group-session-list { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 10px; overflow: auto; padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
+    .group-session-item { display: flex; width: 100%; min-height: 64px; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border: 1px solid #d7e4f0; border-radius: 8px; background: #ffffff; color: var(--text); text-align: left; box-shadow: 0 8px 18px rgba(38, 62, 88, 0.05); }
+    .group-session-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+    .group-session-name { overflow: hidden; font-size: 14px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .group-session-meta { color: var(--muted); font-size: 12px; }
+    .field-input { min-width: 0; height: 36px; flex: 1; padding: 0 10px; border: 1px solid #cbd8e6; border-radius: 7px; background: #ffffff; color: var(--text); font-size: 14px; outline: none; box-shadow: inset 0 1px 2px rgba(38, 62, 88, 0.03); }
+    .field-input:focus { border-color: #8ab5dc; box-shadow: 0 0 0 3px rgba(37, 106, 168, 0.1); }
+    .text-button, .icon-button { display: inline-flex; height: 36px; flex: none; align-items: center; justify-content: center; gap: 5px; border: 1px solid #c7d5e4; border-radius: 7px; background: #ffffff; color: var(--primary); font-size: 13px; font-weight: 800; text-decoration: none; box-shadow: 0 4px 12px rgba(38, 62, 88, 0.05); }
+    .text-button.group-back { display: none; flex: none; min-width: 52px; padding: 0 8px; }
+    .text-button.group-back.active { display: inline-flex; }
+    .primary-button { border-color: var(--primary); background: var(--primary); color: #ffffff; box-shadow: 0 8px 18px rgba(37, 106, 168, 0.2); }
     .file-list, .message-list { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: auto; }
-    .file-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid #edf2f7; }
+    .file-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid #edf2f7; background: #ffffff; }
     .file-item:last-child { border-bottom: 0; }
     .file-main { min-width: 0; flex: 1; }
-    .file-name { display: block; overflow: hidden; color: #172033; font-size: 14px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-    .file-meta { display: block; margin-top: 4px; color: #748195; font-size: 12px; }
+    .file-name { display: block; overflow: hidden; color: var(--text); font-size: 14px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .file-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
     .file-actions { display: flex; flex: none; gap: 6px; }
-    .message-list { padding: 12px; gap: 9px; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
-    .message { display: flex; max-width: 84%; flex-direction: column; gap: 5px; padding: 9px 11px; border: 0; border-radius: 8px; background: #eef4fb; color: #172033; font-size: 14px; line-height: 1.45; text-align: left; box-shadow: 0 6px 18px rgba(35, 55, 80, 0.06); }
-    .message.me { align-self: flex-end; background: #dff3e7; }
-    .message small { color: #708197; font-size: 11px; }
-    .composer { display: flex; gap: 8px; padding: 10px; border-top: 1px solid #edf2f7; background: #ffffff; }
-    .empty { padding: 26px 12px; color: #748195; text-align: center; }
+    .message-list { padding: 12px; gap: 10px; background: linear-gradient(180deg, #fbfdff 0%, #ffffff 44%, #f5f9fd 100%); }
+    .message { display: flex; max-width: 82%; min-width: 96px; flex-direction: column; gap: 6px; padding: 10px 11px; border: 0; border-radius: 8px; background: #eef5fc; color: var(--text); font-size: 14px; line-height: 1.45; text-align: left; box-shadow: 0 8px 22px rgba(38, 62, 88, 0.08); }
+    .message.me { align-self: flex-end; background: var(--success); box-shadow: 0 8px 22px rgba(34, 126, 82, 0.09); }
+    .message small { color: #6f8095; font-size: 11px; }
+    .composer { display: flex; flex: none; gap: 8px; padding: 10px; border-top: 1px solid rgba(237, 242, 247, 0.95); background: #ffffff; }
+    .empty { display: flex; min-height: 120px; align-items: center; justify-content: center; padding: 22px 12px; color: var(--muted); line-height: 1.6; text-align: center; }
     .preview-dialog { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center; padding: 14px; }
     .preview-dialog.open { display: flex; }
     .preview-overlay { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.42); }
@@ -889,21 +1268,37 @@ fn mobile_page_html() -> String {
       </div>
     </section>
       <section class="content-shell">
-        <nav class="view-tabs" aria-label="设备快传详情">
-          <button class="view-tab active" data-view="messages" type="button">消息</button>
-          <button class="view-tab" data-view="files" type="button">共享文件</button>
+        <nav class="view-tabs" aria-label="设备快传模式">
+          <button class="mode-tab active" data-mode="direct" type="button">单聊</button>
+          <button class="mode-tab" data-mode="group" type="button">群聊</button>
         </nav>
-        <section id="messagesView" class="card view-panel active">
-          <div class="card-head"><strong>消息</strong><button id="createSession" class="text-button" type="button">新会话</button></div>
-          <div id="messages" class="message-list" aria-label="点击消息可复制"></div>
-          <div class="composer">
-            <input id="messageInput" class="field-input" placeholder="输入消息" />
-            <button id="sendMessage" class="text-button primary-button" type="button">发送</button>
+        <section id="groupListView" class="card group-list-view">
+          <div class="card-head"><strong>已加入群聊</strong><span>点击群聊进入消息和共享文件</span></div>
+          <div class="group-join-row">
+            <input id="inviteCode" class="field-input" maxlength="16" placeholder="输入群邀请码" />
+            <button id="joinGroup" class="text-button" type="button">加入</button>
           </div>
+          <div id="groups" class="group-session-list"></div>
         </section>
-        <section id="filesView" class="card view-panel">
-          <div class="card-head"><strong>共享文件</strong><button id="refreshFiles" class="text-button" type="button">刷新</button></div>
-          <div id="files" class="file-list"><div class="empty">正在读取文件列表</div></div>
+        <section id="detailView" class="content-detail">
+          <nav class="view-tabs" aria-label="设备快传详情">
+            <button id="backGroups" class="text-button group-back" type="button" title="返回群列表">返回</button>
+            <button class="view-tab active" data-view="messages" type="button">消息</button>
+            <button class="view-tab" data-view="files" type="button">共享文件</button>
+            <button id="leaveGroup" class="text-button group-back" type="button" title="退出群聊">退出</button>
+          </nav>
+          <section id="messagesView" class="card view-panel active">
+            <div class="card-head"><strong id="messagesTitle">消息</strong><button id="createSession" class="text-button" type="button">新会话</button></div>
+            <div id="messages" class="message-list" aria-label="点击消息可复制"></div>
+            <div class="composer">
+              <input id="messageInput" class="field-input" placeholder="输入消息" />
+              <button id="sendMessage" class="text-button primary-button" type="button">发送</button>
+            </div>
+          </section>
+          <section id="filesView" class="card view-panel">
+            <div class="card-head"><strong id="filesTitle">共享文件</strong><button id="refreshFiles" class="text-button" type="button">刷新</button></div>
+            <div id="files" class="file-list"><div class="empty">正在读取文件列表</div></div>
+          </section>
         </section>
       </section>
     </main>
@@ -928,12 +1323,23 @@ fn mobile_page_html() -> String {
     window.__LAN_SHARE_APP__ = true;
     const query = new URLSearchParams(location.search);
     const token = query.get("token") || "";
+    const initialInviteCode = query.get("invite") || "";
     const statusEl = document.getElementById("status");
     const filesEl = document.getElementById("files");
     const messagesEl = document.getElementById("messages");
     const inputEl = document.getElementById("messageInput");
     const deviceNameEl = document.getElementById("deviceName");
+    const inviteCodeEl = document.getElementById("inviteCode");
+    const groupsEl = document.getElementById("groups");
+    const modeTabs = Array.from(document.querySelectorAll(".mode-tab"));
     const viewTabs = Array.from(document.querySelectorAll(".view-tab"));
+    const groupListViewEl = document.getElementById("groupListView");
+    const detailViewEl = document.getElementById("detailView");
+    const backGroupsEl = document.getElementById("backGroups");
+    const leaveGroupEl = document.getElementById("leaveGroup");
+    const createSessionEl = document.getElementById("createSession");
+    const messagesTitleEl = document.getElementById("messagesTitle");
+    const filesTitleEl = document.getElementById("filesTitle");
     const viewPanels = {
       files: document.getElementById("filesView"),
       messages: document.getElementById("messagesView")
@@ -946,8 +1352,12 @@ fn mobile_page_html() -> String {
     let ws = null;
     let deviceId = "";
     let currentSessionId = "";
+    let currentMode = "direct";
+    let currentGroupId = "";
+    let joinedGroups = [];
     const messageIds = new Set();
     deviceNameEl.value = localStorage.getItem("lanShareDeviceName") || "";
+    inviteCodeEl.value = initialInviteCode;
 
     function formatSize(size) {
       const value = Number(size || 0);
@@ -968,6 +1378,46 @@ fn mobile_page_html() -> String {
       Object.entries(viewPanels).forEach(([name, panel]) => {
         panel.classList.toggle("active", name === view);
       });
+    }
+
+    function activeGroup() {
+      return joinedGroups.find(group => group.id === currentGroupId || group.sessionId === currentSessionId) || null;
+    }
+
+    function renderMode() {
+      const inGroupList = currentMode === "group" && !currentGroupId;
+      modeTabs.forEach(tab => {
+        tab.classList.toggle("active", tab.dataset.mode === currentMode);
+      });
+      groupListViewEl.classList.toggle("active", inGroupList);
+      detailViewEl.classList.toggle("hidden", inGroupList);
+      backGroupsEl.classList.toggle("active", currentMode === "group" && Boolean(currentGroupId));
+      leaveGroupEl.classList.toggle("active", currentMode === "group" && Boolean(currentGroupId));
+      createSessionEl.style.display = currentMode === "direct" ? "inline-flex" : "none";
+      const group = activeGroup();
+      messagesTitleEl.textContent = group ? (group.name || "群消息") + " · 群消息" : "消息";
+      filesTitleEl.textContent = group ? (group.name || "群文件") + " · 群文件" : "共享文件";
+      if (inGroupList) {
+        filesEl.innerHTML = '<div class="empty">请选择群聊后查看共享文件</div>';
+        messagesEl.innerHTML = '<div class="empty">请选择群聊后查看消息</div>';
+      }
+    }
+
+    function switchMode(mode) {
+      currentMode = mode;
+      if (mode === "group") {
+        currentGroupId = "";
+        currentSessionId = "";
+        renderMode();
+        renderGroups();
+        loadGroups().catch(error => setStatus(error.message));
+        return;
+      }
+      currentGroupId = "";
+      currentSessionId = "";
+      renderMode();
+      renderGroups();
+      loadMessages().catch(error => setStatus(error.message));
     }
 
     async function copyMessageText(text) {
@@ -1086,7 +1536,102 @@ fn mobile_page_html() -> String {
       localStorage.setItem("lanShareDeviceName", deviceNameEl.value);
     }
 
+    function renderGroups() {
+      groupsEl.innerHTML = "";
+      if (!joinedGroups.length) {
+        groupsEl.innerHTML = '<div class="empty">还没有加入任何群聊，可以输入邀请码加入</div>';
+        renderMode();
+        return;
+      }
+      for (const group of joinedGroups) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "group-session-item";
+        button.innerHTML = '<span class="group-session-main"><span class="group-session-name"></span><span class="group-session-meta"></span></span><span class="text-button">进入</span>';
+        button.querySelector(".group-session-name").textContent = group.name || "群聊";
+        button.querySelector(".group-session-meta").textContent = "邀请码 " + (group.inviteCode || "") + " · " + visibilityText(group.messageVisibility);
+        button.onclick = () => {
+          openGroupSession(group);
+        };
+        groupsEl.appendChild(button);
+      }
+      renderMode();
+    }
+
+    function visibilityText(value) {
+      if (value === "afterJoin") return "仅加入后消息";
+      if (value === "recent10") return "加入前最多 10 条";
+      return "全部历史消息";
+    }
+
+    function openGroupSession(group) {
+      currentMode = "group";
+      currentGroupId = group.id || "";
+      currentSessionId = group.sessionId || "";
+      setActiveView("messages");
+      renderMode();
+      loadMessages().catch(error => setStatus(error.message));
+    }
+
+    async function loadGroups() {
+      joinedGroups = await api("/api/groups?token=" + encodeURIComponent(token) + "&deviceId=" + encodeURIComponent(deviceId));
+      renderGroups();
+    }
+
+    async function joinGroup(inviteCode) {
+      const code = String(inviteCode || inviteCodeEl.value || "").trim();
+      if (!code) {
+        setStatus("请输入群邀请码");
+        return;
+      }
+      const data = await api("/api/groups/join", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          token,
+          inviteCode: code,
+          deviceId,
+          deviceName: deviceNameEl.value,
+          userAgent: navigator.userAgent
+        })
+      });
+      deviceId = data.device?.id || deviceId;
+      currentMode = "group";
+      currentGroupId = data.group?.id || "";
+      currentSessionId = data.currentSession?.id || currentSessionId;
+      await loadGroups();
+      await loadMessages();
+      setStatus("已加入群聊 " + (data.group?.name || ""));
+    }
+
+    async function leaveCurrentGroup() {
+      const group = joinedGroups.find(item => item.sessionId === currentSessionId);
+      if (!group) {
+        setStatus("请先选择要退出的群聊");
+        return;
+      }
+      await api("/api/groups/leave", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          token,
+          groupId: group.id,
+          deviceId
+        })
+      });
+      currentMode = "group";
+      currentGroupId = "";
+      currentSessionId = "";
+      await loadGroups();
+      renderMode();
+      setStatus("已退出群聊 " + (group.name || ""));
+    }
+
     async function loadFiles() {
+      if (currentMode === "group" && !currentGroupId) {
+        filesEl.innerHTML = '<div class="empty">请选择群聊后查看共享文件</div>';
+        return;
+      }
       const files = await api("/api/files?token=" + encodeURIComponent(token) + "&sessionId=" + encodeURIComponent(currentSessionId));
       filesEl.innerHTML = "";
       if (!files.length) {
@@ -1107,6 +1652,11 @@ fn mobile_page_html() -> String {
     }
 
     async function loadMessages() {
+      if (currentMode === "group" && !currentGroupId) {
+        messagesEl.innerHTML = '<div class="empty">请选择群聊后查看消息</div>';
+        await loadFiles();
+        return;
+      }
       const data = await api("/api/messages?token=" + encodeURIComponent(token) + "&deviceId=" + encodeURIComponent(deviceId) + "&sessionId=" + encodeURIComponent(currentSessionId));
       currentSessionId = data.currentSession?.id || currentSessionId;
       messagesEl.innerHTML = "";
@@ -1117,6 +1667,7 @@ fn mobile_page_html() -> String {
       if (!messageIds.size) {
         messagesEl.innerHTML = '<div class="empty">暂无消息，发送一条开始对话</div>';
       }
+      renderMode();
       await loadFiles();
     }
 
@@ -1132,7 +1683,10 @@ fn mobile_page_html() -> String {
         })
       });
       deviceId = data.device?.id || deviceId;
+      currentMode = "direct";
+      currentGroupId = "";
       currentSessionId = data.currentSession?.id || "";
+      renderMode();
       messagesEl.innerHTML = '<div class="empty">新会话已创建，可以开始发送消息</div>';
       messageIds.clear();
       await loadFiles();
@@ -1186,8 +1740,19 @@ fn mobile_page_html() -> String {
     viewTabs.forEach(tab => {
       tab.onclick = () => setActiveView(tab.dataset.view);
     });
+    modeTabs.forEach(tab => {
+      tab.onclick = () => switchMode(tab.dataset.mode);
+    });
     document.getElementById("refreshFiles").onclick = () => loadFiles().catch(error => setStatus(error.message));
     document.getElementById("createSession").onclick = () => createSession().catch(error => setStatus(error.message));
+    document.getElementById("joinGroup").onclick = () => joinGroup().catch(error => setStatus(error.message));
+    backGroupsEl.onclick = () => {
+      currentMode = "group";
+      currentGroupId = "";
+      currentSessionId = "";
+      renderMode();
+    };
+    leaveGroupEl.onclick = () => leaveCurrentGroup().catch(error => setStatus(error.message));
     document.getElementById("closePreview").onclick = closePreview;
     document.getElementById("previewOverlay").onclick = closePreview;
     document.getElementById("sendMessage").onclick = () => {
@@ -1200,9 +1765,10 @@ fn mobile_page_html() -> String {
       if (event.key === "Enter") document.getElementById("sendMessage").click();
     });
 
-    loadFiles().catch(error => setStatus(error.message));
+    renderMode();
     registerDevice()
-      .then(() => Promise.all([loadMessages(), loadFiles()]))
+      .then(() => initialInviteCode ? joinGroup(initialInviteCode) : Promise.resolve())
+      .then(() => Promise.all([loadGroups(), loadMessages()]))
       .then(connectWs)
       .catch(error => setStatus(error.message));
   </script>
@@ -1567,6 +2133,7 @@ fn ensure_session(
             .enumerate()
             .filter(|(_, session)| {
                 session.device_id == device_id
+                    && session.mode != "group"
                     && (ip.is_empty() || session.ip == ip || session.ip.is_empty())
             })
             .max_by_key(|(_, session)| session.updated_at)
@@ -1595,6 +2162,11 @@ fn ensure_session(
         device_id: device_id.to_string(),
         device_name: device_name.to_string(),
         ip: ip.to_string(),
+        mode: "direct".to_string(),
+        group_id: String::new(),
+        group_name: String::new(),
+        message_visibility: default_message_visibility(),
+        joined_at: now,
         created_at: now,
         updated_at: now,
     };
@@ -1662,6 +2234,197 @@ fn find_device_for_session(
         }))
 }
 
+fn visible_session_ids_for_session(
+    paths: &AppPaths,
+    session_id: &str,
+) -> Result<Vec<String>, ManagerError> {
+    if session_id.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+    let Some(session) = sessions.iter().find(|session| session.id == session_id) else {
+        return Ok(vec![session_id.to_string()]);
+    };
+
+    if session.mode != "group" || session.group_id.is_empty() {
+        return Ok(vec![session_id.to_string()]);
+    }
+    let group_id = session.group_id.clone();
+
+    Ok(sessions
+        .into_iter()
+        .filter(|item| item.group_id == group_id)
+        .map(|item| item.id)
+        .collect::<Vec<_>>())
+}
+
+fn group_session_by_id(
+    paths: &AppPaths,
+    session_id: &str,
+) -> Result<Option<LanShareSession>, ManagerError> {
+    if session_id.is_empty() {
+        return Ok(None);
+    }
+
+    let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+
+    Ok(sessions
+        .into_iter()
+        .find(|session| session.id == session_id && session.mode == "group"))
+}
+
+fn find_group_session_by_member_session(
+    paths: &AppPaths,
+    session_id: &str,
+    device_id: &str,
+    device_name: &str,
+    ip: &str,
+) -> Result<Option<LanShareSession>, ManagerError> {
+    if session_id.is_empty() {
+        return Ok(None);
+    }
+
+    let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+    let Some(index) = sessions.iter().position(|session| {
+        session.id == session_id && session.mode == "group" && session.device_id == device_id
+    }) else {
+        return Ok(None);
+    };
+
+    sessions[index].device_name = device_name.to_string();
+    sessions[index].ip = ip.to_string();
+    sessions[index].updated_at = now_millis();
+    let session = sessions[index].clone();
+    sort_sessions(&mut sessions);
+    write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
+    Ok(Some(session))
+}
+
+async fn group_online_targets(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    group_id: &str,
+) -> Result<Vec<(String, mpsc::UnboundedSender<WsOutbound>)>, ManagerError> {
+    let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+    let device_ids = sessions
+        .into_iter()
+        .filter(|session| session.group_id == group_id && !session.device_id.is_empty())
+        .map(|session| session.device_id)
+        .collect::<Vec<_>>();
+    let runtime = registry.inner.lock().await;
+
+    Ok(device_ids
+        .into_iter()
+        .filter_map(|device_id| {
+            runtime
+                .clients
+                .get(&device_id)
+                .cloned()
+                .map(|sender| (device_id, sender))
+        })
+        .collect::<Vec<_>>())
+}
+
+fn group_messages_for_member(
+    messages: &[LanShareMessage],
+    group_session_ids: &[String],
+    session: &LanShareSession,
+) -> Vec<LanShareMessage> {
+    let mut messages = messages
+        .iter()
+        .filter(|message| group_session_ids.contains(&message.session_id))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    messages.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+
+    match session.message_visibility.as_str() {
+        "afterJoin" => messages
+            .into_iter()
+            .filter(|message| message.created_at >= session.joined_at)
+            .collect::<Vec<_>>(),
+        "recent10" => {
+            let keep_from = messages.len().saturating_sub(10);
+
+            messages.into_iter().skip(keep_from).collect::<Vec<_>>()
+        }
+        _ => messages,
+    }
+}
+
+fn upsert_group_session_blocking(
+    paths: &AppPaths,
+    group: &mut LanShareGroup,
+    device: &LanShareDevice,
+    ip: &str,
+) -> Result<LanShareSession, ManagerError> {
+    let now = now_millis();
+    let device_name = device_display_name(device);
+
+    if let Some(member) = group
+        .members
+        .iter_mut()
+        .find(|member| member.device_id == device.id)
+    {
+        member.device_name = device_name.clone();
+        member.ip = ip.to_string();
+        member.last_seen_at = now;
+        member.active = true;
+    } else {
+        group.members.push(LanShareGroupMember {
+            device_id: device.id.clone(),
+            device_name: device_name.clone(),
+            ip: ip.to_string(),
+            joined_at: now,
+            last_seen_at: now,
+            active: true,
+        });
+    }
+
+    group.updated_at = now;
+    let member_joined_at = group
+        .members
+        .iter()
+        .find(|member| member.device_id == device.id)
+        .map(|member| member.joined_at)
+        .unwrap_or(now);
+    let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+
+    if let Some(session) = sessions.iter_mut().find(|session| {
+        session.mode == "group" && session.group_id == group.id && session.device_id == device.id
+    }) {
+        session.device_name = device_name;
+        session.ip = ip.to_string();
+        session.group_name = group.name.clone();
+        session.message_visibility = group.message_visibility.clone();
+        session.updated_at = now;
+        let next_session = session.clone();
+        sort_sessions(&mut sessions);
+        write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
+        return Ok(next_session);
+    }
+
+    let session = LanShareSession {
+        id: create_id("session"),
+        device_id: device.id.clone(),
+        device_name,
+        ip: ip.to_string(),
+        mode: "group".to_string(),
+        group_id: group.id.clone(),
+        group_name: group.name.clone(),
+        message_visibility: group.message_visibility.clone(),
+        joined_at: member_joined_at,
+        created_at: now,
+        updated_at: now,
+    };
+
+    sessions.insert(0, session.clone());
+    sort_sessions(&mut sessions);
+    write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
+    Ok(session)
+}
+
 pub async fn create_session(
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
@@ -1684,6 +2447,11 @@ pub async fn create_session(
             device_id: device_id.to_string(),
             device_name,
             ip: device.ip,
+            mode: "direct".to_string(),
+            group_id: String::new(),
+            group_name: String::new(),
+            message_visibility: default_message_visibility(),
+            joined_at: now,
             created_at: now,
             updated_at: now,
         };
@@ -1783,13 +2551,25 @@ pub async fn append_message(
     let _storage = registry.storage.lock().await;
     let device = find_device_for_session(paths, device_id)?;
     let device_name = device_display_name(&device);
-    let session = ensure_session(
+    let session = if let Some(group_session) = group_session_by_id(paths, &selected_session_id)? {
+        group_session
+    } else if let Some(group_session) = find_group_session_by_member_session(
         paths,
-        device_id,
         &selected_session_id,
+        device_id,
         &device_name,
         &device.ip,
-    )?;
+    )? {
+        group_session
+    } else {
+        ensure_session(
+            paths,
+            device_id,
+            &selected_session_id,
+            &device_name,
+            &device.ip,
+        )?
+    };
     let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
     let message = LanShareMessage {
         id: create_id("message"),
@@ -1852,6 +2632,31 @@ pub async fn send_message(
 
     let target_device_id = string_value(payload.get("deviceId"));
     let target_session_id = string_value(payload.get("sessionId"));
+    if let Some(group_session) = group_session_by_id(paths, &target_session_id)? {
+        let targets = group_online_targets(registry, paths, &group_session.group_id).await?;
+        let stored = append_message(
+            registry,
+            paths,
+            if group_session.device_id.is_empty() {
+                "desktop"
+            } else {
+                &group_session.device_id
+            },
+            &group_session.id,
+            "desktop-to-mobile",
+            &content,
+            !targets.is_empty(),
+        )
+        .await?;
+
+        for (_, sender) in targets {
+            let _ = send_stored_message_to_client(&sender, &stored);
+        }
+
+        emit_message_created(&app, &stored);
+        return Ok(lan_share_response(json!([stored])));
+    }
+
     let targets = {
         let runtime = registry.inner.lock().await;
 
@@ -1918,14 +2723,22 @@ async fn process_http_request(
 ) -> Result<Response<BoxBody>, ManagerError> {
     let path = request.uri().path().to_string();
     let request_token = if request.method() == Method::POST
-        && (path == "/api/devices" || path == "/api/sessions")
+        && (path == "/api/devices"
+            || path == "/api/sessions"
+            || path == "/api/groups/join"
+            || path == "/api/groups/leave")
     {
         String::new()
     } else {
         query_value(request.uri(), "token")
     };
 
-    if request.method() != Method::POST || (path != "/api/devices" && path != "/api/sessions") {
+    if request.method() != Method::POST
+        || (path != "/api/devices"
+            && path != "/api/sessions"
+            && path != "/api/groups/join"
+            && path != "/api/groups/leave")
+    {
         if !is_request_token_valid(&context.registry, &request_token).await {
             return Ok(api_error(
                 StatusCode::UNAUTHORIZED,
@@ -1947,8 +2760,11 @@ async fn process_http_request(
         (&Method::GET, "/api/files/download") => download_file(request.uri(), &context, addr).await,
         (&Method::GET, "/api/files/preview") => preview_file(request.uri(), &context, addr).await,
         (&Method::GET, "/api/messages") => mobile_messages(request.uri(), &context, addr).await,
+        (&Method::GET, "/api/groups") => mobile_groups(request.uri(), &context, addr).await,
         (&Method::POST, "/api/devices") => register_device_request(request, &context, addr).await,
         (&Method::POST, "/api/sessions") => create_mobile_session(request, &context, addr).await,
+        (&Method::POST, "/api/groups/join") => join_mobile_group(request, &context, addr).await,
+        (&Method::POST, "/api/groups/leave") => leave_mobile_group(request, &context, addr).await,
         (&Method::GET, "/ws") => websocket_response(request, context, addr).await,
         _ => Ok(api_error(StatusCode::NOT_FOUND, "请求路径不存在。")),
     }
@@ -1963,11 +2779,12 @@ async fn mobile_files_payload(
         return Ok(json!([]));
     }
 
+    let session_scope_ids = visible_session_ids_for_session(paths, session_id)?;
     let files = {
         let _storage = registry.storage.lock().await;
         read_array::<LanShareFile>(&paths.lan_share_files.files)?
             .into_iter()
-            .filter(|file| file.enabled && file.session_id == session_id)
+            .filter(|file| file.enabled && session_scope_ids.contains(&file.session_id))
             .map(|file| {
                 json!({
                     "id": file.id,
@@ -1992,6 +2809,7 @@ async fn download_file(
     let file_id = query_value(uri, "id");
     let device_id = query_value(uri, "deviceId");
     let session_id = query_value(uri, "sessionId");
+    let session_scope_ids = visible_session_ids_for_session(&context.paths, &session_id)?;
     let file = {
         let _storage = context.registry.storage.lock().await;
         read_array::<LanShareFile>(&context.paths.lan_share_files.files)?
@@ -1999,7 +2817,7 @@ async fn download_file(
             .find(|file| {
                 file.id == file_id
                     && file.enabled
-                    && (session_id.is_empty() || file.session_id == session_id)
+                    && (session_id.is_empty() || session_scope_ids.contains(&file.session_id))
             })
     };
     let Some(file) = file else {
@@ -2045,6 +2863,7 @@ async fn preview_file(
     let file_id = query_value(uri, "id");
     let device_id = query_value(uri, "deviceId");
     let session_id = query_value(uri, "sessionId");
+    let session_scope_ids = visible_session_ids_for_session(&context.paths, &session_id)?;
     let file = {
         let _storage = context.registry.storage.lock().await;
         read_array::<LanShareFile>(&context.paths.lan_share_files.files)?
@@ -2052,7 +2871,7 @@ async fn preview_file(
             .find(|file| {
                 file.id == file_id
                     && file.enabled
-                    && (session_id.is_empty() || file.session_id == session_id)
+                    && (session_id.is_empty() || session_scope_ids.contains(&file.session_id))
             })
     };
     let Some(file) = file else {
@@ -2130,8 +2949,20 @@ async fn mobile_messages(
         let mut messages: Vec<LanShareMessage> =
             read_array(&context.paths.lan_share_files.messages)?;
 
-        messages.retain(|message| message.session_id == session.id);
-        messages.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        if session.mode == "group" {
+            let sessions: Vec<LanShareSession> =
+                read_array(&context.paths.lan_share_files.sessions)?;
+            let group_session_ids = sessions
+                .iter()
+                .filter(|item| item.group_id == session.group_id)
+                .map(|item| item.id.clone())
+                .collect::<Vec<_>>();
+
+            messages = group_messages_for_member(&messages, &group_session_ids, &session);
+        } else {
+            messages.retain(|message| message.session_id == session.id);
+            messages.sort_by(|left, right| left.created_at.cmp(&right.created_at));
+        }
         (session, messages)
     };
     context
@@ -2146,6 +2977,52 @@ async fn mobile_messages(
         "currentSession": session,
         "messages": messages
     })))
+}
+
+async fn mobile_groups(
+    uri: &hyper::Uri,
+    context: &HttpContext,
+    addr: SocketAddr,
+) -> Result<Response<BoxBody>, ManagerError> {
+    let request_ip = client_ip(addr);
+    let requested_device_id = query_value(uri, "deviceId");
+    let device_id = if request_ip.is_empty() {
+        requested_device_id
+    } else {
+        device_id_from_ip(&request_ip)
+    };
+
+    if device_id.is_empty() {
+        return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
+    }
+
+    let groups = {
+        let _storage = context.registry.storage.lock().await;
+        let groups: Vec<LanShareGroup> = read_array(&context.paths.lan_share_files.groups)?;
+        let sessions: Vec<LanShareSession> = read_array(&context.paths.lan_share_files.sessions)?;
+
+        groups
+            .into_iter()
+            .filter_map(|group| {
+                let session = sessions.iter().find(|session| {
+                    session.group_id == group.id
+                        && session.device_id == device_id
+                        && session.mode == "group"
+                })?;
+
+                Some(json!({
+                    "id": group.id,
+                    "name": group.name,
+                    "inviteCode": group.invite_code,
+                    "messageVisibility": group.message_visibility,
+                    "sessionId": session.id,
+                    "joinedAt": session.joined_at
+                }))
+            })
+            .collect::<Vec<_>>()
+    };
+
+    Ok(api_success(json!(groups)))
 }
 
 async fn append_download_record(
@@ -2250,6 +3127,183 @@ async fn create_mobile_session(
         "messages": [],
         "files": []
     })))
+}
+
+async fn join_mobile_group(
+    request: Request<Incoming>,
+    context: &HttpContext,
+    addr: SocketAddr,
+) -> Result<Response<BoxBody>, ManagerError> {
+    let body = request
+        .into_body()
+        .collect()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .to_bytes();
+    let payload: Value = serde_json::from_slice(&body)?;
+    let token = string_value(payload.get("token"));
+
+    if !is_request_token_valid(&context.registry, &token).await {
+        return Ok(api_error(
+            StatusCode::UNAUTHORIZED,
+            "访问已失效，请重新扫码。",
+        ));
+    }
+
+    let invite_code = string_value(payload.get("inviteCode")).to_uppercase();
+
+    if invite_code.is_empty() {
+        return Ok(api_error(StatusCode::BAD_REQUEST, "请输入群邀请码。"));
+    }
+
+    let ip = client_ip(addr);
+    let requested_device_id = string_value(payload.get("deviceId"));
+    let device_id = if ip.is_empty() {
+        requested_device_id
+    } else {
+        device_id_from_ip(&ip)
+    };
+
+    if device_id.is_empty() {
+        return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
+    }
+
+    let device_name = normalize_device_name(&string_value(payload.get("deviceName")));
+    let user_agent = string_value(payload.get("userAgent"));
+    let device = upsert_device(
+        &context.registry,
+        &context.paths,
+        &device_id,
+        &device_name,
+        &user_agent,
+        &ip,
+    )
+    .await?;
+    let (group, session, messages) = {
+        let _storage = context.registry.storage.lock().await;
+        let mut groups: Vec<LanShareGroup> = read_array(&context.paths.lan_share_files.groups)?;
+        let Some(group_index) = groups
+            .iter()
+            .position(|group| group.invite_code.eq_ignore_ascii_case(&invite_code))
+        else {
+            return Ok(api_error(StatusCode::NOT_FOUND, "群邀请码不存在。"));
+        };
+
+        let session = upsert_group_session_blocking(
+            &context.paths,
+            &mut groups[group_index],
+            &device,
+            &ip,
+        )?;
+        let group = groups[group_index].clone();
+        write_json(&context.paths.lan_share_files.groups, &json!(groups)).await?;
+        let all_messages: Vec<LanShareMessage> =
+            read_array(&context.paths.lan_share_files.messages)?;
+        let sessions: Vec<LanShareSession> = read_array(&context.paths.lan_share_files.sessions)?;
+        let group_session_ids = sessions
+            .iter()
+            .filter(|item| item.group_id == group.id)
+            .map(|item| item.id.clone())
+            .collect::<Vec<_>>();
+        let messages = group_messages_for_member(&all_messages, &group_session_ids, &session);
+
+        (group, session, messages)
+    };
+
+    context
+        .registry
+        .inner
+        .lock()
+        .await
+        .active_sessions
+        .insert(device.id.clone(), session.id.clone());
+    emit_state_changed(&context.app, &context.registry, &context.paths).await?;
+
+    Ok(api_success(json!({
+        "device": device,
+        "group": group,
+        "currentSession": session,
+        "messages": messages,
+        "files": []
+    })))
+}
+
+async fn leave_mobile_group(
+    request: Request<Incoming>,
+    context: &HttpContext,
+    addr: SocketAddr,
+) -> Result<Response<BoxBody>, ManagerError> {
+    let body = request
+        .into_body()
+        .collect()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .to_bytes();
+    let payload: Value = serde_json::from_slice(&body)?;
+    let token = string_value(payload.get("token"));
+
+    if !is_request_token_valid(&context.registry, &token).await {
+        return Ok(api_error(
+            StatusCode::UNAUTHORIZED,
+            "访问已失效，请重新扫码。",
+        ));
+    }
+
+    let group_id = string_value(payload.get("groupId"));
+
+    if group_id.is_empty() {
+        return Ok(api_error(StatusCode::BAD_REQUEST, "群聊不能为空。"));
+    }
+
+    let ip = client_ip(addr);
+    let requested_device_id = string_value(payload.get("deviceId"));
+    let device_id = if ip.is_empty() {
+        requested_device_id
+    } else {
+        device_id_from_ip(&ip)
+    };
+
+    if device_id.is_empty() {
+        return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
+    }
+
+    {
+        let _storage = context.registry.storage.lock().await;
+        let mut groups: Vec<LanShareGroup> = read_array(&context.paths.lan_share_files.groups)?;
+        let Some(group) = groups.iter_mut().find(|group| group.id == group_id) else {
+            return Ok(api_error(StatusCode::NOT_FOUND, "群聊不存在。"));
+        };
+
+        group.members.retain(|member| member.device_id != device_id);
+        group.updated_at = now_millis();
+
+        let mut sessions: Vec<LanShareSession> =
+            read_array(&context.paths.lan_share_files.sessions)?;
+        sessions.retain(|session| {
+            !(session.mode == "group"
+                && session.group_id == group_id
+                && session.device_id == device_id)
+        });
+
+        write_json(&context.paths.lan_share_files.groups, &json!(groups)).await?;
+        write_json(&context.paths.lan_share_files.sessions, &json!(sessions)).await?;
+    }
+
+    {
+        let mut runtime = context.registry.inner.lock().await;
+        if runtime
+            .active_sessions
+            .get(&device_id)
+            .and_then(|session_id| group_session_by_id(&context.paths, session_id).ok().flatten())
+            .map(|session| session.group_id == group_id)
+            .unwrap_or(false)
+        {
+            runtime.active_sessions.remove(&device_id);
+        }
+    }
+
+    emit_state_changed(&context.app, &context.registry, &context.paths).await?;
+    Ok(api_success(json!(true)))
 }
 
 async fn register_device_request(
@@ -2436,7 +3490,17 @@ async fn handle_websocket_connection(
             )
             .await?;
 
-            let _ = send_stored_message_to_client(&client_sender, &message);
+            if let Some(group_session) = group_session_by_id(&context.paths, &message.session_id)? {
+                let targets =
+                    group_online_targets(&context.registry, &context.paths, &group_session.group_id)
+                        .await?;
+
+                for (_, sender) in targets {
+                    let _ = send_stored_message_to_client(&sender, &message);
+                }
+            } else {
+                let _ = send_stored_message_to_client(&client_sender, &message);
+            }
             emit_message_created(&context.app, &message);
             emit_state_changed(&context.app, &context.registry, &context.paths).await?;
         }
@@ -2489,7 +3553,7 @@ mod tests {
     use super::{
         activate_session, add_files, append_message, create_file_id, create_id, create_session,
         delete_messages, delete_session, device_id_from_ip, export_files_zip, list_messages,
-        mobile_files_payload, refresh_files, remove_files, string_value, upsert_device,
+        mobile_files_payload, read_array, refresh_files, remove_files, string_value, upsert_device,
         LanShareDevice, LanShareFile, LanShareMessage, LanShareServerRegistry, LanShareSession,
     };
     use crate::core::paths::resolve_app_paths;
@@ -2684,6 +3748,58 @@ mod tests {
     }
 
     #[test]
+    fn empty_mobile_session_id_prefers_direct_session() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let paths = resolve_app_paths(&root);
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
+            super::write_json(
+                &paths.lan_share_files.sessions,
+                &json!([
+                    LanShareSession {
+                        id: "group_session".to_string(),
+                        device_id: "device_1".to_string(),
+                        device_name: "设备一".to_string(),
+                        ip: "192.168.1.8".to_string(),
+                        mode: "group".to_string(),
+                        group_id: "group_1".to_string(),
+                        group_name: "群聊".to_string(),
+                        message_visibility: "all".to_string(),
+                        joined_at: 20,
+                        created_at: 20,
+                        updated_at: 90,
+                    },
+                    LanShareSession {
+                        id: "direct_session".to_string(),
+                        device_id: "device_1".to_string(),
+                        device_name: "设备一".to_string(),
+                        ip: "192.168.1.8".to_string(),
+                        mode: "direct".to_string(),
+                        group_id: String::new(),
+                        group_name: String::new(),
+                        message_visibility: "all".to_string(),
+                        joined_at: 10,
+                        created_at: 10,
+                        updated_at: 30,
+                    }
+                ]),
+            )
+            .await
+            .unwrap();
+
+            let session =
+                super::ensure_session(&paths, "device_1", "", "设备一", "192.168.1.8").unwrap();
+
+            assert_eq!(session.id, "direct_session");
+            assert_eq!(session.mode, "direct");
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
     fn bulk_actions_delete_session_removes_related_records() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id("lan_share_test"));
@@ -2699,6 +3815,11 @@ mod tests {
                         device_id: "device_1".to_string(),
                         device_name: "设备一".to_string(),
                         ip: "192.168.1.8".to_string(),
+                        mode: "direct".to_string(),
+                        group_id: String::new(),
+                        group_name: String::new(),
+                        message_visibility: "all".to_string(),
+                        joined_at: 10,
                         created_at: 10,
                         updated_at: 20,
                     },
@@ -2707,6 +3828,11 @@ mod tests {
                         device_id: "device_1".to_string(),
                         device_name: "设备一".to_string(),
                         ip: "192.168.1.8".to_string(),
+                        mode: "direct".to_string(),
+                        group_id: String::new(),
+                        group_name: String::new(),
+                        message_visibility: "all".to_string(),
+                        joined_at: 30,
                         created_at: 30,
                         updated_at: 40,
                     }
@@ -3100,6 +4226,80 @@ mod tests {
     }
 
     #[test]
+    fn appends_desktop_message_to_group_session_without_new_direct_session() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let paths = resolve_app_paths(&root);
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
+            super::write_json(
+                &paths.lan_share_files.sessions,
+                &json!([
+                    LanShareSession {
+                        id: "group_owner_session".to_string(),
+                        device_id: String::new(),
+                        device_name: "群聊".to_string(),
+                        ip: String::new(),
+                        mode: "group".to_string(),
+                        group_id: "group_1".to_string(),
+                        group_name: "测试群".to_string(),
+                        message_visibility: "all".to_string(),
+                        joined_at: 10,
+                        created_at: 10,
+                        updated_at: 10,
+                    },
+                    LanShareSession {
+                        id: "group_member_session".to_string(),
+                        device_id: "device_1".to_string(),
+                        device_name: "我的设备".to_string(),
+                        ip: "192.168.1.8".to_string(),
+                        mode: "group".to_string(),
+                        group_id: "group_1".to_string(),
+                        group_name: "测试群".to_string(),
+                        message_visibility: "all".to_string(),
+                        joined_at: 20,
+                        created_at: 20,
+                        updated_at: 20,
+                    }
+                ]),
+            )
+            .await
+            .unwrap();
+
+            let registry = LanShareServerRegistry::new();
+            let message = append_message(
+                &registry,
+                &paths,
+                "desktop",
+                "group_owner_session",
+                "desktop-to-mobile",
+                "群聊服务端消息",
+                true,
+            )
+            .await
+            .unwrap();
+            let messages = list_messages(
+                &registry,
+                &paths,
+                json!({ "sessionId": "group_owner_session", "to": 0 }),
+            )
+            .await
+            .unwrap();
+            let sessions = read_array::<LanShareSession>(&paths.lan_share_files.sessions).unwrap();
+
+            assert_eq!(message.session_id, "group_owner_session");
+            assert_eq!(messages["data"][0]["content"], "群聊服务端消息");
+            assert_eq!(sessions.len(), 2);
+            assert!(!sessions
+                .iter()
+                .any(|session| session.mode == "direct" && session.device_id == "desktop"));
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
     fn appends_desktop_message_to_last_activated_session_by_default() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id("lan_share_test"));
@@ -3361,6 +4561,61 @@ mod tests {
     }
 
     #[test]
+    fn adding_files_creates_file_message() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let paths = resolve_app_paths(&root);
+            let shared_file = root.join("shared.txt");
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
+            tokio::fs::write(&shared_file, "hello").await.unwrap();
+            super::write_json(
+                &paths.lan_share_files.sessions,
+                &json!([LanShareSession {
+                    id: "session_1".to_string(),
+                    device_id: "device_1".to_string(),
+                    device_name: "我的设备".to_string(),
+                    ip: "192.168.1.8".to_string(),
+                    mode: "direct".to_string(),
+                    group_id: String::new(),
+                    group_name: String::new(),
+                    message_visibility: "all".to_string(),
+                    joined_at: 10,
+                    created_at: 10,
+                    updated_at: 10,
+                }]),
+            )
+            .await
+            .unwrap();
+
+            let registry = LanShareServerRegistry::new();
+            add_files(
+                &registry,
+                &paths,
+                json!({
+                    "sessionId": "session_1",
+                    "paths": [shared_file.to_string_lossy().to_string()]
+                }),
+            )
+            .await
+            .unwrap();
+            let messages = list_messages(
+                &registry,
+                &paths,
+                json!({ "sessionId": "session_1", "to": 0 }),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(messages["data"][0]["messageType"], "file");
+            assert_eq!(messages["data"][0]["content"], "共享文件：shared.txt（5 B）");
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
     fn desktop_message_to_offline_session_is_kept_for_later_sync() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id("lan_share_test"));
@@ -3498,15 +4753,30 @@ mod service_tests {
     #[test]
     fn mobile_page_defaults_to_message_view_first() {
         let html = mobile_page_html();
+        let direct_mode_index = html.find("data-mode=\"direct\"").unwrap();
+        let group_mode_index = html.find("data-mode=\"group\"").unwrap();
         let messages_tab_index = html.find("data-view=\"messages\"").unwrap();
         let files_tab_index = html.find("data-view=\"files\"").unwrap();
         let messages_panel_index = html.find("id=\"messagesView\"").unwrap();
         let files_panel_index = html.find("id=\"filesView\"").unwrap();
 
+        assert!(direct_mode_index < group_mode_index);
         assert!(messages_tab_index < files_tab_index);
         assert!(messages_panel_index < files_panel_index);
+        assert!(html.contains("class=\"mode-tab active\" data-mode=\"direct\""));
         assert!(html.contains("class=\"view-tab active\" data-view=\"messages\""));
         assert!(html.contains("id=\"messagesView\" class=\"card view-panel active\""));
+    }
+
+    #[test]
+    fn mobile_page_group_mode_starts_from_joined_group_records() {
+        let html = mobile_page_html();
+
+        assert!(html.contains("id=\"groupListView\""));
+        assert!(html.contains("已加入群聊"));
+        assert!(html.contains("openGroupSession"));
+        assert!(html.contains("返回群列表"));
+        assert!(html.contains("currentMode === \"group\" && !currentGroupId"));
     }
 
     #[test]
@@ -3516,7 +4786,7 @@ mod service_tests {
         assert!(html.contains("class=\"page-shell\""));
         assert!(html.contains("class=\"card device-card\""));
         assert!(html.contains("class=\"content-shell\""));
-        assert!(html.contains("flex-wrap: wrap"));
+        assert!(html.contains("class=\"content-detail\""));
         assert!(!html.contains("@media"));
         assert!(!html.contains("@container"));
     }
