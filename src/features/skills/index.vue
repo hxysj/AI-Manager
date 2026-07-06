@@ -133,61 +133,61 @@
         </label>
         <div class="skills-view-batch-actions">
           <button
+            v-if="canBatchInstall"
             class="skills-view-button"
             type="button"
-            :disabled="!selectedSkillIds.length"
-            @click="openInstallDialog()"
+            @click="openInstallDialog(batchInstallSkillIds)"
           >
             <Power :size="16" />
             一键安装
           </button>
           <button
+            v-if="canBatchUninstall"
             class="skills-view-button"
             type="button"
-            :disabled="!selectedSkillIds.length"
-            @click="emitBatchAction('uninstall-all')"
+            @click="emitBatchAction('uninstall-all', batchUninstallSkillIds)"
           >
             <PowerOff :size="16" />
             一键卸载
           </button>
           <button
+            v-if="canBatchDisable"
             class="skills-view-button"
             type="button"
-            :disabled="!selectedSkillIds.length"
-            @click="emitBatchAction('disable')"
+            @click="emitBatchAction('disable', batchDisableSkillIds)"
           >
             <Ban :size="16" />
             一键禁用
           </button>
           <button
+            v-if="canBatchEnable"
             class="skills-view-button"
             type="button"
-            :disabled="!selectedSkillIds.length"
-            @click="emitBatchAction('enable')"
+            @click="emitBatchAction('enable', batchEnableSkillIds)"
           >
             <RotateCcw :size="16" />
             一键恢复
           </button>
           <button
+            v-if="hasSelectedSkills && skillGroupsView.length"
             class="skills-view-button"
             type="button"
-            :disabled="!selectedSkillIds.length || !skillGroupsView.length"
             @click="openMoveGroupDialog"
           >
             移动到分组
           </button>
           <button
+            v-if="canBatchRemoveFromGroup"
             class="skills-view-button"
             type="button"
-            :disabled="!selectedSkillIds.length"
             @click="removeSelectedFromGroup"
           >
             移出分组
           </button>
           <button
+            v-if="hasSelectedSkills"
             class="skills-view-button danger"
             type="button"
-            :disabled="!selectedSkillIds.length"
             @click="deleteSelectedSkills"
           >
             <Trash2 :size="16" />
@@ -615,6 +615,60 @@ const selectedSkillNames = computed(() => {
     .filter(Boolean)
 })
 
+const selectedSkills = computed(() => {
+  return selectedSkillIds.value
+    .map((skillId) => skillById.value.get(skillId))
+    .filter(Boolean)
+})
+
+const hasSelectedSkills = computed(() => {
+  return Boolean(selectedSkills.value.length)
+})
+
+const batchInstallSkillIds = computed(() => {
+  return selectedSkills.value
+    .filter((skill) => !skill.disabled && hasInstallableTarget(skill))
+    .map((skill) => skill.id)
+})
+
+const batchUninstallSkillIds = computed(() => {
+  return selectedSkills.value
+    .filter((skill) => hasInstalledTarget(skill))
+    .map((skill) => skill.id)
+})
+
+const batchDisableSkillIds = computed(() => {
+  return selectedSkills.value
+    .filter((skill) => !skill.disabled)
+    .map((skill) => skill.id)
+})
+
+const batchEnableSkillIds = computed(() => {
+  return selectedSkills.value
+    .filter((skill) => skill.disabled)
+    .map((skill) => skill.id)
+})
+
+const canBatchInstall = computed(() => {
+  return Boolean(batchInstallSkillIds.value.length)
+})
+
+const canBatchUninstall = computed(() => {
+  return Boolean(batchUninstallSkillIds.value.length)
+})
+
+const canBatchDisable = computed(() => {
+  return Boolean(batchDisableSkillIds.value.length)
+})
+
+const canBatchEnable = computed(() => {
+  return Boolean(batchEnableSkillIds.value.length)
+})
+
+const canBatchRemoveFromGroup = computed(() => {
+  return selectedSkills.value.some((skill) => skillGroupBySkillId.value.has(skill.id))
+})
+
 const skillGroupBySkillId = computed(() => {
   const groupMap = new Map()
 
@@ -778,6 +832,22 @@ function resolveSkillNames(skillIds) {
   return skillIds
     .map((skillId) => skillById.value.get(skillId)?.name)
     .filter(Boolean)
+}
+
+function targetInstallState(skill, cli) {
+  return skill.installStates?.[cli.id]?.state || "not-installed"
+}
+
+function hasInstallableTarget(skill) {
+  return installedCliTargets.value.some((cli) =>
+    ["not-installed", "broken-link"].includes(targetInstallState(skill, cli))
+  )
+}
+
+function hasInstalledTarget(skill) {
+  return installedCliTargets.value.some(
+    (cli) => targetInstallState(skill, cli) === "installed"
+  )
 }
 
 function emitBatchAction(
