@@ -1,6 +1,6 @@
 use crate::api::{
     app, app_logs, codex_account, data, git_tool, lan_share, proxy, repos, rules, runtime_provider,
-    sessions, settings, skills, system, translation, usage,
+    sessions, settings, skills, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
@@ -24,6 +24,7 @@ pub struct ManagerState {
     codex_login_cache: codex_account::CodexLoginCache,
     proxy_server_registry: proxy::ProxyServerRegistry,
     lan_share_registry: lan_share::LanShareServerRegistry,
+    toolbox_server_registry: tools::ToolboxServerRegistry,
     state: Value,
 }
 
@@ -142,6 +143,7 @@ impl ManagerState {
             codex_login_cache: codex_account::CodexLoginCache::new(),
             proxy_server_registry: proxy::ProxyServerRegistry::new(),
             lan_share_registry: lan_share::LanShareServerRegistry::new(),
+            toolbox_server_registry: tools::ToolboxServerRegistry::new(),
             state,
         })
     }
@@ -1490,6 +1492,9 @@ impl ManagerState {
             "system:save-file" => system::save_file(&app, payload),
             "system:open-path" => system::open_path(&app, payload),
             "system:open-external" => system::open_external(&app, payload),
+            "tools:open-toolbox" => {
+                tools::open_toolbox(&app, &mut self.toolbox_server_registry).await
+            }
             "translation:translate" => {
                 translation::translate_text(
                     &self.user_data_path,

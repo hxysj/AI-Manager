@@ -12,5 +12,6 @@ pub mod sessions;
 pub mod settings;
 pub mod skills;
 pub mod system;
+pub mod tools;
 pub mod translation;
 pub mod usage;
