@@ -1,5 +1,8 @@
 <template>
-  <section :class="['usage-view', { 'usage-view-loading-active': pageLoading }]">
+  <section
+    ref="usageReportRef"
+    :class="['usage-view', { 'usage-view-loading-active': pageLoading }]"
+  >
     <div v-if="pageLoading" class="usage-view-loading">
       <RefreshCw class="usage-view-loading-icon" :size="22" />
       <span>正在加载用量数据...</span>
@@ -680,7 +683,7 @@ import {
   Upload,
   X
 } from "lucide-vue-next"
-import { usageApi } from "@/api"
+import { systemApi, usageApi } from "@/api"
 import { createMessage } from "@/utils/message"
 
 echarts.use([
@@ -732,6 +735,7 @@ const pricingPageSize = ref(8)
 const tokenTrendMode = ref("model")
 const usagePieMode = ref("provider")
 const trendModeOverride = ref("")
+const usageReportRef = ref(null)
 const trendChartRef = ref(null)
 const providerPieRef = ref(null)
 let trendChart = null
@@ -895,11 +899,10 @@ const tokenTrendLabel = computed(
       tokenTrendMode.value === "provider" ? "来源" : "模型"
     } · ${trendLabel.value}`
 )
-const tokenTrendEmptyText = computed(
-  () =>
-    tokenTrendMode.value === "provider"
-      ? "暂无 Provider 用量趋势。"
-      : "暂无模型用量趋势。"
+const tokenTrendEmptyText = computed(() =>
+  tokenTrendMode.value === "provider"
+    ? "暂无 Provider 用量趋势。"
+    : "暂无模型用量趋势。"
 )
 const totalLogPages = computed(() =>
   Math.max(1, Math.ceil(logTotalCount.value / logPageSize.value))
@@ -1006,11 +1009,14 @@ watch([dateTimeRange, appType, providerId, requestSource, model], () => {
   loadStats()
 })
 
-watch(() => props.usage, () => {
-  if (!pending.value) {
-    loadStats()
+watch(
+  () => props.usage,
+  () => {
+    if (!pending.value) {
+      loadStats()
+    }
   }
-})
+)
 
 watch(logPageSize, () => {
   if (logPage.value === 1) {
@@ -1886,12 +1892,540 @@ function waitReportFrame() {
   })
 }
 
+async function createUsageReportImageData() {
+  if (!usageReportRef.value) {
+    throw new Error("未找到用量报告内容。")
+  }
+
+  const shouldRestoreExportClass = !document.body.classList.contains(
+    "usage-report-exporting"
+  )
+
+  if (shouldRestoreExportClass) {
+    document.body.classList.add("usage-report-exporting")
+  }
+
+  try {
+    await nextTick()
+    renderCharts()
+    resizeCharts()
+    await waitReportFrame()
+    return await renderUsageReportCanvas()
+  } finally {
+    if (shouldRestoreExportClass) {
+      document.body.classList.remove("usage-report-exporting")
+      await nextTick()
+      resizeCharts()
+    }
+  }
+}
+
+async function renderUsageReportCanvas() {
+  const width = 1180
+  const padding = 36
+  const gap = 18
+  const contentWidth = width - padding * 2
+  const chartWidth = (contentWidth - gap) / 2
+  const chartHeight = 310
+  const providerItems = createReportProviderItems()
+  const modelItems = createReportModelItems()
+  const providerListHeight = createReportListHeight(providerItems)
+  const modelListHeight = createReportListHeight(modelItems)
+  const height =
+    padding +
+    76 +
+    42 +
+    118 +
+    gap +
+    chartHeight +
+    gap +
+    Math.max(providerListHeight, modelListHeight) +
+    padding
+  const ratio = createExportPixelRatio(width, height)
+  const canvas = document.createElement("canvas")
+  const context = canvas.getContext("2d")
+
+  if (!context) {
+    throw new Error("用量报告图片画布创建失败。")
+  }
+
+  const [trendImage, pieImage] = await Promise.all([
+    loadReportCanvasImage(trendChartRef.value),
+    loadReportCanvasImage(providerPieRef.value)
+  ])
+
+  canvas.width = Math.ceil(width * ratio)
+  canvas.height = Math.ceil(height * ratio)
+  context.scale(ratio, ratio)
+  context.fillStyle = "#f5f7fb"
+  context.fillRect(0, 0, width, height)
+
+  let y = padding
+
+  drawReportHeader(context, padding, y, contentWidth)
+  y += 76
+  drawReportFilters(context, padding, y, contentWidth)
+  y += 42
+  drawReportMetrics(context, padding, y, contentWidth, gap)
+  y += 118 + gap
+  drawReportChart(
+    context,
+    padding,
+    y,
+    chartWidth,
+    chartHeight,
+    "Token 趋势",
+    tokenTrendLabel.value,
+    trendImage,
+    tokenTrendEmptyText.value
+  )
+  drawReportChart(
+    context,
+    padding + chartWidth + gap,
+    y,
+    chartWidth,
+    chartHeight,
+    usagePieTitle.value,
+    usagePieCountLabel.value,
+    pieImage,
+    usagePieEmptyText.value
+  )
+  y += chartHeight + gap
+  drawReportList(
+    context,
+    padding,
+    y,
+    chartWidth,
+    providerListHeight,
+    "Provider 统计",
+    `${providerStats.value.length} 个来源`,
+    providerItems,
+    "暂无 Provider 统计。"
+  )
+  drawReportList(
+    context,
+    padding + chartWidth + gap,
+    y,
+    chartWidth,
+    modelListHeight,
+    "模型统计",
+    `${modelStats.value.length} 个模型`,
+    modelItems,
+    "暂无模型统计。"
+  )
+
+  return canvas.toDataURL("image/png")
+}
+
+function drawReportHeader(context, x, y, width) {
+  drawReportText(context, "TOKEN USAGE", x, y + 14, {
+    color: "#7a8da8",
+    font: "700 12px Arial"
+  })
+  drawReportText(context, "模型用量统计", x, y + 48, {
+    color: "#17233a",
+    font: "700 30px Arial"
+  })
+  drawReportText(
+    context,
+    `生成时间 ${formatDateTime(Date.now())}`,
+    x + width,
+    y + 44,
+    {
+      align: "right",
+      color: "#6c7d94",
+      font: "600 13px Arial"
+    }
+  )
+}
+
+function drawReportFilters(context, x, y, width) {
+  const filters = [
+    rangeTypeLabel.value,
+    selectedAppLabel.value,
+    selectedProviderLabel.value,
+    selectedRequestSourceLabel.value,
+    selectedModelLabel.value
+  ]
+  let currentX = x
+
+  for (const filter of filters) {
+    const text = fitReportText(context, filter, 190, "600 13px Arial")
+    const itemWidth = Math.min(210, context.measureText(text).width + 26)
+
+    if (currentX + itemWidth > x + width) {
+      break
+    }
+
+    drawReportRoundRect(
+      context,
+      currentX,
+      y,
+      itemWidth,
+      30,
+      15,
+      "#ffffff",
+      "#dce5ef"
+    )
+    drawReportText(context, text, currentX + 13, y + 20, {
+      color: "#476179",
+      font: "600 13px Arial"
+    })
+    currentX += itemWidth + 10
+  }
+}
+
+function drawReportMetrics(context, x, y, width, gap) {
+  const cardWidth = (width - gap * 3) / 4
+  const items = [
+    {
+      label: "真实消耗 Tokens",
+      value: formatNumber(summary.value.actualTokens),
+      note: `新增输入 ${formatNumber(summary.value.inputTokens)}`
+    },
+    {
+      label: "输出 Tokens",
+      value: formatNumber(summary.value.outputTokens),
+      note: `请求 ${formatNumber(summary.value.requestCount)} 次`
+    },
+    {
+      label: "缓存读取",
+      value: formatNumber(summary.value.cacheReadTokens),
+      note: `命中率 ${formatPercent(summary.value.cacheHitRate)}`
+    },
+    {
+      label: "费用估算",
+      value: formatCost(summary.value.totalCostUsd),
+      note: `${displayCurrencyLabel.value} · 汇率 ${formatExchangeRate(exchangeRate.value)}`
+    }
+  ]
+
+  items.forEach((item, index) => {
+    const cardX = x + index * (cardWidth + gap)
+
+    drawReportRoundRect(
+      context,
+      cardX,
+      y,
+      cardWidth,
+      100,
+      14,
+      "#ffffff",
+      "#dde6f0"
+    )
+    drawReportText(context, item.label, cardX + 18, y + 28, {
+      color: "#718197",
+      font: "700 13px Arial"
+    })
+    drawReportText(
+      context,
+      fitReportText(context, item.value, cardWidth - 36, "700 26px Arial"),
+      cardX + 18,
+      y + 62,
+      {
+        color: "#19314d",
+        font: "700 26px Arial"
+      }
+    )
+    drawReportText(
+      context,
+      fitReportText(context, item.note, cardWidth - 36, "600 12px Arial"),
+      cardX + 18,
+      y + 84,
+      {
+        color: "#8290a4",
+        font: "600 12px Arial"
+      }
+    )
+  })
+}
+
+function drawReportChart(
+  context,
+  x,
+  y,
+  width,
+  height,
+  title,
+  subtitle,
+  image,
+  emptyText
+) {
+  drawReportRoundRect(context, x, y, width, height, 14, "#ffffff", "#dde6f0")
+  drawReportSectionHeader(context, x + 18, y + 20, width - 36, title, subtitle)
+
+  if (image) {
+    drawReportImage(context, image, x + 18, y + 62, width - 36, height - 82)
+  } else {
+    drawReportText(context, emptyText, x + width / 2, y + height / 2 + 12, {
+      align: "center",
+      color: "#8b98aa",
+      font: "600 14px Arial"
+    })
+  }
+}
+
+function drawReportList(
+  context,
+  x,
+  y,
+  width,
+  height,
+  title,
+  subtitle,
+  items,
+  emptyText
+) {
+  drawReportRoundRect(context, x, y, width, height, 14, "#ffffff", "#dde6f0")
+  drawReportSectionHeader(context, x + 18, y + 20, width - 36, title, subtitle)
+
+  if (!items.length) {
+    drawReportText(context, emptyText, x + width / 2, y + 86, {
+      align: "center",
+      color: "#8b98aa",
+      font: "600 14px Arial"
+    })
+    return
+  }
+
+  let currentY = y + 62
+
+  items.forEach((item) => {
+    drawReportRoundRect(
+      context,
+      x + 14,
+      currentY,
+      width - 28,
+      58,
+      12,
+      "#f8fafc",
+      "#e5edf5"
+    )
+    drawReportText(
+      context,
+      fitReportText(context, item.title, width - 210, "700 14px Arial"),
+      x + 30,
+      currentY + 23,
+      {
+        color: "#253852",
+        font: "700 14px Arial"
+      }
+    )
+    drawReportText(
+      context,
+      fitReportText(context, item.description, width - 210, "600 12px Arial"),
+      x + 30,
+      currentY + 43,
+      {
+        color: "#7a8799",
+        font: "600 12px Arial"
+      }
+    )
+    drawReportText(context, item.value, x + width - 30, currentY + 24, {
+      align: "right",
+      color: "#1c3450",
+      font: "700 15px Arial"
+    })
+    drawReportText(context, item.note, x + width - 30, currentY + 43, {
+      align: "right",
+      color: "#7a8799",
+      font: "600 12px Arial"
+    })
+    currentY += 66
+  })
+}
+
+function drawReportSectionHeader(context, x, y, width, title, subtitle) {
+  drawReportText(context, title, x, y, {
+    color: "#1e334d",
+    font: "700 18px Arial"
+  })
+  drawReportText(
+    context,
+    fitReportText(context, subtitle, width, "600 12px Arial"),
+    x,
+    y + 21,
+    {
+      color: "#7a8799",
+      font: "600 12px Arial"
+    }
+  )
+}
+
+function drawReportImage(context, image, x, y, width, height) {
+  const scale = Math.min(width / image.width, height / image.height)
+  const imageWidth = image.width * scale
+  const imageHeight = image.height * scale
+
+  context.drawImage(
+    image,
+    x + (width - imageWidth) / 2,
+    y + (height - imageHeight) / 2,
+    imageWidth,
+    imageHeight
+  )
+}
+
+function drawReportText(context, text, x, y, options = {}) {
+  context.fillStyle = options.color || "#1f2937"
+  context.font = options.font || "14px Arial"
+  context.textAlign = options.align || "left"
+  context.textBaseline = "alphabetic"
+  context.fillText(String(text || ""), x, y)
+}
+
+function drawReportRoundRect(
+  context,
+  x,
+  y,
+  width,
+  height,
+  radius,
+  fill,
+  stroke
+) {
+  context.beginPath()
+  context.moveTo(x + radius, y)
+  context.lineTo(x + width - radius, y)
+  context.quadraticCurveTo(x + width, y, x + width, y + radius)
+  context.lineTo(x + width, y + height - radius)
+  context.quadraticCurveTo(
+    x + width,
+    y + height,
+    x + width - radius,
+    y + height
+  )
+  context.lineTo(x + radius, y + height)
+  context.quadraticCurveTo(x, y + height, x, y + height - radius)
+  context.lineTo(x, y + radius)
+  context.quadraticCurveTo(x, y, x + radius, y)
+  context.closePath()
+  context.fillStyle = fill
+  context.fill()
+
+  if (stroke) {
+    context.strokeStyle = stroke
+    context.lineWidth = 1
+    context.stroke()
+  }
+}
+
+function fitReportText(context, text, maxWidth, font) {
+  const value = String(text || "")
+
+  context.font = font
+
+  if (context.measureText(value).width <= maxWidth) {
+    return value
+  }
+
+  let nextValue = value
+
+  while (
+    nextValue.length > 1 &&
+    context.measureText(`${nextValue}...`).width > maxWidth
+  ) {
+    nextValue = nextValue.slice(0, -1)
+  }
+
+  return `${nextValue}...`
+}
+
+function createReportProviderItems() {
+  const items = providerStats.value.slice(0, 24).map((item) => ({
+    title: item.providerName || "未识别来源",
+    description: item.providerType || "未识别类型",
+    value: formatNumber(item.actualTokens),
+    note: `${formatNumber(item.requestCount)} 次 · ${formatCost(item.totalCostUsd)}`
+  }))
+
+  if (providerStats.value.length > 24) {
+    items.push({
+      title: `还有 ${providerStats.value.length - 24} 个 Provider 未显示`,
+      description: "可在页面筛选后导出更细的报告",
+      value: "",
+      note: ""
+    })
+  }
+
+  return items
+}
+
+function createReportModelItems() {
+  const items = modelStats.value.slice(0, 24).map((item) => ({
+    title: item.model || "未识别模型",
+    description: `${formatAppName(item.appType)} · ${item.providerName || "未识别来源"}`,
+    value: formatNumber(item.actualTokens),
+    note: `缓存 ${formatNumber(item.cacheReadTokens)} · ${formatCost(item.totalCostUsd)}`
+  }))
+
+  if (modelStats.value.length > 24) {
+    items.push({
+      title: `还有 ${modelStats.value.length - 24} 个模型未显示`,
+      description: "可在页面筛选后导出更细的报告",
+      value: "",
+      note: ""
+    })
+  }
+
+  return items
+}
+
+function createReportListHeight(items) {
+  return items.length ? 82 + items.length * 66 + 12 : 136
+}
+
+function loadReportCanvasImage(element) {
+  const canvas = element?.querySelector("canvas")
+
+  if (!canvas) {
+    return Promise.resolve(null)
+  }
+
+  return loadReportImage(canvas.toDataURL("image/png"))
+}
+
+function loadReportImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+
+    image.onload = () => resolve(image)
+    image.onerror = () => reject(new Error("用量报告图表读取失败。"))
+    image.src = dataUrl
+  })
+}
+
+function createExportPixelRatio(width, height) {
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2)
+  const maxPixels = 32000000
+  const scaledPixels = width * height * pixelRatio * pixelRatio
+
+  if (scaledPixels <= maxPixels) {
+    return pixelRatio
+  }
+
+  return Math.max(1, Math.sqrt(maxPixels / (width * height)))
+}
+
 async function exportUsageReport() {
   reportExporting.value = true
 
   try {
     const filterPayload = createFilterPayload()
+    const targetPath = await systemApi.saveFile({
+      title: "保存用量报告长图",
+      defaultPath: `usage-report-${createExportTimestamp()}.png`,
+      filters: [{ name: "PNG 图片", extensions: ["png"] }]
+    })
+
+    if (!targetPath) {
+      return
+    }
+
+    const imageData = await createUsageReportImageData()
     const result = await usageApi.exportUsageReportImage({
+      targetPath,
+      imageData,
       rangeType: filterPayload.startAt ? rangeType.value : "all",
       startAt: filterPayload.startAt,
       endAt: filterPayload.endAt,
@@ -1909,7 +2443,7 @@ async function exportUsageReport() {
       ]
     })
 
-    if (!result?.canceled) {
+    if (!result?.data?.canceled) {
       createMessage.success("用量报告长图已导出。")
     }
   } catch (error) {
@@ -2201,8 +2735,10 @@ function formatSessionLabel(item) {
 <style scoped lang="less">
 :global(body.usage-report-exporting .app-shell) {
   display: block;
+  width: auto;
   height: auto;
   min-height: 0;
+  transform: none;
 }
 
 :global(body.usage-report-exporting .app-sidebar) {
