@@ -1,6 +1,8 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use crate::core::settings::string_value;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use regex::Regex;
 use serde_json::{json, Map, Value};
@@ -254,10 +256,32 @@ pub async fn save_pricing(paths: &AppPaths, payload: Value) -> Result<Value, Man
     }))
 }
 
-pub async fn export_report_image(_payload: Value) -> Result<Value, ManagerError> {
-    Err(ManagerError::System(
-        "用量报告长图导出尚未迁移到 Tauri 截图实现".to_string(),
-    ))
+pub async fn export_report_image(payload: Value) -> Result<Value, ManagerError> {
+    let target_path = string_value(payload.get("targetPath"));
+
+    if target_path.is_empty() {
+        return Ok(json!({
+          "status": "ok",
+          "data": {
+            "canceled": true
+          },
+          "message": ""
+        }));
+    }
+
+    let image_data = string_value(payload.get("imageData"));
+    let image_bytes = decode_report_image_data_url(&image_data)?;
+
+    std::fs::write(&target_path, image_bytes)?;
+
+    Ok(json!({
+      "status": "ok",
+      "data": {
+        "canceled": false,
+        "targetPath": target_path
+      },
+      "message": ""
+    }))
 }
 
 fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError> {
@@ -3422,14 +3446,50 @@ fn path_skill_regex() -> &'static Regex {
     })
 }
 
+fn decode_report_image_data_url(value: &str) -> Result<Vec<u8>, ManagerError> {
+    let Some((metadata, data)) = value.trim().split_once(',') else {
+        return Err(ManagerError::System("用量报告图片数据格式无效。".to_string()));
+    };
+    let metadata = metadata.to_ascii_lowercase();
+
+    if !metadata.starts_with("data:image/png") || !metadata.contains(";base64") {
+        return Err(ManagerError::System(
+            "用量报告只支持导出 PNG 图片。".to_string(),
+        ));
+    }
+
+    if data.trim().is_empty() {
+        return Err(ManagerError::System("用量报告图片数据为空。".to_string()));
+    }
+
+    BASE64_STANDARD
+        .decode(data.trim())
+        .map_err(|error| ManagerError::System(format!("用量报告图片数据解析失败：{error}")))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{path_skill_regex, slash_skill_regex};
+    use super::{decode_report_image_data_url, path_skill_regex, slash_skill_regex};
 
     #[test]
     fn skill_usage_regexes_are_valid() {
         assert!(slash_skill_regex().is_match("/frontend-design"));
         assert!(path_skill_regex().is_match(r"C:\Users\readboy\.codex\skills\frontend-design\SKILL.md"));
+    }
+
+    #[test]
+    fn decodes_png_report_image_data_url() {
+        let bytes = decode_report_image_data_url("data:image/png;base64,aGVsbG8=").unwrap();
+
+        assert_eq!(bytes, b"hello");
+    }
+
+    #[test]
+    fn rejects_non_png_report_image_data_url() {
+        let error = decode_report_image_data_url("data:text/plain;base64,aGVsbG8=")
+            .expect_err("non-png data URL should be rejected");
+
+        assert!(error.to_string().contains("PNG"));
     }
 }
 

@@ -428,9 +428,7 @@ const SkillUsageView = defineAsyncComponent(
 const UsageView = defineAsyncComponent(
   () => import("@/features/usage/index.vue")
 )
-const LogsView = defineAsyncComponent(
-  () => import("@/features/logs/index.vue")
-)
+const LogsView = defineAsyncComponent(() => import("@/features/logs/index.vue"))
 const CreateSkillModal = defineAsyncComponent(
   () => import("@/features/skills/components/CreateSkillModal.vue")
 )
@@ -1397,7 +1395,9 @@ async function restoreSkillTrash(payload) {
 
   if (success) {
     skillTrashItems.value = trashResult?.trash || []
-    showSuccessMessage(formatTrashActionMessage("恢复", trashResult?.restored || []))
+    showSuccessMessage(
+      formatTrashActionMessage("恢复", trashResult?.restored || [])
+    )
   }
 }
 
@@ -1407,7 +1407,9 @@ async function purgeSkillTrash(payload) {
     const trashResult = result.trash || null
 
     skillTrashItems.value = trashResult?.trash || []
-    showSuccessMessage(formatTrashActionMessage("永久删除", trashResult?.purged || []))
+    showSuccessMessage(
+      formatTrashActionMessage("永久删除", trashResult?.purged || [])
+    )
   } catch (error) {
     showErrorMessage(error)
   }
@@ -1416,12 +1418,13 @@ async function purgeSkillTrash(payload) {
 function formatBatchSkillMessage(action, result) {
   const count = result?.successes?.length || 0
   const errorCount = result?.errors?.length || 0
-  const actionLabel = {
-    "install-all": "安装",
-    "uninstall-all": "卸载",
-    enable: "恢复",
-    disable: "禁用"
-  }[action] || "处理"
+  const actionLabel =
+    {
+      "install-all": "安装",
+      "uninstall-all": "卸载",
+      enable: "恢复",
+      disable: "禁用"
+    }[action] || "处理"
   const suffix = errorCount ? `，${errorCount} 个失败` : ""
 
   return `已${actionLabel} ${count} 个 Skill${suffix}。`
