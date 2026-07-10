@@ -1391,11 +1391,21 @@ pub(crate) async fn write_cli_config(
     let files = build_cli_config_files(paths, cli, &provider, &profile)?;
 
     for file in &files {
-        tokio::fs::write(
-            Path::new(&config_path).join(string_value(file.get("name"))),
-            string_value(file.get("content")),
-        )
-        .await?;
+        let name = string_value(file.get("name"));
+        let file_path = Path::new(&config_path).join(&name);
+        let content = if cli == "codex" && name == "config.toml" {
+            let existing_content = match tokio::fs::read_to_string(&file_path).await {
+                Ok(content) => content,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(error) => return Err(ManagerError::Io(error)),
+            };
+
+            merge_codex_config_toml(&existing_content, &string_value(file.get("content")))
+        } else {
+            string_value(file.get("content"))
+        };
+
+        tokio::fs::write(file_path, content).await?;
     }
 
     let mut runtime_state = read_object(&paths.storage_files.runtime_provider_state)?;
@@ -1556,6 +1566,211 @@ fn build_codex_config_files(
           "content": format!("{}\n", config_lines.join("\n"))
         }),
     ])
+}
+
+fn merge_codex_config_toml(existing_content: &str, managed_content: &str) -> String {
+    if existing_content.trim().is_empty() {
+        return format!("{}\n", managed_content.trim_end());
+    }
+
+    let managed = parse_simple_toml(managed_content);
+    let empty_root = Map::new();
+    let empty_sections = Map::new();
+    let root = managed
+        .get("root")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty_root);
+    let sections = managed
+        .get("sections")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty_sections);
+    let empty_custom = Map::new();
+    let custom_provider = sections
+        .get("model_providers.custom")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty_custom);
+    let mut content = existing_content.to_string();
+
+    // Codex Provider 启用时只接管运行所需的根配置，保留用户其他配置。
+    for key in [
+        "model_provider",
+        "model",
+        "model_reasoning_effort",
+        "disable_response_storage",
+    ] {
+        if let Some(value) = root.get(key) {
+            content = set_toml_root_line(&content, key, &format_toml_line(key, value));
+        }
+    }
+
+    if let Some(value) = root.get("service_tier") {
+        content = set_toml_root_line(
+            &content,
+            "service_tier",
+            &format_toml_line("service_tier", value),
+        );
+    } else {
+        content = remove_toml_root_line(&content, "service_tier");
+    }
+
+    if has_toml_section(&content, "model_providers.custom") {
+        if let Some(value) = custom_provider.get("base_url") {
+            content = set_toml_section_line(
+                &content,
+                "model_providers.custom",
+                "base_url",
+                &format_toml_line("base_url", value),
+            );
+        }
+    } else {
+        content = append_codex_custom_provider(&content, custom_provider);
+    }
+
+    format!("{}\n", content.trim_end())
+}
+
+fn set_toml_root_line(content: &str, key: &str, next_line: &str) -> String {
+    let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
+
+    if let Some(index) = lines.iter().position(|line| {
+        let text = line.trim();
+
+        !text.is_empty()
+            && !text.starts_with('#')
+            && !text.starts_with('[')
+            && text.split_once('=').map(|(left, _)| left.trim()) == Some(key)
+    }) {
+        lines[index] = next_line.to_string();
+        return lines.join("\n");
+    }
+
+    let insert_index = lines
+        .iter()
+        .position(|line| line.trim().starts_with('['))
+        .unwrap_or(lines.len());
+
+    lines.insert(insert_index, next_line.to_string());
+    lines.join("\n")
+}
+
+fn remove_toml_root_line(content: &str, key: &str) -> String {
+    let mut next_lines = Vec::new();
+    let mut in_section = false;
+
+    for line in content.lines() {
+        let text = line.trim();
+
+        if text.starts_with('[') {
+            in_section = true;
+        }
+
+        if !in_section
+            && text
+                .split_once('=')
+                .map(|(left, _)| left.trim() == key)
+                .unwrap_or(false)
+        {
+            continue;
+        }
+
+        next_lines.push(line.to_string());
+    }
+
+    next_lines.join("\n")
+}
+
+fn set_toml_section_line(content: &str, section_name: &str, key: &str, next_line: &str) -> String {
+    let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
+    let section_header = format!("[{}]", section_name);
+    let Some(section_index) = lines.iter().position(|line| line.trim() == section_header) else {
+        return content.to_string();
+    };
+    let mut insert_index = section_index + 1;
+
+    while insert_index < lines.len() && !lines[insert_index].trim().starts_with('[') {
+        if lines[insert_index]
+            .trim()
+            .split_once('=')
+            .map(|(left, _)| left.trim() == key)
+            .unwrap_or(false)
+        {
+            lines[insert_index] = next_line.to_string();
+            return lines.join("\n");
+        }
+
+        insert_index += 1;
+    }
+
+    lines.insert(insert_index, next_line.to_string());
+    lines.join("\n")
+}
+
+fn append_codex_custom_provider(content: &str, custom_provider: &Map<String, Value>) -> String {
+    let mut lines = content
+        .trim_end()
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    let custom_name = custom_provider
+        .get("name")
+        .cloned()
+        .unwrap_or_else(|| json!("custom"));
+    let wire_api = custom_provider
+        .get("wire_api")
+        .cloned()
+        .unwrap_or_else(|| json!("responses"));
+    let requires_openai_auth = custom_provider
+        .get("requires_openai_auth")
+        .cloned()
+        .unwrap_or_else(|| json!(true));
+    let base_url = custom_provider
+        .get("base_url")
+        .cloned()
+        .unwrap_or_else(|| json!(""));
+
+    if !lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    if !has_toml_section(content, "model_providers") {
+        lines.push("[model_providers]".to_string());
+    }
+
+    lines.extend([
+        "[model_providers.custom]".to_string(),
+        format_toml_line("name", &custom_name),
+        format_toml_line("wire_api", &wire_api),
+        format_toml_line("requires_openai_auth", &requires_openai_auth),
+        format_toml_line("base_url", &base_url),
+    ]);
+
+    lines.join("\n")
+}
+
+fn has_toml_section(content: &str, section_name: &str) -> bool {
+    let section_header = format!("[{}]", section_name);
+
+    content.lines().any(|line| line.trim() == section_header)
+}
+
+fn format_toml_line(key: &str, value: &Value) -> String {
+    format!("{} = {}", key, toml_literal(value))
+}
+
+fn toml_literal(value: &Value) -> String {
+    if let Some(text) = value.as_str() {
+        return to_toml_string(text.to_string());
+    }
+
+    if let Some(flag) = value.as_bool() {
+        return flag.to_string();
+    }
+
+    if let Some(number) = value.as_u64() {
+        return number.to_string();
+    }
+
+    to_toml_string(string_value(Some(value)))
 }
 
 pub(crate) fn get_provider_api_key(paths: &AppPaths, provider_id: &str) -> Result<String, ManagerError> {
@@ -1845,13 +2060,6 @@ fn normalize_codex_config_file(file: &Value) -> Result<Value, ManagerError> {
             to_toml_string(first_string(root.get("model"), Some(&json!(""))))
         ),
         format!(
-            "model_reasoning_effort = {}",
-            to_toml_string(first_string(
-                root.get("model_reasoning_effort"),
-                Some(&json!("low"))
-            ))
-        ),
-        format!(
             "disable_response_storage = {}",
             if root
                 .get("disable_response_storage")
@@ -1869,47 +2077,10 @@ fn normalize_codex_config_file(file: &Value) -> Result<Value, ManagerError> {
         lines.push("service_tier = \"fast\"".to_string());
     }
 
-    if root.get("model_context_window").is_some() {
-        lines.push(format!(
-            "model_context_window = {}",
-            number_value(root.get("model_context_window"), 0)
-        ));
-        lines.push(format!(
-            "model_auto_compact_token_limit = {}",
-            number_value(root.get("model_auto_compact_token_limit"), 900000)
-        ));
-    }
-
     lines.extend([
         "".to_string(),
         "[model_providers]".to_string(),
         "[model_providers.custom]".to_string(),
-        format!(
-            "name = {}",
-            to_toml_string(first_string(
-                custom_provider.get("name"),
-                Some(&json!("custom"))
-            ))
-        ),
-        format!(
-            "wire_api = {}",
-            to_toml_string(first_string(
-                custom_provider.get("wire_api"),
-                Some(&json!("responses"))
-            ))
-        ),
-        format!(
-            "requires_openai_auth = {}",
-            if custom_provider
-                .get("requires_openai_auth")
-                .and_then(Value::as_bool)
-                == Some(false)
-            {
-                "false"
-            } else {
-                "true"
-            }
-        ),
         format!(
             "base_url = {}",
             to_toml_string(first_string(
@@ -2580,5 +2751,177 @@ impl EmptyStringExt for String {
         } else {
             self
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::paths::{resolve_app_paths, AppPaths};
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn write_codex_config_updates_existing_custom_provider_base_url_only() {
+        tauri::async_runtime::block_on(async {
+            let (test_root, paths, config_dir) = create_codex_runtime_fixture();
+            fs::write(
+                config_dir.join("config.toml"),
+                r#"sandbox_mode = "workspace-write"
+model_provider = "old"
+model = "old-model"
+model_reasoning_effort = "high"
+disable_response_storage = false
+service_tier = "default"
+approvals_reviewer = "auto"
+
+[tools]
+web_search = true
+
+[model_providers]
+[model_providers.custom]
+name = "old"
+wire_api = "chat"
+requires_openai_auth = false
+base_url = "https://old.example.com"
+extra_header = "keep"
+
+[model_providers.other]
+name = "other"
+"#,
+            )
+            .unwrap();
+
+            let content = write_codex_config(&paths, &config_dir).await;
+
+            assert!(content.contains("sandbox_mode = \"workspace-write\""));
+            assert!(content.contains("[tools]\nweb_search = true"));
+            assert!(content.contains("[model_providers.other]\nname = \"other\""));
+            assert!(content.contains("extra_header = \"keep\""));
+            assert!(content.contains("model_provider = \"custom\""));
+            assert!(content.contains("model = \"gpt-5.6-sol\""));
+            assert!(content.contains("model_reasoning_effort = \"minimal\""));
+            assert!(content.contains("disable_response_storage = true"));
+            assert!(content.contains("service_tier = \"fast\""));
+            assert!(content.contains("approvals_reviewer = \"auto\""));
+            assert!(content.contains("name = \"old\""));
+            assert!(content.contains("wire_api = \"chat\""));
+            assert!(content.contains("requires_openai_auth = false"));
+            assert!(content.contains("base_url = \"https://llmp.readboy.com\""));
+
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
+
+    #[test]
+    fn write_codex_config_creates_custom_provider_when_missing() {
+        tauri::async_runtime::block_on(async {
+            let (test_root, paths, config_dir) = create_codex_runtime_fixture();
+            fs::write(
+                config_dir.join("config.toml"),
+                r#"sandbox_mode = "workspace-write"
+
+[tools]
+web_search = true
+"#,
+            )
+            .unwrap();
+
+            let content = write_codex_config(&paths, &config_dir).await;
+
+            assert!(content.contains("sandbox_mode = \"workspace-write\""));
+            assert!(content.contains("[tools]\nweb_search = true"));
+            assert!(content.contains("model_provider = \"custom\""));
+            assert!(content.contains("model = \"gpt-5.6-sol\""));
+            assert!(content.contains("model_reasoning_effort = \"minimal\""));
+            assert!(content.contains("disable_response_storage = true"));
+            assert!(content.contains("service_tier = \"fast\""));
+            assert!(!content.contains("approvals_reviewer"));
+            assert!(content.contains("[model_providers]\n[model_providers.custom]"));
+            assert!(content.contains("name = \"custom\""));
+            assert!(content.contains("wire_api = \"responses\""));
+            assert!(content.contains("requires_openai_auth = true"));
+            assert!(content.contains("base_url = \"https://llmp.readboy.com\""));
+
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
+
+    #[test]
+    fn codex_managed_compare_ignores_reasoning_effort() {
+        let low_config = json!({
+          "name": "config.toml",
+          "content": "model_provider = \"custom\"\nmodel = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"low\"\ndisable_response_storage = true\napprovals_reviewer = \"user\"\n\n[model_providers]\n[model_providers.custom]\nbase_url = \"https://llmp.readboy.com\"\n"
+        });
+        let max_config = json!({
+          "name": "config.toml",
+          "content": "model_provider = \"custom\"\nmodel = \"gpt-5.6-sol\"\nmodel_reasoning_effort = \"max\"\ndisable_response_storage = true\napprovals_reviewer = \"auto\"\n\n[model_providers]\n[model_providers.custom]\nbase_url = \"https://llmp.readboy.com\"\n"
+        });
+
+        let low_normalized = normalize_codex_config_file(&low_config).unwrap();
+        let max_normalized = normalize_codex_config_file(&max_config).unwrap();
+
+        assert_eq!(low_normalized, max_normalized);
+        assert!(!string_value(low_normalized.get("content")).contains("model_reasoning_effort"));
+        assert!(!string_value(low_normalized.get("content")).contains("approvals_reviewer"));
+    }
+
+    fn create_codex_runtime_fixture() -> (PathBuf, AppPaths, PathBuf) {
+        let test_root =
+            std::env::temp_dir().join(format!("ai-manager-runtime-test-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&test_root);
+        let config_dir = test_root.join("codex-config");
+
+        fs::create_dir_all(&paths.storage_dir).unwrap();
+        fs::create_dir_all(&config_dir).unwrap();
+        fs::write(
+            &paths.storage_files.providers,
+            serde_json::to_string_pretty(&json!([{
+              "id": "provider-codex",
+              "cli": "codex",
+              "icon": "codex.svg",
+              "name": "Codex Provider",
+              "type": "openai",
+              "note": "",
+              "website": "",
+              "baseUrl": "https://llmp.readboy.com",
+              "authField": "OPENAI_API_KEY",
+              "headers": {},
+              "enabled": true,
+              "runtimeConfig": {
+                "modelReasoningEffort": "minimal",
+                "serviceTierFast": true
+              }
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            &paths.storage_files.runtime_profiles,
+            serde_json::to_string_pretty(&json!([{
+              "id": "profile-codex",
+              "cli": "codex",
+              "providerId": "provider-codex",
+              "model": "gpt-5.6-sol",
+              "baseUrl": "https://llmp.readboy.com"
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(&paths.storage_files.runtime_provider_keys, "{}").unwrap();
+
+        (test_root, paths, config_dir)
+    }
+
+    async fn write_codex_config(paths: &AppPaths, config_dir: &PathBuf) -> String {
+        write_cli_config(
+            paths,
+            "codex",
+            json!({ "configPath": config_dir.to_string_lossy() }),
+        )
+        .await
+        .unwrap();
+
+        fs::read_to_string(config_dir.join("config.toml")).unwrap()
     }
 }

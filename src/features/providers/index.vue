@@ -781,7 +781,7 @@
                 <span>{{ field.label }}</span>
                 <select v-model="draft[field.key]">
                   <option
-                    v-for="option in field.options"
+                    v-for="option in runtimeFieldOptions(field)"
                     :key="option"
                     :value="option"
                   >
@@ -1000,7 +1000,7 @@
                 <span>{{ field.label }}</span>
                 <select v-model="draft[field.key]">
                   <option
-                    v-for="option in field.options"
+                    v-for="option in runtimeFieldOptions(field)"
                     :key="option"
                     :value="option"
                   >
@@ -2065,6 +2065,34 @@ const activeRuntimeSchema = computed(() => {
   )
 })
 
+function runtimeFieldOptions(field) {
+  // Codex 5.6 模型支持更完整的思考强度选项。
+  if (
+    activeCli.value === "codex" &&
+    field.key === "modelReasoningEffort" &&
+    isCodexFiveSixModel(modelDrafts.mainModel)
+  ) {
+    return ["minimal", "low", "medium", "high", "xhigh", "max"]
+  }
+
+  return field.options || []
+}
+
+function isCodexFiveSixModel(model) {
+  return String(model || "")
+    .toLowerCase()
+    .includes("5.6")
+}
+
+function normalizeModelReasoningEffort(model, effort) {
+  // 模型切换后避免保存当前模型不支持的思考强度。
+  const options = isCodexFiveSixModel(model)
+    ? ["minimal", "low", "medium", "high", "xhigh", "max"]
+    : ["low", "medium", "high", "xhigh"]
+
+  return options.includes(effort) ? effort : "low"
+}
+
 const activeCliName = computed(() => {
   return (
     visibleCliTargets.value.find(item => item.id === activeCli.value)?.name ||
@@ -3056,7 +3084,10 @@ function submitProvider() {
       maxThinking: draft.maxThinking,
       modelContextWindowEnabled: draft.modelContextWindowEnabled,
       serviceTierFast: draft.serviceTierFast,
-      modelReasoningEffort: draft.modelReasoningEffort,
+      modelReasoningEffort: normalizeModelReasoningEffort(
+        modelDrafts.mainModel,
+        draft.modelReasoningEffort
+      ),
       modelAutoCompactTokenLimit: draft.modelAutoCompactTokenLimit
     },
     enabled: draft.enabled
@@ -3288,6 +3319,20 @@ watch(
       usageStatsTarget.value = ""
       ensureUsageStatsReady()
     }
+  }
+)
+
+watch(
+  () => modelDrafts.mainModel,
+  model => {
+    if (activeCli.value !== "codex") {
+      return
+    }
+
+    draft.modelReasoningEffort = normalizeModelReasoningEffort(
+      model,
+      draft.modelReasoningEffort
+    )
   }
 )
 
