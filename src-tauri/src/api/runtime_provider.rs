@@ -1,6 +1,7 @@
 use crate::api::{codex_account, proxy};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
+use crate::core::provider_store;
 use crate::core::settings::{number_value, resolve_portable_path};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -16,10 +17,10 @@ static PROVIDER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
-    let mut providers = read_array(&paths.storage_files.providers)?;
-    let mut models = read_array(&paths.storage_files.runtime_models)?;
-    let mut profiles = read_array(&paths.storage_files.runtime_profiles)?;
-    let mut keys = read_object(&paths.storage_files.runtime_provider_keys)?;
+    let mut providers = provider_store::read_providers(paths)?;
+    let mut models = provider_store::read_models(paths)?;
+    let mut profiles = provider_store::read_profiles(paths)?;
+    let mut keys = provider_store::read_keys(paths)?;
     let previous = providers
         .iter()
         .find(|item| item.get("id") == payload.get("id"))
@@ -113,20 +114,13 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
         }
     }
 
-    write_json(&paths.storage_files.providers, &json!(providers)).await?;
-    write_json(&paths.storage_files.runtime_models, &json!(models)).await?;
-    write_json(&paths.storage_files.runtime_profiles, &json!(profiles)).await?;
-    write_json(
-        &paths.storage_files.runtime_provider_keys,
-        &Value::Object(keys),
-    )
-    .await
+    provider_store::write_provider_bundle(paths, &providers, &models, &profiles, &keys)
 }
 
 pub async fn delete_provider(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
     let provider_id = string_value(payload.get("providerId"));
-    let mut providers = read_array(&paths.storage_files.providers)?;
-    let mut keys = read_object(&paths.storage_files.runtime_provider_keys)?;
+    let mut providers = provider_store::read_providers(paths)?;
+    let mut keys = provider_store::read_keys(paths)?;
     let provider = providers
         .iter()
         .find(|item| item.get("id").and_then(Value::as_str) == Some(provider_id.as_str()))
@@ -144,8 +138,8 @@ pub async fn delete_provider(paths: &AppPaths, payload: Value) -> Result<(), Man
     }
 
     providers.retain(|item| item.get("id").and_then(Value::as_str) != Some(provider_id.as_str()));
-    let mut models = read_array(&paths.storage_files.runtime_models)?;
-    let mut profiles = read_array(&paths.storage_files.runtime_profiles)?;
+    let mut models = provider_store::read_models(paths)?;
+    let mut profiles = provider_store::read_profiles(paths)?;
 
     models.retain(|item| {
         item.get("providerId").and_then(Value::as_str) != Some(provider_id.as_str())
@@ -155,19 +149,12 @@ pub async fn delete_provider(paths: &AppPaths, payload: Value) -> Result<(), Man
     });
     keys.remove(&provider_id);
 
-    write_json(&paths.storage_files.providers, &json!(providers)).await?;
-    write_json(&paths.storage_files.runtime_models, &json!(models)).await?;
-    write_json(&paths.storage_files.runtime_profiles, &json!(profiles)).await?;
-    write_json(
-        &paths.storage_files.runtime_provider_keys,
-        &Value::Object(keys),
-    )
-    .await
+    provider_store::write_provider_bundle(paths, &providers, &models, &profiles, &keys)
 }
 
 pub async fn save_runtime_model(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
-    let providers = read_array(&paths.storage_files.providers)?;
-    let mut models = read_array(&paths.storage_files.runtime_models)?;
+    let providers = provider_store::read_providers(paths)?;
+    let mut models = provider_store::read_models(paths)?;
     let previous = models
         .iter()
         .find(|item| item.get("id") == payload.get("id"))
@@ -199,7 +186,7 @@ pub async fn save_runtime_model(paths: &AppPaths, payload: Value) -> Result<(), 
         models.push(model);
     }
 
-    write_json(&paths.storage_files.runtime_models, &json!(models)).await
+    provider_store::write_models(paths, &models)
 }
 
 pub async fn switch_runtime(
@@ -211,8 +198,8 @@ pub async fn switch_runtime(
 
     ensure_proxy_disabled(paths, &cli)?;
 
-    let providers = read_array(&paths.storage_files.providers)?;
-    let mut profiles = read_array(&paths.storage_files.runtime_profiles)?;
+    let providers = provider_store::read_providers(paths)?;
+    let mut profiles = provider_store::read_profiles(paths)?;
     let provider_id = string_value(payload.get("providerId"));
     let provider = providers
         .iter()
@@ -253,11 +240,11 @@ pub async fn switch_runtime(
         profiles.push(profile);
     }
 
-    write_json(&paths.storage_files.runtime_profiles, &json!(profiles)).await?;
+    provider_store::write_profiles(paths, &profiles)?;
     write_cli_config(paths, &cli, find_cli_target(cli_targets, &cli)?).await?;
 
     if cli == "codex" {
-        write_json(&paths.storage_files.codex_active_account_id, &json!("")).await?;
+        provider_store::write_active_codex_account_id(paths, "")?;
     }
 
     refresh_drift(paths, cli_targets).await
@@ -272,10 +259,10 @@ pub async fn clear_runtime(
 
     ensure_proxy_disabled(paths, &cli)?;
 
-    let mut profiles = read_array(&paths.storage_files.runtime_profiles)?;
+    let mut profiles = provider_store::read_profiles(paths)?;
 
     profiles.retain(|item| item.get("cli").and_then(Value::as_str) != Some(cli.as_str()));
-    write_json(&paths.storage_files.runtime_profiles, &json!(profiles)).await?;
+    provider_store::write_profiles(paths, &profiles)?;
     refresh_drift(paths, cli_targets).await
 }
 
@@ -356,7 +343,7 @@ pub fn build_runtime_env(paths: &AppPaths, payload: Value) -> Result<Value, Mana
     let profile = find_runtime_profile(paths, &cli)?;
     let provider = find_provider(paths, &string_value(profile.get("providerId")))?;
     let provider_id = string_value(provider.get("id"));
-    let keys = read_object(&paths.storage_files.runtime_provider_keys)?;
+    let keys = provider_store::read_keys(paths)?;
     let api_key = keys
         .get(&provider_id)
         .and_then(Value::as_str)
@@ -473,7 +460,7 @@ pub async fn launch_codex_provider_instance(
         target_name = first_string(auth.get("name"), Some(&json!(account_id.clone())));
         target_type = "codex".to_string();
     } else {
-        let provider = read_array(&paths.storage_files.providers)?
+        let provider = provider_store::read_providers(paths)?
             .into_iter()
             .find(|item| {
                 item.get("id").and_then(Value::as_str) == Some(provider_id.as_str())
@@ -503,7 +490,7 @@ pub async fn launch_codex_provider_instance(
 
         model = first_string(
             runtime_config.get("mainModel"),
-            read_array(&paths.storage_files.runtime_models)?
+            provider_store::read_models(paths)?
                 .iter()
                 .find(|item| {
                     item.get("providerId").and_then(Value::as_str) == Some(provider_id.as_str())
@@ -605,11 +592,11 @@ pub async fn launch_codex_provider_instance(
       "sessionsPath": sessions_path.to_string_lossy().to_string(),
       "updatedAt": now_millis()
     });
-    let mut instances = read_array(&paths.storage_files.codex_provider_instances)?;
+    let mut instances = provider_store::read_instances(paths)?;
 
     instances.retain(|item| item.get("providerId").and_then(Value::as_str) != Some(target_id.as_str()));
     instances.insert(0, next_instance);
-    write_json(&paths.storage_files.codex_provider_instances, &json!(instances)).await?;
+    provider_store::write_instances(paths, &instances)?;
 
     let codex_executable_path = resolve_codex_executable_path(&executable_path).await;
 
@@ -705,7 +692,7 @@ pub async fn launch_claude_provider_instance(
         .await?;
 
     let provider_id = string_value(payload.get("providerId"));
-    let provider = read_array(&paths.storage_files.providers)?
+    let provider = provider_store::read_providers(paths)?
         .into_iter()
         .find(|item| {
             item.get("id").and_then(Value::as_str) == Some(provider_id.as_str())
@@ -919,9 +906,9 @@ pub async fn launch_claude_provider_instance(
 }
 
 pub async fn refresh_drift(paths: &AppPaths, cli_targets: &Value) -> Result<(), ManagerError> {
-    let providers = read_array(&paths.storage_files.providers)?;
-    let profiles = read_array(&paths.storage_files.runtime_profiles)?;
-    let mut runtime_state = read_object(&paths.storage_files.runtime_provider_state)?;
+    let providers = provider_store::read_providers(paths)?;
+    let profiles = provider_store::read_profiles(paths)?;
+    let mut runtime_state = provider_store::read_runtime_state(paths)?;
     let schemas = runtime_config_schemas();
     let Some(schema_map) = schemas.as_object() else {
         return Ok(());
@@ -1023,16 +1010,12 @@ pub async fn refresh_drift(paths: &AppPaths, cli_targets: &Value) -> Result<(), 
         runtime_state.insert(cli.to_string(), Value::Object(next_state));
     }
 
-    write_json(
-        &paths.storage_files.runtime_provider_state,
-        &Value::Object(runtime_state),
-    )
-    .await
+    provider_store::write_runtime_state(paths, &runtime_state)
 }
 
 pub fn read_public_providers(paths: &AppPaths) -> Result<Value, ManagerError> {
-    let providers = read_array(&paths.storage_files.providers)?;
-    let keys = read_object(&paths.storage_files.runtime_provider_keys)?;
+    let providers = provider_store::read_providers(paths)?;
+    let keys = provider_store::read_keys(paths)?;
 
     Ok(json!(providers
         .into_iter()
@@ -1052,9 +1035,9 @@ pub fn read_public_providers(paths: &AppPaths) -> Result<Value, ManagerError> {
 }
 
 pub fn read_public_profiles(paths: &AppPaths) -> Result<Value, ManagerError> {
-    let providers = read_array(&paths.storage_files.providers)?;
-    let profiles = read_array(&paths.storage_files.runtime_profiles)?;
-    let keys = read_object(&paths.storage_files.runtime_provider_keys)?;
+    let providers = provider_store::read_providers(paths)?;
+    let profiles = provider_store::read_profiles(paths)?;
+    let keys = provider_store::read_keys(paths)?;
 
     Ok(json!(profiles
         .into_iter()
@@ -1326,22 +1309,22 @@ pub(crate) fn find_cli_target(cli_targets: &Value, cli: &str) -> Result<Value, M
 }
 
 fn find_runtime_profile(paths: &AppPaths, cli: &str) -> Result<Value, ManagerError> {
-    read_array(&paths.storage_files.runtime_profiles)?
+    provider_store::read_profiles(paths)?
         .into_iter()
         .find(|item| item.get("cli").and_then(Value::as_str) == Some(cli))
         .ok_or_else(|| ManagerError::System("Runtime Profile 不存在".to_string()))
 }
 
 pub(crate) fn find_provider(paths: &AppPaths, provider_id: &str) -> Result<Value, ManagerError> {
-    read_array(&paths.storage_files.providers)?
+    provider_store::read_providers(paths)?
         .into_iter()
         .find(|item| item.get("id").and_then(Value::as_str) == Some(provider_id))
         .ok_or_else(|| ManagerError::System("Provider 不存在".to_string()))
 }
 
 fn to_public_profile(paths: &AppPaths, mut profile: Value) -> Result<Value, ManagerError> {
-    let providers = read_array(&paths.storage_files.providers)?;
-    let keys = read_object(&paths.storage_files.runtime_provider_keys)?;
+    let providers = provider_store::read_providers(paths)?;
+    let keys = provider_store::read_keys(paths)?;
     let provider_id = string_value(profile.get("providerId"));
 
     if let Some(provider) = providers
@@ -1408,7 +1391,7 @@ pub(crate) async fn write_cli_config(
         tokio::fs::write(file_path, content).await?;
     }
 
-    let mut runtime_state = read_object(&paths.storage_files.runtime_provider_state)?;
+    let mut runtime_state = provider_store::read_runtime_state(paths)?;
     runtime_state.insert(
         cli.to_string(),
         json!({
@@ -1419,11 +1402,7 @@ pub(crate) async fn write_cli_config(
           "status": "SYNCED"
         }),
     );
-    write_json(
-        &paths.storage_files.runtime_provider_state,
-        &Value::Object(runtime_state),
-    )
-    .await
+    provider_store::write_runtime_state(paths, &runtime_state)
 }
 
 pub(crate) fn build_cli_config_files(
@@ -1774,7 +1753,7 @@ fn toml_literal(value: &Value) -> String {
 }
 
 pub(crate) fn get_provider_api_key(paths: &AppPaths, provider_id: &str) -> Result<String, ManagerError> {
-    Ok(read_object(&paths.storage_files.runtime_provider_keys)?
+    Ok(provider_store::read_keys(paths)?
         .get(provider_id)
         .and_then(Value::as_str)
         .map(decrypt_provider_key)
@@ -2297,7 +2276,7 @@ async fn sync_codex_runtime_to_manager(
 
 async fn switch_runtime_profile_only(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
     let cli = string_value(payload.get("cli"));
-    let mut profiles = read_array(&paths.storage_files.runtime_profiles)?;
+    let mut profiles = provider_store::read_profiles(paths)?;
     let previous = profiles
         .iter()
         .find(|item| item.get("cli").and_then(Value::as_str) == Some(cli.as_str()))
@@ -2319,7 +2298,7 @@ async fn switch_runtime_profile_only(paths: &AppPaths, payload: Value) -> Result
         profiles.push(profile);
     }
 
-    write_json(&paths.storage_files.runtime_profiles, &json!(profiles)).await
+    provider_store::write_profiles(paths, &profiles)
 }
 
 pub(crate) fn parse_simple_toml(content: &str) -> Value {
@@ -2641,14 +2620,6 @@ pub(crate) fn string_value(value: Option<&Value>) -> String {
         .unwrap_or("")
         .trim()
         .to_string()
-}
-
-pub(crate) fn read_array(path: &str) -> Result<Vec<Value>, ManagerError> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => Ok(serde_json::from_str(&content)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(ManagerError::Io(error)),
-    }
 }
 
 pub(crate) fn read_object(path: &str) -> Result<Map<String, Value>, ManagerError> {

@@ -1,6 +1,7 @@
 use crate::api::{codex_account, runtime_provider};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
+use crate::core::provider_store;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
@@ -956,7 +957,7 @@ fn get_target(
         }
 
         let account_id = account_id_from_target(target_id);
-        let accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?;
+        let accounts = provider_store::read_codex_accounts(paths)?;
         let account = accounts
             .into_iter()
             .find(|account| string_value(account.get("id")) == account_id)
@@ -1040,7 +1041,7 @@ fn get_forward_provider_ids(
 
 fn is_target_enabled(paths: &AppPaths, cli: &str, target_id: &str) -> bool {
     if is_account_target(target_id) {
-        return runtime_provider::read_array(&paths.storage_files.codex_accounts)
+        return provider_store::read_codex_accounts(paths)
             .map(|accounts| {
                 accounts.into_iter().any(|account| {
                     string_value(account.get("id")) == account_id_from_target(target_id)

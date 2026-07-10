@@ -1,6 +1,7 @@
 use crate::api::{codex_account, rules, runtime_provider, skills, usage};
 use crate::core::error::ManagerError;
 use crate::core::paths::{path_text, public_paths, AppPaths};
+use crate::core::provider_store;
 use crate::core::settings::{
     bool_value, non_empty_string, number_value, resolve_portable_path, serialize_portable_path,
     string_value, AppSettings,
@@ -22,7 +23,7 @@ pub fn create_initial_state(
 ) -> Result<Value, ManagerError> {
     let files = &paths.storage_files;
     let cli_targets = read_cli_targets(paths, app_settings)?;
-    let runtime_state = read_json_file(&files.runtime_provider_state, json!({}))?;
+    let runtime_state = Value::Object(provider_store::read_runtime_state(paths)?);
     let claude_proxy_config = normalize_proxy_config(
         read_json_file(&files.claude_proxy_config, json!({}))?,
         15722,
@@ -66,7 +67,7 @@ pub fn create_initial_state(
       "providers": runtime_provider::read_public_providers(paths)?,
       "rules": rules::build_state(paths, &cli_targets)?,
       "runtimeConfigSchemas": runtime_provider::runtime_config_schemas(),
-      "runtimeModels": read_json_file(&files.runtime_models, json!([]))?,
+      "runtimeModels": provider_store::read_models(paths)?,
       "runtimeProfiles": runtime_provider::read_public_profiles(paths)?,
       "runtimeProviderState": runtime_provider_state,
       "claudeProxyState": claude_proxy_state,
