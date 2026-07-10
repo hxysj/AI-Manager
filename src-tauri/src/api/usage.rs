@@ -1,13 +1,14 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use crate::core::settings::string_value;
+use crate::core::usage_store::{self, UsageLogQuery, UsageSessionUpdate};
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use regex::Regex;
 use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -56,8 +57,7 @@ struct SkillInvocation {
 
 struct UsageLogCache {
     path: String,
-    len: u64,
-    modified_at: u128,
+    revision: u64,
     logs: Arc<Vec<Value>>,
 }
 
@@ -305,30 +305,31 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
     let log_page = number_value(input.get("logPage"), 1).max(1) as usize;
     let log_page_size = number_value(input.get("logPageSize"), 20).max(1) as usize;
     let include_all_logs = input.get("includeAllLogs").and_then(Value::as_bool) == Some(true);
-    let raw_logs = read_usage_logs(&paths.storage_files.usage_logs)?;
-    let logs = raw_logs
+    let selected_logs = usage_store::query_logs(paths, &create_usage_log_query(&filters))?;
+    let option_filters = json!({
+      "appType": filters["appType"],
+      "providerId": "all",
+      "providerIds": filters["providerIds"],
+      "model": "all",
+      "requestSource": "all",
+      "startAt": filters["startAt"],
+      "endAt": filters["endAt"],
+      "trendMode": filters["trendMode"]
+    });
+    let option_logs = if filters["providerId"] == "all"
+        && filters["providerIds"]
+            .as_array()
+            .is_none_or(|items| items.is_empty())
+        && filters["model"] == "all"
+        && filters["requestSource"] == "all"
+    {
+        selected_logs.clone()
+    } else {
+        usage_store::query_logs(paths, &create_usage_log_query(&option_filters))?
+    };
+    let logs = selected_logs
         .iter()
-        .filter(|item| in_range(item, &filters))
         .map(|item| enrich_usage_log(item, &pricing_config, &pricing_index))
-        .collect::<Vec<_>>();
-    let option_logs = raw_logs
-        .iter()
-        .filter(|item| {
-            in_range(
-                item,
-                &json!({
-                  "appType": filters["appType"],
-                  "providerId": "all",
-                  "providerIds": filters["providerIds"],
-                  "model": "all",
-                  "requestSource": "all",
-                  "startAt": filters["startAt"],
-                  "endAt": filters["endAt"],
-                  "trendMode": filters["trendMode"]
-                }),
-            )
-        })
-        .cloned()
         .collect::<Vec<_>>();
     let mut summary = create_empty_summary();
 
@@ -385,7 +386,7 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
       "logs": response_logs,
       "logTotalCount": log_total_count,
       "filters": {
-        "appTypes": unique_strings(raw_logs.iter().map(|item| string_value(item.get("appType"))).collect()),
+        "appTypes": usage_store::read_app_types(paths)?,
         "providers": create_provider_filter_options(&option_logs),
         "models": unique_strings(option_logs.iter().map(|item| string_value(item.get("model"))).filter(|item| !item.is_empty()).collect()),
         "requestSources": unique_strings(option_logs.iter().map(|item| non_empty_text(item.get("requestSource"), "session")).collect())
@@ -400,7 +401,7 @@ fn get_provider_stats_data(
     pricing_index: &HashMap<String, Value>,
     filters: &Value,
 ) -> Result<Value, ManagerError> {
-    let raw_logs = read_usage_logs(&paths.storage_files.usage_logs)?;
+    let raw_logs = read_usage_logs(paths)?;
     let today_start_at = today_start_at();
     let cache_key = format!(
         "{}|{}",
@@ -412,7 +413,7 @@ fn get_provider_stats_data(
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let cached = cache.entry(cache_key).or_insert_with(|| UsageProviderStatsCache {
-        path: paths.storage_files.usage_logs.clone(),
+        path: paths.storage_files.usage_database.clone(),
         logs: Arc::new(Vec::new()),
         today_start_at,
         log_signatures: HashMap::new(),
@@ -422,7 +423,7 @@ fn get_provider_stats_data(
         today_model_stats: HashMap::new(),
     });
 
-    if cached.path == paths.storage_files.usage_logs
+    if cached.path == paths.storage_files.usage_database
         && cached.today_start_at == today_start_at
         && Arc::ptr_eq(&cached.logs, &raw_logs)
     {
@@ -434,14 +435,14 @@ fn get_provider_stats_data(
         .map(|log| (usage_log_cache_id(log), usage_log_cache_signature(log)))
         .collect::<HashMap<_, _>>();
 
-    if cached.path != paths.storage_files.usage_logs
+    if cached.path != paths.storage_files.usage_database
         || cached.today_start_at != today_start_at
         || cached
             .log_signatures
             .iter()
             .any(|(request_id, signature)| current_log_signatures.get(request_id) != Some(signature))
     {
-        cached.path = paths.storage_files.usage_logs.clone();
+        cached.path = paths.storage_files.usage_database.clone();
         cached.logs = raw_logs.clone();
         cached.today_start_at = today_start_at;
         cached.log_signatures.clear();
@@ -502,7 +503,7 @@ fn provider_stats_cache_response(cached: &UsageProviderStatsCache, pricing_confi
 fn get_initial_state_data(paths: &AppPaths) -> Result<Value, ManagerError> {
     let pricing_config = read_pricing(paths)?;
     let pricing_index = create_pricing_index(&pricing_config);
-    let raw_logs = read_usage_logs(&paths.storage_files.usage_logs)?;
+    let raw_logs = read_usage_logs(paths)?;
     let logs = raw_logs
         .iter()
         .take(200)
@@ -558,19 +559,14 @@ fn get_initial_state_data(paths: &AppPaths) -> Result<Value, ManagerError> {
 }
 
 async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
-    let mut logs = Vec::new();
     let mut diagnostics = Vec::new();
-    let mut changed_session_found = false;
-    let mut usage_sessions = Vec::new();
-    let mut changed_session_paths = HashMap::new();
+    let mut updates = Vec::new();
     let workspace_created_at = std::fs::metadata(&paths.workspace_root)?
         .created()?
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| ManagerError::System(error.to_string()))?
         .as_millis() as u64;
-    let cached_logs = read_usage_logs(&paths.storage_files.usage_logs)?;
-    let cached_session_logs = create_cached_session_log_map(&cached_logs);
-    let usage_logs_updated_at = file_modified_at(&paths.storage_files.usage_logs);
+    let session_versions = usage_store::read_session_versions(paths)?;
 
     for session in collect_usage_sessions(paths, state)? {
         let app_type = normalize_app_type(&string_value(session.get("cli")));
@@ -580,110 +576,38 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
             continue;
         }
 
-        if let Some(cached_indexes) = cached_session_logs.get(&raw_path) {
-            if cached_session_logs_match(
-                &cached_logs,
-                cached_indexes,
-                &session,
-                usage_logs_updated_at,
-            ) {
-                usage_sessions.push(session);
-                continue;
-            }
-        } else if number_value(session.get("updatedAt"), 0) > 0
-            && usage_logs_updated_at >= number_value(session.get("updatedAt"), 0)
-        {
-            usage_sessions.push(session);
+        let session_updated_at = match number_value(session.get("updatedAt"), 0) {
+            0 => file_modified_at(&raw_path),
+            value => value,
+        };
+
+        if session_versions.get(&raw_path) == Some(&session_updated_at) {
             continue;
         }
 
-        changed_session_found = true;
-        changed_session_paths.insert(raw_path, true);
-        usage_sessions.push(session);
-    }
-
-    if !changed_session_found && diagnostics.is_empty() {
-        return Ok(diagnostics);
-    }
-
-    for session in usage_sessions {
-        let app_type = normalize_app_type(&string_value(session.get("cli")));
-        let raw_path = string_value(session.get("rawPath"));
-
-        if !changed_session_paths.contains_key(&raw_path) {
-            if let Some(cached_indexes) = cached_session_logs.get(&raw_path) {
-                logs.extend(
-                    cached_indexes
-                        .iter()
-                        .filter_map(|index| cached_logs.get(*index).cloned()),
+        match parse_usage_session(&session, state, workspace_created_at).await {
+            Ok(logs) => {
+                let request_ids = logs
+                    .iter()
+                    .map(|log| string_value(log.get("requestId")))
+                    .filter(|request_id| !request_id.is_empty())
+                    .collect::<Vec<_>>();
+                let record_map = usage_store::read_request_records(paths, &request_ids)?;
+                let (logs, records) = merge_usage_records(
+                    logs,
+                    record_map,
+                    state,
+                    workspace_created_at,
                 );
+
+                updates.push(UsageSessionUpdate {
+                    raw_path,
+                    app_type,
+                    updated_at: session_updated_at,
+                    logs,
+                    records,
+                });
             }
-            continue;
-        }
-
-        let parse_result = async {
-            let content = tokio::fs::read_to_string(&raw_path).await?;
-            let extension = Path::new(&raw_path)
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-            let mut session_created_at =
-                session_content_created_at(&app_type, &extension, &content)?;
-
-            if session_created_at == 0 {
-                session_created_at = std::fs::metadata(&raw_path)?
-                    .created()?
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_err(|error| ManagerError::System(error.to_string()))?
-                    .as_millis() as u64;
-            }
-
-            let is_legacy_unbound_session = session_created_at < workspace_created_at
-                && string_value(session.get("requestSource")).is_empty()
-                && string_value(session.get("instanceProviderId")).is_empty();
-            let request_source = if is_legacy_unbound_session {
-                String::new()
-            } else if !string_value(session.get("requestSource")).is_empty() {
-                string_value(session.get("requestSource"))
-            } else if proxy_state_enabled(state, &app_type) {
-                "proxy-managed".to_string()
-            } else {
-                String::new()
-            };
-            let mut usage_session = session.clone();
-
-            usage_session["requestSource"] = json!(request_source);
-            usage_session["sessionCreatedAt"] = json!(session_created_at);
-            let fallback_provider = if is_legacy_unbound_session {
-                json!({
-                  "providerId": app_type,
-                  "providerName": format_app_provider_name(&app_type),
-                  "providerType": ""
-                })
-            } else {
-                resolve_provider(&app_type, state)
-            };
-            let provider_info = create_session_provider_info(&usage_session, &fallback_provider);
-
-            if app_type == "claude" {
-                return extract_claude_logs(&usage_session, &content, &provider_info);
-            }
-
-            if app_type == "codex" && extension != "json" {
-                return extract_codex_logs(&usage_session, &content, &provider_info);
-            }
-
-            if app_type == "gemini" {
-                return extract_gemini_logs(&usage_session, &content, &provider_info);
-            }
-
-            Ok(Vec::new())
-        }
-        .await;
-
-        match parse_result {
-            Ok(items) => logs.extend(items),
             Err(error) => diagnostics.push(json!({
               "type": "usage-parse-error",
               "message": error.to_string(),
@@ -692,22 +616,85 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         }
     }
 
-    let mut record_map = read_array(&paths.storage_files.usage_request_records)?
-        .into_iter()
-        .map(|item| (string_value(item.get("requestId")), item))
-        .collect::<HashMap<_, _>>();
+    usage_store::replace_sessions(paths, &updates)?;
+    Ok(diagnostics)
+}
 
-    for log in cached_logs.iter() {
-        let request_id = string_value(log.get("requestId"));
+pub fn migrate_legacy_storage(paths: &AppPaths) -> Result<(), ManagerError> {
+    usage_store::initialize(paths)
+}
 
-        if !record_map.contains_key(&request_id) {
-            record_map.insert(
-                request_id,
-                create_request_record(&log, &create_log_provider_info(&log)),
-            );
-        }
+async fn parse_usage_session(
+    session: &Value,
+    state: &Value,
+    workspace_created_at: u64,
+) -> Result<Vec<Value>, ManagerError> {
+    let app_type = normalize_app_type(&string_value(session.get("cli")));
+    let raw_path = string_value(session.get("rawPath"));
+    let content = tokio::fs::read_to_string(&raw_path).await?;
+    let extension = Path::new(&raw_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let mut session_created_at = session_content_created_at(&app_type, &extension, &content)?;
+
+    if session_created_at == 0 {
+        session_created_at = std::fs::metadata(&raw_path)?
+            .created()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| ManagerError::System(error.to_string()))?
+            .as_millis() as u64;
     }
 
+    let is_legacy_unbound_session = session_created_at < workspace_created_at
+        && string_value(session.get("requestSource")).is_empty()
+        && string_value(session.get("instanceProviderId")).is_empty();
+    let request_source = if is_legacy_unbound_session {
+        String::new()
+    } else if !string_value(session.get("requestSource")).is_empty() {
+        string_value(session.get("requestSource"))
+    } else if proxy_state_enabled(state, &app_type) {
+        "proxy-managed".to_string()
+    } else {
+        String::new()
+    };
+    let mut usage_session = session.clone();
+
+    usage_session["requestSource"] = json!(request_source);
+    usage_session["sessionCreatedAt"] = json!(session_created_at);
+    let fallback_provider = if is_legacy_unbound_session {
+        json!({
+          "providerId": app_type,
+          "providerName": format_app_provider_name(&app_type),
+          "providerType": ""
+        })
+    } else {
+        resolve_provider(&app_type, state)
+    };
+    let provider_info = create_session_provider_info(&usage_session, &fallback_provider);
+
+    if app_type == "claude" {
+        return extract_claude_logs(&usage_session, &content, &provider_info);
+    }
+
+    if app_type == "codex" && extension != "json" {
+        return extract_codex_logs(&usage_session, &content, &provider_info);
+    }
+
+    if app_type == "gemini" {
+        return extract_gemini_logs(&usage_session, &content, &provider_info);
+    }
+
+    Ok(Vec::new())
+}
+
+fn merge_usage_records(
+    logs: Vec<Value>,
+    mut record_map: HashMap<String, Value>,
+    state: &Value,
+    workspace_created_at: u64,
+) -> (Vec<Value>, Vec<Value>) {
     let providers = state
         .get("providers")
         .and_then(Value::as_array)
@@ -792,87 +779,26 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         merged_logs.push(apply_request_record(&log, &request_record));
     }
 
-    let mut unique_logs = Vec::new();
-    let mut seen_logs = HashMap::new();
-
-    for log in merged_logs {
-        let request_id = string_value(log.get("requestId"));
-
-        if !seen_logs.contains_key(&request_id) {
-            seen_logs.insert(request_id, true);
-            unique_logs.push(log);
-        }
-    }
-
-    unique_logs.sort_by(|left, right| {
+    merged_logs.sort_by(|left, right| {
         number_value(right.get("createdAt"), 0).cmp(&number_value(left.get("createdAt"), 0))
     });
+    let mut seen_logs = HashSet::new();
+
+    merged_logs.retain(|log| seen_logs.insert(string_value(log.get("requestId"))));
     let mut records = record_map.into_values().collect::<Vec<_>>();
 
     records.sort_by(|left, right| {
         number_value(right.get("createdAt"), 0).cmp(&number_value(left.get("createdAt"), 0))
     });
-    write_json(&paths.storage_files.usage_logs, &json!(unique_logs)).await?;
-    write_json(&paths.storage_files.usage_request_records, &json!(records)).await?;
-    Ok(diagnostics)
-}
-
-fn create_cached_session_log_map(logs: &[Value]) -> HashMap<String, Vec<usize>> {
-    let mut map: HashMap<String, Vec<usize>> = HashMap::new();
-
-    for (index, log) in logs.iter().enumerate() {
-        let raw_path = string_value(log.get("rawPath"));
-
-        if raw_path.is_empty() {
-            continue;
-        }
-
-        map.entry(raw_path).or_default().push(index);
-    }
-
-    map
-}
-
-fn cached_session_logs_match(
-    logs: &[Value],
-    indexes: &[usize],
-    session: &Value,
-    usage_logs_updated_at: u64,
-) -> bool {
-    if indexes.is_empty() {
-        return false;
-    }
-
-    let session_updated_at = number_value(session.get("updatedAt"), 0);
-
-    if session_updated_at == 0 {
-        return false;
-    }
-
-    if indexes.iter().all(|index| {
-        logs.get(*index).is_some_and(|log| {
-            number_value(log.get("sessionUpdatedAt"), 0) > 0
-                && number_value(log.get("sessionUpdatedAt"), 0) == session_updated_at
-        })
-    }) {
-        return true;
-    }
-
-    usage_logs_updated_at >= session_updated_at
+    (merged_logs, records)
 }
 
 fn read_pricing(paths: &AppPaths) -> Result<Value, ManagerError> {
-    match std::fs::read_to_string(&paths.storage_files.usage_pricing) {
-        Ok(content) => normalize_pricing_config(serde_json::from_str(&content)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            normalize_pricing_config(json!({}))
-        }
-        Err(error) => Err(ManagerError::Io(error)),
-    }
+    normalize_pricing_config(usage_store::read_pricing(paths)?)
 }
 
 async fn write_pricing(paths: &AppPaths, pricing: &Value) -> Result<(), ManagerError> {
-    write_json(&paths.storage_files.usage_pricing, pricing).await
+    usage_store::write_pricing(paths, pricing)
 }
 
 fn normalize_pricing_config(input: Value) -> Result<Value, ManagerError> {
@@ -1721,6 +1647,18 @@ fn create_usage_trend_label(
     }
 
     (day, local_sort_at(created_at, false, false))
+}
+
+fn create_usage_log_query(filters: &Value) -> UsageLogQuery {
+    UsageLogQuery {
+        app_type: non_empty_text(filters.get("appType"), "all"),
+        provider_id: non_empty_text(filters.get("providerId"), "all"),
+        provider_ids: string_array(filters.get("providerIds")),
+        model: non_empty_text(filters.get("model"), "all"),
+        request_source: non_empty_text(filters.get("requestSource"), "all"),
+        start_at: number_value(filters.get("startAt"), 0),
+        end_at: number_value(filters.get("endAt"), 0),
+    }
 }
 
 fn in_range(log: &Value, filters: &Value) -> bool {
@@ -3491,62 +3429,31 @@ mod tests {
 
         assert!(error.to_string().contains("PNG"));
     }
+
 }
 
-fn read_array(path: &str) -> Result<Vec<Value>, ManagerError> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => Ok(serde_json::from_str(&content)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(ManagerError::Io(error)),
-    }
-}
-
-fn read_usage_logs(path: &str) -> Result<Arc<Vec<Value>>, ManagerError> {
-    let metadata = match std::fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Arc::new(Vec::new()));
-        }
-        Err(error) => return Err(ManagerError::Io(error)),
-    };
-    let modified_at = metadata
-        .modified()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| ManagerError::System(error.to_string()))?
-        .as_millis();
+fn read_usage_logs(paths: &AppPaths) -> Result<Arc<Vec<Value>>, ManagerError> {
+    let revision = usage_store::revision(paths)?;
+    let path = &paths.storage_files.usage_database;
     let cache = USAGE_LOG_CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = cache
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
     if let Some(cache) = cache.as_ref() {
-        if cache.path == path && cache.len == metadata.len() && cache.modified_at == modified_at {
+        if cache.path == *path && cache.revision == revision {
             return Ok(cache.logs.clone());
         }
     }
 
-    let logs: Arc<Vec<Value>> = Arc::new(serde_json::from_str(&std::fs::read_to_string(path)?)?);
+    let logs = Arc::new(usage_store::read_all_logs(paths)?);
 
     *cache = Some(UsageLogCache {
-        path: path.to_string(),
-        len: metadata.len(),
-        modified_at,
+        path: path.clone(),
+        revision,
         logs: logs.clone(),
     });
     Ok(logs)
-}
-
-async fn write_json(path: &str, payload: &Value) -> Result<(), ManagerError> {
-    if let Some(parent) = Path::new(path).parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    tokio::fs::write(
-        path,
-        format!("{}\n", serde_json::to_string_pretty(payload)?),
-    )
-    .await?;
-    Ok(())
 }
 
 fn round_to(value: f64, digits: i32) -> f64 {

@@ -1,0 +1,926 @@
+use crate::core::error::ManagerError;
+use crate::core::paths::AppPaths;
+use rusqlite::types::Value as SqlValue;
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction, MAIN_DB};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::path::Path;
+use std::time::Duration;
+
+const SCHEMA_VERSION: i64 = 1;
+
+pub struct UsageLogQuery {
+    pub app_type: String,
+    pub provider_id: String,
+    pub provider_ids: Vec<String>,
+    pub model: String,
+    pub request_source: String,
+    pub start_at: u64,
+    pub end_at: u64,
+}
+
+pub struct UsageSessionUpdate {
+    pub raw_path: String,
+    pub app_type: String,
+    pub updated_at: u64,
+    pub logs: Vec<Value>,
+    pub records: Vec<Value>,
+}
+
+pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
+    let mut connection = open_connection(paths)?;
+    create_schema(&connection)?;
+    migrate_legacy_json(paths, &mut connection)?;
+    remove_legacy_usage_files(paths)
+}
+
+pub fn backup_database(paths: &AppPaths) -> Result<Vec<u8>, ManagerError> {
+    initialize(paths)?;
+    std::fs::create_dir_all(&paths.temp_dir)?;
+    let snapshot_path = Path::new(&paths.temp_dir).join(format!(
+        "usage-backup-{}-{}.db",
+        std::process::id(),
+        now_millis()
+    ));
+    let result = (|| {
+        let connection = open_connection(paths)?;
+        connection.backup(MAIN_DB, &snapshot_path, None)?;
+        Ok(std::fs::read(&snapshot_path)?)
+    })();
+
+    if snapshot_path.exists() {
+        std::fs::remove_file(snapshot_path)?;
+    }
+    result
+}
+
+pub fn restore_database(paths: &AppPaths, content: &[u8]) -> Result<(), ManagerError> {
+    initialize(paths)?;
+    std::fs::create_dir_all(&paths.temp_dir)?;
+    let snapshot_path = Path::new(&paths.temp_dir).join(format!(
+        "usage-restore-{}-{}.db",
+        std::process::id(),
+        now_millis()
+    ));
+    std::fs::write(&snapshot_path, content)?;
+    let result = (|| {
+        let source = Connection::open(&snapshot_path)?;
+        let integrity =
+            source.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))?;
+
+        if integrity != "ok" {
+            return Err(ManagerError::System(format!(
+                "Usage 数据库备份校验失败：{integrity}"
+            )));
+        }
+
+        let schema_version = source
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get::<_, Option<i64>>(0)
+            })?
+            .unwrap_or(0);
+
+        if schema_version == 0 {
+            return Err(ManagerError::System(
+                "Usage 数据库备份缺少结构版本。".to_string(),
+            ));
+        }
+        drop(source);
+
+        let mut connection = open_connection(paths)?;
+        connection.restore(
+            MAIN_DB,
+            &snapshot_path,
+            None::<fn(rusqlite::backup::Progress)>,
+        )?;
+        create_schema(&connection)?;
+        connection.execute(
+            "INSERT INTO usage_metadata(key, value) VALUES ('revision', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![now_millis().to_string()],
+        )?;
+        connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        Ok(())
+    })();
+
+    if snapshot_path.exists() {
+        std::fs::remove_file(snapshot_path)?;
+    }
+    result?;
+    remove_legacy_usage_files(paths)
+}
+
+pub fn read_pricing(paths: &AppPaths) -> Result<Value, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    let exchange_rate = connection
+        .query_row(
+            "SELECT exchange_rate FROM usage_pricing_config WHERE id = 1",
+            [],
+            |row| row.get::<_, f64>(0),
+        )
+        .optional()?
+        .unwrap_or(7.2);
+    let mut statement = connection.prepare(
+        "SELECT id, model_id, model_category, currency,
+                input_cost_per_million, output_cost_per_million,
+                cache_read_cost_per_million, cache_creation_cost_per_million
+         FROM usage_pricing_items
+         ORDER BY sort_order ASC, id ASC",
+    )?;
+    let items = statement
+        .query_map([], |row| {
+            Ok(json!({
+              "id": row.get::<_, String>(0)?,
+              "modelId": row.get::<_, String>(1)?,
+              "modelCategory": row.get::<_, String>(2)?,
+              "currency": row.get::<_, String>(3)?,
+              "inputCostPerMillion": row.get::<_, f64>(4)?,
+              "outputCostPerMillion": row.get::<_, f64>(5)?,
+              "cacheReadCostPerMillion": row.get::<_, f64>(6)?,
+              "cacheCreationCostPerMillion": row.get::<_, f64>(7)?
+            }))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    Ok(json!({
+      "exchangeRate": exchange_rate,
+      "items": items
+    }))
+}
+
+pub fn write_pricing(paths: &AppPaths, pricing: &Value) -> Result<(), ManagerError> {
+    initialize(paths)?;
+    let mut connection = open_connection(paths)?;
+    let transaction = connection.transaction()?;
+
+    replace_pricing(&transaction, pricing)?;
+    bump_revision(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn query_logs(paths: &AppPaths, query: &UsageLogQuery) -> Result<Vec<Value>, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    let (where_sql, parameters) = build_log_where(query);
+    let sql = format!(
+        "SELECT payload_json FROM usage_logs {where_sql} ORDER BY created_at DESC, request_id ASC"
+    );
+    read_log_query(&connection, &sql, parameters)
+}
+
+pub fn read_all_logs(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    read_log_query(
+        &connection,
+        "SELECT payload_json FROM usage_logs ORDER BY created_at DESC, request_id ASC",
+        Vec::new(),
+    )
+}
+
+pub fn read_app_types(paths: &AppPaths) -> Result<Vec<String>, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT app_type FROM usage_logs WHERE app_type <> '' ORDER BY app_type ASC",
+    )?;
+
+    let items = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(items)
+}
+
+pub fn read_session_versions(paths: &AppPaths) -> Result<HashMap<String, u64>, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    let mut statement = connection.prepare("SELECT raw_path, updated_at FROM usage_sessions")?;
+    let items = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+    })?;
+
+    Ok(items.collect::<Result<HashMap<_, _>, _>>()?)
+}
+
+pub fn read_request_records(
+    paths: &AppPaths,
+    request_ids: &[String],
+) -> Result<HashMap<String, Value>, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    let mut output = HashMap::new();
+
+    for chunk in request_ids.chunks(500) {
+        if chunk.is_empty() {
+            continue;
+        }
+
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT request_id, payload_json FROM usage_request_records WHERE request_id IN ({placeholders})"
+        );
+        let mut statement = connection.prepare(&sql)?;
+        let parameters = chunk
+            .iter()
+            .cloned()
+            .map(SqlValue::Text)
+            .collect::<Vec<_>>();
+        let rows = statement.query_map(params_from_iter(parameters.iter()), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        for row in rows {
+            let (request_id, payload) = row?;
+            output.insert(request_id, serde_json::from_str(&payload)?);
+        }
+    }
+
+    Ok(output)
+}
+
+pub fn replace_sessions(
+    paths: &AppPaths,
+    updates: &[UsageSessionUpdate],
+) -> Result<(), ManagerError> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+
+    initialize(paths)?;
+    let mut connection = open_connection(paths)?;
+    let transaction = connection.transaction()?;
+
+    for update in updates {
+        transaction.execute(
+            "DELETE FROM usage_logs WHERE raw_path = ?1",
+            params![update.raw_path],
+        )?;
+
+        for log in &update.logs {
+            insert_usage_log(&transaction, log)?;
+        }
+
+        for record in &update.records {
+            insert_request_record(&transaction, record)?;
+        }
+
+        transaction.execute(
+            "INSERT INTO usage_sessions(raw_path, app_type, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(raw_path) DO UPDATE SET
+               app_type = excluded.app_type,
+               updated_at = excluded.updated_at",
+            params![update.raw_path, update.app_type, to_i64(update.updated_at)],
+        )?;
+    }
+
+    bump_revision(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn revision(paths: &AppPaths) -> Result<u64, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+
+    Ok(connection
+        .query_row(
+            "SELECT value FROM usage_metadata WHERE key = 'revision'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0))
+}
+
+fn open_connection(paths: &AppPaths) -> Result<Connection, ManagerError> {
+    if let Some(parent) = Path::new(&paths.storage_files.usage_database).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let connection = Connection::open(&paths.storage_files.usage_database)?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(connection)
+}
+
+fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+           version INTEGER PRIMARY KEY,
+           applied_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS usage_metadata (
+           key TEXT PRIMARY KEY,
+           value TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS usage_logs (
+           request_id TEXT PRIMARY KEY,
+           raw_path TEXT NOT NULL DEFAULT '',
+           created_at INTEGER NOT NULL,
+           session_updated_at INTEGER NOT NULL DEFAULT 0,
+           app_type TEXT NOT NULL DEFAULT '',
+           provider_id TEXT NOT NULL DEFAULT '',
+           model TEXT NOT NULL DEFAULT '',
+           request_source TEXT NOT NULL DEFAULT 'session',
+           payload_json TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at
+           ON usage_logs(created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_usage_logs_raw_path
+           ON usage_logs(raw_path);
+         CREATE INDEX IF NOT EXISTS idx_usage_logs_app_created_at
+           ON usage_logs(app_type, created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_usage_logs_provider_created_at
+           ON usage_logs(provider_id, created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_usage_logs_model_created_at
+           ON usage_logs(model, created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_usage_logs_source_created_at
+           ON usage_logs(request_source, created_at DESC);
+         CREATE TABLE IF NOT EXISTS usage_sessions (
+           raw_path TEXT PRIMARY KEY,
+           app_type TEXT NOT NULL DEFAULT '',
+           updated_at INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE TABLE IF NOT EXISTS usage_request_records (
+           request_id TEXT PRIMARY KEY,
+           created_at INTEGER NOT NULL DEFAULT 0,
+           payload_json TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_usage_request_records_created_at
+           ON usage_request_records(created_at DESC);
+         CREATE TABLE IF NOT EXISTS usage_pricing_config (
+           id INTEGER PRIMARY KEY CHECK(id = 1),
+           exchange_rate REAL NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS usage_pricing_items (
+           id TEXT PRIMARY KEY,
+           sort_order INTEGER NOT NULL,
+           model_id TEXT NOT NULL,
+           model_category TEXT NOT NULL DEFAULT '',
+           currency TEXT NOT NULL DEFAULT 'USD',
+           input_cost_per_million REAL NOT NULL DEFAULT 0,
+           output_cost_per_million REAL NOT NULL DEFAULT 0,
+           cache_read_cost_per_million REAL NOT NULL DEFAULT 0,
+           cache_creation_cost_per_million REAL NOT NULL DEFAULT 0
+         );
+         CREATE INDEX IF NOT EXISTS idx_usage_pricing_model_id
+           ON usage_pricing_items(model_id);
+         INSERT OR IGNORE INTO usage_metadata(key, value) VALUES ('revision', '0');",
+    )?;
+    connection.execute(
+        "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
+        params![SCHEMA_VERSION, now_millis() as i64],
+    )?;
+    Ok(())
+}
+
+fn migrate_legacy_json(paths: &AppPaths, connection: &mut Connection) -> Result<(), ManagerError> {
+    let log_path = Path::new(&paths.storage_files.usage_logs);
+    let record_path = Path::new(&paths.storage_files.usage_request_records);
+    let pricing_path = Path::new(&paths.storage_files.usage_pricing);
+
+    if !log_path.exists() && !record_path.exists() && !pricing_path.exists() {
+        return Ok(());
+    }
+
+    let logs = read_json_array(log_path)?;
+    let records = read_json_array(record_path)?;
+    let pricing = read_json_value(pricing_path)?;
+    let transaction = connection.transaction()?;
+
+    for log in &logs {
+        insert_usage_log(&transaction, log)?;
+    }
+
+    for record in &records {
+        insert_request_record(&transaction, record)?;
+    }
+
+    if let Some(pricing) = pricing.as_ref() {
+        replace_pricing(&transaction, pricing)?;
+    }
+
+    if !logs.is_empty() {
+        rebuild_session_versions(&transaction)?;
+    }
+    bump_revision(&transaction)?;
+    transaction.commit()?;
+
+    Ok(())
+}
+
+fn insert_usage_log(transaction: &Transaction<'_>, log: &Value) -> Result<(), ManagerError> {
+    let request_id = non_empty_text(log.get("requestId"), &text(log.get("id")));
+
+    if request_id.is_empty() {
+        return Ok(());
+    }
+
+    let mut stored_log = log.clone();
+    stored_log["requestId"] = json!(request_id);
+
+    transaction.execute(
+        "INSERT INTO usage_logs(
+           request_id, raw_path, created_at, session_updated_at,
+           app_type, provider_id, model, request_source, payload_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(request_id) DO UPDATE SET
+           raw_path = excluded.raw_path,
+           created_at = excluded.created_at,
+           session_updated_at = excluded.session_updated_at,
+           app_type = excluded.app_type,
+           provider_id = excluded.provider_id,
+           model = excluded.model,
+           request_source = excluded.request_source,
+           payload_json = excluded.payload_json",
+        params![
+            request_id,
+            text(stored_log.get("rawPath")),
+            number(stored_log.get("createdAt")),
+            number(stored_log.get("sessionUpdatedAt")),
+            text(stored_log.get("appType")),
+            text(stored_log.get("providerId")),
+            text(stored_log.get("model")),
+            non_empty_text(stored_log.get("requestSource"), "session"),
+            serde_json::to_string(&stored_log)?
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_request_record(
+    transaction: &Transaction<'_>,
+    record: &Value,
+) -> Result<(), ManagerError> {
+    let request_id = text(record.get("requestId"));
+
+    if request_id.is_empty() {
+        return Ok(());
+    }
+
+    transaction.execute(
+        "INSERT INTO usage_request_records(request_id, created_at, payload_json)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(request_id) DO UPDATE SET
+           created_at = excluded.created_at,
+           payload_json = excluded.payload_json",
+        params![
+            request_id,
+            number(record.get("createdAt")),
+            serde_json::to_string(record)?
+        ],
+    )?;
+    Ok(())
+}
+
+fn replace_pricing(transaction: &Transaction<'_>, pricing: &Value) -> Result<(), ManagerError> {
+    let exchange_rate = decimal(pricing.get("exchangeRate"), 7.2);
+
+    transaction.execute(
+        "INSERT INTO usage_pricing_config(id, exchange_rate) VALUES (1, ?1)
+         ON CONFLICT(id) DO UPDATE SET exchange_rate = excluded.exchange_rate",
+        params![exchange_rate],
+    )?;
+    transaction.execute("DELETE FROM usage_pricing_items", [])?;
+
+    for (index, item) in pricing
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let id = non_empty_text(item.get("id"), &format!("pricing-legacy-{index}"));
+        let model_id = text(item.get("modelId"));
+
+        if model_id.is_empty() {
+            continue;
+        }
+
+        transaction.execute(
+            "INSERT OR REPLACE INTO usage_pricing_items(
+               id, sort_order, model_id, model_category, currency,
+               input_cost_per_million, output_cost_per_million,
+               cache_read_cost_per_million, cache_creation_cost_per_million
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                id,
+                index as i64,
+                model_id,
+                non_empty_text(
+                    item.get("modelCategory").or_else(|| item.get("category")),
+                    ""
+                ),
+                non_empty_text(item.get("currency"), "USD").to_uppercase(),
+                decimal(item.get("inputCostPerMillion"), 0.0),
+                decimal(item.get("outputCostPerMillion"), 0.0),
+                decimal(item.get("cacheReadCostPerMillion"), 0.0),
+                decimal(item.get("cacheCreationCostPerMillion"), 0.0)
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn rebuild_session_versions(transaction: &Transaction<'_>) -> Result<(), ManagerError> {
+    transaction.execute_batch(
+        "INSERT INTO usage_sessions(raw_path, app_type, updated_at)
+         SELECT raw_path, MAX(app_type), MAX(session_updated_at)
+         FROM usage_logs
+         WHERE raw_path <> ''
+         GROUP BY raw_path
+         ON CONFLICT(raw_path) DO UPDATE SET
+           app_type = excluded.app_type,
+           updated_at = excluded.updated_at;",
+    )?;
+    Ok(())
+}
+
+fn bump_revision(transaction: &Transaction<'_>) -> Result<(), ManagerError> {
+    transaction.execute(
+        "UPDATE usage_metadata
+         SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
+         WHERE key = 'revision'",
+        [],
+    )?;
+    Ok(())
+}
+
+fn build_log_where(query: &UsageLogQuery) -> (String, Vec<SqlValue>) {
+    let mut clauses: Vec<String> = Vec::new();
+    let mut parameters = Vec::new();
+
+    if query.app_type != "all" {
+        clauses.push("app_type = ?".to_string());
+        parameters.push(SqlValue::Text(query.app_type.clone()));
+    }
+
+    if !query.provider_ids.is_empty() {
+        let placeholders = std::iter::repeat_n("?", query.provider_ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        clauses.push(format!("provider_id IN ({placeholders})"));
+        parameters.extend(query.provider_ids.iter().cloned().map(SqlValue::Text));
+    } else if query.provider_id != "all" {
+        clauses.push("provider_id = ?".to_string());
+        parameters.push(SqlValue::Text(query.provider_id.clone()));
+    }
+
+    if query.model != "all" {
+        clauses.push("model = ?".to_string());
+        parameters.push(SqlValue::Text(query.model.clone()));
+    }
+
+    if query.request_source != "all" {
+        clauses.push("request_source = ?".to_string());
+        parameters.push(SqlValue::Text(query.request_source.clone()));
+    }
+
+    if query.start_at > 0 {
+        clauses.push("created_at >= ?".to_string());
+        parameters.push(SqlValue::Integer(to_i64(query.start_at)));
+    }
+
+    if query.end_at > 0 {
+        clauses.push("created_at <= ?".to_string());
+        parameters.push(SqlValue::Integer(to_i64(query.end_at)));
+    }
+
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", clauses.join(" AND "))
+    };
+    (where_sql, parameters)
+}
+
+fn read_log_query(
+    connection: &Connection,
+    sql: &str,
+    parameters: Vec<SqlValue>,
+) -> Result<Vec<Value>, ManagerError> {
+    let mut statement = connection.prepare(sql)?;
+    let rows = statement.query_map(params_from_iter(parameters.iter()), |row| {
+        row.get::<_, String>(0)
+    })?;
+    let mut logs = Vec::new();
+
+    for row in rows {
+        logs.push(serde_json::from_str(&row?)?);
+    }
+    Ok(logs)
+}
+
+fn read_json_array(path: &Path) -> Result<Vec<Value>, ManagerError> {
+    Ok(read_json_value(path)?
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default())
+}
+
+fn read_json_value(path: &Path) -> Result<Option<Value>, ManagerError> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(serde_json::from_str(&content)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ManagerError::Io(error)),
+    }
+}
+
+fn remove_legacy_usage_files(paths: &AppPaths) -> Result<(), ManagerError> {
+    for path in [
+        &paths.storage_files.usage_logs,
+        &paths.storage_files.usage_request_records,
+        &paths.storage_files.usage_pricing,
+    ] {
+        let path = Path::new(path);
+        let Some(parent) = path.parent() else {
+            continue;
+        };
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+
+        if !parent.exists() {
+            continue;
+        }
+
+        for entry in std::fs::read_dir(parent)? {
+            let entry = entry?;
+            let entry_name = entry.file_name().to_string_lossy().to_string();
+
+            if entry.path().is_file()
+                && (entry_name == file_name || entry_name.starts_with(&format!("{file_name}.")))
+            {
+                std::fs::remove_file(entry.path())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn text(value: Option<&Value>) -> String {
+    value
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+fn non_empty_text(value: Option<&Value>, fallback: &str) -> String {
+    let value = text(value);
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value
+    }
+}
+
+fn number(value: Option<&Value>) -> i64 {
+    value
+        .and_then(Value::as_i64)
+        .or_else(|| value.and_then(Value::as_u64).map(to_i64))
+        .or_else(|| value.and_then(Value::as_f64).map(|value| value as i64))
+        .unwrap_or(0)
+}
+
+fn decimal(value: Option<&Value>, fallback: f64) -> f64 {
+    value
+        .and_then(Value::as_f64)
+        .or_else(|| {
+            value
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse().ok())
+        })
+        .unwrap_or(fallback)
+}
+
+fn to_i64(value: u64) -> i64 {
+    value.min(i64::MAX as u64) as i64
+}
+
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        initialize, query_logs, read_pricing, replace_sessions, write_pricing, UsageLogQuery,
+        UsageSessionUpdate,
+    };
+    use crate::core::paths::resolve_app_paths;
+    use serde_json::json;
+    use std::path::Path;
+
+    fn create_test_paths(name: &str) -> crate::core::paths::AppPaths {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-usage-store-{name}-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+        std::fs::create_dir_all(root.join("workspace/logs")).unwrap();
+        std::fs::create_dir_all(root.join("workspace/storage")).unwrap();
+        resolve_app_paths(Path::new(&root))
+    }
+
+    fn all_query() -> UsageLogQuery {
+        UsageLogQuery {
+            app_type: "all".to_string(),
+            provider_id: "all".to_string(),
+            provider_ids: Vec::new(),
+            model: "all".to_string(),
+            request_source: "all".to_string(),
+            start_at: 0,
+            end_at: 0,
+        }
+    }
+
+    #[test]
+    fn migrates_legacy_usage_json_into_sqlite() {
+        let paths = create_test_paths("migration");
+        std::fs::write(
+            &paths.storage_files.usage_logs,
+            serde_json::to_string(&json!([{
+              "requestId": "request-1",
+              "rawPath": "session-1.jsonl",
+              "createdAt": 100,
+              "sessionUpdatedAt": 120,
+              "appType": "codex",
+              "providerId": "provider-1",
+              "model": "gpt-test",
+              "requestSource": "session"
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &paths.storage_files.usage_request_records,
+            serde_json::to_string(&json!([{
+              "requestId": "request-1",
+              "createdAt": 100,
+              "providerId": "provider-1"
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &paths.storage_files.usage_pricing,
+            serde_json::to_string(&json!({
+              "exchangeRate": 7.3,
+              "items": [{
+                "id": "pricing-1",
+                "modelId": "gpt-test",
+                "currency": "USD",
+                "inputCostPerMillion": 1
+              }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        initialize(&paths).unwrap();
+
+        assert_eq!(query_logs(&paths, &all_query()).unwrap().len(), 1);
+        assert_eq!(read_pricing(&paths).unwrap()["exchangeRate"], 7.3);
+        assert!(Path::new(&paths.storage_files.usage_database).exists());
+        assert!(!Path::new(&paths.storage_files.usage_logs).exists());
+        assert!(!Path::new(&format!("{}.migrated", paths.storage_files.usage_logs)).exists());
+    }
+
+    #[test]
+    fn replaces_only_the_changed_session() {
+        let paths = create_test_paths("incremental");
+        initialize(&paths).unwrap();
+        replace_sessions(
+            &paths,
+            &[
+                UsageSessionUpdate {
+                    raw_path: "session-1.jsonl".to_string(),
+                    app_type: "codex".to_string(),
+                    updated_at: 100,
+                    logs: vec![json!({
+                      "requestId": "request-1",
+                      "rawPath": "session-1.jsonl",
+                      "createdAt": 100,
+                      "appType": "codex"
+                    })],
+                    records: Vec::new(),
+                },
+                UsageSessionUpdate {
+                    raw_path: "session-2.jsonl".to_string(),
+                    app_type: "codex".to_string(),
+                    updated_at: 100,
+                    logs: vec![json!({
+                      "requestId": "request-2",
+                      "rawPath": "session-2.jsonl",
+                      "createdAt": 200,
+                      "appType": "codex"
+                    })],
+                    records: Vec::new(),
+                },
+            ],
+        )
+        .unwrap();
+        replace_sessions(
+            &paths,
+            &[UsageSessionUpdate {
+                raw_path: "session-1.jsonl".to_string(),
+                app_type: "codex".to_string(),
+                updated_at: 200,
+                logs: vec![json!({
+                  "requestId": "request-3",
+                  "rawPath": "session-1.jsonl",
+                  "createdAt": 300,
+                  "appType": "codex"
+                })],
+                records: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        let logs = query_logs(&paths, &all_query()).unwrap();
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0]["requestId"], "request-3");
+        assert_eq!(logs[1]["requestId"], "request-2");
+    }
+
+    #[test]
+    fn filters_logs_and_persists_pricing() {
+        let paths = create_test_paths("filters");
+        initialize(&paths).unwrap();
+        replace_sessions(
+            &paths,
+            &[UsageSessionUpdate {
+                raw_path: "session.jsonl".to_string(),
+                app_type: "codex".to_string(),
+                updated_at: 100,
+                logs: vec![
+                    json!({
+                      "requestId": "request-1",
+                      "rawPath": "session.jsonl",
+                      "createdAt": 100,
+                      "appType": "codex",
+                      "providerId": "provider-1",
+                      "model": "gpt-a",
+                      "requestSource": "session"
+                    }),
+                    json!({
+                      "requestId": "request-2",
+                      "rawPath": "session.jsonl",
+                      "createdAt": 200,
+                      "appType": "codex",
+                      "providerId": "provider-2",
+                      "model": "gpt-b",
+                      "requestSource": "proxy-managed"
+                    }),
+                ],
+                records: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let query = UsageLogQuery {
+            app_type: "codex".to_string(),
+            provider_id: "provider-2".to_string(),
+            provider_ids: Vec::new(),
+            model: "gpt-b".to_string(),
+            request_source: "proxy-managed".to_string(),
+            start_at: 150,
+            end_at: 250,
+        };
+
+        let logs = query_logs(&paths, &query).unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["requestId"], "request-2");
+
+        write_pricing(
+            &paths,
+            &json!({
+              "exchangeRate": 7.5,
+              "items": [{
+                "id": "pricing-1",
+                "modelId": "gpt-b",
+                "modelCategory": "text",
+                "currency": "CNY",
+                "inputCostPerMillion": 2.5,
+                "outputCostPerMillion": 5
+              }]
+            }),
+        )
+        .unwrap();
+        let pricing = read_pricing(&paths).unwrap();
+        assert_eq!(pricing["exchangeRate"], 7.5);
+        assert_eq!(pricing["items"][0]["modelId"], "gpt-b");
+        assert_eq!(pricing["items"][0]["currency"], "CNY");
+    }
+}
