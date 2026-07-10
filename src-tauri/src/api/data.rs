@@ -1,5 +1,5 @@
 use crate::api::{runtime_provider, usage};
-use crate::core::{database, rule_store, skill_store};
+use crate::core::{database, provider_store, rule_store, skill_store};
 use crate::core::error::ManagerError;
 use crate::core::paths::{ensure_app_directories, home_path, path_text, AppPaths};
 use crate::core::settings::{
@@ -386,7 +386,7 @@ fn serialize_backup_app_settings(app_settings: &AppSettings) -> Value {
 
 async fn preview_data_backup_restore_content(paths: &AppPaths, content: &str) -> Result<Value, ManagerError> {
     let backup = parse_backup(content)?;
-    let mut preview = create_restore_preview(&paths.workspace_root, backup["workspaceEntries"].as_array().cloned().unwrap_or_default()).await?;
+    let mut preview = create_restore_preview(paths, backup["workspaceEntries"].as_array().cloned().unwrap_or_default()).await?;
 
     preview["createdAt"] = json!(number_value(backup.get("createdAt"), 0));
     Ok(preview)
@@ -465,11 +465,13 @@ async fn restore_data_backup_content(
         &choices,
     )
     .await?;
-    restore_database_entries(paths, &workspace_entries, &choices).await?;
+    restore_legacy_usage_database_entry(paths, &workspace_entries, &choices).await?;
     migrate_workspace_data(paths).await?;
     usage::migrate_legacy_storage(paths)?;
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
+    provider_store::initialize(paths)?;
+    restore_database_entries(paths, &workspace_entries, &choices).await?;
     write_json(&paths.storage_files.cli_targets, &json!([])).await?;
 
     if let Some(runtime_provider_keys) = runtime_provider_keys {
@@ -486,19 +488,9 @@ async fn collect_backup_entries(
     usage::migrate_legacy_storage(paths)?;
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
+    provider_store::initialize(paths)?;
 
     let storage_files = vec![
-        (&paths.storage_files.providers, "storage/providers.json"),
-        (&paths.storage_files.runtime_models, "storage/runtime-models.json"),
-        (&paths.storage_files.runtime_profiles, "storage/runtime-profiles.json"),
-        (
-            &paths.storage_files.runtime_provider_state,
-            "storage/runtime-provider-state.json",
-        ),
-        (
-            &paths.storage_files.runtime_provider_keys,
-            "storage/runtime-provider-keys.json",
-        ),
         (
             &paths.storage_files.claude_proxy_config,
             "storage/claude-proxy-config.json",
@@ -514,11 +506,6 @@ async fn collect_backup_entries(
         (
             &paths.storage_files.codex_proxy_request_logs,
             "storage/codex-proxy-request-logs.json",
-        ),
-        (&paths.storage_files.codex_accounts, "storage/codex-accounts.json"),
-        (
-            &paths.storage_files.codex_active_account_id,
-            "storage/codex-active-account-id.json",
         ),
     ];
     let mut entries = Vec::new();
@@ -839,7 +826,8 @@ fn create_backup_entry_view(entry: &Value) -> Result<Value, ManagerError> {
     }))
 }
 
-async fn create_restore_preview(root_path: &str, entries: Vec<Value>) -> Result<Value, ManagerError> {
+async fn create_restore_preview(paths: &AppPaths, entries: Vec<Value>) -> Result<Value, ManagerError> {
+    let root_path = &paths.workspace_root;
     let mut added = Vec::new();
     let mut conflicts = Vec::new();
 
@@ -848,6 +836,20 @@ async fn create_restore_preview(root_path: &str, entries: Vec<Value>) -> Result<
         .filter(|item| item.get("type").and_then(Value::as_str) == Some("file"))
     {
         let entry_path = string_value(entry.get("path"));
+
+        if entry_path == "storage/ai-manager.db" {
+            let backup_content = base64::engine::general_purpose::STANDARD
+                .decode(string_value(entry.get("content")))
+                .map_err(|error| ManagerError::System(error.to_string()))?;
+
+            for difference in database::preview_restore(paths, &backup_content)? {
+                conflicts.push(create_database_table_restore_preview(
+                    &entry_path,
+                    &difference,
+                ));
+            }
+            continue;
+        }
         let current_content = read_current_file(root_path, &entry_path).await?;
 
         if is_mergeable_restore_json_path(&entry_path) {
@@ -1111,40 +1113,62 @@ async fn restore_database_entries(
     entries: &[Value],
     choices: &Map<String, Value>,
 ) -> Result<(), ManagerError> {
-    for entry_path in ["storage/ai-manager.db", "logs/usage.db"] {
-        let Some(entry) = entries.iter().find(|entry| {
-            entry.get("path").and_then(Value::as_str) == Some(entry_path)
-                && entry.get("type").and_then(Value::as_str) == Some("file")
-        }) else {
-            continue;
-        };
-        let backup_content = base64::engine::general_purpose::STANDARD
-            .decode(string_value(entry.get("content")))
-            .map_err(|error| ManagerError::System(error.to_string()))?;
-        let target_path = if entry_path == "storage/ai-manager.db" {
-            &paths.storage_files.database
-        } else {
-            &paths.storage_files.usage_database
-        };
-        let current_content = tokio::fs::read(target_path).await.ok();
+    let entry_path = "storage/ai-manager.db";
+    let Some(entry) = entries.iter().find(|entry| {
+        entry.get("path").and_then(Value::as_str) == Some(entry_path)
+            && entry.get("type").and_then(Value::as_str) == Some("file")
+    }) else {
+        return Ok(());
+    };
+    let backup_content = base64::engine::general_purpose::STANDARD
+        .decode(string_value(entry.get("content")))
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let selected_tables = database::preview_restore(paths, &backup_content)?
+        .into_iter()
+        .filter(|difference| {
+            choice_text(
+                choices,
+                &create_restore_database_table_key(entry_path, &difference.table),
+            ) == "backup"
+        })
+        .map(|difference| difference.table)
+        .collect::<Vec<_>>();
 
-        if current_content
-            .as_ref()
-            .is_some_and(|value| sha256_bytes(value) != sha256_bytes(&backup_content))
-            && choice_text(choices, &create_restore_file_key(entry_path)) != "backup"
-        {
-            continue;
-        }
-
-        if entry_path == "storage/ai-manager.db" {
-            database::restore(paths, &backup_content)?;
-        } else {
-            if let Some(parent) = Path::new(target_path).parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
-            tokio::fs::write(target_path, backup_content).await?;
-        }
+    if !selected_tables.is_empty() {
+        database::restore_selected(paths, &backup_content, &selected_tables)?;
     }
+    Ok(())
+}
+
+async fn restore_legacy_usage_database_entry(
+    paths: &AppPaths,
+    entries: &[Value],
+    choices: &Map<String, Value>,
+) -> Result<(), ManagerError> {
+    let entry_path = "logs/usage.db";
+    let Some(entry) = entries.iter().find(|entry| {
+        entry.get("path").and_then(Value::as_str) == Some(entry_path)
+            && entry.get("type").and_then(Value::as_str) == Some("file")
+    }) else {
+        return Ok(());
+    };
+    let backup_content = base64::engine::general_purpose::STANDARD
+        .decode(string_value(entry.get("content")))
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let target_path = &paths.storage_files.usage_database;
+    let current_content = tokio::fs::read(target_path).await.ok();
+
+    if current_content
+        .as_ref()
+        .is_some_and(|value| sha256_bytes(value) != sha256_bytes(&backup_content))
+        && choice_text(choices, &create_restore_file_key(entry_path)) != "backup"
+    {
+        return Ok(());
+    }
+    if let Some(parent) = Path::new(target_path).parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(target_path, backup_content).await?;
     Ok(())
 }
 
@@ -1201,7 +1225,11 @@ fn merge_json_backup_value(
                 }
             } else {
                 next_index_map.insert(item_key, next_items.len());
-                next_items.push(item.clone());
+                next_items.push(if entry_path == "storage/providers.json" {
+                    merge_restore_value(entry_path, &Value::Null, item)
+                } else {
+                    item.clone()
+                });
             }
         }
 
@@ -1231,6 +1259,19 @@ fn merge_json_backup_value(
 }
 
 fn merge_restore_value(entry_path: &str, current_value: &Value, backup_value: &Value) -> Value {
+    if entry_path == "storage/providers.json" {
+        let mut next_backup_value = backup_value.as_object().cloned().unwrap_or_default();
+
+        next_backup_value.insert(
+            "enabled".to_string(),
+            json!(current_value
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)),
+        );
+        return Value::Object(next_backup_value);
+    }
+
     if entry_path == "storage/skills.json" {
         let mut next_backup_value = backup_value.as_object().cloned().unwrap_or_default();
 
@@ -1725,8 +1766,8 @@ fn backup_secret() -> [u8; 32] {
 }
 
 fn export_provider_keys(paths: &AppPaths) -> Result<Value, ManagerError> {
-    let providers = read_array(&paths.storage_files.providers)?;
-    let keys = read_object(&paths.storage_files.runtime_provider_keys)?;
+    let providers = provider_store::read_providers(paths)?;
+    let keys = provider_store::read_keys(paths)?;
     let mut exported = Map::new();
 
     for provider in providers {
@@ -1749,7 +1790,19 @@ async fn merge_provider_keys(
     api_keys: &Value,
     choices: &Map<String, Value>,
 ) -> Result<(), ManagerError> {
-    let mut next_keys = read_object(&paths.storage_files.runtime_provider_keys)?;
+    let mut next_keys = provider_store::read_keys(paths)?;
+    let provider_ids = provider_store::read_providers(paths)?
+        .into_iter()
+        .map(|provider| string_value(provider.get("id")))
+        .filter(|provider_id| !provider_id.is_empty())
+        .collect::<HashSet<_>>();
+    let uses_database_choices = choices
+        .keys()
+        .any(|key| key.starts_with("database:storage/ai-manager.db:"));
+    let restore_provider_table = choice_text(
+        choices,
+        &create_restore_database_table_key("storage/ai-manager.db", "providers"),
+    ) == "backup";
 
     for (provider_id, api_key) in api_keys.as_object().cloned().unwrap_or_default() {
         let key = string_value(Some(&api_key));
@@ -1758,7 +1811,15 @@ async fn merge_provider_keys(
             continue;
         }
 
-        if next_keys.contains_key(&provider_id)
+        // 保留当前 Provider 表时只补缺失密钥，不能覆盖当前设备已经保存的密钥。
+        if uses_database_choices
+            && !restore_provider_table
+            && (next_keys.contains_key(&provider_id) || !provider_ids.contains(&provider_id))
+        {
+            continue;
+        }
+        if !uses_database_choices
+            && next_keys.contains_key(&provider_id)
             && choice_text(choices, &create_restore_choice_key("storage/providers.json", &provider_id))
                 != "backup"
         {
@@ -1768,7 +1829,7 @@ async fn merge_provider_keys(
         runtime_provider::set_provider_key(&mut next_keys, &provider_id, key)?;
     }
 
-    write_json(&paths.storage_files.runtime_provider_keys, &Value::Object(next_keys)).await
+    provider_store::write_keys(paths, &next_keys)
 }
 
 async fn migrate_workspace_data(paths: &AppPaths) -> Result<(), ManagerError> {
@@ -1977,8 +2038,11 @@ fn is_ignored_backup_path(entry_path: &str) -> bool {
         "storage/sessions.json",
         "storage/usage-logs.json",
         "storage/usage-request-records.json",
+        "storage/prompt-runtime-state.json",
         "storage/codex-active-account-id.json",
         "storage/codex-provider-instances.json",
+        "profiles/claude-profile.json",
+        "profiles/codex-profile.json",
     ]);
     let normalized_path = entry_path.to_lowercase();
     let file_name = Path::new(&normalized_path)
@@ -2307,12 +2371,60 @@ fn create_restore_file_preview_item(
     })
 }
 
+fn create_database_table_restore_preview(
+    entry_path: &str,
+    difference: &database::RestoreTableDifference,
+) -> Value {
+    let name = restore_database_table_name(&difference.table);
+
+    json!({
+      "key": create_restore_database_table_key(entry_path, &difference.table),
+      "type": "数据库表",
+      "name": format!("{name} ({})", difference.table),
+      "path": format!("{entry_path}/{}", difference.table),
+      "groupPath": entry_path,
+      "status": "conflict",
+      "currentContent": format!(
+          "数据表：{name}\n记录数：{}\n仅当前存在或内容不同：{}",
+          difference.current_rows,
+          difference.current_only_rows
+      ),
+      "backupContent": format!(
+          "数据表：{name}\n记录数：{}\n仅备份存在或内容不同：{}",
+          difference.backup_rows,
+          difference.backup_only_rows
+      )
+    })
+}
+
+fn restore_database_table_name(table: &str) -> &'static str {
+    match table {
+        "usage_metadata" => "用量元数据",
+        "usage_logs" => "使用记录",
+        "usage_pricing_config" => "模型费用配置",
+        "usage_pricing_items" => "模型费用明细",
+        "skills" => "Skill 索引",
+        "skill_groups" => "Skill 分组",
+        "skill_repositories" => "Skill 仓库",
+        "rule_prompts" => "Rule 内容",
+        "rule_profiles" => "Rule 配置",
+        "providers" => "Provider",
+        "provider_models" => "Provider 模型",
+        "codex_accounts" => "Codex 官方账号",
+        _ => "应用数据",
+    }
+}
+
 fn create_restore_choice_key(entry_path: &str, item_key: &str) -> String {
     format!("json:{}:{}", entry_path, item_key)
 }
 
 fn create_restore_file_key(entry_path: &str) -> String {
     format!("file:{}", entry_path)
+}
+
+fn create_restore_database_table_key(entry_path: &str, table: &str) -> String {
+    format!("database:{entry_path}:{table}")
 }
 
 fn choice_text(choices: &Map<String, Value>, key: &str) -> String {
@@ -2382,25 +2494,6 @@ fn file_path_text(file_path: FilePath) -> Result<String, ManagerError> {
         .map_err(|error| ManagerError::Path(error.to_string()))
 }
 
-fn read_array(path: &str) -> Result<Vec<Value>, ManagerError> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => Ok(serde_json::from_str(&content)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(ManagerError::Io(error)),
-    }
-}
-
-fn read_object(path: &str) -> Result<Map<String, Value>, ManagerError> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => Ok(serde_json::from_str::<Value>(&content)?
-            .as_object()
-            .cloned()
-            .unwrap_or_default()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Map::new()),
-        Err(error) => Err(ManagerError::Io(error)),
-    }
-}
-
 async fn write_json(path: &str, payload: &Value) -> Result<(), ManagerError> {
     if let Some(parent) = Path::new(path).parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -2443,13 +2536,15 @@ fn is_database_backup_path(entry_path: &str) -> bool {
 mod tests {
     use super::{
         collect_backup_entries, create_backup_entry_view, create_restore_preview,
-        is_database_backup_path,
+        is_database_backup_path, merge_json_backup_value, merge_provider_keys,
+        restore_legacy_usage_database_entry, sanitize_runtime_backup_entries,
     };
+    use crate::api::runtime_provider;
     use base64::Engine;
-    use crate::core::database;
+    use crate::core::{database, provider_store};
     use crate::core::paths::resolve_app_paths;
     use crate::core::usage_store::{self, UsageSessionUpdate};
-    use serde_json::json;
+    use serde_json::{json, Map};
     use std::path::Path;
 
     #[test]
@@ -2517,14 +2612,16 @@ mod tests {
             std::fs::remove_dir_all(&restore_root).unwrap();
         }
         let restore_paths = resolve_app_paths(Path::new(&restore_root));
-        database::restore(&restore_paths, &database).unwrap();
         usage_store::initialize(&restore_paths).unwrap();
+        let restore_tables = database::preview_restore(&restore_paths, &database)
+            .unwrap()
+            .into_iter()
+            .map(|difference| difference.table)
+            .collect::<Vec<_>>();
+        database::restore_selected(&restore_paths, &database, &restore_tables).unwrap();
         let pricing = usage_store::read_pricing(&restore_paths).unwrap();
         let preview = runtime
-            .block_on(create_restore_preview(
-                &paths.workspace_root,
-                entries.clone(),
-            ))
+            .block_on(create_restore_preview(&paths, entries.clone()))
             .unwrap();
 
         assert_eq!(pricing["exchangeRate"], 7.4);
@@ -2562,5 +2659,164 @@ mod tests {
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|path| path == "storage/usage-pricing.json")
         }));
+    }
+
+    #[test]
+    fn restore_keys_without_provider_table_only_fills_missing_keys() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-provider-key-restore-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+        let paths = resolve_app_paths(Path::new(&root));
+        let mut current_keys = Map::new();
+        runtime_provider::set_provider_key(
+            &mut current_keys,
+            "provider-a",
+            "current-key".to_string(),
+        )
+        .unwrap();
+        provider_store::write_provider_bundle(
+            &paths,
+            &[
+                json!({"id": "provider-a"}),
+                json!({"id": "provider-b"}),
+            ],
+            &[],
+            &[],
+            &current_keys,
+        )
+        .unwrap();
+        let choices = json!({
+          "database:storage/ai-manager.db:codex_accounts": "backup"
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime
+            .block_on(merge_provider_keys(
+                &paths,
+                &json!({
+                  "provider-a": "backup-key-a",
+                  "provider-b": "backup-key-b",
+                  "provider-c": "backup-key-c"
+                }),
+                &choices,
+            ))
+            .unwrap();
+
+        assert_eq!(
+            runtime_provider::get_provider_api_key(&paths, "provider-a").unwrap(),
+            "current-key"
+        );
+        assert_eq!(
+            runtime_provider::get_provider_api_key(&paths, "provider-b").unwrap(),
+            "backup-key-b"
+        );
+        assert!(!provider_store::read_keys(&paths)
+            .unwrap()
+            .contains_key("provider-c"));
+    }
+
+    #[test]
+    fn restores_legacy_usage_database_before_migration() {
+        let source_root = std::env::temp_dir().join(format!(
+            "monkey-thief-legacy-usage-backup-source-{}",
+            std::process::id()
+        ));
+        let target_root = std::env::temp_dir().join(format!(
+            "monkey-thief-legacy-usage-backup-target-{}",
+            std::process::id()
+        ));
+        for root in [&source_root, &target_root] {
+            if root.exists() {
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+        let source_paths = resolve_app_paths(Path::new(&source_root));
+        usage_store::replace_sessions(
+            &source_paths,
+            &[UsageSessionUpdate {
+                raw_path: "legacy-session.jsonl".to_string(),
+                app_type: "codex".to_string(),
+                updated_at: 120,
+                logs: vec![json!({
+                  "requestId": "legacy-request",
+                  "rawPath": "legacy-session.jsonl",
+                  "createdAt": 100,
+                  "appType": "codex"
+                })],
+                records: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let legacy_database = std::fs::read(&source_paths.storage_files.database).unwrap();
+        let entries = vec![json!({
+          "path": "logs/usage.db",
+          "type": "file",
+          "content": base64::engine::general_purpose::STANDARD.encode(legacy_database)
+        })];
+        let target_paths = resolve_app_paths(Path::new(&target_root));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        runtime
+            .block_on(restore_legacy_usage_database_entry(
+                &target_paths,
+                &entries,
+                &Map::new(),
+            ))
+            .unwrap();
+        usage_store::initialize(&target_paths).unwrap();
+
+        assert_eq!(usage_store::read_all_logs(&target_paths).unwrap().len(), 1);
+        assert!(!Path::new(&target_paths.storage_files.usage_database).exists());
+    }
+
+    #[test]
+    fn ignores_local_rule_state_in_legacy_backups() {
+        let entries = sanitize_runtime_backup_entries(vec![
+            json!({"path": "profiles/claude-profile.json", "type": "file"}),
+            json!({"path": "profiles/codex-profile.json", "type": "file"}),
+            json!({"path": "storage/prompt-runtime-state.json", "type": "file"}),
+            json!({"path": "prompts/common/rule-a.md", "type": "file"}),
+        ])
+        .unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["path"], "prompts/common/rule-a.md");
+    }
+
+    #[test]
+    fn legacy_provider_restore_preserves_current_enabled_state() {
+        let choices = json!({
+          "json:storage/providers.json:provider-a": "backup"
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+        let merged = merge_json_backup_value(
+            "storage/providers.json",
+            &json!([{"id": "provider-a", "name": "current", "enabled": true}]),
+            &json!([
+              {"id": "provider-a", "name": "backup"},
+              {"id": "provider-b", "name": "new"}
+            ]),
+            &choices,
+        )
+        .unwrap();
+
+        assert_eq!(merged[0]["name"], "backup");
+        assert_eq!(merged[0]["enabled"], true);
+        assert_eq!(merged[1]["enabled"], false);
     }
 }

@@ -1,6 +1,7 @@
 use crate::api::runtime_provider;
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
+use crate::core::provider_store;
 use base64::Engine;
 use bytes::Bytes;
 use http_body_util::Full;
@@ -95,7 +96,7 @@ impl CodexLoginCache {
 }
 
 pub fn read_public_accounts(paths: &AppPaths) -> Result<Value, ManagerError> {
-    let accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?;
+    let accounts = provider_store::read_codex_accounts(paths)?;
     let active_account_id = read_active_account_id(paths)?;
 
     Ok(json!(accounts
@@ -121,7 +122,7 @@ pub async fn start_login(
 
     let target_account_id = string_value(payload.get("accountId"));
     if !target_account_id.is_empty()
-        && !runtime_provider::read_array(&paths.storage_files.codex_accounts)?
+        && !provider_store::read_codex_accounts(paths)?
             .iter()
             .any(|account| string_value(account.get("id")) == target_account_id)
     {
@@ -222,7 +223,7 @@ pub async fn import_auth_json(
 
     let proxy = string_value(payload.get("proxy"));
     let target_account_id = string_value(payload.get("accountId"));
-    let accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?;
+    let accounts = provider_store::read_codex_accounts(paths)?;
     let target_account = if target_account_id.is_empty() {
         None
     } else {
@@ -259,15 +260,11 @@ pub async fn enable_account(
     let account = prepare_account_for_switch(paths, &account_id, &cli_target).await?;
 
     write_account_bundle(&account, &cli_target).await?;
-    runtime_provider::write_json(
-        &paths.storage_files.codex_active_account_id,
-        &json!(string_value(account.get("id"))),
-    )
-    .await
+    provider_store::write_active_codex_account_id(paths, &string_value(account.get("id")))
 }
 
 pub async fn clear_account(paths: &AppPaths) -> Result<(), ManagerError> {
-    runtime_provider::write_json(&paths.storage_files.codex_active_account_id, &json!("")).await
+    provider_store::write_active_codex_account_id(paths, "")
 }
 
 pub async fn refresh_account(
@@ -289,7 +286,7 @@ pub async fn refresh_account(
 
 pub async fn disable_account(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
     let account_id = string_value(payload.get("accountId"));
-    let mut accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?;
+    let mut accounts = provider_store::read_codex_accounts(paths)?;
     let account = accounts
         .iter()
         .find(|account| string_value(account.get("id")) == account_id)
@@ -309,17 +306,16 @@ pub async fn disable_account(paths: &AppPaths, payload: Value) -> Result<(), Man
         .collect();
 
     if read_active_account_id(paths)? == string_value(account.get("id")) {
-        runtime_provider::write_json(&paths.storage_files.codex_active_account_id, &json!(""))
-            .await?;
+        provider_store::write_active_codex_account_id(paths, "")?;
     }
 
-    runtime_provider::write_json(&paths.storage_files.codex_accounts, &json!(accounts)).await
+    provider_store::write_codex_accounts(paths, &accounts)
 }
 
 pub async fn restore_account(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
     let account_id = string_value(payload.get("accountId"));
     let mut exists = false;
-    let accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?
+    let accounts = provider_store::read_codex_accounts(paths)?
         .into_iter()
         .map(|mut account| {
             if string_value(account.get("id")) == account_id {
@@ -335,14 +331,14 @@ pub async fn restore_account(paths: &AppPaths, payload: Value) -> Result<(), Man
         return Err(ManagerError::System("Codex 官方账号不存在".to_string()));
     }
 
-    runtime_provider::write_json(&paths.storage_files.codex_accounts, &json!(accounts)).await
+    provider_store::write_codex_accounts(paths, &accounts)
 }
 
 pub async fn update_account_proxy(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
     let account_id = string_value(payload.get("accountId"));
     let proxy = string_value(payload.get("proxy"));
     let mut exists = false;
-    let accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?
+    let accounts = provider_store::read_codex_accounts(paths)?
         .into_iter()
         .map(|mut account| {
             if string_value(account.get("id")) == account_id {
@@ -370,7 +366,7 @@ pub async fn update_account_proxy(paths: &AppPaths, payload: Value) -> Result<()
         ));
     }
 
-    runtime_provider::write_json(&paths.storage_files.codex_accounts, &json!(accounts)).await
+    provider_store::write_codex_accounts(paths, &accounts)
 }
 
 pub async fn delete_account(
@@ -379,7 +375,7 @@ pub async fn delete_account(
     payload: Value,
 ) -> Result<(), ManagerError> {
     let account_id = string_value(payload.get("accountId"));
-    let accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?;
+    let accounts = provider_store::read_codex_accounts(paths)?;
     let account = accounts
         .iter()
         .find(|account| string_value(account.get("id")) == account_id)
@@ -399,8 +395,7 @@ pub async fn delete_account(
         .collect::<Vec<_>>();
 
     if active_account_id == account_id {
-        runtime_provider::write_json(&paths.storage_files.codex_active_account_id, &json!(""))
-            .await?;
+        provider_store::write_active_codex_account_id(paths, "")?;
         let cli_target = find_codex_cli_target(cli_targets)?;
         let config_path = string_value(cli_target.get("configPath"));
 
@@ -413,7 +408,7 @@ pub async fn delete_account(
         }
     }
 
-    runtime_provider::write_json(&paths.storage_files.codex_accounts, &json!(next_accounts)).await
+    provider_store::write_codex_accounts(paths, &next_accounts)
 }
 
 pub async fn account_detail(
@@ -422,7 +417,7 @@ pub async fn account_detail(
 ) -> Result<Value, ManagerError> {
     let account_id = string_value(payload.get("accountId"));
     let active_account_id = read_active_account_id(paths)?;
-    let account = runtime_provider::read_array(&paths.storage_files.codex_accounts)?
+    let account = provider_store::read_codex_accounts(paths)?
         .into_iter()
         .find(|account| string_value(account.get("id")) == account_id)
         .ok_or_else(|| ManagerError::System("Codex 官方账号不存在".to_string()))?;
@@ -554,7 +549,7 @@ async fn complete_login(
         "",
     ))?;
     let account_id = extract_account_id(&claims);
-    let accounts = runtime_provider::read_array(&context.paths.storage_files.codex_accounts)?;
+    let accounts = provider_store::read_codex_accounts(&context.paths)?;
     let target_account_id = string_value(login_state.get("targetAccountId"));
     let target_account = if target_account_id.is_empty() {
         None
@@ -714,7 +709,7 @@ async fn refresh_account_usage(
     account_id: &str,
     cli_target: &Value,
 ) -> Result<Value, ManagerError> {
-    let accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?;
+    let accounts = provider_store::read_codex_accounts(paths)?;
     let account = accounts
         .iter()
         .find(|account| string_value(account.get("id")) == account_id)
@@ -803,7 +798,7 @@ async fn prepare_account_for_switch(
     account_id: &str,
     cli_target: &Value,
 ) -> Result<Value, ManagerError> {
-    let mut account = runtime_provider::read_array(&paths.storage_files.codex_accounts)?
+    let mut account = provider_store::read_codex_accounts(paths)?
         .into_iter()
         .find(|account| string_value(account.get("id")) == account_id)
         .ok_or_else(|| ManagerError::System("Codex 官方账号不存在".to_string()))?;
@@ -1080,10 +1075,9 @@ async fn save_account(
         Some(&json!(extract_email(claims))),
         "未识别账号",
     );
-    let current_account =
-        runtime_provider::read_array(&paths.storage_files.codex_accounts)?
-            .into_iter()
-            .find(|account| string_value(account.get("id")) == account_id);
+    let current_account = provider_store::read_codex_accounts(paths)?
+        .into_iter()
+        .find(|account| string_value(account.get("id")) == account_id);
     let token_updated_at = tokens
         .token_updated_at
         .max(parse_timestamp(&tokens.last_refresh))
@@ -1144,7 +1138,7 @@ async fn save_account(
 async fn replace_account(paths: &AppPaths, next_account: &Value) -> Result<(), ManagerError> {
     let account_id = string_value(next_account.get("id"));
     let mut replaced = false;
-    let mut accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?
+    let mut accounts = provider_store::read_codex_accounts(paths)?
         .into_iter()
         .map(|account| {
             if string_value(account.get("id")) == account_id {
@@ -1160,7 +1154,7 @@ async fn replace_account(paths: &AppPaths, next_account: &Value) -> Result<(), M
         accounts.push(next_account.clone());
     }
 
-    runtime_provider::write_json(&paths.storage_files.codex_accounts, &json!(accounts)).await
+    provider_store::write_codex_accounts(paths, &accounts)
 }
 
 async fn mark_account_reauth(
@@ -1198,7 +1192,7 @@ async fn update_account(
     account_id: &str,
     updater: impl Fn(&mut Value),
 ) -> Result<(), ManagerError> {
-    let accounts = runtime_provider::read_array(&paths.storage_files.codex_accounts)?
+    let accounts = provider_store::read_codex_accounts(paths)?
         .into_iter()
         .map(|mut account| {
             if string_value(account.get("id")) == account_id {
@@ -1208,7 +1202,7 @@ async fn update_account(
         })
         .collect::<Vec<_>>();
 
-    runtime_provider::write_json(&paths.storage_files.codex_accounts, &json!(accounts)).await
+    provider_store::write_codex_accounts(paths, &accounts)
 }
 
 async fn fetch_usage_info(
@@ -1611,13 +1605,7 @@ fn find_codex_cli_target(cli_targets: &Value) -> Result<Value, ManagerError> {
 }
 
 fn read_active_account_id(paths: &AppPaths) -> Result<String, ManagerError> {
-    match std::fs::read_to_string(&paths.storage_files.codex_active_account_id) {
-        Ok(content) => Ok(serde_json::from_str::<Value>(&content)
-            .map(|value| string_value(Some(&value)))
-            .unwrap_or_default()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(ManagerError::Io(error)),
-    }
+    provider_store::read_active_codex_account_id(paths)
 }
 
 fn build_auth_url(challenge: &str, state: &str) -> Result<String, ManagerError> {
