@@ -413,7 +413,7 @@ fn get_provider_stats_data(
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let cached = cache.entry(cache_key).or_insert_with(|| UsageProviderStatsCache {
-        path: paths.storage_files.usage_database.clone(),
+        path: paths.storage_files.database.clone(),
         logs: Arc::new(Vec::new()),
         today_start_at,
         log_signatures: HashMap::new(),
@@ -423,7 +423,7 @@ fn get_provider_stats_data(
         today_model_stats: HashMap::new(),
     });
 
-    if cached.path == paths.storage_files.usage_database
+    if cached.path == paths.storage_files.database
         && cached.today_start_at == today_start_at
         && Arc::ptr_eq(&cached.logs, &raw_logs)
     {
@@ -435,14 +435,14 @@ fn get_provider_stats_data(
         .map(|log| (usage_log_cache_id(log), usage_log_cache_signature(log)))
         .collect::<HashMap<_, _>>();
 
-    if cached.path != paths.storage_files.usage_database
+    if cached.path != paths.storage_files.database
         || cached.today_start_at != today_start_at
         || cached
             .log_signatures
             .iter()
             .any(|(request_id, signature)| current_log_signatures.get(request_id) != Some(signature))
     {
-        cached.path = paths.storage_files.usage_database.clone();
+        cached.path = paths.storage_files.database.clone();
         cached.logs = raw_logs.clone();
         cached.today_start_at = today_start_at;
         cached.log_signatures.clear();
@@ -3434,7 +3434,7 @@ mod tests {
 
 fn read_usage_logs(paths: &AppPaths) -> Result<Arc<Vec<Value>>, ManagerError> {
     let revision = usage_store::revision(paths)?;
-    let path = &paths.storage_files.usage_database;
+    let path = &paths.storage_files.database;
     let cache = USAGE_LOG_CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = cache
         .lock()

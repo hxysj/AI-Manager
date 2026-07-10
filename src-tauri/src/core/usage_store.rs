@@ -1,11 +1,11 @@
+use crate::core::database;
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use rusqlite::types::Value as SqlValue;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction, MAIN_DB};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
 
 const SCHEMA_VERSION: i64 = 1;
 
@@ -28,85 +28,11 @@ pub struct UsageSessionUpdate {
 }
 
 pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
+    database::initialize(paths)?;
     let mut connection = open_connection(paths)?;
     create_schema(&connection)?;
+    migrate_legacy_database(paths, &mut connection)?;
     migrate_legacy_json(paths, &mut connection)?;
-    remove_legacy_usage_files(paths)
-}
-
-pub fn backup_database(paths: &AppPaths) -> Result<Vec<u8>, ManagerError> {
-    initialize(paths)?;
-    std::fs::create_dir_all(&paths.temp_dir)?;
-    let snapshot_path = Path::new(&paths.temp_dir).join(format!(
-        "usage-backup-{}-{}.db",
-        std::process::id(),
-        now_millis()
-    ));
-    let result = (|| {
-        let connection = open_connection(paths)?;
-        connection.backup(MAIN_DB, &snapshot_path, None)?;
-        Ok(std::fs::read(&snapshot_path)?)
-    })();
-
-    if snapshot_path.exists() {
-        std::fs::remove_file(snapshot_path)?;
-    }
-    result
-}
-
-pub fn restore_database(paths: &AppPaths, content: &[u8]) -> Result<(), ManagerError> {
-    initialize(paths)?;
-    std::fs::create_dir_all(&paths.temp_dir)?;
-    let snapshot_path = Path::new(&paths.temp_dir).join(format!(
-        "usage-restore-{}-{}.db",
-        std::process::id(),
-        now_millis()
-    ));
-    std::fs::write(&snapshot_path, content)?;
-    let result = (|| {
-        let source = Connection::open(&snapshot_path)?;
-        let integrity =
-            source.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))?;
-
-        if integrity != "ok" {
-            return Err(ManagerError::System(format!(
-                "Usage 数据库备份校验失败：{integrity}"
-            )));
-        }
-
-        let schema_version = source
-            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
-                row.get::<_, Option<i64>>(0)
-            })?
-            .unwrap_or(0);
-
-        if schema_version == 0 {
-            return Err(ManagerError::System(
-                "Usage 数据库备份缺少结构版本。".to_string(),
-            ));
-        }
-        drop(source);
-
-        let mut connection = open_connection(paths)?;
-        connection.restore(
-            MAIN_DB,
-            &snapshot_path,
-            None::<fn(rusqlite::backup::Progress)>,
-        )?;
-        create_schema(&connection)?;
-        connection.execute(
-            "INSERT INTO usage_metadata(key, value) VALUES ('revision', ?1)
-             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            params![now_millis().to_string()],
-        )?;
-        connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-        Ok(())
-    })();
-
-    if snapshot_path.exists() {
-        std::fs::remove_file(snapshot_path)?;
-    }
-    result?;
     remove_legacy_usage_files(paths)
 }
 
@@ -299,15 +225,7 @@ pub fn revision(paths: &AppPaths) -> Result<u64, ManagerError> {
 }
 
 fn open_connection(paths: &AppPaths) -> Result<Connection, ManagerError> {
-    if let Some(parent) = Path::new(&paths.storage_files.usage_database).parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let connection = Connection::open(&paths.storage_files.usage_database)?;
-    connection.busy_timeout(Duration::from_secs(5))?;
-    connection.pragma_update(None, "journal_mode", "WAL")?;
-    connection.pragma_update(None, "synchronous", "NORMAL")?;
-    Ok(connection)
+    database::open(paths)
 }
 
 fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
@@ -414,6 +332,54 @@ fn migrate_legacy_json(paths: &AppPaths, connection: &mut Connection) -> Result<
     transaction.commit()?;
 
     Ok(())
+}
+
+fn migrate_legacy_database(
+    paths: &AppPaths,
+    connection: &mut Connection,
+) -> Result<(), ManagerError> {
+    let legacy_path = Path::new(&paths.storage_files.usage_database);
+
+    if !legacy_path.exists() || Path::new(&paths.storage_files.database) == legacy_path {
+        return Ok(());
+    }
+
+    let legacy_connection = Connection::open(legacy_path)?;
+    let integrity =
+        legacy_connection.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))?;
+
+    if integrity != "ok" {
+        return Err(ManagerError::System(format!(
+            "旧 Usage 数据库校验失败：{integrity}"
+        )));
+    }
+    legacy_connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+    drop(legacy_connection);
+
+    connection.execute(
+        "ATTACH DATABASE ?1 AS legacy_usage",
+        params![paths.storage_files.usage_database],
+    )?;
+    let migration_result = (|| {
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "INSERT OR REPLACE INTO usage_logs
+               SELECT * FROM legacy_usage.usage_logs;
+             INSERT OR REPLACE INTO usage_sessions
+               SELECT * FROM legacy_usage.usage_sessions;
+             INSERT OR REPLACE INTO usage_request_records
+               SELECT * FROM legacy_usage.usage_request_records;
+             INSERT OR REPLACE INTO usage_pricing_config
+               SELECT * FROM legacy_usage.usage_pricing_config;
+             INSERT OR REPLACE INTO usage_pricing_items
+               SELECT * FROM legacy_usage.usage_pricing_items;",
+        )?;
+        bump_revision(&transaction)?;
+        transaction.commit()?;
+        Ok::<(), ManagerError>(())
+    })();
+    connection.execute_batch("DETACH DATABASE legacy_usage")?;
+    migration_result
 }
 
 fn insert_usage_log(transaction: &Transaction<'_>, log: &Value) -> Result<(), ManagerError> {
@@ -661,6 +627,17 @@ fn remove_legacy_usage_files(paths: &AppPaths) -> Result<(), ManagerError> {
             }
         }
     }
+
+    let legacy_database = Path::new(&paths.storage_files.usage_database);
+    for path in [
+        legacy_database.to_path_buf(),
+        legacy_database.with_extension("db-wal"),
+        legacy_database.with_extension("db-shm"),
+    ] {
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+    }
     Ok(())
 }
 
@@ -714,10 +691,11 @@ fn now_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::{
-        initialize, query_logs, read_pricing, replace_sessions, write_pricing, UsageLogQuery,
-        UsageSessionUpdate,
+        create_schema, initialize, query_logs, read_pricing, read_request_records,
+        read_session_versions, replace_sessions, write_pricing, UsageLogQuery, UsageSessionUpdate,
     };
     use crate::core::paths::resolve_app_paths;
+    use rusqlite::{params, Connection};
     use serde_json::json;
     use std::path::Path;
 
@@ -793,9 +771,68 @@ mod tests {
 
         assert_eq!(query_logs(&paths, &all_query()).unwrap().len(), 1);
         assert_eq!(read_pricing(&paths).unwrap()["exchangeRate"], 7.3);
-        assert!(Path::new(&paths.storage_files.usage_database).exists());
+        assert!(Path::new(&paths.storage_files.database).exists());
+        assert!(!Path::new(&paths.storage_files.usage_database).exists());
         assert!(!Path::new(&paths.storage_files.usage_logs).exists());
         assert!(!Path::new(&format!("{}.migrated", paths.storage_files.usage_logs)).exists());
+    }
+
+    #[test]
+    fn migrates_legacy_usage_database_into_main_database() {
+        let paths = create_test_paths("database-migration");
+        let legacy = Connection::open(&paths.storage_files.usage_database).unwrap();
+        create_schema(&legacy).unwrap();
+        legacy
+            .execute(
+                "INSERT INTO usage_logs(
+                   request_id, raw_path, created_at, session_updated_at,
+                   app_type, provider_id, model, request_source, payload_json
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    "request-legacy",
+                    "session-legacy.jsonl",
+                    100,
+                    120,
+                    "codex",
+                    "provider-legacy",
+                    "gpt-legacy",
+                    "session",
+                    serde_json::to_string(&json!({"requestId": "request-legacy"})).unwrap()
+                ],
+            )
+            .unwrap();
+        legacy
+            .execute(
+                "INSERT INTO usage_sessions(raw_path, app_type, updated_at)
+                 VALUES (?1, ?2, ?3)",
+                params!["session-legacy.jsonl", "codex", 120],
+            )
+            .unwrap();
+        legacy
+            .execute(
+                "INSERT INTO usage_request_records(request_id, created_at, payload_json)
+                 VALUES (?1, ?2, ?3)",
+                params![
+                    "request-legacy",
+                    100,
+                    serde_json::to_string(&json!({"requestId": "request-legacy"})).unwrap()
+                ],
+            )
+            .unwrap();
+        drop(legacy);
+
+        initialize(&paths).unwrap();
+
+        assert_eq!(query_logs(&paths, &all_query()).unwrap().len(), 1);
+        assert_eq!(read_session_versions(&paths).unwrap().len(), 1);
+        assert_eq!(
+            read_request_records(&paths, &["request-legacy".to_string()])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(!Path::new(&paths.storage_files.usage_database).exists());
+        assert!(Path::new(&paths.storage_files.database).exists());
     }
 
     #[test]

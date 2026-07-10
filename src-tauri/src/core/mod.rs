@@ -1,6 +1,9 @@
+pub mod database;
 pub mod error;
 pub mod paths;
+pub mod rule_store;
 pub mod settings;
+pub mod skill_store;
 pub mod state;
 pub mod storage_state;
 pub mod usage_store;
