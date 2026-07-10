@@ -1,4 +1,4 @@
-use crate::api::runtime_provider;
+use crate::api::{runtime_provider, usage};
 use crate::core::error::ManagerError;
 use crate::core::paths::{ensure_app_directories, home_path, path_text, AppPaths};
 use crate::core::settings::{
@@ -6,6 +6,7 @@ use crate::core::settings::{
     write_json_file, AppSettings, CloudSyncSettings,
 };
 use crate::core::storage_state::create_initial_state;
+use crate::core::usage_store;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
@@ -450,13 +451,23 @@ async fn restore_data_backup_content(
         .transpose()?;
 
     ensure_app_directories(paths).await?;
+    let workspace_entries = backup["workspaceEntries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     restore_directory_entries(
         &paths.workspace_root,
-        backup["workspaceEntries"].as_array().cloned().unwrap_or_default(),
+        workspace_entries
+            .iter()
+            .filter(|entry| entry.get("path").and_then(Value::as_str) != Some("logs/usage.db"))
+            .cloned()
+            .collect(),
         &choices,
     )
     .await?;
+    restore_usage_database_entry(paths, &workspace_entries, &choices).await?;
     migrate_workspace_data(paths).await?;
+    usage::migrate_legacy_storage(paths)?;
     write_json(&paths.storage_files.cli_targets, &json!([])).await?;
 
     if let Some(runtime_provider_keys) = runtime_provider_keys {
@@ -475,7 +486,6 @@ async fn collect_backup_entries(
         (&paths.storage_files.skill_groups, "storage/skill-groups.json"),
         (&paths.storage_files.skills, "storage/skills.json"),
         (&paths.storage_files.installs, "storage/installs.json"),
-        (&paths.storage_files.usage_pricing, "storage/usage-pricing.json"),
         (&paths.storage_files.providers, "storage/providers.json"),
         (&paths.storage_files.runtime_models, "storage/runtime-models.json"),
         (&paths.storage_files.runtime_profiles, "storage/runtime-profiles.json"),
@@ -521,6 +531,13 @@ async fn collect_backup_entries(
             entries.push(entry);
         }
     }
+
+    let usage_database = usage_store::backup_database(paths)?;
+    entries.push(json!({
+      "path": "logs/usage.db",
+      "type": "file",
+      "content": base64::engine::general_purpose::STANDARD.encode(usage_database)
+    }));
 
     let mut source_dirs = vec![
         PathBuf::from(&paths.skills_dir),
@@ -792,8 +809,19 @@ fn create_backup_entry_view(entry: &Value) -> Result<Value, ManagerError> {
     let buffer = base64::engine::general_purpose::STANDARD
         .decode(string_value(entry.get("content")))
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    let text = String::from_utf8(buffer.clone()).map_err(|error| ManagerError::System(error.to_string()))?;
     let entry_path = string_value(entry.get("path"));
+    if entry_path == "logs/usage.db" {
+        return Ok(json!({
+          "path": entry_path,
+          "type": "file",
+          "typeName": "用量数据库",
+          "size": buffer.len(),
+          "content": format!("SQLite 数据库，SHA-256：{}", sha256_bytes(&buffer))
+        }));
+    }
+
+    let text =
+        String::from_utf8(buffer.clone()).map_err(|error| ManagerError::System(error.to_string()))?;
     let content = if is_storage_json_path(&entry_path) {
         serde_json::to_string_pretty(&serde_json::from_str::<Value>(&text)?)?
     } else {
@@ -851,6 +879,16 @@ async fn create_restore_preview(root_path: &str, entries: Vec<Value>) -> Result<
             .map_err(|error| ManagerError::System(error.to_string()))?;
 
         if sha256_bytes(&current_content) != sha256_bytes(&backup_content) {
+            if entry_path == "logs/usage.db" {
+                conflicts.push(create_restore_file_preview_item(
+                    &entry_path,
+                    "conflict",
+                    &format!("SQLite 数据库，SHA-256：{}", sha256_bytes(&current_content)),
+                    &format!("SQLite 数据库，SHA-256：{}", sha256_bytes(&backup_content)),
+                ));
+                continue;
+            }
+
             conflicts.push(create_restore_file_preview_item(
                 &entry_path,
                 "conflict",
@@ -1064,6 +1102,35 @@ async fn restore_directory_entries(
     }
 
     Ok(())
+}
+
+async fn restore_usage_database_entry(
+    paths: &AppPaths,
+    entries: &[Value],
+    choices: &Map<String, Value>,
+) -> Result<(), ManagerError> {
+    let Some(entry) = entries.iter().find(|entry| {
+        entry.get("path").and_then(Value::as_str) == Some("logs/usage.db")
+            && entry.get("type").and_then(Value::as_str) == Some("file")
+    }) else {
+        return Ok(());
+    };
+    let backup_content = base64::engine::general_purpose::STANDARD
+        .decode(string_value(entry.get("content")))
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let current_content = tokio::fs::read(&paths.storage_files.usage_database)
+        .await
+        .ok();
+
+    if current_content
+        .as_ref()
+        .is_some_and(|value| sha256_bytes(value) != sha256_bytes(&backup_content))
+        && choice_text(choices, &create_restore_file_key("logs/usage.db")) != "backup"
+    {
+        return Ok(());
+    }
+
+    usage_store::restore_database(paths, &backup_content)
 }
 
 async fn restore_json_entry(
@@ -1904,6 +1971,10 @@ fn is_ignored_backup_path(entry_path: &str) -> bool {
         .map(|value| value.to_string_lossy().to_string())
         .unwrap_or_default();
 
+    if normalized_path == "logs/usage.db" {
+        return false;
+    }
+
     ignored_runtime_backup_paths.contains(entry_path)
         || normalized_path == "logs"
         || normalized_path.starts_with("logs/")
@@ -1922,6 +1993,7 @@ fn restore_storage_name(entry_path: &str) -> Option<&'static str> {
         "storage/installs.json" => Some("Skill 挂载"),
         "storage/usage-logs.json" => Some("用量日志"),
         "storage/usage-pricing.json" => Some("模型费用"),
+        "logs/usage.db" => Some("用量数据库"),
         "storage/codex-provider-instances.json" => Some("Codex 独立实例"),
         "storage/providers.json" => Some("Provider"),
         "storage/runtime-models.json" => Some("模型"),
@@ -2208,7 +2280,7 @@ fn create_restore_file_preview_item(
       } else if entry_path.starts_with("profiles/") {
           "Prompt 配置"
       } else {
-          "文件"
+          restore_storage_name(entry_path).unwrap_or("文件")
       },
       "name": Path::new(entry_path).file_name().map(|value| value.to_string_lossy().to_string()).unwrap_or_default(),
       "path": entry_path,
@@ -2344,5 +2416,113 @@ impl NonEmptyString for String {
         } else {
             self
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{collect_backup_entries, create_backup_entry_view, create_restore_preview};
+    use base64::Engine;
+    use crate::core::paths::resolve_app_paths;
+    use crate::core::usage_store::{self, UsageSessionUpdate};
+    use serde_json::json;
+    use std::path::Path;
+
+    #[test]
+    fn exports_usage_database_as_single_log_entry() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-usage-backup-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+        let paths = resolve_app_paths(Path::new(&root));
+        usage_store::write_pricing(
+            &paths,
+            &json!({
+              "exchangeRate": 7.4,
+              "items": [{
+                "id": "pricing-1",
+                "modelId": "gpt-test",
+                "currency": "USD"
+              }]
+            }),
+        )
+        .unwrap();
+        usage_store::replace_sessions(
+            &paths,
+            &[UsageSessionUpdate {
+                raw_path: "session.jsonl".to_string(),
+                app_type: "codex".to_string(),
+                updated_at: 100,
+                logs: vec![json!({
+                  "requestId": "request-1",
+                  "rawPath": "session.jsonl",
+                  "createdAt": 100,
+                  "appType": "codex"
+                })],
+                records: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let entries = runtime
+            .block_on(collect_backup_entries(&paths, false))
+            .unwrap();
+        let database_entry = entries
+            .iter()
+            .find(|entry| entry["path"] == "logs/usage.db")
+            .unwrap();
+        let database = base64::engine::general_purpose::STANDARD
+            .decode(database_entry["content"].as_str().unwrap())
+            .unwrap();
+        let database_view = create_backup_entry_view(database_entry).unwrap();
+        let restore_root = std::env::temp_dir().join(format!(
+            "monkey-thief-usage-backup-restore-{}",
+            std::process::id()
+        ));
+        if restore_root.exists() {
+            std::fs::remove_dir_all(&restore_root).unwrap();
+        }
+        let restore_paths = resolve_app_paths(Path::new(&restore_root));
+        usage_store::restore_database(&restore_paths, &database).unwrap();
+        let pricing = usage_store::read_pricing(&restore_paths).unwrap();
+        let preview = runtime
+            .block_on(create_restore_preview(
+                &paths.workspace_root,
+                entries.clone(),
+            ))
+            .unwrap();
+
+        assert_eq!(pricing["exchangeRate"], 7.4);
+        assert_eq!(pricing["items"][0]["modelId"], "gpt-test");
+        assert_eq!(usage_store::read_all_logs(&restore_paths).unwrap().len(), 1);
+        assert_eq!(database_view["typeName"], "用量数据库");
+        assert!(database_view["content"]
+            .as_str()
+            .is_some_and(|content| content.contains("SHA-256")));
+        assert!(preview["conflictCount"].as_u64().unwrap_or_default() <= 1);
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|path| path.starts_with("logs/"))
+                })
+                .count(),
+            1
+        );
+        assert!(!entries.iter().any(|entry| {
+            entry
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|path| path == "storage/usage-pricing.json")
+        }));
     }
 }
