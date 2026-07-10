@@ -19,3 +19,5 @@ release
 backup/
 tests/
 gen
+AGENTS.md
+CLAUDE.md

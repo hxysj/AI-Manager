@@ -1055,7 +1055,7 @@ async fn detect_installed_windows_app() -> Result<Option<InstalledWindowsApp>, M
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    let install_location = value
+    let mut install_location = value
         .get("installLocation")
         .and_then(Value::as_str)
         .unwrap_or("")
@@ -1063,6 +1063,12 @@ async fn detect_installed_windows_app() -> Result<Option<InstalledWindowsApp>, M
 
     if uninstall_string.is_empty() {
         return detect_installed_windows_app_from_current_exe().await;
+    }
+    if install_location.trim().is_empty() {
+        install_location = std::env::current_exe()?
+            .parent()
+            .map(|path| path.to_string_lossy().to_string())
+            .unwrap_or_default();
     }
 
     Ok(Some(InstalledWindowsApp {
@@ -1273,6 +1279,10 @@ if (-not [string]::IsNullOrWhiteSpace($UninstallString)) {{
   if ($uninstallerArgs -notmatch '(^|\s)/S(\s|$)') {{
     $uninstallerArgs = ($uninstallerArgs + ' /S').Trim()
   }}
+  if (-not [string]::IsNullOrWhiteSpace($InstallLocation) -and $uninstallerArgs -notmatch '(^|\s)_\?=') {{
+    # NSIS 原目录模式不会派生临时卸载器，-Wait 可以等待实际卸载彻底结束。
+    $uninstallerArgs = ($uninstallerArgs + " _?=$InstallLocation").Trim()
+  }}
   $process = Start-Process -FilePath $uninstallerPath -ArgumentList $uninstallerArgs -Wait -PassThru
   if ($process.ExitCode -ne 0) {{
     Add-Type -AssemblyName PresentationFramework
@@ -1294,7 +1304,7 @@ if (Test-OldVersionExists) {{
   exit 1
 }}
 
-Start-Process -FilePath $InstallerPath -ArgumentList '/P /R /UPDATE'
+Start-Process -FilePath $InstallerPath
 "#,
         process_id = current_process_id,
         current_exe_path = to_powershell_literal(&current_exe_path.to_string_lossy()),
@@ -1407,4 +1417,42 @@ fn now_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::{build_windows_update_script, InstalledWindowsApp};
+    use std::path::Path;
+
+    #[test]
+    fn windows_update_waits_for_uninstall_before_opening_installer_panel() {
+        let script = build_windows_update_script(
+            100,
+            Path::new(r"C:\Program Files\Monkey Thief\Monkey Thief.exe"),
+            Path::new(r"C:\Temp\Monkey-Thief-setup.exe"),
+            Some(&InstalledWindowsApp {
+                uninstall_string: r#""C:\Program Files\Monkey Thief\uninstall.exe" /currentuser"#
+                    .to_string(),
+                install_location: r"C:\Program Files\Monkey Thief".to_string(),
+            }),
+        );
+        let wait_for_app = script.find("Wait-Process -Id $ProcessId").unwrap();
+        let uninstall = script
+            .find("Start-Process -FilePath $uninstallerPath")
+            .unwrap();
+        let in_place_uninstall = script.find("_?=$InstallLocation").unwrap();
+        let wait_for_uninstall = script.find("for ($index = 0;").unwrap();
+        let open_installer = script
+            .rfind("Start-Process -FilePath $InstallerPath")
+            .unwrap();
+
+        assert!(wait_for_app < uninstall);
+        assert!(in_place_uninstall < uninstall);
+        assert!(uninstall < wait_for_uninstall);
+        assert!(wait_for_uninstall < open_installer);
+        assert!(script.contains("-Wait -PassThru"));
+        assert!(script.contains("($uninstallerArgs + ' /S').Trim()"));
+        assert!(script.contains("_?=$InstallLocation"));
+        assert!(!script.contains("$InstallerPath -ArgumentList"));
+    }
 }
