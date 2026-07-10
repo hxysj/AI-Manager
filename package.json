@@ -1,6 +1,6 @@
 {
   "name": "monkey-thief",
-  "version": "2.0.7",
+  "version": "2.0.8",
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
   "type": "module",
   "scripts": {
