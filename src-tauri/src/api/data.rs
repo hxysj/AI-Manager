@@ -1,4 +1,5 @@
 use crate::api::{runtime_provider, usage};
+use crate::core::{database, rule_store, skill_store};
 use crate::core::error::ManagerError;
 use crate::core::paths::{ensure_app_directories, home_path, path_text, AppPaths};
 use crate::core::settings::{
@@ -6,7 +7,6 @@ use crate::core::settings::{
     write_json_file, AppSettings, CloudSyncSettings,
 };
 use crate::core::storage_state::create_initial_state;
-use crate::core::usage_store;
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
@@ -459,15 +459,17 @@ async fn restore_data_backup_content(
         &paths.workspace_root,
         workspace_entries
             .iter()
-            .filter(|entry| entry.get("path").and_then(Value::as_str) != Some("logs/usage.db"))
+            .filter(|entry| !is_database_backup_path(&string_value(entry.get("path"))))
             .cloned()
             .collect(),
         &choices,
     )
     .await?;
-    restore_usage_database_entry(paths, &workspace_entries, &choices).await?;
+    restore_database_entries(paths, &workspace_entries, &choices).await?;
     migrate_workspace_data(paths).await?;
     usage::migrate_legacy_storage(paths)?;
+    skill_store::initialize(paths)?;
+    rule_store::initialize(paths)?;
     write_json(&paths.storage_files.cli_targets, &json!([])).await?;
 
     if let Some(runtime_provider_keys) = runtime_provider_keys {
@@ -481,11 +483,11 @@ async fn collect_backup_entries(
     paths: &AppPaths,
     include_git_tool_data: bool,
 ) -> Result<Vec<Value>, ManagerError> {
+    usage::migrate_legacy_storage(paths)?;
+    skill_store::initialize(paths)?;
+    rule_store::initialize(paths)?;
+
     let storage_files = vec![
-        (&paths.storage_files.skill_repositories, "storage/skill-repositories.json"),
-        (&paths.storage_files.skill_groups, "storage/skill-groups.json"),
-        (&paths.storage_files.skills, "storage/skills.json"),
-        (&paths.storage_files.installs, "storage/installs.json"),
         (&paths.storage_files.providers, "storage/providers.json"),
         (&paths.storage_files.runtime_models, "storage/runtime-models.json"),
         (&paths.storage_files.runtime_profiles, "storage/runtime-profiles.json"),
@@ -518,11 +520,6 @@ async fn collect_backup_entries(
             &paths.storage_files.codex_active_account_id,
             "storage/codex-active-account-id.json",
         ),
-        (&paths.storage_files.rules, "storage/rules.json"),
-        (
-            &paths.storage_files.prompt_runtime_state,
-            "storage/prompt-runtime-state.json",
-        ),
     ];
     let mut entries = Vec::new();
 
@@ -532,17 +529,16 @@ async fn collect_backup_entries(
         }
     }
 
-    let usage_database = usage_store::backup_database(paths)?;
+    let database = database::backup(paths)?;
     entries.push(json!({
-      "path": "logs/usage.db",
+      "path": "storage/ai-manager.db",
       "type": "file",
-      "content": base64::engine::general_purpose::STANDARD.encode(usage_database)
+      "content": base64::engine::general_purpose::STANDARD.encode(database)
     }));
 
     let mut source_dirs = vec![
         PathBuf::from(&paths.skills_dir),
         PathBuf::from(&paths.prompts_dir),
-        PathBuf::from(&paths.prompt_profiles_dir),
     ];
 
     if include_git_tool_data {
@@ -810,11 +806,17 @@ fn create_backup_entry_view(entry: &Value) -> Result<Value, ManagerError> {
         .decode(string_value(entry.get("content")))
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let entry_path = string_value(entry.get("path"));
-    if entry_path == "logs/usage.db" {
+    if is_database_backup_path(&entry_path) {
+        let type_name = if entry_path == "storage/ai-manager.db" {
+            "主数据库"
+        } else {
+            "旧版用量数据库"
+        };
+
         return Ok(json!({
           "path": entry_path,
           "type": "file",
-          "typeName": "用量数据库",
+          "typeName": type_name,
           "size": buffer.len(),
           "content": format!("SQLite 数据库，SHA-256：{}", sha256_bytes(&buffer))
         }));
@@ -879,7 +881,7 @@ async fn create_restore_preview(root_path: &str, entries: Vec<Value>) -> Result<
             .map_err(|error| ManagerError::System(error.to_string()))?;
 
         if sha256_bytes(&current_content) != sha256_bytes(&backup_content) {
-            if entry_path == "logs/usage.db" {
+            if is_database_backup_path(&entry_path) {
                 conflicts.push(create_restore_file_preview_item(
                     &entry_path,
                     "conflict",
@@ -1104,33 +1106,46 @@ async fn restore_directory_entries(
     Ok(())
 }
 
-async fn restore_usage_database_entry(
+async fn restore_database_entries(
     paths: &AppPaths,
     entries: &[Value],
     choices: &Map<String, Value>,
 ) -> Result<(), ManagerError> {
-    let Some(entry) = entries.iter().find(|entry| {
-        entry.get("path").and_then(Value::as_str) == Some("logs/usage.db")
-            && entry.get("type").and_then(Value::as_str) == Some("file")
-    }) else {
-        return Ok(());
-    };
-    let backup_content = base64::engine::general_purpose::STANDARD
-        .decode(string_value(entry.get("content")))
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-    let current_content = tokio::fs::read(&paths.storage_files.usage_database)
-        .await
-        .ok();
+    for entry_path in ["storage/ai-manager.db", "logs/usage.db"] {
+        let Some(entry) = entries.iter().find(|entry| {
+            entry.get("path").and_then(Value::as_str) == Some(entry_path)
+                && entry.get("type").and_then(Value::as_str) == Some("file")
+        }) else {
+            continue;
+        };
+        let backup_content = base64::engine::general_purpose::STANDARD
+            .decode(string_value(entry.get("content")))
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        let target_path = if entry_path == "storage/ai-manager.db" {
+            &paths.storage_files.database
+        } else {
+            &paths.storage_files.usage_database
+        };
+        let current_content = tokio::fs::read(target_path).await.ok();
 
-    if current_content
-        .as_ref()
-        .is_some_and(|value| sha256_bytes(value) != sha256_bytes(&backup_content))
-        && choice_text(choices, &create_restore_file_key("logs/usage.db")) != "backup"
-    {
-        return Ok(());
+        if current_content
+            .as_ref()
+            .is_some_and(|value| sha256_bytes(value) != sha256_bytes(&backup_content))
+            && choice_text(choices, &create_restore_file_key(entry_path)) != "backup"
+        {
+            continue;
+        }
+
+        if entry_path == "storage/ai-manager.db" {
+            database::restore(paths, &backup_content)?;
+        } else {
+            if let Some(parent) = Path::new(target_path).parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            tokio::fs::write(target_path, backup_content).await?;
+        }
     }
-
-    usage_store::restore_database(paths, &backup_content)
+    Ok(())
 }
 
 async fn restore_json_entry(
@@ -1971,7 +1986,7 @@ fn is_ignored_backup_path(entry_path: &str) -> bool {
         .map(|value| value.to_string_lossy().to_string())
         .unwrap_or_default();
 
-    if normalized_path == "logs/usage.db" {
+    if is_database_backup_path(&normalized_path) {
         return false;
     }
 
@@ -1993,7 +2008,8 @@ fn restore_storage_name(entry_path: &str) -> Option<&'static str> {
         "storage/installs.json" => Some("Skill 挂载"),
         "storage/usage-logs.json" => Some("用量日志"),
         "storage/usage-pricing.json" => Some("模型费用"),
-        "logs/usage.db" => Some("用量数据库"),
+        "storage/ai-manager.db" => Some("主数据库"),
+        "logs/usage.db" => Some("旧版用量数据库"),
         "storage/codex-provider-instances.json" => Some("Codex 独立实例"),
         "storage/providers.json" => Some("Provider"),
         "storage/runtime-models.json" => Some("模型"),
@@ -2419,17 +2435,25 @@ impl NonEmptyString for String {
     }
 }
 
+fn is_database_backup_path(entry_path: &str) -> bool {
+    matches!(entry_path, "storage/ai-manager.db" | "logs/usage.db")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{collect_backup_entries, create_backup_entry_view, create_restore_preview};
+    use super::{
+        collect_backup_entries, create_backup_entry_view, create_restore_preview,
+        is_database_backup_path,
+    };
     use base64::Engine;
+    use crate::core::database;
     use crate::core::paths::resolve_app_paths;
     use crate::core::usage_store::{self, UsageSessionUpdate};
     use serde_json::json;
     use std::path::Path;
 
     #[test]
-    fn exports_usage_database_as_single_log_entry() {
+    fn exports_main_database_without_usage_runtime_tables() {
         let root = std::env::temp_dir().join(format!(
             "monkey-thief-usage-backup-{}",
             std::process::id()
@@ -2462,7 +2486,11 @@ mod tests {
                   "createdAt": 100,
                   "appType": "codex"
                 })],
-                records: Vec::new(),
+                records: vec![json!({
+                  "requestId": "request-1",
+                  "createdAt": 100,
+                  "providerId": "provider-1"
+                })],
             }],
         )
         .unwrap();
@@ -2475,7 +2503,7 @@ mod tests {
             .unwrap();
         let database_entry = entries
             .iter()
-            .find(|entry| entry["path"] == "logs/usage.db")
+            .find(|entry| entry["path"] == "storage/ai-manager.db")
             .unwrap();
         let database = base64::engine::general_purpose::STANDARD
             .decode(database_entry["content"].as_str().unwrap())
@@ -2489,7 +2517,8 @@ mod tests {
             std::fs::remove_dir_all(&restore_root).unwrap();
         }
         let restore_paths = resolve_app_paths(Path::new(&restore_root));
-        usage_store::restore_database(&restore_paths, &database).unwrap();
+        database::restore(&restore_paths, &database).unwrap();
+        usage_store::initialize(&restore_paths).unwrap();
         let pricing = usage_store::read_pricing(&restore_paths).unwrap();
         let preview = runtime
             .block_on(create_restore_preview(
@@ -2501,7 +2530,16 @@ mod tests {
         assert_eq!(pricing["exchangeRate"], 7.4);
         assert_eq!(pricing["items"][0]["modelId"], "gpt-test");
         assert_eq!(usage_store::read_all_logs(&restore_paths).unwrap().len(), 1);
-        assert_eq!(database_view["typeName"], "用量数据库");
+        assert!(usage_store::read_session_versions(&restore_paths)
+            .unwrap()
+            .is_empty());
+        assert!(usage_store::read_request_records(
+            &restore_paths,
+            &["request-1".to_string()]
+        )
+        .unwrap()
+        .is_empty());
+        assert_eq!(database_view["typeName"], "主数据库");
         assert!(database_view["content"]
             .as_str()
             .is_some_and(|content| content.contains("SHA-256")));
@@ -2513,7 +2551,7 @@ mod tests {
                     entry
                         .get("path")
                         .and_then(serde_json::Value::as_str)
-                        .is_some_and(|path| path.starts_with("logs/"))
+                        .is_some_and(is_database_backup_path)
                 })
                 .count(),
             1

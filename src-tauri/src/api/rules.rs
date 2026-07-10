@@ -1,5 +1,6 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
+use crate::core::rule_store;
 use crate::core::settings::{resolve_portable_path, string_value};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -12,10 +13,7 @@ const COMMON_PROMPT_CLI: &str = "common";
 pub fn build_state(paths: &AppPaths, cli_targets: &Value) -> Result<Value, ManagerError> {
     let runtime_state = refresh_drift_state(paths, cli_targets)?;
 
-    write_json_sync(
-        &paths.storage_files.prompt_runtime_state,
-        &Value::Object(runtime_state.clone()),
-    )?;
+    rule_store::write_runtime_state(paths, &runtime_state)?;
 
     let prompts = load_prompts(paths)?;
     let profiles = load_profiles(paths)?;
@@ -287,11 +285,7 @@ pub async fn move_rule(_: &AppPaths) -> Result<(), ManagerError> {
 pub async fn refresh_drift(paths: &AppPaths, cli_targets: &Value) -> Result<(), ManagerError> {
     let runtime_state = refresh_drift_state(paths, cli_targets)?;
 
-    write_json(
-        &paths.storage_files.prompt_runtime_state,
-        &Value::Object(runtime_state),
-    )
-    .await
+    rule_store::write_runtime_state(paths, &runtime_state)
 }
 
 fn refresh_drift_state(
@@ -300,7 +294,7 @@ fn refresh_drift_state(
 ) -> Result<serde_json::Map<String, Value>, ManagerError> {
     let prompts = load_prompts(paths)?;
     let profiles = load_profiles(paths)?;
-    let mut runtime_state = read_json_object(&paths.storage_files.prompt_runtime_state)?;
+    let mut runtime_state = rule_store::read_runtime_state(paths)?;
 
     for cli in ["claude", "codex"] {
         let cli_target = find_cli_target(cli_targets, cli);
@@ -427,15 +421,7 @@ async fn save_prompt(paths: &AppPaths, payload: Value) -> Result<Value, ManagerE
 
     tokio::fs::create_dir_all(&prompt_dir).await?;
     tokio::fs::write(prompt_dir.join(&file_name), format!("{}\n", content.trim())).await?;
-    write_json(&metadata_path(paths, &cli, &prompt_id), &metadata).await?;
-
-    if let Some(previous) = previous {
-        let metadata_file_name = string_value(previous.get("metadataFileName"));
-
-        if !metadata_file_name.is_empty() && metadata_file_name != format!("{}.json", prompt_id) {
-            remove_file_if_exists(prompt_dir.join(metadata_file_name)).await?;
-        }
-    }
+    rule_store::upsert_prompt(paths, &metadata)?;
 
     let mut prompt = metadata;
 
@@ -462,12 +448,8 @@ async fn delete_prompt(paths: &AppPaths, prompt_id: &str) -> Result<(), ManagerE
 
     let prompt_dir = prompt_dir(paths, &cli);
 
-    remove_file_if_exists(prompt_dir.join(first_string(
-        prompt.get("metadataFileName"),
-        Some(&json!(format!("{}.json", prompt_id))),
-    )))
-    .await?;
-    remove_file_if_exists(prompt_dir.join(string_value(prompt.get("fileName")))).await
+    remove_file_if_exists(prompt_dir.join(string_value(prompt.get("fileName")))).await?;
+    rule_store::delete_prompt(paths, prompt_id)
 }
 
 async fn enable_prompt(
@@ -493,13 +475,9 @@ async fn enable_prompt(
         tokio::fs::create_dir_all(parent).await?;
     }
     tokio::fs::write(&runtime_path, &runtime_content).await?;
-    write_json(
-        &profile_path(paths, &cli),
-        &json!({ "activePromptId": prompt_id }),
-    )
-    .await?;
+    rule_store::write_profile(paths, &cli, &json!({ "activePromptId": prompt_id }))?;
 
-    let mut runtime_state = read_json_object(&paths.storage_files.prompt_runtime_state)?;
+    let mut runtime_state = rule_store::read_runtime_state(paths)?;
 
     runtime_state.insert(
         cli.to_string(),
@@ -511,11 +489,7 @@ async fn enable_prompt(
           "status": "SYNCED"
         }),
     );
-    write_json(
-        &paths.storage_files.prompt_runtime_state,
-        &Value::Object(runtime_state),
-    )
-    .await
+    rule_store::write_runtime_state(paths, &runtime_state)
 }
 
 async fn disable_prompt(
@@ -556,8 +530,8 @@ async fn disable_prompt(
         remove_file_if_exists(&runtime_path).await?;
     }
 
-    write_json(&profile_path(paths, &cli), &json!({ "activePromptId": "" })).await?;
-    let mut runtime_state = read_json_object(&paths.storage_files.prompt_runtime_state)?;
+    rule_store::write_profile(paths, &cli, &json!({ "activePromptId": "" }))?;
+    let mut runtime_state = rule_store::read_runtime_state(paths)?;
     let mut next_state = runtime_state
         .get(&cli)
         .and_then(Value::as_object)
@@ -568,11 +542,7 @@ async fn disable_prompt(
     next_state.insert("runtimePath".to_string(), json!(runtime_path));
     next_state.insert("status".to_string(), json!("NO_ACTIVE"));
     runtime_state.insert(cli, Value::Object(next_state));
-    write_json(
-        &paths.storage_files.prompt_runtime_state,
-        &Value::Object(runtime_state),
-    )
-    .await
+    rule_store::write_runtime_state(paths, &runtime_state)
 }
 
 async fn read_global_prompt_content(
@@ -603,44 +573,18 @@ async fn read_global_prompt_content(
 fn load_prompts(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     let mut prompts = Vec::new();
 
-    for cli in [COMMON_PROMPT_CLI, "claude", "codex"] {
-        let prompt_dir = prompt_dir(paths, cli);
+    for mut prompt in rule_store::read_prompts(paths)? {
+        let cli = string_value(prompt.get("cli"));
+        let prompt_dir = prompt_dir(paths, &cli);
+        let content = std::fs::read_to_string(
+            prompt_dir.join(string_value(prompt.get("fileName"))),
+        )
+        .unwrap_or_default();
 
-        if !prompt_dir.exists() {
-            continue;
-        }
-
-        for entry in std::fs::read_dir(&prompt_dir)? {
-            let entry = entry?;
-            let entry_path = entry.path();
-
-            if !entry_path.is_file()
-                || entry_path.extension().and_then(|value| value.to_str()) != Some("json")
-            {
-                continue;
-            }
-
-            let metadata: Value = serde_json::from_str(&std::fs::read_to_string(&entry_path)?)?;
-
-            if string_value(metadata.get("id")).is_empty()
-                || string_value(metadata.get("fileName")).is_empty()
-            {
-                continue;
-            }
-
-            let content =
-                std::fs::read_to_string(prompt_dir.join(string_value(metadata.get("fileName"))))
-                    .unwrap_or_default();
-            let mut prompt = metadata;
-
-            prompt["content"] = json!(content);
-            prompt["metadataFileName"] = json!(entry_path
-                .file_name()
-                .map(|value| value.to_string_lossy().to_string())
-                .unwrap_or_default());
-            prompt["storageDir"] = json!(prompt_dir.to_string_lossy().to_string());
-            prompts.push(prompt);
-        }
+        prompt["content"] = json!(content);
+        prompt["metadataFileName"] = json!(format!("{}.json", string_value(prompt.get("id"))));
+        prompt["storageDir"] = json!(prompt_dir.to_string_lossy().to_string());
+        prompts.push(prompt);
     }
 
     prompts.sort_by(|left, right| {
@@ -658,9 +602,11 @@ fn load_prompts(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
 }
 
 fn load_profiles(paths: &AppPaths) -> Result<Value, ManagerError> {
+    let profiles = rule_store::read_profiles(paths)?;
+
     Ok(json!({
-      "claude": read_json_file(profile_path(paths, "claude"), json!({ "activePromptId": "" }))?,
-      "codex": read_json_file(profile_path(paths, "codex"), json!({ "activePromptId": "" }))?
+      "claude": profiles.get("claude").cloned().unwrap_or_else(|| json!({ "activePromptId": "" })),
+      "codex": profiles.get("codex").cloned().unwrap_or_else(|| json!({ "activePromptId": "" }))
     }))
 }
 
@@ -905,56 +851,6 @@ fn slugify_name(value: &str) -> String {
 
 fn prompt_dir(paths: &AppPaths, cli: &str) -> PathBuf {
     Path::new(&paths.prompts_dir).join(cli)
-}
-
-fn metadata_path(paths: &AppPaths, cli: &str, prompt_id: &str) -> PathBuf {
-    prompt_dir(paths, cli).join(format!("{}.json", prompt_id))
-}
-
-fn profile_path(paths: &AppPaths, cli: &str) -> PathBuf {
-    Path::new(&paths.prompt_profiles_dir).join(format!("{}-profile.json", cli))
-}
-
-fn read_json_file(path: impl AsRef<Path>, fallback: Value) -> Result<Value, ManagerError> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => Ok(serde_json::from_str(&content)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(fallback),
-        Err(error) => Err(ManagerError::Io(error)),
-    }
-}
-
-fn read_json_object(
-    path: impl AsRef<Path>,
-) -> Result<serde_json::Map<String, Value>, ManagerError> {
-    Ok(read_json_file(path, json!({}))?
-        .as_object()
-        .cloned()
-        .unwrap_or_default())
-}
-
-async fn write_json(path: impl AsRef<Path>, payload: &Value) -> Result<(), ManagerError> {
-    if let Some(parent) = path.as_ref().parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    tokio::fs::write(
-        path,
-        format!("{}\n", serde_json::to_string_pretty(payload)?),
-    )
-    .await?;
-    Ok(())
-}
-
-fn write_json_sync(path: impl AsRef<Path>, payload: &Value) -> Result<(), ManagerError> {
-    if let Some(parent) = path.as_ref().parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    std::fs::write(
-        path,
-        format!("{}\n", serde_json::to_string_pretty(payload)?),
-    )?;
-    Ok(())
 }
 
 async fn remove_file_if_exists(path: impl AsRef<Path>) -> Result<(), ManagerError> {

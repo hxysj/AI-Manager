@@ -27,6 +27,7 @@ pub struct AppPaths {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageFiles {
+    pub database: String,
     pub usage_database: String,
     pub skill_repositories: String,
     pub skill_groups: String,
@@ -109,6 +110,7 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
         storage_dir: path_text(&storage_dir),
         lan_share_dir: path_text(&lan_share_dir),
         storage_files: StorageFiles {
+            database: path_text(storage_dir.join("ai-manager.db")),
             usage_database: path_text(logs_dir.join("usage.db")),
             skill_repositories: path_text(storage_dir.join("skill-repositories.json")),
             skill_groups: path_text(storage_dir.join("skill-groups.json")),
@@ -231,6 +233,10 @@ mod tests {
         assert_eq!(
             paths.storage_files.usage_database.replace('/', "\\"),
             r"D:\ai-manager-data\workspace\logs\usage.db"
+        );
+        assert_eq!(
+            paths.storage_files.database.replace('/', "\\"),
+            r"D:\ai-manager-data\workspace\storage\ai-manager.db"
         );
     }
 }

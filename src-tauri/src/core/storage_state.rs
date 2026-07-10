@@ -5,6 +5,7 @@ use crate::core::settings::{
     bool_value, non_empty_string, number_value, resolve_portable_path, serialize_portable_path,
     string_value, AppSettings,
 };
+use crate::core::skill_store;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -54,7 +55,7 @@ pub fn create_initial_state(
 
     Ok(json!({
       "cliTargets": cli_targets.clone(),
-      "skills": read_json_file(&files.skills, json!([]))?,
+      "skills": skill_store::read_skills(paths)?,
       "skillGroups": skills::load_skill_groups(paths)?,
       "skillRepositories": skills::load_repositories(paths)?,
       "repos": read_json_file(&files.repos, json!([]))?,

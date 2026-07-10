@@ -1,6 +1,7 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::{path_text, AppPaths};
 use crate::core::settings::serialize_portable_path;
+use crate::core::skill_store;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
@@ -39,8 +40,11 @@ pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result
             ))
         })
         .collect::<HashMap<_, _>>();
-    let previous_skills = read_array(&paths.storage_files.skills)?;
-    let mut install_index = read_object_index(&paths.storage_files.installs)?;
+    let previous_skills = skill_store::read_skills(paths)?;
+    let mut install_index = skill_store::read_installs(paths)?
+        .into_iter()
+        .map(|(key, value)| (key, value.as_array().cloned().unwrap_or_default()))
+        .collect::<HashMap<_, _>>();
     let scanned_items = scan_many(
         std::iter::once((paths.skills_dir.clone(), Value::Null))
             .chain(repos.iter().map(|repo| {
@@ -420,7 +424,7 @@ pub async fn batch_skill_action(
 }
 
 pub(crate) fn load_skill_groups(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
-    Ok(read_array(&paths.storage_files.skill_groups)?
+    Ok(skill_store::read_groups(paths)?
         .into_iter()
         .map(normalize_skill_group)
         .filter(|item| !string_value(item.get("id")).is_empty())
@@ -489,7 +493,7 @@ pub async fn save_skill_group(paths: &AppPaths, payload: Value) -> Result<Value,
     }
 
     groups.sort_by(|left, right| string_value(left.get("name")).cmp(&string_value(right.get("name"))));
-    write_json(&paths.storage_files.skill_groups, &json!(groups)).await?;
+    skill_store::write_groups(paths, &groups)?;
 
     Ok(json!({
       "groups": groups,
@@ -517,7 +521,7 @@ pub async fn remove_skill_group(paths: &AppPaths, payload: Value) -> Result<Valu
         return Err(ManagerError::System("Skill 分组不存在".to_string()));
     }
 
-    write_json(&paths.storage_files.skill_groups, &json!(groups)).await?;
+    skill_store::write_groups(paths, &groups)?;
     Ok(json!({
       "groups": groups
     }))
@@ -550,7 +554,7 @@ pub async fn remove_skill_group_items(
         group["updatedAt"] = json!(now_millis());
     }
 
-    write_json(&paths.storage_files.skill_groups, &json!(groups)).await?;
+    skill_store::write_groups(paths, &groups)?;
     Ok(json!({
       "groups": groups
     }))
@@ -596,7 +600,7 @@ pub async fn set_skill_enabled(
     }
 
     skills[index]["disabled"] = json!(!enabled);
-    write_json(&paths.storage_files.skills, &json!(skills)).await?;
+    skill_store::write_skills(paths, &skills)?;
     refresh_skills_state(paths, state).await
 }
 
@@ -2903,7 +2907,7 @@ async fn restore_skill_trash_item(paths: &AppPaths, item: &Value) -> Result<Valu
 }
 
 fn state_skill_name_exists(paths: &AppPaths, skill_name: &str) -> Result<bool, ManagerError> {
-    Ok(read_array(&paths.storage_files.skills)?.iter().any(|item| {
+    Ok(skill_store::read_skills(paths)?.iter().any(|item| {
         item.get("name").and_then(Value::as_str) == Some(skill_name)
             && Path::new(&string_value(item.get("sourcePath"))).exists()
     }))
@@ -2956,19 +2960,15 @@ async fn cleanup_expired_skill_trash(paths: &AppPaths) -> Result<(), ManagerErro
 }
 
 fn read_skill_trash(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
-    read_array(&path_text(skill_trash_index_path(paths)))
+    skill_store::read_trash(paths)
 }
 
 async fn write_skill_trash(paths: &AppPaths, items: &[Value]) -> Result<(), ManagerError> {
-    write_json(&path_text(skill_trash_index_path(paths)), &json!(items)).await
+    skill_store::write_trash(paths, items)
 }
 
 fn skill_trash_root(paths: &AppPaths) -> PathBuf {
     Path::new(&paths.temp_dir).join("skill-trash")
-}
-
-fn skill_trash_index_path(paths: &AppPaths) -> PathBuf {
-    skill_trash_root(paths).join("trash.json")
 }
 
 fn validate_skill_trash_path(paths: &AppPaths, value: &str) -> Result<PathBuf, ManagerError> {
@@ -3075,13 +3075,19 @@ async fn persist_skills(
         }
     }
 
-    write_json(&paths.storage_files.skills, &json!(skills)).await?;
+    skill_store::write_skills(paths, skills)?;
     write_json(
         &paths.storage_files.cli_targets,
         &json!(serialize_cli_targets(cli_targets)),
     )
     .await?;
-    write_json(&paths.storage_files.installs, &json!(install_index)).await
+    skill_store::write_installs(
+        paths,
+        &install_index
+            .into_iter()
+            .map(|(key, value)| (key, json!(value)))
+            .collect(),
+    )
 }
 
 fn serialize_cli_targets(cli_targets: &[Value]) -> Vec<Value> {
@@ -3110,13 +3116,13 @@ fn serialize_cli_targets(cli_targets: &[Value]) -> Vec<Value> {
 }
 
 pub(crate) fn load_repositories(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
-    let caches = read_array(&paths.storage_files.skill_repository_cache)?;
+    let caches = skill_store::read_repository_cache(paths)?;
     let cache_map = caches
         .into_iter()
         .map(|item| (string_value(item.get("id")), item))
         .collect::<HashMap<_, _>>();
 
-    Ok(read_array(&paths.storage_files.skill_repositories)?
+    Ok(skill_store::read_repositories(paths)?
         .into_iter()
         .map(|item| {
             let repository = create_repository_runtime_item(&item);
@@ -3149,16 +3155,8 @@ async fn persist_repositories(
         })
         .collect::<Vec<_>>();
 
-    write_json(
-        &paths.storage_files.skill_repositories,
-        &json!(storage_items),
-    )
-    .await?;
-    write_json(
-        &paths.storage_files.skill_repository_cache,
-        &json!(cache_items),
-    )
-    .await
+    skill_store::write_repositories(paths, &storage_items)?;
+    skill_store::write_repository_cache(paths, &cache_items)
 }
 
 fn create_repository_storage_item(repository: &Value) -> Value {
@@ -3243,32 +3241,6 @@ fn merge_diagnostics(state: &mut Value, diagnostics: Vec<Value>) {
         .collect::<Vec<_>>();
 
     state["diagnostics"] = json!(next);
-}
-
-fn read_array(path: &str) -> Result<Vec<Value>, ManagerError> {
-    match std::fs::read_to_string(path) {
-        Ok(content) => Ok(serde_json::from_str(&content)?),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(ManagerError::Io(error)),
-    }
-}
-
-fn read_object_index(path: &str) -> Result<HashMap<String, Vec<Value>>, ManagerError> {
-    let content = match std::fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(error) => return Err(ManagerError::Io(error)),
-    };
-    let value: Value = serde_json::from_str(&content)?;
-    let index = value
-        .as_object()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(key, value)| (key, value.as_array().cloned().unwrap_or_default()))
-        .collect();
-
-    Ok(index)
 }
 
 async fn write_json(path: &str, payload: &Value) -> Result<(), ManagerError> {
