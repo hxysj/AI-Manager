@@ -809,12 +809,12 @@ fn create_backup_entry_view(entry: &Value) -> Result<Value, ManagerError> {
         }));
     }
 
-    let text =
-        String::from_utf8(buffer.clone()).map_err(|error| ManagerError::System(error.to_string()))?;
     let content = if is_storage_json_path(&entry_path) {
+        let text = String::from_utf8(buffer.clone())
+            .map_err(|error| ManagerError::System(error.to_string()))?;
         serde_json::to_string_pretty(&serde_json::from_str::<Value>(&text)?)?
     } else {
-        text
+        format_restore_file_content(&buffer)
     };
 
     Ok(json!({
@@ -896,8 +896,8 @@ async fn create_restore_preview(paths: &AppPaths, entries: Vec<Value>) -> Result
             conflicts.push(create_restore_file_preview_item(
                 &entry_path,
                 "conflict",
-                &String::from_utf8(current_content).map_err(|error| ManagerError::System(error.to_string()))?,
-                &String::from_utf8(backup_content).map_err(|error| ManagerError::System(error.to_string()))?,
+                &format_restore_file_content(&current_content),
+                &format_restore_file_content(&backup_content),
             ));
         }
     }
@@ -2371,6 +2371,17 @@ fn create_restore_file_preview_item(
     })
 }
 
+fn format_restore_file_content(content: &[u8]) -> String {
+    match std::str::from_utf8(content) {
+        Ok(content) => content.to_string(),
+        Err(_) => format!(
+            "二进制文件，大小：{} 字节，SHA-256：{}",
+            content.len(),
+            sha256_bytes(content)
+        ),
+    }
+}
+
 fn create_database_table_restore_preview(
     entry_path: &str,
     difference: &database::RestoreTableDifference,
@@ -2536,8 +2547,8 @@ fn is_database_backup_path(entry_path: &str) -> bool {
 mod tests {
     use super::{
         collect_backup_entries, create_backup_entry_view, create_restore_preview,
-        is_database_backup_path, merge_json_backup_value, merge_provider_keys,
-        restore_legacy_usage_database_entry, sanitize_runtime_backup_entries,
+        format_restore_file_content, is_database_backup_path, merge_json_backup_value,
+        merge_provider_keys, restore_legacy_usage_database_entry, sanitize_runtime_backup_entries,
     };
     use crate::api::runtime_provider;
     use base64::Engine;
@@ -2546,6 +2557,14 @@ mod tests {
     use crate::core::usage_store::{self, UsageSessionUpdate};
     use serde_json::{json, Map};
     use std::path::Path;
+
+    #[test]
+    fn formats_binary_restore_content_as_summary() {
+        let content = [0x89, b'P', b'N', b'G'];
+        let summary = format_restore_file_content(&content);
+
+        assert!(summary.starts_with("二进制文件，大小：4 字节，SHA-256："));
+    }
 
     #[test]
     fn exports_main_database_without_usage_runtime_tables() {
