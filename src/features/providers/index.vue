@@ -64,7 +64,7 @@
             <span>Proxy</span>
             <input
               type="checkbox"
-              :checked="activeProxyState.enabled"
+              :checked="proxySwitchEnabled"
               :disabled="pending"
               @change="toggleProxySwitch"
             />
@@ -2031,6 +2031,7 @@ const proxyPanelRef = ref(null)
 const showProxyAddAction = ref(false)
 const showProxyManager = ref(false)
 const proxyTab = ref("proxy")
+const proxySwitchEnabled = ref(false)
 const providerDetail = ref(null)
 const providerDetailTab = ref("config")
 const manualCallbackUrl = ref("")
@@ -3182,8 +3183,11 @@ function emitProxyEvent(action, payload) {
 }
 
 function toggleProxySwitch(event) {
+  proxySwitchEnabled.value = event.target.checked
+
   if (event.target.checked) {
     if (!activeProxyProviderIds.value.length) {
+      proxySwitchEnabled.value = false
       event.target.checked = false
       showProxyAddAction.value = true
       createMessage.error("请先添加代理接管池")
@@ -3191,12 +3195,10 @@ function toggleProxySwitch(event) {
     }
 
     emitProxyEvent("enable", {})
-    event.target.checked = activeProxyState.value.enabled
     return
   }
 
   emitProxyEvent("disable")
-  event.target.checked = activeProxyState.value.enabled
 }
 
 function openProxyProviderPicker() {
@@ -3368,9 +3370,19 @@ watch(
 watch(
   () => activeProxyState.value?.enabled,
   enabled => {
+    proxySwitchEnabled.value = Boolean(enabled)
     proxyTab.value = enabled ? "proxy" : "providers"
   },
   { immediate: true }
+)
+
+watch(
+  () => props.pending,
+  pending => {
+    if (!pending) {
+      proxySwitchEnabled.value = activeProxyEnabled.value
+    }
+  }
 )
 
 watch(

@@ -162,7 +162,10 @@ pub async fn start_login(
     };
 
     tauri::async_runtime::spawn(async move {
+        let callback_context = context.clone();
+
         if let Err(error) = run_callback_server(context).await {
+            let _ = fail_login(&callback_context, error.to_string()).await;
             eprintln!("{error}");
         }
     });
@@ -476,6 +479,7 @@ async fn run_callback_server(context: CallbackContext) -> Result<(), ManagerErro
     let listener = TcpListener::bind(addr).await?;
 
     let (stream, _) = listener.accept().await?;
+    drop(listener);
     let io = TokioIo::new(stream);
     let callback_context = context.clone();
     let service = service_fn(move |request| handle_callback(request, callback_context.clone()));
