@@ -1,4 +1,4 @@
-use crate::api::{runtime_provider, usage};
+use crate::api::{runtime_provider, sessions, usage};
 use crate::core::{database, provider_store, rule_store, skill_store};
 use crate::core::error::ManagerError;
 use crate::core::paths::{ensure_app_directories, home_path, path_text, AppPaths};
@@ -160,6 +160,7 @@ pub async fn restore_data_backup(
     restore_data_backup_content(paths, &string_value(draft.get("content")), &choices).await?;
     cache.delete_restore_backup_draft(&restore_id);
     *state = create_initial_state(paths, app_settings)?;
+    sessions::refresh_sessions_state(paths, state).await?;
 
     Ok(json!({
       "canceled": false,
@@ -248,6 +249,7 @@ pub async fn restore_local_backup(
     restore_data_backup_content(paths, &string_value(draft.get("content")), &choices).await?;
     cache.delete_restore_backup_draft(&restore_id);
     *state = create_initial_state(paths, app_settings)?;
+    sessions::refresh_sessions_state(paths, state).await?;
 
     Ok(json!({
       "canceled": false,
@@ -350,6 +352,7 @@ pub async fn pull_cloud_backup(
     )
     .await?;
     *state = create_initial_state(paths, app_settings)?;
+    sessions::refresh_sessions_state(paths, state).await?;
 
     Ok(json!({
       "downloadedAt": last_updated_at,
@@ -472,7 +475,6 @@ async fn restore_data_backup_content(
     rule_store::initialize(paths)?;
     provider_store::initialize(paths)?;
     restore_database_entries(paths, &workspace_entries, &choices).await?;
-    write_json(&paths.storage_files.cli_targets, &json!([])).await?;
 
     if let Some(runtime_provider_keys) = runtime_provider_keys {
         merge_provider_keys(paths, &runtime_provider_keys, &choices).await?;
@@ -2032,6 +2034,7 @@ fn assert_backup_path(root_path: &str, entry_path: &str) -> Result<PathBuf, Mana
 fn is_ignored_backup_path(entry_path: &str) -> bool {
     let ignored_runtime_backup_paths = HashSet::from([
         "storage/installs.json",
+        "storage/cli-targets.json",
         "storage/runtime-profiles.json",
         "storage/runtime-provider-state.json",
         "storage/runtime-provider-keys.json",
@@ -2802,11 +2805,13 @@ mod tests {
     }
 
     #[test]
-    fn ignores_local_rule_state_in_legacy_backups() {
+    fn ignores_local_runtime_state_in_legacy_backups() {
         let entries = sanitize_runtime_backup_entries(vec![
             json!({"path": "profiles/claude-profile.json", "type": "file"}),
             json!({"path": "profiles/codex-profile.json", "type": "file"}),
             json!({"path": "storage/prompt-runtime-state.json", "type": "file"}),
+            json!({"path": "storage/cli-targets.json", "type": "file"}),
+            json!({"path": "storage/sessions.json", "type": "file"}),
             json!({"path": "prompts/common/rule-a.md", "type": "file"}),
         ])
         .unwrap();
