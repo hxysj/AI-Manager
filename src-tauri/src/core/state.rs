@@ -163,11 +163,13 @@ impl ManagerState {
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
         match channel {
-            "app:bootstrap"
-            | "app:refresh"
-            | "app:ensure-sessions-ready"
-            | "app:ensure-tools-ready" => {
+            "app:bootstrap" | "app:refresh" | "app:ensure-tools-ready" => {
                 self.refresh_state().await?;
+                Ok(self.state.clone())
+            }
+            "app:ensure-sessions-ready" => {
+                self.refresh_state().await?;
+                sessions::refresh_sessions_state(&self.paths, &mut self.state).await?;
                 Ok(self.state.clone())
             }
             "app:ensure-skills-ready" => {
@@ -1173,7 +1175,12 @@ impl ManagerState {
                     .await
             }
             "session:delete" => {
-                sessions::delete_session(&self.paths, payload.unwrap_or_else(|| json!({}))).await?;
+                sessions::delete_session(
+                    &self.paths,
+                    &self.state["cliTargets"],
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
                 self.refresh_state().await?;
                 app.emit("state:changed", self.state.clone())
                     .map_err(|error| ManagerError::Path(error.to_string()))?;
@@ -1184,6 +1191,7 @@ impl ManagerState {
                 sessions::restore_session(&self.paths, payload.unwrap_or_else(|| json!({})))
                     .await?;
                 self.refresh_state().await?;
+                sessions::refresh_sessions_state(&self.paths, &mut self.state).await?;
                 app.emit("state:changed", self.state.clone())
                     .map_err(|error| ManagerError::Path(error.to_string()))?;
                 Ok(self.state.clone())

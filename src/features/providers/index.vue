@@ -2067,28 +2067,30 @@ const activeRuntimeSchema = computed(() => {
 })
 
 function runtimeFieldOptions(field) {
-  // Codex 5.6 模型支持更完整的思考强度选项。
+  // 仅 Codex 5.6 Sol 和 Terra 模型支持 ultra 思考强度。
   if (
     activeCli.value === "codex" &&
     field.key === "modelReasoningEffort" &&
-    isCodexFiveSixModel(modelDrafts.mainModel)
+    isCodexFiveSixSolOrTerraModel(modelDrafts.mainModel)
   ) {
-    return ["minimal", "low", "medium", "high", "xhigh", "max"]
+    return ["low", "medium", "high", "xhigh", "ultra"]
   }
 
   return field.options || []
 }
 
-function isCodexFiveSixModel(model) {
-  return String(model || "")
-    .toLowerCase()
-    .includes("5.6")
+function isCodexFiveSixSolOrTerraModel(model) {
+  return ["gpt-5.6-sol", "gpt-5.6-terra"].includes(
+    String(model || "")
+      .trim()
+      .toLowerCase()
+  )
 }
 
 function normalizeModelReasoningEffort(model, effort) {
   // 模型切换后避免保存当前模型不支持的思考强度。
-  const options = isCodexFiveSixModel(model)
-    ? ["minimal", "low", "medium", "high", "xhigh", "max"]
+  const options = isCodexFiveSixSolOrTerraModel(model)
+    ? ["low", "medium", "high", "xhigh", "ultra"]
     : ["low", "medium", "high", "xhigh"]
 
   return options.includes(effort) ? effort : "low"

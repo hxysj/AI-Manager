@@ -121,7 +121,7 @@ pub async fn get_skill_usage_stats(
         .unwrap_or_default();
     let skills = collect_skills(&cli_targets, &managed_skills).await?;
     let alias_map = create_alias_map(&skills);
-    let files = collect_skill_usage_files(&cli_targets)?;
+    let files = collect_cli_session_files(&cli_targets)?;
     let mut diagnostics = Vec::new();
     let mut invocations = Vec::new();
     let filters = json!({
@@ -2011,7 +2011,9 @@ fn create_alias_map(skills: &[SkillInfo]) -> HashMap<String, String> {
     alias_map
 }
 
-fn collect_skill_usage_files(cli_targets: &[Value]) -> Result<Vec<Value>, ManagerError> {
+pub(crate) fn collect_cli_session_files(
+    cli_targets: &[Value],
+) -> Result<Vec<Value>, ManagerError> {
     let mut files = Vec::new();
 
     for cli_target in cli_targets {
@@ -2056,7 +2058,7 @@ fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>,
         .cloned()
         .unwrap_or_default();
 
-    for item in collect_skill_usage_files(&cli_targets)? {
+    for item in collect_cli_session_files(&cli_targets)? {
         let raw_path = string_value(item.get("filePath"));
 
         if raw_path.is_empty() || seen_paths.contains_key(&raw_path) {

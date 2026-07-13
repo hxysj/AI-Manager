@@ -66,7 +66,7 @@
           :sessions="state.sessions"
           @delete-session="deleteSession"
           @open-path="openPath"
-          @refresh="refreshState"
+          @refresh="refreshSessions"
         />
 
         <ProvidersView
@@ -922,6 +922,11 @@ function applyUpdateStatus(status = {}) {
 
 async function refreshState() {
   await runAction(() => appApi.refresh())
+}
+
+async function refreshSessions() {
+  // Session 索引只从当前设备的 CLI 目录重新生成。
+  await runAction(() => appApi.ensureSessionsReady())
 }
 
 async function saveSettings(payload) {
