@@ -19,6 +19,21 @@ const SKILL_TRASH_RETENTION_MS: u128 = 10 * 24 * 60 * 60 * 1000;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result<(), ManagerError> {
+    refresh_skills_state_inner(paths, state, false).await
+}
+
+pub async fn refresh_skills_state_after_restore(
+    paths: &AppPaths,
+    state: &mut Value,
+) -> Result<(), ManagerError> {
+    refresh_skills_state_inner(paths, state, true).await
+}
+
+async fn refresh_skills_state_inner(
+    paths: &AppPaths,
+    state: &mut Value,
+    disable_new_skills: bool,
+) -> Result<(), ManagerError> {
     cleanup_expired_skill_trash(paths).await?;
 
     let cli_targets = state
@@ -41,6 +56,10 @@ pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result
         })
         .collect::<HashMap<_, _>>();
     let previous_skills = skill_store::read_skills(paths)?;
+    let previous_skill_map = previous_skills
+        .iter()
+        .map(|item| (string_value(item.get("name")), item.clone()))
+        .collect::<HashMap<_, _>>();
     let mut install_index = skill_store::read_installs(paths)?
         .into_iter()
         .map(|(key, value)| (key, value.as_array().cloned().unwrap_or_default()))
@@ -61,7 +80,7 @@ pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result
 
     for scanned_item in scanned_items {
         match parse_skill(&scanned_item.skill_root, scanned_item.repo_id.clone()) {
-            Ok(parsed) => {
+            Ok(mut parsed) => {
                 let skill_name = string_value(parsed.get("name"));
 
                 if used_names.contains(&skill_name) {
@@ -71,6 +90,15 @@ pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result
                       "sourcePath": parsed["sourcePath"]
                     }));
                     continue;
+                }
+
+                if let Some(previous_id) = previous_skill_map
+                    .get(&skill_name)
+                    .and_then(|skill| skill.get("id"))
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty())
+                {
+                    parsed["id"] = json!(previous_id);
                 }
 
                 used_names.insert(skill_name);
@@ -84,36 +112,50 @@ pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result
         }
     }
 
-    let previous_skill_map = previous_skills
-        .iter()
-        .map(|item| (string_value(item.get("name")), item.clone()))
-        .collect::<HashMap<_, _>>();
     let scanned_skill_names = parsed_skills
         .iter()
         .map(|item| string_value(item.get("name")))
         .collect::<HashSet<_>>();
+    let mut pending_cleanup_skills = HashSet::new();
 
     for (skill_name, target_ids) in install_index.clone() {
-        if target_ids.is_empty() || scanned_skill_names.contains(&skill_name) {
+        let disabled = previous_skill_map
+            .get(&skill_name)
+            .and_then(|skill| skill.get("disabled"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
+        if target_ids.is_empty() || (scanned_skill_names.contains(&skill_name) && !disabled) {
             continue;
         }
 
+        let mut cleanup_failed = false;
         for target_id in target_ids {
             let target_id = string_value(Some(&target_id));
 
             if let Err(error) = uninstall_skill_link(&cli_targets, &skill_name, &target_id).await {
+                cleanup_failed = true;
                 diagnostics.push(json!({
                   "type": "cleanup-error",
-                  "message": format!("清理失效链接失败：{}", error),
+                  "message": format!("清理 Skill 链接失败：{}", error),
                   "sourcePath": format!("{} -> {}", skill_name, target_id)
                 }));
             }
         }
 
+        if cleanup_failed {
+            pending_cleanup_skills.insert(skill_name);
+            continue;
+        }
+
         install_index.remove(&skill_name);
         diagnostics.push(json!({
-          "type": "orphan-skill-cleaned",
-          "message": format!("Skill 源目录已删除，已自动清理挂载：{}", skill_name),
+          "type": if disabled { "disabled-skill-cleaned" } else { "orphan-skill-cleaned" },
+          "message": if disabled {
+              format!("Skill 已禁用，已自动清理挂载：{}", skill_name)
+          } else {
+              format!("Skill 源目录已删除，已自动清理挂载：{}", skill_name)
+          },
           "sourcePath": previous_skill_map
             .get(&skill_name)
             .map(|item| string_value(item.get("sourcePath")))
@@ -135,7 +177,7 @@ pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result
             .get(&skill_name)
             .and_then(|item| item.get("disabled"))
             .and_then(Value::as_bool)
-            .unwrap_or(false);
+            .unwrap_or(disable_new_skills);
 
         for cli_target in &cli_targets {
             let state = get_install_state(&skill, cli_target, disabled).await;
@@ -179,7 +221,14 @@ pub async fn refresh_skills_state(paths: &AppPaths, state: &mut Value) -> Result
         })
         .collect::<Vec<_>>();
 
-    persist_skills(paths, &skills, &cli_targets, install_index).await?;
+    persist_skills(
+        paths,
+        &skills,
+        &cli_targets,
+        install_index,
+        &pending_cleanup_skills,
+    )
+    .await?;
     state["skills"] = json!(skills);
     state["repos"] = json!(repos);
     merge_diagnostics(state, diagnostics);
@@ -3059,6 +3108,7 @@ async fn persist_skills(
     skills: &[Value],
     cli_targets: &[Value],
     mut install_index: HashMap<String, Vec<Value>>,
+    pending_cleanup_skills: &HashSet<String>,
 ) -> Result<(), ManagerError> {
     for skill in skills {
         let skill_name = string_value(skill.get("name"));
@@ -3068,9 +3118,9 @@ async fn persist_skills(
             .cloned()
             .unwrap_or_default();
 
-        if installed_targets.is_empty() {
+        if installed_targets.is_empty() && !pending_cleanup_skills.contains(&skill_name) {
             install_index.remove(&skill_name);
-        } else {
+        } else if !installed_targets.is_empty() {
             install_index.insert(skill_name, installed_targets);
         }
     }
@@ -3430,6 +3480,7 @@ mod tests {
         try_load_cached_repository_archive_zip, RepositoryArchive,
     };
     use serde_json::json;
+    use crate::core::skill_store;
     use std::io::Write;
     use std::path::Path;
 
@@ -3950,6 +4001,175 @@ mod tests {
             );
             assert!(target_a.join("demo-skill").exists());
             assert!(!target_b.join("demo-skill").exists());
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn refresh_uninstalls_disabled_skill_links_and_preserves_skill_id() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_disabled_cleanup_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+            let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
+            let target_root = root.join("target");
+            let target_link = target_root.join("demo-skill");
+            let mut state = json!({
+              "skills": [],
+              "repos": [],
+              "cliTargets": [{
+                "id": "test-cli",
+                "name": "Test CLI",
+                "installed": true,
+                "skillsPath": path_text(&target_root)
+              }]
+            });
+
+            write_test_skill(&skill_root, "demo-skill");
+            skill_store::write_skills(
+                &paths,
+                &[json!({
+                  "id": "stable-skill-id",
+                  "name": "demo-skill",
+                  "disabled": false,
+                  "sourcePath": "C:\\old-device\\skills\\demo-skill",
+                  "entryPath": "C:\\old-device\\skills\\demo-skill\\SKILL.md"
+                })],
+            )
+            .unwrap();
+            skill_store::write_groups(
+                &paths,
+                &[json!({"id": "group-a", "name": "Group A", "skillIds": ["stable-skill-id"]})],
+            )
+            .unwrap();
+            super::refresh_skills_state(&paths, &mut state)
+                .await
+                .unwrap();
+            batch_skill_action(
+                &paths,
+                &mut state,
+                json!({
+                  "action": "install-all",
+                  "skillNames": ["demo-skill"],
+                  "targetIds": ["test-cli"]
+                }),
+            )
+            .await
+            .unwrap();
+            assert!(std::fs::symlink_metadata(&target_link).is_ok());
+
+            let mut stored_skills = skill_store::read_skills(&paths).unwrap();
+            stored_skills[0]["disabled"] = json!(true);
+            skill_store::write_skills(&paths, &stored_skills).unwrap();
+            super::refresh_skills_state(&paths, &mut state)
+                .await
+                .unwrap();
+
+            assert!(std::fs::symlink_metadata(&target_link).is_err());
+            assert!(!skill_store::read_installs(&paths)
+                .unwrap()
+                .contains_key("demo-skill"));
+            assert_eq!(state["skills"][0]["disabled"], true);
+            assert_eq!(state["skills"][0]["id"], "stable-skill-id");
+            assert_eq!(
+                state["skills"][0]["sourcePath"],
+                path_text(&skill_root)
+            );
+            assert_eq!(
+                load_skill_groups(&paths).unwrap()[0]["skillIds"],
+                json!(["stable-skill-id"])
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn refresh_after_restore_disables_new_skills() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_restore_default_disabled_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+            let skill_root = Path::new(&paths.skills_dir).join("restored-skill");
+            let mut state = json!({
+              "skills": [],
+              "repos": [],
+              "cliTargets": []
+            });
+
+            write_test_skill(&skill_root, "restored-skill");
+            super::refresh_skills_state_after_restore(&paths, &mut state)
+                .await
+                .unwrap();
+
+            assert_eq!(state["skills"][0]["disabled"], true);
+            assert_eq!(state["skills"][0]["status"], "disabled");
+            assert_eq!(
+                skill_store::read_skills(&paths).unwrap()[0]["disabled"],
+                true
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn failed_disabled_skill_cleanup_keeps_install_index_for_retry() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "skill_disabled_cleanup_retry_test_{}",
+                super::create_uuid_like_id()
+            ));
+            let paths = resolve_app_paths(&root);
+            let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
+            let target_root = root.join("target");
+            let occupied_target = target_root.join("demo-skill");
+            let mut state = json!({
+              "skills": [],
+              "repos": [],
+              "cliTargets": [{
+                "id": "test-cli",
+                "name": "Test CLI",
+                "skillsPath": path_text(&target_root)
+              }]
+            });
+
+            write_test_skill(&skill_root, "demo-skill");
+            std::fs::create_dir_all(&occupied_target).unwrap();
+            std::fs::write(occupied_target.join("keep.txt"), "keep").unwrap();
+            skill_store::write_skills(
+                &paths,
+                &[json!({"name": "demo-skill", "disabled": true})],
+            )
+            .unwrap();
+            skill_store::write_installs(
+                &paths,
+                &serde_json::Map::from_iter([(
+                    "demo-skill".to_string(),
+                    json!(["test-cli"]),
+                )]),
+            )
+            .unwrap();
+
+            super::refresh_skills_state(&paths, &mut state)
+                .await
+                .unwrap();
+
+            assert!(occupied_target.join("keep.txt").exists());
+            assert_eq!(
+                skill_store::read_installs(&paths).unwrap()["demo-skill"],
+                json!(["test-cli"])
+            );
+            assert!(state["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["type"] == "cleanup-error"));
 
             let _ = std::fs::remove_dir_all(root);
         });

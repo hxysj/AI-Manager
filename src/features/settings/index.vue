@@ -164,7 +164,7 @@
             <div class="settings-view__data-copy">
               <strong>导出配置</strong>
               <span
-                >备份当前 Skills、Prompts、Providers、Runtime 和存储数据。</span
+                >备份 Providers、Codex 官方账号、Skills、Rules 和坚果云设置。</span
               >
             </div>
             <button type="button" @click="$emit('export-data')">
@@ -176,7 +176,7 @@
           <article class="settings-view__data-card">
             <div class="settings-view__data-copy">
               <strong>恢复配置</strong>
-              <span>从加密备份中合并配置，冲突内容恢复前确认。</span>
+              <span>恢复数据但保留本机启用状态，冲突内容恢复前确认。</span>
             </div>
             <button type="button" @click="$emit('restore-data')">
               <Upload :size="16" />

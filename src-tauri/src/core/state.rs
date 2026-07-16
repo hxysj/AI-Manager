@@ -260,13 +260,18 @@ impl ManagerState {
             }
             "data:export" => data::export_data_backup(&app, &self.paths, &self.app_settings).await,
             "data:preview-restore" => {
-                data::preview_data_backup_restore(&app, &self.paths, &mut self.data_backup_cache)
-                    .await
+                data::preview_data_backup_restore(
+                    &app,
+                    &self.paths,
+                    &self.app_settings,
+                    &mut self.data_backup_cache,
+                )
+                .await
             }
             "data:restore" => {
                 data::restore_data_backup(
                     &self.paths,
-                    &self.app_settings,
+                    &mut self.app_settings,
                     &mut self.state,
                     &mut self.data_backup_cache,
                     payload.unwrap_or_else(|| json!({})),
@@ -288,6 +293,7 @@ impl ManagerState {
                 data::preview_local_backup_restore(
                     &self.user_data_path,
                     &self.paths,
+                    &self.app_settings,
                     &mut self.data_backup_cache,
                     payload.unwrap_or_else(|| json!({})),
                 )
@@ -297,7 +303,7 @@ impl ManagerState {
                 data::restore_local_backup(
                     &self.user_data_path,
                     &self.paths,
-                    &self.app_settings,
+                    &mut self.app_settings,
                     &mut self.state,
                     &mut self.data_backup_cache,
                     payload.unwrap_or_else(|| json!({})),
@@ -316,6 +322,7 @@ impl ManagerState {
             "data:cloud-preview" => {
                 data::preview_cloud_backup_restore(
                     &self.paths,
+                    &self.app_settings,
                     &mut self.data_backup_cache,
                     payload.unwrap_or_else(|| json!({})),
                 )

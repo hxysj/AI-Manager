@@ -1114,7 +1114,7 @@ async function inspectCloudBackup(payload) {
       cloudBackupView.value = result
       selectedCloudBackupPath.value =
         result.backup?.entries.find(
-          (entry) => entry.path === "storage/usage-pricing.json"
+          (entry) => entry.path === "app-settings.json"
         )?.path ||
         result.backup?.entries.find((entry) => entry.type === "file")?.path ||
         ""

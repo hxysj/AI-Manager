@@ -48,7 +48,7 @@
       </div>
 
       <p class="restore-notice">
-        新增项会合并到当前数据；Provider 和 Runtime Profile 恢复后保持未启用。
+        已有 Provider 和 Skill 保留当前启用状态；备份新增项默认禁用，失效的当前选择会清空。
       </p>
 
       <div class="restore-body">
@@ -407,9 +407,15 @@ const emit = defineEmits(['close', 'submit'])
 
 const restoreCategoryOptions = [
   {
+    id: 'settings',
+    label: '坚果云设置',
+    description: 'WebDAV 地址、账号和备份文件名',
+    prefixes: ['app-settings.json']
+  },
+  {
     id: 'storage',
-    label: '存储配置',
-    description: 'Provider、模型费用、仓库地址等可同步配置',
+    label: '配置索引',
+    description: 'Provider、Codex 账号、Skills 和 Rules 索引',
     prefixes: ['storage']
   },
   {
@@ -423,12 +429,6 @@ const restoreCategoryOptions = [
     label: 'Prompts',
     description: 'Prompt 内容和 CLI 分类数据',
     prefixes: ['prompts']
-  },
-  {
-    id: 'profiles',
-    label: 'Profiles',
-    description: 'Runtime Profile 和 Prompt 配置档案',
-    prefixes: ['profiles']
   },
   {
     id: 'other',
@@ -569,8 +569,7 @@ function resetRestoreState() {
   }
 
   for (const item of props.preview?.conflicts || []) {
-    restoreChoices[item.key] =
-      item.path === 'storage/usage-pricing.json' ? 'backup' : 'current'
+    restoreChoices[item.key] = 'current'
   }
 }
 
@@ -648,7 +647,10 @@ function getRestoreItemPath(item) {
 }
 
 function getRestoreItemCategory(item) {
-  const itemPath = getRestoreItemPath(item)
+  const itemPath = String(item.path || item.groupPath || '根目录').replace(
+    /\\/g,
+    '/'
+  )
   const matchedCategory = restoreCategoryOptions.find(category =>
     category.prefixes.some(
       prefix => itemPath === prefix || itemPath.startsWith(`${prefix}/`)

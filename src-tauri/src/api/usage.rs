@@ -620,10 +620,6 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
     Ok(diagnostics)
 }
 
-pub fn migrate_legacy_storage(paths: &AppPaths) -> Result<(), ManagerError> {
-    usage_store::initialize(paths)
-}
-
 async fn parse_usage_session(
     session: &Value,
     state: &Value,

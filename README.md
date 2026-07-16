@@ -109,7 +109,7 @@ D:\ai-manager-data\
 ├─ app-settings.json          # 应用设置和数据目录入口
 ├─ models\                    # 本地模型缓存
 └─ workspace\
-   ├─ storage\                # 可备份的配置、索引和主数据库
+   ├─ storage\                # 配置、索引和主数据库
    │  └─ ai-manager.db        # Provider、账号、Skills、Prompt、Usage 等 SQLite 表
    ├─ skills\                 # 本地 Skill 实际内容
    ├─ prompts\                # Prompt 内容
@@ -124,7 +124,15 @@ D:\ai-manager-data\
 
 应用启动时会将旧版 Provider、Codex 账号、Skill、Prompt Rule、Usage JSON 或旧 Usage 数据库迁移到主数据库；只有迁移事务成功后才会删除对应旧数据。
 
-备份文件使用 `.aimbackup` 格式。导出和云备份默认包含可跨设备恢复的配置、主数据库快照、Skills 与 Prompts；`workspace/logs`、`temp`、`repos`、`sessions`、`lan-share` 等目录不会被普通云备份收集，SQLite 中的用量同步记录和设备 Runtime 状态也会被排除。Git 工具数据仅在本地自动备份场景中按现有策略打包。
+备份文件使用 `.aimbackup` 加密格式。手动导出、本地自动备份和坚果云备份使用同一份白名单，只包含：
+
+- Provider 配置、模型和加密保存的 API Key。
+- Codex 官方账号登录信息。
+- Skills 索引、分组、仓库配置及 `workspace/skills` 中的实际内容。
+- Rules 索引及 `workspace/prompts` 中的实际内容。
+- 设置模块中的坚果云 WebDAV 地址、账号、密码和备份文件名。
+
+Usage、Tools、Sessions、代理配置与请求日志、Git 工具归档、仓库工作目录、缓存、回收站和设备 Runtime 状态均不进入备份。恢复时，当前已存在的 Provider 和 Skill 保留本机启用及安装状态；备份中新增的 Provider 和 Skill 默认禁用；当前启用项若不在恢复结果中，会清空对应活动状态，由用户手动重新启用。
 
 ## 技术栈
 
