@@ -1,12 +1,12 @@
-use crate::api::{runtime_provider, sessions, usage};
-use crate::core::{database, provider_store, rule_store, skill_store};
+use crate::api::{runtime_provider, sessions, skills};
 use crate::core::error::ManagerError;
 use crate::core::paths::{ensure_app_directories, home_path, path_text, AppPaths};
 use crate::core::settings::{
-    non_empty_string, number_value, serialize_app_settings, serialize_portable_path, string_value,
-    write_json_file, AppSettings, CloudSyncSettings,
+    non_empty_string, number_value, serialize_app_settings, string_value, write_json_file,
+    AppSettings, CloudSyncSettings,
 };
 use crate::core::storage_state::create_initial_state;
+use crate::core::{database, provider_store, rule_store, skill_store};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
@@ -31,7 +31,11 @@ impl DataBackupCache {
         }
     }
 
-    fn cache_restore_backup(&mut self, content: String, source: Value) -> Result<String, ManagerError> {
+    fn cache_restore_backup(
+        &mut self,
+        content: String,
+        source: Value,
+    ) -> Result<String, ManagerError> {
         let restore_id = create_restore_id()?;
 
         self.drafts.insert(
@@ -71,11 +75,12 @@ impl DataBackupCache {
     }
 }
 
-pub async fn export_data_backup(app: &AppHandle, paths: &AppPaths, app_settings: &AppSettings) -> Result<Value, ManagerError> {
-    let desktop_path = app
-        .path()
-        .desktop_dir()
-        .unwrap_or_else(|_| home_path());
+pub async fn export_data_backup(
+    app: &AppHandle,
+    paths: &AppPaths,
+    app_settings: &AppSettings,
+) -> Result<Value, ManagerError> {
+    let desktop_path = app.path().desktop_dir().unwrap_or_else(|_| home_path());
     let file_name = format!(
         "monkey-thief-{}.aimbackup",
         chrono::Local::now().format("%Y-%m-%d")
@@ -97,7 +102,7 @@ pub async fn export_data_backup(app: &AppHandle, paths: &AppPaths, app_settings:
     };
     let file_path = file_path_text(file_path)?;
 
-    tokio::fs::write(&file_path, create_data_backup(paths, app_settings, false).await?).await?;
+    tokio::fs::write(&file_path, create_data_backup(paths, app_settings).await?).await?;
 
     Ok(json!({
       "canceled": false,
@@ -108,12 +113,10 @@ pub async fn export_data_backup(app: &AppHandle, paths: &AppPaths, app_settings:
 pub async fn preview_data_backup_restore(
     app: &AppHandle,
     paths: &AppPaths,
+    app_settings: &AppSettings,
     cache: &mut DataBackupCache,
 ) -> Result<Value, ManagerError> {
-    let desktop_path = app
-        .path()
-        .desktop_dir()
-        .unwrap_or_else(|_| home_path());
+    let desktop_path = app.path().desktop_dir().unwrap_or_else(|_| home_path());
     let mut dialog = app
         .dialog()
         .file()
@@ -142,13 +145,13 @@ pub async fn preview_data_backup_restore(
       "canceled": false,
       "restoreId": restore_id,
       "filePath": file_path,
-      "preview": preview_data_backup_restore_content(paths, &content).await?
+      "preview": preview_data_backup_restore_content(paths, app_settings, &content).await?
     }))
 }
 
 pub async fn restore_data_backup(
     paths: &AppPaths,
-    app_settings: &AppSettings,
+    app_settings: &mut AppSettings,
     state: &mut Value,
     cache: &mut DataBackupCache,
     payload: Value,
@@ -157,10 +160,20 @@ pub async fn restore_data_backup(
     let draft = cache.get_restore_backup_draft(&restore_id)?;
     let choices = payload.get("choices").cloned().unwrap_or_else(|| json!({}));
 
-    restore_data_backup_content(paths, &string_value(draft.get("content")), &choices).await?;
+    let refresh_skills = restore_data_backup_content(
+        paths,
+        app_settings,
+        &string_value(draft.get("content")),
+        &choices,
+    )
+    .await?;
     cache.delete_restore_backup_draft(&restore_id);
-    *state = create_initial_state(paths, app_settings)?;
-    sessions::refresh_sessions_state(paths, state).await?;
+    write_json_file(
+        Path::new(&app_settings.settings_file_path),
+        &serialize_app_settings(app_settings),
+    )
+    .await?;
+    rebuild_state_after_restore(paths, app_settings, state, refresh_skills).await?;
 
     Ok(json!({
       "canceled": false,
@@ -205,12 +218,15 @@ pub async fn create_local_backup_if_due(
         return Ok(None);
     }
 
-    Ok(Some(create_local_backup_inner(app_data_path, paths, app_settings).await?))
+    Ok(Some(
+        create_local_backup_inner(app_data_path, paths, app_settings).await?,
+    ))
 }
 
 pub async fn preview_local_backup_restore(
     app_data_path: &Path,
     paths: &AppPaths,
+    app_settings: &AppSettings,
     cache: &mut DataBackupCache,
     payload: Value,
 ) -> Result<Value, ManagerError> {
@@ -230,14 +246,14 @@ pub async fn preview_local_backup_restore(
       "restoreId": restore_id,
       "fileName": file_path.file_name().map(|value| value.to_string_lossy().to_string()).unwrap_or_default(),
       "filePath": path_text(&file_path),
-      "preview": preview_data_backup_restore_content(paths, &content).await?
+      "preview": preview_data_backup_restore_content(paths, app_settings, &content).await?
     }))
 }
 
 pub async fn restore_local_backup(
     app_data_path: &Path,
     paths: &AppPaths,
-    app_settings: &AppSettings,
+    app_settings: &mut AppSettings,
     state: &mut Value,
     cache: &mut DataBackupCache,
     payload: Value,
@@ -246,10 +262,20 @@ pub async fn restore_local_backup(
     let draft = cache.get_restore_backup_draft(&restore_id)?;
     let choices = payload.get("choices").cloned().unwrap_or_else(|| json!({}));
 
-    restore_data_backup_content(paths, &string_value(draft.get("content")), &choices).await?;
+    let refresh_skills = restore_data_backup_content(
+        paths,
+        app_settings,
+        &string_value(draft.get("content")),
+        &choices,
+    )
+    .await?;
     cache.delete_restore_backup_draft(&restore_id);
-    *state = create_initial_state(paths, app_settings)?;
-    sessions::refresh_sessions_state(paths, state).await?;
+    write_json_file(
+        Path::new(&app_settings.settings_file_path),
+        &serialize_app_settings(app_settings),
+    )
+    .await?;
+    rebuild_state_after_restore(paths, app_settings, state, refresh_skills).await?;
 
     Ok(json!({
       "canceled": false,
@@ -268,11 +294,7 @@ pub async fn push_cloud_backup(
     let cloud_sync = normalize_cloud_sync_settings(&payload);
     let last_updated_at = now_millis();
 
-    upload_webdav_backup(
-        &cloud_sync,
-        create_data_backup(paths, app_settings, false).await?,
-    )
-    .await?;
+    upload_webdav_backup(&cloud_sync, create_data_backup(paths, app_settings).await?).await?;
     app_settings.cloud_sync = CloudSyncSettings {
         last_updated_at,
         ..cloud_sync.clone()
@@ -293,11 +315,14 @@ pub async fn push_cloud_backup(
 
 pub async fn preview_cloud_backup_restore(
     paths: &AppPaths,
+    app_settings: &AppSettings,
     cache: &mut DataBackupCache,
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let cloud_sync = normalize_cloud_sync_settings(&payload);
     let content = download_webdav_backup(&cloud_sync).await?;
+    let mut preview_settings = app_settings.clone();
+    preview_settings.cloud_sync = cloud_sync.clone();
     let restore_id = cache.cache_restore_backup(
         content.clone(),
         json!({
@@ -309,7 +334,7 @@ pub async fn preview_cloud_backup_restore(
     Ok(json!({
       "restoreId": restore_id,
       "fileName": cloud_sync.file_name,
-      "preview": preview_data_backup_restore_content(paths, &content).await?
+      "preview": preview_data_backup_restore_content(paths, &preview_settings, &content).await?
     }))
 }
 
@@ -340,19 +365,22 @@ pub async fn pull_cloud_backup(
     let choices = payload.get("choices").cloned().unwrap_or_else(|| json!({}));
     let last_updated_at = now_millis();
 
-    restore_data_backup_content(paths, &string_value(draft.get("content")), &choices).await?;
+    app_settings.cloud_sync = cloud_sync.clone();
+    let refresh_skills = restore_data_backup_content(
+        paths,
+        app_settings,
+        &string_value(draft.get("content")),
+        &choices,
+    )
+    .await?;
     cache.delete_restore_backup_draft(&restore_id);
-    app_settings.cloud_sync = CloudSyncSettings {
-        last_updated_at,
-        ..cloud_sync.clone()
-    };
+    app_settings.cloud_sync.last_updated_at = last_updated_at;
     write_json_file(
         Path::new(&app_settings.settings_file_path),
         &serialize_app_settings(app_settings),
     )
     .await?;
-    *state = create_initial_state(paths, app_settings)?;
-    sessions::refresh_sessions_state(paths, state).await?;
+    rebuild_state_after_restore(paths, app_settings, state, refresh_skills).await?;
 
     Ok(json!({
       "downloadedAt": last_updated_at,
@@ -364,7 +392,6 @@ pub async fn pull_cloud_backup(
 pub async fn create_data_backup(
     paths: &AppPaths,
     app_settings: &AppSettings,
-    include_git_tool_data: bool,
 ) -> Result<String, ManagerError> {
     let provider_keys = export_provider_keys(paths)?;
 
@@ -372,47 +399,148 @@ pub async fn create_data_backup(
       "version": 1,
       "createdAt": now_millis(),
       "appSettings": serialize_backup_app_settings(app_settings),
-      "workspaceEntries": collect_backup_entries(paths, include_git_tool_data).await?,
+      "workspaceEntries": collect_backup_entries(paths).await?,
       "runtimeProviderKeys": encrypt_backup_data(&provider_keys)?
     }))
 }
 
 fn serialize_backup_app_settings(app_settings: &AppSettings) -> Value {
-    let mut payload = serialize_app_settings(app_settings);
-
-    if let Some(payload) = payload.as_object_mut() {
-        payload.remove("restartRequired");
-    }
-
-    payload
+    json!({
+      "cloudSync": serialize_backup_cloud_sync_settings(&app_settings.cloud_sync)
+    })
 }
 
-async fn preview_data_backup_restore_content(paths: &AppPaths, content: &str) -> Result<Value, ManagerError> {
+fn serialize_backup_cloud_sync_settings(cloud_sync: &CloudSyncSettings) -> Value {
+    json!({
+      "provider": cloud_sync.provider,
+      "webdavUrl": cloud_sync.webdav_url,
+      "username": cloud_sync.username,
+      "password": cloud_sync.password,
+      "fileName": cloud_sync.file_name
+    })
+}
+
+fn normalize_backup_app_settings(value: Option<&Value>) -> Option<Value> {
+    let cloud_sync = value?.get("cloudSync")?;
+
+    if !cloud_sync.is_object() {
+        return None;
+    }
+    Some(json!({
+      "cloudSync": serialize_backup_cloud_sync_settings(&normalize_cloud_sync_settings(cloud_sync))
+    }))
+}
+
+fn restore_backup_app_settings(
+    app_settings: &mut AppSettings,
+    backup: &Value,
+    choices: &Map<String, Value>,
+) -> Result<(), ManagerError> {
+    let Some(backup_settings) = normalize_backup_app_settings(backup.get("appSettings")) else {
+        return Ok(());
+    };
+    let current_settings = serialize_backup_app_settings(app_settings);
+    let merged = merge_json_backup_value(
+        "app-settings.json",
+        &current_settings,
+        &backup_settings,
+        choices,
+    )?;
+    let last_updated_at = app_settings.cloud_sync.last_updated_at;
+    app_settings.cloud_sync = normalize_cloud_sync_settings(&merged["cloudSync"]);
+    app_settings.cloud_sync.last_updated_at = last_updated_at;
+    Ok(())
+}
+
+fn redact_backup_app_settings(mut value: Value) -> Value {
+    if let Some(value) = value.as_object_mut() {
+        let password = if value.contains_key("cloudSync") {
+            value
+                .get_mut("cloudSync")
+                .and_then(Value::as_object_mut)
+                .and_then(|cloud_sync| cloud_sync.get_mut("password"))
+        } else {
+            value.get_mut("password")
+        };
+
+        if let Some(password) = password {
+            *password = json!("********");
+        }
+    }
+    value
+}
+
+async fn preview_data_backup_restore_content(
+    paths: &AppPaths,
+    app_settings: &AppSettings,
+    content: &str,
+) -> Result<Value, ManagerError> {
     let backup = parse_backup(content)?;
-    let mut preview = create_restore_preview(paths, backup["workspaceEntries"].as_array().cloned().unwrap_or_default()).await?;
+    let mut preview = create_restore_preview(
+        paths,
+        backup["workspaceEntries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+    )
+    .await?;
+    append_app_settings_restore_preview(&mut preview, app_settings, &backup)?;
 
     preview["createdAt"] = json!(number_value(backup.get("createdAt"), 0));
     Ok(preview)
 }
 
+fn append_app_settings_restore_preview(
+    preview: &mut Value,
+    app_settings: &AppSettings,
+    backup: &Value,
+) -> Result<(), ManagerError> {
+    let Some(backup_settings) = normalize_backup_app_settings(backup.get("appSettings")) else {
+        return Ok(());
+    };
+    let mut added = preview["added"].as_array().cloned().unwrap_or_default();
+    let mut conflicts = preview["conflicts"].as_array().cloned().unwrap_or_default();
+
+    append_json_restore_preview(
+        "app-settings.json",
+        &serialize_backup_app_settings(app_settings),
+        &backup_settings,
+        &mut added,
+        &mut conflicts,
+    )?;
+    preview["addedCount"] = json!(added.len());
+    preview["conflictCount"] = json!(conflicts.len());
+    preview["added"] = json!(added);
+    preview["conflicts"] = json!(conflicts);
+    Ok(())
+}
+
 fn inspect_data_backup(content: &str) -> Result<Value, ManagerError> {
     let backup = parse_backup(content)?;
-    let app_settings_content = format!(
-        "{}\n",
-        serde_json::to_string_pretty(backup.get("appSettings").unwrap_or(&json!({})))?
-    );
-    let runtime_provider_keys = if let Some(keys) = backup.get("runtimeProviderKeys").and_then(Value::as_str) {
-        decrypt_backup_data(keys)?
-    } else {
-        json!({})
-    };
-    let mut entries = vec![create_backup_view_entry(
-        "app-settings.json",
-        "应用设置",
-        app_settings_content,
-    )];
+    let runtime_provider_keys =
+        if let Some(keys) = backup.get("runtimeProviderKeys").and_then(Value::as_str) {
+            decrypt_backup_data(keys)?
+        } else {
+            json!({})
+        };
+    let mut entries = Vec::new();
 
-    for entry in backup["workspaceEntries"].as_array().cloned().unwrap_or_default() {
+    if let Some(app_settings) = normalize_backup_app_settings(backup.get("appSettings")) {
+        entries.push(create_backup_view_entry(
+            "app-settings.json",
+            "坚果云设置",
+            format!(
+                "{}\n",
+                serde_json::to_string_pretty(&redact_backup_app_settings(app_settings))?
+            ),
+        ));
+    }
+
+    for entry in backup["workspaceEntries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
         entries.push(create_backup_entry_view(&entry)?);
     }
 
@@ -442,9 +570,10 @@ fn inspect_data_backup(content: &str) -> Result<Value, ManagerError> {
 
 async fn restore_data_backup_content(
     paths: &AppPaths,
+    app_settings: &mut AppSettings,
     content: &str,
     choices: &Value,
-) -> Result<(), ManagerError> {
+) -> Result<bool, ManagerError> {
     let backup = parse_backup(content)?;
     let choices = choices.as_object().cloned().unwrap_or_default();
     let runtime_provider_keys = backup
@@ -458,65 +587,74 @@ async fn restore_data_backup_content(
         .as_array()
         .cloned()
         .unwrap_or_default();
+    let restored_paths = workspace_entries
+        .iter()
+        .filter_map(|entry| entry.get("path").and_then(Value::as_str))
+        .collect::<HashSet<_>>();
+    let providers_changed = restored_paths.contains("storage/providers.json");
+    let provider_models_changed = restored_paths.contains("storage/runtime-models.json");
+    let codex_accounts_changed = restored_paths.contains("storage/codex-accounts.json");
+    let rule_prompts_changed = restored_paths.contains("storage/rules.json");
+    let refresh_skills = restored_paths.contains("storage/skills.json")
+        || restored_paths
+            .iter()
+            .any(|path| path.starts_with("skills/"))
+        || choice_text(
+            &choices,
+            &create_restore_database_table_key("storage/ai-manager.db", "skills"),
+        ) == "backup";
+    let current_restore_json_values =
+        read_current_restore_json_values(paths, &workspace_entries).await?;
     restore_directory_entries(
-        &paths.workspace_root,
+        paths,
         workspace_entries
             .iter()
             .filter(|entry| !is_database_backup_path(&string_value(entry.get("path"))))
             .cloned()
             .collect(),
         &choices,
+        &current_restore_json_values,
     )
     .await?;
-    restore_legacy_usage_database_entry(paths, &workspace_entries, &choices).await?;
-    migrate_workspace_data(paths).await?;
-    usage::migrate_legacy_storage(paths)?;
+    migrate_skill_repository_storage(paths).await?;
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
     provider_store::initialize(paths)?;
     restore_database_entries(paths, &workspace_entries, &choices).await?;
+    database::reconcile_local_state(
+        paths,
+        providers_changed,
+        provider_models_changed,
+        codex_accounts_changed,
+        rule_prompts_changed,
+    )?;
 
     if let Some(runtime_provider_keys) = runtime_provider_keys {
         merge_provider_keys(paths, &runtime_provider_keys, &choices).await?;
     }
+    restore_backup_app_settings(app_settings, &backup, &choices)?;
 
-    Ok(())
+    Ok(refresh_skills)
 }
 
-async fn collect_backup_entries(
+async fn rebuild_state_after_restore(
     paths: &AppPaths,
-    include_git_tool_data: bool,
-) -> Result<Vec<Value>, ManagerError> {
-    usage::migrate_legacy_storage(paths)?;
+    app_settings: &AppSettings,
+    state: &mut Value,
+    refresh_skills: bool,
+) -> Result<(), ManagerError> {
+    *state = create_initial_state(paths, app_settings)?;
+    if refresh_skills {
+        skills::refresh_skills_state_after_restore(paths, state).await?;
+    }
+    sessions::refresh_sessions_state(paths, state).await
+}
+
+async fn collect_backup_entries(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
     provider_store::initialize(paths)?;
-
-    let storage_files = vec![
-        (
-            &paths.storage_files.claude_proxy_config,
-            "storage/claude-proxy-config.json",
-        ),
-        (
-            &paths.storage_files.claude_proxy_request_logs,
-            "storage/claude-proxy-request-logs.json",
-        ),
-        (
-            &paths.storage_files.codex_proxy_config,
-            "storage/codex-proxy-config.json",
-        ),
-        (
-            &paths.storage_files.codex_proxy_request_logs,
-            "storage/codex-proxy-request-logs.json",
-        ),
-    ];
     let mut entries = Vec::new();
-
-    for (source_path, relative_path) in storage_files {
-        if let Some(entry) = collect_file_entry(source_path, relative_path).await? {
-            entries.push(entry);
-        }
-    }
 
     let database = database::backup(paths)?;
     entries.push(json!({
@@ -525,14 +663,10 @@ async fn collect_backup_entries(
       "content": base64::engine::general_purpose::STANDARD.encode(database)
     }));
 
-    let mut source_dirs = vec![
+    let source_dirs = [
         PathBuf::from(&paths.skills_dir),
         PathBuf::from(&paths.prompts_dir),
     ];
-
-    if include_git_tool_data {
-        source_dirs.push(Path::new(&paths.workspace_root).join("git-tool"));
-    }
 
     for source_path in source_dirs {
         let source_entries = collect_directory_entries(&source_path).await?;
@@ -555,18 +689,6 @@ async fn collect_backup_entries(
     }
 
     sanitize_runtime_backup_entries(entries)
-}
-
-async fn collect_file_entry(source_path: &str, relative_path: &str) -> Result<Option<Value>, ManagerError> {
-    if !Path::new(source_path).exists() {
-        return Ok(None);
-    }
-
-    Ok(Some(json!({
-      "path": relative_path,
-      "type": "file",
-      "content": base64::engine::general_purpose::STANDARD.encode(tokio::fs::read(source_path).await?)
-    })))
 }
 
 async fn collect_directory_entries(root_path: &Path) -> Result<Vec<Value>, ManagerError> {
@@ -595,8 +717,8 @@ async fn collect_directory_entries_inner(
 
     for child in children {
         let child_path = child.path();
-        let relative_path = path_text(child_path.strip_prefix(root_path).unwrap_or(&child_path))
-            .replace('\\', "/");
+        let relative_path =
+            path_text(child_path.strip_prefix(root_path).unwrap_or(&child_path)).replace('\\', "/");
         let stat = std::fs::symlink_metadata(&child_path)?;
 
         if stat.file_type().is_symlink() {
@@ -613,7 +735,12 @@ async fn collect_directory_entries_inner(
               "path": relative_path,
               "type": "dir"
             }));
-            Box::pin(collect_directory_entries_inner(root_path, &child_path, entries)).await?;
+            Box::pin(collect_directory_entries_inner(
+                root_path,
+                &child_path,
+                entries,
+            ))
+            .await?;
             continue;
         }
 
@@ -636,12 +763,19 @@ fn parse_backup(content: &str) -> Result<Value, ManagerError> {
         return Err(ManagerError::System("备份版本不支持".to_string()));
     }
 
-    if !backup.get("workspaceEntries").and_then(Value::as_array).is_some() {
+    if !backup
+        .get("workspaceEntries")
+        .and_then(Value::as_array)
+        .is_some()
+    {
         return Err(ManagerError::System("备份数据不完整".to_string()));
     }
 
     backup["workspaceEntries"] = json!(sanitize_runtime_backup_entries(
-        backup["workspaceEntries"].as_array().cloned().unwrap_or_default()
+        backup["workspaceEntries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
     )?);
 
     Ok(backup)
@@ -651,11 +785,11 @@ fn sanitize_runtime_backup_entries(entries: Vec<Value>) -> Result<Vec<Value>, Ma
     let mut next_entries = Vec::new();
 
     for entry in entries {
-        if is_ignored_backup_path(&string_value(entry.get("path"))) {
+        if !is_allowed_backup_path(&string_value(entry.get("path"))) {
             continue;
         }
 
-        next_entries.push(serialize_prompt_runtime_backup_paths(serialize_skill_backup_paths(
+        next_entries.push(strip_codex_account_usage(strip_skill_local_state(
             strip_provider_enabled(entry)?,
         )?)?);
     }
@@ -686,7 +820,7 @@ fn strip_provider_enabled(entry: Value) -> Result<Value, ManagerError> {
     })
 }
 
-fn serialize_skill_backup_paths(entry: Value) -> Result<Value, ManagerError> {
+fn strip_skill_local_state(entry: Value) -> Result<Value, ManagerError> {
     if entry.get("path").and_then(Value::as_str) != Some("storage/skills.json") {
         return Ok(entry);
     }
@@ -699,13 +833,17 @@ fn serialize_skill_backup_paths(entry: Value) -> Result<Value, ManagerError> {
             .into_iter()
             .map(|mut skill| {
                 if let Some(skill) = skill.as_object_mut() {
-                    skill.remove("installedTargets");
-                    skill.remove("installStates");
-                    skill.remove("status");
-                    let source_path = string_value(skill.get("sourcePath"));
-                    let entry_path = string_value(skill.get("entryPath"));
-                    skill.insert("sourcePath".to_string(), json!(serialize_portable_path(&source_path)));
-                    skill.insert("entryPath".to_string(), json!(serialize_portable_path(&entry_path)));
+                    for field in [
+                        "disabled",
+                        "installedTargets",
+                        "installStates",
+                        "status",
+                        "sourcePath",
+                        "entryPath",
+                        "repoName",
+                    ] {
+                        skill.remove(field);
+                    }
                 }
                 skill
             })
@@ -713,24 +851,26 @@ fn serialize_skill_backup_paths(entry: Value) -> Result<Value, ManagerError> {
     })
 }
 
-fn serialize_prompt_runtime_backup_paths(entry: Value) -> Result<Value, ManagerError> {
-    if entry.get("path").and_then(Value::as_str) != Some("storage/prompt-runtime-state.json") {
+fn strip_codex_account_usage(entry: Value) -> Result<Value, ManagerError> {
+    if entry.get("path").and_then(Value::as_str) != Some("storage/codex-accounts.json")
+        || entry.get("type").and_then(Value::as_str) != Some("file")
+    {
         return Ok(entry);
     }
 
-    map_backup_json_entry(entry, |runtime_state| {
-        let mut next_state = Map::new();
-
-        for (cli, state) in runtime_state.as_object().cloned().unwrap_or_default() {
-            let mut state = state;
-            if let Some(state) = state.as_object_mut() {
-                let runtime_path = string_value(state.get("runtimePath"));
-                state.insert("runtimePath".to_string(), json!(serialize_portable_path(&runtime_path)));
-            }
-            next_state.insert(cli, state);
-        }
-
-        Value::Object(next_state)
+    map_backup_json_entry(entry, |accounts| {
+        json!(accounts
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|mut account| {
+                if let Some(account) = account.as_object_mut() {
+                    account.remove("usage");
+                }
+                account
+            })
+            .collect::<Vec<_>>())
     })
 }
 
@@ -828,8 +968,12 @@ fn create_backup_entry_view(entry: &Value) -> Result<Value, ManagerError> {
     }))
 }
 
-async fn create_restore_preview(paths: &AppPaths, entries: Vec<Value>) -> Result<Value, ManagerError> {
+async fn create_restore_preview(
+    paths: &AppPaths,
+    entries: Vec<Value>,
+) -> Result<Value, ManagerError> {
     let root_path = &paths.workspace_root;
+    let current_restore_json_values = read_current_restore_json_values(paths, &entries).await?;
     let mut added = Vec::new();
     let mut conflicts = Vec::new();
 
@@ -852,17 +996,12 @@ async fn create_restore_preview(paths: &AppPaths, entries: Vec<Value>) -> Result
             }
             continue;
         }
-        let current_content = read_current_file(root_path, &entry_path).await?;
-
         if is_mergeable_restore_json_path(&entry_path) {
             let backup_value = read_backup_entry_json(entry)?;
-            let current_value = if let Some(content) = current_content {
-                serde_json::from_slice(&content)?
-            } else if backup_value.is_array() {
-                json!([])
-            } else {
-                json!({})
-            };
+            let current_value = current_restore_json_values
+                .get(&entry_path)
+                .cloned()
+                .unwrap_or_else(|| if backup_value.is_array() { json!([]) } else { json!({}) });
 
             append_json_restore_preview(
                 &entry_path,
@@ -873,9 +1012,15 @@ async fn create_restore_preview(paths: &AppPaths, entries: Vec<Value>) -> Result
             )?;
             continue;
         }
+        let current_content = read_current_file(root_path, &entry_path).await?;
 
         if current_content.is_none() {
-            added.push(create_restore_file_preview_item(&entry_path, "added", "", ""));
+            added.push(create_restore_file_preview_item(
+                &entry_path,
+                "added",
+                "",
+                "",
+            ));
             continue;
         }
 
@@ -912,7 +1057,12 @@ async fn create_restore_preview(paths: &AppPaths, entries: Vec<Value>) -> Result
         let target_path = assert_backup_path(root_path, &entry_path)?;
 
         if !target_path.exists() {
-            added.push(create_restore_file_preview_item(&entry_path, "added", "", ""));
+            added.push(create_restore_file_preview_item(
+                &entry_path,
+                "added",
+                "",
+                "",
+            ));
             continue;
         }
 
@@ -961,11 +1111,7 @@ fn append_json_restore_preview(
             let item_key = get_restore_item_key(entry_path, item, index);
             let Some(current_item) = current_map.get(&item_key) else {
                 added.push(create_restore_preview_item(
-                    entry_path,
-                    &item_key,
-                    item,
-                    "added",
-                    None,
+                    entry_path, &item_key, item, "added", None,
                 )?);
                 continue;
             };
@@ -991,11 +1137,7 @@ fn append_json_restore_preview(
         for (item_key, value) in backup_object {
             let Some(current_item) = current_object.get(item_key) else {
                 added.push(create_restore_preview_item(
-                    entry_path,
-                    item_key,
-                    value,
-                    "added",
-                    None,
+                    entry_path, item_key, value, "added", None,
                 )?);
                 continue;
             };
@@ -1031,10 +1173,12 @@ fn append_json_restore_preview(
 }
 
 async fn restore_directory_entries(
-    root_path: &str,
+    paths: &AppPaths,
     entries: Vec<Value>,
     choices: &Map<String, Value>,
+    current_restore_json_values: &HashMap<String, Value>,
 ) -> Result<(), ManagerError> {
+    let root_path = &paths.workspace_root;
     tokio::fs::create_dir_all(root_path).await?;
 
     for entry in entries
@@ -1053,7 +1197,13 @@ async fn restore_directory_entries(
         let target_path = assert_backup_path(root_path, &entry_path)?;
 
         if is_mergeable_restore_json_path(&entry_path) {
-            restore_json_entry(root_path, entry, choices).await?;
+            restore_json_entry(
+                paths,
+                entry,
+                choices,
+                current_restore_json_values.get(&entry_path),
+            )
+            .await?;
             continue;
         }
 
@@ -1083,6 +1233,8 @@ async fn restore_directory_entries(
     {
         let entry_path = string_value(entry.get("path"));
         let target_path = assert_backup_path(root_path, &entry_path)?;
+        let backup_target = string_value(entry.get("target"));
+        validate_backup_symlink_target(root_path, &target_path, &backup_target)?;
 
         if target_path.exists() {
             let stat = std::fs::symlink_metadata(&target_path)?;
@@ -1092,7 +1244,7 @@ async fn restore_directory_entries(
                 String::new()
             };
 
-            if current_target != string_value(entry.get("target"))
+            if current_target != backup_target
                 && choice_text(choices, &create_restore_file_key(&entry_path)) != "backup"
             {
                 continue;
@@ -1104,7 +1256,7 @@ async fn restore_directory_entries(
         if let Some(parent) = target_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        create_symlink(Path::new(&string_value(entry.get("target"))), &target_path)?;
+        create_symlink(Path::new(&backup_target), &target_path)?;
     }
 
     Ok(())
@@ -1142,54 +1294,23 @@ async fn restore_database_entries(
     Ok(())
 }
 
-async fn restore_legacy_usage_database_entry(
-    paths: &AppPaths,
-    entries: &[Value],
-    choices: &Map<String, Value>,
-) -> Result<(), ManagerError> {
-    let entry_path = "logs/usage.db";
-    let Some(entry) = entries.iter().find(|entry| {
-        entry.get("path").and_then(Value::as_str) == Some(entry_path)
-            && entry.get("type").and_then(Value::as_str) == Some("file")
-    }) else {
-        return Ok(());
-    };
-    let backup_content = base64::engine::general_purpose::STANDARD
-        .decode(string_value(entry.get("content")))
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-    let target_path = &paths.storage_files.usage_database;
-    let current_content = tokio::fs::read(target_path).await.ok();
-
-    if current_content
-        .as_ref()
-        .is_some_and(|value| sha256_bytes(value) != sha256_bytes(&backup_content))
-        && choice_text(choices, &create_restore_file_key(entry_path)) != "backup"
-    {
-        return Ok(());
-    }
-    if let Some(parent) = Path::new(target_path).parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    tokio::fs::write(target_path, backup_content).await?;
-    Ok(())
-}
-
 async fn restore_json_entry(
-    root_path: &str,
+    paths: &AppPaths,
     entry: &Value,
     choices: &Map<String, Value>,
+    current_value: Option<&Value>,
 ) -> Result<(), ManagerError> {
+    let root_path = &paths.workspace_root;
     let entry_path = string_value(entry.get("path"));
     let target_path = assert_backup_path(root_path, &entry_path)?;
-    let current_content = read_current_file(root_path, &entry_path).await?;
     let backup_value = read_backup_entry_json(entry)?;
-    let current_value = if let Some(content) = current_content {
-        serde_json::from_slice(&content)?
-    } else if backup_value.is_array() {
-        json!([])
-    } else {
-        json!({})
-    };
+    let current_value = current_value.cloned().unwrap_or_else(|| {
+        if backup_value.is_array() {
+            json!([])
+        } else {
+            json!({})
+        }
+    });
     let merged = merge_json_backup_value(&entry_path, &current_value, &backup_value, choices)?;
 
     if let Some(parent) = target_path.parent() {
@@ -1201,6 +1322,62 @@ async fn restore_json_entry(
     )
     .await?;
     Ok(())
+}
+
+async fn read_current_restore_json_values(
+    paths: &AppPaths,
+    entries: &[Value],
+) -> Result<HashMap<String, Value>, ManagerError> {
+    let mut current_values = HashMap::new();
+
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("file"))
+    {
+        let entry_path = string_value(entry.get("path"));
+
+        if !is_mergeable_restore_json_path(&entry_path)
+            || current_values.contains_key(&entry_path)
+        {
+            continue;
+        }
+        let backup_value = read_backup_entry_json(entry)?;
+        let current_content = read_current_file(&paths.workspace_root, &entry_path).await?;
+        current_values.insert(
+            entry_path.clone(),
+            read_current_restore_json_value(
+                paths,
+                &entry_path,
+                current_content,
+                &backup_value,
+            )?,
+        );
+    }
+    Ok(current_values)
+}
+
+fn read_current_restore_json_value(
+    paths: &AppPaths,
+    entry_path: &str,
+    current_content: Option<Vec<u8>>,
+    backup_value: &Value,
+) -> Result<Value, ManagerError> {
+    if let Some(content) = current_content {
+        return Ok(serde_json::from_slice(&content)?);
+    }
+
+    let current_value = match entry_path {
+        "storage/providers.json" => json!(provider_store::read_providers(paths)?),
+        "storage/runtime-models.json" => json!(provider_store::read_models(paths)?),
+        "storage/codex-accounts.json" => json!(provider_store::read_codex_accounts(paths)?),
+        "storage/skills.json" => json!(skill_store::read_skills(paths)?),
+        "storage/skill-groups.json" => json!(skill_store::read_groups(paths)?),
+        "storage/skill-repositories.json" => json!(skill_store::read_repositories(paths)?),
+        "storage/rules.json" => json!(rule_store::read_prompts(paths)?),
+        _ if backup_value.is_array() => json!([]),
+        _ => json!({}),
+    };
+    Ok(current_value)
 }
 
 fn merge_json_backup_value(
@@ -1221,17 +1398,21 @@ fn merge_json_backup_value(
             let item_key = get_restore_item_key(entry_path, item, index);
 
             if let Some(next_index) = next_index_map.get(&item_key).cloned() {
-                if choice_text(choices, &create_restore_choice_key(entry_path, &item_key)) == "backup" {
+                if choice_text(choices, &create_restore_choice_key(entry_path, &item_key))
+                    == "backup"
+                {
                     next_items[next_index] =
                         merge_restore_value(entry_path, &next_items[next_index], item);
                 }
             } else {
                 next_index_map.insert(item_key, next_items.len());
-                next_items.push(if entry_path == "storage/providers.json" {
-                    merge_restore_value(entry_path, &Value::Null, item)
-                } else {
-                    item.clone()
-                });
+                next_items.push(
+                    if ["storage/providers.json", "storage/skills.json"].contains(&entry_path) {
+                        merge_restore_value(entry_path, &Value::Null, item)
+                    } else {
+                        item.clone()
+                    },
+                );
             }
         }
 
@@ -1243,10 +1424,14 @@ fn merge_json_backup_value(
 
         for (item_key, value) in backup_object {
             if !next_value.contains_key(item_key)
-                || choice_text(choices, &create_restore_choice_key(entry_path, item_key)) == "backup"
+                || choice_text(choices, &create_restore_choice_key(entry_path, item_key))
+                    == "backup"
             {
                 let current_item = next_value.get(item_key).cloned().unwrap_or(Value::Null);
-                next_value.insert(item_key.clone(), merge_restore_value(entry_path, &current_item, value));
+                next_value.insert(
+                    item_key.clone(),
+                    merge_restore_value(entry_path, &current_item, value),
+                );
             }
         }
 
@@ -1263,23 +1448,33 @@ fn merge_json_backup_value(
 fn merge_restore_value(entry_path: &str, current_value: &Value, backup_value: &Value) -> Value {
     if entry_path == "storage/providers.json" {
         let mut next_backup_value = backup_value.as_object().cloned().unwrap_or_default();
+        let current_exists = current_value.is_object();
 
         next_backup_value.insert(
             "enabled".to_string(),
             json!(current_value
                 .get("enabled")
                 .and_then(Value::as_bool)
-                .unwrap_or(false)),
+                .unwrap_or(current_exists)),
         );
         return Value::Object(next_backup_value);
     }
 
     if entry_path == "storage/skills.json" {
         let mut next_backup_value = backup_value.as_object().cloned().unwrap_or_default();
+        let current_exists = current_value.is_object();
 
+        next_backup_value.remove("disabled");
         next_backup_value.remove("installedTargets");
         next_backup_value.remove("installStates");
         next_backup_value.remove("status");
+        next_backup_value.insert(
+            "disabled".to_string(),
+            json!(current_value
+                .get("disabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(!current_exists)),
+        );
         next_backup_value.insert(
             "installedTargets".to_string(),
             current_value
@@ -1296,10 +1491,13 @@ fn merge_restore_value(entry_path: &str, current_value: &Value, backup_value: &V
         );
         next_backup_value.insert(
             "status".to_string(),
-            current_value
-                .get("status")
-                .cloned()
-                .unwrap_or_else(|| json!("not-installed")),
+            current_value.get("status").cloned().unwrap_or_else(|| {
+                if current_exists {
+                    json!("not-installed")
+                } else {
+                    json!("disabled")
+                }
+            }),
         );
         return Value::Object(next_backup_value);
     }
@@ -1321,10 +1519,11 @@ fn merge_restore_value(entry_path: &str, current_value: &Value, backup_value: &V
     if entry_path == "storage/codex-accounts.json" {
         let mut next_backup_value = backup_value.as_object().cloned().unwrap_or_default();
 
-        next_backup_value.insert(
-            "usage".to_string(),
-            truthy_or_backup(current_value, backup_value, "usage"),
-        );
+        if let Some(usage) = current_value.get("usage") {
+            next_backup_value.insert("usage".to_string(), usage.clone());
+        } else {
+            next_backup_value.remove("usage");
+        }
         return Value::Object(next_backup_value);
     }
 
@@ -1395,11 +1594,7 @@ async fn create_local_backup_inner(
     let file_path = backup_dir.join(&file_name);
 
     tokio::fs::create_dir_all(&backup_dir).await?;
-    tokio::fs::write(
-        &file_path,
-        create_data_backup(paths, app_settings, true).await?,
-    )
-    .await?;
+    tokio::fs::write(&file_path, create_data_backup(paths, app_settings).await?).await?;
     prune_local_backups(app_data_path, app_settings).await?;
     app_settings.local_backup.last_backup_at = created_at;
     write_json_file(
@@ -1637,8 +1832,8 @@ fn build_webdav_file_url(config: &CloudSyncSettings) -> Result<String, ManagerEr
     } else {
         format!("{}/", config.webdav_url)
     };
-    let mut url = url::Url::parse(&root_url)
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let mut url =
+        url::Url::parse(&root_url).map_err(|error| ManagerError::System(error.to_string()))?;
     let mut segments = url
         .path_segments_mut()
         .map_err(|_| ManagerError::System("WebDAV 地址非法".to_string()))?;
@@ -1669,7 +1864,10 @@ fn encrypt_backup_payload(payload: &Value) -> Result<String, ManagerError> {
     let cipher = Aes256Gcm::new_from_slice(&secret)
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let encrypted = cipher
-        .encrypt(Nonce::from_slice(&iv), serde_json::to_string(payload)?.as_bytes())
+        .encrypt(
+            Nonce::from_slice(&iv),
+            serde_json::to_string(payload)?.as_bytes(),
+        )
         .map_err(|error| ManagerError::System(format!("{:?}", error)))?;
     let tag_index = encrypted.len() - 16;
     let engine = base64::engine::general_purpose::STANDARD;
@@ -1716,7 +1914,10 @@ fn encrypt_backup_data(value: &Value) -> Result<String, ManagerError> {
     let secret = backup_secret();
     let cipher = Aes256Gcm::new_from_slice(&secret)
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    let content = format!("AI_MANAGER::RUNTIME_KEYS::{}", serde_json::to_string(value)?);
+    let content = format!(
+        "AI_MANAGER::RUNTIME_KEYS::{}",
+        serde_json::to_string(value)?
+    );
     let encrypted = cipher
         .encrypt(Nonce::from_slice(&iv), content.as_bytes())
         .map_err(|error| ManagerError::System(format!("{:?}", error)))?;
@@ -1822,8 +2023,10 @@ async fn merge_provider_keys(
         }
         if !uses_database_choices
             && next_keys.contains_key(&provider_id)
-            && choice_text(choices, &create_restore_choice_key("storage/providers.json", &provider_id))
-                != "backup"
+            && choice_text(
+                choices,
+                &create_restore_choice_key("storage/providers.json", &provider_id),
+            ) != "backup"
         {
             continue;
         }
@@ -1834,86 +2037,6 @@ async fn merge_provider_keys(
     provider_store::write_keys(paths, &next_keys)
 }
 
-async fn migrate_workspace_data(paths: &AppPaths) -> Result<(), ManagerError> {
-    migrate_json_array_file(
-        &Path::new(&paths.storage_dir).join("usage-logs.json"),
-        Path::new(&paths.storage_files.usage_logs),
-        |item| {
-            string_value(item.get("requestId"))
-                .or_else_non_empty(|| string_value(item.get("id")))
-        },
-    )
-    .await?;
-    migrate_json_array_file(
-        &Path::new(&paths.storage_dir).join("usage-request-records.json"),
-        Path::new(&paths.storage_files.usage_request_records),
-        |item| string_value(item.get("requestId")),
-    )
-    .await?;
-    migrate_json_array_file(
-        &Path::new(&paths.storage_dir).join("sessions.json"),
-        Path::new(&paths.storage_files.sessions),
-        |item| string_value(item.get("id")),
-    )
-    .await?;
-    migrate_skill_repository_storage(paths).await
-}
-
-async fn migrate_json_array_file(
-    source_path: &Path,
-    target_path: &Path,
-    key_selector: impl Fn(&Value) -> String,
-) -> Result<(), ManagerError> {
-    if !source_path.exists() {
-        return Ok(());
-    }
-
-    if let Some(parent) = target_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    if !target_path.exists() {
-        tokio::fs::rename(source_path, target_path).await?;
-        return Ok(());
-    }
-
-    let source_items: Value = serde_json::from_str(&tokio::fs::read_to_string(source_path).await?)?;
-    let target_items: Value = serde_json::from_str(&tokio::fs::read_to_string(target_path).await?)?;
-
-    if !source_items.is_array() || !target_items.is_array() {
-        match tokio::fs::remove_file(source_path).await {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(ManagerError::Io(error)),
-        }
-        return Ok(());
-    }
-
-    let mut next_items = Vec::new();
-    let mut item_index_map = HashMap::new();
-
-    for item in target_items
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .chain(source_items.as_array().cloned().unwrap_or_default())
-    {
-        let item_key = key_selector(&item);
-
-        if let Some(index) = item_index_map.get(&item_key).cloned() {
-            next_items[index] = item;
-        } else {
-            item_index_map.insert(item_key, next_items.len());
-            next_items.push(item);
-        }
-    }
-
-    write_json(&path_text(target_path), &json!(next_items)).await?;
-    tokio::fs::remove_file(source_path).await?;
-    Ok(())
-}
-
 async fn migrate_skill_repository_storage(paths: &AppPaths) -> Result<(), ManagerError> {
     let storage_path = Path::new(&paths.storage_files.skill_repositories);
     let cache_path = Path::new(&paths.storage_files.skill_repository_cache);
@@ -1922,7 +2045,8 @@ async fn migrate_skill_repository_storage(paths: &AppPaths) -> Result<(), Manage
         return Ok(());
     }
 
-    let repositories: Value = serde_json::from_str(&tokio::fs::read_to_string(storage_path).await?)?;
+    let repositories: Value =
+        serde_json::from_str(&tokio::fs::read_to_string(storage_path).await?)?;
 
     if !repositories.is_array() {
         return Ok(());
@@ -2006,11 +2130,22 @@ fn has_skill_repository_cache(repository: &Value) -> bool {
         && number_value(repository.get("lastSyncedAt"), 0) > 0
 }
 
-async fn read_current_file(root_path: &str, entry_path: &str) -> Result<Option<Vec<u8>>, ManagerError> {
+async fn read_current_file(
+    root_path: &str,
+    entry_path: &str,
+) -> Result<Option<Vec<u8>>, ManagerError> {
     let target_path = assert_backup_path(root_path, entry_path)?;
 
-    if !target_path.exists() {
-        return Ok(None);
+    match std::fs::symlink_metadata(&target_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(ManagerError::System(format!(
+                "备份文件目标不能是链接：{}",
+                path_text(target_path)
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(ManagerError::Io(error)),
     }
 
     Ok(Some(tokio::fs::read(target_path).await?))
@@ -2028,62 +2163,91 @@ fn assert_backup_path(root_path: &str, entry_path: &str) -> Result<PathBuf, Mana
         }
     }
 
+    let mut parent = target_path.parent();
+    while let Some(path) = parent.filter(|path| *path != root) {
+        if std::fs::symlink_metadata(path)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Err(ManagerError::System(format!(
+                "备份路径不能穿过链接：{}",
+                path_text(path)
+            )));
+        }
+        parent = path.parent();
+    }
+
     Ok(target_path)
 }
 
-fn is_ignored_backup_path(entry_path: &str) -> bool {
-    let ignored_runtime_backup_paths = HashSet::from([
-        "storage/installs.json",
-        "storage/cli-targets.json",
-        "storage/runtime-profiles.json",
-        "storage/runtime-provider-state.json",
-        "storage/runtime-provider-keys.json",
-        "storage/sessions.json",
-        "storage/usage-logs.json",
-        "storage/usage-request-records.json",
-        "storage/prompt-runtime-state.json",
-        "storage/codex-active-account-id.json",
-        "storage/codex-provider-instances.json",
-        "profiles/claude-profile.json",
-        "profiles/codex-profile.json",
-    ]);
-    let normalized_path = entry_path.to_lowercase();
-    let file_name = Path::new(&normalized_path)
-        .file_name()
-        .map(|value| value.to_string_lossy().to_string())
-        .unwrap_or_default();
+fn validate_backup_symlink_target(
+    root_path: &str,
+    link_path: &Path,
+    target: &str,
+) -> Result<(), ManagerError> {
+    let target_path = Path::new(target);
 
-    if is_database_backup_path(&normalized_path) {
-        return false;
+    if target.is_empty()
+        || target_path.is_absolute()
+        || target_path.components().any(|component| {
+            !matches!(component, Component::Normal(_) | Component::CurDir)
+        })
+    {
+        return Err(ManagerError::System("备份链接目标非法".to_string()));
     }
 
-    ignored_runtime_backup_paths.contains(entry_path)
-        || normalized_path == "logs"
-        || normalized_path.starts_with("logs/")
-        || normalized_path.contains("/logs/")
-        || file_name.ends_with(".log")
-        || file_name.ends_with(".logs")
-        || file_name.ends_with("-logs.json")
-        || file_name.ends_with("_logs.json")
-        || file_name == "logs.json"
+    let resolved_target = link_path
+        .parent()
+        .unwrap_or_else(|| Path::new(root_path))
+        .join(target_path);
+    let relative_target = resolved_target
+        .strip_prefix(root_path)
+        .map_err(|_| ManagerError::System("备份链接目标超出工作区".to_string()))?;
+    let checked_target = assert_backup_path(root_path, &path_text(relative_target))?;
+
+    if checked_target.exists()
+        && !std::fs::canonicalize(&checked_target)?
+            .starts_with(std::fs::canonicalize(root_path)?)
+    {
+        return Err(ManagerError::System(
+            "备份链接目标超出工作区".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_allowed_backup_path(entry_path: &str) -> bool {
+    let normalized_path = entry_path
+        .replace('\\', "/")
+        .trim_matches('/')
+        .to_lowercase();
+
+    matches!(
+        normalized_path.as_str(),
+        "storage/ai-manager.db"
+            | "storage/providers.json"
+            | "storage/runtime-models.json"
+            | "storage/codex-accounts.json"
+            | "storage/skills.json"
+            | "storage/skill-groups.json"
+            | "storage/skill-repositories.json"
+            | "storage/rules.json"
+            | "skills"
+            | "prompts"
+    ) || normalized_path.starts_with("skills/")
+        || normalized_path.starts_with("prompts/")
 }
 
 fn restore_storage_name(entry_path: &str) -> Option<&'static str> {
     match entry_path {
+        "app-settings.json" => Some("坚果云设置"),
+        "storage/skill-groups.json" => Some("Skill 分组"),
         "storage/skill-repositories.json" => Some("Skill 仓库"),
         "storage/skills.json" => Some("Skill 索引"),
-        "storage/installs.json" => Some("Skill 挂载"),
-        "storage/usage-logs.json" => Some("用量日志"),
-        "storage/usage-pricing.json" => Some("模型费用"),
         "storage/ai-manager.db" => Some("主数据库"),
-        "logs/usage.db" => Some("旧版用量数据库"),
-        "storage/codex-provider-instances.json" => Some("Codex 独立实例"),
         "storage/providers.json" => Some("Provider"),
         "storage/runtime-models.json" => Some("模型"),
         "storage/codex-accounts.json" => Some("Codex 官方账号"),
-        "storage/codex-proxy-config.json" => Some("Codex 代理配置"),
         "storage/rules.json" => Some("Prompt 索引"),
-        "storage/prompt-runtime-state.json" => Some("Prompt Runtime 状态"),
         _ => None,
     }
 }
@@ -2094,6 +2258,7 @@ fn is_storage_json_path(entry_path: &str) -> bool {
 
 fn is_mergeable_restore_json_path(entry_path: &str) -> bool {
     HashSet::from([
+        "storage/skill-groups.json",
         "storage/skill-repositories.json",
         "storage/skills.json",
         "storage/installs.json",
@@ -2112,6 +2277,12 @@ fn is_mergeable_restore_json_path(entry_path: &str) -> bool {
 
 fn normalize_restore_value(entry_path: &str, value: &Value) -> Result<String, ManagerError> {
     let mut value = value.clone();
+
+    if entry_path == "app-settings.json" {
+        return Ok(serde_json::to_string_pretty(&redact_backup_app_settings(
+            value,
+        ))?);
+    }
 
     if [
         "storage/providers.json",
@@ -2137,7 +2308,9 @@ fn normalize_restore_value(entry_path: &str, value: &Value) -> Result<String, Ma
     }
 
     if entry_path == "storage/skills.json" {
-        return Ok(serde_json::to_string_pretty(&normalize_skill_restore_value(value))?);
+        return Ok(serde_json::to_string_pretty(
+            &normalize_skill_restore_value(value),
+        )?);
     }
 
     if entry_path == "storage/prompt-runtime-state.json" {
@@ -2199,9 +2372,17 @@ fn remove_runtime_time_fields(value: Value) -> Value {
 
 fn normalize_skill_restore_value(value: Value) -> Value {
     if let Value::Object(mut map) = value {
-        map.remove("installedTargets");
-        map.remove("installStates");
-        map.remove("status");
+        for field in [
+            "disabled",
+            "installedTargets",
+            "installStates",
+            "status",
+            "sourcePath",
+            "entryPath",
+            "repoName",
+        ] {
+            map.remove(field);
+        }
         return Value::Object(map);
     }
 
@@ -2237,11 +2418,22 @@ fn normalize_runtime_provider_state_restore_value(value: Value) -> Value {
 }
 
 fn create_restore_content_hash(entry_path: &str, value: &Value) -> Result<String, ManagerError> {
+    if entry_path == "app-settings.json" {
+        return Ok(sha256_text(&serde_json::to_string(value)?));
+    }
     Ok(sha256_text(&normalize_restore_value(entry_path, value)?))
 }
 
-fn get_restore_item_key(_entry_path: &str, item: &Value, index: usize) -> String {
+fn get_restore_item_key(entry_path: &str, item: &Value, index: usize) -> String {
     if let Some(item) = item.as_object() {
+        if entry_path == "storage/skills.json" {
+            let name = string_value(item.get("name"));
+
+            if !name.is_empty() {
+                return name;
+            }
+        }
+
         if let Some(id) = item.get("id").and_then(Value::as_str) {
             return id.to_string();
         }
@@ -2271,6 +2463,10 @@ fn get_restore_item_key(_entry_path: &str, item: &Value, index: usize) -> String
 fn get_restore_item_name(entry_path: &str, item_key: &str, value: &Value) -> String {
     if !value.is_object() {
         return item_key.to_string();
+    }
+
+    if entry_path == "app-settings.json" && item_key == "cloudSync" {
+        return "坚果云".to_string();
     }
 
     if entry_path == "storage/codex-accounts.json" {
@@ -2528,36 +2724,26 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
-trait NonEmptyString {
-    fn or_else_non_empty(self, value: impl FnOnce() -> String) -> String;
-}
-
-impl NonEmptyString for String {
-    fn or_else_non_empty(self, value: impl FnOnce() -> String) -> String {
-        if self.is_empty() {
-            value()
-        } else {
-            self
-        }
-    }
-}
-
 fn is_database_backup_path(entry_path: &str) -> bool {
-    matches!(entry_path, "storage/ai-manager.db" | "logs/usage.db")
+    entry_path == "storage/ai-manager.db"
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_backup_entries, create_backup_entry_view, create_restore_preview,
-        format_restore_file_content, is_database_backup_path, merge_json_backup_value,
-        merge_provider_keys, restore_legacy_usage_database_entry, sanitize_runtime_backup_entries,
+        append_app_settings_restore_preview, collect_backup_entries, create_backup_entry_view,
+        encrypt_backup_payload, format_restore_file_content, is_allowed_backup_path,
+        is_database_backup_path, merge_json_backup_value, merge_provider_keys,
+        preview_data_backup_restore_content, redact_backup_app_settings,
+        restore_backup_app_settings, restore_data_backup_content, sanitize_runtime_backup_entries,
+        serialize_backup_app_settings, validate_backup_symlink_target,
     };
     use crate::api::runtime_provider;
-    use base64::Engine;
-    use crate::core::{database, provider_store};
     use crate::core::paths::resolve_app_paths;
+    use crate::core::settings::normalize_app_settings;
     use crate::core::usage_store::{self, UsageSessionUpdate};
+    use crate::core::{database, provider_store, skill_store};
+    use base64::Engine;
     use serde_json::{json, Map};
     use std::path::Path;
 
@@ -2570,15 +2756,57 @@ mod tests {
     }
 
     #[test]
-    fn exports_main_database_without_usage_runtime_tables() {
+    fn backup_symlink_targets_must_stay_inside_workspace() {
         let root = std::env::temp_dir().join(format!(
-            "monkey-thief-usage-backup-{}",
+            "monkey-thief-backup-link-safety-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+        let skills_root = root.join("skills");
+        let link_path = skills_root.join("linked-skill");
+        std::fs::create_dir_all(&skills_root).unwrap();
+        std::fs::write(skills_root.join("target.txt"), "target").unwrap();
+
+        assert!(validate_backup_symlink_target(
+            &root.to_string_lossy(),
+            &link_path,
+            "target.txt"
+        )
+        .is_ok());
+        assert!(validate_backup_symlink_target(
+            &root.to_string_lossy(),
+            &link_path,
+            "../outside.txt"
+        )
+        .is_err());
+        assert!(validate_backup_symlink_target(
+            &root.to_string_lossy(),
+            &link_path,
+            &root.join("outside.txt").to_string_lossy()
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn exports_only_config_database_skills_and_prompts() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-data-backup-scope-{}",
             std::process::id()
         ));
         if root.exists() {
             std::fs::remove_dir_all(&root).unwrap();
         }
         let paths = resolve_app_paths(Path::new(&root));
+        provider_store::write_provider_bundle(
+            &paths,
+            &[json!({"id": "provider-a", "enabled": true})],
+            &[],
+            &[],
+            &Map::new(),
+        )
+        .unwrap();
         usage_store::write_pricing(
             &paths,
             &json!({
@@ -2611,13 +2839,42 @@ mod tests {
             }],
         )
         .unwrap();
+        let skill_file = Path::new(&paths.skills_dir)
+            .join("skill-a")
+            .join("SKILL.md");
+        let prompt_file = Path::new(&paths.prompts_dir)
+            .join("common")
+            .join("rule-a.md");
+        let git_tool_file = Path::new(&paths.workspace_root)
+            .join("git-tool")
+            .join("archive.git")
+            .join("objects.pack");
+        std::fs::create_dir_all(skill_file.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(prompt_file.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(git_tool_file.parent().unwrap()).unwrap();
+        std::fs::write(&skill_file, "# Skill A").unwrap();
+        std::fs::write(&prompt_file, "# Rule A").unwrap();
+        std::fs::write(&git_tool_file, vec![1u8; 1024]).unwrap();
+        std::fs::write(
+            &paths.storage_files.codex_proxy_config,
+            "{\"enabled\":true}",
+        )
+        .unwrap();
+        std::fs::create_dir_all(&paths.sessions_dir).unwrap();
+        std::fs::write(
+            Path::new(&paths.sessions_dir).join("session.jsonl"),
+            "session",
+        )
+        .unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
-        let entries = runtime
-            .block_on(collect_backup_entries(&paths, false))
-            .unwrap();
+        let entries = runtime.block_on(collect_backup_entries(&paths)).unwrap();
+        let entry_paths = entries
+            .iter()
+            .map(|entry| entry["path"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
         let database_entry = entries
             .iter()
             .find(|entry| entry["path"] == "storage/ai-manager.db")
@@ -2635,34 +2892,32 @@ mod tests {
         }
         let restore_paths = resolve_app_paths(Path::new(&restore_root));
         usage_store::initialize(&restore_paths).unwrap();
+        provider_store::initialize(&restore_paths).unwrap();
         let restore_tables = database::preview_restore(&restore_paths, &database)
             .unwrap()
             .into_iter()
             .map(|difference| difference.table)
             .collect::<Vec<_>>();
-        database::restore_selected(&restore_paths, &database, &restore_tables).unwrap();
-        let pricing = usage_store::read_pricing(&restore_paths).unwrap();
-        let preview = runtime
-            .block_on(create_restore_preview(&paths, entries.clone()))
-            .unwrap();
 
-        assert_eq!(pricing["exchangeRate"], 7.4);
-        assert_eq!(pricing["items"][0]["modelId"], "gpt-test");
-        assert_eq!(usage_store::read_all_logs(&restore_paths).unwrap().len(), 1);
-        assert!(usage_store::read_session_versions(&restore_paths)
-            .unwrap()
-            .is_empty());
-        assert!(usage_store::read_request_records(
-            &restore_paths,
-            &["request-1".to_string()]
-        )
-        .unwrap()
-        .is_empty());
+        assert!(entry_paths.iter().all(|path| is_allowed_backup_path(path)));
+        assert!(entry_paths
+            .iter()
+            .any(|path| path == "skills/skill-a/SKILL.md"));
+        assert!(entry_paths
+            .iter()
+            .any(|path| path == "prompts/common/rule-a.md"));
+        assert!(!entry_paths.iter().any(|path| path.starts_with("git-tool")));
+        assert!(!entry_paths.iter().any(|path| path.starts_with("sessions")));
+        assert!(!entry_paths.iter().any(|path| path.contains("proxy")));
+        assert!(!entry_paths.iter().any(|path| path.contains("usage")));
+        assert!(restore_tables
+            .iter()
+            .all(|table| !table.starts_with("usage_")));
+        assert_eq!(restore_tables, vec!["providers".to_string()]);
         assert_eq!(database_view["typeName"], "主数据库");
         assert!(database_view["content"]
             .as_str()
             .is_some_and(|content| content.contains("SHA-256")));
-        assert!(preview["conflictCount"].as_u64().unwrap_or_default() <= 1);
         assert_eq!(
             entries
                 .iter()
@@ -2675,12 +2930,6 @@ mod tests {
                 .count(),
             1
         );
-        assert!(!entries.iter().any(|entry| {
-            entry
-                .get("path")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|path| path == "storage/usage-pricing.json")
-        }));
     }
 
     #[test]
@@ -2702,10 +2951,7 @@ mod tests {
         .unwrap();
         provider_store::write_provider_bundle(
             &paths,
-            &[
-                json!({"id": "provider-a"}),
-                json!({"id": "provider-b"}),
-            ],
+            &[json!({"id": "provider-a"}), json!({"id": "provider-b"})],
             &[],
             &[],
             &current_keys,
@@ -2748,76 +2994,61 @@ mod tests {
     }
 
     #[test]
-    fn restores_legacy_usage_database_before_migration() {
-        let source_root = std::env::temp_dir().join(format!(
-            "monkey-thief-legacy-usage-backup-source-{}",
-            std::process::id()
-        ));
-        let target_root = std::env::temp_dir().join(format!(
-            "monkey-thief-legacy-usage-backup-target-{}",
-            std::process::id()
-        ));
-        for root in [&source_root, &target_root] {
-            if root.exists() {
-                std::fs::remove_dir_all(root).unwrap();
-            }
-        }
-        let source_paths = resolve_app_paths(Path::new(&source_root));
-        usage_store::replace_sessions(
-            &source_paths,
-            &[UsageSessionUpdate {
-                raw_path: "legacy-session.jsonl".to_string(),
-                app_type: "codex".to_string(),
-                updated_at: 120,
-                logs: vec![json!({
-                  "requestId": "legacy-request",
-                  "rawPath": "legacy-session.jsonl",
-                  "createdAt": 100,
-                  "appType": "codex"
-                })],
-                records: Vec::new(),
-            }],
-        )
-        .unwrap();
-        let legacy_database = std::fs::read(&source_paths.storage_files.database).unwrap();
-        let entries = vec![json!({
-          "path": "logs/usage.db",
-          "type": "file",
-          "content": base64::engine::general_purpose::STANDARD.encode(legacy_database)
-        })];
-        let target_paths = resolve_app_paths(Path::new(&target_root));
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-
-        runtime
-            .block_on(restore_legacy_usage_database_entry(
-                &target_paths,
-                &entries,
-                &Map::new(),
-            ))
-            .unwrap();
-        usage_store::initialize(&target_paths).unwrap();
-
-        assert_eq!(usage_store::read_all_logs(&target_paths).unwrap().len(), 1);
-        assert!(!Path::new(&target_paths.storage_files.usage_database).exists());
-    }
-
-    #[test]
-    fn ignores_local_runtime_state_in_legacy_backups() {
+    fn legacy_backups_are_reduced_to_the_supported_scope() {
         let entries = sanitize_runtime_backup_entries(vec![
             json!({"path": "profiles/claude-profile.json", "type": "file"}),
-            json!({"path": "profiles/codex-profile.json", "type": "file"}),
             json!({"path": "storage/prompt-runtime-state.json", "type": "file"}),
-            json!({"path": "storage/cli-targets.json", "type": "file"}),
             json!({"path": "storage/sessions.json", "type": "file"}),
+            json!({"path": "storage/usage-pricing.json", "type": "file"}),
+            json!({"path": "storage/codex-proxy-config.json", "type": "file"}),
+            json!({"path": "logs/usage.db", "type": "file"}),
+            json!({"path": "git-tool/project/archive.git", "type": "file"}),
             json!({"path": "prompts/common/rule-a.md", "type": "file"}),
+            encoded_json_entry(
+                "storage/providers.json",
+                &json!([{"id": "provider-a", "enabled": true}]),
+            ),
+            encoded_json_entry(
+                "storage/skills.json",
+                &json!([{
+                  "name": "skill-a",
+                  "disabled": false,
+                  "installedTargets": ["codex"],
+                  "status": "installed"
+                }]),
+            ),
+            encoded_json_entry(
+                "storage/codex-accounts.json",
+                &json!([{"id": "account-a", "usage": {"limit": 1}}]),
+            ),
         ])
         .unwrap();
 
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0]["path"], "prompts/common/rule-a.md");
+        assert_eq!(entries.len(), 4);
+        let provider = decode_json_entry(
+            entries
+                .iter()
+                .find(|entry| entry["path"] == "storage/providers.json")
+                .unwrap(),
+        );
+        let skill = decode_json_entry(
+            entries
+                .iter()
+                .find(|entry| entry["path"] == "storage/skills.json")
+                .unwrap(),
+        );
+        let account = decode_json_entry(
+            entries
+                .iter()
+                .find(|entry| entry["path"] == "storage/codex-accounts.json")
+                .unwrap(),
+        );
+
+        assert!(provider[0].get("enabled").is_none());
+        assert!(skill[0].get("disabled").is_none());
+        assert!(skill[0].get("installedTargets").is_none());
+        assert!(skill[0].get("status").is_none());
+        assert!(account[0].get("usage").is_none());
     }
 
     #[test]
@@ -2830,7 +3061,7 @@ mod tests {
         .unwrap();
         let merged = merge_json_backup_value(
             "storage/providers.json",
-            &json!([{"id": "provider-a", "name": "current", "enabled": true}]),
+            &json!([{"id": "provider-a", "name": "current"}]),
             &json!([
               {"id": "provider-a", "name": "backup"},
               {"id": "provider-b", "name": "new"}
@@ -2842,5 +3073,345 @@ mod tests {
         assert_eq!(merged[0]["name"], "backup");
         assert_eq!(merged[0]["enabled"], true);
         assert_eq!(merged[1]["enabled"], false);
+    }
+
+    #[test]
+    fn legacy_skill_restore_preserves_current_state_and_disables_new_items() {
+        let choices = json!({
+          "json:storage/skills.json:skill-a": "backup"
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+        let merged = merge_json_backup_value(
+            "storage/skills.json",
+            &json!([{
+              "name": "skill-a",
+              "description": "current",
+              "disabled": false,
+              "installedTargets": ["codex"],
+              "status": "installed"
+            }]),
+            &json!([
+              {"name": "skill-a", "description": "backup", "disabled": true},
+              {"name": "skill-b", "description": "new", "disabled": false}
+            ]),
+            &choices,
+        )
+        .unwrap();
+
+        assert_eq!(merged[0]["description"], "backup");
+        assert_eq!(merged[0]["disabled"], false);
+        assert_eq!(merged[0]["installedTargets"], json!(["codex"]));
+        assert_eq!(merged[0]["status"], "installed");
+        assert_eq!(merged[1]["disabled"], true);
+        assert_eq!(merged[1]["installedTargets"], json!([]));
+        assert_eq!(merged[1]["status"], "disabled");
+    }
+
+    #[test]
+    fn legacy_json_restore_reads_current_state_from_sqlite() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-legacy-json-sqlite-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+        let paths = resolve_app_paths(Path::new(&root));
+        let mut app_settings = normalize_app_settings(
+            root.join("app-settings.json"),
+            Some(json!({"dataPath": root.to_string_lossy()})),
+        );
+        provider_store::write_provider_bundle(
+            &paths,
+            &[json!({"id": "provider-a", "cli": "codex", "name": "current"})],
+            &[],
+            &[json!({"id": "codex", "cli": "codex", "providerId": "provider-a"})],
+            &Map::new(),
+        )
+        .unwrap();
+        provider_store::write_runtime_state(
+            &paths,
+            &Map::from_iter([(
+                "codex".to_string(),
+                json!({"activeProviderId": "provider-a", "status": "SYNCED"}),
+            )]),
+        )
+        .unwrap();
+        provider_store::write_codex_accounts(
+            &paths,
+            &[json!({
+              "id": "account-a",
+              "email": "current@example.com",
+              "usage": {"source": "current"}
+            })],
+        )
+        .unwrap();
+        skill_store::write_skills(
+            &paths,
+            &[json!({
+              "id": "skill-id-a",
+              "name": "skill-a",
+              "description": "current",
+              "disabled": false,
+              "installedTargets": ["codex"],
+              "installStates": {"codex": {"state": "installed"}},
+              "status": "installed"
+            })],
+        )
+        .unwrap();
+        skill_store::write_installs(
+            &paths,
+            &Map::from_iter([("skill-a".to_string(), json!(["codex"]))]),
+        )
+        .unwrap();
+        let backup = encrypt_backup_payload(&json!({
+          "version": 1,
+          "createdAt": 1,
+          "workspaceEntries": [
+            encoded_json_entry(
+              "storage/providers.json",
+              &json!([
+                {"id": "provider-a", "cli": "claude", "name": "backup", "enabled": false},
+                {"id": "provider-b", "cli": "codex", "name": "new", "enabled": true}
+              ])
+            ),
+            encoded_json_entry(
+              "storage/skills.json",
+              &json!([
+                {"id": "skill-id-a", "name": "skill-a", "description": "backup", "disabled": true},
+                {"id": "skill-id-b", "name": "skill-b", "description": "new", "disabled": false}
+              ])
+            ),
+            encoded_json_entry(
+              "storage/codex-accounts.json",
+              &json!([
+                {"id": "account-a", "email": "backup@example.com", "usage": {"source": "backup"}},
+                {"id": "account-b", "email": "new@example.com", "usage": {"source": "backup"}}
+              ])
+            )
+          ]
+        }))
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let preview = runtime
+            .block_on(preview_data_backup_restore_content(
+                &paths,
+                &app_settings,
+                &backup,
+            ))
+            .unwrap();
+        let conflict_keys = preview["conflicts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|item| item["key"].as_str())
+            .collect::<Vec<_>>();
+
+        assert!(conflict_keys.contains(&"json:storage/providers.json:provider-a"));
+        assert!(conflict_keys.contains(&"json:storage/skills.json:skill-a"));
+        assert!(conflict_keys.contains(&"json:storage/codex-accounts.json:account-a"));
+
+        runtime
+            .block_on(restore_data_backup_content(
+                &paths,
+                &mut app_settings,
+                &backup,
+                &json!({
+                  "json:storage/providers.json:provider-a": "backup",
+                  "json:storage/skills.json:skill-a": "backup",
+                  "json:storage/codex-accounts.json:account-a": "backup"
+                }),
+            ))
+            .unwrap();
+
+        let providers = provider_store::read_providers(&paths).unwrap();
+        let provider_a = providers.iter().find(|item| item["id"] == "provider-a").unwrap();
+        let provider_b = providers.iter().find(|item| item["id"] == "provider-b").unwrap();
+        let skills = skill_store::read_skills(&paths).unwrap();
+        let skill_a = skills.iter().find(|item| item["name"] == "skill-a").unwrap();
+        let skill_b = skills.iter().find(|item| item["name"] == "skill-b").unwrap();
+        let accounts = provider_store::read_codex_accounts(&paths).unwrap();
+        let account_a = accounts.iter().find(|item| item["id"] == "account-a").unwrap();
+        let account_b = accounts.iter().find(|item| item["id"] == "account-b").unwrap();
+        let runtime_state = provider_store::read_runtime_state(&paths).unwrap();
+        let installs = skill_store::read_installs(&paths).unwrap();
+
+        assert_eq!(provider_a["name"], "backup");
+        assert_eq!(provider_a["enabled"], true);
+        assert_eq!(provider_b["enabled"], false);
+        assert!(provider_store::read_profiles(&paths).unwrap().is_empty());
+        assert_eq!(runtime_state["codex"]["activeProviderId"], "");
+        assert_eq!(skill_a["description"], "backup");
+        assert_eq!(skill_a["disabled"], false);
+        assert_eq!(skill_a["installedTargets"], json!(["codex"]));
+        assert_eq!(skill_a["installStates"]["codex"]["state"], "installed");
+        assert_eq!(skill_a["status"], "installed");
+        assert_eq!(installs["skill-a"], json!(["codex"]));
+        assert_eq!(skill_b["disabled"], true);
+        assert_eq!(skill_b["installedTargets"], json!([]));
+        assert_eq!(skill_b["installStates"], json!({}));
+        assert_eq!(skill_b["status"], "disabled");
+        assert!(!installs.contains_key("skill-b"));
+        assert_eq!(account_a["email"], "backup@example.com");
+        assert_eq!(account_a["usage"]["source"], "current");
+        assert!(account_b.get("usage").is_none());
+    }
+
+    #[test]
+    fn backup_and_restore_only_jianguoyun_settings() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-app-settings-backup-{}",
+            std::process::id()
+        ));
+        let mut app_settings = normalize_app_settings(
+            root.join("app-settings.json"),
+            Some(json!({
+              "dataPath": root.join("current-data").to_string_lossy(),
+              "cliConfigPaths": {"claude": "current-claude", "codex": "current-codex"},
+              "cloudSync": {
+                "webdavUrl": "https://current.example/dav",
+                "username": "current-user",
+                "password": "current-password",
+                "fileName": "current.aimbackup",
+                "lastUpdatedAt": 900
+              },
+              "localBackup": {"enabled": false, "intervalMinutes": 30, "maxCount": 3},
+              "system": {"closeAction": "quit", "quickSwitchVisible": false}
+            })),
+        );
+        let serialized = serialize_backup_app_settings(&app_settings);
+
+        assert_eq!(
+            serialized.as_object().unwrap().keys().collect::<Vec<_>>(),
+            vec!["cloudSync"]
+        );
+        assert_eq!(
+            serialized["cloudSync"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["fileName", "password", "provider", "username", "webdavUrl"]
+        );
+        assert!(serialized["cloudSync"].get("lastUpdatedAt").is_none());
+
+        let original_data_path = app_settings.data_path.clone();
+        let original_local_backup_enabled = app_settings.local_backup.enabled;
+        let original_close_action = app_settings.system.close_action.clone();
+        let choices = json!({
+          "json:app-settings.json:cloudSync": "backup"
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+        restore_backup_app_settings(
+            &mut app_settings,
+            &json!({
+              "appSettings": {
+                "dataPath": "ignored-data-path",
+                "localBackup": {"enabled": true},
+                "system": {"closeAction": "minimize"},
+                "cloudSync": {
+                  "webdavUrl": "https://backup.example/dav",
+                  "username": "backup-user",
+                  "password": "backup-password",
+                  "fileName": "backup.aimbackup",
+                  "lastUpdatedAt": 1
+                }
+              }
+            }),
+            &choices,
+        )
+        .unwrap();
+
+        assert_eq!(
+            app_settings.cloud_sync.webdav_url,
+            "https://backup.example/dav"
+        );
+        assert_eq!(app_settings.cloud_sync.username, "backup-user");
+        assert_eq!(app_settings.cloud_sync.password, "backup-password");
+        assert_eq!(app_settings.cloud_sync.file_name, "backup.aimbackup");
+        assert_eq!(app_settings.cloud_sync.last_updated_at, 900);
+        assert_eq!(app_settings.data_path, original_data_path);
+        assert_eq!(
+            app_settings.local_backup.enabled,
+            original_local_backup_enabled
+        );
+        assert_eq!(app_settings.system.close_action, original_close_action);
+    }
+
+    #[test]
+    fn jianguoyun_preview_and_inspection_hide_passwords() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-app-settings-preview-{}",
+            std::process::id()
+        ));
+        let app_settings = normalize_app_settings(
+            root.join("app-settings.json"),
+            Some(json!({
+              "cloudSync": {
+                "username": "current-user",
+                "password": "current-secret"
+              }
+            })),
+        );
+        let mut preview = json!({
+          "added": [],
+          "conflicts": [],
+          "addedCount": 0,
+          "conflictCount": 0
+        });
+        append_app_settings_restore_preview(
+            &mut preview,
+            &app_settings,
+            &json!({
+              "appSettings": {
+                "cloudSync": {
+                  "username": "backup-user",
+                  "password": "backup-secret"
+                }
+              }
+            }),
+        )
+        .unwrap();
+        let preview_text = serde_json::to_string(&preview).unwrap();
+        let inspected_text = serde_json::to_string(&redact_backup_app_settings(json!({
+          "cloudSync": {"password": "backup-secret"}
+        })))
+        .unwrap();
+
+        assert_eq!(preview["conflictCount"], 1);
+        assert_eq!(
+            preview["conflicts"][0]["key"],
+            "json:app-settings.json:cloudSync"
+        );
+        assert!(!preview_text.contains("current-secret"));
+        assert!(!preview_text.contains("backup-secret"));
+        assert!(!inspected_text.contains("backup-secret"));
+        assert!(inspected_text.contains("********"));
+    }
+
+    fn encoded_json_entry(path: &str, value: &serde_json::Value) -> serde_json::Value {
+        json!({
+          "path": path,
+          "type": "file",
+          "content": base64::engine::general_purpose::STANDARD
+            .encode(serde_json::to_string(value).unwrap())
+        })
+    }
+
+    fn decode_json_entry(entry: &serde_json::Value) -> serde_json::Value {
+        serde_json::from_slice(
+            &base64::engine::general_purpose::STANDARD
+                .decode(entry["content"].as_str().unwrap())
+                .unwrap(),
+        )
+        .unwrap()
     }
 }
