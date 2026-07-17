@@ -15,11 +15,7 @@ use std::path::{Component, Path, PathBuf};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 use tokio::net::TcpListener;
-use tokio::process::Command;
 use tokio::task::JoinHandle;
-
-#[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 const INDEX_HTML: &str = include_str!("../../toolbox-panel/index.html");
 const STYLE_CSS: &str = include_str!("../../toolbox-panel/styles.css");
@@ -169,17 +165,27 @@ struct CodexPetIdPayload {
 pub async fn list_codex_pets(paths: &AppPaths, cli_targets: &Value) -> Result<Value, ManagerError> {
     let codex_pets_dir = codex_pets_dir(cli_targets)?;
 
-    sync_codex_pets(paths, &codex_pets_dir).await?;
+    tokio::fs::create_dir_all(&codex_pets_dir).await?;
+    tokio::fs::create_dir_all(&paths.disabled_pets_dir).await?;
+    migrate_legacy_codex_pets(paths, &codex_pets_dir).await?;
 
-    let mut pets = read_managed_pets(Path::new(&paths.pets_dir), true).await?;
-    pets.extend(read_managed_pets(Path::new(&paths.disabled_pets_dir), false).await?);
+    let mut pets = read_pets(&codex_pets_dir, true).await?;
+    let disabled_pets = read_pets(Path::new(&paths.disabled_pets_dir), false).await?;
+    if disabled_pets.iter().any(|disabled_pet| {
+        pets.iter()
+            .any(|pet| pet_string(pet, "id") == pet_string(disabled_pet, "id"))
+    }) {
+        return Err(ManagerError::System(
+            "Codex 目录与已禁用目录存在同名宠物".to_string(),
+        ));
+    }
+    pets.extend(disabled_pets);
     pets.sort_by(|left, right| {
         pet_string(left, "displayName").cmp(&pet_string(right, "displayName"))
     });
 
     Ok(json!({
       "codexPetsPath": path_text(&codex_pets_dir),
-      "managedPetsPath": paths.pets_dir,
       "disabledPetsPath": paths.disabled_pets_dir,
       "pets": pets
     }))
@@ -199,8 +205,7 @@ pub async fn rename_codex_pet(
     }
 
     let codex_pets_dir = codex_pets_dir(cli_targets)?;
-    sync_codex_pets(paths, &codex_pets_dir).await?;
-    let pet_dir = managed_pet_dir(paths, id)?;
+    let pet_dir = codex_pet_dir(&codex_pets_dir, Path::new(&paths.disabled_pets_dir), id)?;
     let pet_json_path = pet_dir.join("pet.json");
     let content = tokio::fs::read_to_string(&pet_json_path).await?;
     let mut pet_json: Value = serde_json::from_str(&content)?;
@@ -230,8 +235,7 @@ pub async fn toggle_codex_pet(
     let id = valid_pet_id(&payload.id)?;
     let codex_pets_dir = codex_pets_dir(cli_targets)?;
 
-    sync_codex_pets(paths, &codex_pets_dir).await?;
-    let active_path = Path::new(&paths.pets_dir).join(id);
+    let active_path = codex_pets_dir.join(id);
     let disabled_path = Path::new(&paths.disabled_pets_dir).join(id);
 
     if payload.enabled {
@@ -243,10 +247,6 @@ pub async fn toggle_codex_pet(
         }
 
         move_pet_dir(&disabled_path, &active_path).await?;
-        if let Err(error) = ensure_codex_pet_link(&active_path, &codex_pets_dir.join(id)).await {
-            let _ = move_pet_dir(&active_path, &disabled_path).await;
-            return Err(error);
-        }
     } else {
         if disabled_path.exists() {
             return Ok(json!({ "id": id, "enabled": false }));
@@ -255,11 +255,7 @@ pub async fn toggle_codex_pet(
             return Err(ManagerError::System(format!("未找到宠物：{}", id)));
         }
 
-        remove_codex_pet_link(&codex_pets_dir.join(id)).await?;
-        if let Err(error) = move_pet_dir(&active_path, &disabled_path).await {
-            let _ = ensure_codex_pet_link(&active_path, &codex_pets_dir.join(id)).await;
-            return Err(error);
-        }
+        move_pet_dir(&active_path, &disabled_path).await?;
     }
 
     Ok(json!({ "id": id, "enabled": payload.enabled }))
@@ -274,16 +270,11 @@ pub async fn delete_codex_pet(
     let id = valid_pet_id(&payload.id)?;
     let codex_pets_dir = codex_pets_dir(cli_targets)?;
 
-    sync_codex_pets(paths, &codex_pets_dir).await?;
-    let active_path = Path::new(&paths.pets_dir).join(id);
+    let active_path = codex_pets_dir.join(id);
     let disabled_path = Path::new(&paths.disabled_pets_dir).join(id);
 
     if active_path.exists() {
-        remove_codex_pet_link(&codex_pets_dir.join(id)).await?;
-        if let Err(error) = tokio::fs::remove_dir_all(&active_path).await {
-            let _ = ensure_codex_pet_link(&active_path, &codex_pets_dir.join(id)).await;
-            return Err(error.into());
-        }
+        tokio::fs::remove_dir_all(&active_path).await?;
     } else if disabled_path.exists() {
         tokio::fs::remove_dir_all(&disabled_path).await?;
     } else {
@@ -311,54 +302,17 @@ fn codex_pets_dir(cli_targets: &Value) -> Result<PathBuf, ManagerError> {
     Ok(Path::new(&config_path).join("pets"))
 }
 
-async fn sync_codex_pets(paths: &AppPaths, codex_pets_dir: &Path) -> Result<(), ManagerError> {
-    let active_dir = Path::new(&paths.pets_dir);
-    let disabled_dir = Path::new(&paths.disabled_pets_dir);
+// 将旧版本遗留在应用目录中的启用宠物还原到 Codex 目录，后续不再创建链接。
+async fn migrate_legacy_codex_pets(
+    paths: &AppPaths,
+    codex_pets_dir: &Path,
+) -> Result<(), ManagerError> {
+    let legacy_pets_dir = Path::new(&paths.pets_dir);
+    let Ok(mut entries) = tokio::fs::read_dir(legacy_pets_dir).await else {
+        return Ok(());
+    };
 
-    tokio::fs::create_dir_all(active_dir).await?;
-    tokio::fs::create_dir_all(disabled_dir).await?;
-    tokio::fs::create_dir_all(codex_pets_dir).await?;
-
-    let mut entries = tokio::fs::read_dir(codex_pets_dir).await?;
     while let Some(entry) = entries.next_entry().await? {
-        let runtime_path = entry.path();
-        let id = entry.file_name().to_string_lossy().to_string();
-
-        if valid_pet_id(&id).is_err() || !is_pet_directory(&runtime_path).await {
-            continue;
-        }
-
-        let active_path = active_dir.join(&id);
-        let disabled_path = disabled_dir.join(&id);
-        let stat = tokio::fs::symlink_metadata(&runtime_path).await?;
-
-        if active_path.exists() {
-            if stat.file_type().is_symlink() && linked_to(&runtime_path, &active_path).await {
-                continue;
-            }
-
-            return Err(ManagerError::System(format!(
-                "Codex 宠物目录与受管宠物冲突：{}",
-                path_text(&runtime_path)
-            )));
-        }
-
-        if disabled_path.exists() {
-            return Err(ManagerError::System(format!(
-                "Codex 宠物目录与已禁用宠物冲突：{}",
-                path_text(&runtime_path)
-            )));
-        }
-
-        if stat.file_type().is_symlink() {
-            continue;
-        }
-
-        move_pet_dir(&runtime_path, &active_path).await?;
-    }
-
-    let mut active_entries = tokio::fs::read_dir(active_dir).await?;
-    while let Some(entry) = active_entries.next_entry().await? {
         let source_path = entry.path();
         let id = entry.file_name().to_string_lossy().to_string();
 
@@ -366,13 +320,26 @@ async fn sync_codex_pets(paths: &AppPaths, codex_pets_dir: &Path) -> Result<(), 
             continue;
         }
 
-        ensure_codex_pet_link(&source_path, &codex_pets_dir.join(id)).await?;
+        let target_path = codex_pets_dir.join(&id);
+        if target_path.exists() {
+            let stat = tokio::fs::symlink_metadata(&target_path).await?;
+            if !stat.file_type().is_symlink() || !linked_to(&target_path, &source_path).await {
+                return Err(ManagerError::System(format!(
+                    "Codex 宠物目录与旧版受管宠物冲突：{}",
+                    path_text(&target_path)
+                )));
+            }
+
+            remove_legacy_pet_link(&target_path).await?;
+        }
+
+        move_pet_dir(&source_path, &target_path).await?;
     }
 
     Ok(())
 }
 
-async fn read_managed_pets(pets_dir: &Path, enabled: bool) -> Result<Vec<Value>, ManagerError> {
+async fn read_pets(pets_dir: &Path, enabled: bool) -> Result<Vec<Value>, ManagerError> {
     let mut entries = tokio::fs::read_dir(pets_dir).await?;
     let mut pets = Vec::new();
 
@@ -421,14 +388,18 @@ async fn is_pet_directory(path: &Path) -> bool {
             .unwrap_or(false)
 }
 
-fn managed_pet_dir<'a>(paths: &'a AppPaths, id: &str) -> Result<PathBuf, ManagerError> {
-    let active_path = Path::new(&paths.pets_dir).join(id);
+fn codex_pet_dir(
+    codex_pets_dir: &Path,
+    disabled_pets_dir: &Path,
+    id: &str,
+) -> Result<PathBuf, ManagerError> {
+    let active_path = codex_pets_dir.join(id);
 
     if active_path.exists() {
         return Ok(active_path);
     }
 
-    let disabled_path = Path::new(&paths.disabled_pets_dir).join(id);
+    let disabled_path = disabled_pets_dir.join(id);
     if disabled_path.exists() {
         return Ok(disabled_path);
     }
@@ -459,32 +430,6 @@ fn pet_string(value: &Value, key: &str) -> String {
         .to_string()
 }
 
-async fn ensure_codex_pet_link(source_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
-    if let Ok(stat) = tokio::fs::symlink_metadata(target_path).await {
-        if !stat.file_type().is_symlink() {
-            return Err(ManagerError::System(format!(
-                "Codex 宠物目录已被真实目录占用：{}",
-                path_text(target_path)
-            )));
-        }
-
-        if linked_to(target_path, source_path).await {
-            return Ok(());
-        }
-
-        return Err(ManagerError::System(format!(
-            "Codex 宠物目录已链接到其他位置：{}",
-            path_text(target_path)
-        )));
-    }
-
-    if let Some(parent) = target_path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-
-    create_junction(source_path, target_path).await
-}
-
 async fn linked_to(target_path: &Path, source_path: &Path) -> bool {
     matches!(
         (
@@ -495,14 +440,14 @@ async fn linked_to(target_path: &Path, source_path: &Path) -> bool {
     )
 }
 
-async fn remove_codex_pet_link(target_path: &Path) -> Result<(), ManagerError> {
+async fn remove_legacy_pet_link(target_path: &Path) -> Result<(), ManagerError> {
     let Ok(stat) = tokio::fs::symlink_metadata(target_path).await else {
         return Ok(());
     };
 
     if !stat.file_type().is_symlink() {
         return Err(ManagerError::System(format!(
-            "Codex 宠物目录不是可管理的链接：{}",
+            "Codex 宠物目录不是旧版链接：{}",
             path_text(target_path)
         )));
     }
@@ -514,48 +459,6 @@ async fn remove_codex_pet_link(target_path: &Path) -> Result<(), ManagerError> {
             Ok(())
         }
     }
-}
-
-async fn create_junction(source_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
-    #[cfg(windows)]
-    {
-        let mut command = Command::new("cmd");
-        command.creation_flags(CREATE_NO_WINDOW);
-
-        let output = command
-            .args([
-                "/C",
-                "mklink",
-                "/J",
-                &path_text(target_path),
-                &path_text(source_path),
-            ])
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            let output_message = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let message = if message.is_empty() {
-                output_message
-            } else {
-                message
-            };
-
-            return Err(ManagerError::System(if message.is_empty() {
-                "创建 Codex 宠物链接失败".to_string()
-            } else {
-                message
-            }));
-        }
-    }
-
-    #[cfg(not(windows))]
-    {
-        std::os::unix::fs::symlink(source_path, target_path)?;
-    }
-
-    Ok(())
 }
 
 async fn move_pet_dir(source_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
@@ -636,14 +539,12 @@ mod tests {
 
             let result = list_codex_pets(&paths, &cli_targets).await.unwrap();
             assert_eq!(result["pets"].as_array().unwrap().len(), 1);
-            assert!(Path::new(&paths.pets_dir).join("demo").exists());
-            assert!(
-                tokio::fs::symlink_metadata(config_path.join("pets").join("demo"))
-                    .await
-                    .unwrap()
-                    .file_type()
-                    .is_symlink()
-            );
+            assert!(runtime_pet.exists());
+            assert!(!tokio::fs::symlink_metadata(&runtime_pet)
+                .await
+                .unwrap()
+                .file_type()
+                .is_symlink());
 
             rename_codex_pet(
                 &paths,
@@ -652,10 +553,9 @@ mod tests {
             )
             .await
             .unwrap();
-            let content =
-                tokio::fs::read_to_string(Path::new(&paths.pets_dir).join("demo").join("pet.json"))
-                    .await
-                    .unwrap();
+            let content = tokio::fs::read_to_string(runtime_pet.join("pet.json"))
+                .await
+                .unwrap();
             assert_eq!(
                 serde_json::from_str::<Value>(&content).unwrap()["displayName"],
                 "新的名称"
@@ -678,13 +578,17 @@ mod tests {
             )
             .await
             .unwrap();
-            assert!(Path::new(&paths.pets_dir).join("demo").exists());
+            assert!(runtime_pet.exists());
+            assert!(!tokio::fs::symlink_metadata(&runtime_pet)
+                .await
+                .unwrap()
+                .file_type()
+                .is_symlink());
 
             delete_codex_pet(&paths, &cli_targets, json!({ "id": "demo" }))
                 .await
                 .unwrap();
-            assert!(!Path::new(&paths.pets_dir).join("demo").exists());
-            assert!(!config_path.join("pets").join("demo").exists());
+            assert!(!runtime_pet.exists());
 
             let _ = tokio::fs::remove_dir_all(&root).await;
         });

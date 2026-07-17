@@ -12,9 +12,9 @@
         <button
           class="codex-pet-manager-icon-button"
           type="button"
-          title="打开 AI Manager 宠物目录"
-          :disabled="!managedPetsPath"
-          @click="openPath(managedPetsPath)"
+          title="打开已禁用宠物目录"
+          :disabled="!disabledPetsPath"
+          @click="openPath(disabledPetsPath)"
         >
           <FolderOpen :size="16" />
         </button>
@@ -34,11 +34,11 @@
       <button
         class="codex-pet-manager-path"
         type="button"
-        :disabled="!managedPetsPath"
-        @click="openPath(managedPetsPath)"
+        :disabled="!disabledPetsPath"
+        @click="openPath(disabledPetsPath)"
       >
-        <span class="codex-pet-manager-path-label">AI Manager</span>
-        <span class="codex-pet-manager-path-value">{{ managedPetsPath }}</span>
+        <span class="codex-pet-manager-path-label">已禁用</span>
+        <span class="codex-pet-manager-path-value">{{ disabledPetsPath }}</span>
       </button>
       <button
         class="codex-pet-manager-path"
@@ -52,13 +52,13 @@
     </section>
 
     <section v-if="loading" class="codex-pet-manager-state">
-      正在同步 Codex 宠物...
+      正在读取 Codex 宠物...
     </section>
     <section v-else-if="!pets.length" class="codex-pet-manager-empty">
       <PawPrint :size="26" />
       <strong class="codex-pet-manager-empty-title">暂无可管理宠物</strong>
       <span class="codex-pet-manager-empty-desc">
-        在 Codex pets 目录中放入包含 pet.json 和 spritesheet.webp 的宠物目录后，刷新即可接管。
+        在 Codex pets 目录中放入包含 pet.json 和 spritesheet.webp 的宠物目录后，刷新即可显示。
       </span>
     </section>
     <section v-else class="codex-pet-manager-list">
@@ -218,7 +218,7 @@ import { createMessage } from '@/utils/message'
 const pets = ref([])
 const loading = ref(false)
 const actionPending = ref(false)
-const managedPetsPath = ref('')
+const disabledPetsPath = ref('')
 const codexPetsPath = ref('')
 const renamePet = ref(null)
 const renameName = ref('')
@@ -239,14 +239,14 @@ const animationRows = [
 
 const enabledCount = computed(() => pets.value.filter(pet => pet.enabled).length)
 
-// 重新读取时同步迁移未受管的 Codex 宠物，并刷新链接状态。
+// 直接读取 Codex 宠物目录与应用数据目录中的已禁用宠物。
 async function loadPets() {
   loading.value = true
 
   try {
     const result = await toolboxApi.listCodexPets()
     pets.value = result.pets || []
-    managedPetsPath.value = result.managedPetsPath || ''
+    disabledPetsPath.value = result.disabledPetsPath || ''
     codexPetsPath.value = result.codexPetsPath || ''
   } catch (error) {
     createMessage.error(error.message || String(error))

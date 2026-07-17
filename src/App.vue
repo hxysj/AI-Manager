@@ -987,9 +987,11 @@ async function downloadAppUpdate() {
 
 async function installAppUpdate() {
   try {
-    await appApi.installUpdate({
-      installDirectory: updateDialog.installDirectory
-    })
+    applyUpdateStatus(
+      await appApi.installUpdate({
+        installDirectory: updateDialog.installDirectory
+      })
+    )
   } catch (error) {
     applyUpdateStatus({
       phase: "error",

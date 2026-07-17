@@ -4,7 +4,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, USER_AGENT};
 use serde::Deserialize;
 use serde_json::{json, Value};
 #[cfg(windows)]
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -35,8 +35,10 @@ const QUICK_SWITCH_COLLAPSED_HEIGHT: u32 = 44;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 #[cfg(windows)]
+#[allow(dead_code)]
 const AI_MANAGER_UNINSTALL_ROOT: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 #[cfg(windows)]
+#[allow(dead_code)]
 const AI_MANAGER_UNINSTALL_KEYS: [&str; 3] = [
     "a178c25c-9e1d-5bca-9cea-7f005c2da482",
     "Monkey Thief",
@@ -290,46 +292,39 @@ pub async fn install_update(
         return Err(error);
     };
 
-    let version = downloaded_update.update.version.clone();
-
-    if let Err(error) = emit_update_status(
-        app,
-        json!({
-          "phase": "installing",
-          "message": "正在打开更新安装程序。",
-          "version": version,
-          "manual": true,
-          "configured": true,
-          "isDev": false
-        }),
-    ) {
-        *DOWNLOADED_UPDATE.lock().await = Some(downloaded_update);
-        return Err(error);
-    }
-
     #[cfg(windows)]
-    let install_result = install_update_on_windows(app, &downloaded_update).await;
-
-    #[cfg(not(windows))]
-    let install_result = downloaded_update
-        .update
-        .install(&downloaded_update.bytes)
-        .map_err(|error| ManagerError::System(error.to_string()));
-
-    if let Err(error) = install_result {
+    {
         let version = downloaded_update.update.version.clone();
         let release_notes = downloaded_update.update.body.clone().unwrap_or_default();
-        let bytes = downloaded_update.bytes;
-        let transferred = bytes.len() as u64;
-        *DOWNLOADED_UPDATE.lock().await = Some(DownloadedUpdate {
-            update: downloaded_update.update,
-            bytes,
-        });
-        emit_update_status(
+        let transferred = downloaded_update.bytes.len() as u64;
+
+        if let Err(error) = install_update_on_windows(&downloaded_update).await {
+            *DOWNLOADED_UPDATE.lock().await = Some(downloaded_update);
+            emit_update_status(
+                app,
+                json!({
+                  "phase": "downloaded",
+                  "message": format!("新版本 {} 已下载完成，可重新打开安装向导。", version),
+                  "version": version,
+                  "releaseNotes": release_notes,
+                  "manual": true,
+                  "configured": true,
+                  "isDev": cfg!(debug_assertions),
+                  "percent": 100,
+                  "transferred": transferred,
+                  "total": transferred,
+                  "bytesPerSecond": 0
+                }),
+            )?;
+            return Err(error);
+        }
+
+        *DOWNLOADED_UPDATE.lock().await = Some(downloaded_update);
+        return emit_update_status(
             app,
             json!({
-              "phase": "downloaded",
-              "message": format!("新版本 {} 已下载完成，可重新打开安装向导。", version),
+              "phase": "installer-opened",
+              "message": "安装程序已打开，请在安装程序中完成升级。",
               "version": version,
               "releaseNotes": release_notes,
               "manual": true,
@@ -340,11 +335,17 @@ pub async fn install_update(
               "total": transferred,
               "bytesPerSecond": 0
             }),
-        )?;
-        return Err(error);
+        );
     }
 
-    Ok(json!(true))
+    #[cfg(not(windows))]
+    {
+        downloaded_update
+            .update
+            .install(&downloaded_update.bytes)
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        Ok(json!(true))
+    }
 }
 
 pub async fn dismiss_update() -> Result<Value, ManagerError> {
@@ -974,7 +975,6 @@ fn update_configured() -> bool {
 
 #[cfg(windows)]
 async fn install_update_on_windows(
-    app: &tauri::AppHandle,
     downloaded_update: &DownloadedUpdate,
 ) -> Result<(), ManagerError> {
     let installer_path = persist_windows_update_installer(
@@ -982,155 +982,17 @@ async fn install_update_on_windows(
         &downloaded_update.bytes,
     )
     .await?;
-    let current_process_id = std::process::id();
-    let current_exe_path = std::env::current_exe()?;
-    let install_info = detect_installed_windows_app().await?;
-    let script = build_windows_update_script(
-        current_process_id,
-        &current_exe_path,
-        &installer_path,
-        install_info.as_ref(),
-    );
-    let script_path = write_windows_update_script(&downloaded_update.update.version, &script)?;
-    let mut command = std::process::Command::new("powershell.exe");
-
-    command.creation_flags(CREATE_NO_WINDOW);
-    command.args([
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-WindowStyle",
-        "Hidden",
-        "-File",
-        &script_path.to_string_lossy(),
-    ]);
-    command
+    std::process::Command::new(&installer_path)
         .spawn()
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    app.exit(0);
     Ok(())
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 struct InstalledWindowsApp {
     uninstall_string: String,
     install_location: String,
-}
-
-#[cfg(windows)]
-async fn detect_installed_windows_app() -> Result<Option<InstalledWindowsApp>, ManagerError> {
-    let query_script = build_windows_install_query_script();
-    let output = tokio::process::Command::new("powershell.exe")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            &query_script,
-        ])
-        .output()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(ManagerError::System(if message.is_empty() {
-            "检测旧版本安装状态失败".to_string()
-        } else {
-            message
-        }));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-
-    if stdout.is_empty() || stdout == "null" {
-        return detect_installed_windows_app_from_current_exe().await;
-    }
-
-    let value: Value = serde_json::from_str(&stdout)?;
-    let uninstall_string = value
-        .get("uninstallString")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let mut install_location = value
-        .get("installLocation")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-
-    if uninstall_string.is_empty() {
-        return detect_installed_windows_app_from_current_exe().await;
-    }
-    if install_location.trim().is_empty() {
-        install_location = std::env::current_exe()?
-            .parent()
-            .map(|path| path.to_string_lossy().to_string())
-            .unwrap_or_default();
-    }
-
-    Ok(Some(InstalledWindowsApp {
-        uninstall_string,
-        install_location,
-    }))
-}
-
-#[cfg(windows)]
-async fn detect_installed_windows_app_from_current_exe(
-) -> Result<Option<InstalledWindowsApp>, ManagerError> {
-    let current_exe = std::env::current_exe()?;
-    let Some(install_directory) = current_exe.parent() else {
-        return Ok(None);
-    };
-
-    let Ok(uninstaller_path) = find_app_uninstaller(install_directory).await else {
-        return Ok(None);
-    };
-
-    Ok(Some(InstalledWindowsApp {
-        uninstall_string: format!("\"{}\"", uninstaller_path.to_string_lossy()),
-        install_location: install_directory.to_string_lossy().to_string(),
-    }))
-}
-
-#[cfg(windows)]
-fn build_windows_install_query_script() -> String {
-    let keys = AI_MANAGER_UNINSTALL_KEYS
-        .iter()
-        .map(|key| to_powershell_literal(key))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    format!(
-        r#"$ErrorActionPreference = 'Stop'
-$root = {root}
-$keys = @({keys})
-$hives = @('HKCU', 'HKLM')
-foreach ($hive in $hives) {{
-  foreach ($key in $keys) {{
-    $regPath = "$hive`:\$root\$key"
-    if (-not (Test-Path -LiteralPath $regPath)) {{
-      continue
-    }}
-    $item = Get-ItemProperty -LiteralPath $regPath
-    $uninstallString = [string]$item.QuietUninstallString
-    if ([string]::IsNullOrWhiteSpace($uninstallString)) {{
-      $uninstallString = [string]$item.UninstallString
-    }}
-    if (-not [string]::IsNullOrWhiteSpace($uninstallString)) {{
-      [PSCustomObject]@{{
-        uninstallString = $uninstallString
-        installLocation = [string]$item.InstallLocation
-      }} | ConvertTo-Json -Compress
-      exit 0
-    }}
-  }}
-}}"#,
-        root = to_powershell_literal(AI_MANAGER_UNINSTALL_ROOT),
-        keys = keys
-    )
 }
 
 #[cfg(windows)]
@@ -1181,16 +1043,6 @@ fn extract_windows_update_installer(bytes: &[u8]) -> Result<Vec<u8>, ManagerErro
 }
 
 #[cfg(windows)]
-fn write_windows_update_script(version: &str, script: &str) -> Result<PathBuf, ManagerError> {
-    let temp_dir = windows_update_temp_dir(version)?;
-    std::fs::create_dir_all(&temp_dir)?;
-    let script_path = temp_dir.join("install-after-uninstall.ps1");
-    let mut file = std::fs::File::create(&script_path)?;
-    file.write_all(script.as_bytes())?;
-    Ok(script_path)
-}
-
-#[cfg(windows)]
 fn windows_update_temp_dir(version: &str) -> Result<PathBuf, ManagerError> {
     Ok(std::env::temp_dir().join(format!("monkey-thief-update-{}", safe_file_part(version))))
 }
@@ -1210,6 +1062,7 @@ fn safe_file_part(value: &str) -> String {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn build_windows_update_script(
     current_process_id: u32,
     current_exe_path: &Path,
@@ -1421,38 +1274,13 @@ fn now_millis() -> u64 {
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::{build_windows_update_script, InstalledWindowsApp};
-    use std::path::Path;
+    use super::extract_windows_update_installer;
 
     #[test]
-    fn windows_update_waits_for_uninstall_before_opening_installer_panel() {
-        let script = build_windows_update_script(
-            100,
-            Path::new(r"C:\Program Files\Monkey Thief\Monkey Thief.exe"),
-            Path::new(r"C:\Temp\Monkey-Thief-setup.exe"),
-            Some(&InstalledWindowsApp {
-                uninstall_string: r#""C:\Program Files\Monkey Thief\uninstall.exe" /currentuser"#
-                    .to_string(),
-                install_location: r"C:\Program Files\Monkey Thief".to_string(),
-            }),
+    fn accepts_raw_windows_installer() {
+        assert_eq!(
+            extract_windows_update_installer(b"MZinstaller").unwrap(),
+            b"MZinstaller"
         );
-        let wait_for_app = script.find("Wait-Process -Id $ProcessId").unwrap();
-        let uninstall = script
-            .find("Start-Process -FilePath $uninstallerPath")
-            .unwrap();
-        let in_place_uninstall = script.find("_?=$InstallLocation").unwrap();
-        let wait_for_uninstall = script.find("for ($index = 0;").unwrap();
-        let open_installer = script
-            .rfind("Start-Process -FilePath $InstallerPath")
-            .unwrap();
-
-        assert!(wait_for_app < uninstall);
-        assert!(in_place_uninstall < uninstall);
-        assert!(uninstall < wait_for_uninstall);
-        assert!(wait_for_uninstall < open_installer);
-        assert!(script.contains("-Wait -PassThru"));
-        assert!(script.contains("($uninstallerArgs + ' /S').Trim()"));
-        assert!(script.contains("_?=$InstallLocation"));
-        assert!(!script.contains("$InstallerPath -ArgumentList"));
     }
 }
