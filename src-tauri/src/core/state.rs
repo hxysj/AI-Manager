@@ -1510,6 +1510,33 @@ impl ManagerState {
             "tools:open-toolbox" => {
                 tools::open_toolbox(&app, &mut self.toolbox_server_registry).await
             }
+            "tools:codex-pets" => {
+                tools::list_codex_pets(&self.paths, &self.state["cliTargets"]).await
+            }
+            "tools:rename-codex-pet" => {
+                tools::rename_codex_pet(
+                    &self.paths,
+                    &self.state["cliTargets"],
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "tools:toggle-codex-pet" => {
+                tools::toggle_codex_pet(
+                    &self.paths,
+                    &self.state["cliTargets"],
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "tools:delete-codex-pet" => {
+                tools::delete_codex_pet(
+                    &self.paths,
+                    &self.state["cliTargets"],
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
             "translation:translate" => {
                 translation::translate_text(
                     &self.user_data_path,
