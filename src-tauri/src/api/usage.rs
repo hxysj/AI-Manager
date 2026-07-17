@@ -568,7 +568,7 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         .as_millis() as u64;
     let session_versions = usage_store::read_session_versions(paths)?;
 
-    for session in collect_usage_sessions(paths, state)? {
+    for mut session in collect_usage_sessions(paths, state)? {
         let app_type = normalize_app_type(&string_value(session.get("cli")));
         let raw_path = string_value(session.get("rawPath"));
 
@@ -576,10 +576,8 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
             continue;
         }
 
-        let session_updated_at = match number_value(session.get("updatedAt"), 0) {
-            0 => file_modified_at(&raw_path),
-            value => value,
-        };
+        let session_updated_at = file_modified_at(&raw_path);
+        session["updatedAt"] = json!(session_updated_at);
 
         if session_versions.get(&raw_path) == Some(&session_updated_at) {
             continue;
@@ -3405,7 +3403,14 @@ fn decode_report_image_data_url(value: &str) -> Result<Vec<u8>, ManagerError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_report_image_data_url, path_skill_regex, slash_skill_regex};
+    use super::{
+        decode_report_image_data_url, file_modified_at, path_skill_regex, refresh_usage,
+        slash_skill_regex,
+    };
+    use crate::core::{paths::resolve_app_paths, usage_store};
+    use serde_json::json;
+    use std::path::Path;
+    use std::time::Duration;
 
     #[test]
     fn skill_usage_regexes_are_valid() {
@@ -3426,6 +3431,56 @@ mod tests {
             .expect_err("non-png data URL should be rejected");
 
         assert!(error.to_string().contains("PNG"));
+    }
+
+    #[test]
+    fn refresh_usage_reprocesses_indexed_session_after_file_changes() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "monkey-thief-usage-refresh-{}-{}",
+                std::process::id(),
+                super::now_millis()
+            ));
+            let paths = resolve_app_paths(Path::new(&root));
+            let session_path = root.join("session.jsonl");
+
+            std::fs::create_dir_all(&paths.workspace_root).unwrap();
+            std::fs::write(
+                &session_path,
+                concat!(
+                    "{\"timestamp\":\"2026-07-17T10:00:00Z\",\"payload\":{\"type\":\"session_meta\",\"model\":\"gpt-test\"}}\n",
+                    "{\"timestamp\":\"2026-07-17T10:00:01Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":10,\"output_tokens\":5}}}}\n"
+                ),
+            )
+            .unwrap();
+            let indexed_at = file_modified_at(session_path.to_string_lossy().as_ref());
+            let state = json!({
+              "providers": [],
+              "sessions": [{
+                "id": "session-a",
+                "cli": "codex",
+                "rawPath": session_path.to_string_lossy(),
+                "updatedAt": indexed_at
+              }]
+            });
+
+            refresh_usage(&paths, &state).await.unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            std::fs::write(
+                &session_path,
+                concat!(
+                    "{\"timestamp\":\"2026-07-17T10:00:00Z\",\"payload\":{\"type\":\"session_meta\",\"model\":\"gpt-test\"}}\n",
+                    "{\"timestamp\":\"2026-07-17T10:00:01Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":10,\"output_tokens\":5}}}}\n",
+                    "{\"timestamp\":\"2026-07-17T10:00:02Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":30,\"output_tokens\":10}}}}\n"
+                ),
+            )
+            .unwrap();
+
+            refresh_usage(&paths, &state).await.unwrap();
+
+            assert_eq!(usage_store::read_all_logs(&paths).unwrap().len(), 2);
+            let _ = std::fs::remove_dir_all(root);
+        });
     }
 
 }
