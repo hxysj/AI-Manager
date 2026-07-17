@@ -16,6 +16,8 @@ pub struct AppPaths {
     pub session_recycle_dir: String,
     pub session_recycle_sessions_dir: String,
     pub session_recycle_metadata_dir: String,
+    pub pets_dir: String,
+    pub disabled_pets_dir: String,
     pub logs_dir: String,
     pub temp_dir: String,
     pub storage_dir: String,
@@ -92,6 +94,8 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
     let session_recycle_dir = sessions_dir.join("recycle");
     let prompts_dir = workspace_root.join("prompts");
     let profiles_dir = workspace_root.join("profiles");
+    let pets_dir = workspace_root.join("pets");
+    let disabled_pets_dir = workspace_root.join("pets-disabled");
     let lan_share_dir = workspace_root.join("lan-share");
 
     AppPaths {
@@ -105,6 +109,8 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
         session_recycle_dir: path_text(&session_recycle_dir),
         session_recycle_sessions_dir: path_text(session_recycle_dir.join("sessions")),
         session_recycle_metadata_dir: path_text(session_recycle_dir.join("metadata")),
+        pets_dir: path_text(&pets_dir),
+        disabled_pets_dir: path_text(&disabled_pets_dir),
         logs_dir: path_text(&logs_dir),
         temp_dir: path_text(&temp_dir),
         storage_dir: path_text(&storage_dir),
@@ -166,6 +172,8 @@ pub async fn ensure_app_directories(paths: &AppPaths) -> Result<(), std::io::Err
         &paths.repos_dir,
         &paths.session_recycle_sessions_dir,
         &paths.session_recycle_metadata_dir,
+        &paths.pets_dir,
+        &paths.disabled_pets_dir,
         &paths.logs_dir,
         &paths.temp_dir,
         &paths.storage_dir,
@@ -237,6 +245,14 @@ mod tests {
         assert_eq!(
             paths.storage_files.database.replace('/', "\\"),
             r"D:\ai-manager-data\workspace\storage\ai-manager.db"
+        );
+        assert_eq!(
+            paths.pets_dir.replace('/', "\\"),
+            r"D:\ai-manager-data\workspace\pets"
+        );
+        assert_eq!(
+            paths.disabled_pets_dir.replace('/', "\\"),
+            r"D:\ai-manager-data\workspace\pets-disabled"
         );
     }
 }

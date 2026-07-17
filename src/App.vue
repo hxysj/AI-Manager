@@ -134,6 +134,7 @@
 
         <ToolsView
           v-else-if="activeView === 'tools'"
+          :cli-targets="state.cliTargets"
           :repos="state.repos"
           @add-repo="showAddRepo = true"
         />

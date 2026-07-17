@@ -64,6 +64,7 @@
         @status-change="gitToolStatus = $event"
       />
       <LanShareView v-else-if="activeTool === 'lan-share'" />
+      <CodexPetManager v-else-if="activeTool === 'codex-pets'" />
       <section v-else-if="activeTool === 'utility'" class="tools-view-utility">
         <div class="tools-view-utility-card">
           <span class="tools-view-utility-icon">
@@ -121,16 +122,22 @@ import {
   ArrowLeft,
   GitBranchIcon,
   Hammer,
+  PawPrint,
   Power,
   Share2,
   Wrench
 } from "lucide-vue-next"
 import GitToolView from "@/features/gitTool/index.vue"
 import LanShareView from "@/features/lanShare/index.vue"
+import CodexPetManager from "@/features/tools/components/CodexPetManager.vue"
 import { toolboxApi } from "@/api"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
+  cliTargets: {
+    type: Array,
+    default: () => []
+  },
   repos: {
     type: Array,
     default: () => []
@@ -144,29 +151,50 @@ const gitToolStatus = ref([])
 const utilityPending = ref(false)
 const utilityUrl = ref("")
 
-const toolItems = computed(() => [
-  {
-    id: "utility",
-    label: "实用工具",
-    summary: "启动浏览器工具大全面板，集中使用轻量辅助工具。",
-    meta: "2 个工具",
-    icon: Wrench
-  },
-  {
-    id: "git",
-    label: "Git 管理",
-    summary: "管理项目的本地分支归档、提交检查和 stash 归档。",
-    meta: `${props.repos.length} 个项目`,
-    icon: GitBranchIcon
-  },
-  {
-    id: "lan-share",
-    label: "设备快传",
-    summary: "启动局域网服务，通过二维码向同网段设备共享文件并实时通信。",
-    meta: "手动启动",
-    icon: Share2
+const codexInstalled = computed(() =>
+  props.cliTargets.some(
+    (target) => target.id === "codex" && target.installed === true
+  )
+)
+
+const toolItems = computed(() => {
+  const items = [
+    {
+      id: "utility",
+      label: "实用工具",
+      summary: "启动浏览器工具大全面板，集中使用轻量辅助工具。",
+      meta: "2 个工具",
+      icon: Wrench
+    },
+    {
+      id: "git",
+      label: "Git 管理",
+      summary: "管理项目的本地分支归档、提交检查和 stash 归档。",
+      meta: `${props.repos.length} 个项目`,
+      icon: GitBranchIcon
+    },
+    {
+      id: "lan-share",
+      label: "设备快传",
+      summary: "启动局域网服务，通过二维码向同网段设备共享文件并实时通信。",
+      meta: "手动启动",
+      icon: Share2
+    }
+  ]
+
+  // 仅在应用状态确认本机已安装 Codex 后提供宠物管理入口。
+  if (codexInstalled.value) {
+    items.push({
+      id: "codex-pets",
+      label: "Codex 宠物",
+      summary: "管理 Codex 宠物的名称、启用状态和本地文件。",
+      meta: "本机 Codex",
+      icon: PawPrint
+    })
   }
-])
+
+  return items
+})
 
 const activeToolMeta = computed(
   () => toolItems.value.find((tool) => tool.id === activeTool.value) || null
