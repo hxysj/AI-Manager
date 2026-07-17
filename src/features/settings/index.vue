@@ -155,16 +155,16 @@
         <div class="settings-view__panel-header">
           <div>
             <h2>数据管理</h2>
-            <span>导出会加密打包当前配置，恢复会兼容合并并刷新状态。</span>
+            <span>支持导出至本地备份文件，也可从本地备份文件兼容恢复。</span>
           </div>
         </div>
 
         <div class="settings-view__data-list">
           <article class="settings-view__data-card">
             <div class="settings-view__data-copy">
-              <strong>导出配置</strong>
+              <strong>导出到本地文件</strong>
               <span
-                >备份 Providers、Codex 官方账号、Skills、Rules 和坚果云设置。</span
+                >选择保存位置，生成加密的 .aimbackup 本地备份文件。</span
               >
             </div>
             <button type="button" @click="$emit('export-data')">
@@ -175,8 +175,8 @@
 
           <article class="settings-view__data-card">
             <div class="settings-view__data-copy">
-              <strong>恢复配置</strong>
-              <span>恢复数据但保留本机启用状态，冲突内容恢复前确认。</span>
+              <strong>从本地备份文件恢复</strong>
+              <span>选择 .aimbackup 文件，预览冲突后再恢复并保留本机启用状态。</span>
             </div>
             <button type="button" @click="$emit('restore-data')">
               <Upload :size="16" />

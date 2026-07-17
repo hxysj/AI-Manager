@@ -1138,6 +1138,9 @@ function createPresetDateTimeRange(type) {
   const end = new Date()
   const start = new Date()
 
+  // 预设范围持续包含当天后续同步的日志。
+  end.setHours(23, 59, 59, 999)
+
   if (type === "today") {
     start.setHours(0, 0, 0, 0)
   } else {
