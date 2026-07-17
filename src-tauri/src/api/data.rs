@@ -400,6 +400,7 @@ pub async fn create_data_backup(
       "createdAt": now_millis(),
       "appSettings": serialize_backup_app_settings(app_settings),
       "workspaceEntries": collect_backup_entries(paths).await?,
+      "codexPetEntries": collect_codex_pet_entries(app_settings).await?,
       "runtimeProviderKeys": encrypt_backup_data(&provider_keys)?
     }))
 }
@@ -485,6 +486,7 @@ async fn preview_data_backup_restore_content(
     )
     .await?;
     append_app_settings_restore_preview(&mut preview, app_settings, &backup)?;
+    append_codex_pets_restore_preview(&mut preview, app_settings, &backup).await?;
 
     preview["createdAt"] = json!(number_value(backup.get("createdAt"), 0));
     Ok(preview)
@@ -508,6 +510,61 @@ fn append_app_settings_restore_preview(
         &mut added,
         &mut conflicts,
     )?;
+    preview["addedCount"] = json!(added.len());
+    preview["conflictCount"] = json!(conflicts.len());
+    preview["added"] = json!(added);
+    preview["conflicts"] = json!(conflicts);
+    Ok(())
+}
+
+async fn append_codex_pets_restore_preview(
+    preview: &mut Value,
+    app_settings: &AppSettings,
+    backup: &Value,
+) -> Result<(), ManagerError> {
+    let Some(codex_pets_dir) = codex_pets_backup_dir(app_settings) else {
+        return Ok(());
+    };
+    let root_path = path_text(&codex_pets_dir);
+    let mut added = preview["added"].as_array().cloned().unwrap_or_default();
+    let mut conflicts = preview["conflicts"].as_array().cloned().unwrap_or_default();
+
+    for entry in backup["codexPetEntries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .iter()
+        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("file"))
+    {
+        let entry_path = string_value(entry.get("path"));
+        let preview_path = codex_pet_backup_entry_path(&entry_path);
+        let current_content = read_current_file(&root_path, &entry_path).await?;
+
+        if current_content.is_none() {
+            added.push(create_restore_file_preview_item(
+                &preview_path,
+                "added",
+                "",
+                "",
+            ));
+            continue;
+        }
+
+        let backup_content = base64::engine::general_purpose::STANDARD
+            .decode(string_value(entry.get("content")))
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        let current_content = current_content.unwrap_or_default();
+
+        if sha256_bytes(&current_content) != sha256_bytes(&backup_content) {
+            conflicts.push(create_restore_file_preview_item(
+                &preview_path,
+                "conflict",
+                &format_restore_file_content(&current_content),
+                &format_restore_file_content(&backup_content),
+            ));
+        }
+    }
+
     preview["addedCount"] = json!(added.len());
     preview["conflictCount"] = json!(conflicts.len());
     preview["added"] = json!(added);
@@ -541,6 +598,17 @@ fn inspect_data_backup(content: &str) -> Result<Value, ManagerError> {
         .cloned()
         .unwrap_or_default()
     {
+        entries.push(create_backup_entry_view(&entry)?);
+    }
+
+    for mut entry in backup["codexPetEntries"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+    {
+        entry["path"] = json!(codex_pet_backup_entry_path(&string_value(
+            entry.get("path")
+        )));
         entries.push(create_backup_entry_view(&entry)?);
     }
 
@@ -616,6 +684,15 @@ async fn restore_data_backup_content(
         &current_restore_json_values,
     )
     .await?;
+    restore_codex_pet_entries(
+        app_settings,
+        backup["codexPetEntries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+        &choices,
+    )
+    .await?;
     migrate_skill_repository_storage(paths).await?;
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
@@ -666,6 +743,7 @@ async fn collect_backup_entries(paths: &AppPaths) -> Result<Vec<Value>, ManagerE
     let source_dirs = [
         PathBuf::from(&paths.skills_dir),
         PathBuf::from(&paths.prompts_dir),
+        PathBuf::from(&paths.disabled_pets_dir),
     ];
 
     for source_path in source_dirs {
@@ -689,6 +767,34 @@ async fn collect_backup_entries(paths: &AppPaths) -> Result<Vec<Value>, ManagerE
     }
 
     sanitize_runtime_backup_entries(entries)
+}
+
+// 启用宠物由 Codex 直接读取，因此单独保存并恢复到当前机器的 Codex 配置目录。
+async fn collect_codex_pet_entries(app_settings: &AppSettings) -> Result<Vec<Value>, ManagerError> {
+    let Some(codex_pets_dir) = codex_pets_backup_dir(app_settings) else {
+        return Ok(Vec::new());
+    };
+
+    Ok(sanitize_codex_pet_entries(
+        collect_directory_entries(&codex_pets_dir).await?,
+    ))
+}
+
+fn codex_pets_backup_dir(app_settings: &AppSettings) -> Option<PathBuf> {
+    let config_path = string_value(app_settings.cli_config_paths.get("codex"));
+
+    if config_path.is_empty() {
+        return None;
+    }
+
+    Some(Path::new(&config_path).join("pets"))
+}
+
+fn codex_pet_backup_entry_path(entry_path: &str) -> String {
+    format!(
+        "codex-pets/{}",
+        entry_path.replace('\\', "/").trim_matches('/')
+    )
 }
 
 async fn collect_directory_entries(root_path: &Path) -> Result<Vec<Value>, ManagerError> {
@@ -777,6 +883,12 @@ fn parse_backup(content: &str) -> Result<Value, ManagerError> {
             .cloned()
             .unwrap_or_default()
     )?);
+    backup["codexPetEntries"] = json!(sanitize_codex_pet_entries(
+        backup["codexPetEntries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    ));
 
     Ok(backup)
 }
@@ -795,6 +907,13 @@ fn sanitize_runtime_backup_entries(entries: Vec<Value>) -> Result<Vec<Value>, Ma
     }
 
     Ok(next_entries)
+}
+
+fn sanitize_codex_pet_entries(entries: Vec<Value>) -> Vec<Value> {
+    entries
+        .into_iter()
+        .filter(|entry| is_allowed_codex_pet_backup_entry(entry))
+        .collect()
 }
 
 fn strip_provider_enabled(entry: Value) -> Result<Value, ManagerError> {
@@ -1001,7 +1120,13 @@ async fn create_restore_preview(
             let current_value = current_restore_json_values
                 .get(&entry_path)
                 .cloned()
-                .unwrap_or_else(|| if backup_value.is_array() { json!([]) } else { json!({}) });
+                .unwrap_or_else(|| {
+                    if backup_value.is_array() {
+                        json!([])
+                    } else {
+                        json!({})
+                    }
+                });
 
             append_json_restore_preview(
                 &entry_path,
@@ -1262,6 +1387,58 @@ async fn restore_directory_entries(
     Ok(())
 }
 
+async fn restore_codex_pet_entries(
+    app_settings: &AppSettings,
+    entries: Vec<Value>,
+    choices: &Map<String, Value>,
+) -> Result<(), ManagerError> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    let Some(codex_pets_dir) = codex_pets_backup_dir(app_settings) else {
+        return Ok(());
+    };
+    let root_path = path_text(&codex_pets_dir);
+    tokio::fs::create_dir_all(&codex_pets_dir).await?;
+
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("dir"))
+    {
+        let target_path = assert_backup_path(&root_path, &string_value(entry.get("path")))?;
+        tokio::fs::create_dir_all(target_path).await?;
+    }
+
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("file"))
+    {
+        let entry_path = string_value(entry.get("path"));
+        let target_path = assert_backup_path(&root_path, &entry_path)?;
+        let backup_content = base64::engine::general_purpose::STANDARD
+            .decode(string_value(entry.get("content")))
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        let current_content = read_current_file(&root_path, &entry_path).await?;
+        let preview_path = codex_pet_backup_entry_path(&entry_path);
+
+        if current_content
+            .as_ref()
+            .map(|content| sha256_bytes(content) != sha256_bytes(&backup_content))
+            .unwrap_or(false)
+            && choice_text(choices, &create_restore_file_key(&preview_path)) != "backup"
+        {
+            continue;
+        }
+
+        if let Some(parent) = target_path.parent() {
+            tokio::fs::create_dir_all(parent).await?;
+        }
+        tokio::fs::write(target_path, backup_content).await?;
+    }
+
+    Ok(())
+}
+
 async fn restore_database_entries(
     paths: &AppPaths,
     entries: &[Value],
@@ -1336,8 +1513,7 @@ async fn read_current_restore_json_values(
     {
         let entry_path = string_value(entry.get("path"));
 
-        if !is_mergeable_restore_json_path(&entry_path)
-            || current_values.contains_key(&entry_path)
+        if !is_mergeable_restore_json_path(&entry_path) || current_values.contains_key(&entry_path)
         {
             continue;
         }
@@ -1345,12 +1521,7 @@ async fn read_current_restore_json_values(
         let current_content = read_current_file(&paths.workspace_root, &entry_path).await?;
         current_values.insert(
             entry_path.clone(),
-            read_current_restore_json_value(
-                paths,
-                &entry_path,
-                current_content,
-                &backup_value,
-            )?,
+            read_current_restore_json_value(paths, &entry_path, current_content, &backup_value)?,
         );
     }
     Ok(current_values)
@@ -2165,9 +2336,7 @@ fn assert_backup_path(root_path: &str, entry_path: &str) -> Result<PathBuf, Mana
 
     let mut parent = target_path.parent();
     while let Some(path) = parent.filter(|path| *path != root) {
-        if std::fs::symlink_metadata(path)
-            .is_ok_and(|metadata| metadata.file_type().is_symlink())
-        {
+        if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
             return Err(ManagerError::System(format!(
                 "备份路径不能穿过链接：{}",
                 path_text(path)
@@ -2188,9 +2357,9 @@ fn validate_backup_symlink_target(
 
     if target.is_empty()
         || target_path.is_absolute()
-        || target_path.components().any(|component| {
-            !matches!(component, Component::Normal(_) | Component::CurDir)
-        })
+        || target_path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
     {
         return Err(ManagerError::System("备份链接目标非法".to_string()));
     }
@@ -2205,12 +2374,9 @@ fn validate_backup_symlink_target(
     let checked_target = assert_backup_path(root_path, &path_text(relative_target))?;
 
     if checked_target.exists()
-        && !std::fs::canonicalize(&checked_target)?
-            .starts_with(std::fs::canonicalize(root_path)?)
+        && !std::fs::canonicalize(&checked_target)?.starts_with(std::fs::canonicalize(root_path)?)
     {
-        return Err(ManagerError::System(
-            "备份链接目标超出工作区".to_string(),
-        ));
+        return Err(ManagerError::System("备份链接目标超出工作区".to_string()));
     }
     Ok(())
 }
@@ -2233,8 +2399,24 @@ fn is_allowed_backup_path(entry_path: &str) -> bool {
             | "storage/rules.json"
             | "skills"
             | "prompts"
+            | "pets-disabled"
     ) || normalized_path.starts_with("skills/")
         || normalized_path.starts_with("prompts/")
+        || normalized_path.starts_with("pets-disabled/")
+}
+
+fn is_allowed_codex_pet_backup_entry(entry: &Value) -> bool {
+    let entry_path = string_value(entry.get("path"));
+    let path = Path::new(&entry_path);
+
+    !entry_path.is_empty()
+        && matches!(
+            entry.get("type").and_then(Value::as_str),
+            Some("dir") | Some("file")
+        )
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
 }
 
 fn restore_storage_name(entry_path: &str) -> Option<&'static str> {
@@ -2731,12 +2913,13 @@ fn is_database_backup_path(entry_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_app_settings_restore_preview, collect_backup_entries, create_backup_entry_view,
-        encrypt_backup_payload, format_restore_file_content, is_allowed_backup_path,
-        is_database_backup_path, merge_json_backup_value, merge_provider_keys,
-        preview_data_backup_restore_content, redact_backup_app_settings,
-        restore_backup_app_settings, restore_data_backup_content, sanitize_runtime_backup_entries,
-        serialize_backup_app_settings, validate_backup_symlink_target,
+        append_app_settings_restore_preview, collect_backup_entries, collect_codex_pet_entries,
+        create_backup_entry_view, encrypt_backup_payload, format_restore_file_content,
+        is_allowed_backup_path, is_database_backup_path, merge_json_backup_value,
+        merge_provider_keys, preview_data_backup_restore_content, redact_backup_app_settings,
+        restore_backup_app_settings, restore_codex_pet_entries, restore_data_backup_content,
+        restore_directory_entries, sanitize_runtime_backup_entries, serialize_backup_app_settings,
+        validate_backup_symlink_target,
     };
     use crate::api::runtime_provider;
     use crate::core::paths::resolve_app_paths;
@@ -2769,12 +2952,10 @@ mod tests {
         std::fs::create_dir_all(&skills_root).unwrap();
         std::fs::write(skills_root.join("target.txt"), "target").unwrap();
 
-        assert!(validate_backup_symlink_target(
-            &root.to_string_lossy(),
-            &link_path,
-            "target.txt"
-        )
-        .is_ok());
+        assert!(
+            validate_backup_symlink_target(&root.to_string_lossy(), &link_path, "target.txt")
+                .is_ok()
+        );
         assert!(validate_backup_symlink_target(
             &root.to_string_lossy(),
             &link_path,
@@ -2930,6 +3111,94 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn backs_up_and_restores_enabled_and_disabled_codex_pets() {
+        let root =
+            std::env::temp_dir().join(format!("monkey-thief-pet-backup-{}", std::process::id()));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+
+        let source_paths = resolve_app_paths(&root.join("source-data"));
+        let source_codex_path = root.join("source-codex");
+        let source_settings = normalize_app_settings(
+            root.join("source-settings.json"),
+            Some(json!({
+              "cliConfigPaths": { "codex": source_codex_path.to_string_lossy() }
+            })),
+        );
+        let enabled_pet = source_codex_path.join("pets").join("enabled-pet");
+        let disabled_pet = Path::new(&source_paths.disabled_pets_dir).join("disabled-pet");
+        std::fs::create_dir_all(&enabled_pet).unwrap();
+        std::fs::create_dir_all(&disabled_pet).unwrap();
+        std::fs::write(enabled_pet.join("pet.json"), r#"{"id":"enabled-pet"}"#).unwrap();
+        std::fs::write(enabled_pet.join("spritesheet.webp"), [1_u8, 2, 3]).unwrap();
+        std::fs::write(disabled_pet.join("pet.json"), r#"{"id":"disabled-pet"}"#).unwrap();
+        std::fs::write(disabled_pet.join("spritesheet.webp"), [4_u8, 5, 6]).unwrap();
+
+        let target_paths = resolve_app_paths(&root.join("target-data"));
+        let target_codex_path = root.join("target-codex");
+        let target_settings = normalize_app_settings(
+            root.join("target-settings.json"),
+            Some(json!({
+              "cliConfigPaths": { "codex": target_codex_path.to_string_lossy() }
+            })),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let codex_entries = runtime
+            .block_on(collect_codex_pet_entries(&source_settings))
+            .unwrap();
+        let workspace_entries = runtime
+            .block_on(collect_backup_entries(&source_paths))
+            .unwrap();
+
+        assert!(codex_entries
+            .iter()
+            .any(|entry| entry["path"] == "enabled-pet/pet.json"));
+        assert!(codex_entries
+            .iter()
+            .any(|entry| entry["path"] == "enabled-pet/spritesheet.webp"));
+        assert!(workspace_entries
+            .iter()
+            .any(|entry| entry["path"] == "pets-disabled/disabled-pet/pet.json"));
+
+        runtime
+            .block_on(restore_codex_pet_entries(
+                &target_settings,
+                codex_entries,
+                &Map::new(),
+            ))
+            .unwrap();
+        runtime
+            .block_on(restore_directory_entries(
+                &target_paths,
+                workspace_entries
+                    .into_iter()
+                    .filter(|entry| !is_database_backup_path(entry["path"].as_str().unwrap_or("")))
+                    .collect(),
+                &Map::new(),
+                &std::collections::HashMap::new(),
+            ))
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read(target_codex_path.join("pets/enabled-pet/spritesheet.webp")).unwrap(),
+            [1_u8, 2, 3]
+        );
+        assert_eq!(
+            std::fs::read(
+                Path::new(&target_paths.disabled_pets_dir).join("disabled-pet/spritesheet.webp")
+            )
+            .unwrap(),
+            [4_u8, 5, 6]
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -3230,14 +3499,32 @@ mod tests {
             .unwrap();
 
         let providers = provider_store::read_providers(&paths).unwrap();
-        let provider_a = providers.iter().find(|item| item["id"] == "provider-a").unwrap();
-        let provider_b = providers.iter().find(|item| item["id"] == "provider-b").unwrap();
+        let provider_a = providers
+            .iter()
+            .find(|item| item["id"] == "provider-a")
+            .unwrap();
+        let provider_b = providers
+            .iter()
+            .find(|item| item["id"] == "provider-b")
+            .unwrap();
         let skills = skill_store::read_skills(&paths).unwrap();
-        let skill_a = skills.iter().find(|item| item["name"] == "skill-a").unwrap();
-        let skill_b = skills.iter().find(|item| item["name"] == "skill-b").unwrap();
+        let skill_a = skills
+            .iter()
+            .find(|item| item["name"] == "skill-a")
+            .unwrap();
+        let skill_b = skills
+            .iter()
+            .find(|item| item["name"] == "skill-b")
+            .unwrap();
         let accounts = provider_store::read_codex_accounts(&paths).unwrap();
-        let account_a = accounts.iter().find(|item| item["id"] == "account-a").unwrap();
-        let account_b = accounts.iter().find(|item| item["id"] == "account-b").unwrap();
+        let account_a = accounts
+            .iter()
+            .find(|item| item["id"] == "account-a")
+            .unwrap();
+        let account_b = accounts
+            .iter()
+            .find(|item| item["id"] == "account-b")
+            .unwrap();
         let runtime_state = provider_store::read_runtime_state(&paths).unwrap();
         let installs = skill_store::read_installs(&paths).unwrap();
 
