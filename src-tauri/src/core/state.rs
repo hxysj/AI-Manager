@@ -11,7 +11,7 @@ use crate::core::storage_state::create_initial_state;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 pub struct ManagerState {
     user_data_path: PathBuf,
@@ -30,12 +30,16 @@ pub struct ManagerState {
 
 pub struct AppState {
     manager: Mutex<ManagerState>,
+    close_action: RwLock<String>,
 }
 
 impl AppState {
     pub fn new(manager: ManagerState) -> Self {
+        let close_action = manager.app_settings.system.close_action.clone();
+
         Self {
             manager: Mutex::new(manager),
+            close_action: RwLock::new(close_action),
         }
     }
 
@@ -46,7 +50,18 @@ impl AppState {
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
         let mut manager = self.manager.lock().await;
-        manager.dispatch(app, channel, payload).await
+        let result = manager.dispatch(app, channel, payload).await;
+        let close_action = matches!(channel, "settings:save" | "app:close-action")
+            .then(|| manager.app_settings.system.close_action.clone());
+        drop(manager);
+
+        if result.is_ok() {
+            if let Some(close_action) = close_action {
+                *self.close_action.write().await = close_action;
+            }
+        }
+
+        result
     }
 
     pub async fn user_data_path(&self) -> PathBuf {
@@ -56,9 +71,7 @@ impl AppState {
     }
 
     pub async fn close_action(&self) -> String {
-        let manager = self.manager.lock().await;
-
-        manager.app_settings.system.close_action.clone()
+        self.close_action.read().await.clone()
     }
 
     pub async fn quick_switch_settings(&self) -> (AppSettings, bool) {
