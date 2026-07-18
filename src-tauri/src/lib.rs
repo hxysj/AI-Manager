@@ -102,15 +102,23 @@ pub fn run() {
                         if let Err(error) = window.hide() {
                             eprintln!("{error}");
                         }
-                        let (app_settings, quick_switch_collapsed) =
-                            state.quick_switch_settings().await;
-                        if let Err(error) = app::sync_quick_switch_window(
-                            &app_handle,
-                            &app_settings,
-                            quick_switch_collapsed,
-                        ) {
-                            eprintln!("{error}");
-                        }
+                        let sync_handle = app_handle.clone();
+
+                        tauri::async_runtime::spawn(async move {
+                            let Some(state) = sync_handle.try_state::<AppState>() else {
+                                return;
+                            };
+                            let (app_settings, quick_switch_collapsed) =
+                                state.quick_switch_settings().await;
+
+                            if let Err(error) = app::sync_quick_switch_window(
+                                &sync_handle,
+                                &app_settings,
+                                quick_switch_collapsed,
+                            ) {
+                                eprintln!("{error}");
+                            }
+                        });
                         return;
                     }
 
