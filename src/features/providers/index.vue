@@ -43,8 +43,7 @@
               :class="[
                 'providers-view-proxy-tab',
                 {
-                  'providers-view-proxy-tab-active':
-                    proxyTab === 'providers'
+                  'providers-view-proxy-tab-active': proxyTab === 'providers'
                 }
               ]"
               type="button"
@@ -117,10 +116,7 @@
       </header>
 
       <CodexProxyPanel
-        v-if="
-          activeProxyState &&
-          (!activeProxyEnabled || proxyTab === 'proxy')
-        "
+        v-if="activeProxyState && (!activeProxyEnabled || proxyTab === 'proxy')"
         ref="proxyPanelRef"
         :accounts="codexAccounts"
         :cli-name="activeCliName"
@@ -128,11 +124,9 @@
         :pending="pending"
         :providers="scopedProviders"
         :proxy-state="activeProxyState"
-        @account-model-save="
-          emit('codex-proxy-account-model-save', $event)
-        "
+        @account-model-save="emit('codex-proxy-account-model-save', $event)"
         @add-provider="
-          payload => {
+          (payload) => {
             showProxyAddAction = false
             emitProxyEvent('provider-add', payload)
           }
@@ -158,11 +152,9 @@
           :pending="pending"
           :providers="scopedProviders"
           :proxy-state="activeProxyState"
-          @account-model-save="
-            emit('codex-proxy-account-model-save', $event)
-          "
+          @account-model-save="emit('codex-proxy-account-model-save', $event)"
           @add-provider="
-            payload => {
+            (payload) => {
               showProxyAddAction = false
               emitProxyEvent('provider-add', payload)
             }
@@ -1339,11 +1331,9 @@
                   <div class="providers-view-usage-hero-item">
                     <span class="providers-view-usage-label">全部 Token</span>
                     <strong class="providers-view-usage-total">
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageSummary.actualTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageSummary.actualTokens"
+                      />
                     </strong>
                     <span class="providers-view-usage-subtext">
                       {{
@@ -1357,11 +1347,9 @@
                   <div class="providers-view-usage-hero-item">
                     <span class="providers-view-usage-label">今日 Token</span>
                     <strong class="providers-view-usage-total">
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageTodaySummary.actualTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageTodaySummary.actualTokens"
+                      />
                     </strong>
                     <span class="providers-view-usage-subtext">
                       {{
@@ -1376,7 +1364,9 @@
                     <span class="providers-view-usage-label">费用</span>
                     <strong class="providers-view-usage-cost">
                       {{
-                        formatProviderCost(codexAccountUsageSummary.totalCostUsd)
+                        formatProviderCost(
+                          codexAccountUsageSummary.totalCostUsd
+                        )
                       }}
                     </strong>
                     <span class="providers-view-usage-subtext">
@@ -1396,73 +1386,57 @@
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">输入</span>
                     <strong class="providers-view-usage-value">
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageSummary.inputTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageSummary.inputTokens"
+                      />
                     </strong>
                     <small>
                       今日
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageTodaySummary.inputTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageTodaySummary.inputTokens"
+                      />
                     </small>
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">输出</span>
                     <strong class="providers-view-usage-value">
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageSummary.outputTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageSummary.outputTokens"
+                      />
                     </strong>
                     <small>
                       今日
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageTodaySummary.outputTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageTodaySummary.outputTokens"
+                      />
                     </small>
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">缓存读取</span>
                     <strong class="providers-view-usage-value">
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageSummary.cacheReadTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageSummary.cacheReadTokens"
+                      />
                     </strong>
                     <small>
                       今日
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageTodaySummary.cacheReadTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageTodaySummary.cacheReadTokens"
+                      />
                     </small>
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">缓存写入</span>
                     <strong class="providers-view-usage-value">
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageSummary.cacheCreationTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageSummary.cacheCreationTokens"
+                      />
                     </strong>
                     <small>
                       今日
-                      {{
-                        formatProviderNumber(
-                          codexAccountUsageTodaySummary.cacheCreationTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="codexAccountUsageTodaySummary.cacheCreationTokens"
+                      />
                     </small>
                   </article>
                 </div>
@@ -1491,13 +1465,13 @@
                     </div>
                     <div class="providers-view-usage-row-side">
                       <strong class="providers-view-usage-value">
-                        {{ formatProviderNumber(item.actualTokens) }}
+                        <TokenCount :value="item.actualTokens" />
                       </strong>
                       <span class="providers-view-usage-label">
                         {{ formatProviderCost(item.totalCostUsd) }}
                       </span>
                       <span class="providers-view-usage-label">
-                        今日 {{ formatProviderNumber(item.todayActualTokens) }}
+                        今日 <TokenCount :value="item.todayActualTokens" />
                       </span>
                     </div>
                   </article>
@@ -1597,9 +1571,7 @@
                   <div class="providers-view-usage-hero-item">
                     <span class="providers-view-usage-label">全部 Token</span>
                     <strong class="providers-view-usage-total">
-                      {{
-                        formatProviderNumber(providerUsageSummary.actualTokens)
-                      }}
+                      <TokenCount :value="providerUsageSummary.actualTokens" />
                     </strong>
                     <span class="providers-view-usage-subtext">
                       {{
@@ -1611,11 +1583,9 @@
                   <div class="providers-view-usage-hero-item">
                     <span class="providers-view-usage-label">今日 Token</span>
                     <strong class="providers-view-usage-total">
-                      {{
-                        formatProviderNumber(
-                          providerUsageTodaySummary.actualTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="providerUsageTodaySummary.actualTokens"
+                      />
                     </strong>
                     <span class="providers-view-usage-subtext">
                       {{
@@ -1629,7 +1599,9 @@
                   <div class="providers-view-usage-hero-side">
                     <span class="providers-view-usage-label">费用</span>
                     <strong class="providers-view-usage-cost">
-                      {{ formatProviderCost(providerUsageSummary.totalCostUsd) }}
+                      {{
+                        formatProviderCost(providerUsageSummary.totalCostUsd)
+                      }}
                     </strong>
                     <span class="providers-view-usage-subtext">
                       今日
@@ -1648,69 +1620,53 @@
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">输入</span>
                     <strong class="providers-view-usage-value">
-                      {{
-                        formatProviderNumber(providerUsageSummary.inputTokens)
-                      }}
+                      <TokenCount :value="providerUsageSummary.inputTokens" />
                     </strong>
                     <small>
                       今日
-                      {{
-                        formatProviderNumber(
-                          providerUsageTodaySummary.inputTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="providerUsageTodaySummary.inputTokens"
+                      />
                     </small>
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">输出</span>
                     <strong class="providers-view-usage-value">
-                      {{
-                        formatProviderNumber(providerUsageSummary.outputTokens)
-                      }}
+                      <TokenCount :value="providerUsageSummary.outputTokens" />
                     </strong>
                     <small>
                       今日
-                      {{
-                        formatProviderNumber(
-                          providerUsageTodaySummary.outputTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="providerUsageTodaySummary.outputTokens"
+                      />
                     </small>
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">缓存读取</span>
                     <strong class="providers-view-usage-value">
-                      {{
-                        formatProviderNumber(
-                          providerUsageSummary.cacheReadTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="providerUsageSummary.cacheReadTokens"
+                      />
                     </strong>
                     <small>
                       今日
-                      {{
-                        formatProviderNumber(
-                          providerUsageTodaySummary.cacheReadTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="providerUsageTodaySummary.cacheReadTokens"
+                      />
                     </small>
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">缓存写入</span>
                     <strong class="providers-view-usage-value">
-                      {{
-                        formatProviderNumber(
-                          providerUsageSummary.cacheCreationTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="providerUsageSummary.cacheCreationTokens"
+                      />
                     </strong>
                     <small>
                       今日
-                      {{
-                        formatProviderNumber(
-                          providerUsageTodaySummary.cacheCreationTokens
-                        )
-                      }}
+                      <TokenCount
+                        :value="providerUsageTodaySummary.cacheCreationTokens"
+                      />
                     </small>
                   </article>
                 </div>
@@ -1739,13 +1695,13 @@
                     </div>
                     <div class="providers-view-usage-row-side">
                       <strong class="providers-view-usage-value">
-                        {{ formatProviderNumber(item.actualTokens) }}
+                        <TokenCount :value="item.actualTokens" />
                       </strong>
                       <span class="providers-view-usage-label">
                         {{ formatProviderCost(item.totalCostUsd) }}
                       </span>
                       <span class="providers-view-usage-label">
-                        今日 {{ formatProviderNumber(item.todayActualTokens) }}
+                        今日 <TokenCount :value="item.todayActualTokens" />
                       </span>
                     </div>
                   </article>
@@ -1852,8 +1808,10 @@ import {
 } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
+import TokenCount from "@/components/TokenCount.vue"
 import CodexProxyPanel from "@/features/providers/components/CodexProxyPanel.vue"
 import { accountApi, runtimeApi, systemApi, usageApi } from "@/api"
+import { formatTokenCount } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
@@ -2043,12 +2001,12 @@ const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
   import: "default"
 })
 const iconOptions = Object.keys(iconModules)
-  .map(item => item.split("/").pop())
+  .map((item) => item.split("/").pop())
   .sort((left, right) => left.localeCompare(right))
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
-  return props.cliTargets.filter(item => {
+  return props.cliTargets.filter((item) => {
     return props.runtimeConfigSchemas[item.id]?.enabled
   })
 })
@@ -2098,22 +2056,22 @@ function normalizeModelReasoningEffort(model, effort) {
 
 const activeCliName = computed(() => {
   return (
-    visibleCliTargets.value.find(item => item.id === activeCli.value)?.name ||
+    visibleCliTargets.value.find((item) => item.id === activeCli.value)?.name ||
     activeCli.value ||
     "Runtime"
   )
 })
 
 const selectedProvider = computed(() => {
-  return props.providers.find(item => item.id === draft.id) || null
+  return props.providers.find((item) => item.id === draft.id) || null
 })
 
 const scopedProviders = computed(() => {
-  return props.providers.filter(item => item.cli === activeCli.value)
+  return props.providers.filter((item) => item.cli === activeCli.value)
 })
 
 const mixedItems = computed(() => {
-  const providerItems = scopedProviders.value.map(provider => ({
+  const providerItems = scopedProviders.value.map((provider) => ({
     type: "provider",
     provider,
     key: `provider:${provider.id}`,
@@ -2132,7 +2090,7 @@ const mixedItems = computed(() => {
   }))
   const accountItems =
     activeCli.value === "codex"
-      ? props.codexAccounts.map(account => ({
+      ? props.codexAccounts.map((account) => ({
           type: "account",
           account,
           key: `account:${account.id}`,
@@ -2157,7 +2115,9 @@ const mixedItems = computed(() => {
 })
 
 const profileMap = computed(() => {
-  return Object.fromEntries(props.runtimeProfiles.map(item => [item.cli, item]))
+  return Object.fromEntries(
+    props.runtimeProfiles.map((item) => [item.cli, item])
+  )
 })
 
 const runtimeState = computed(() => {
@@ -2205,7 +2165,7 @@ const runtimeConfigDescription = computed(() => {
 const filteredIconOptions = computed(() => {
   const keyword = iconKeyword.value.toLowerCase()
 
-  return iconOptions.filter(item =>
+  return iconOptions.filter((item) =>
     iconLabel(item).toLowerCase().includes(keyword)
   )
 })
@@ -2216,7 +2176,7 @@ const codexLoginTitle = computed(() => {
 
 const configPreviewMap = computed(() => {
   return Object.fromEntries(
-    activeRuntimeSchema.value.configFiles.map(file => [
+    activeRuntimeSchema.value.configFiles.map((file) => [
       file.name,
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
@@ -2257,7 +2217,7 @@ const codexAccountUsageLogs = computed(() => {
     return []
   }
 
-  return (usageStats.value.logs || []).filter(item =>
+  return (usageStats.value.logs || []).filter((item) =>
     codexAccountUsageProviderIds.value.includes(item.providerId)
   )
 })
@@ -2268,7 +2228,7 @@ const codexAccountUsageSummary = computed(() => {
   }
 
   return mergeUsageSummaries(
-    (usageStats.value.providerStats || []).filter(item =>
+    (usageStats.value.providerStats || []).filter((item) =>
       codexAccountUsageProviderIds.value.includes(item.providerId)
     )
   )
@@ -2280,7 +2240,7 @@ const codexAccountUsageTodaySummary = computed(() => {
   }
 
   return mergeUsageLogSummaries(
-    codexAccountUsageLogs.value.filter(item => isTodayUsageLog(item))
+    codexAccountUsageLogs.value.filter((item) => isTodayUsageLog(item))
   )
 })
 
@@ -2290,13 +2250,13 @@ const codexAccountUsageTodayModelStats = computed(() => {
   }
 
   return mergeUsageLogModelStats(
-    codexAccountUsageLogs.value.filter(item => isTodayUsageLog(item))
+    codexAccountUsageLogs.value.filter((item) => isTodayUsageLog(item))
   )
 })
 
 const codexAccountUsageModelStats = computed(() => {
   return mergeUsageModelStats(
-    (usageStats.value.modelStats || []).filter(item => {
+    (usageStats.value.modelStats || []).filter((item) => {
       return (
         usageStatsTarget.value === codexAccountUsageTarget.value ||
         codexAccountUsageProviderIds.value.includes(item.providerId)
@@ -2327,7 +2287,7 @@ const providerUsageLogs = computed(() => {
     return []
   }
 
-  return (usageStats.value.logs || []).filter(item => {
+  return (usageStats.value.logs || []).filter((item) => {
     return item.providerId === providerUsageProviderId.value
   })
 })
@@ -2338,7 +2298,7 @@ const providerUsageSummary = computed(() => {
   }
 
   return (
-    (usageStats.value.providerStats || []).find(item => {
+    (usageStats.value.providerStats || []).find((item) => {
       return item.providerId === providerUsageProviderId.value
     }) || emptyUsageSummary
   )
@@ -2350,7 +2310,7 @@ const providerUsageTodaySummary = computed(() => {
   }
 
   return mergeUsageLogSummaries(
-    providerUsageLogs.value.filter(item => isTodayUsageLog(item))
+    providerUsageLogs.value.filter((item) => isTodayUsageLog(item))
   )
 })
 
@@ -2360,13 +2320,13 @@ const providerUsageTodayModelStats = computed(() => {
   }
 
   return mergeUsageLogModelStats(
-    providerUsageLogs.value.filter(item => isTodayUsageLog(item))
+    providerUsageLogs.value.filter((item) => isTodayUsageLog(item))
   )
 })
 
 const providerUsageModelStats = computed(() => {
   return mergeUsageModelStats(
-    (usageStats.value.modelStats || []).filter(item => {
+    (usageStats.value.modelStats || []).filter((item) => {
       return (
         usageStatsTarget.value === providerUsageTarget.value ||
         item.providerId === providerUsageProviderId.value
@@ -2440,7 +2400,7 @@ function applyConfigTemplate(template) {
 }
 
 function ensureActiveCli() {
-  if (visibleCliTargets.value.find(item => item.id === activeCli.value)) {
+  if (visibleCliTargets.value.find((item) => item.id === activeCli.value)) {
     return
   }
 
@@ -2669,7 +2629,10 @@ async function ensureUsageStatsReady() {
   let target = ""
   let payload = {}
 
-  if (codexAccountDetailTab.value === "usage" && codexAccountUsageTarget.value) {
+  if (
+    codexAccountDetailTab.value === "usage" &&
+    codexAccountUsageTarget.value
+  ) {
     target = codexAccountUsageTarget.value
     payload = {
       statsScope: "provider",
@@ -2702,7 +2665,8 @@ async function ensureUsageStatsReady() {
     if (
       (codexAccountDetailTab.value === "usage" &&
         target !== codexAccountUsageTarget.value) ||
-      (providerDetailTab.value === "usage" && target !== providerUsageTarget.value)
+      (providerDetailTab.value === "usage" &&
+        target !== providerUsageTarget.value)
     ) {
       ensureUsageStatsReady()
     }
@@ -2713,7 +2677,7 @@ function rateLimitWindows(rateLimit) {
   return [
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
-  ].filter(item => item.window)
+  ].filter((item) => item.window)
 }
 
 function formatPlanName(value) {
@@ -2831,21 +2795,24 @@ function mergeUsageSummaries(items) {
 }
 
 function mergeUsageLogSummaries(items) {
-  return items.reduce((result, item) => {
-    result.requestCount += 1
-    result.inputTokens += usageInputTokens(item)
-    result.outputTokens += Number(item.outputTokens || 0)
-    result.cacheReadTokens += Number(item.cacheReadTokens || 0)
-    result.cacheCreationTokens += Number(item.cacheCreationTokens || 0)
-    result.actualTokens += Number(item.actualTokens || 0)
-    result.totalCostUsd += Number(item.totalCostUsd || 0)
-    return result
-  }, { ...emptyUsageSummary })
+  return items.reduce(
+    (result, item) => {
+      result.requestCount += 1
+      result.inputTokens += usageInputTokens(item)
+      result.outputTokens += Number(item.outputTokens || 0)
+      result.cacheReadTokens += Number(item.cacheReadTokens || 0)
+      result.cacheCreationTokens += Number(item.cacheCreationTokens || 0)
+      result.actualTokens += Number(item.actualTokens || 0)
+      result.totalCostUsd += Number(item.totalCostUsd || 0)
+      return result
+    },
+    { ...emptyUsageSummary }
+  )
 }
 
 function mergeUsageLogModelStats(items) {
   return mergeUsageModelStats(
-    items.map(item => ({
+    items.map((item) => ({
       appType: item.appType,
       model: item.model || "未识别模型",
       requestCount: 1,
@@ -2942,7 +2909,7 @@ function isCodexAccountRefreshing(account) {
 }
 
 function refreshCodexAccounts() {
-  props.codexAccounts.forEach(account => {
+  props.codexAccounts.forEach((account) => {
     if (account.disabled) {
       return
     }
@@ -3007,7 +2974,8 @@ function clearDraft() {
 
 function firstModelName(providerId) {
   return (
-    props.runtimeModels.find(item => item.providerId === providerId)?.name || ""
+    props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
+    ""
   )
 }
 
@@ -3317,7 +3285,7 @@ watch(
 
 watch(
   () => props.usage,
-  usage => {
+  (usage) => {
     if (!usageStatsLoading.value) {
       usageStats.value = usage || {}
       usageStatsTarget.value = ""
@@ -3328,7 +3296,7 @@ watch(
 
 watch(
   () => modelDrafts.mainModel,
-  model => {
+  (model) => {
     if (activeCli.value !== "codex") {
       return
     }
@@ -3340,13 +3308,13 @@ watch(
   }
 )
 
-watch(codexAccountDetailTab, tab => {
+watch(codexAccountDetailTab, (tab) => {
   if (tab === "usage") {
     ensureUsageStatsReady()
   }
 })
 
-watch(providerDetailTab, tab => {
+watch(providerDetailTab, (tab) => {
   if (tab === "usage") {
     ensureUsageStatsReady()
   }
@@ -3354,8 +3322,8 @@ watch(providerDetailTab, tab => {
 
 watch(
   () => props.codexAccounts,
-  accounts => {
-    accounts.forEach(account => {
+  (accounts) => {
+    accounts.forEach((account) => {
       codexAccountProxyDrafts[account.id] = account.proxy || ""
     })
   },
@@ -3371,7 +3339,7 @@ watch(
 
 watch(
   () => activeProxyState.value?.enabled,
-  enabled => {
+  (enabled) => {
     proxySwitchEnabled.value = Boolean(enabled)
     proxyTab.value = enabled ? "proxy" : "providers"
   },
@@ -3380,7 +3348,7 @@ watch(
 
 watch(
   () => props.pending,
-  pending => {
+  (pending) => {
     if (!pending) {
       proxySwitchEnabled.value = activeProxyEnabled.value
     }
@@ -3389,10 +3357,10 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  accounts => {
+  (accounts) => {
     if (codexAuthUpdateAccountId.value) {
       const account = accounts.find(
-        item => item.id === codexAuthUpdateAccountId.value
+        (item) => item.id === codexAuthUpdateAccountId.value
       )
 
       if (account && account.refresh_status !== "failed") {
@@ -3403,7 +3371,7 @@ watch(
 
     if (
       codexAccountDetail.value &&
-      !accounts.find(item => item.id === codexAccountDetail.value.id)
+      !accounts.find((item) => item.id === codexAccountDetail.value.id)
     ) {
       closeCodexAccountDetail()
     }
@@ -3413,10 +3381,10 @@ watch(
 
 watch(
   () => props.providers,
-  providers => {
+  (providers) => {
     if (
       providerDetail.value &&
-      !providers.find(item => item.id === providerDetail.value.id)
+      !providers.find((item) => item.id === providerDetail.value.id)
     ) {
       closeProviderDetail()
     }
@@ -3469,6 +3437,14 @@ watch(
   flex-direction: column;
   overflow: hidden;
   background: #ffffff;
+
+  :deep(.token-count) {
+    font-size: inherit;
+  }
+
+  :deep(.token-count-exact) {
+    font-size: 0.74em;
+  }
 
   &__toolbar {
     display: flex;
