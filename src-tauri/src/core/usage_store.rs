@@ -209,6 +209,31 @@ pub fn replace_sessions(
     Ok(())
 }
 
+pub fn remove_usage_sessions(paths: &AppPaths, raw_paths: &[String]) -> Result<(), ManagerError> {
+    if raw_paths.is_empty() {
+        return Ok(());
+    }
+
+    initialize(paths)?;
+    let mut connection = open_connection(paths)?;
+    let transaction = connection.transaction()?;
+
+    for raw_path in raw_paths {
+        transaction.execute(
+            "DELETE FROM usage_logs WHERE raw_path = ?1",
+            params![raw_path],
+        )?;
+        transaction.execute(
+            "DELETE FROM usage_sessions WHERE raw_path = ?1",
+            params![raw_path],
+        )?;
+    }
+
+    bump_revision(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 pub fn revision(paths: &AppPaths) -> Result<u64, ManagerError> {
     initialize(paths)?;
     let connection = open_connection(paths)?;
