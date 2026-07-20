@@ -84,7 +84,7 @@
           </article>
           <article class="skill-usage-view__metric">
             <span>Token 消耗</span>
-            <strong>{{ formatNumber(summary.actualTokens) }}</strong>
+            <strong><TokenCount :value="summary.actualTokens" /></strong>
             <small>按 Session 用量区间归因</small>
           </article>
           <article class="skill-usage-view__metric">
@@ -109,7 +109,10 @@
               class="skill-usage-view__chart"
               @wheel="handleTrendWheel"
             ></div>
-            <div v-if="!skillTrendSeries.length" class="skill-usage-view__empty">
+            <div
+              v-if="!skillTrendSeries.length"
+              class="skill-usage-view__empty"
+            >
               暂无 Skill 调用趋势。
             </div>
           </section>
@@ -162,7 +165,7 @@
             <span>{{ formatCliList(item.cliTypes) }}</span>
             <span>{{ formatNumber(item.usageCount) }}</span>
             <span>
-              <strong>{{ formatNumber(item.actualTokens) }}</strong>
+              <strong><TokenCount :value="item.actualTokens" /></strong>
               <small>{{ formatCost(item.totalCostUsd) }}</small>
             </span>
             <span
@@ -201,7 +204,11 @@
 
 <script setup>
 import { LineChart, PieChart as EchartsPieChart } from "echarts/charts"
-import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components"
+import {
+  GridComponent,
+  LegendComponent,
+  TooltipComponent
+} from "echarts/components"
 import * as echarts from "echarts/core"
 import { CanvasRenderer } from "echarts/renderers"
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
@@ -212,6 +219,8 @@ import {
   RefreshCw
 } from "lucide-vue-next"
 import { usageApi } from "@/api"
+import TokenCount from "@/components/TokenCount.vue"
+import { formatTokenCount } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
 echarts.use([
@@ -276,28 +285,33 @@ const cliOptions = computed(() => stats.value.filters?.clis || [])
 const filteredSkills = computed(() => {
   const keyword = searchQuery.value.toLowerCase()
 
-  if (!keyword) {
-    return rows.value
-  }
+  const skills = keyword
+    ? rows.value.filter((item) => {
+        const source = [
+          item.name,
+          item.description,
+          formatCliList(item.cliTypes),
+          formatProviderTitle(item.providers),
+          formatModelTitle(item.models)
+        ]
+          .join(" ")
+          .toLowerCase()
 
-  return rows.value.filter(item => {
-    const source = [
-      item.name,
-      item.description,
-      formatCliList(item.cliTypes),
-      formatProviderTitle(item.providers),
-      formatModelTitle(item.models)
-    ]
-      .join(" ")
-      .toLowerCase()
+        return source.includes(keyword)
+      })
+    : rows.value
 
-    return source.includes(keyword)
+  // 按 Token 消耗降序展示，便于优先定位高消耗 Skill。
+  return [...skills].sort((left, right) => {
+    const tokenDifference = (right.actualTokens || 0) - (left.actualTokens || 0)
+
+    return tokenDifference || left.name.localeCompare(right.name)
   })
 })
 const skillPieStats = computed(() =>
   filteredSkills.value
-    .filter(item => item.usageCount > 0)
-    .map(item => ({
+    .filter((item) => item.usageCount > 0)
+    .map((item) => ({
       name: item.name,
       value: item.usageCount
     }))
@@ -305,21 +319,21 @@ const skillPieStats = computed(() =>
 const skillTrendNames = computed(() =>
   Array.from(
     new Set(
-      trendStats.value.flatMap(item =>
-        (item.skills || []).map(skill => skill.skillName)
+      trendStats.value.flatMap((item) =>
+        (item.skills || []).map((skill) => skill.skillName)
       )
     )
-  ).filter(name => filteredSkills.value.some(item => item.name === name))
+  ).filter((name) => filteredSkills.value.some((item) => item.name === name))
 )
 const skillTrendSeries = computed(() =>
-  skillTrendNames.value.map(name => ({
+  skillTrendNames.value.map((name) => ({
     name,
     type: "line",
     smooth: true,
     symbolSize: 5,
-    data: trendStats.value.map(item => {
+    data: trendStats.value.map((item) => {
       const skill = (item.skills || []).find(
-        skillItem => skillItem.skillName === name
+        (skillItem) => skillItem.skillName === name
       )
 
       return skill?.usageCount || 0
@@ -456,7 +470,7 @@ function renderTrendChart() {
       tooltip: {
         trigger: "axis",
         appendToBody: true,
-        valueFormatter: value => `${formatNumber(value)} 次`
+        valueFormatter: (value) => `${formatNumber(value)} 次`
       },
       legend: {
         type: "scroll",
@@ -477,7 +491,7 @@ function renderTrendChart() {
       },
       xAxis: {
         type: "category",
-        data: trendStats.value.map(item => item.date),
+        data: trendStats.value.map((item) => item.date),
         axisTick: { show: false },
         axisLine: { lineStyle: { color: "#dbe5ed" } },
         axisLabel: { color: "#5f7087" }
@@ -487,7 +501,7 @@ function renderTrendChart() {
         splitLine: { lineStyle: { color: "#edf2f8" } },
         axisLabel: {
           color: "#5f7087",
-          formatter: value => formatCompactNumber(value)
+          formatter: (value) => formatCompactNumber(value)
         }
       },
       series: skillTrendSeries.value
@@ -508,7 +522,7 @@ function renderSkillPie() {
       tooltip: {
         trigger: "item",
         appendToBody: true,
-        formatter: item => {
+        formatter: (item) => {
           return `${item.name}<br />${formatNumber(item.value)} 次 · ${item.percent}%`
         }
       },
@@ -519,7 +533,7 @@ function renderSkillPie() {
         top: 0,
         itemWidth: 10,
         itemHeight: 10,
-        formatter: name => {
+        formatter: (name) => {
           return name.length > 24 ? `${name.slice(0, 24)}...` : name
         },
         textStyle: {
@@ -602,21 +616,21 @@ function formatDate(value) {
 
 function formatCliList(items) {
   if (!items?.length) {
-    return "集中管理"
+    return "已禁用"
   }
 
-  return items.map(item => item.name || item.id).join(" / ")
+  return items.map((item) => item.name || item.id).join(" / ")
 }
 
 function formatProviderTitle(items) {
   return (items || [])
-    .map(item => `${item.providerName}：${formatNumber(item.actualTokens)}`)
+    .map((item) => `${item.providerName}：${formatTokenCount(item.actualTokens)}`)
     .join("\n")
 }
 
 function formatModelTitle(items) {
   return (items || [])
-    .map(item => `${item.model}：${formatNumber(item.actualTokens)}`)
+    .map((item) => `${item.model}：${formatTokenCount(item.actualTokens)}`)
     .join("\n")
 }
 
@@ -635,7 +649,7 @@ function formatUsageItems(items, type) {
 
     return {
       key: `${name || "unknown"}-${index}`,
-      label: `${name || "未匹配"}：${formatNumber(item.actualTokens)}`
+      label: `${name || "未匹配"}：${formatTokenCount(item.actualTokens)}`
     }
   })
 }
@@ -649,6 +663,14 @@ function formatUsageItems(items, type) {
   flex-direction: column;
   gap: 10px;
   overflow: hidden;
+
+  :deep(.token-count) {
+    font-size: inherit;
+  }
+
+  :deep(.token-count-exact) {
+    font-size: 0.76em;
+  }
 
   &__toolbar {
     display: flex;

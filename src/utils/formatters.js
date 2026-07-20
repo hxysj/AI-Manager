@@ -50,3 +50,52 @@ export function hashColor(value) {
 
   return `hsl(${hue} 24% 86%)`
 }
+
+// Token 数量超过千和百万时使用紧凑单位，避免占满统计卡片和表格列。
+export function formatTokenCount(value) {
+  const { compact, exact } = formatTokenCountParts(value)
+
+  return exact ? `${compact}（${exact}）` : compact
+}
+
+export function formatTokenCountParts(value) {
+  const tokenCount = Number(value || 0)
+
+  if (!Number.isFinite(tokenCount)) {
+    return {
+      compact: "0",
+      exact: ""
+    }
+  }
+
+  const absoluteCount = Math.abs(tokenCount)
+  const exactCount = new Intl.NumberFormat("zh-CN", {
+    maximumFractionDigits: 20
+  }).format(tokenCount)
+
+  if (absoluteCount >= 1000000) {
+    return {
+      compact: `${(tokenCount / 1000000).toFixed(2)}M`,
+      exact: exactCount
+    }
+  }
+
+  if (absoluteCount >= 1000) {
+    if (absoluteCount >= 999950) {
+      return {
+        compact: `${(tokenCount / 1000000).toFixed(2)}M`,
+        exact: exactCount
+      }
+    }
+
+    return {
+      compact: `${(tokenCount / 1000).toFixed(2)}k`,
+      exact: exactCount
+    }
+  }
+
+  return {
+    compact: exactCount,
+    exact: ""
+  }
+}

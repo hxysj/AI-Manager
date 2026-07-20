@@ -2155,17 +2155,21 @@ fn collect_session_record_texts(record: &Value, output: &mut Vec<String>) {
         .unwrap_or(payload);
     let role = get_session_record_role(record);
 
-    if payload.get("type").and_then(Value::as_str) == Some("function_call") {
-        let arguments = payload.get("arguments").cloned().unwrap_or(Value::Null);
+    let tool_arguments = match payload.get("type").and_then(Value::as_str) {
+        Some("function_call") => payload.get("arguments"),
+        Some("custom_tool_call") => payload.get("input"),
+        _ => None,
+    };
 
+    if let Some(arguments) = tool_arguments {
         if let Some(text) = arguments.as_str() {
             if let Ok(value) = serde_json::from_str::<Value>(text) {
                 collect_text_values(&value, output);
             } else {
-                collect_text_values(&arguments, output);
+                collect_text_values(arguments, output);
             }
         } else {
-            collect_text_values(&arguments, output);
+            collect_text_values(arguments, output);
         }
         return;
     }
@@ -3404,8 +3408,8 @@ fn decode_report_image_data_url(value: &str) -> Result<Vec<u8>, ManagerError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_report_image_data_url, file_modified_at, path_skill_regex, refresh_usage,
-        slash_skill_regex,
+        collect_session_record_texts, decode_report_image_data_url, file_modified_at,
+        path_skill_regex, refresh_usage, slash_skill_regex,
     };
     use crate::core::{paths::resolve_app_paths, usage_store};
     use serde_json::json;
@@ -3416,6 +3420,24 @@ mod tests {
     fn skill_usage_regexes_are_valid() {
         assert!(slash_skill_regex().is_match("/frontend-design"));
         assert!(path_skill_regex().is_match(r"C:\Users\readboy\.codex\skills\frontend-design\SKILL.md"));
+    }
+
+    #[test]
+    fn collects_custom_tool_call_input_for_skill_usage() {
+        let record = json!({
+          "payload": {
+            "type": "custom_tool_call",
+            "input": r"Get-Content C:\Users\readboy\.codex\skills\frontend-design\SKILL.md"
+          }
+        });
+        let mut texts = Vec::new();
+
+        collect_session_record_texts(&record, &mut texts);
+
+        assert_eq!(
+            texts,
+            vec![r"Get-Content C:\Users\readboy\.codex\skills\frontend-design\SKILL.md"]
+        );
     }
 
     #[test]

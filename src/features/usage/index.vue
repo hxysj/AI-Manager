@@ -105,17 +105,17 @@
     <section class="usage-view__metrics">
       <article class="usage-view__metric">
         <span>真实消耗 Tokens</span>
-        <strong>{{ formatNumber(summary.actualTokens) }}</strong>
-        <small>新增输入 {{ formatNumber(summary.inputTokens) }}</small>
+        <strong><TokenCount :value="summary.actualTokens" /></strong>
+        <small>新增输入 <TokenCount :value="summary.inputTokens" /></small>
       </article>
       <article class="usage-view__metric">
         <span>输出 Tokens</span>
-        <strong>{{ formatNumber(summary.outputTokens) }}</strong>
+        <strong><TokenCount :value="summary.outputTokens" /></strong>
         <small>请求 {{ formatNumber(summary.requestCount) }} 次</small>
       </article>
       <article class="usage-view__metric">
         <span>缓存读取</span>
-        <strong>{{ formatNumber(summary.cacheReadTokens) }}</strong>
+        <strong><TokenCount :value="summary.cacheReadTokens" /></strong>
         <small>命中率 {{ formatPercent(summary.cacheHitRate) }}</small>
       </article>
       <article class="usage-view__metric">
@@ -221,7 +221,7 @@
               <span>{{ item.providerType || "未识别类型" }}</span>
             </div>
             <div>
-              <strong>{{ formatNumber(item.actualTokens) }}</strong>
+              <strong><TokenCount :value="item.actualTokens" /></strong>
               <span
                 >{{ formatNumber(item.requestCount) }} 次 ·
                 {{ formatCost(item.totalCostUsd) }}</span
@@ -254,9 +254,9 @@
               >
             </div>
             <div>
-              <strong>{{ formatNumber(item.actualTokens) }}</strong>
+              <strong><TokenCount :value="item.actualTokens" /></strong>
               <span
-                >缓存 {{ formatNumber(item.cacheReadTokens) }} ·
+                >缓存 <TokenCount :value="item.cacheReadTokens" /> ·
                 {{ formatCost(item.totalCostUsd) }}</span
               >
             </div>
@@ -316,10 +316,10 @@
               {{ formatSessionLabel(item) }}
             </span>
             <span :title="item.model">{{ item.model || "未识别模型" }}</span>
-            <span>{{ formatNumber(normalizeInput(item)) }}</span>
-            <span>{{ formatNumber(item.outputTokens) }}</span>
-            <span>{{ formatNumber(item.cacheReadTokens) }}</span>
-            <span>{{ formatNumber(actualTokens(item)) }}</span>
+            <span><TokenCount :value="normalizeInput(item)" /></span>
+            <span><TokenCount :value="item.outputTokens" /></span>
+            <span><TokenCount :value="item.cacheReadTokens" /></span>
+            <span><TokenCount :value="actualTokens(item)" /></span>
             <span>{{ formatCost(item.totalCostUsd) }}</span>
           </div>
         </div>
@@ -684,6 +684,8 @@ import {
   X
 } from "lucide-vue-next"
 import { systemApi, usageApi } from "@/api"
+import TokenCount from "@/components/TokenCount.vue"
+import { formatTokenCount } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
 echarts.use([
@@ -2083,17 +2085,17 @@ function drawReportMetrics(context, x, y, width, gap) {
   const items = [
     {
       label: "真实消耗 Tokens",
-      value: formatNumber(summary.value.actualTokens),
-      note: `新增输入 ${formatNumber(summary.value.inputTokens)}`
+      value: formatTokenCount(summary.value.actualTokens),
+      note: `新增输入 ${formatTokenCount(summary.value.inputTokens)}`
     },
     {
       label: "输出 Tokens",
-      value: formatNumber(summary.value.outputTokens),
+      value: formatTokenCount(summary.value.outputTokens),
       note: `请求 ${formatNumber(summary.value.requestCount)} 次`
     },
     {
       label: "缓存读取",
-      value: formatNumber(summary.value.cacheReadTokens),
+      value: formatTokenCount(summary.value.cacheReadTokens),
       note: `命中率 ${formatPercent(summary.value.cacheHitRate)}`
     },
     {
@@ -2338,7 +2340,7 @@ function createReportProviderItems() {
   const items = providerStats.value.slice(0, 24).map((item) => ({
     title: item.providerName || "未识别来源",
     description: item.providerType || "未识别类型",
-    value: formatNumber(item.actualTokens),
+    value: formatTokenCount(item.actualTokens),
     note: `${formatNumber(item.requestCount)} 次 · ${formatCost(item.totalCostUsd)}`
   }))
 
@@ -2358,8 +2360,8 @@ function createReportModelItems() {
   const items = modelStats.value.slice(0, 24).map((item) => ({
     title: item.model || "未识别模型",
     description: `${formatAppName(item.appType)} · ${item.providerName || "未识别来源"}`,
-    value: formatNumber(item.actualTokens),
-    note: `缓存 ${formatNumber(item.cacheReadTokens)} · ${formatCost(item.totalCostUsd)}`
+    value: formatTokenCount(item.actualTokens),
+    note: `缓存 ${formatTokenCount(item.cacheReadTokens)} · ${formatCost(item.totalCostUsd)}`
   }))
 
   if (modelStats.value.length > 24) {
@@ -2482,7 +2484,7 @@ function renderTrendChart() {
       tooltip: {
         trigger: "axis",
         appendToBody: true,
-        valueFormatter: (value) => formatNumber(value)
+        valueFormatter: (value) => formatTokenCount(value)
       },
       grid: {
         top: 28,
@@ -2513,7 +2515,7 @@ function renderTrendChart() {
         splitLine: { lineStyle: { color: "#edf2f8" } },
         axisLabel: {
           color: "#5f7087",
-          formatter: (value) => formatCompactNumber(value)
+          formatter: (value) => formatTokenCount(value)
         }
       },
       series: tokenTrendSeries.value.map((item) => ({
@@ -2541,7 +2543,7 @@ function renderProviderPie() {
         trigger: "item",
         appendToBody: true,
         formatter: (item) => {
-          return `${item.name}<br />${formatNumber(item.value)} Tokens · ${item.percent}%`
+          return `${item.name}<br />${formatTokenCount(item.value)} Tokens · ${item.percent}%`
         }
       },
       legend: {
@@ -2640,20 +2642,6 @@ function formatModelCategory(value) {
 
 function formatExchangeRate(value) {
   return `1 $ = ￥${Number(value || 0).toFixed(4)}`
-}
-
-function formatCompactNumber(value) {
-  const number = Number(value || 0)
-
-  if (number >= 1000000) {
-    return `${(number / 1000000).toFixed(1)}M`
-  }
-
-  if (number >= 1000) {
-    return `${(number / 1000).toFixed(0)}K`
-  }
-
-  return String(number)
 }
 
 function formatDateTime(value) {
@@ -2800,6 +2788,14 @@ function formatSessionLabel(item) {
   overflow-y: auto;
   padding-right: 4px;
   color: var(--color-text);
+
+  :deep(.token-count) {
+    font-size: inherit;
+  }
+
+  :deep(.token-count-exact) {
+    font-size: 0.72em;
+  }
 
   &.usage-view-loading-active {
     overflow-y: hidden;

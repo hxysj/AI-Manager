@@ -160,7 +160,7 @@
           <article class="quick-switch-panel-metric">
             <span class="quick-switch-panel-metric-label">Token</span>
             <strong class="quick-switch-panel-metric-value">
-              {{ formatQuickNumber(usageSummary.actualTokens) }}
+              <TokenCount :value="usageSummary.actualTokens" />
             </strong>
           </article>
           <article class="quick-switch-panel-metric">
@@ -184,7 +184,7 @@
                 v-for="item in usageTrend"
                 :key="item.date"
                 class="quick-switch-panel-bar"
-                :title="`${item.date} · ${formatQuickNumber(item.actualTokens)} Token`"
+                :title="`${item.date} · ${formatTokenCount(item.actualTokens)} Token`"
               >
                 <span
                   class="quick-switch-panel-bar-fill"
@@ -335,7 +335,9 @@ import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { ChevronDown, ExternalLink, RefreshCw } from "lucide-vue-next"
 import { accountApi, appApi, proxyApi, runtimeApi } from "@/api"
 import logoUrl from "@/assets/ai-manager-logo.svg?url"
+import TokenCount from "@/components/TokenCount.vue"
 import { useGlobalLoading } from "@/utils/global-loading"
+import { formatTokenCount } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
@@ -922,6 +924,14 @@ onBeforeUnmount(() => {
   border: 1px solid #b8cce5;
   background: #eef4fb;
   color: #101828;
+
+  :deep(.token-count) {
+    font-size: inherit;
+  }
+
+  :deep(.token-count-exact) {
+    font-size: 0.7em;
+  }
 
   .quick-switch-panel-header {
     display: flex;
