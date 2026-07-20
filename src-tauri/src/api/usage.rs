@@ -9,6 +9,7 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -561,6 +562,7 @@ fn get_initial_state_data(paths: &AppPaths) -> Result<Value, ManagerError> {
 async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
     let mut diagnostics = Vec::new();
     let mut updates = Vec::new();
+    let mut removed_subagent_paths = Vec::new();
     let workspace_created_at = std::fs::metadata(&paths.workspace_root)?
         .created()?
         .duration_since(std::time::UNIX_EPOCH)
@@ -578,6 +580,13 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
 
         let session_updated_at = file_modified_at(&raw_path);
         session["updatedAt"] = json!(session_updated_at);
+
+        if app_type == "codex" && is_codex_subagent_session(&raw_path)? {
+            if session_versions.contains_key(&raw_path) {
+                removed_subagent_paths.push(raw_path);
+            }
+            continue;
+        }
 
         if session_versions.get(&raw_path) == Some(&session_updated_at) {
             continue;
@@ -614,6 +623,7 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         }
     }
 
+    usage_store::remove_usage_sessions(paths, &removed_subagent_paths)?;
     usage_store::replace_sessions(paths, &updates)?;
     Ok(diagnostics)
 }
@@ -2107,6 +2117,28 @@ fn create_scanned_usage_session(item: &Value, raw_path: &str) -> Value {
     })
 }
 
+fn is_codex_subagent_session(raw_path: &str) -> Result<bool, ManagerError> {
+    let file = std::fs::File::open(raw_path)?;
+    let reader = BufReader::new(file);
+
+    for line in reader.lines().take(8) {
+        let record: Value = serde_json::from_str(&line?)?;
+
+        if record.get("type").and_then(Value::as_str) != Some("session_meta") {
+            continue;
+        }
+
+        let payload = record.get("payload").unwrap_or(&record);
+        return Ok(string_value(payload.get("thread_source")) == "subagent"
+            || payload
+                .get("source")
+                .and_then(|source| source.get("subagent"))
+                .is_some());
+    }
+
+    Ok(false)
+}
+
 fn file_modified_at(path: &str) -> u64 {
     std::fs::metadata(path)
         .ok()
@@ -3409,7 +3441,7 @@ fn decode_report_image_data_url(value: &str) -> Result<Vec<u8>, ManagerError> {
 mod tests {
     use super::{
         collect_session_record_texts, decode_report_image_data_url, file_modified_at,
-        path_skill_regex, refresh_usage, slash_skill_regex,
+        is_codex_subagent_session, path_skill_regex, refresh_usage, slash_skill_regex,
     };
     use crate::core::{paths::resolve_app_paths, usage_store};
     use serde_json::json;
@@ -3453,6 +3485,95 @@ mod tests {
             .expect_err("non-png data URL should be rejected");
 
         assert!(error.to_string().contains("PNG"));
+    }
+
+    #[test]
+    fn detects_codex_subagent_session_from_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-codex-session-{}-{}",
+            std::process::id(),
+            super::now_millis()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let subagent_path = root.join("subagent.jsonl");
+        std::fs::write(
+            &subagent_path,
+            r#"{"timestamp":"2026-07-17T10:00:00Z","type":"session_meta","payload":{"session_id":"parent","id":"child","thread_source":"subagent","parent_thread_id":"parent"}}
+"#,
+        )
+        .unwrap();
+        assert!(is_codex_subagent_session(subagent_path.to_string_lossy().as_ref()).unwrap());
+
+        let root_path = root.join("root.jsonl");
+        std::fs::write(
+            &root_path,
+            r#"{"timestamp":"2026-07-17T10:00:00Z","type":"session_meta","payload":{"session_id":"root","id":"root"}}
+"#,
+        )
+        .unwrap();
+        assert!(!is_codex_subagent_session(root_path.to_string_lossy().as_ref()).unwrap());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn refresh_usage_removes_indexed_codex_subagent_usage() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "monkey-thief-codex-subagent-usage-{}-{}",
+                std::process::id(),
+                super::now_millis()
+            ));
+            let paths = resolve_app_paths(Path::new(&root));
+            let subagent_path = root.join("subagent.jsonl");
+
+            std::fs::create_dir_all(&paths.workspace_root).unwrap();
+            std::fs::write(
+                &subagent_path,
+                r#"{"timestamp":"2026-07-17T10:00:00Z","type":"session_meta","payload":{"session_id":"parent","id":"child","thread_source":"subagent","parent_thread_id":"parent"}}
+"#,
+            )
+            .unwrap();
+            let subagent_path = subagent_path.to_string_lossy().to_string();
+            let updated_at = file_modified_at(&subagent_path);
+
+            usage_store::replace_sessions(
+                &paths,
+                &[usage_store::UsageSessionUpdate {
+                    raw_path: subagent_path.clone(),
+                    app_type: "codex".to_string(),
+                    updated_at,
+                    logs: vec![json!({
+                      "requestId": "subagent-log",
+                      "rawPath": subagent_path.clone(),
+                      "createdAt": updated_at,
+                      "appType": "codex"
+                    })],
+                    records: Vec::new(),
+                }],
+            )
+            .unwrap();
+
+            let state = json!({
+              "providers": [],
+              "sessions": [{
+                "id": "subagent-session",
+                "cli": "codex",
+                "rawPath": subagent_path,
+                "updatedAt": updated_at
+              }]
+            });
+
+            refresh_usage(&paths, &state).await.unwrap();
+
+            assert!(usage_store::read_all_logs(&paths).unwrap().is_empty());
+            assert!(usage_store::read_session_versions(&paths)
+                .unwrap()
+                .is_empty());
+
+            let _ = std::fs::remove_dir_all(root);
+        });
     }
 
     #[test]
