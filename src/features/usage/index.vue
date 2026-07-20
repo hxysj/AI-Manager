@@ -685,7 +685,7 @@ import {
 } from "lucide-vue-next"
 import { systemApi, usageApi } from "@/api"
 import TokenCount from "@/components/TokenCount.vue"
-import { formatTokenCount } from "@/utils/formatters"
+import { formatTokenCount, formatTokenCountParts } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
 echarts.use([
@@ -2515,7 +2515,7 @@ function renderTrendChart() {
         splitLine: { lineStyle: { color: "#edf2f8" } },
         axisLabel: {
           color: "#5f7087",
-          formatter: (value) => formatTokenCount(value)
+          formatter: (value) => formatTokenCountParts(value).compact
         }
       },
       series: tokenTrendSeries.value.map((item) => ({
