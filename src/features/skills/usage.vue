@@ -235,6 +235,8 @@ echarts.use([
 defineEmits(["back"])
 
 const pending = ref(false)
+let statsLoadRunning = false
+let statsLoadQueued = false
 const stats = ref({
   summary: {},
   skills: [],
@@ -439,17 +441,36 @@ function handleTrendWheel(event) {
 }
 
 async function loadStats() {
+  // 筛选连续变化时只补跑最后一次请求，避免全量统计在后端排队。
+  if (statsLoadRunning) {
+    statsLoadQueued = true
+    return
+  }
+
+  statsLoadRunning = true
   pending.value = true
 
   try {
-    const result = await usageApi.getSkillUsageStats(createPayload())
-    stats.value = result.data || stats.value
+    do {
+      statsLoadQueued = false
+      const result = await usageApi.getSkillUsageStats(createPayload())
+      stats.value = result.data || stats.value
+    } while (statsLoadQueued)
+
     await nextTick()
     renderCharts()
   } catch (error) {
     createMessage.error(error.message || String(error))
   } finally {
+    const shouldReload = statsLoadQueued
+
+    statsLoadQueued = false
+    statsLoadRunning = false
     pending.value = false
+
+    if (shouldReload) {
+      loadStats()
+    }
   }
 }
 

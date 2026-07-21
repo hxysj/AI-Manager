@@ -8,14 +8,17 @@ use crate::core::settings::{
 };
 use crate::core::skill_store;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+static CLI_INFO_CACHE: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
 
 pub fn create_initial_state(
     paths: &AppPaths,
@@ -77,6 +80,31 @@ pub fn create_initial_state(
       "appSettings": app_settings,
       "refreshedAt": now_millis()
     }))
+}
+
+pub fn refresh_runtime_provider_state(
+    paths: &AppPaths,
+    state: &mut Value,
+) -> Result<(), ManagerError> {
+    let runtime_state = Value::Object(provider_store::read_runtime_state(paths)?);
+    let mut runtime_provider_state = runtime_state
+        .get("runtimeProviderState")
+        .cloned()
+        .unwrap_or(runtime_state);
+
+    apply_proxy_runtime_state(
+        &mut runtime_provider_state,
+        "claude",
+        &state["claudeProxyState"],
+    );
+    apply_proxy_runtime_state(
+        &mut runtime_provider_state,
+        "codex",
+        &state["codexProxyState"],
+    );
+    state["runtimeProviderState"] = runtime_provider_state;
+    state["refreshedAt"] = json!(now_millis());
+    Ok(())
 }
 
 fn build_proxy_state(cli: &str, config: Value, live_backup_path: String, logs: Value) -> Value {
@@ -205,11 +233,7 @@ fn read_cli_targets(paths: &AppPaths, app_settings: &AppSettings) -> Result<Valu
             .unwrap_or_else(|| json!({}));
         let config_path = string_value(app_settings.cli_config_paths.get(id));
         let config_dir = PathBuf::from(&config_path);
-        let executable_path = detect_executable_path(command_name);
-        let version = executable_path
-            .as_deref()
-            .and_then(detect_cli_version)
-            .unwrap_or_default();
+        let (executable_path, version) = detect_cli_info(command_name);
         let skills_path = path_text(config_dir.join("skills"));
         let sessions_path = if id == "claude" {
             path_text(config_dir.join("projects"))
@@ -233,7 +257,7 @@ fn read_cli_targets(paths: &AppPaths, app_settings: &AppSettings) -> Result<Valu
         target["skillsPath"] = json!(skills_path);
         target["sessionsPath"] = json!(sessions_path);
         target["sessionPaths"] = session_paths;
-        target["executablePath"] = json!(executable_path.unwrap_or_default());
+        target["executablePath"] = json!(executable_path);
         target["version"] = json!(version);
         target["installed"] = json!(
             Path::new(&config_path).exists()
@@ -346,6 +370,29 @@ fn detect_executable_path(command_name: &str) -> Option<String> {
     }
 
     paths.first().cloned()
+}
+
+fn detect_cli_info(command_name: &str) -> (String, String) {
+    let cache = CLI_INFO_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Some(info) = cache
+        .lock()
+        .ok()
+        .and_then(|items| items.get(command_name).cloned())
+    {
+        return info;
+    }
+
+    let Some(executable_path) = detect_executable_path(command_name) else {
+        return (String::new(), String::new());
+    };
+    let version = detect_cli_version(&executable_path).unwrap_or_default();
+    let info = (executable_path, version);
+
+    if let Ok(mut items) = cache.lock() {
+        items.insert(command_name.to_string(), info.clone());
+    }
+    info
 }
 
 fn detect_cli_version(executable_path: &str) -> Option<String> {

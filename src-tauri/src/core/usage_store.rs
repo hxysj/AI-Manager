@@ -130,6 +130,96 @@ pub fn read_session_versions(paths: &AppPaths) -> Result<HashMap<String, u64>, M
     Ok(items.collect::<Result<HashMap<_, _>, _>>()?)
 }
 
+pub fn read_skill_session_records(
+    paths: &AppPaths,
+) -> Result<HashMap<String, (u64, Vec<Value>)>, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    let mut statement = connection.prepare(
+        "SELECT raw_path, updated_at, payload_json FROM skill_usage_session_records",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)? as u64,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut records = HashMap::new();
+
+    for row in rows {
+        let (raw_path, updated_at, payload) = row?;
+        let payload = serde_json::from_str::<Value>(&payload)?;
+        records.insert(
+            raw_path,
+            (updated_at, payload.as_array().cloned().unwrap_or_default()),
+        );
+    }
+
+    Ok(records)
+}
+
+pub fn write_skill_session_records(
+    paths: &AppPaths,
+    records: &[(String, u64, Vec<Value>)],
+) -> Result<(), ManagerError> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    initialize(paths)?;
+    let mut connection = open_connection(paths)?;
+    let transaction = connection.transaction()?;
+
+    for (raw_path, updated_at, payload) in records {
+        transaction.execute(
+            "INSERT INTO skill_usage_session_records(raw_path, updated_at, payload_json)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(raw_path) DO UPDATE SET
+               updated_at = excluded.updated_at,
+               payload_json = excluded.payload_json",
+            params![
+                raw_path,
+                to_i64(*updated_at),
+                serde_json::to_string(payload)?
+            ],
+        )?;
+    }
+
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn ensure_skill_session_parser_version(
+    paths: &AppPaths,
+    version: u64,
+) -> Result<(), ManagerError> {
+    initialize(paths)?;
+    let mut connection = open_connection(paths)?;
+    let key = "skill_session_parser_version";
+    let current_version = connection
+        .query_row(
+            "SELECT value FROM usage_metadata WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    if current_version.as_deref() == Some(&version.to_string()) {
+        return Ok(());
+    }
+
+    let transaction = connection.transaction()?;
+    transaction.execute("DELETE FROM skill_usage_session_records", [])?;
+    transaction.execute(
+        "INSERT INTO usage_metadata(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, version.to_string()],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
 pub fn ensure_session_parser_version(
     paths: &AppPaths,
     app_type: &str,
@@ -315,6 +405,11 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
          );
          CREATE INDEX IF NOT EXISTS idx_usage_request_records_created_at
            ON usage_request_records(created_at DESC);
+         CREATE TABLE IF NOT EXISTS skill_usage_session_records (
+           raw_path TEXT PRIMARY KEY,
+           updated_at INTEGER NOT NULL DEFAULT 0,
+           payload_json TEXT NOT NULL
+         );
          CREATE TABLE IF NOT EXISTS usage_pricing_config (
            id INTEGER PRIMARY KEY CHECK(id = 1),
            exchange_rate REAL NOT NULL
@@ -733,8 +828,9 @@ fn now_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_schema, initialize, query_logs, read_pricing, read_request_records,
-        read_session_versions, replace_sessions, write_pricing, UsageLogQuery, UsageSessionUpdate,
+        create_schema, ensure_skill_session_parser_version, initialize, query_logs, read_pricing,
+        read_request_records, read_session_versions, read_skill_session_records, replace_sessions,
+        write_pricing, write_skill_session_records, UsageLogQuery, UsageSessionUpdate,
     };
     use crate::core::paths::resolve_app_paths;
     use rusqlite::{params, Connection};
@@ -1001,5 +1097,46 @@ mod tests {
         assert_eq!(pricing["exchangeRate"], 7.5);
         assert_eq!(pricing["items"][0]["modelId"], "gpt-b");
         assert_eq!(pricing["items"][0]["currency"], "CNY");
+    }
+
+    #[test]
+    fn persists_skill_session_records_by_file_version() {
+        let paths = create_test_paths("skill-session-records");
+
+        write_skill_session_records(
+            &paths,
+            &[(
+                "session.jsonl".to_string(),
+                123,
+                vec![json!({"display": "$imagegen", "timestamp": 100})],
+            )],
+        )
+        .unwrap();
+
+        let records = read_skill_session_records(&paths).unwrap();
+        assert_eq!(records["session.jsonl"].0, 123);
+        assert_eq!(records["session.jsonl"].1.len(), 1);
+        assert_eq!(records["session.jsonl"].1[0]["display"], "$imagegen");
+    }
+
+    #[test]
+    fn invalidates_skill_records_when_parser_version_changes() {
+        let paths = create_test_paths("skill-session-parser-version");
+        let records = [(
+            "session.jsonl".to_string(),
+            123,
+            vec![json!({"display": "$imagegen", "timestamp": 100})],
+        )];
+
+        write_skill_session_records(&paths, &records).unwrap();
+        ensure_skill_session_parser_version(&paths, 1).unwrap();
+        assert!(read_skill_session_records(&paths).unwrap().is_empty());
+
+        write_skill_session_records(&paths, &records).unwrap();
+        ensure_skill_session_parser_version(&paths, 1).unwrap();
+        assert_eq!(read_skill_session_records(&paths).unwrap().len(), 1);
+
+        ensure_skill_session_parser_version(&paths, 2).unwrap();
+        assert!(read_skill_session_records(&paths).unwrap().is_empty());
     }
 }

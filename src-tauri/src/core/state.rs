@@ -7,7 +7,7 @@ use crate::core::paths::{
     ensure_app_directories, resolve_app_paths, AppPaths, DEFAULT_USER_DATA_PATH,
 };
 use crate::core::settings::{load_app_settings, AppSettings};
-use crate::core::storage_state::create_initial_state;
+use crate::core::storage_state::{create_initial_state, refresh_runtime_provider_state};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
@@ -176,17 +176,16 @@ impl ManagerState {
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
         match channel {
-            "app:bootstrap" | "app:refresh" | "app:ensure-tools-ready" => {
+            "app:bootstrap" | "app:refresh" => {
                 self.refresh_state().await?;
                 Ok(self.state.clone())
             }
+            "app:ensure-tools-ready" => Ok(self.state.clone()),
             "app:ensure-sessions-ready" => {
-                self.refresh_state().await?;
                 sessions::refresh_sessions_state(&self.paths, &mut self.state).await?;
                 Ok(self.state.clone())
             }
             "app:ensure-skills-ready" => {
-                self.refresh_state().await?;
                 skills::refresh_skills_state(&self.paths, &mut self.state).await?;
                 Ok(self.state.clone())
             }
@@ -1567,7 +1566,7 @@ impl ManagerState {
         ensure_app_directories(&self.paths).await?;
         self.state = create_initial_state(&self.paths, &self.app_settings)?;
         runtime_provider::refresh_drift(&self.paths, &self.state["cliTargets"]).await?;
-        self.state = create_initial_state(&self.paths, &self.app_settings)?;
+        refresh_runtime_provider_state(&self.paths, &mut self.state)?;
         Ok(())
     }
 
