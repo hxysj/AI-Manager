@@ -6,7 +6,10 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     OnceLock,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
+
+const LOG_COMPACT_SIZE: u64 = 2 * 1024 * 1024;
 
 static LOG_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -40,7 +43,7 @@ pub async fn clear_logs(user_data_path: &Path) -> Result<Value, ManagerError> {
     let file_path = log_path(user_data_path);
 
     migrate_legacy_logs(user_data_path, &file_path).await?;
-    write_logs(&file_path, &json!([])).await?;
+    write_log_lines(&file_path, &json!([])).await?;
     Ok(json!({
       "logs": [],
       "filePath": path_text(file_path)
@@ -187,16 +190,29 @@ async fn append_log(user_data_path: &Path, entry: Value) -> Result<(), ManagerEr
     let file_path = log_path(user_data_path);
 
     migrate_legacy_logs(user_data_path, &file_path).await?;
+    ensure_append_log_format(&file_path).await?;
 
-    let mut logs = read_logs(&file_path)
-        .await?
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    if let Some(parent) = file_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
 
-    logs.insert(0, entry);
-    logs.truncate(1000);
-    write_logs(&file_path, &json!(logs)).await
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&file_path)
+        .await?;
+    file.write_all(format!("{}\n", serde_json::to_string(&entry)?).as_bytes())
+        .await?;
+    file.flush().await?;
+    let should_compact = file.metadata().await?.len() > LOG_COMPACT_SIZE;
+
+    drop(file);
+
+    if should_compact {
+        let logs = read_logs(&file_path).await?;
+        write_log_lines(&file_path, &logs).await?;
+    }
+    Ok(())
 }
 
 fn sanitize_log_value(value: Value) -> Value {
@@ -250,6 +266,10 @@ fn is_sensitive_key(key: &str) -> bool {
 async fn read_logs(file_path: &Path) -> Result<Value, ManagerError> {
     match tokio::fs::read_to_string(file_path).await {
         Ok(content) => {
+            if !content.trim_start().starts_with('[') {
+                return parse_log_lines(&content).map_err(ManagerError::Json);
+            }
+
             let (logs, has_trailing_content) = parse_log_content(&content)?;
 
             if has_trailing_content && logs.is_array() {
@@ -261,6 +281,35 @@ async fn read_logs(file_path: &Path) -> Result<Value, ManagerError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(json!([])),
         Err(error) => Err(ManagerError::Io(error)),
     }
+}
+
+fn parse_log_lines(content: &str) -> Result<Value, serde_json::Error> {
+    let mut logs = content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    logs.reverse();
+    logs.truncate(1000);
+    Ok(Value::Array(logs))
+}
+
+async fn ensure_append_log_format(file_path: &Path) -> Result<(), ManagerError> {
+    let Ok(mut file) = tokio::fs::File::open(file_path).await else {
+        return Ok(());
+    };
+    let mut prefix = [0_u8; 64];
+    let size = file.read(&mut prefix).await?;
+    let starts_as_array = String::from_utf8_lossy(&prefix[..size])
+        .trim_start()
+        .starts_with('[');
+
+    if starts_as_array {
+        let logs = read_logs(file_path).await?;
+        write_log_lines(file_path, &logs).await?;
+    }
+    Ok(())
 }
 
 fn parse_log_content(content: &str) -> Result<(Value, bool), serde_json::Error> {
@@ -303,13 +352,29 @@ async fn write_logs(file_path: &Path, logs: &Value) -> Result<(), ManagerError> 
     Ok(())
 }
 
+async fn write_log_lines(file_path: &Path, logs: &Value) -> Result<(), ManagerError> {
+    if let Some(parent) = file_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+
+    let mut content = String::new();
+
+    for log in logs.as_array().cloned().unwrap_or_default().iter().rev() {
+        content.push_str(&serde_json::to_string(log)?);
+        content.push('\n');
+    }
+
+    tokio::fs::write(file_path, content).await?;
+    Ok(())
+}
+
 fn log_file_lock() -> &'static Mutex<()> {
     LOG_FILE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_log_content;
+    use super::{ensure_append_log_format, parse_log_content, parse_log_lines, read_logs};
 
     #[test]
     fn parses_log_content_without_trailing_text() {
@@ -325,5 +390,41 @@ mod tests {
 
         assert!(value.is_array());
         assert!(trailing);
+    }
+
+    #[test]
+    fn parses_appended_log_lines_in_reverse_order() {
+        let logs = parse_log_lines("{\"id\":1}\n{\"id\":2}\n").unwrap();
+
+        assert_eq!(logs[0]["id"], 2);
+        assert_eq!(logs[1]["id"], 1);
+    }
+
+    #[test]
+    fn converts_legacy_array_to_append_log_order() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "monkey-thief-app-log-conversion-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let file_path = root.join("app-call-logs.json");
+
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(&file_path, "[{\"id\":2},{\"id\":1}]\n").unwrap();
+
+            ensure_append_log_format(&file_path).await.unwrap();
+
+            let lines = std::fs::read_to_string(&file_path).unwrap();
+            assert_eq!(lines, "{\"id\":1}\n{\"id\":2}\n");
+            let logs = read_logs(&file_path).await.unwrap();
+            assert_eq!(logs[0]["id"], 2);
+            assert_eq!(logs[1]["id"], 1);
+
+            let _ = std::fs::remove_dir_all(root);
+        });
     }
 }

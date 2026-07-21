@@ -2,6 +2,7 @@ use crate::core::error::ManagerError;
 use crate::core::paths::{path_text, AppPaths};
 use crate::core::settings::serialize_portable_path;
 use crate::core::skill_store;
+use futures_util::future::join_all;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
@@ -168,20 +169,39 @@ async fn refresh_skills_state_inner(
     });
     repo_skill_counts.values_mut().for_each(|count| *count = 0);
     let mut skills = Vec::new();
+    let disabled_states = parsed_skills
+        .iter()
+        .map(|skill| {
+            previous_skill_map
+                .get(&string_value(skill.get("name")))
+                .and_then(|item| item.get("disabled"))
+                .and_then(Value::as_bool)
+                .unwrap_or(disable_new_skills)
+        })
+        .collect::<Vec<_>>();
+    let install_state_rows = join_all(
+        parsed_skills
+            .iter()
+            .zip(disabled_states.iter())
+            .map(|(skill, disabled)| {
+                join_all(
+                    cli_targets
+                        .iter()
+                        .map(|target| get_install_state(skill, target, *disabled)),
+                )
+            }),
+    )
+    .await;
 
-    for mut skill in parsed_skills {
+    for ((mut skill, disabled), target_states) in parsed_skills
+        .into_iter()
+        .zip(disabled_states)
+        .zip(install_state_rows)
+    {
         let mut install_states = serde_json::Map::new();
         let mut installed_targets = Vec::new();
-        let skill_name = string_value(skill.get("name"));
-        let disabled = previous_skill_map
-            .get(&skill_name)
-            .and_then(|item| item.get("disabled"))
-            .and_then(Value::as_bool)
-            .unwrap_or(disable_new_skills);
 
-        for cli_target in &cli_targets {
-            let state = get_install_state(&skill, cli_target, disabled).await;
-
+        for (cli_target, state) in cli_targets.iter().zip(target_states) {
             if matches!(
                 state.get("state").and_then(Value::as_str),
                 Some("installed") | Some("broken-link")

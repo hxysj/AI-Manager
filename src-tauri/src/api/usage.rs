@@ -15,9 +15,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 const DEFAULT_EXCHANGE_RATE: f64 = 7.2;
 const CODEX_USAGE_PARSER_VERSION: u64 = 2;
+const SKILL_USAGE_PARSER_VERSION: u64 = 1;
 static PRICING_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static USAGE_LOG_CACHE: OnceLock<Mutex<Option<UsageLogCache>>> = OnceLock::new();
 static USAGE_PROVIDER_STATS_CACHE: OnceLock<Mutex<HashMap<String, UsageProviderStatsCache>>> =
+    OnceLock::new();
+static SKILL_SESSION_RECORD_CACHE: OnceLock<Mutex<HashMap<String, SkillSessionRecordCache>>> =
     OnceLock::new();
 
 #[derive(Clone)]
@@ -54,6 +57,17 @@ struct SkillInvocation {
     cli: String,
     raw_path: String,
     created_at: u64,
+}
+
+#[derive(Clone)]
+struct SkillReference {
+    alias: String,
+    discoverable: bool,
+}
+
+struct SkillSessionRecordCache {
+    updated_at: u64,
+    records: Arc<Vec<Value>>,
 }
 
 struct UsageLogCache {
@@ -116,15 +130,16 @@ pub async fn get_skill_usage_stats(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let usage_logs = get_stats_data(paths, json!({}))?["logs"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let skills = collect_skills(&cli_targets, &managed_skills).await?;
-    let alias_map = create_alias_map(&skills);
+    let usage_logs = read_priced_usage_logs(paths)?;
+    let mut skills = collect_skills(&cli_targets, &managed_skills).await?;
+    let mut alias_map = create_alias_map(&skills);
     let files = collect_cli_session_files(&cli_targets)?;
+    usage_store::ensure_skill_session_parser_version(paths, SKILL_USAGE_PARSER_VERSION)?;
+    let stored_session_records = usage_store::read_skill_session_records(paths)?;
+    let mut session_record_updates = Vec::new();
     let mut diagnostics = Vec::new();
     let mut invocations = Vec::new();
+    let mut discovered_skills: HashMap<String, SkillInfo> = HashMap::new();
     let filters = json!({
       "cli": non_empty_text(payload.get("cli"), "all"),
       "startAt": number_value(payload.get("startAt"), 0),
@@ -133,7 +148,11 @@ pub async fn get_skill_usage_stats(
     });
 
     for item in files {
-        let records = match read_session_records(&item) {
+        let raw_path = string_value(item.get("filePath"));
+        let (records, records_changed) = match read_session_records(
+            &item,
+            stored_session_records.get(&raw_path),
+        ) {
             Ok(records) => records,
             Err(error) => {
                 diagnostics.push(json!({
@@ -145,17 +164,62 @@ pub async fn get_skill_usage_stats(
             }
         };
 
-        for record in records {
-            let display = string_value(record.get("display")).trim().to_string();
-            let skill_names = extract_skill_names(&display, &alias_map);
+        if records_changed {
+            session_record_updates.push((
+                raw_path,
+                file_modified_at(&string_value(item.get("filePath"))),
+                records.as_ref().clone(),
+            ));
+        }
 
-            if skill_names.is_empty() {
+        for record in records.iter() {
+            let display = string_value(record.get("display")).trim().to_string();
+            let skill_references = extract_skill_references(&display);
+
+            if skill_references.is_empty() {
                 continue;
             }
 
             let created_at = to_timestamp_ms(record.get("timestamp"), 0);
 
-            for skill_name in skill_names {
+            for reference in skill_references {
+                let alias = reference.alias.to_lowercase();
+                let leaf_alias = alias.rsplit(':').next().unwrap_or(&alias);
+                let skill_name = alias_map
+                    .get(&alias)
+                    .or_else(|| alias_map.get(leaf_alias))
+                    .cloned()
+                    .or_else(|| reference.discoverable.then(|| leaf_alias.to_string()));
+                let Some(skill_name) = skill_name else {
+                    continue;
+                };
+
+                if reference.discoverable && !alias_map.contains_key(&alias) {
+                    alias_map.insert(alias, skill_name.clone());
+                    let discovered = discovered_skills
+                        .entry(skill_name.clone())
+                        .or_insert_with(|| SkillInfo {
+                            name: skill_name.clone(),
+                            description: String::new(),
+                            source_paths: Vec::new(),
+                            cli_types: Vec::new(),
+                            aliases: vec![skill_name.clone(), reference.alias.clone()],
+                        });
+                    let cli = string_value(item.get("cli"));
+
+                    if !cli.is_empty()
+                        && !discovered
+                            .cli_types
+                            .iter()
+                            .any(|target| string_value(target.get("id")) == cli)
+                    {
+                        discovered.cli_types.push(json!({
+                          "id": cli,
+                          "name": non_empty_text(item.get("cliName"), &cli)
+                        }));
+                    }
+                }
+
                 invocations.push(SkillInvocation {
                     skill_name,
                     cli: string_value(item.get("cli")),
@@ -165,6 +229,19 @@ pub async fn get_skill_usage_stats(
             }
         }
     }
+
+    usage_store::write_skill_session_records(paths, &session_record_updates)?;
+
+    for (name, mut skill) in discovered_skills {
+        if skills.iter().any(|item| item.name == name) {
+            continue;
+        }
+
+        skill.aliases.sort();
+        skill.aliases.dedup();
+        skills.push(skill);
+    }
+    skills.sort_by(|left, right| left.name.cmp(&right.name));
 
     let usage_logs = usage_logs
         .into_iter()
@@ -244,6 +321,16 @@ pub async fn get_pricing(paths: &AppPaths) -> Result<Value, ManagerError> {
       "data": read_pricing(paths)?,
       "message": ""
     }))
+}
+
+fn read_priced_usage_logs(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
+    let pricing_config = read_pricing(paths)?;
+    let pricing_index = create_pricing_index(&pricing_config);
+
+    Ok(read_usage_logs(paths)?
+        .iter()
+        .map(|log| enrich_usage_log(log, &pricing_config, &pricing_index))
+        .collect())
 }
 
 pub async fn save_pricing(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
@@ -935,9 +1022,9 @@ fn extract_codex_logs(
     let mut logs = Vec::new();
     let mut model = string_value(session.get("model"));
     let mut previous_total_usage: Option<Map<String, Value>> = None;
-    let (is_subagent, subagent_usage_start_line) = codex_subagent_usage_start_line(content)?;
+    let mut subagent_boundary = CodexSubagentBoundary::default();
 
-    for (line_index, line) in content.lines().enumerate() {
+    for line in content.lines() {
         let text = line.trim();
 
         if text.is_empty() {
@@ -946,6 +1033,10 @@ fn extract_codex_logs(
 
         let record: Value = serde_json::from_str(text)?;
         let payload = record.get("payload").unwrap_or(&record);
+
+        if subagent_boundary.observe(&record) {
+            logs.clear();
+        }
 
         if !string_value(payload.get("model")).is_empty() {
             model = string_value(payload.get("model"));
@@ -986,11 +1077,7 @@ fn extract_codex_logs(
             Some(last_usage)
         };
 
-        if is_subagent
-            && subagent_usage_start_line
-                .map(|start_line| line_index <= start_line)
-                .unwrap_or(true)
-        {
+        if !subagent_boundary.should_collect() {
             continue;
         }
 
@@ -2128,51 +2215,53 @@ fn create_scanned_usage_session(item: &Value, raw_path: &str) -> Value {
     })
 }
 
-fn codex_subagent_usage_start_line(content: &str) -> Result<(bool, Option<usize>), ManagerError> {
-    let mut is_subagent = false;
-    let mut first_task_started_line = None;
-    let mut nested_task_started_line = None;
-    let mut task_active = false;
+#[derive(Default)]
+struct CodexSubagentBoundary {
+    is_subagent: bool,
+    task_started: bool,
+    task_active: bool,
+}
 
-    for (line_index, line) in content.lines().enumerate() {
-        let text = line.trim();
-
-        if text.is_empty() {
-            continue;
-        }
-
-        let record: Value = serde_json::from_str(text)?;
-        let payload = record.get("payload").unwrap_or(&record);
+impl CodexSubagentBoundary {
+    fn observe(&mut self, record: &Value) -> bool {
+        let payload = record.get("payload").unwrap_or(record);
+        let mut reset = false;
 
         if record.get("type").and_then(Value::as_str) == Some("session_meta") {
-            is_subagent |= string_value(payload.get("thread_source")) == "subagent"
+            let is_subagent = string_value(payload.get("thread_source")) == "subagent"
                 || payload
                     .get("source")
                     .and_then(|source| source.get("subagent"))
                     .is_some();
-            continue;
+
+            if is_subagent && !self.is_subagent {
+                self.is_subagent = true;
+                self.task_started = false;
+                self.task_active = false;
+                reset = true;
+            }
+        }
+
+        if !self.is_subagent {
+            return reset;
         }
 
         match payload.get("type").and_then(Value::as_str) {
             Some("task_started") => {
-                first_task_started_line.get_or_insert(line_index);
-
-                // 分叉快照保留着未结束的父任务，子 Agent 首任务会表现为嵌套启动。
-                if task_active && nested_task_started_line.is_none() {
-                    nested_task_started_line = Some(line_index);
-                }
-
-                task_active = true;
+                // 分叉快照保留着未结束的父任务，嵌套启动才是子 Agent 的真实起点。
+                reset |= !self.task_started || self.task_active;
+                self.task_started = true;
+                self.task_active = true;
             }
-            Some("task_complete" | "turn_aborted") => task_active = false,
+            Some("task_complete" | "turn_aborted") => self.task_active = false,
             _ => {}
         }
+        reset
     }
 
-    Ok((
-        is_subagent,
-        nested_task_started_line.or(first_task_started_line),
-    ))
+    fn should_collect(&self) -> bool {
+        !self.is_subagent || self.task_started
+    }
 }
 
 fn file_modified_at(path: &str) -> u64 {
@@ -2184,8 +2273,42 @@ fn file_modified_at(path: &str) -> u64 {
         .unwrap_or(0)
 }
 
-fn read_session_records(item: &Value) -> Result<Vec<Value>, ManagerError> {
-    let content = std::fs::read_to_string(string_value(item.get("filePath")))?;
+fn read_session_records(
+    item: &Value,
+    stored_records: Option<&(u64, Vec<Value>)>,
+) -> Result<(Arc<Vec<Value>>, bool), ManagerError> {
+    let raw_path = string_value(item.get("filePath"));
+    let updated_at = file_modified_at(&raw_path);
+    let cache = SKILL_SESSION_RECORD_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Some(records) = cache
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .get(&raw_path)
+        .filter(|cached| cached.updated_at == updated_at)
+        .map(|cached| cached.records.clone())
+    {
+        return Ok((records, false));
+    }
+
+    if let Some((_, records)) = stored_records.filter(|(stored_at, _)| *stored_at == updated_at) {
+        let records = Arc::new(records.clone());
+        cache
+            .lock()
+            .map_err(|error| ManagerError::System(error.to_string()))?
+            .insert(
+                raw_path,
+                SkillSessionRecordCache {
+                    updated_at,
+                    records: records.clone(),
+                },
+            );
+        return Ok((records, false));
+    }
+
+    let content = std::fs::read_to_string(&raw_path)?;
+    let is_codex = string_value(item.get("cli")) == "codex";
+    let mut subagent_boundary = CodexSubagentBoundary::default();
     let mut records = Vec::new();
 
     for line in content.lines() {
@@ -2196,11 +2319,34 @@ fn read_session_records(item: &Value) -> Result<Vec<Value>, ManagerError> {
         }
 
         let record: Value = serde_json::from_str(text)?;
+
+        if is_codex {
+            let reset = subagent_boundary.observe(&record);
+
+            if reset {
+                records.clear();
+            }
+            if reset || !subagent_boundary.should_collect() {
+                continue;
+            }
+        }
+
         let mut texts = Vec::new();
 
         collect_session_record_texts(&record, &mut texts);
+
+        if texts.is_empty() {
+            continue;
+        }
+
+        let display = texts.join("\n");
+
+        if extract_skill_references(&display).is_empty() {
+            continue;
+        }
+
         records.push(json!({
-          "display": texts.join("\n"),
+          "display": display,
           "timestamp": first_defined_value(&[
             record.get("timestamp"),
             record.get("createdAt"),
@@ -2208,11 +2354,22 @@ fn read_session_records(item: &Value) -> Result<Vec<Value>, ManagerError> {
             record.get("payload").and_then(|value| value.get("timestamp")),
             record.get("message").and_then(|value| value.get("timestamp"))
           ]),
-          "rawPath": string_value(item.get("filePath"))
+          "rawPath": raw_path.clone()
         }));
     }
 
-    Ok(records)
+    let records = Arc::new(records);
+    cache
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .insert(
+            raw_path,
+            SkillSessionRecordCache {
+                updated_at,
+                records: records.clone(),
+            },
+        );
+    Ok((records, true))
 }
 
 fn collect_session_record_texts(record: &Value, output: &mut Vec<String>) {
@@ -2294,26 +2451,49 @@ fn collect_tool_use_texts(content: &Value, output: &mut Vec<String>) {
     }
 }
 
-fn extract_skill_names(display: &str, alias_map: &HashMap<String, String>) -> Vec<String> {
-    let mut matches = Vec::new();
+fn extract_skill_references(display: &str) -> Vec<SkillReference> {
+    let mut references = Vec::new();
 
     for capture in slash_skill_regex().captures_iter(display) {
-        if let Some(skill_name) = alias_map.get(&capture[1].to_lowercase()) {
-            if !matches.contains(skill_name) {
-                matches.push(skill_name.clone());
-            }
-        }
+        append_skill_reference(
+            &mut references,
+            &capture[1],
+            capture[1].contains(':'),
+        );
+    }
+
+    for capture in dollar_skill_regex().captures_iter(display) {
+        append_skill_reference(&mut references, &capture[1], true);
     }
 
     for capture in path_skill_regex().captures_iter(display) {
-        if let Some(skill_name) = alias_map.get(&capture[1].to_lowercase()) {
-            if !matches.contains(skill_name) {
-                matches.push(skill_name.clone());
-            }
-        }
+        append_skill_reference(&mut references, &capture[1], true);
     }
 
-    matches
+    for capture in skill_resource_regex().captures_iter(display) {
+        append_skill_reference(&mut references, &capture[1], true);
+    }
+
+    references
+}
+
+fn append_skill_reference(
+    references: &mut Vec<SkillReference>,
+    alias: &str,
+    discoverable: bool,
+) {
+    if alias.is_empty()
+        || references
+            .iter()
+            .any(|reference| reference.alias.eq_ignore_ascii_case(alias))
+    {
+        return;
+    }
+
+    references.push(SkillReference {
+        alias: alias.to_string(),
+        discoverable,
+    });
 }
 
 fn match_invocation_logs(
@@ -2645,20 +2825,45 @@ fn match_log_filters(log: &Value, filters: &Value) -> bool {
 fn scan_skill_roots(skills_path: &str) -> Result<Vec<String>, ManagerError> {
     let mut roots = Vec::new();
 
-    for entry in std::fs::read_dir(skills_path)? {
+    scan_skill_roots_inner(Path::new(skills_path), 0, &mut roots)?;
+    roots.sort();
+    Ok(roots)
+}
+
+fn scan_skill_roots_inner(
+    current_path: &Path,
+    depth: usize,
+    roots: &mut Vec<String>,
+) -> Result<(), ManagerError> {
+    if depth > 4 {
+        return Ok(());
+    }
+
+    if depth > 0 && current_path.join("SKILL.md").is_file() {
+        roots.push(current_path.to_string_lossy().to_string());
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(current_path)? {
         let entry = entry?;
         let entry_path = entry.path();
+        let file_type = entry.file_type()?;
+        let name = entry.file_name().to_string_lossy().to_string();
 
-        if !entry_path.is_dir() {
+        if !entry_path.is_dir()
+            || [".git", "node_modules", "dist", "build"].contains(&name.as_str())
+        {
             continue;
         }
 
         if entry_path.join("SKILL.md").exists() {
             roots.push(entry_path.to_string_lossy().to_string());
+        } else if !file_type.is_symlink() {
+            scan_skill_roots_inner(&entry_path, depth + 1, roots)?;
         }
     }
 
-    Ok(roots)
+    Ok(())
 }
 
 async fn read_skill_name(skill_root: &str) -> Result<String, ManagerError> {
@@ -2842,6 +3047,7 @@ fn session_content_created_at(
             }
         }
     } else if !(app_type == "codex" && extension == "json") {
+        // JSONL 会话按时间追加，首个有效时间戳就是会话创建时间。
         for line in content.lines() {
             let text = line.trim();
 
@@ -2859,8 +3065,9 @@ fn session_content_created_at(
                 0,
             );
 
-            if created_at > 0 && (session_created_at == 0 || created_at < session_created_at) {
+            if created_at > 0 {
                 session_created_at = created_at;
+                break;
             }
         }
     }
@@ -3446,15 +3653,39 @@ fn create_pricing_id() -> String {
 fn slash_skill_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
 
-    REGEX.get_or_init(|| Regex::new(r#"(?:^|[\s`"'(\[\{<])/([A-Za-z0-9][A-Za-z0-9._-]*)"#).unwrap())
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r#"(?:^|[\s`"'(\[\{<])/([A-Za-z][A-Za-z0-9._-]*(?::[A-Za-z][A-Za-z0-9._-]*)*)"#,
+        )
+        .unwrap()
+    })
+}
+
+fn dollar_skill_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+
+    REGEX.get_or_init(|| {
+        Regex::new(
+            r#"(?:^|[\s`"'(\[\{<])\$([A-Za-z][A-Za-z0-9._-]*(?::[A-Za-z][A-Za-z0-9._-]*)*)"#,
+        )
+        .unwrap()
+    })
 }
 
 fn path_skill_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
 
     REGEX.get_or_init(|| {
-        Regex::new(r#"(?i)(?:^|[\\/])skills[\\/](?:\.system[\\/])?([^\\/]+)[\\/]SKILL\.md"#)
+        Regex::new(r#"(?i)(?:^|[\s\\/])skills[\\/](?:\.system[\\/])?([^\\/]+)[\\/]SKILL\.md"#)
             .unwrap()
+    })
+}
+
+fn skill_resource_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+
+    REGEX.get_or_init(|| {
+        Regex::new(r#"(?i)skill://(?:[^/\s]+/)*([A-Za-z][A-Za-z0-9._-]*)"#).unwrap()
     })
 }
 
@@ -3482,8 +3713,10 @@ fn decode_report_image_data_url(value: &str) -> Result<Vec<u8>, ManagerError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_session_record_texts, decode_report_image_data_url, extract_codex_logs,
-        file_modified_at, path_skill_regex, refresh_usage, slash_skill_regex,
+        collect_session_record_texts, decode_report_image_data_url, dollar_skill_regex,
+        extract_codex_logs, extract_skill_references, file_modified_at, path_skill_regex,
+        read_priced_usage_logs, read_session_records, refresh_usage, scan_skill_roots,
+        skill_resource_regex, slash_skill_regex,
     };
     use crate::core::{paths::resolve_app_paths, usage_store};
     use serde_json::json;
@@ -3493,7 +3726,134 @@ mod tests {
     #[test]
     fn skill_usage_regexes_are_valid() {
         assert!(slash_skill_regex().is_match("/frontend-design"));
+        assert!(slash_skill_regex().is_match("/browser:control-in-app-browser"));
+        assert!(dollar_skill_regex().is_match("$imagegen"));
+        assert!(skill_resource_regex().is_match("skill://browser/control-in-app-browser"));
         assert!(path_skill_regex().is_match(r"C:\Users\readboy\.codex\skills\frontend-design\SKILL.md"));
+    }
+
+    #[test]
+    fn extracts_namespaced_and_discoverable_skill_references() {
+        let references = extract_skill_references(
+            r#"/frontend-design $imagegen /browser:control-in-app-browser skill://pdf/read C:\plugins\skills\computer-use\SKILL.md"#,
+        );
+        let aliases = references
+            .iter()
+            .map(|reference| reference.alias.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(aliases.contains(&"frontend-design"));
+        assert!(aliases.contains(&"imagegen"));
+        assert!(aliases.contains(&"browser:control-in-app-browser"));
+        assert!(aliases.contains(&"read"));
+        assert!(aliases.contains(&"computer-use"));
+        assert!(!references[0].discoverable);
+        assert!(references.iter().skip(1).all(|reference| reference.discoverable));
+    }
+
+    #[test]
+    fn recursively_scans_system_skill_roots() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-system-skills-{}-{}",
+            std::process::id(),
+            super::now_millis()
+        ));
+        let system_skill = root.join(".system").join("imagegen");
+        let regular_skill = root.join("frontend-design");
+
+        std::fs::create_dir_all(&system_skill).unwrap();
+        std::fs::create_dir_all(&regular_skill).unwrap();
+        std::fs::write(system_skill.join("SKILL.md"), "---\nname: imagegen\n---\n").unwrap();
+        std::fs::write(
+            regular_skill.join("SKILL.md"),
+            "---\nname: frontend-design\n---\n",
+        )
+        .unwrap();
+
+        let roots = scan_skill_roots(root.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(roots.len(), 2);
+        assert!(roots.iter().any(|path| path.ends_with("imagegen")));
+        assert!(roots.iter().any(|path| path.ends_with("frontend-design")));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_only_codex_subagent_skill_records_after_fork() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-subagent-skill-records-{}-{}",
+            std::process::id(),
+            super::now_millis()
+        ));
+        let session_path = root.join("subagent.jsonl");
+
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            &session_path,
+            concat!(
+                "{\"timestamp\":\"2026-07-17T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"child\",\"thread_source\":\"subagent\"}}\n",
+                "{\"timestamp\":\"2026-07-17T10:00:01Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"parent\"}}\n",
+                "{\"timestamp\":\"2026-07-17T10:00:02Z\",\"payload\":{\"type\":\"custom_tool_call\",\"input\":\"read C:/skills/frontend-design/SKILL.md\"}}\n",
+                "{\"timestamp\":\"2026-07-17T10:00:03Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"child\"}}\n",
+                "{\"timestamp\":\"2026-07-17T10:00:04Z\",\"payload\":{\"type\":\"custom_tool_call\",\"input\":\"read C:/skills/persona-imitation/SKILL.md\"}}\n"
+            ),
+        )
+        .unwrap();
+        let (records, _) = read_session_records(
+            &json!({
+              "cli": "codex",
+              "filePath": session_path.to_string_lossy()
+            }),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(records.len(), 1);
+        assert!(records[0]["display"]
+            .as_str()
+            .unwrap()
+            .contains("persona-imitation"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn reads_all_usage_logs_for_skill_matching() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-skill-usage-logs-{}-{}",
+            std::process::id(),
+            super::now_millis()
+        ));
+        let paths = resolve_app_paths(Path::new(&root));
+        let raw_path = root.join("session.jsonl").to_string_lossy().to_string();
+        let logs = (0..25)
+            .map(|index| {
+                json!({
+                  "requestId": format!("request-{index}"),
+                  "rawPath": raw_path,
+                  "createdAt": index + 1,
+                  "appType": "codex",
+                  "inputTokens": 10,
+                  "outputTokens": 5
+                })
+            })
+            .collect::<Vec<_>>();
+
+        std::fs::create_dir_all(&paths.workspace_root).unwrap();
+        usage_store::replace_sessions(
+            &paths,
+            &[usage_store::UsageSessionUpdate {
+                raw_path,
+                app_type: "codex".to_string(),
+                updated_at: 1,
+                logs,
+                records: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(read_priced_usage_logs(&paths).unwrap().len(), 25);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

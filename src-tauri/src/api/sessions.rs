@@ -4,7 +4,7 @@ use crate::core::paths::AppPaths;
 use crate::core::settings::string_value;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::process::Command;
@@ -16,6 +16,18 @@ pub async fn refresh_sessions_state(
     paths: &AppPaths,
     state: &mut Value,
 ) -> Result<(), ManagerError> {
+    let previous_sessions = state
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let previous_session_map = previous_sessions
+        .into_iter()
+        .filter_map(|session| {
+            let raw_path = string_value(session.get("rawPath"));
+            (!raw_path.is_empty()).then_some((raw_path, session))
+        })
+        .collect::<HashMap<_, _>>();
     let cli_targets = state
         .get("cliTargets")
         .and_then(Value::as_array)
@@ -31,6 +43,20 @@ pub async fn refresh_sessions_state(
         let raw_path = string_value(item.get("filePath"));
 
         if raw_path.is_empty() || !seen_paths.insert(raw_path.clone()) {
+            continue;
+        }
+
+        let source_updated_at = std::fs::metadata(&raw_path)
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(system_time_millis)
+            .unwrap_or(0);
+
+        if let Some(previous) = previous_session_map.get(&raw_path).filter(|session| {
+            source_updated_at > 0
+                && session.get("updatedAt").and_then(Value::as_u64) == Some(source_updated_at)
+        }) {
+            sessions.push(previous.clone());
             continue;
         }
 
@@ -183,90 +209,32 @@ async fn reconcile_recycled_session(
 async fn scan_session_metadata(item: &Value) -> Result<Option<Value>, ManagerError> {
     let raw_path = string_value(item.get("filePath"));
     let cli = string_value(item.get("cli"));
-    let source = json!({
-      "cli": cli,
-      "rawPath": raw_path
-    });
-    let (messages, records) = parse_session_file(&source).await?;
-    let has_conversation = messages.iter().any(|message| {
-        matches!(
-            message.get("role").and_then(Value::as_str),
-            Some("user") | Some("assistant") | Some("tool")
-        )
-    });
+    let content = tokio::fs::read_to_string(&raw_path).await?;
+    let metadata = scan_session_metadata_content(&raw_path, &cli, &content)?;
 
-    if messages.is_empty()
-        || (["claude", "codex", "opencode"].contains(&cli.as_str()) && !has_conversation)
+    if metadata.message_count == 0
+        || (["claude", "codex", "opencode"].contains(&cli.as_str())
+            && !metadata.has_conversation)
     {
         return Ok(None);
     }
 
-    let mut title = String::new();
-    let mut project_path = String::new();
-    let mut model = String::new();
-    let mut token_count = 0;
-
-    for record in &records {
-        let payload = record.get("payload").unwrap_or(record);
-        let metadata = payload.get("metadata");
+    let title = if metadata.title.is_empty() {
+        let title = truncate_text(&metadata.first_user_message, 50);
 
         if title.is_empty() {
-            title = first_string(payload.get("title"), metadata.and_then(|item| item.get("title")));
+            Path::new(&raw_path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(&raw_path)
+                .to_string()
+        } else {
+            title
         }
-        if project_path.is_empty() {
-            project_path = first_string(
-                payload
-                    .get("cwd")
-                    .or_else(|| payload.get("workspace"))
-                    .or_else(|| payload.get("projectPath")),
-                metadata.and_then(|item| {
-                    item.get("cwd")
-                        .or_else(|| item.get("workspace"))
-                        .or_else(|| item.get("projectPath"))
-                }),
-            );
-        }
-        if model.is_empty() {
-            model = first_string(
-                payload
-                    .get("model")
-                    .or_else(|| payload.get("message").and_then(|item| item.get("model"))),
-                metadata.and_then(|item| item.get("model")),
-            );
-        }
-        if token_count == 0 {
-            token_count = payload
-                .get("tokenCount")
-                .and_then(Value::as_u64)
-                .or_else(|| {
-                    payload
-                        .get("usage")
-                        .and_then(|item| item.get("total_tokens"))
-                        .and_then(Value::as_u64)
-                })
-                .unwrap_or(0);
-        }
-    }
-
-    if title.is_empty() {
-        title = messages
-            .iter()
-            .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-            .map(|message| truncate_text(&string_value(message.get("content")), 50))
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| {
-                Path::new(&raw_path)
-                    .file_name()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or(&raw_path)
-                    .to_string()
-            });
-    }
-    let summary = messages
-        .iter()
-        .find(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        .map(|message| truncate_text(&string_value(message.get("content")), 120))
-        .unwrap_or_default();
+    } else {
+        metadata.title
+    };
+    let summary = truncate_text(&metadata.first_assistant_message, 120);
     let file_metadata = std::fs::metadata(&raw_path)?;
     let created_at = file_metadata
         .created()
@@ -278,7 +246,7 @@ async fn scan_session_metadata(item: &Value) -> Result<Option<Value>, ManagerErr
         .ok()
         .and_then(system_time_millis)
         .unwrap_or(0);
-    let project_name = Path::new(&project_path)
+    let project_name = Path::new(&metadata.project_path)
         .file_name()
         .and_then(|value| value.to_str())
         .unwrap_or("")
@@ -290,18 +258,165 @@ async fn scan_session_metadata(item: &Value) -> Result<Option<Value>, ManagerErr
       "cliName": first_string(item.get("cliName"), item.get("cli")),
       "title": title,
       "summary": summary,
-      "projectPath": project_path,
+      "projectPath": metadata.project_path,
       "projectName": project_name,
-      "model": model,
+      "model": metadata.model,
       "rawPath": raw_path,
       "createdAt": created_at,
       "updatedAt": updated_at,
-      "messageCount": messages.len(),
-      "tokenCount": token_count,
+      "messageCount": metadata.message_count,
+      "tokenCount": metadata.token_count,
       "pinned": false,
       "archived": false,
       "deleted": false
     })))
+}
+
+#[derive(Default)]
+struct SessionMetadataSummary {
+    title: String,
+    first_user_message: String,
+    first_assistant_message: String,
+    project_path: String,
+    model: String,
+    token_count: u64,
+    message_count: usize,
+    has_conversation: bool,
+}
+
+fn scan_session_metadata_content(
+    raw_path: &str,
+    cli: &str,
+    content: &str,
+) -> Result<SessionMetadataSummary, ManagerError> {
+    let extension = Path::new(raw_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    let mut summary = SessionMetadataSummary::default();
+
+    if extension == "json" {
+        let payload: Value = serde_json::from_str(content)?;
+
+        if payload.is_object() {
+            append_session_metadata_fields(&mut summary, &payload);
+        }
+
+        for record in payload
+            .as_array()
+            .or_else(|| payload.get("messages").and_then(Value::as_array))
+            .into_iter()
+            .flatten()
+        {
+            append_session_metadata_record(&mut summary, record, cli);
+        }
+        return Ok(summary);
+    }
+
+    if extension == "md" && !content.to_lowercase().contains("messages") {
+        return Ok(summary);
+    }
+
+    for line in content.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        if let Ok(record) = serde_json::from_str::<Value>(line) {
+            append_session_metadata_record(&mut summary, &record, cli);
+        }
+    }
+    Ok(summary)
+}
+
+fn append_session_metadata_record(
+    summary: &mut SessionMetadataSummary,
+    record: &Value,
+    cli: &str,
+) {
+    append_session_metadata_fields(summary, record);
+
+    let payload = record.get("payload").unwrap_or(record);
+
+    if cli == "codex"
+        && !matches!(
+            payload.get("type").and_then(Value::as_str),
+            Some("message") | Some("function_call")
+        )
+    {
+        return;
+    }
+
+    let message = normalize_message(record);
+    let content = string_value(message.get("content"));
+    let has_tool_calls = message
+        .get("toolCalls")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty());
+
+    if content.is_empty() && !has_tool_calls {
+        return;
+    }
+
+    summary.message_count += 1;
+
+    match message.get("role").and_then(Value::as_str) {
+        Some("user") => {
+            summary.has_conversation = true;
+            if summary.first_user_message.is_empty() {
+                summary.first_user_message = content;
+            }
+        }
+        Some("assistant") => {
+            summary.has_conversation = true;
+            if summary.first_assistant_message.is_empty() {
+                summary.first_assistant_message = content;
+            }
+        }
+        Some("tool") => summary.has_conversation = true,
+        _ => {}
+    }
+}
+
+fn append_session_metadata_fields(summary: &mut SessionMetadataSummary, record: &Value) {
+    let payload = record.get("payload").unwrap_or(record);
+    let metadata = payload.get("metadata");
+
+    if summary.title.is_empty() {
+        summary.title = first_string(
+            payload.get("title"),
+            metadata.and_then(|item| item.get("title")),
+        );
+    }
+    if summary.project_path.is_empty() {
+        summary.project_path = first_string(
+            payload
+                .get("cwd")
+                .or_else(|| payload.get("workspace"))
+                .or_else(|| payload.get("projectPath")),
+            metadata.and_then(|item| {
+                item.get("cwd")
+                    .or_else(|| item.get("workspace"))
+                    .or_else(|| item.get("projectPath"))
+            }),
+        );
+    }
+    if summary.model.is_empty() {
+        summary.model = first_string(
+            payload
+                .get("model")
+                .or_else(|| payload.get("message").and_then(|item| item.get("model"))),
+            metadata.and_then(|item| item.get("model")),
+        );
+    }
+    if summary.token_count == 0 {
+        summary.token_count = payload
+            .get("tokenCount")
+            .and_then(Value::as_u64)
+            .or_else(|| {
+                payload
+                    .get("usage")
+                    .and_then(|item| item.get("total_tokens"))
+                    .and_then(Value::as_u64)
+            })
+            .unwrap_or(0);
+    }
 }
 
 pub async fn search_sessions(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
@@ -1094,6 +1209,54 @@ mod tests {
             .unwrap();
             assert_eq!(stored.as_array().unwrap().len(), 1);
             assert_eq!(stored[0]["rawPath"], valid_path.to_string_lossy().as_ref());
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
+
+    #[test]
+    fn reuses_unchanged_session_metadata_without_reparsing() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "monkey-thief-session-cache-{}-{}",
+                std::process::id(),
+                super::now_millis()
+            ));
+            let paths = resolve_app_paths(Path::new(&root));
+            let source_dir = root.join("codex-sessions");
+            let session_path = source_dir.join("cached.jsonl");
+
+            std::fs::create_dir_all(&source_dir).unwrap();
+            std::fs::write(&session_path, "invalid json that must not be reparsed\n").unwrap();
+            let updated_at = std::fs::metadata(&session_path)
+                .unwrap()
+                .modified()
+                .unwrap()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let mut state = json!({
+              "cliTargets": [{
+                "id": "codex",
+                "type": "codex",
+                "name": "Codex",
+                "sessionPaths": [source_dir.to_string_lossy().to_string()]
+              }],
+              "sessions": [{
+                "id": "cached-session",
+                "cli": "codex",
+                "title": "缓存标题",
+                "rawPath": session_path.to_string_lossy().to_string(),
+                "updatedAt": updated_at
+              }],
+              "diagnostics": []
+            });
+
+            refresh_sessions_state(&paths, &mut state).await.unwrap();
+
+            assert_eq!(state["sessions"].as_array().unwrap().len(), 1);
+            assert_eq!(state["sessions"][0]["title"], "缓存标题");
+            assert!(state["diagnostics"].as_array().unwrap().is_empty());
 
             let _ = std::fs::remove_dir_all(root);
         });
