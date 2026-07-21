@@ -9,12 +9,12 @@ use regex::Regex;
 use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 const DEFAULT_EXCHANGE_RATE: f64 = 7.2;
+const CODEX_USAGE_PARSER_VERSION: u64 = 2;
 static PRICING_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static USAGE_LOG_CACHE: OnceLock<Mutex<Option<UsageLogCache>>> = OnceLock::new();
 static USAGE_PROVIDER_STATS_CACHE: OnceLock<Mutex<HashMap<String, UsageProviderStatsCache>>> =
@@ -562,12 +562,12 @@ fn get_initial_state_data(paths: &AppPaths) -> Result<Value, ManagerError> {
 async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
     let mut diagnostics = Vec::new();
     let mut updates = Vec::new();
-    let mut removed_subagent_paths = Vec::new();
     let workspace_created_at = std::fs::metadata(&paths.workspace_root)?
         .created()?
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| ManagerError::System(error.to_string()))?
         .as_millis() as u64;
+    usage_store::ensure_session_parser_version(paths, "codex", CODEX_USAGE_PARSER_VERSION)?;
     let session_versions = usage_store::read_session_versions(paths)?;
 
     for mut session in collect_usage_sessions(paths, state)? {
@@ -580,13 +580,6 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
 
         let session_updated_at = file_modified_at(&raw_path);
         session["updatedAt"] = json!(session_updated_at);
-
-        if app_type == "codex" && is_codex_subagent_session(&raw_path)? {
-            if session_versions.contains_key(&raw_path) {
-                removed_subagent_paths.push(raw_path);
-            }
-            continue;
-        }
 
         if session_versions.get(&raw_path) == Some(&session_updated_at) {
             continue;
@@ -623,7 +616,6 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         }
     }
 
-    usage_store::remove_usage_sessions(paths, &removed_subagent_paths)?;
     usage_store::replace_sessions(paths, &updates)?;
     Ok(diagnostics)
 }
@@ -943,8 +935,9 @@ fn extract_codex_logs(
     let mut logs = Vec::new();
     let mut model = string_value(session.get("model"));
     let mut previous_total_usage: Option<Map<String, Value>> = None;
+    let (is_subagent, subagent_usage_start_line) = codex_subagent_usage_start_line(content)?;
 
-    for line in content.lines() {
+    for (line_index, line) in content.lines().enumerate() {
         let text = line.trim();
 
         if text.is_empty() {
@@ -972,20 +965,38 @@ fn extract_codex_logs(
         }
 
         let info = payload.get("info").unwrap_or(&Value::Null);
-        let total_usage = normalize_codex_token_usage(info.get("total_token_usage"));
         let last_usage = normalize_codex_token_usage(info.get("last_token_usage"));
-        let delta = subtract_token_usage(&total_usage, previous_total_usage.as_ref());
-        let usage = if is_valid_codex_delta(&delta) {
-            delta
+        let usage = if let Some(total_usage) = info
+            .get("total_token_usage")
+            .filter(|usage| usage.is_object())
+            .map(|usage| normalize_codex_token_usage(Some(usage)))
+        {
+            let delta = subtract_token_usage(&total_usage, previous_total_usage.as_ref());
+            previous_total_usage = Some(total_usage);
+
+            if is_valid_codex_delta(&delta) {
+                Some(delta)
+            } else if has_negative_codex_delta(&delta) {
+                // 累计计数器重置时使用单次用量；累计值不变只是重复事件。
+                Some(last_usage)
+            } else {
+                None
+            }
         } else {
-            last_usage
+            Some(last_usage)
         };
 
-        previous_total_usage = Some(total_usage);
-
-        if !is_valid_codex_delta(&usage) {
+        if is_subagent
+            && subagent_usage_start_line
+                .map(|start_line| line_index <= start_line)
+                .unwrap_or(true)
+        {
             continue;
         }
+
+        let Some(usage) = usage.filter(is_valid_codex_delta) else {
+            continue;
+        };
 
         logs.push(create_usage_log(
             session,
@@ -2117,26 +2128,51 @@ fn create_scanned_usage_session(item: &Value, raw_path: &str) -> Value {
     })
 }
 
-fn is_codex_subagent_session(raw_path: &str) -> Result<bool, ManagerError> {
-    let file = std::fs::File::open(raw_path)?;
-    let reader = BufReader::new(file);
+fn codex_subagent_usage_start_line(content: &str) -> Result<(bool, Option<usize>), ManagerError> {
+    let mut is_subagent = false;
+    let mut first_task_started_line = None;
+    let mut nested_task_started_line = None;
+    let mut task_active = false;
 
-    for line in reader.lines().take(8) {
-        let record: Value = serde_json::from_str(&line?)?;
+    for (line_index, line) in content.lines().enumerate() {
+        let text = line.trim();
 
-        if record.get("type").and_then(Value::as_str) != Some("session_meta") {
+        if text.is_empty() {
             continue;
         }
 
+        let record: Value = serde_json::from_str(text)?;
         let payload = record.get("payload").unwrap_or(&record);
-        return Ok(string_value(payload.get("thread_source")) == "subagent"
-            || payload
-                .get("source")
-                .and_then(|source| source.get("subagent"))
-                .is_some());
+
+        if record.get("type").and_then(Value::as_str) == Some("session_meta") {
+            is_subagent |= string_value(payload.get("thread_source")) == "subagent"
+                || payload
+                    .get("source")
+                    .and_then(|source| source.get("subagent"))
+                    .is_some();
+            continue;
+        }
+
+        match payload.get("type").and_then(Value::as_str) {
+            Some("task_started") => {
+                first_task_started_line.get_or_insert(line_index);
+
+                // 分叉快照保留着未结束的父任务，子 Agent 首任务会表现为嵌套启动。
+                if task_active && nested_task_started_line.is_none() {
+                    nested_task_started_line = Some(line_index);
+                }
+
+                task_active = true;
+            }
+            Some("task_complete" | "turn_aborted") => task_active = false,
+            _ => {}
+        }
     }
 
-    Ok(false)
+    Ok((
+        is_subagent,
+        nested_task_started_line.or(first_task_started_line),
+    ))
 }
 
 fn file_modified_at(path: &str) -> u64 {
@@ -2882,6 +2918,12 @@ fn is_valid_codex_delta(delta: &Map<String, Value>) -> bool {
         && input_tokens + output_tokens > 0
 }
 
+fn has_negative_codex_delta(delta: &Map<String, Value>) -> bool {
+    ["input_tokens", "cached_input_tokens", "output_tokens"]
+        .iter()
+        .any(|key| signed_number(delta.get(*key)) < 0)
+}
+
 fn get_usage_value(usage: &Value, keys: &[&str]) -> u64 {
     for key in keys {
         if let Some(value) = usage.get(*key) {
@@ -3440,8 +3482,8 @@ fn decode_report_image_data_url(value: &str) -> Result<Vec<u8>, ManagerError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_session_record_texts, decode_report_image_data_url, file_modified_at,
-        is_codex_subagent_session, path_skill_regex, refresh_usage, slash_skill_regex,
+        collect_session_record_texts, decode_report_image_data_url, extract_codex_logs,
+        file_modified_at, path_skill_regex, refresh_usage, slash_skill_regex,
     };
     use crate::core::{paths::resolve_app_paths, usage_store};
     use serde_json::json;
@@ -3488,37 +3530,82 @@ mod tests {
     }
 
     #[test]
-    fn detects_codex_subagent_session_from_metadata() {
-        let root = std::env::temp_dir().join(format!(
-            "monkey-thief-codex-session-{}-{}",
-            std::process::id(),
-            super::now_millis()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-
-        let subagent_path = root.join("subagent.jsonl");
-        std::fs::write(
-            &subagent_path,
-            r#"{"timestamp":"2026-07-17T10:00:00Z","type":"session_meta","payload":{"session_id":"parent","id":"child","thread_source":"subagent","parent_thread_id":"parent"}}
-"#,
+    fn extracts_only_codex_subagent_usage_after_fork() {
+        let content = concat!(
+            "{\"timestamp\":\"2026-07-17T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"child\",\"thread_source\":\"subagent\",\"parent_thread_id\":\"parent\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"parent\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:01Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"parent-turn\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:02Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":60,\"output_tokens\":10},\"last_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":60,\"output_tokens\":10}}}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:03Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"child-turn\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:04Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":130,\"cached_input_tokens\":80,\"output_tokens\":15},\"last_token_usage\":{\"input_tokens\":30,\"cached_input_tokens\":20,\"output_tokens\":5}}}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:05Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":130,\"cached_input_tokens\":80,\"output_tokens\":15},\"last_token_usage\":{\"input_tokens\":30,\"cached_input_tokens\":20,\"output_tokens\":5}}}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:06Z\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"child-turn\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:07Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"child-follow-up\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:08Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":150,\"cached_input_tokens\":90,\"output_tokens\":20},\"last_token_usage\":{\"input_tokens\":20,\"cached_input_tokens\":10,\"output_tokens\":5}}}}\n"
+        );
+        let logs = extract_codex_logs(
+            &json!({"id": "child", "cli": "codex", "model": "gpt-test"}),
+            content,
+            &json!({"providerId": "openai", "providerName": "OpenAI", "providerType": "official"}),
         )
         .unwrap();
-        assert!(is_codex_subagent_session(subagent_path.to_string_lossy().as_ref()).unwrap());
 
-        let root_path = root.join("root.jsonl");
-        std::fs::write(
-            &root_path,
-            r#"{"timestamp":"2026-07-17T10:00:00Z","type":"session_meta","payload":{"session_id":"root","id":"root"}}
-"#,
-        )
-        .unwrap();
-        assert!(!is_codex_subagent_session(root_path.to_string_lossy().as_ref()).unwrap());
-
-        let _ = std::fs::remove_dir_all(root);
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0]["inputTokens"], 30);
+        assert_eq!(logs[0]["cacheReadTokens"], 20);
+        assert_eq!(logs[0]["outputTokens"], 5);
+        assert_eq!(logs[1]["inputTokens"], 20);
+        assert_eq!(logs[1]["cacheReadTokens"], 10);
+        assert_eq!(logs[1]["outputTokens"], 5);
     }
 
     #[test]
-    fn refresh_usage_removes_indexed_codex_subagent_usage() {
+    fn extracts_all_codex_v1_subagent_turns() {
+        let content = concat!(
+            "{\"timestamp\":\"2026-07-17T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"child\",\"thread_source\":\"subagent\",\"parent_thread_id\":\"parent\",\"multi_agent_version\":\"v1\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:01Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"child-turn\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:02Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":10,\"cached_input_tokens\":5,\"output_tokens\":5}}}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:03Z\",\"payload\":{\"type\":\"task_complete\",\"turn_id\":\"child-turn\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:04Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"child-follow-up\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:05Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":30,\"cached_input_tokens\":15,\"output_tokens\":10}}}}\n"
+        );
+        let logs = extract_codex_logs(
+            &json!({"id": "child", "cli": "codex", "model": "gpt-test"}),
+            content,
+            &json!({"providerId": "openai", "providerName": "OpenAI", "providerType": "official"}),
+        )
+        .unwrap();
+
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0]["inputTokens"], 10);
+        assert_eq!(logs[1]["inputTokens"], 20);
+    }
+
+    #[test]
+    fn extracts_codex_last_usage_when_total_counter_resets() {
+        let content = concat!(
+            "{\"timestamp\":\"2026-07-17T10:00:00Z\",\"payload\":{\"type\":\"session_meta\",\"model\":\"gpt-test\"}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:01Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":60,\"output_tokens\":10}}}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:02Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":20,\"cached_input_tokens\":10,\"output_tokens\":5},\"last_token_usage\":{\"input_tokens\":20,\"cached_input_tokens\":10,\"output_tokens\":5}}}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:03Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":10,\"cached_input_tokens\":5,\"output_tokens\":2}}}}\n",
+            "{\"timestamp\":\"2026-07-17T10:00:04Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":30,\"cached_input_tokens\":15,\"output_tokens\":7}}}}\n"
+        );
+        let logs = extract_codex_logs(
+            &json!({"id": "root", "cli": "codex"}),
+            content,
+            &json!({"providerId": "openai", "providerName": "OpenAI", "providerType": "official"}),
+        )
+        .unwrap();
+
+        assert_eq!(logs.len(), 4);
+        assert_eq!(logs[0]["inputTokens"], 100);
+        assert_eq!(logs[1]["inputTokens"], 20);
+        assert_eq!(logs[2]["inputTokens"], 10);
+        assert_eq!(logs[3]["inputTokens"], 10);
+    }
+
+    #[test]
+    fn refresh_usage_reindexes_codex_subagent_delta() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "monkey-thief-codex-subagent-usage-{}-{}",
@@ -3531,8 +3618,14 @@ mod tests {
             std::fs::create_dir_all(&paths.workspace_root).unwrap();
             std::fs::write(
                 &subagent_path,
-                r#"{"timestamp":"2026-07-17T10:00:00Z","type":"session_meta","payload":{"session_id":"parent","id":"child","thread_source":"subagent","parent_thread_id":"parent"}}
-"#,
+                concat!(
+                    "{\"timestamp\":\"2026-07-17T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"child\",\"thread_source\":\"subagent\",\"parent_thread_id\":\"parent\"}}\n",
+                    "{\"timestamp\":\"2026-07-17T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"parent\"}}\n",
+                    "{\"timestamp\":\"2026-07-17T10:00:01Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"parent-turn\"}}\n",
+                    "{\"timestamp\":\"2026-07-17T10:00:02Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":100,\"cached_input_tokens\":60,\"output_tokens\":10}}}}\n",
+                    "{\"timestamp\":\"2026-07-17T10:00:03Z\",\"payload\":{\"type\":\"task_started\",\"turn_id\":\"child-turn\"}}\n",
+                    "{\"timestamp\":\"2026-07-17T10:00:04Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":130,\"cached_input_tokens\":80,\"output_tokens\":15},\"last_token_usage\":{\"input_tokens\":30,\"cached_input_tokens\":20,\"output_tokens\":5}}}}\n"
+                ),
             )
             .unwrap();
             let subagent_path = subagent_path.to_string_lossy().to_string();
@@ -3567,10 +3660,12 @@ mod tests {
 
             refresh_usage(&paths, &state).await.unwrap();
 
-            assert!(usage_store::read_all_logs(&paths).unwrap().is_empty());
-            assert!(usage_store::read_session_versions(&paths)
-                .unwrap()
-                .is_empty());
+            let logs = usage_store::read_all_logs(&paths).unwrap();
+            assert_eq!(logs.len(), 1);
+            assert_eq!(logs[0]["inputTokens"], 30);
+            assert_eq!(logs[0]["cacheReadTokens"], 20);
+            assert_eq!(logs[0]["outputTokens"], 5);
+            assert_eq!(usage_store::read_session_versions(&paths).unwrap().len(), 1);
 
             let _ = std::fs::remove_dir_all(root);
         });

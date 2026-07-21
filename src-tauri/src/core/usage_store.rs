@@ -130,6 +130,48 @@ pub fn read_session_versions(paths: &AppPaths) -> Result<HashMap<String, u64>, M
     Ok(items.collect::<Result<HashMap<_, _>, _>>()?)
 }
 
+pub fn ensure_session_parser_version(
+    paths: &AppPaths,
+    app_type: &str,
+    version: u64,
+) -> Result<(), ManagerError> {
+    initialize(paths)?;
+    let mut connection = open_connection(paths)?;
+    let key = format!("session_parser_version:{app_type}");
+    let current_version = connection
+        .query_row(
+            "SELECT value FROM usage_metadata WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    if current_version.as_deref() == Some(&version.to_string()) {
+        return Ok(());
+    }
+
+    let transaction = connection.transaction()?;
+    transaction.execute(
+        "DELETE FROM usage_logs
+         WHERE raw_path IN (
+           SELECT raw_path FROM usage_sessions WHERE app_type = ?1
+         )",
+        params![app_type],
+    )?;
+    transaction.execute(
+        "DELETE FROM usage_sessions WHERE app_type = ?1",
+        params![app_type],
+    )?;
+    transaction.execute(
+        "INSERT INTO usage_metadata(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, version.to_string()],
+    )?;
+    bump_revision(&transaction)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 pub fn read_request_records(
     paths: &AppPaths,
     request_ids: &[String],
@@ -201,31 +243,6 @@ pub fn replace_sessions(
                app_type = excluded.app_type,
                updated_at = excluded.updated_at",
             params![update.raw_path, update.app_type, to_i64(update.updated_at)],
-        )?;
-    }
-
-    bump_revision(&transaction)?;
-    transaction.commit()?;
-    Ok(())
-}
-
-pub fn remove_usage_sessions(paths: &AppPaths, raw_paths: &[String]) -> Result<(), ManagerError> {
-    if raw_paths.is_empty() {
-        return Ok(());
-    }
-
-    initialize(paths)?;
-    let mut connection = open_connection(paths)?;
-    let transaction = connection.transaction()?;
-
-    for raw_path in raw_paths {
-        transaction.execute(
-            "DELETE FROM usage_logs WHERE raw_path = ?1",
-            params![raw_path],
-        )?;
-        transaction.execute(
-            "DELETE FROM usage_sessions WHERE raw_path = ?1",
-            params![raw_path],
         )?;
     }
 
