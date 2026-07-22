@@ -91,6 +91,13 @@ pub fn build_state(paths: &AppPaths) -> Result<Value, ManagerError> {
     get_initial_state_data(paths)
 }
 
+pub async fn sync_pending_usage(
+    paths: &AppPaths,
+    state: &Value,
+) -> Result<Vec<Value>, ManagerError> {
+    refresh_usage(paths, state).await
+}
+
 pub async fn get_stats(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
     Ok(json!({
       "status": "ok",
@@ -104,7 +111,7 @@ pub async fn sync_usage(
     payload: Value,
     state: &Value,
 ) -> Result<Value, ManagerError> {
-    let diagnostics = refresh_usage(paths, state).await?;
+    let diagnostics = sync_pending_usage(paths, state).await?;
     let data = get_stats_data(paths, payload)?;
 
     Ok(json!({
@@ -3716,7 +3723,7 @@ mod tests {
         collect_session_record_texts, decode_report_image_data_url, dollar_skill_regex,
         extract_codex_logs, extract_skill_references, file_modified_at, path_skill_regex,
         read_priced_usage_logs, read_session_records, refresh_usage, scan_skill_roots,
-        skill_resource_regex, slash_skill_regex,
+        skill_resource_regex, slash_skill_regex, sync_pending_usage,
     };
     use crate::core::{paths::resolve_app_paths, usage_store};
     use serde_json::json;
@@ -4081,6 +4088,131 @@ mod tests {
         });
     }
 
+    #[test]
+    fn sync_before_provider_switch_preserves_request_provider_bindings() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!(
+                "monkey-thief-usage-provider-switch-{}-{}",
+                std::process::id(),
+                super::now_millis()
+            ));
+            let paths = resolve_app_paths(Path::new(&root));
+            let session_path = root.join("session.jsonl");
+            let session_created_at = (super::now_millis() + 1_000) as u64;
+            let first_request_at = session_created_at + 1;
+
+            std::fs::create_dir_all(&paths.workspace_root).unwrap();
+            std::fs::write(
+                &session_path,
+                format!(
+                    "{}\n{}\n",
+                    json!({
+                      "timestamp": session_created_at,
+                      "payload": { "type": "session_meta", "model": "gpt-test" }
+                    }),
+                    json!({
+                      "timestamp": first_request_at,
+                      "payload": {
+                        "type": "token_count",
+                        "info": {
+                          "total_token_usage": { "input_tokens": 10, "output_tokens": 5 }
+                        }
+                      }
+                    })
+                ),
+            )
+            .unwrap();
+
+            let providers = json!([
+              {
+                "id": "provider-a",
+                "cli": "codex",
+                "name": "Provider A",
+                "type": "custom",
+                "enabled": true
+              },
+              {
+                "id": "provider-b",
+                "cli": "codex",
+                "name": "Provider B",
+                "type": "custom",
+                "enabled": true
+              }
+            ]);
+            let create_state = |active_provider_id: &str| {
+                json!({
+                  "providers": providers.clone(),
+                  "codexProxyState": {
+                    "enabled": true,
+                    "activeProviderId": active_provider_id
+                  },
+                  "sessions": [{
+                    "id": "session-a",
+                    "cli": "codex",
+                    "rawPath": session_path.to_string_lossy()
+                  }],
+                  "cliTargets": []
+                })
+            };
+
+            sync_pending_usage(&paths, &create_state("provider-a"))
+                .await
+                .unwrap();
+
+            std::thread::sleep(Duration::from_millis(20));
+            let second_request_at = first_request_at + 1_000;
+            std::fs::write(
+                &session_path,
+                format!(
+                    "{}\n{}\n{}\n",
+                    json!({
+                      "timestamp": session_created_at,
+                      "payload": { "type": "session_meta", "model": "gpt-test" }
+                    }),
+                    json!({
+                      "timestamp": first_request_at,
+                      "payload": {
+                        "type": "token_count",
+                        "info": {
+                          "total_token_usage": { "input_tokens": 10, "output_tokens": 5 }
+                        }
+                      }
+                    }),
+                    json!({
+                      "timestamp": second_request_at,
+                      "payload": {
+                        "type": "token_count",
+                        "info": {
+                          "total_token_usage": { "input_tokens": 30, "output_tokens": 10 }
+                        }
+                      }
+                    })
+                ),
+            )
+            .unwrap();
+
+            sync_pending_usage(&paths, &create_state("provider-b"))
+                .await
+                .unwrap();
+
+            let logs = usage_store::read_all_logs(&paths).unwrap();
+            assert_eq!(logs.len(), 2);
+            assert_eq!(
+                logs.iter()
+                    .find(|log| log["createdAt"] == first_request_at)
+                    .unwrap()["providerId"],
+                "provider-a"
+            );
+            assert_eq!(
+                logs.iter()
+                    .find(|log| log["createdAt"] == second_request_at)
+                    .unwrap()["providerId"],
+                "provider-b"
+            );
+
+            let _ = std::fs::remove_dir_all(root);
+        });
+    }
 }
 
 fn read_usage_logs(paths: &AppPaths) -> Result<Arc<Vec<Value>>, ManagerError> {
