@@ -175,6 +175,25 @@ impl ManagerState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        if matches!(
+            channel,
+            "claude-proxy:activate-provider"
+                | "codex-proxy:activate-provider"
+                | "claude-proxy:enable"
+                | "codex-proxy:enable"
+                | "claude-proxy:disable"
+                | "codex-proxy:disable"
+                | "codex-account:enable"
+                | "codex-account:clear"
+                | "codex-account:disable"
+                | "codex-account:delete"
+                | "provider:save"
+                | "runtime:switch"
+                | "runtime:clear"
+        ) {
+            self.preserve_pending_usage_provider_bindings().await?;
+        }
+
         match channel {
             "app:bootstrap" | "app:refresh" => {
                 self.refresh_state().await?;
@@ -1570,6 +1589,12 @@ impl ManagerState {
         Ok(())
     }
 
+    async fn preserve_pending_usage_provider_bindings(&self) -> Result<(), ManagerError> {
+        // Provider 变化前固化待处理请求，避免首次同步时按新 Provider 回填历史记录。
+        usage::sync_pending_usage(&self.paths, &self.state).await?;
+        Ok(())
+    }
+
     fn emit_state_changed(&self, app: &AppHandle) -> Result<(), ManagerError> {
         app.emit("state:changed", self.state.clone())
             .map_err(|error| ManagerError::Path(error.to_string()))
@@ -1581,6 +1606,17 @@ impl ManagerState {
         item_id: &str,
     ) -> Result<Value, ManagerError> {
         let parts = item_id.split(':').collect::<Vec<_>>();
+
+        if matches!(
+            parts.as_slice(),
+            ["tray", "runtime", "clear", _]
+                | ["tray", "runtime", "switch", _, _]
+                | ["tray", "codex", "account", "enable", _]
+                | ["tray", "codex", "account", "clear"]
+                | ["tray", "codex", "proxy", "disable"]
+        ) {
+            self.preserve_pending_usage_provider_bindings().await?;
+        }
 
         match parts.as_slice() {
             ["tray", "runtime", "clear", cli] => {
