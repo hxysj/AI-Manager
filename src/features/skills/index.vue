@@ -342,31 +342,89 @@
 
     <BaseModal
       v-if="showMoveGroupDialog"
-      title="移动到已有分组"
-      :description="`当前已选择 ${selectedSkillIds.length} 个 Skill，移动后会从其他分组移除。`"
-      @close="showMoveGroupDialog = false"
+      class="skills-view-move-modal"
+      title="移动到分组"
+      @close="closeMoveGroupDialog"
     >
       <form
-        class="skills-view-group-form"
+        class="skills-view-move-form"
         @submit.prevent="moveSelectedToGroup"
       >
-        <label class="skills-view-dialog-field">
-          <span>目标分组</span>
-          <select v-model="moveGroupId" class="skills-view-dialog-control">
-            <option
+        <div class="skills-view-move-selection">
+          <span class="skills-view-move-selection-icon">
+            <FolderInput :size="18" />
+          </span>
+          <div class="skills-view-move-selection-main">
+            <strong class="skills-view-move-selection-title">
+              已选择 {{ selectedSkillIds.length }} 个 Skill
+            </strong>
+            <span
+              class="skills-view-move-selection-names"
+              :title="selectedSkillNames.join('、')"
+            >
+              {{ moveSkillPreview }}
+            </span>
+          </div>
+        </div>
+        <section
+          class="skills-view-move-targets"
+          aria-labelledby="skills-view-move-target-title"
+        >
+          <h3
+            id="skills-view-move-target-title"
+            class="skills-view-move-target-title"
+          >
+            选择目标分组
+          </h3>
+          <div class="skills-view-move-target-list">
+            <label
               v-for="group in skillGroupsView"
               :key="group.id"
-              :value="group.id"
+              class="skills-view-move-target"
+              :class="{ active: moveGroupId === group.id }"
             >
-              {{ group.name }}
-            </option>
-          </select>
-        </label>
+              <input
+                v-model="moveGroupId"
+                type="radio"
+                name="skill-move-target"
+                :value="group.id"
+              />
+              <span class="skills-view-move-radio">
+                <Check v-if="moveGroupId === group.id" :size="13" />
+              </span>
+              <span class="skills-view-move-target-main">
+                <strong
+                  class="skills-view-move-target-name"
+                  :title="group.name"
+                >
+                  <Folder :size="15" />
+                  {{ group.name }}
+                </strong>
+                <span class="skills-view-move-target-meta">
+                  {{ group.skills.length }} 个 Skill
+                  <template v-if="group.missingCount">
+                    · {{ group.missingCount }} 项未找到
+                  </template>
+                </span>
+              </span>
+              <span
+                v-if="moveGroupAddedCount(group)"
+                class="skills-view-move-target-change"
+                :title="`将新增 ${moveGroupAddedCount(group)} 个 Skill`"
+              >
+                +{{ moveGroupAddedCount(group) }}
+              </span>
+            </label>
+          </div>
+        </section>
         <footer class="skills-view-dialog-actions">
+          <span class="skills-view-move-current-target">
+            目标：{{ moveTargetGroup?.name || "未选择分组" }}
+          </span>
           <button
             class="skills-view-dialog-button"
             type="button"
-            @click="showMoveGroupDialog = false"
+            @click="closeMoveGroupDialog"
           >
             取消
           </button>
@@ -375,7 +433,8 @@
             type="submit"
             :disabled="!moveGroupId"
           >
-            确认移动
+            <FolderInput :size="15" />
+            移动
           </button>
         </footer>
       </form>
@@ -383,71 +442,159 @@
 
     <BaseModal
       v-if="showGroupManageDialog"
+      class="skills-view-group-modal"
       title="分组管理"
-      description="每个分组都有唯一 ID，重命名不会改变分组 ID。"
-      @close="showGroupManageDialog = false"
+      :description="`${skillGroupsView.length} 个分组`"
+      @close="closeGroupManageDialog"
     >
       <section class="skills-view-group-manage">
         <form
           class="skills-view-group-create"
           @submit.prevent="createManagedGroup"
         >
-          <label class="skills-view-dialog-field">
-            <span>新建分组</span>
+          <strong class="skills-view-group-section-title">新建分组</strong>
+          <label class="skills-view-group-create-field">
+            <span class="skills-view-sr-only">分组名称</span>
             <input
               v-model.trim="groupName"
               class="skills-view-dialog-control"
               type="text"
-              placeholder="例如：Vue 调试套件"
+              placeholder="输入分组名称"
             />
           </label>
           <button
-            class="skills-view-dialog-button primary"
+            class="skills-view-dialog-button primary skills-view-group-create-button"
             type="submit"
             :disabled="!groupName.trim()"
           >
-            新建
+            <Plus :size="15" />
+            创建
           </button>
         </form>
-        <article
-          v-for="group in skillGroupsView"
-          :key="group.id"
-          class="skills-view-group-manage-item"
-        >
-          <div class="skills-view-group-manage-main">
-            <span class="skills-view-group-manage-id">{{ group.id }}</span>
-            <span class="skills-view-group-manage-count">
-              {{ group.skills.length }} 个 Skill
-            </span>
-          </div>
-          <label class="skills-view-dialog-field">
-            <span>名称</span>
-            <input
-              v-model.trim="groupRenameDrafts[group.id]"
-              class="skills-view-dialog-control"
-              type="text"
-            />
-          </label>
-          <div class="skills-view-group-manage-actions">
-            <button
-              class="skills-view-dialog-button primary"
-              type="button"
-              :disabled="!groupRenameDrafts[group.id]"
-              @click="renameGroup(group)"
+        <div class="skills-view-group-list-head" aria-hidden="true">
+          <span>已有分组</span>
+          <span>操作</span>
+        </div>
+        <div class="skills-view-group-list">
+          <article
+            v-for="group in skillGroupsView"
+            :key="group.id"
+            class="skills-view-group-manage-item"
+            :class="{
+              editing: editingGroupId === group.id,
+              deleting: deletingGroupId === group.id
+            }"
+          >
+            <form
+              v-if="editingGroupId === group.id"
+              class="skills-view-group-edit"
+              @submit.prevent="renameGroup(group)"
             >
-              重命名
-            </button>
-            <button
-              class="skills-view-dialog-button danger"
-              type="button"
-              @click="$emit('remove-skill-group', { groupId: group.id })"
-            >
-              删除
-            </button>
+              <input
+                :ref="setGroupRenameInput"
+                v-model="groupRenameDraft"
+                class="skills-view-dialog-control"
+                type="text"
+                aria-label="分组名称"
+                @keydown.esc.prevent="cancelRenameGroup"
+              />
+              <div class="skills-view-group-manage-actions">
+                <button
+                  class="skills-view-group-icon-button"
+                  type="button"
+                  title="取消重命名"
+                  aria-label="取消重命名"
+                  @click="cancelRenameGroup"
+                >
+                  <X :size="16" />
+                </button>
+                <button
+                  class="skills-view-group-icon-button primary"
+                  type="submit"
+                  title="保存名称"
+                  aria-label="保存名称"
+                  :disabled="!canRenameGroup(group)"
+                >
+                  <Check :size="16" />
+                </button>
+              </div>
+            </form>
+            <template v-else>
+              <div class="skills-view-group-manage-main">
+                <div class="skills-view-group-name-row">
+                  <Folder :size="16" />
+                  <strong :title="group.name">{{ group.name }}</strong>
+                </div>
+                <div class="skills-view-group-manage-meta">
+                  <span>{{ group.skills.length }} 个 Skill</span>
+                  <span
+                    v-if="group.missingCount"
+                    class="skills-view-group-missing"
+                  >
+                    {{ group.missingCount }} 项未找到
+                  </span>
+                  <button
+                    class="skills-view-group-id-button"
+                    type="button"
+                    :title="`复制分组 ID：${group.id}`"
+                    @click="copyGroupId(group)"
+                  >
+                    <Copy :size="12" />
+                    复制 ID
+                  </button>
+                </div>
+              </div>
+              <div
+                v-if="deletingGroupId === group.id"
+                class="skills-view-group-delete-confirm"
+                role="group"
+                :aria-label="`确认删除分组 ${group.name}`"
+              >
+                <span>确认删除？</span>
+                <button
+                  class="skills-view-group-confirm-button"
+                  type="button"
+                  @click="cancelRemoveGroup"
+                >
+                  取消
+                </button>
+                <button
+                  class="skills-view-group-confirm-button danger"
+                  type="button"
+                  @click="confirmRemoveGroup(group)"
+                >
+                  删除
+                </button>
+              </div>
+              <div v-else class="skills-view-group-manage-actions">
+                <button
+                  class="skills-view-group-icon-button"
+                  type="button"
+                  title="重命名"
+                  aria-label="重命名"
+                  @click="startRenameGroup(group)"
+                >
+                  <Pencil :size="15" />
+                </button>
+                <button
+                  class="skills-view-group-icon-button danger"
+                  type="button"
+                  title="删除分组"
+                  aria-label="删除分组"
+                  @click="requestRemoveGroup(group)"
+                >
+                  <Trash2 :size="15" />
+                </button>
+              </div>
+            </template>
+          </article>
+          <div
+            v-if="!skillGroupsView.length"
+            class="skills-view-dialog-empty skills-view-group-empty"
+          >
+            <Folder :size="20" />
+            <span>暂无分组</span>
           </div>
-        </article>
-        <div v-if="!skillGroupsView.length" class="skills-view-dialog-empty">
-          暂无分组。
         </div>
       </section>
     </BaseModal>
@@ -513,27 +660,34 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue"
+import { computed, nextTick, ref, watch } from "vue"
 import {
   ArrowLeft,
   Archive,
   Ban,
   BarChart3,
+  Check,
+  Copy,
   Download,
+  Folder,
+  FolderInput,
   FolderOpen,
   Library,
+  Pencil,
   Plus,
   Power,
   PowerOff,
   RefreshCw,
   RotateCcw,
-  Trash2
+  Trash2,
+  X
 } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import SkillCard from "./components/SkillCard.vue"
 import SkillRepositoryList from "./components/SkillRepositoryList.vue"
 import SkillRepositoryManager from "./components/SkillRepositoryManager.vue"
 import { formatDateTime } from "@/utils/formatters"
+import { createMessage } from "@/utils/message"
 
 const props = defineProps({
   cliTargets: {
@@ -597,7 +751,10 @@ const showMoveGroupDialog = ref(false)
 const showGroupManageDialog = ref(false)
 const groupName = ref("")
 const moveGroupId = ref("")
-const groupRenameDrafts = ref({})
+const editingGroupId = ref("")
+const deletingGroupId = ref("")
+const groupRenameDraft = ref("")
+const groupRenameInput = ref(null)
 const installDialog = ref(null)
 const selectedInstallTargetIds = ref([])
 
@@ -613,6 +770,18 @@ const selectedSkillNames = computed(() => {
   return selectedSkillIds.value
     .map((skillId) => skillById.value.get(skillId)?.name)
     .filter(Boolean)
+})
+
+// 名称摘要限制为三项，避免大量选择撑开弹窗。
+const moveSkillPreview = computed(() => {
+  const visibleNames = selectedSkillNames.value.slice(0, 3)
+  const remainingCount = selectedSkillNames.value.length - visibleNames.length
+
+  if (!visibleNames.length) {
+    return "未选择 Skill"
+  }
+
+  return `${visibleNames.join("、")}${remainingCount > 0 ? ` 等 ${selectedSkillNames.value.length} 个` : ""}`
 })
 
 const selectedSkills = computed(() => {
@@ -721,6 +890,11 @@ const skillGroupsView = computed(() => {
   })
 })
 
+// 底部始终同步当前选中的目标分组。
+const moveTargetGroup = computed(() => {
+  return skillGroupsView.value.find((group) => group.id === moveGroupId.value)
+})
+
 const allFilteredSelected = computed({
   get() {
     return Boolean(
@@ -809,10 +983,18 @@ watch(
       groupFilter.value = "all"
     }
 
-    if (showGroupManageDialog.value) {
-      groupRenameDrafts.value = Object.fromEntries(
-        groups.map((group) => [group.id, group.name])
-      )
+    if (
+      editingGroupId.value &&
+      !groups.some((group) => group.id === editingGroupId.value)
+    ) {
+      cancelRenameGroup()
+    }
+
+    if (
+      deletingGroupId.value &&
+      !groups.some((group) => group.id === deletingGroupId.value)
+    ) {
+      cancelRemoveGroup()
     }
   }
 )
@@ -938,6 +1120,20 @@ function openMoveGroupDialog() {
   showMoveGroupDialog.value = true
 }
 
+// 移动弹窗关闭后清理目标，避免下次打开短暂显示旧选择。
+function closeMoveGroupDialog() {
+  showMoveGroupDialog.value = false
+  moveGroupId.value = ""
+}
+
+// 目标行展示本次移动后实际新增的 Skill 数量。
+function moveGroupAddedCount(group) {
+  const groupSkillIds = new Set(group.skillIds || [])
+
+  return selectedSkillIds.value.filter((skillId) => !groupSkillIds.has(skillId))
+    .length
+}
+
 function moveSelectedToGroup() {
   const group = props.skillGroups.find((item) => item.id === moveGroupId.value)
 
@@ -952,22 +1148,57 @@ function moveSelectedToGroup() {
       ...new Set([...(group.skillIds || []), ...selectedSkillIds.value])
     ]
   })
-  showMoveGroupDialog.value = false
-  moveGroupId.value = ""
+  closeMoveGroupDialog()
   selectedSkillIds.value = []
 }
 
 function openGroupManageDialog() {
-  groupRenameDrafts.value = Object.fromEntries(
-    props.skillGroups.map(group => [group.id, group.name])
-  )
+  groupName.value = ""
+  editingGroupId.value = ""
+  deletingGroupId.value = ""
+  groupRenameDraft.value = ""
   showGroupManageDialog.value = true
 }
 
-function renameGroup(group) {
-  const nextName = groupRenameDrafts.value[group.id]?.trim()
+function closeGroupManageDialog() {
+  showGroupManageDialog.value = false
+  groupName.value = ""
+  editingGroupId.value = ""
+  deletingGroupId.value = ""
+  groupRenameDraft.value = ""
+}
 
-  if (!nextName) {
+// 每次仅允许一行处于编辑或删除确认状态。
+function startRenameGroup(group) {
+  deletingGroupId.value = ""
+  editingGroupId.value = group.id
+  groupRenameDraft.value = group.name
+
+  nextTick(() => {
+    groupRenameInput.value?.focus()
+    groupRenameInput.value?.select()
+  })
+}
+
+function setGroupRenameInput(element) {
+  groupRenameInput.value = element
+}
+
+function cancelRenameGroup() {
+  editingGroupId.value = ""
+  groupRenameDraft.value = ""
+}
+
+function canRenameGroup(group) {
+  const nextName = groupRenameDraft.value.trim()
+
+  return Boolean(nextName && nextName !== group.name)
+}
+
+function renameGroup(group) {
+  const nextName = groupRenameDraft.value.trim()
+
+  if (!nextName || nextName === group.name) {
     return
   }
 
@@ -976,6 +1207,32 @@ function renameGroup(group) {
     name: nextName,
     skillIds: [...(group.skillIds || [])]
   })
+  cancelRenameGroup()
+}
+
+function requestRemoveGroup(group) {
+  editingGroupId.value = ""
+  groupRenameDraft.value = ""
+  deletingGroupId.value = group.id
+}
+
+function cancelRemoveGroup() {
+  deletingGroupId.value = ""
+}
+
+function confirmRemoveGroup(group) {
+  emit("remove-skill-group", { groupId: group.id })
+  cancelRemoveGroup()
+}
+
+// 复制 ID 后给出结果反馈，避免用户重复点击。
+async function copyGroupId(group) {
+  try {
+    await navigator.clipboard.writeText(group.id)
+    createMessage.success("分组 ID 已复制。")
+  } catch {
+    createMessage.error("复制分组 ID 失败。")
+  }
 }
 
 function removeSelectedFromGroup() {
@@ -1399,7 +1656,6 @@ function installRepositorySkill(skill) {
     line-height: 1.45;
   }
 
-  .skills-view-group-form,
   .skills-view-install-form {
     display: flex;
     flex-direction: column;
@@ -1453,61 +1709,486 @@ function installRepositorySkill(skill) {
     font-weight: 700;
   }
 
-  .skills-view-group-manage {
+  .skills-view-group-modal,
+  .skills-view-move-modal {
+    :deep(.base-modal__header) {
+      align-items: center;
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid var(--color-line);
+    }
+
+    :deep(.base-modal__header h2) {
+      font-size: 1.12rem;
+    }
+
+    :deep(.base-modal__header p) {
+      margin-top: 3px;
+      font-size: 0.78rem;
+    }
+
+    :deep(.base-modal__close) {
+      width: 32px;
+      height: 32px;
+      border: 0;
+      background: transparent;
+      font-size: 1.2rem;
+    }
+
+    :deep(.base-modal__content) {
+      padding: 0;
+    }
+  }
+
+  .skills-view-group-modal {
+    :deep(.base-modal__panel) {
+      width: 760px;
+    }
+  }
+
+  .skills-view-move-modal {
+    :deep(.base-modal__panel) {
+      width: 620px;
+    }
+  }
+
+  .skills-view-move-form {
     display: flex;
-    max-height: 420px;
+    min-height: 0;
     flex-direction: column;
-    gap: 10px;
-    overflow: auto;
   }
 
-  .skills-view-group-create {
+  .skills-view-move-selection {
     display: flex;
-    align-items: flex-end;
+    flex: none;
+    align-items: center;
     gap: 10px;
-    padding: 12px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: #ffffff;
-  }
-
-  .skills-view-group-manage-item {
-    display: flex;
-    align-items: flex-end;
-    gap: 12px;
-    padding: 12px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--color-line);
     background: var(--color-panel-soft);
   }
 
-  .skills-view-group-manage-main {
-    display: flex;
-    width: 230px;
+  .skills-view-move-selection-icon {
+    display: grid;
+    width: 34px;
+    height: 34px;
     flex: none;
-    flex-direction: column;
-    gap: 5px;
+    place-items: center;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: var(--color-panel);
+    color: var(--color-primary);
   }
 
-  .skills-view-group-manage-id {
+  .skills-view-move-selection-main {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .skills-view-move-selection-title {
+    color: var(--color-text);
+    font-size: 0.82rem;
+  }
+
+  .skills-view-move-selection-names {
     overflow: hidden;
-    color: var(--color-text-soft);
+    color: var(--color-text-muted);
+    font-size: 0.74rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .skills-view-move-targets {
+    min-height: 0;
+    padding: 15px 18px 17px;
+  }
+
+  .skills-view-move-target-title {
+    margin: 0 0 8px;
+    color: var(--color-text-muted);
+    font-size: 0.76rem;
+    letter-spacing: 0;
+  }
+
+  .skills-view-move-target-list {
+    max-height: min(340px, calc(100vh - 306px));
+    overflow: auto;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: var(--color-panel);
+  }
+
+  .skills-view-move-target {
+    position: relative;
+    display: grid;
+    min-height: 58px;
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-panel);
+    cursor: pointer;
+    transition:
+      background 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  .skills-view-move-target:last-child {
+    border-bottom: 0;
+  }
+
+  .skills-view-move-target:hover {
+    background: #fbfcfd;
+  }
+
+  .skills-view-move-target.active {
+    background: var(--color-primary-soft);
+    box-shadow: inset 3px 0 0 var(--color-primary);
+  }
+
+  .skills-view-move-target > input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .skills-view-move-radio {
+    display: grid;
+    width: 18px;
+    height: 18px;
+    place-items: center;
+    border: 1px solid var(--color-line-strong);
+    border-radius: 50%;
+    background: var(--color-panel);
+    color: #ffffff;
+  }
+
+  .skills-view-move-target.active .skills-view-move-radio {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+  }
+
+  .skills-view-move-target:focus-within {
+    outline: 2px solid rgba(47, 70, 104, 0.24);
+    outline-offset: -2px;
+  }
+
+  .skills-view-move-target-main {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .skills-view-move-target-name {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 7px;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 0.82rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .skills-view-move-target-name svg {
+    flex: none;
+    color: var(--color-primary);
+  }
+
+  .skills-view-move-target-meta {
+    overflow: hidden;
+    color: var(--color-text-muted);
     font-size: 0.72rem;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .skills-view-group-manage-count {
-    color: var(--color-text-muted);
-    font-size: 0.78rem;
+  .skills-view-move-target-change {
+    min-width: 30px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: var(--color-success-soft);
+    color: var(--color-success);
+    font-size: 0.7rem;
     font-weight: 700;
+    text-align: center;
+  }
+
+  .skills-view-move-form .skills-view-dialog-actions {
+    flex: none;
+    padding: 12px 18px;
+    border-top: 1px solid var(--color-line);
+    background: var(--color-panel);
+  }
+
+  .skills-view-move-current-target {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .skills-view-move-form .skills-view-dialog-button.primary {
+    gap: 6px;
+    min-width: 76px;
+  }
+
+  .skills-view-group-manage {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .skills-view-group-create {
+    display: grid;
+    flex: none;
+    grid-template-columns: 104px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-panel-soft);
+  }
+
+  .skills-view-group-section-title {
+    color: var(--color-text);
+    font-size: 0.82rem;
+  }
+
+  .skills-view-group-create-field {
+    display: block;
+    min-width: 0;
+  }
+
+  .skills-view-group-create-field .skills-view-dialog-control {
+    width: 100%;
+    background: var(--color-panel);
+  }
+
+  .skills-view-group-create-button {
+    gap: 6px;
+    min-width: 76px;
+  }
+
+  .skills-view-group-list-head {
+    display: grid;
+    flex: none;
+    grid-template-columns: minmax(0, 1fr) 76px;
+    gap: 16px;
+    padding: 10px 20px 8px;
+    border-bottom: 1px solid var(--color-line);
+    color: var(--color-text-soft);
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+
+  .skills-view-group-list-head span:last-child {
+    text-align: right;
+  }
+
+  .skills-view-group-list {
+    min-height: 84px;
+    max-height: min(440px, calc(100vh - 272px));
+    overflow: auto;
+  }
+
+  .skills-view-group-manage-item {
+    display: grid;
+    min-height: 64px;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-panel);
+    transition: background 0.15s ease;
+  }
+
+  .skills-view-group-manage-item:hover,
+  .skills-view-group-manage-item.editing,
+  .skills-view-group-manage-item.deleting {
+    background: #fbfcfd;
+  }
+
+  .skills-view-group-manage-item:last-child {
+    border-bottom: 0;
+  }
+
+  .skills-view-group-manage-main {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .skills-view-group-name-row {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    color: var(--color-text);
+  }
+
+  .skills-view-group-name-row svg {
+    flex: none;
+    color: var(--color-primary);
+  }
+
+  .skills-view-group-name-row strong {
+    overflow: hidden;
+    font-size: 0.84rem;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .skills-view-group-manage-meta {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    padding-left: 24px;
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+  }
+
+  .skills-view-group-manage-meta > * + * {
+    position: relative;
+    padding-left: 9px;
+  }
+
+  .skills-view-group-manage-meta > * + *::before {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 2px;
+    height: 2px;
+    border-radius: 50%;
+    background: var(--color-text-soft);
+    content: "";
+    transform: translateY(-50%);
+  }
+
+  .skills-view-group-missing {
+    color: var(--color-warning);
+  }
+
+  .skills-view-group-id-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-soft);
+    cursor: pointer;
+    font-size: inherit;
+  }
+
+  .skills-view-group-id-button:hover {
+    color: var(--color-primary);
   }
 
   .skills-view-group-manage-actions {
     display: flex;
     flex: none;
     align-items: center;
-    gap: 8px;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .skills-view-group-icon-button {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    place-items: center;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+
+  .skills-view-group-icon-button:hover {
+    border-color: var(--color-line);
+    background: var(--color-panel);
+    color: var(--color-primary);
+  }
+
+  .skills-view-group-icon-button.primary {
+    border-color: var(--color-primary);
+    background: var(--color-primary);
+    color: #ffffff;
+  }
+
+  .skills-view-group-icon-button.danger:hover {
+    border-color: #ffc7c2;
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
+  }
+
+  .skills-view-group-icon-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .skills-view-group-edit {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .skills-view-group-edit .skills-view-dialog-control {
+    width: 100%;
+    background: var(--color-panel);
+  }
+
+  .skills-view-group-delete-confirm {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px;
+  }
+
+  .skills-view-group-delete-confirm > span {
+    margin-right: 2px;
+    color: var(--color-danger);
+    font-size: 0.75rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .skills-view-group-confirm-button {
+    height: 30px;
+    padding: 0 9px;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+
+  .skills-view-group-confirm-button.danger {
+    border-color: var(--color-danger);
+    background: var(--color-danger);
+    color: #ffffff;
   }
 
   .skills-view-dialog-empty {
@@ -1518,6 +2199,12 @@ function installRepositorySkill(skill) {
     color: var(--color-text-muted);
     font-size: 0.8rem;
     text-align: center;
+  }
+
+  .skills-view-group-empty {
+    min-height: 120px;
+    flex-direction: column;
+    gap: 8px;
   }
 
   .skills-view-dialog-actions {
@@ -1556,6 +2243,47 @@ function installRepositorySkill(skill) {
   .skills-view-dialog-button:disabled {
     cursor: not-allowed;
     opacity: 0.55;
+  }
+
+  .skills-view-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    clip-path: inset(50%);
+  }
+
+  @media (max-width: 720px) {
+    .skills-view-group-modal,
+    .skills-view-move-modal {
+      :deep(.base-modal__panel) {
+        width: 100%;
+      }
+    }
+
+    .skills-view-group-create {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+
+    .skills-view-group-section-title {
+      grid-column: 1 / -1;
+    }
+
+    .skills-view-group-manage-item {
+      padding-inline: 14px;
+    }
+
+    .skills-view-group-list-head {
+      padding-inline: 14px;
+    }
+
+    .skills-view-move-selection,
+    .skills-view-move-targets,
+    .skills-view-move-form .skills-view-dialog-actions {
+      padding-inline: 14px;
+    }
   }
 }
 </style>
