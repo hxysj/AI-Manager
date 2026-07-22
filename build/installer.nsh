@@ -86,10 +86,8 @@ FunctionEnd
   ${GetOptions} $0 "/UPGRADE=" $1
   StrCmp $1 "1" aiManagerUpgradeUninstall
 
-  ; 仅在用户手动卸载时询问是否清理用户数据。
-  IfSilent aiManagerSkipUserDataCleanup
-  MessageBox MB_YESNO|MB_ICONQUESTION "是否同时清空用户数据？$\r$\n$\r$\n选择“是”会删除当前 Data 存放位置下的 workspace 内容。$\r$\n选择“否”仅卸载软件并保留用户数据。" IDYES aiManagerRemoveUserData IDNO aiManagerSkipUserDataCleanup
-  Goto aiManagerSkipUserDataCleanup
+  ; 普通卸载复用 Tauri 卸载页的勾选状态，不再重复询问。
+  StrCmp $DeleteAppDataCheckboxState "1" aiManagerRemoveUserData aiManagerSkipUserDataCleanup
 
   ; 安装器升级时复用升级对话框中的选择，避免再次弹出确认框。
   aiManagerUpgradeUninstall:
