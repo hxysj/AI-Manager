@@ -2,8 +2,9 @@ use crate::api::{runtime_provider, sessions, skills};
 use crate::core::error::ManagerError;
 use crate::core::paths::{ensure_app_directories, home_path, path_text, AppPaths};
 use crate::core::settings::{
-    non_empty_string, number_value, serialize_app_settings, string_value, write_json_file,
-    AppSettings, CloudSyncSettings,
+    non_empty_string, normalize_cloud_sync_settings as normalize_provider_cloud_sync_settings,
+    number_value, serialize_app_settings, string_value, write_json_file, AppSettings,
+    CloudSyncSettings,
 };
 use crate::core::storage_state::create_initial_state;
 use crate::core::{database, provider_store, rule_store, skill_store};
@@ -293,12 +294,19 @@ pub async fn push_cloud_backup(
 ) -> Result<Value, ManagerError> {
     let cloud_sync = normalize_cloud_sync_settings(&payload);
     let last_updated_at = now_millis();
-
-    upload_webdav_backup(&cloud_sync, create_data_backup(paths, app_settings).await?).await?;
-    app_settings.cloud_sync = CloudSyncSettings {
+    let updated_cloud_sync = CloudSyncSettings {
         last_updated_at,
         ..cloud_sync.clone()
     };
+    let mut backup_settings = app_settings.clone();
+
+    set_cloud_sync_settings(&mut backup_settings, updated_cloud_sync.clone());
+    upload_webdav_backup(
+        &cloud_sync,
+        create_data_backup(paths, &backup_settings).await?,
+    )
+    .await?;
+    set_cloud_sync_settings(app_settings, updated_cloud_sync);
     write_json_file(
         Path::new(&app_settings.settings_file_path),
         &serialize_app_settings(app_settings),
@@ -322,7 +330,7 @@ pub async fn preview_cloud_backup_restore(
     let cloud_sync = normalize_cloud_sync_settings(&payload);
     let content = download_webdav_backup(&cloud_sync).await?;
     let mut preview_settings = app_settings.clone();
-    preview_settings.cloud_sync = cloud_sync.clone();
+    set_cloud_sync_settings(&mut preview_settings, cloud_sync.clone());
     let restore_id = cache.cache_restore_backup(
         content.clone(),
         json!({
@@ -365,7 +373,7 @@ pub async fn pull_cloud_backup(
     let choices = payload.get("choices").cloned().unwrap_or_else(|| json!({}));
     let last_updated_at = now_millis();
 
-    app_settings.cloud_sync = cloud_sync.clone();
+    set_cloud_sync_settings(app_settings, cloud_sync.clone());
     let refresh_skills = restore_data_backup_content(
         paths,
         app_settings,
@@ -374,7 +382,7 @@ pub async fn pull_cloud_backup(
     )
     .await?;
     cache.delete_restore_backup_draft(&restore_id);
-    app_settings.cloud_sync.last_updated_at = last_updated_at;
+    cloud_sync_settings_mut(app_settings, &cloud_sync.provider).last_updated_at = last_updated_at;
     write_json_file(
         Path::new(&app_settings.settings_file_path),
         &serialize_app_settings(app_settings),
@@ -407,7 +415,8 @@ pub async fn create_data_backup(
 
 fn serialize_backup_app_settings(app_settings: &AppSettings) -> Value {
     json!({
-      "cloudSync": serialize_backup_cloud_sync_settings(&app_settings.cloud_sync)
+      "cloudSync": serialize_backup_cloud_sync_settings(&app_settings.cloud_sync),
+      "koofrSync": serialize_backup_cloud_sync_settings(&app_settings.koofr_sync)
     })
 }
 
@@ -422,14 +431,29 @@ fn serialize_backup_cloud_sync_settings(cloud_sync: &CloudSyncSettings) -> Value
 }
 
 fn normalize_backup_app_settings(value: Option<&Value>) -> Option<Value> {
-    let cloud_sync = value?.get("cloudSync")?;
+    let value = value?;
+    let mut settings = Map::new();
 
-    if !cloud_sync.is_object() {
-        return None;
+    if let Some(cloud_sync) = value.get("cloudSync").filter(|value| value.is_object()) {
+        settings.insert(
+            "cloudSync".to_string(),
+            serialize_backup_cloud_sync_settings(&normalize_provider_cloud_sync_settings(
+                cloud_sync,
+                "jianguoyun",
+            )),
+        );
     }
-    Some(json!({
-      "cloudSync": serialize_backup_cloud_sync_settings(&normalize_cloud_sync_settings(cloud_sync))
-    }))
+    if let Some(koofr_sync) = value.get("koofrSync").filter(|value| value.is_object()) {
+        settings.insert(
+            "koofrSync".to_string(),
+            serialize_backup_cloud_sync_settings(&normalize_provider_cloud_sync_settings(
+                koofr_sync,
+                "koofr",
+            )),
+        );
+    }
+
+    (!settings.is_empty()).then(|| Value::Object(settings))
 }
 
 fn restore_backup_app_settings(
@@ -447,24 +471,29 @@ fn restore_backup_app_settings(
         &backup_settings,
         choices,
     )?;
-    let last_updated_at = app_settings.cloud_sync.last_updated_at;
-    app_settings.cloud_sync = normalize_cloud_sync_settings(&merged["cloudSync"]);
-    app_settings.cloud_sync.last_updated_at = last_updated_at;
+    let cloud_sync_last_updated_at = app_settings.cloud_sync.last_updated_at;
+    let koofr_sync_last_updated_at = app_settings.koofr_sync.last_updated_at;
+    app_settings.cloud_sync =
+        normalize_provider_cloud_sync_settings(&merged["cloudSync"], "jianguoyun");
+    app_settings.cloud_sync.last_updated_at = cloud_sync_last_updated_at;
+    app_settings.koofr_sync =
+        normalize_provider_cloud_sync_settings(&merged["koofrSync"], "koofr");
+    app_settings.koofr_sync.last_updated_at = koofr_sync_last_updated_at;
     Ok(())
 }
 
 fn redact_backup_app_settings(mut value: Value) -> Value {
     if let Some(value) = value.as_object_mut() {
-        let password = if value.contains_key("cloudSync") {
-            value
-                .get_mut("cloudSync")
+        for key in ["cloudSync", "koofrSync"] {
+            if let Some(password) = value
+                .get_mut(key)
                 .and_then(Value::as_object_mut)
                 .and_then(|cloud_sync| cloud_sync.get_mut("password"))
-        } else {
-            value.get_mut("password")
-        };
-
-        if let Some(password) = password {
+            {
+                *password = json!("********");
+            }
+        }
+        if let Some(password) = value.get_mut("password") {
             *password = json!("********");
         }
     }
@@ -585,7 +614,7 @@ fn inspect_data_backup(content: &str) -> Result<Value, ManagerError> {
     if let Some(app_settings) = normalize_backup_app_settings(backup.get("appSettings")) {
         entries.push(create_backup_view_entry(
             "app-settings.json",
-            "坚果云设置",
+            "云同步设置",
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&redact_backup_app_settings(app_settings))?
@@ -1878,20 +1907,38 @@ fn get_local_backup_path(app_data_path: &Path, backup_id: &str) -> Result<PathBu
 }
 
 fn normalize_cloud_sync_settings(input: &Value) -> CloudSyncSettings {
-    CloudSyncSettings {
-        provider: "jianguoyun".to_string(),
-        webdav_url: non_empty_string(
-            input.get("webdavUrl"),
-            "https://dav.jianguoyun.com/dav/AI-Manager",
-        ),
-        username: string_value(input.get("username")),
-        password: input
-            .get("password")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        file_name: non_empty_string(input.get("fileName"), "ai-manager.aimbackup"),
-        last_updated_at: number_value(input.get("lastUpdatedAt"), 0),
+    let provider = match input.get("provider").and_then(Value::as_str) {
+        Some("koofr") => "koofr",
+        _ => "jianguoyun",
+    };
+
+    normalize_provider_cloud_sync_settings(input, provider)
+}
+
+fn set_cloud_sync_settings(app_settings: &mut AppSettings, cloud_sync: CloudSyncSettings) {
+    if cloud_sync.provider == "koofr" {
+        app_settings.koofr_sync = cloud_sync;
+    } else {
+        app_settings.cloud_sync = cloud_sync;
+    }
+}
+
+fn cloud_sync_settings_mut<'a>(
+    app_settings: &'a mut AppSettings,
+    provider: &str,
+) -> &'a mut CloudSyncSettings {
+    if provider == "koofr" {
+        &mut app_settings.koofr_sync
+    } else {
+        &mut app_settings.cloud_sync
+    }
+}
+
+fn cloud_sync_provider_name(config: &CloudSyncSettings) -> &'static str {
+    if config.provider == "koofr" {
+        "Koofr"
+    } else {
+        "坚果云"
     }
 }
 
@@ -1910,11 +1957,13 @@ async fn ensure_webdav_directory(config: &CloudSyncSettings) -> Result<(), Manag
     let status = response.status().as_u16();
 
     if ![201, 405].contains(&status) {
-        let detail = read_webdav_error_detail(response).await?;
+        let detail = read_webdav_error_detail(response, config).await?;
 
         return Err(ManagerError::System(format!(
-            "坚果云目录创建失败：{}{}",
-            status, detail
+            "{}目录创建失败：{}{}",
+            cloud_sync_provider_name(config),
+            status,
+            detail
         )));
     }
 
@@ -1939,11 +1988,13 @@ async fn upload_webdav_backup(
     let status = response.status().as_u16();
 
     if ![200, 201, 204].contains(&status) {
-        let detail = read_webdav_error_detail(response).await?;
+        let detail = read_webdav_error_detail(response, config).await?;
 
         return Err(ManagerError::System(format!(
-            "坚果云上传失败：{}{}",
-            status, detail
+            "{}上传失败：{}{}",
+            cloud_sync_provider_name(config),
+            status,
+            detail
         )));
     }
 
@@ -1960,15 +2011,20 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
     let status = response.status().as_u16();
 
     if status == 404 {
-        return Err(ManagerError::System("坚果云上未找到配置备份".to_string()));
+        return Err(ManagerError::System(format!(
+            "{}上未找到配置备份",
+            cloud_sync_provider_name(config)
+        )));
     }
 
     if status != 200 {
-        let detail = read_webdav_error_detail(response).await?;
+        let detail = read_webdav_error_detail(response, config).await?;
 
         return Err(ManagerError::System(format!(
-            "坚果云下载失败：{}{}",
-            status, detail
+            "{}下载失败：{}{}",
+            cloud_sync_provider_name(config),
+            status,
+            detail
         )));
     }
 
@@ -1978,7 +2034,10 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
         .map_err(|error| ManagerError::System(error.to_string()))
 }
 
-async fn read_webdav_error_detail(response: reqwest::Response) -> Result<String, ManagerError> {
+async fn read_webdav_error_detail(
+    response: reqwest::Response,
+    config: &CloudSyncSettings,
+) -> Result<String, ManagerError> {
     let status = response.status().as_u16();
     let body = response
         .text()
@@ -1988,7 +2047,10 @@ async fn read_webdav_error_detail(response: reqwest::Response) -> Result<String,
 
     if body.is_empty() {
         if status == 400 {
-            return Ok("，请确认 WebDAV 地址是坚果云目录地址，备份文件名没有包含非法路径，并且云端备份文件已存在".to_string());
+            return Ok(format!(
+                "，请确认 WebDAV 地址是{}目录地址，备份文件名没有包含非法路径，并且云端备份文件已存在",
+                cloud_sync_provider_name(config)
+            ));
         }
 
         return Ok(String::new());
@@ -2421,7 +2483,7 @@ fn is_allowed_codex_pet_backup_entry(entry: &Value) -> bool {
 
 fn restore_storage_name(entry_path: &str) -> Option<&'static str> {
     match entry_path {
-        "app-settings.json" => Some("坚果云设置"),
+        "app-settings.json" => Some("云同步设置"),
         "storage/skill-groups.json" => Some("Skill 分组"),
         "storage/skill-repositories.json" => Some("Skill 仓库"),
         "storage/skills.json" => Some("Skill 索引"),
@@ -2647,8 +2709,13 @@ fn get_restore_item_name(entry_path: &str, item_key: &str, value: &Value) -> Str
         return item_key.to_string();
     }
 
-    if entry_path == "app-settings.json" && item_key == "cloudSync" {
-        return "坚果云".to_string();
+    if entry_path == "app-settings.json" {
+        if item_key == "cloudSync" {
+            return "坚果云".to_string();
+        }
+        if item_key == "koofrSync" {
+            return "Koofr".to_string();
+        }
     }
 
     if entry_path == "storage/codex-accounts.json" {
@@ -3550,7 +3617,7 @@ mod tests {
     }
 
     #[test]
-    fn backup_and_restore_only_jianguoyun_settings() {
+    fn backup_and_restore_cloud_sync_settings() {
         let root = std::env::temp_dir().join(format!(
             "monkey-thief-app-settings-backup-{}",
             std::process::id()
@@ -3567,6 +3634,13 @@ mod tests {
                 "fileName": "current.aimbackup",
                 "lastUpdatedAt": 900
               },
+              "koofrSync": {
+                "webdavUrl": "https://current-koofr.example/dav",
+                "username": "current-koofr-user",
+                "password": "current-koofr-password",
+                "fileName": "current-koofr.aimbackup",
+                "lastUpdatedAt": 800
+              },
               "localBackup": {"enabled": false, "intervalMinutes": 30, "maxCount": 3},
               "system": {"closeAction": "quit", "quickSwitchVisible": false}
             })),
@@ -3575,7 +3649,7 @@ mod tests {
 
         assert_eq!(
             serialized.as_object().unwrap().keys().collect::<Vec<_>>(),
-            vec!["cloudSync"]
+            vec!["cloudSync", "koofrSync"]
         );
         assert_eq!(
             serialized["cloudSync"]
@@ -3587,12 +3661,15 @@ mod tests {
             vec!["fileName", "password", "provider", "username", "webdavUrl"]
         );
         assert!(serialized["cloudSync"].get("lastUpdatedAt").is_none());
+        assert_eq!(serialized["koofrSync"]["provider"], "koofr");
+        assert!(serialized["koofrSync"].get("lastUpdatedAt").is_none());
 
         let original_data_path = app_settings.data_path.clone();
         let original_local_backup_enabled = app_settings.local_backup.enabled;
         let original_close_action = app_settings.system.close_action.clone();
         let choices = json!({
-          "json:app-settings.json:cloudSync": "backup"
+          "json:app-settings.json:cloudSync": "backup",
+          "json:app-settings.json:koofrSync": "backup"
         })
         .as_object()
         .cloned()
@@ -3610,6 +3687,13 @@ mod tests {
                   "password": "backup-password",
                   "fileName": "backup.aimbackup",
                   "lastUpdatedAt": 1
+                },
+                "koofrSync": {
+                  "webdavUrl": "https://backup-koofr.example/dav",
+                  "username": "backup-koofr-user",
+                  "password": "backup-koofr-password",
+                  "fileName": "backup-koofr.aimbackup",
+                  "lastUpdatedAt": 2
                 }
               }
             }),
@@ -3625,6 +3709,17 @@ mod tests {
         assert_eq!(app_settings.cloud_sync.password, "backup-password");
         assert_eq!(app_settings.cloud_sync.file_name, "backup.aimbackup");
         assert_eq!(app_settings.cloud_sync.last_updated_at, 900);
+        assert_eq!(
+            app_settings.koofr_sync.webdav_url,
+            "https://backup-koofr.example/dav"
+        );
+        assert_eq!(app_settings.koofr_sync.username, "backup-koofr-user");
+        assert_eq!(app_settings.koofr_sync.password, "backup-koofr-password");
+        assert_eq!(
+            app_settings.koofr_sync.file_name,
+            "backup-koofr.aimbackup"
+        );
+        assert_eq!(app_settings.koofr_sync.last_updated_at, 800);
         assert_eq!(app_settings.data_path, original_data_path);
         assert_eq!(
             app_settings.local_backup.enabled,
@@ -3634,7 +3729,49 @@ mod tests {
     }
 
     #[test]
-    fn jianguoyun_preview_and_inspection_hide_passwords() {
+    fn old_jianguoyun_backup_preserves_koofr_settings() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-old-cloud-sync-backup-{}",
+            std::process::id()
+        ));
+        let mut app_settings = normalize_app_settings(
+            root.join("app-settings.json"),
+            Some(json!({
+              "cloudSync": {"username": "current-user"},
+              "koofrSync": {
+                "username": "current-koofr-user",
+                "password": "current-koofr-password"
+              }
+            })),
+        );
+        let choices = json!({
+          "json:app-settings.json:cloudSync": "backup"
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+
+        restore_backup_app_settings(
+            &mut app_settings,
+            &json!({
+              "appSettings": {
+                "cloudSync": {"username": "backup-user"}
+              }
+            }),
+            &choices,
+        )
+        .unwrap();
+
+        assert_eq!(app_settings.cloud_sync.username, "backup-user");
+        assert_eq!(app_settings.koofr_sync.username, "current-koofr-user");
+        assert_eq!(
+            app_settings.koofr_sync.password,
+            "current-koofr-password"
+        );
+    }
+
+    #[test]
+    fn cloud_sync_preview_and_inspection_hide_passwords() {
         let root = std::env::temp_dir().join(format!(
             "monkey-thief-app-settings-preview-{}",
             std::process::id()
@@ -3645,6 +3782,10 @@ mod tests {
               "cloudSync": {
                 "username": "current-user",
                 "password": "current-secret"
+              },
+              "koofrSync": {
+                "username": "current-koofr-user",
+                "password": "current-koofr-secret"
               }
             })),
         );
@@ -3662,6 +3803,10 @@ mod tests {
                 "cloudSync": {
                   "username": "backup-user",
                   "password": "backup-secret"
+                },
+                "koofrSync": {
+                  "username": "backup-koofr-user",
+                  "password": "backup-koofr-secret"
                 }
               }
             }),
@@ -3669,19 +3814,27 @@ mod tests {
         .unwrap();
         let preview_text = serde_json::to_string(&preview).unwrap();
         let inspected_text = serde_json::to_string(&redact_backup_app_settings(json!({
-          "cloudSync": {"password": "backup-secret"}
+          "cloudSync": {"password": "backup-secret"},
+          "koofrSync": {"password": "backup-koofr-secret"}
         })))
         .unwrap();
 
-        assert_eq!(preview["conflictCount"], 1);
+        assert_eq!(preview["conflictCount"], 2);
         assert_eq!(
             preview["conflicts"][0]["key"],
             "json:app-settings.json:cloudSync"
         );
+        assert_eq!(
+            preview["conflicts"][1]["key"],
+            "json:app-settings.json:koofrSync"
+        );
         assert!(!preview_text.contains("current-secret"));
         assert!(!preview_text.contains("backup-secret"));
+        assert!(!preview_text.contains("current-koofr-secret"));
+        assert!(!preview_text.contains("backup-koofr-secret"));
         assert!(!inspected_text.contains("backup-secret"));
-        assert!(inspected_text.contains("********"));
+        assert!(!inspected_text.contains("backup-koofr-secret"));
+        assert_eq!(inspected_text.matches("********").count(), 2);
     }
 
     fn encoded_json_entry(path: &str, value: &serde_json::Value) -> serde_json::Value {

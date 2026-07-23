@@ -2527,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "monkey-thief"
-version = "2.0.11"
+version = "2.0.12"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",

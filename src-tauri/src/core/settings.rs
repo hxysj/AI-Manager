@@ -41,6 +41,7 @@ pub struct AppSettings {
     pub cli_config_paths: Value,
     pub default_cli_config_paths: Value,
     pub cloud_sync: CloudSyncSettings,
+    pub koofr_sync: CloudSyncSettings,
     pub local_backup: LocalBackupSettings,
     pub system: SystemSettings,
     pub restart_required: bool,
@@ -68,6 +69,7 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
         .cloned()
         .unwrap_or_else(|| json!({}));
     let cloud_sync = input.get("cloudSync").cloned().unwrap_or_else(|| json!({}));
+    let koofr_sync = input.get("koofrSync").cloned().unwrap_or_else(|| json!({}));
     let local_backup = input
         .get("localBackup")
         .cloned()
@@ -98,17 +100,8 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
           )
         }),
         default_cli_config_paths,
-        cloud_sync: CloudSyncSettings {
-            provider: "jianguoyun".to_string(),
-            webdav_url: non_empty_string(
-                cloud_sync.get("webdavUrl"),
-                "https://dav.jianguoyun.com/dav/AI-Manager",
-            ),
-            username: string_value(cloud_sync.get("username")),
-            password: string_value(cloud_sync.get("password")),
-            file_name: non_empty_string(cloud_sync.get("fileName"), "ai-manager.aimbackup"),
-            last_updated_at: number_value(cloud_sync.get("lastUpdatedAt"), 0),
-        },
+        cloud_sync: normalize_cloud_sync_settings(&cloud_sync, "jianguoyun"),
+        koofr_sync: normalize_cloud_sync_settings(&koofr_sync, "koofr"),
         local_backup: LocalBackupSettings {
             enabled: bool_value(local_backup.get("enabled"), true),
             interval_minutes: number_value(local_backup.get("intervalMinutes"), 60).max(1),
@@ -121,6 +114,25 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
             auto_launch_enabled: bool_value(system.get("autoLaunchEnabled"), false),
         },
         restart_required: false,
+    }
+}
+
+pub fn normalize_cloud_sync_settings(input: &Value, provider: &str) -> CloudSyncSettings {
+    let (provider, default_url) = match provider {
+        "koofr" => ("koofr", "https://app.koofr.net/dav/Koofr/AI-Manager"),
+        _ => (
+            "jianguoyun",
+            "https://dav.jianguoyun.com/dav/AI-Manager",
+        ),
+    };
+
+    CloudSyncSettings {
+        provider: provider.to_string(),
+        webdav_url: non_empty_string(input.get("webdavUrl"), default_url),
+        username: string_value(input.get("username")),
+        password: string_value(input.get("password")),
+        file_name: non_empty_string(input.get("fileName"), "ai-manager.aimbackup"),
+        last_updated_at: number_value(input.get("lastUpdatedAt"), 0),
     }
 }
 
