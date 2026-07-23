@@ -408,8 +408,8 @@ const emit = defineEmits(['close', 'submit'])
 const restoreCategoryOptions = [
   {
     id: 'settings',
-    label: '坚果云设置',
-    description: 'WebDAV 地址、账号和备份文件名',
+    label: '云同步设置',
+    description: '坚果云与 Koofr 的 WebDAV 地址、账号和备份文件名',
     prefixes: ['app-settings.json']
   },
   {

@@ -540,6 +540,13 @@ const state = reactive({
       password: "",
       fileName: ""
     },
+    koofrSync: {
+      provider: "koofr",
+      webdavUrl: "",
+      username: "",
+      password: "",
+      fileName: ""
+    },
     localBackup: {
       enabled: true,
       intervalMinutes: 60,
@@ -628,7 +635,7 @@ const cloudBackupDescription = computed(() => {
     return ""
   }
 
-  return `${cloudBackupView.value.fileName} · 创建于 ${formatCloudBackupTime(
+  return `${cloudBackupView.value.providerName} · ${cloudBackupView.value.fileName} · 创建于 ${formatCloudBackupTime(
     cloudBackupView.value.backup.createdAt
   )}`
 })
@@ -1102,7 +1109,9 @@ async function pushCloudBackup(payload) {
         updateState(result.state)
       }
 
-      showSuccessMessage("配置数据已推送到坚果云。")
+      showSuccessMessage(
+        `配置数据已推送到${payload.provider === "koofr" ? "Koofr" : "坚果云"}。`
+      )
     } catch (error) {
       showErrorMessage(error)
     }
@@ -1114,7 +1123,11 @@ async function inspectCloudBackup(payload) {
     try {
       const result = await dataApi.inspectCloudBackup(payload)
 
-      cloudBackupView.value = result
+      // 查看器保留云端来源，避免同名备份无法区分服务。
+      cloudBackupView.value = {
+        ...result,
+        providerName: payload.provider === "koofr" ? "Koofr" : "坚果云"
+      }
       selectedCloudBackupPath.value =
         result.backup?.entries.find(
           (entry) => entry.path === "app-settings.json"
@@ -1205,7 +1218,9 @@ async function confirmRestore(payload) {
       closeRestorePreview(true)
       showSuccessMessage(
         source.type === "cloud"
-          ? "已从坚果云兼容恢复配置数据。"
+          ? `已从${
+              source.cloudSync?.provider === "koofr" ? "Koofr" : "坚果云"
+            }兼容恢复配置数据。`
           : source.type === "local"
             ? "已从本地备份兼容恢复配置数据。"
             : "配置数据已兼容恢复。"

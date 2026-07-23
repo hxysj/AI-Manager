@@ -320,34 +320,51 @@
           </div>
         </section>
 
-        <section class="settings-view__cloud">
+        <section
+          v-for="syncItem in cloudSyncItems"
+          :key="syncItem.settingKey"
+          class="settings-view__cloud"
+        >
           <div class="settings-view__cloud-header">
             <div>
-              <strong>坚果云同步</strong>
-              <span>通过坚果云 WebDAV 同步加密备份文件。</span>
+              <strong>{{ syncItem.label }}同步</strong>
+              <span>{{ syncItem.description }}</span>
             </div>
             <span class="settings-view__cloud-time">
-              上次同步：{{ formatCloudSyncTime(draft.cloudSync.lastUpdatedAt) }}
+              上次同步：{{
+                formatCloudSyncTime(
+                  draft[syncItem.settingKey].lastUpdatedAt
+                )
+              }}
             </span>
           </div>
 
           <div class="settings-view__cloud-grid">
             <label class="settings-view__field">
               <span>WebDAV 地址</span>
-              <input v-model.trim="draft.cloudSync.webdavUrl" type="text" />
+              <input
+                v-model.trim="draft[syncItem.settingKey].webdavUrl"
+                type="text"
+              />
             </label>
             <label class="settings-view__field">
               <span>备份文件名</span>
-              <input v-model.trim="draft.cloudSync.fileName" type="text" />
+              <input
+                v-model.trim="draft[syncItem.settingKey].fileName"
+                type="text"
+              />
             </label>
             <label class="settings-view__field">
-              <span>坚果云账号</span>
-              <input v-model.trim="draft.cloudSync.username" type="text" />
+              <span>{{ syncItem.accountLabel }}</span>
+              <input
+                v-model.trim="draft[syncItem.settingKey].username"
+                type="text"
+              />
             </label>
             <label class="settings-view__field">
               <span>应用密码</span>
               <el-input
-                v-model="draft.cloudSync.password"
+                v-model="draft[syncItem.settingKey].password"
                 type="password"
                 show-password
               />
@@ -359,17 +376,29 @@
               <Save :size="16" />
               保存配置
             </button>
-            <button type="button" @click="pushCloudData">
+            <button
+              type="button"
+              :disabled="pending"
+              @click="emitCloudSync('push-cloud-data', syncItem)"
+            >
               <UploadCloud :size="16" />
-              推送到坚果云
+              推送到{{ syncItem.label }}
             </button>
-            <button type="button" @click="inspectCloudData">
+            <button
+              type="button"
+              :disabled="pending"
+              @click="emitCloudSync('inspect-cloud-data', syncItem)"
+            >
               <Eye :size="16" />
               查看云端备份
             </button>
-            <button type="button" @click="pullCloudData">
+            <button
+              type="button"
+              :disabled="pending"
+              @click="emitCloudSync('pull-cloud-data', syncItem)"
+            >
               <DownloadCloud :size="16" />
-              从坚果云恢复
+              从{{ syncItem.label }}恢复
             </button>
           </div>
         </section>
@@ -590,6 +619,26 @@ const emit = defineEmits([
 
 const activeTab = ref("directories")
 
+// 两个 WebDAV 服务保留独立配置，避免切换同步目标时覆盖凭据。
+const cloudSyncItems = [
+  {
+    settingKey: "cloudSync",
+    provider: "jianguoyun",
+    label: "坚果云",
+    accountLabel: "坚果云账号",
+    description: "通过坚果云 WebDAV 同步加密备份文件。",
+    defaultUrl: "https://dav.jianguoyun.com/dav/AI-Manager"
+  },
+  {
+    settingKey: "koofrSync",
+    provider: "koofr",
+    label: "Koofr",
+    accountLabel: "Koofr 账号",
+    description: "通过 Koofr WebDAV 同步加密备份文件。",
+    defaultUrl: "https://app.koofr.net/dav/Koofr/AI-Manager"
+  }
+]
+
 const draft = reactive({
   dataPath: "",
   cliConfigPaths: {
@@ -600,6 +649,14 @@ const draft = reactive({
   },
   cloudSync: {
     provider: "jianguoyun",
+    webdavUrl: "",
+    username: "",
+    password: "",
+    fileName: "",
+    lastUpdatedAt: 0
+  },
+  koofrSync: {
+    provider: "koofr",
     webdavUrl: "",
     username: "",
     password: "",
@@ -684,17 +741,17 @@ function syncDraft() {
   draft.cliConfigPaths.codex = props.appSettings.cliConfigPaths?.codex || ""
   // 当前版本暂不启用 Gemini。
   // draft.cliConfigPaths.gemini = props.appSettings.cliConfigPaths?.gemini || ""
-  draft.cloudSync.provider = "jianguoyun"
-  draft.cloudSync.webdavUrl =
-    props.appSettings.cloudSync?.webdavUrl ||
-    "https://dav.jianguoyun.com/dav/AI-Manager"
-  draft.cloudSync.username = props.appSettings.cloudSync?.username || ""
-  draft.cloudSync.password = props.appSettings.cloudSync?.password || ""
-  draft.cloudSync.fileName =
-    props.appSettings.cloudSync?.fileName || "ai-manager.aimbackup"
-  draft.cloudSync.lastUpdatedAt = Number(
-    props.appSettings.cloudSync?.lastUpdatedAt || 0
-  )
+  for (const syncItem of cloudSyncItems) {
+    const source = props.appSettings[syncItem.settingKey] || {}
+    const target = draft[syncItem.settingKey]
+
+    target.provider = syncItem.provider
+    target.webdavUrl = source.webdavUrl || syncItem.defaultUrl
+    target.username = source.username || ""
+    target.password = source.password || ""
+    target.fileName = source.fileName || "ai-manager.aimbackup"
+    target.lastUpdatedAt = Number(source.lastUpdatedAt || 0)
+  }
   draft.localBackup.enabled = props.appSettings.localBackup?.enabled !== false
   draft.localBackup.intervalMinutes = Number(
     props.appSettings.localBackup?.intervalMinutes || 60
@@ -753,6 +810,14 @@ function submitSettings() {
       fileName: draft.cloudSync.fileName,
       lastUpdatedAt: draft.cloudSync.lastUpdatedAt
     },
+    koofrSync: {
+      provider: draft.koofrSync.provider,
+      webdavUrl: draft.koofrSync.webdavUrl,
+      username: draft.koofrSync.username,
+      password: draft.koofrSync.password,
+      fileName: draft.koofrSync.fileName,
+      lastUpdatedAt: draft.koofrSync.lastUpdatedAt
+    },
     localBackup: {
       enabled: draft.localBackup.enabled,
       intervalMinutes: Number(draft.localBackup.intervalMinutes || 60),
@@ -767,37 +832,29 @@ function submitSettings() {
   })
 }
 
-function emitCloudSync(eventName) {
+function emitCloudSync(eventName, syncItem) {
+  const cloudSync = draft[syncItem.settingKey]
+
   if (
-    !draft.cloudSync.webdavUrl ||
-    !draft.cloudSync.username ||
-    !draft.cloudSync.password ||
-    !draft.cloudSync.fileName
+    !cloudSync.webdavUrl ||
+    !cloudSync.username ||
+    !cloudSync.password ||
+    !cloudSync.fileName
   ) {
-    window.alert("请先填写坚果云 WebDAV 地址、账号、应用密码和文件名")
+    window.alert(
+      `请先填写${syncItem.label} WebDAV 地址、账号、应用密码和文件名`
+    )
     return
   }
 
   emit(eventName, {
-    provider: draft.cloudSync.provider,
-    webdavUrl: draft.cloudSync.webdavUrl,
-    username: draft.cloudSync.username,
-    password: draft.cloudSync.password,
-    fileName: draft.cloudSync.fileName,
-    lastUpdatedAt: draft.cloudSync.lastUpdatedAt
+    provider: cloudSync.provider,
+    webdavUrl: cloudSync.webdavUrl,
+    username: cloudSync.username,
+    password: cloudSync.password,
+    fileName: cloudSync.fileName,
+    lastUpdatedAt: cloudSync.lastUpdatedAt
   })
-}
-
-function pushCloudData() {
-  emitCloudSync("push-cloud-data")
-}
-
-function inspectCloudData() {
-  emitCloudSync("inspect-cloud-data")
-}
-
-function pullCloudData() {
-  emitCloudSync("pull-cloud-data")
 }
 
 function formatCloudSyncTime(value) {
