@@ -1541,6 +1541,10 @@ impl ManagerState {
             "tools:open-toolbox" => {
                 tools::open_toolbox(&app, &mut self.toolbox_server_registry).await
             }
+            "tools:list-ports" => tools::list_ports().await,
+            "tools:terminate-port-process" => {
+                tools::terminate_port_process(payload.unwrap_or_else(|| json!({}))).await
+            }
             "tools:codex-pets" => {
                 tools::list_codex_pets(&self.paths, &self.state["cliTargets"]).await
             }

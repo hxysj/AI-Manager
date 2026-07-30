@@ -65,6 +65,7 @@
       />
       <LanShareView v-else-if="activeTool === 'lan-share'" />
       <CodexPetManager v-else-if="activeTool === 'codex-pets'" />
+      <PortMonitor v-else-if="activeTool === 'port-monitor'" />
       <section v-else-if="activeTool === 'utility'" class="tools-view-utility">
         <div class="tools-view-utility-card">
           <span class="tools-view-utility-icon">
@@ -122,6 +123,7 @@ import {
   ArrowLeft,
   GitBranchIcon,
   Hammer,
+  Network,
   PawPrint,
   Power,
   Share2,
@@ -130,6 +132,7 @@ import {
 import GitToolView from "@/features/gitTool/index.vue"
 import LanShareView from "@/features/lanShare/index.vue"
 import CodexPetManager from "@/features/tools/components/CodexPetManager.vue"
+import PortMonitor from "@/features/tools/components/PortMonitor.vue"
 import { toolboxApi } from "@/api"
 import { createMessage } from "@/utils/message"
 
@@ -165,6 +168,14 @@ const toolItems = computed(() => {
       summary: "启动浏览器工具大全面板，集中使用轻量辅助工具。",
       meta: "2 个工具",
       icon: Wrench
+    },
+    {
+      // 端口监测直接使用桌面端系统权限，不依赖浏览器工具服务。
+      id: "port-monitor",
+      label: "端口监测",
+      summary: "查看本机监听端口、所属程序和系统服务，并按需关闭进程。",
+      meta: "本机进程",
+      icon: Network
     },
     {
       id: "git",
