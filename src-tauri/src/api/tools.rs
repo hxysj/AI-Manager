@@ -15,6 +15,8 @@ use std::path::{Component, Path, PathBuf};
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 use tokio::net::TcpListener;
+#[cfg(target_os = "windows")]
+use tokio::process::Command;
 use tokio::task::JoinHandle;
 
 const INDEX_HTML: &str = include_str!("../../toolbox-panel/index.html");
@@ -24,6 +26,9 @@ const TOOL_REGISTRY_JS: &str = include_str!("../../toolbox-panel/tools/registry.
 const IMAGE_LINK_EXTRACTOR_JS: &str =
     include_str!("../../toolbox-panel/tools/image-link-extractor.js");
 const STRING_DIFF_JS: &str = include_str!("../../toolbox-panel/tools/string-diff.js");
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 pub struct ToolboxServerRegistry {
     runtime: Option<ToolboxServerRuntime>,
@@ -141,6 +146,302 @@ fn response(status: StatusCode, content_type: &str, body: &str) -> Response<Full
         .header("cache-control", "no-store")
         .body(Full::new(Bytes::copy_from_slice(body.as_bytes())))
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminatePortProcessPayload {
+    pid: u32,
+    started_at: i64,
+}
+
+#[cfg(target_os = "windows")]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowsPortRecord {
+    protocol: String,
+    local_address: String,
+    local_port: u16,
+    pid: u32,
+    process_name: String,
+    executable_path: String,
+    service_names: Vec<String>,
+    started_at: i64,
+}
+
+pub async fn list_ports() -> Result<Value, ManagerError> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err(ManagerError::System(
+            "端口监测目前仅支持 Windows".to_string(),
+        ))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let script = r#"
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+
+$processMap = @{}
+Get-Process -ErrorAction SilentlyContinue | ForEach-Object {
+  $processMap[[string]$_.Id] = $_
+}
+
+$serviceMap = @{}
+try {
+  Get-CimInstance Win32_Service -ErrorAction Stop | Where-Object { $_.ProcessId -gt 0 } | ForEach-Object {
+    $key = [string]$_.ProcessId
+    if ($serviceMap.ContainsKey($key)) {
+      $serviceMap[$key] = @($serviceMap[$key]) + [string]$_.DisplayName
+    } else {
+      $serviceMap[$key] = @([string]$_.DisplayName)
+    }
+  }
+} catch {}
+
+$records = @(
+  Get-NetTCPConnection -State Listen -ErrorAction Stop | ForEach-Object {
+    $ownerId = [int]$_.OwningProcess
+    $process = $processMap[[string]$ownerId]
+    $processName = ''
+    $processPath = ''
+    $startedAt = 0
+    if ($null -ne $process) {
+      $processName = [string]$process.ProcessName
+      try { $processPath = [string]$process.Path } catch {}
+      try {
+        $started = [DateTimeOffset]$process.StartTime
+        $startedAt = $started.ToUnixTimeSeconds()
+      } catch {}
+    }
+
+    [PSCustomObject]@{
+      protocol = 'TCP'
+      localAddress = [string]$_.LocalAddress
+      localPort = [int]$_.LocalPort
+      pid = $ownerId
+      processName = $processName
+      executablePath = $processPath
+      serviceNames = @($serviceMap[[string]$ownerId] | Where-Object { $null -ne $_ })
+      startedAt = $startedAt
+    }
+  }
+
+  Get-NetUDPEndpoint -ErrorAction Stop | ForEach-Object {
+    $ownerId = [int]$_.OwningProcess
+    $process = $processMap[[string]$ownerId]
+    $processName = ''
+    $processPath = ''
+    $startedAt = 0
+    if ($null -ne $process) {
+      $processName = [string]$process.ProcessName
+      try { $processPath = [string]$process.Path } catch {}
+      try {
+        $started = [DateTimeOffset]$process.StartTime
+        $startedAt = $started.ToUnixTimeSeconds()
+      } catch {}
+    }
+
+    [PSCustomObject]@{
+      protocol = 'UDP'
+      localAddress = [string]$_.LocalAddress
+      localPort = [int]$_.LocalPort
+      pid = $ownerId
+      processName = $processName
+      executablePath = $processPath
+      serviceNames = @($serviceMap[[string]$ownerId] | Where-Object { $null -ne $_ })
+      startedAt = $startedAt
+    }
+  }
+)
+
+ConvertTo-Json -InputObject @($records | Sort-Object localPort, protocol, pid) -Compress -Depth 4
+"#;
+        let mut command = Command::new("powershell.exe");
+        command.creation_flags(CREATE_NO_WINDOW);
+        let output = command
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            return Err(ManagerError::System(
+                "读取端口失败，请确认系统网络管理服务可用".to_string(),
+            ));
+        }
+
+        let content = String::from_utf8_lossy(&output.stdout);
+        let records: Vec<WindowsPortRecord> = serde_json::from_str(content.trim())
+            .map_err(|_| ManagerError::System("无法解析系统返回的端口信息".to_string()))?;
+        let ports = records
+            .into_iter()
+            .map(|record| {
+                let protected_reason = protected_process_reason(record.pid, &record.process_name)
+                    .map(str::to_string)
+                    .or_else(|| {
+                        if record.process_name.trim().is_empty() {
+                            Some("无法读取进程信息".to_string())
+                        } else if record.started_at <= 0 {
+                            Some("无法校验进程启动时间".to_string())
+                        } else {
+                            None
+                        }
+                    });
+
+                json!({
+                  "id": format!(
+                    "{}:{}:{}:{}",
+                    record.protocol, record.local_address, record.local_port, record.pid
+                  ),
+                  "protocol": record.protocol,
+                  "localAddress": record.local_address,
+                  "localPort": record.local_port,
+                  "pid": record.pid,
+                  "processName": record.process_name,
+                  "executablePath": record.executable_path,
+                  "serviceNames": record.service_names,
+                  "startedAt": record.started_at,
+                  "canTerminate": protected_reason.is_none(),
+                  "protectedReason": protected_reason.unwrap_or_default()
+                })
+            })
+            .collect::<Vec<_>>();
+
+        Ok(json!({ "ports": ports }))
+    }
+}
+
+pub async fn terminate_port_process(payload: Value) -> Result<Value, ManagerError> {
+    let payload: TerminatePortProcessPayload = serde_json::from_value(payload)?;
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = payload;
+        Err(ManagerError::System(
+            "进程关闭目前仅支持 Windows".to_string(),
+        ))
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if payload.started_at <= 0 {
+            return Err(ManagerError::System("进程校验信息不完整".to_string()));
+        }
+
+        // 关闭前重新读取进程身份，避免端口列表中的 PID 已被系统复用。
+        let inspect_script = format!(
+            r#"
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+$process = Get-Process -Id {} -ErrorAction Stop
+$started = [DateTimeOffset]$process.StartTime
+[PSCustomObject]@{{
+  processName = [string]$process.ProcessName
+  startedAt = $started.ToUnixTimeSeconds()
+}} | ConvertTo-Json -Compress
+"#,
+            payload.pid
+        );
+        let mut inspect_command = Command::new("powershell.exe");
+        inspect_command.creation_flags(CREATE_NO_WINDOW);
+        let inspect_output = inspect_command
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                &inspect_script,
+            ])
+            .output()
+            .await?;
+
+        if !inspect_output.status.success() {
+            return Err(ManagerError::System(
+                "进程已退出或当前无权读取该进程".to_string(),
+            ));
+        }
+
+        let process: Value = serde_json::from_slice(&inspect_output.stdout)
+            .map_err(|_| ManagerError::System("无法校验目标进程".to_string()))?;
+        let process_name = process
+            .get("processName")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let started_at = process
+            .get("startedAt")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+
+        if started_at != payload.started_at {
+            return Err(ManagerError::System(
+                "目标 PID 已被其他进程占用，请刷新列表后重试".to_string(),
+            ));
+        }
+        if let Some(reason) = protected_process_reason(payload.pid, process_name) {
+            return Err(ManagerError::System(reason.to_string()));
+        }
+
+        let mut terminate_command = Command::new("taskkill.exe");
+        terminate_command.creation_flags(CREATE_NO_WINDOW);
+        let output = terminate_command
+            .args(["/PID", &payload.pid.to_string(), "/T", "/F"])
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            return Err(ManagerError::System(format!(
+                "无法关闭进程 {}，请尝试以管理员身份运行应用",
+                payload.pid
+            )));
+        }
+
+        Ok(json!({ "pid": payload.pid }))
+    }
+}
+
+fn protected_process_reason(pid: u32, process_name: &str) -> Option<&'static str> {
+    if pid == std::process::id() {
+        return Some("不能在端口监测中关闭当前应用");
+    }
+    if pid <= 4 {
+        return Some("系统核心进程不可关闭");
+    }
+
+    let process_name = process_name
+        .trim()
+        .trim_end_matches(".exe")
+        .to_ascii_lowercase();
+    if matches!(
+        process_name.as_str(),
+        "system"
+            | "registry"
+            | "smss"
+            | "csrss"
+            | "wininit"
+            | "services"
+            | "lsass"
+            | "winlogon"
+            | "svchost"
+            | "fontdrvhost"
+            | "secure system"
+            | "memory compression"
+    ) {
+        return Some("系统关键进程不可关闭");
+    }
+
+    None
 }
 
 #[derive(Deserialize)]
@@ -506,6 +807,93 @@ async fn copy_pet_dir(source_path: &Path, target_path: &Path) -> Result<(), Mana
 mod tests {
     use super::*;
     use crate::core::paths::resolve_app_paths;
+
+    #[test]
+    fn protects_system_port_processes() {
+        assert_eq!(
+            protected_process_reason(4, "System"),
+            Some("系统核心进程不可关闭")
+        );
+        assert_eq!(
+            protected_process_reason(128, "svchost.exe"),
+            Some("系统关键进程不可关闭")
+        );
+        assert_eq!(protected_process_reason(u32::MAX, "node.exe"), None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn lists_windows_ports() {
+        tauri::async_runtime::block_on(async {
+            let result = list_ports().await.unwrap();
+            let ports = result["ports"].as_array().unwrap();
+
+            assert!(!ports.is_empty());
+            assert!(ports.iter().all(|port| {
+                port.get("protocol").and_then(Value::as_str).is_some()
+                    && port.get("localPort").and_then(Value::as_u64).is_some()
+                    && port.get("pid").and_then(Value::as_u64).is_some()
+                    && port.get("canTerminate").and_then(Value::as_bool).is_some()
+            }));
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn terminates_verified_port_process() {
+        tauri::async_runtime::block_on(async {
+            let mut child_command = Command::new("powershell.exe");
+            child_command.creation_flags(CREATE_NO_WINDOW);
+            let mut child = child_command
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Start-Sleep -Seconds 30",
+                ])
+                .spawn()
+                .unwrap();
+            let pid = child.id().unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+            let script = format!(
+                "$process = Get-Process -Id {}; $started = [DateTimeOffset]$process.StartTime; $started.ToUnixTimeSeconds()",
+                pid
+            );
+            let mut inspect_command = Command::new("powershell.exe");
+            inspect_command.creation_flags(CREATE_NO_WINDOW);
+            let output = inspect_command
+                .args([
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    &script,
+                ])
+                .output()
+                .await
+                .unwrap();
+            let started_at = String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .parse::<i64>()
+                .unwrap();
+
+            // 仅终止本测试创建的进程，验证 PID 身份校验和关闭链路。
+            let result = terminate_port_process(json!({
+              "pid": pid,
+              "startedAt": started_at
+            }))
+            .await;
+            if result.is_err() {
+                let _ = child.kill().await;
+            }
+
+            result.unwrap();
+            let status = child.wait().await.unwrap();
+            assert!(!status.success());
+        });
+    }
 
     #[test]
     fn manages_codex_pet_lifecycle() {
