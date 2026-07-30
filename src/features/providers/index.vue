@@ -96,6 +96,34 @@
             加入接管池
           </button>
           <button
+            :class="[
+              'providers-disabled-filter',
+              {
+                'providers-disabled-filter-active': showDisabledItems
+              }
+            ]"
+            type="button"
+            :title="
+              showDisabledItems
+                ? '隐藏已禁用的 Provider 与官方账号'
+                : '显示已禁用的 Provider 与官方账号'
+            "
+            :aria-pressed="showDisabledItems"
+            @click="showDisabledItems = !showDisabledItems"
+          >
+            <EyeOff v-if="!showDisabledItems" :size="16" />
+            <Eye v-else :size="16" />
+            <span class="providers-disabled-filter-label">
+              {{ showDisabledItems ? "已显示禁用项" : "显示禁用项" }}
+            </span>
+            <span
+              v-if="disabledItemCount"
+              class="providers-disabled-filter-count"
+            >
+              {{ disabledItemCount }}
+            </span>
+          </button>
+          <button
             class="providers-view__system-config"
             type="button"
             title="查看当前系统配置"
@@ -585,7 +613,7 @@
         </article>
 
         <div v-if="!mixedItems.length" class="providers-view__empty">
-          当前 CLI 还没有 Provider。
+          {{ showDisabledItems ? "当前 CLI 还没有 Provider。" : "当前 CLI 暂无启用的 Provider。" }}
         </div>
       </section>
     </div>
@@ -1793,6 +1821,7 @@ import {
   Globe2,
   GripVertical,
   Eye,
+  EyeOff,
   Play,
   Plus,
   RefreshCw,
@@ -1990,6 +2019,8 @@ const showProxyAddAction = ref(false)
 const showProxyManager = ref(false)
 const proxyTab = ref("proxy")
 const proxySwitchEnabled = ref(false)
+// 控制列表是否包含已禁用的 Provider 与官方账号。
+const showDisabledItems = ref(false)
 const providerDetail = ref(null)
 const providerDetailTab = ref("config")
 const manualCallbackUrl = ref("")
@@ -2070,43 +2101,62 @@ const scopedProviders = computed(() => {
   return props.providers.filter((item) => item.cli === activeCli.value)
 })
 
+// 统计当前 CLI 下可按需展示的禁用项。
+const disabledItemCount = computed(() => {
+  const disabledProviderCount = scopedProviders.value.filter(
+    (provider) => provider.enabled === false
+  ).length
+  const disabledAccountCount =
+    activeCli.value === "codex"
+      ? props.codexAccounts.filter((account) => account.disabled).length
+      : 0
+
+  return disabledProviderCount + disabledAccountCount
+})
+
 const mixedItems = computed(() => {
-  const providerItems = scopedProviders.value.map((provider) => ({
-    type: "provider",
-    provider,
-    key: `provider:${provider.id}`,
-    className: [
-      "providers-view__provider-card",
-      {
-        "providers-view__provider-card--active":
-          profileMap.value[activeCli.value]?.providerId === provider.id,
-        "providers-view__provider-card--runtime-warning":
-          showRuntimeWarning.value &&
-          profileMap.value[activeCli.value]?.providerId === provider.id,
-        "providers-view__provider-card--disabled": provider.enabled === false
-      }
-    ],
-    createdAt: provider.createdAt || 0
-  }))
+  const providerItems = scopedProviders.value
+    .filter(
+      (provider) => showDisabledItems.value || provider.enabled !== false
+    )
+    .map((provider) => ({
+      type: "provider",
+      provider,
+      key: `provider:${provider.id}`,
+      className: [
+        "providers-view__provider-card",
+        {
+          "providers-view__provider-card--active":
+            profileMap.value[activeCli.value]?.providerId === provider.id,
+          "providers-view__provider-card--runtime-warning":
+            showRuntimeWarning.value &&
+            profileMap.value[activeCli.value]?.providerId === provider.id,
+          "providers-view__provider-card--disabled": provider.enabled === false
+        }
+      ],
+      createdAt: provider.createdAt || 0
+    }))
   const accountItems =
     activeCli.value === "codex"
-      ? props.codexAccounts.map((account) => ({
-          type: "account",
-          account,
-          key: `account:${account.id}`,
-          className: [
-            "providers-view__account-card",
-            {
-              "providers-view__account-card--active": account.active,
-              "providers-view__account-card--refreshing":
-                codexAccountRefreshingMap[account.id],
-              "providers-view__account-card--error":
-                account.refresh_status === "failed",
-              "providers-view__account-card--disabled": account.disabled
-            }
-          ],
-          createdAt: account.createdAt || account.updatedAt || 0
-        }))
+      ? props.codexAccounts
+          .filter((account) => showDisabledItems.value || !account.disabled)
+          .map((account) => ({
+            type: "account",
+            account,
+            key: `account:${account.id}`,
+            className: [
+              "providers-view__account-card",
+              {
+                "providers-view__account-card--active": account.active,
+                "providers-view__account-card--refreshing":
+                  codexAccountRefreshingMap[account.id],
+                "providers-view__account-card--error":
+                  account.refresh_status === "failed",
+                "providers-view__account-card--disabled": account.disabled
+              }
+            ],
+            createdAt: account.createdAt || account.updatedAt || 0
+          }))
       : []
 
   return [...providerItems, ...accountItems].sort(
@@ -3742,40 +3792,62 @@ watch(
     color: #ffffff;
   }
 
-  &__toggle {
+  .providers-disabled-filter {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    height: 30px;
-    padding: 0 7px;
-    border-radius: 999px;
-    background: #f0f2f5;
-    color: #667085;
-  }
-
-  &__toggle input {
-    display: none;
-  }
-
-  &__toggle span {
-    width: 38px;
-    height: 22px;
-    border-radius: 999px;
-    background: #d7dbe1;
-  }
-
-  &__toggle span::before {
-    content: "";
-    display: block;
-    width: 20px;
-    height: 20px;
-    margin: 1px;
-    border-radius: 999px;
+    gap: 7px;
+    height: 38px;
+    padding: 0 10px;
+    border: 1px solid #d8e0eb;
+    border-radius: 12px;
     background: #ffffff;
+    color: #667085;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 700;
+    transition:
+      border-color 0.18s ease,
+      background 0.18s ease,
+      color 0.18s ease,
+      box-shadow 0.18s ease;
+
+    &:hover {
+      border-color: #b8c5d6;
+      background: #f8fafc;
+      color: #344054;
+      box-shadow: 0 2px 7px rgba(15, 23, 42, 0.06);
+    }
+
+    .providers-disabled-filter-label {
+      white-space: nowrap;
+    }
+
+    .providers-disabled-filter-count {
+      display: inline-flex;
+      min-width: 18px;
+      height: 18px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: #f2f4f7;
+      color: #667085;
+      font-size: 0.7rem;
+      font-variant-numeric: tabular-nums;
+    }
   }
 
-  &__toggle input:checked + span::before {
-    margin-left: 17px;
+  .providers-disabled-filter-active,
+  .providers-disabled-filter-active:hover {
+    border-color: #fed7aa;
+    background: #fff7ed;
+    color: #c2410c;
+    box-shadow: none;
+
+    .providers-disabled-filter-count {
+      background: #ffedd5;
+      color: #c2410c;
+    }
   }
 
   &__list-panel {
