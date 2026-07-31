@@ -617,7 +617,7 @@ async fn migrate_legacy_codex_pets(
         let source_path = entry.path();
         let id = entry.file_name().to_string_lossy().to_string();
 
-        if valid_pet_id(&id).is_err() || !is_pet_directory(&source_path).await {
+        if valid_pet_id(&id).is_err() || !is_codex_pet_directory(&source_path).await {
             continue;
         }
 
@@ -648,7 +648,7 @@ async fn read_pets(pets_dir: &Path, enabled: bool) -> Result<Vec<Value>, Manager
         let pet_dir = entry.path();
         let id = entry.file_name().to_string_lossy().to_string();
 
-        if valid_pet_id(&id).is_err() || !is_pet_directory(&pet_dir).await {
+        if valid_pet_id(&id).is_err() || !is_codex_pet_directory(&pet_dir).await {
             continue;
         }
 
@@ -674,7 +674,7 @@ async fn read_pets(pets_dir: &Path, enabled: bool) -> Result<Vec<Value>, Manager
     Ok(pets)
 }
 
-async fn is_pet_directory(path: &Path) -> bool {
+pub(crate) async fn is_codex_pet_directory(path: &Path) -> bool {
     tokio::fs::metadata(path)
         .await
         .map(|stat| stat.is_dir())

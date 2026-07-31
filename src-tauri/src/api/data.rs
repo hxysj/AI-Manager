@@ -1,4 +1,4 @@
-use crate::api::{runtime_provider, sessions, skills};
+use crate::api::{runtime_provider, sessions, skills, tools};
 use crate::core::error::ManagerError;
 use crate::core::paths::{ensure_app_directories, home_path, path_text, AppPaths};
 use crate::core::settings::{
@@ -803,10 +803,40 @@ async fn collect_codex_pet_entries(app_settings: &AppSettings) -> Result<Vec<Val
     let Some(codex_pets_dir) = codex_pets_backup_dir(app_settings) else {
         return Ok(Vec::new());
     };
+    if !codex_pets_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut children = tokio::fs::read_dir(&codex_pets_dir).await?;
+    let mut pet_dirs = Vec::new();
 
-    Ok(sanitize_codex_pet_entries(
-        collect_directory_entries(&codex_pets_dir).await?,
-    ))
+    while let Some(child) = children.next_entry().await? {
+        let pet_dir = child.path();
+
+        if tools::is_codex_pet_directory(&pet_dir).await {
+            pet_dirs.push(pet_dir);
+        }
+    }
+    pet_dirs.sort();
+    let mut entries = Vec::new();
+
+    for pet_dir in pet_dirs {
+        let pet_id = pet_dir
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        entries.push(json!({
+          "path": pet_id,
+          "type": "dir"
+        }));
+        for mut entry in collect_directory_entries(&pet_dir).await? {
+            let child_path = string_value(entry.get("path"));
+            entry["path"] = json!(format!("{}/{}", pet_id, child_path));
+            entries.push(entry);
+        }
+    }
+
+    Ok(sanitize_codex_pet_entries(entries))
 }
 
 fn codex_pets_backup_dir(app_settings: &AppSettings) -> Option<PathBuf> {
@@ -1975,6 +2005,7 @@ async fn upload_webdav_backup(
     content: String,
 ) -> Result<(), ManagerError> {
     ensure_webdav_directory(config).await?;
+    let expected_size = content.len() as u64;
 
     let response = reqwest::Client::new()
         .put(build_webdav_file_url(config)?)
@@ -1995,6 +2026,38 @@ async fn upload_webdav_backup(
             cloud_sync_provider_name(config),
             status,
             detail
+        )));
+    }
+
+    let response = reqwest::Client::new()
+        .head(build_webdav_file_url(config)?)
+        .header(AUTHORIZATION, build_webdav_auth_header(config))
+        .send()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let status = response.status().as_u16();
+
+    if status != 200 {
+        return Err(ManagerError::System(format!(
+            "{}上传校验失败：{}",
+            cloud_sync_provider_name(config),
+            status
+        )));
+    }
+
+    let actual_size = response.content_length().ok_or_else(|| {
+        ManagerError::System(format!(
+            "{}上传校验失败：云端未返回文件大小",
+            cloud_sync_provider_name(config)
+        ))
+    })?;
+
+    if actual_size != expected_size {
+        return Err(ManagerError::System(format!(
+            "{}上传不完整：本地备份 {} 字节，云端文件 {} 字节，请重新上传",
+            cloud_sync_provider_name(config),
+            expected_size,
+            actual_size
         )));
     }
 
@@ -2115,7 +2178,13 @@ fn encrypt_backup_payload(payload: &Value) -> Result<String, ManagerError> {
 }
 
 fn decrypt_backup_payload(content: &str) -> Result<Value, ManagerError> {
-    let payload: Value = serde_json::from_str(content)?;
+    let payload: Value = serde_json::from_str(content).map_err(|error| {
+        if error.is_eof() {
+            ManagerError::System("备份文件不完整，请重新生成或上传备份".to_string())
+        } else {
+            ManagerError::Json(error)
+        }
+    })?;
     let engine = base64::engine::general_purpose::STANDARD;
     let iv = engine
         .decode(string_value(payload.get("iv")))
@@ -2981,8 +3050,9 @@ fn is_database_backup_path(entry_path: &str) -> bool {
 mod tests {
     use super::{
         append_app_settings_restore_preview, collect_backup_entries, collect_codex_pet_entries,
-        create_backup_entry_view, encrypt_backup_payload, format_restore_file_content,
-        is_allowed_backup_path, is_database_backup_path, merge_json_backup_value,
+        create_backup_entry_view, decrypt_backup_payload, encrypt_backup_payload,
+        format_restore_file_content, is_allowed_backup_path, is_database_backup_path,
+        merge_json_backup_value,
         merge_provider_keys, preview_data_backup_restore_content, redact_backup_app_settings,
         restore_backup_app_settings, restore_codex_pet_entries, restore_data_backup_content,
         restore_directory_entries, sanitize_runtime_backup_entries, serialize_backup_app_settings,
@@ -3003,6 +3073,17 @@ mod tests {
         let summary = format_restore_file_content(&content);
 
         assert!(summary.starts_with("二进制文件，大小：4 字节，SHA-256："));
+    }
+
+    #[test]
+    fn reports_truncated_backup_as_incomplete() {
+        let error = decrypt_backup_payload("{\n  \"version\": 1,\n  \"content\": \"abc")
+            .expect_err("截断备份应返回错误");
+
+        assert_eq!(
+            error.to_string(),
+            "系统调用失败：备份文件不完整，请重新生成或上传备份"
+        );
     }
 
     #[test]
@@ -3197,11 +3278,14 @@ mod tests {
             })),
         );
         let enabled_pet = source_codex_path.join("pets").join("enabled-pet");
+        let invalid_pet = source_codex_path.join("pets").join("$out");
         let disabled_pet = Path::new(&source_paths.disabled_pets_dir).join("disabled-pet");
         std::fs::create_dir_all(&enabled_pet).unwrap();
+        std::fs::create_dir_all(&invalid_pet).unwrap();
         std::fs::create_dir_all(&disabled_pet).unwrap();
         std::fs::write(enabled_pet.join("pet.json"), r#"{"id":"enabled-pet"}"#).unwrap();
         std::fs::write(enabled_pet.join("spritesheet.webp"), [1_u8, 2, 3]).unwrap();
+        std::fs::write(invalid_pet.join("build.js"), [7_u8, 8, 9]).unwrap();
         std::fs::write(disabled_pet.join("pet.json"), r#"{"id":"disabled-pet"}"#).unwrap();
         std::fs::write(disabled_pet.join("spritesheet.webp"), [4_u8, 5, 6]).unwrap();
 
@@ -3230,6 +3314,10 @@ mod tests {
         assert!(codex_entries
             .iter()
             .any(|entry| entry["path"] == "enabled-pet/spritesheet.webp"));
+        assert!(!codex_entries.iter().any(|entry| entry
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|path| path.starts_with("$out"))));
         assert!(workspace_entries
             .iter()
             .any(|entry| entry["path"] == "pets-disabled/disabled-pet/pet.json"));
