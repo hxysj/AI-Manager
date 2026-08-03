@@ -11,7 +11,7 @@ use crate::core::{database, provider_store, rule_store, skill_store};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{HeaderMap, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -2045,7 +2045,7 @@ async fn upload_webdav_backup(
         )));
     }
 
-    let actual_size = response.content_length().ok_or_else(|| {
+    let actual_size = webdav_content_length(response.headers()).ok_or_else(|| {
         ManagerError::System(format!(
             "{}上传校验失败：云端未返回文件大小",
             cloud_sync_provider_name(config)
@@ -2062,6 +2062,15 @@ async fn upload_webdav_backup(
     }
 
     Ok(())
+}
+
+fn webdav_content_length(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get(CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()
 }
 
 async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, ManagerError> {
@@ -3052,11 +3061,10 @@ mod tests {
         append_app_settings_restore_preview, collect_backup_entries, collect_codex_pet_entries,
         create_backup_entry_view, decrypt_backup_payload, encrypt_backup_payload,
         format_restore_file_content, is_allowed_backup_path, is_database_backup_path,
-        merge_json_backup_value,
-        merge_provider_keys, preview_data_backup_restore_content, redact_backup_app_settings,
-        restore_backup_app_settings, restore_codex_pet_entries, restore_data_backup_content,
-        restore_directory_entries, sanitize_runtime_backup_entries, serialize_backup_app_settings,
-        validate_backup_symlink_target,
+        merge_json_backup_value, merge_provider_keys, preview_data_backup_restore_content,
+        redact_backup_app_settings, restore_backup_app_settings, restore_codex_pet_entries,
+        restore_data_backup_content, restore_directory_entries, sanitize_runtime_backup_entries,
+        serialize_backup_app_settings, validate_backup_symlink_target, webdav_content_length,
     };
     use crate::api::runtime_provider;
     use crate::core::paths::resolve_app_paths;
@@ -3064,6 +3072,7 @@ mod tests {
     use crate::core::usage_store::{self, UsageSessionUpdate};
     use crate::core::{database, provider_store, skill_store};
     use base64::Engine;
+    use reqwest::header::{HeaderMap, HeaderValue, CONTENT_LENGTH};
     use serde_json::{json, Map};
     use std::path::Path;
 
@@ -3084,6 +3093,14 @@ mod tests {
             error.to_string(),
             "系统调用失败：备份文件不完整，请重新生成或上传备份"
         );
+    }
+
+    #[test]
+    fn reads_webdav_file_size_from_content_length_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_LENGTH, HeaderValue::from_static("146938538"));
+
+        assert_eq!(webdav_content_length(&headers), Some(146_938_538));
     }
 
     #[test]
