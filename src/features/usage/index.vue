@@ -45,6 +45,7 @@
       <label class="usage-view__field">
         <span>时间范围</span>
         <el-date-picker
+          ref="dateTimeRangePickerRef"
           v-model="dateTimeRange"
           type="datetimerange"
           :shortcuts="dateTimeShortcuts"
@@ -54,6 +55,7 @@
           end-placeholder="结束时间"
           range-separator="至"
           start-placeholder="开始时间"
+          @calendar-change="handleDateTimeRangeCalendarChange"
         />
       </label>
       <label class="usage-view__field">
@@ -714,6 +716,7 @@ const pricingSaving = ref(false)
 const pageLoading = computed(() => pending.value && !isReportExportWindow)
 const stats = ref(props.usage || {})
 const rangeType = ref(usageSearchParams.get("rangeType") || "today")
+const dateTimeRangePickerRef = ref(null)
 const dateTimeRange = ref(createInitialDateTimeRange())
 const appType = ref(usageSearchParams.get("appType") || "all")
 const providerId = ref(usageSearchParams.get("providerId") || "all")
@@ -799,7 +802,10 @@ const dateTimeShortcuts = [
   {
     text: "全部时间",
     value: null,
-    onClick: () => (dateTimeRange.value = [])
+    onClick: () => {
+      dateTimeRange.value = []
+      closeDateTimeRangePicker()
+    }
   }
 ]
 
@@ -1165,6 +1171,17 @@ function createInitialDateTimeRange() {
   }
 
   return createPresetDateTimeRange(rangeType.value)
+}
+
+function handleDateTimeRangeCalendarChange([, end]) {
+  if (end) {
+    closeDateTimeRangePicker()
+  }
+}
+
+function closeDateTimeRangePicker() {
+  // 等待组件完成内部选值，避免关闭状态被后续更新重新覆盖。
+  nextTick(() => dateTimeRangePickerRef.value?.handleClose())
 }
 
 function createFilterPayload(options = {}) {
