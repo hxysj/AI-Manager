@@ -94,7 +94,7 @@ fn strip_non_backup_tables(snapshot_path: &Path) -> Result<(), ManagerError> {
             "repoName",
         ],
     )?;
-    strip_json_fields(&transaction, "codex_accounts", &["usage"])?;
+    strip_json_fields(&transaction, "codex_accounts", &["usage", "disabled"])?;
 
     transaction.commit()?;
     connection.execute_batch("VACUUM;")?;
@@ -728,7 +728,7 @@ fn clear_missing_rule_prompt_state(
 }
 
 fn restore_codex_accounts(transaction: &rusqlite::Transaction<'_>) -> Result<(), ManagerError> {
-    let current_usage = {
+    let current_state = {
         let mut statement =
             transaction.prepare("SELECT item_key, payload_json FROM codex_accounts")?;
         let rows = statement
@@ -736,15 +736,25 @@ fn restore_codex_accounts(transaction: &rusqlite::Transaction<'_>) -> Result<(),
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        let mut usage = HashMap::new();
+        let mut state = HashMap::new();
 
         for (item_key, payload) in rows {
             let account: serde_json::Value = serde_json::from_str(&payload)?;
-            if let Some(value) = account.get("usage").filter(|value| is_json_truthy(value)) {
-                usage.insert(item_key, value.clone());
-            }
+            state.insert(
+                item_key,
+                (
+                    account
+                        .get("usage")
+                        .filter(|value| is_json_truthy(value))
+                        .cloned(),
+                    account
+                        .get("disabled")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                ),
+            );
         }
-        usage
+        state
     };
 
     restore_table(transaction, "codex_accounts")?;
@@ -759,17 +769,22 @@ fn restore_codex_accounts(transaction: &rusqlite::Transaction<'_>) -> Result<(),
         rows
     };
 
-    // usage 是当前设备刚刷新的运行数据，账号凭据恢复时只保留当前值。
+    // usage 和 disabled 都属于本机状态；备份新增的官方账号默认禁用。
     for (item_key, payload) in restored {
         let mut account: serde_json::Value = serde_json::from_str(&payload)?;
         let account = account.as_object_mut().ok_or_else(|| {
             ManagerError::System(format!("Codex 账号 {item_key} 的数据格式无效。"))
         })?;
-        if let Some(usage) = current_usage.get(&item_key) {
+        let current = current_state.get(&item_key);
+        if let Some(usage) = current.and_then(|(usage, _)| usage.as_ref()) {
             account.insert("usage".to_string(), usage.clone());
         } else {
             account.remove("usage");
         }
+        account.insert(
+            "disabled".to_string(),
+            serde_json::Value::Bool(current.map(|(_, disabled)| *disabled).unwrap_or(true)),
+        );
         transaction.execute(
             "UPDATE codex_accounts SET payload_json = ?1 WHERE item_key = ?2",
             params![serde_json::to_string(&account)?, item_key],
@@ -885,7 +900,7 @@ fn comparison_column(table: &str, column: &str) -> String {
              '$.sourcePath', '$.entryPath', '$.repoName', {runtime_paths})"
         ),
         "codex_accounts" => format!(
-            "json_remove({column}, '$.usage', {runtime_paths},
+            "json_remove({column}, '$.usage', '$.disabled', {runtime_paths},
              '$.auth.createdAt', '$.auth.updatedAt', '$.auth.lastUpdatedAt', '$.auth.lastSyncAt',
              '$.auth.created_at', '$.auth.updated_at', '$.auth.last_refresh', '$.auth.token_updated_at')"
         ),
@@ -945,7 +960,7 @@ mod tests {
         .unwrap();
         provider_store::write_codex_accounts(
             &paths,
-            &[json!({"id": "account-a", "usage": {"source": "current"}})],
+            &[json!({"id": "account-a", "usage": {"source": "current"}, "disabled": true})],
         )
         .unwrap();
         skill_store::write_skills(
@@ -1062,6 +1077,7 @@ mod tests {
             );
         }
         assert!(account.get("usage").is_none());
+        assert!(account.get("disabled").is_none());
     }
 
     #[test]
@@ -1095,8 +1111,8 @@ mod tests {
         provider_store::write_codex_accounts(
             &source_paths,
             &[
-                json!({"id": "account-a", "email": "backup@example.com", "usage": {"source": "backup"}}),
-                json!({"id": "account-b", "email": "new@example.com", "usage": {"source": "backup"}}),
+                json!({"id": "account-a", "email": "backup@example.com", "usage": {"source": "backup"}, "disabled": false}),
+                json!({"id": "account-b", "email": "new@example.com", "usage": {"source": "backup"}, "disabled": false}),
             ],
         )
         .unwrap();
@@ -1146,7 +1162,7 @@ mod tests {
         provider_store::write_codex_accounts(
             &target_paths,
             &[
-                json!({"id": "account-a", "email": "current@example.com", "usage": {"source": "current"}}),
+                json!({"id": "account-a", "email": "current@example.com", "usage": {"source": "current"}, "disabled": true}),
                 json!({"id": "account-local", "email": "local@example.com"}),
             ],
         )
@@ -1293,6 +1309,7 @@ mod tests {
         .unwrap();
         assert_eq!(account_a["email"], "backup@example.com");
         assert_eq!(account_a["usage"]["source"], "current");
+        assert_eq!(account_a["disabled"], true);
         let account_b: serde_json::Value = serde_json::from_str(
             &restored
                 .query_row(
@@ -1304,6 +1321,7 @@ mod tests {
         )
         .unwrap();
         assert!(account_b.get("usage").is_none());
+        assert_eq!(account_b["disabled"], true);
         assert_eq!(
             restored
                 .query_row(
@@ -1553,7 +1571,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_ignores_provider_and_skill_local_state() {
+    fn preview_ignores_provider_skill_and_codex_account_local_state() {
         let source_root = std::env::temp_dir().join(format!(
             "monkey-thief-main-database-preview-source-{}",
             std::process::id()
@@ -1601,10 +1619,33 @@ mod tests {
             })],
         )
         .unwrap();
+        provider_store::write_codex_accounts(
+            &source_paths,
+            &[json!({
+              "id": "account-a",
+              "email": "same@example.com",
+              "usage": {"source": "backup"},
+              "disabled": false
+            })],
+        )
+        .unwrap();
+        provider_store::write_codex_accounts(
+            &target_paths,
+            &[json!({
+              "id": "account-a",
+              "email": "same@example.com",
+              "usage": {"source": "current"},
+              "disabled": true
+            })],
+        )
+        .unwrap();
 
         let differences = preview_restore(&target_paths, &backup(&source_paths).unwrap()).unwrap();
 
         assert!(!differences.iter().any(|item| item.table == "providers"));
         assert!(!differences.iter().any(|item| item.table == "skills"));
+        assert!(!differences
+            .iter()
+            .any(|item| item.table == "codex_accounts"));
     }
 }

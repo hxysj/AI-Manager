@@ -506,16 +506,22 @@ async fn preview_data_backup_restore_content(
     content: &str,
 ) -> Result<Value, ManagerError> {
     let backup = parse_backup(content)?;
-    let mut preview = create_restore_preview(
+    let (workspace_entries, codex_pet_entries) = prepare_pet_restore_entries(
         paths,
+        app_settings,
         backup["workspaceEntries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+        backup["codexPetEntries"]
             .as_array()
             .cloned()
             .unwrap_or_default(),
     )
     .await?;
+    let mut preview = create_restore_preview(paths, workspace_entries).await?;
     append_app_settings_restore_preview(&mut preview, app_settings, &backup)?;
-    append_codex_pets_restore_preview(&mut preview, app_settings, &backup).await?;
+    append_codex_pets_restore_preview(&mut preview, app_settings, &codex_pet_entries).await?;
 
     preview["createdAt"] = json!(number_value(backup.get("createdAt"), 0));
     Ok(preview)
@@ -549,7 +555,7 @@ fn append_app_settings_restore_preview(
 async fn append_codex_pets_restore_preview(
     preview: &mut Value,
     app_settings: &AppSettings,
-    backup: &Value,
+    entries: &[Value],
 ) -> Result<(), ManagerError> {
     let Some(codex_pets_dir) = codex_pets_backup_dir(app_settings) else {
         return Ok(());
@@ -558,10 +564,7 @@ async fn append_codex_pets_restore_preview(
     let mut added = preview["added"].as_array().cloned().unwrap_or_default();
     let mut conflicts = preview["conflicts"].as_array().cloned().unwrap_or_default();
 
-    for entry in backup["codexPetEntries"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
+    for entry in entries
         .iter()
         .filter(|entry| entry.get("type").and_then(Value::as_str) == Some("file"))
     {
@@ -680,10 +683,19 @@ async fn restore_data_backup_content(
         .transpose()?;
 
     ensure_app_directories(paths).await?;
-    let workspace_entries = backup["workspaceEntries"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let (workspace_entries, codex_pet_entries) = prepare_pet_restore_entries(
+        paths,
+        app_settings,
+        backup["workspaceEntries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+        backup["codexPetEntries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+    )
+    .await?;
     let restored_paths = workspace_entries
         .iter()
         .filter_map(|entry| entry.get("path").and_then(Value::as_str))
@@ -713,15 +725,7 @@ async fn restore_data_backup_content(
         &current_restore_json_values,
     )
     .await?;
-    restore_codex_pet_entries(
-        app_settings,
-        backup["codexPetEntries"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default(),
-        &choices,
-    )
-    .await?;
+    restore_codex_pet_entries(app_settings, codex_pet_entries, &choices).await?;
     migrate_skill_repository_storage(paths).await?;
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
@@ -854,6 +858,98 @@ fn codex_pet_backup_entry_path(entry_path: &str) -> String {
         "codex-pets/{}",
         entry_path.replace('\\', "/").trim_matches('/')
     )
+}
+
+// 宠物启用状态属于本机状态，同步时任一目录已存在相同 ID 都保留本机宠物。
+async fn prepare_pet_restore_entries(
+    paths: &AppPaths,
+    app_settings: &AppSettings,
+    workspace_entries: Vec<Value>,
+    codex_pet_entries: Vec<Value>,
+) -> Result<(Vec<Value>, Vec<Value>), ManagerError> {
+    let mut existing_ids = HashSet::new();
+    collect_pet_directory_ids(Path::new(&paths.disabled_pets_dir), &mut existing_ids).await?;
+    if let Some(codex_pets_dir) = codex_pets_backup_dir(app_settings) {
+        collect_pet_directory_ids(&codex_pets_dir, &mut existing_ids).await?;
+    }
+
+    let disabled_backup_ids = workspace_entries
+        .iter()
+        .filter_map(disabled_pet_entry_id)
+        .filter(|id| !existing_ids.contains(&pet_id_key(id)))
+        .map(pet_id_key)
+        .collect::<HashSet<_>>();
+    existing_ids.extend(disabled_backup_ids.iter().cloned());
+
+    let workspace_entries = workspace_entries
+        .into_iter()
+        .filter(|entry| {
+            disabled_pet_entry_id(entry)
+                .map(|id| disabled_backup_ids.contains(&pet_id_key(id)))
+                .unwrap_or(true)
+        })
+        .collect();
+
+    let enabled_backup_ids = codex_pet_entries
+        .iter()
+        .filter_map(codex_pet_entry_id)
+        .filter(|id| !existing_ids.contains(&pet_id_key(id)))
+        .map(pet_id_key)
+        .collect::<HashSet<_>>();
+    let codex_pet_entries = codex_pet_entries
+        .into_iter()
+        .filter(|entry| {
+            codex_pet_entry_id(entry)
+                .map(|id| enabled_backup_ids.contains(&pet_id_key(id)))
+                .unwrap_or(false)
+        })
+        .collect();
+
+    Ok((workspace_entries, codex_pet_entries))
+}
+
+async fn collect_pet_directory_ids(
+    pets_dir: &Path,
+    pet_ids: &mut HashSet<String>,
+) -> Result<(), ManagerError> {
+    if !pets_dir.exists() {
+        return Ok(());
+    }
+
+    let mut entries = tokio::fs::read_dir(pets_dir).await?;
+    while let Some(entry) = entries.next_entry().await? {
+        pet_ids.insert(pet_id_key(&entry.file_name().to_string_lossy()));
+    }
+    Ok(())
+}
+
+fn disabled_pet_entry_id(entry: &Value) -> Option<String> {
+    let path = entry.get("path")?.as_str()?.replace('\\', "/");
+    let mut components = path.trim_matches('/').split('/');
+
+    if !components.next()?.eq_ignore_ascii_case("pets-disabled") {
+        return None;
+    }
+    components
+        .next()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+fn codex_pet_entry_id(entry: &Value) -> Option<String> {
+    entry
+        .get("path")?
+        .as_str()?
+        .replace('\\', "/")
+        .trim_matches('/')
+        .split('/')
+        .next()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+fn pet_id_key(id: impl AsRef<str>) -> String {
+    id.as_ref().to_lowercase()
 }
 
 async fn collect_directory_entries(root_path: &Path) -> Result<Vec<Value>, ManagerError> {
@@ -1045,6 +1141,7 @@ fn strip_codex_account_usage(entry: Value) -> Result<Value, ManagerError> {
             .map(|mut account| {
                 if let Some(account) = account.as_object_mut() {
                     account.remove("usage");
+                    account.remove("disabled");
                 }
                 account
             })
@@ -1637,7 +1734,13 @@ fn merge_json_backup_value(
             } else {
                 next_index_map.insert(item_key, next_items.len());
                 next_items.push(
-                    if ["storage/providers.json", "storage/skills.json"].contains(&entry_path) {
+                    if [
+                        "storage/providers.json",
+                        "storage/skills.json",
+                        "storage/codex-accounts.json",
+                    ]
+                    .contains(&entry_path)
+                    {
                         merge_restore_value(entry_path, &Value::Null, item)
                     } else {
                         item.clone()
@@ -1748,12 +1851,20 @@ fn merge_restore_value(entry_path: &str, current_value: &Value, backup_value: &V
 
     if entry_path == "storage/codex-accounts.json" {
         let mut next_backup_value = backup_value.as_object().cloned().unwrap_or_default();
+        let current_exists = current_value.is_object();
 
         if let Some(usage) = current_value.get("usage") {
             next_backup_value.insert("usage".to_string(), usage.clone());
         } else {
             next_backup_value.remove("usage");
         }
+        next_backup_value.insert(
+            "disabled".to_string(),
+            json!(current_value
+                .get("disabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(!current_exists)),
+        );
         return Value::Object(next_backup_value);
     }
 
@@ -2724,6 +2835,7 @@ fn normalize_prompt_runtime_restore_value(value: Value) -> Value {
 fn normalize_codex_account_restore_value(value: Value) -> Value {
     if let Value::Object(mut map) = value {
         map.remove("usage");
+        map.remove("disabled");
         return Value::Object(map);
     }
 
@@ -3061,10 +3173,11 @@ mod tests {
         append_app_settings_restore_preview, collect_backup_entries, collect_codex_pet_entries,
         create_backup_entry_view, decrypt_backup_payload, encrypt_backup_payload,
         format_restore_file_content, is_allowed_backup_path, is_database_backup_path,
-        merge_json_backup_value, merge_provider_keys, preview_data_backup_restore_content,
-        redact_backup_app_settings, restore_backup_app_settings, restore_codex_pet_entries,
-        restore_data_backup_content, restore_directory_entries, sanitize_runtime_backup_entries,
-        serialize_backup_app_settings, validate_backup_symlink_target, webdav_content_length,
+        merge_json_backup_value, merge_provider_keys, prepare_pet_restore_entries,
+        preview_data_backup_restore_content, redact_backup_app_settings,
+        restore_backup_app_settings, restore_codex_pet_entries, restore_data_backup_content,
+        restore_directory_entries, sanitize_runtime_backup_entries, serialize_backup_app_settings,
+        validate_backup_symlink_target, webdav_content_length,
     };
     use crate::api::runtime_provider;
     use crate::core::paths::resolve_app_paths;
@@ -3279,7 +3392,7 @@ mod tests {
     }
 
     #[test]
-    fn backs_up_and_restores_enabled_and_disabled_codex_pets() {
+    fn syncing_codex_pets_preserves_local_enabled_state() {
         let root =
             std::env::temp_dir().join(format!("monkey-thief-pet-backup-{}", std::process::id()));
         if root.exists() {
@@ -3294,17 +3407,29 @@ mod tests {
               "cliConfigPaths": { "codex": source_codex_path.to_string_lossy() }
             })),
         );
-        let enabled_pet = source_codex_path.join("pets").join("enabled-pet");
+        let enabled_pet = source_codex_path.join("pets").join("disabled-locally");
+        let new_enabled_pet = source_codex_path.join("pets").join("new-enabled");
         let invalid_pet = source_codex_path.join("pets").join("$out");
-        let disabled_pet = Path::new(&source_paths.disabled_pets_dir).join("disabled-pet");
+        let disabled_pet = Path::new(&source_paths.disabled_pets_dir).join("enabled-locally");
+        let new_disabled_pet = Path::new(&source_paths.disabled_pets_dir).join("new-disabled");
         std::fs::create_dir_all(&enabled_pet).unwrap();
+        std::fs::create_dir_all(&new_enabled_pet).unwrap();
         std::fs::create_dir_all(&invalid_pet).unwrap();
         std::fs::create_dir_all(&disabled_pet).unwrap();
-        std::fs::write(enabled_pet.join("pet.json"), r#"{"id":"enabled-pet"}"#).unwrap();
+        std::fs::create_dir_all(&new_disabled_pet).unwrap();
+        std::fs::write(enabled_pet.join("pet.json"), r#"{"id":"disabled-locally"}"#).unwrap();
         std::fs::write(enabled_pet.join("spritesheet.webp"), [1_u8, 2, 3]).unwrap();
+        std::fs::write(new_enabled_pet.join("pet.json"), r#"{"id":"new-enabled"}"#).unwrap();
+        std::fs::write(new_enabled_pet.join("spritesheet.webp"), [3_u8, 4, 5]).unwrap();
         std::fs::write(invalid_pet.join("build.js"), [7_u8, 8, 9]).unwrap();
-        std::fs::write(disabled_pet.join("pet.json"), r#"{"id":"disabled-pet"}"#).unwrap();
+        std::fs::write(disabled_pet.join("pet.json"), r#"{"id":"enabled-locally"}"#).unwrap();
         std::fs::write(disabled_pet.join("spritesheet.webp"), [4_u8, 5, 6]).unwrap();
+        std::fs::write(
+            new_disabled_pet.join("pet.json"),
+            r#"{"id":"new-disabled"}"#,
+        )
+        .unwrap();
+        std::fs::write(new_disabled_pet.join("spritesheet.webp"), [6_u8, 7, 8]).unwrap();
 
         let target_paths = resolve_app_paths(&root.join("target-data"));
         let target_codex_path = root.join("target-codex");
@@ -3318,34 +3443,59 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let codex_entries = runtime
+        let backup_codex_entries = runtime
             .block_on(collect_codex_pet_entries(&source_settings))
             .unwrap();
-        let workspace_entries = runtime
+        let backup_workspace_entries = runtime
             .block_on(collect_backup_entries(&source_paths))
+            .unwrap();
+
+        let current_enabled_pet = target_codex_path.join("pets").join("enabled-locally");
+        let current_disabled_pet =
+            Path::new(&target_paths.disabled_pets_dir).join("disabled-locally");
+        std::fs::create_dir_all(&current_enabled_pet).unwrap();
+        std::fs::create_dir_all(&current_disabled_pet).unwrap();
+        std::fs::write(
+            current_enabled_pet.join("pet.json"),
+            r#"{"id":"enabled-locally"}"#,
+        )
+        .unwrap();
+        std::fs::write(current_enabled_pet.join("spritesheet.webp"), [8_u8, 8, 8]).unwrap();
+        std::fs::write(
+            current_disabled_pet.join("pet.json"),
+            r#"{"id":"disabled-locally"}"#,
+        )
+        .unwrap();
+        std::fs::write(current_disabled_pet.join("spritesheet.webp"), [9_u8, 9, 9]).unwrap();
+
+        let (workspace_entries, codex_entries) = runtime
+            .block_on(prepare_pet_restore_entries(
+                &target_paths,
+                &target_settings,
+                backup_workspace_entries,
+                backup_codex_entries,
+            ))
             .unwrap();
 
         assert!(codex_entries
             .iter()
-            .any(|entry| entry["path"] == "enabled-pet/pet.json"));
-        assert!(codex_entries
-            .iter()
-            .any(|entry| entry["path"] == "enabled-pet/spritesheet.webp"));
+            .any(|entry| entry["path"] == "new-enabled/pet.json"));
+        assert!(codex_entries.iter().all(|entry| !entry["path"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("disabled-locally")));
         assert!(!codex_entries.iter().any(|entry| entry
             .get("path")
             .and_then(serde_json::Value::as_str)
             .is_some_and(|path| path.starts_with("$out"))));
         assert!(workspace_entries
             .iter()
-            .any(|entry| entry["path"] == "pets-disabled/disabled-pet/pet.json"));
+            .any(|entry| entry["path"] == "pets-disabled/new-disabled/pet.json"));
+        assert!(workspace_entries.iter().all(|entry| !entry["path"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("pets-disabled/enabled-locally")));
 
-        runtime
-            .block_on(restore_codex_pet_entries(
-                &target_settings,
-                codex_entries,
-                &Map::new(),
-            ))
-            .unwrap();
         runtime
             .block_on(restore_directory_entries(
                 &target_paths,
@@ -3357,17 +3507,39 @@ mod tests {
                 &std::collections::HashMap::new(),
             ))
             .unwrap();
+        runtime
+            .block_on(restore_codex_pet_entries(
+                &target_settings,
+                codex_entries,
+                &Map::new(),
+            ))
+            .unwrap();
 
         assert_eq!(
-            std::fs::read(target_codex_path.join("pets/enabled-pet/spritesheet.webp")).unwrap(),
-            [1_u8, 2, 3]
+            std::fs::read(current_enabled_pet.join("spritesheet.webp")).unwrap(),
+            [8_u8, 8, 8]
+        );
+        assert_eq!(
+            std::fs::read(current_disabled_pet.join("spritesheet.webp")).unwrap(),
+            [9_u8, 9, 9]
+        );
+        assert!(!Path::new(&target_paths.disabled_pets_dir)
+            .join("enabled-locally")
+            .exists());
+        assert!(!target_codex_path
+            .join("pets")
+            .join("disabled-locally")
+            .exists());
+        assert_eq!(
+            std::fs::read(target_codex_path.join("pets/new-enabled/spritesheet.webp")).unwrap(),
+            [3_u8, 4, 5]
         );
         assert_eq!(
             std::fs::read(
-                Path::new(&target_paths.disabled_pets_dir).join("disabled-pet/spritesheet.webp")
+                Path::new(&target_paths.disabled_pets_dir).join("new-disabled/spritesheet.webp")
             )
             .unwrap(),
-            [4_u8, 5, 6]
+            [6_u8, 7, 8]
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -3460,7 +3632,7 @@ mod tests {
             ),
             encoded_json_entry(
                 "storage/codex-accounts.json",
-                &json!([{"id": "account-a", "usage": {"limit": 1}}]),
+                &json!([{"id": "account-a", "usage": {"limit": 1}, "disabled": false}]),
             ),
         ])
         .unwrap();
@@ -3490,6 +3662,7 @@ mod tests {
         assert!(skill[0].get("installedTargets").is_none());
         assert!(skill[0].get("status").is_none());
         assert!(account[0].get("usage").is_none());
+        assert!(account[0].get("disabled").is_none());
     }
 
     #[test]
@@ -3551,6 +3724,30 @@ mod tests {
     }
 
     #[test]
+    fn legacy_codex_account_restore_preserves_current_disabled_state() {
+        let choices = json!({
+          "json:storage/codex-accounts.json:account-a": "backup"
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+        let merged = merge_json_backup_value(
+            "storage/codex-accounts.json",
+            &json!([{"id": "account-a", "email": "current@example.com", "disabled": true}]),
+            &json!([
+              {"id": "account-a", "email": "backup@example.com", "disabled": false},
+              {"id": "account-b", "email": "new@example.com", "disabled": false}
+            ]),
+            &choices,
+        )
+        .unwrap();
+
+        assert_eq!(merged[0]["email"], "backup@example.com");
+        assert_eq!(merged[0]["disabled"], true);
+        assert_eq!(merged[1]["disabled"], true);
+    }
+
+    #[test]
     fn legacy_json_restore_reads_current_state_from_sqlite() {
         let root = std::env::temp_dir().join(format!(
             "monkey-thief-legacy-json-sqlite-{}",
@@ -3585,7 +3782,8 @@ mod tests {
             &[json!({
               "id": "account-a",
               "email": "current@example.com",
-              "usage": {"source": "current"}
+              "usage": {"source": "current"},
+              "disabled": true
             })],
         )
         .unwrap();
@@ -3628,8 +3826,8 @@ mod tests {
             encoded_json_entry(
               "storage/codex-accounts.json",
               &json!([
-                {"id": "account-a", "email": "backup@example.com", "usage": {"source": "backup"}},
-                {"id": "account-b", "email": "new@example.com", "usage": {"source": "backup"}}
+                {"id": "account-a", "email": "backup@example.com", "usage": {"source": "backup"}, "disabled": false},
+                {"id": "account-b", "email": "new@example.com", "usage": {"source": "backup"}, "disabled": false}
               ])
             )
           ]
@@ -3718,7 +3916,9 @@ mod tests {
         assert!(!installs.contains_key("skill-b"));
         assert_eq!(account_a["email"], "backup@example.com");
         assert_eq!(account_a["usage"]["source"], "current");
+        assert_eq!(account_a["disabled"], true);
         assert!(account_b.get("usage").is_none());
+        assert_eq!(account_b["disabled"], true);
     }
 
     #[test]
