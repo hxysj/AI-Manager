@@ -48,27 +48,28 @@
       </div>
 
       <p class="restore-notice">
-        已有 Provider 和 Skill 保留当前启用状态；备份新增项默认禁用，失效的当前选择会清空。
+        已有 Provider、Codex 官方账号、Skill 和宠物保留本机启用状态；备份新增的 Provider、官方账号和 Skill 默认禁用。
       </p>
 
       <div class="restore-body">
         <aside class="restore-nav">
           <button
-            v-for="tab in restoreCategoryTabs"
+            v-for="tab in restoreNavigationItems"
             :key="tab.id"
             :class="[
               'restore-nav-button',
               {
-                'restore-nav-button-active': restoreSelectedCategory === tab.id
+                'restore-nav-button-active': restoreSelectedRoot === tab.id
               }
             ]"
             type="button"
-            @click="restoreSelectedCategory = tab.id"
+            @click="restoreSelectedRoot = tab.id"
           >
             <span class="restore-nav-main">
               <span class="restore-nav-name">{{ tab.label }}</span>
               <span class="restore-nav-total">{{ tab.totalCount }} 项</span>
             </span>
+            <span v-if="tab.path" class="restore-nav-path">{{ tab.path }}</span>
             <span class="restore-nav-counts">
               <span v-if="tab.addedCount" class="restore-nav-count">
                 新增 {{ tab.addedCount }}
@@ -285,7 +286,7 @@
               "
               class="restore-empty"
             >
-              当前分类没有差异。
+              当前导航项没有差异。
             </div>
           </div>
         </section>
@@ -405,40 +406,7 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'submit'])
 
-const restoreCategoryOptions = [
-  {
-    id: 'settings',
-    label: '云同步设置',
-    description: '坚果云与 Koofr 的 WebDAV 地址、账号和备份文件名',
-    prefixes: ['app-settings.json']
-  },
-  {
-    id: 'storage',
-    label: '配置索引',
-    description: 'Provider、Codex 账号、Skills 和 Rules 索引',
-    prefixes: ['storage']
-  },
-  {
-    id: 'skills',
-    label: 'Skills',
-    description: '本地安装的 Skill 内容',
-    prefixes: ['skills']
-  },
-  {
-    id: 'prompts',
-    label: 'Prompts',
-    description: 'Prompt 内容和 CLI 分类数据',
-    prefixes: ['prompts']
-  },
-  {
-    id: 'other',
-    label: '其他',
-    description: '未归入常见目录的备份内容',
-    prefixes: []
-  }
-]
-
-const restoreSelectedCategory = ref('all')
+const restoreSelectedRoot = ref('all')
 const restoreCompareKey = ref('')
 const restoreCurrentCompareCodeRef = ref(null)
 const restoreBackupCompareCodeRef = ref(null)
@@ -455,11 +423,11 @@ const restoreConflictItems = computed(() => {
 })
 
 const restoreFilteredAddedItems = computed(() => {
-  return filterRestoreItemsByCategory(restoreAddedItems.value)
+  return filterRestoreItemsByRoot(restoreAddedItems.value)
 })
 
 const restoreFilteredConflictItems = computed(() => {
-  return filterRestoreItemsByCategory(restoreConflictItems.value)
+  return filterRestoreItemsByRoot(restoreConflictItems.value)
 })
 
 const restoreFilteredAddedGroups = computed(() => {
@@ -482,36 +450,47 @@ const restoreBackupChoiceCount = computed(() => {
   ).length
 })
 
-const restoreCategoryTabs = computed(() => {
-  const tabs = [
+const restoreNavigationItems = computed(() => {
+  const roots = new Map()
+
+  // 导航按实际同步数据的最外层路径聚合，避免固定分类掩盖大量子项。
+  for (const [items, countKey] of [
+    [restoreAddedItems.value, 'addedCount'],
+    [restoreConflictItems.value, 'conflictCount']
+  ]) {
+    for (const item of items) {
+      const rootPath = getRestoreItemRoot(item)
+
+      if (!roots.has(rootPath)) {
+        roots.set(rootPath, {
+          id: rootPath,
+          label: getRestoreRootLabel(rootPath),
+          path: rootPath,
+          addedCount: 0,
+          conflictCount: 0
+        })
+      }
+      roots.get(rootPath)[countKey] += 1
+    }
+  }
+
+  return [
     {
       id: 'all',
-      label: '全部变更',
-      description: '查看备份和当前数据之间的全部差异',
+      label: '全部同步数据',
+      path: '',
       addedCount: restoreAddedItems.value.length,
-      conflictCount: restoreConflictItems.value.length
+      conflictCount: restoreConflictItems.value.length,
+      totalCount:
+        restoreAddedItems.value.length + restoreConflictItems.value.length
     },
-    ...restoreCategoryOptions.map(category => ({
-      id: category.id,
-      label: category.label,
-      description: category.description,
-      addedCount: countRestoreItemsByCategory(
-        restoreAddedItems.value,
-        category.id
-      ),
-      conflictCount: countRestoreItemsByCategory(
-        restoreConflictItems.value,
-        category.id
-      )
-    }))
+    ...Array.from(roots.values())
+      .sort((left, right) => left.path.localeCompare(right.path))
+      .map(item => ({
+        ...item,
+        totalCount: item.addedCount + item.conflictCount
+      }))
   ]
-
-  return tabs
-    .map(tab => ({
-      ...tab,
-      totalCount: tab.addedCount + tab.conflictCount
-    }))
-    .filter(tab => tab.id === 'all' || tab.totalCount)
 })
 
 const restoreCompareItem = computed(() => {
@@ -561,7 +540,7 @@ watch(
 )
 
 function resetRestoreState() {
-  restoreSelectedCategory.value = 'all'
+  restoreSelectedRoot.value = 'all'
   restoreCompareKey.value = ''
 
   for (const key of Object.keys(restoreChoices)) {
@@ -646,33 +625,66 @@ function getRestoreItemPath(item) {
   return String(item.groupPath || item.path || '根目录').replace(/\\/g, '/')
 }
 
-function getRestoreItemCategory(item) {
+function getRestoreItemRoot(item) {
   const itemPath = String(item.path || item.groupPath || '根目录').replace(
     /\\/g,
     '/'
   )
-  const matchedCategory = restoreCategoryOptions.find(category =>
-    category.prefixes.some(
-      prefix => itemPath === prefix || itemPath.startsWith(`${prefix}/`)
+  const groupPath = String(item.groupPath || '').replace(/\\/g, '/')
+
+  if (groupPath === 'storage/ai-manager.db') {
+    return groupPath
+  }
+
+  const pathParts = itemPath.split('/').filter(Boolean)
+
+  if (
+    pathParts.length > 1 &&
+    ['storage', 'skills', 'prompts', 'pets-disabled', 'codex-pets'].includes(
+      pathParts[0]
     )
-  )
+  ) {
+    return pathParts.slice(0, 2).join('/')
+  }
 
-  return matchedCategory?.id || 'other'
+  return pathParts[0] || '根目录'
 }
 
-function countRestoreItemsByCategory(items, categoryId) {
-  return items.filter(item => getRestoreItemCategory(item) === categoryId)
-    .length
+function getRestoreRootLabel(rootPath) {
+  const labels = {
+    'app-settings.json': '云同步设置',
+    'storage/ai-manager.db': '主数据库',
+    'storage/providers.json': 'Provider',
+    'storage/codex-accounts.json': 'Codex 官方账号',
+    'storage/skills.json': 'Skill 索引',
+    'storage/rules.json': 'Prompt 索引'
+  }
+
+  if (labels[rootPath]) {
+    return labels[rootPath]
+  }
+  if (rootPath.startsWith('skills/')) {
+    return `Skill · ${rootPath.slice('skills/'.length)}`
+  }
+  if (rootPath.startsWith('prompts/')) {
+    return `Prompt · ${rootPath.slice('prompts/'.length)}`
+  }
+  if (rootPath.startsWith('codex-pets/')) {
+    return `启用宠物 · ${rootPath.slice('codex-pets/'.length)}`
+  }
+  if (rootPath.startsWith('pets-disabled/')) {
+    return `禁用宠物 · ${rootPath.slice('pets-disabled/'.length)}`
+  }
+
+  return rootPath
 }
 
-function filterRestoreItemsByCategory(items) {
-  if (restoreSelectedCategory.value === 'all') {
+function filterRestoreItemsByRoot(items) {
+  if (restoreSelectedRoot.value === 'all') {
     return items
   }
 
-  return items.filter(
-    item => getRestoreItemCategory(item) === restoreSelectedCategory.value
-  )
+  return items.filter(item => getRestoreItemRoot(item) === restoreSelectedRoot.value)
 }
 
 function groupRestoreItems(items) {
@@ -923,7 +935,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
   .restore-nav {
     display: flex;
-    width: 220px;
+    width: 240px;
     flex: none;
     flex-direction: column;
     gap: 8px;
@@ -932,7 +944,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
     .restore-nav-button {
       display: flex;
-      min-height: 68px;
+      min-height: 76px;
       flex-direction: column;
       align-items: stretch;
       justify-content: center;
@@ -982,6 +994,16 @@ function createRestoreCompareRows(currentContent, backupContent) {
           font-weight: 700;
           line-height: 1.4;
         }
+      }
+
+      .restore-nav-path {
+        overflow: hidden;
+        color: var(--color-text-soft);
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 0.68rem;
+        line-height: 1.35;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
     }
 
