@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 pub struct UsageLogQuery {
     pub app_type: String,
@@ -104,6 +104,165 @@ pub fn read_all_logs(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
         "SELECT payload_json FROM usage_logs ORDER BY created_at DESC, request_id ASC",
         Vec::new(),
     )
+}
+
+pub fn write_usage_cost_snapshots(
+    paths: &AppPaths,
+    logs: &[Value],
+) -> Result<(), ManagerError> {
+    if logs.is_empty() {
+        return Ok(());
+    }
+
+    initialize(paths)?;
+    let mut connection = open_connection(paths)?;
+    let transaction = connection.transaction()?;
+    let mut changed = false;
+
+    for log in logs {
+        let request_id = text(log.get("requestId"));
+
+        if request_id.is_empty() || number(log.get("costLockedAt")) <= 0 {
+            continue;
+        }
+
+        changed |= transaction.execute(
+            "UPDATE usage_logs SET payload_json = ?1 WHERE request_id = ?2",
+            params![serde_json::to_string(log)?, request_id],
+        )? > 0;
+    }
+
+    if changed {
+        bump_revision(&transaction)?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn record_codex_quota_stages(
+    paths: &AppPaths,
+    account_id: &str,
+    stages: &[Value],
+) -> Result<(), ManagerError> {
+    if account_id.is_empty() || stages.is_empty() {
+        return Ok(());
+    }
+
+    initialize(paths)?;
+    let mut connection = open_connection(paths)?;
+    let transaction = connection.transaction()?;
+
+    for stage in stages {
+        let window_key = text(stage.get("windowKey"));
+        let reset_at = number(stage.get("resetAt"));
+        let starts_at = number(stage.get("startsAt"));
+        let observed_at = number(stage.get("observedAt"));
+
+        if window_key.is_empty() || reset_at <= 0 || observed_at <= 0 {
+            continue;
+        }
+
+        let completed_at = if starts_at > 0 { starts_at } else { observed_at };
+        transaction.execute(
+            "UPDATE codex_quota_stages
+             SET completed_at = ?1
+             WHERE account_id = ?2 AND window_key = ?3
+               AND reset_at <> ?4 AND completed_at = 0",
+            params![completed_at, account_id, window_key, reset_at],
+        )?;
+
+        let existing = transaction
+            .query_row(
+                "SELECT payload_json FROM codex_quota_stages
+                 WHERE account_id = ?1 AND window_key = ?2 AND reset_at = ?3",
+                params![account_id, window_key, reset_at],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|payload| serde_json::from_str::<Value>(&payload))
+            .transpose()?;
+        let first_observed_at = existing
+            .as_ref()
+            .map(|item| number(item.get("firstObservedAt")))
+            .filter(|value| *value > 0)
+            .unwrap_or(observed_at);
+        let first_used_percent = existing
+            .as_ref()
+            .and_then(|item| item.get("firstUsedPercent"))
+            .and_then(Value::as_f64)
+            .unwrap_or_else(|| decimal(stage.get("usedPercent"), 0.0));
+        let used_percent = existing
+            .as_ref()
+            .map(|item| decimal(item.get("usedPercent"), 0.0))
+            .unwrap_or(0.0)
+            .max(decimal(stage.get("usedPercent"), 0.0))
+            .clamp(0.0, 100.0);
+        let payload = json!({
+          "id": format!("{account_id}:{window_key}:{reset_at}"),
+          "accountId": account_id,
+          "windowKey": window_key,
+          "limitWindowSeconds": number(stage.get("limitWindowSeconds")),
+          "startsAt": starts_at,
+          "resetAt": reset_at,
+          "firstObservedAt": first_observed_at,
+          "lastObservedAt": observed_at,
+          "firstUsedPercent": first_used_percent,
+          "usedPercent": used_percent,
+          "remainingPercent": (100.0 - used_percent).max(0.0)
+        });
+
+        transaction.execute(
+            "INSERT INTO codex_quota_stages(
+               stage_id, account_id, window_key, reset_at, starts_at,
+               observed_at, completed_at, payload_json
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)
+             ON CONFLICT(account_id, window_key, reset_at) DO UPDATE SET
+               starts_at = excluded.starts_at,
+               observed_at = excluded.observed_at,
+               completed_at = 0,
+               payload_json = excluded.payload_json",
+            params![
+                format!("{account_id}:{window_key}:{reset_at}"),
+                account_id,
+                window_key,
+                reset_at,
+                starts_at,
+                observed_at,
+                serde_json::to_string(&payload)?
+            ],
+        )?;
+    }
+
+    transaction.commit()?;
+    Ok(())
+}
+
+pub fn read_codex_quota_stages(
+    paths: &AppPaths,
+    account_id: &str,
+) -> Result<Vec<Value>, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    let mut statement = connection.prepare(
+        "SELECT completed_at, payload_json
+         FROM codex_quota_stages
+         WHERE account_id = ?1
+         ORDER BY reset_at DESC, window_key ASC",
+    )?;
+    let rows = statement.query_map(params![account_id], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut stages = Vec::new();
+
+    for row in rows {
+        let (completed_at, payload) = row?;
+        let mut stage = serde_json::from_str::<Value>(&payload)?;
+
+        stage["active"] = json!(completed_at == 0);
+        stage["completedAt"] = json!(completed_at.max(0));
+        stages.push(stage);
+    }
+    Ok(stages)
 }
 
 pub fn read_app_types(paths: &AppPaths) -> Result<Vec<String>, ManagerError> {
@@ -313,13 +472,50 @@ pub fn replace_sessions(
     let transaction = connection.transaction()?;
 
     for update in updates {
+        let existing_logs = {
+            let mut statement = transaction.prepare(
+                "SELECT request_id, payload_json FROM usage_logs WHERE raw_path = ?1",
+            )?;
+            let rows = statement.query_map(params![update.raw_path], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            let mut logs = HashMap::new();
+
+            for row in rows {
+                let (request_id, payload) = row?;
+                logs.insert(request_id, serde_json::from_str::<Value>(&payload)?);
+            }
+            logs
+        };
         transaction.execute(
             "DELETE FROM usage_logs WHERE raw_path = ?1",
             params![update.raw_path],
         )?;
 
         for log in &update.logs {
-            insert_usage_log(&transaction, log)?;
+            let mut next_log = log.clone();
+            let request_id = text(log.get("requestId"));
+
+            if let Some(existing) = existing_logs
+                .get(&request_id)
+                .filter(|item| number(item.get("costLockedAt")) > 0)
+            {
+                for field in [
+                    "pricingSnapshot",
+                    "actualTokens",
+                    "inputCostUsd",
+                    "outputCostUsd",
+                    "cacheReadCostUsd",
+                    "cacheCreationCostUsd",
+                    "totalCostUsd",
+                    "costLockedAt",
+                ] {
+                    if let Some(value) = existing.get(field) {
+                        next_log[field] = value.clone();
+                    }
+                }
+            }
+            insert_usage_log(&transaction, &next_log)?;
         }
 
         for record in &update.records {
@@ -427,6 +623,19 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
          );
          CREATE INDEX IF NOT EXISTS idx_usage_pricing_model_id
            ON usage_pricing_items(model_id);
+         CREATE TABLE IF NOT EXISTS codex_quota_stages (
+           stage_id TEXT PRIMARY KEY,
+           account_id TEXT NOT NULL,
+           window_key TEXT NOT NULL,
+           reset_at INTEGER NOT NULL,
+           starts_at INTEGER NOT NULL DEFAULT 0,
+           observed_at INTEGER NOT NULL,
+           completed_at INTEGER NOT NULL DEFAULT 0,
+           payload_json TEXT NOT NULL,
+           UNIQUE(account_id, window_key, reset_at)
+         );
+         CREATE INDEX IF NOT EXISTS idx_codex_quota_stages_account_reset
+           ON codex_quota_stages(account_id, reset_at DESC);
          INSERT OR IGNORE INTO usage_metadata(key, value) VALUES ('revision', '0');",
     )?;
     connection.execute(
@@ -829,8 +1038,9 @@ fn now_millis() -> u128 {
 mod tests {
     use super::{
         create_schema, ensure_skill_session_parser_version, initialize, query_logs, read_pricing,
-        read_request_records, read_session_versions, read_skill_session_records, replace_sessions,
-        write_pricing, write_skill_session_records, UsageLogQuery, UsageSessionUpdate,
+        read_codex_quota_stages, read_request_records, read_session_versions,
+        read_skill_session_records, record_codex_quota_stages, replace_sessions, write_pricing,
+        write_skill_session_records, UsageLogQuery, UsageSessionUpdate,
     };
     use crate::core::paths::resolve_app_paths;
     use rusqlite::{params, Connection};
@@ -1097,6 +1307,121 @@ mod tests {
         assert_eq!(pricing["exchangeRate"], 7.5);
         assert_eq!(pricing["items"][0]["modelId"], "gpt-b");
         assert_eq!(pricing["items"][0]["currency"], "CNY");
+    }
+
+    #[test]
+    fn records_codex_quota_stage_progress_and_reset_history() {
+        let paths = create_test_paths("codex-quota-stage");
+
+        record_codex_quota_stages(
+            &paths,
+            "account-1",
+            &[json!({
+              "windowKey": "primary",
+              "limitWindowSeconds": 1,
+              "startsAt": 1_000,
+              "resetAt": 2_000,
+              "observedAt": 1_100,
+              "usedPercent": 10.0
+            })],
+        )
+        .unwrap();
+        record_codex_quota_stages(
+            &paths,
+            "account-1",
+            &[json!({
+              "windowKey": "primary",
+              "limitWindowSeconds": 1,
+              "startsAt": 1_000,
+              "resetAt": 2_000,
+              "observedAt": 1_200,
+              "usedPercent": 40.0
+            })],
+        )
+        .unwrap();
+
+        let active_stages = read_codex_quota_stages(&paths, "account-1").unwrap();
+        assert_eq!(active_stages.len(), 1);
+        assert_eq!(active_stages[0]["firstObservedAt"], 1_100);
+        assert_eq!(active_stages[0]["lastObservedAt"], 1_200);
+        assert_eq!(active_stages[0]["firstUsedPercent"], 10.0);
+        assert_eq!(active_stages[0]["usedPercent"], 40.0);
+        assert_eq!(active_stages[0]["remainingPercent"], 60.0);
+        assert_eq!(active_stages[0]["active"], true);
+
+        record_codex_quota_stages(
+            &paths,
+            "account-1",
+            &[json!({
+              "windowKey": "primary",
+              "limitWindowSeconds": 1,
+              "startsAt": 2_000,
+              "resetAt": 3_000,
+              "observedAt": 2_100,
+              "usedPercent": 5.0
+            })],
+        )
+        .unwrap();
+
+        let stages = read_codex_quota_stages(&paths, "account-1").unwrap();
+        assert_eq!(stages.len(), 2);
+        assert_eq!(stages[0]["resetAt"], 3_000);
+        assert_eq!(stages[0]["active"], true);
+        assert_eq!(stages[1]["resetAt"], 2_000);
+        assert_eq!(stages[1]["active"], false);
+        assert_eq!(stages[1]["completedAt"], 2_000);
+    }
+
+    #[test]
+    fn preserves_locked_cost_when_replacing_session_logs() {
+        let paths = create_test_paths("locked-cost-reparse");
+
+        replace_sessions(
+            &paths,
+            &[UsageSessionUpdate {
+                raw_path: "session.jsonl".to_string(),
+                app_type: "codex".to_string(),
+                updated_at: 100,
+                logs: vec![json!({
+                  "requestId": "request-1",
+                  "rawPath": "session.jsonl",
+                  "createdAt": 100,
+                  "appType": "codex",
+                  "inputTokens": 100,
+                  "actualTokens": 120,
+                  "totalCostUsd": 0.25,
+                  "costLockedAt": 90,
+                  "pricingSnapshot": { "pricingId": "pricing-old" }
+                })],
+                records: Vec::new(),
+            }],
+        )
+        .unwrap();
+        replace_sessions(
+            &paths,
+            &[UsageSessionUpdate {
+                raw_path: "session.jsonl".to_string(),
+                app_type: "codex".to_string(),
+                updated_at: 200,
+                logs: vec![json!({
+                  "requestId": "request-1",
+                  "rawPath": "session.jsonl",
+                  "createdAt": 100,
+                  "appType": "codex",
+                  "inputTokens": 150
+                })],
+                records: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        let logs = query_logs(&paths, &all_query()).unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["inputTokens"], 150);
+        assert_eq!(logs[0]["actualTokens"], 120);
+        assert_eq!(logs[0]["totalCostUsd"], 0.25);
+        assert_eq!(logs[0]["costLockedAt"], 90);
+        assert_eq!(logs[0]["pricingSnapshot"]["pricingId"], "pricing-old");
     }
 
     #[test]

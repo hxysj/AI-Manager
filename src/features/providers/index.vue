@@ -1354,6 +1354,117 @@
           <template v-else-if="codexAccountDetailTarget">
             <div class="providers-view-usage-panel">
               <section class="providers-view__drawer-section">
+                <h3>额度阶段</h3>
+                <div
+                  v-if="codexCurrentQuotaStages.length"
+                  class="providers-view-quota-stage-list"
+                >
+                  <article
+                    v-for="stage in codexCurrentQuotaStages"
+                    :key="stage.id"
+                    class="providers-view-quota-stage-card"
+                  >
+                    <div class="providers-view-quota-stage-head">
+                      <div class="providers-view-quota-stage-title">
+                        <strong class="providers-view-quota-stage-name">{{
+                          formatRateWindowName(stage.limitWindowSeconds)
+                        }}</strong>
+                        <span class="providers-view-quota-stage-status">
+                          当前阶段
+                        </span>
+                      </div>
+                      <strong class="providers-view-quota-stage-percent">
+                        剩余 {{ formatQuotaPercent(stage.remainingPercent) }}%
+                      </strong>
+                    </div>
+                    <div class="providers-view-quota-stage-track">
+                      <span
+                        class="providers-view-quota-stage-fill"
+                        :style="{
+                          width: formatRateWidth(stage.usedPercent)
+                        }"
+                      ></span>
+                    </div>
+                    <div class="providers-view-quota-stage-metrics">
+                      <span class="providers-view-quota-stage-metric">
+                        已使用
+                        <strong class="providers-view-quota-stage-metric-value">
+                          {{ formatQuotaPercent(stage.usedPercent) }}%
+                        </strong>
+                      </span>
+                      <span class="providers-view-quota-stage-metric">
+                        Token
+                        <strong class="providers-view-quota-stage-metric-value">
+                          <TokenCount :value="stage.summary?.actualTokens" />
+                        </strong>
+                      </span>
+                      <span class="providers-view-quota-stage-metric">
+                        请求
+                        <strong class="providers-view-quota-stage-metric-value">
+                          {{
+                            formatProviderNumber(stage.summary?.requestCount)
+                          }}
+                        </strong>
+                      </span>
+                      <span class="providers-view-quota-stage-metric">
+                        已计费
+                        <strong class="providers-view-quota-stage-metric-value">
+                          {{ formatProviderCost(stage.summary?.totalCostUsd) }}
+                        </strong>
+                      </span>
+                    </div>
+                    <span class="providers-view-quota-stage-range">
+                      {{ formatQuotaStageRange(stage) }}
+                    </span>
+                  </article>
+                </div>
+                <div v-else class="providers-view__drawer-empty">
+                  刷新账号额度后开始记录额度阶段。
+                </div>
+                <div
+                  v-if="codexQuotaStageHistory.length"
+                  class="providers-view-quota-history"
+                >
+                  <div class="providers-view-quota-history-head">
+                    <strong class="providers-view-quota-history-title">
+                      历史阶段
+                    </strong>
+                    <span class="providers-view-quota-history-count">
+                      {{ codexQuotaStageHistory.length }} 个
+                    </span>
+                  </div>
+                  <article
+                    v-for="stage in codexQuotaStageHistory"
+                    :key="stage.id"
+                    class="providers-view-quota-history-row"
+                  >
+                    <div class="providers-view-quota-history-main">
+                      <strong class="providers-view-quota-history-name">{{
+                        formatRateWindowName(stage.limitWindowSeconds)
+                      }}</strong>
+                      <span class="providers-view-quota-history-range">
+                        {{ formatQuotaStageRange(stage) }}
+                      </span>
+                    </div>
+                    <div class="providers-view-quota-history-metrics">
+                      <span class="providers-view-quota-history-usage">
+                        使用 {{ formatQuotaPercent(stage.usedPercent) }}% /
+                        {{
+                          formatProviderNumber(stage.summary?.requestCount)
+                        }}
+                        次
+                      </span>
+                      <strong class="providers-view-quota-history-token">
+                        <TokenCount :value="stage.summary?.actualTokens" />
+                      </strong>
+                      <span class="providers-view-quota-history-cost">{{
+                        formatProviderCost(stage.summary?.totalCostUsd)
+                      }}</span>
+                    </div>
+                  </article>
+                </div>
+              </section>
+              <section class="providers-view__drawer-section">
                 <h3>用量概览</h3>
                 <div class="providers-view-usage-hero">
                   <div class="providers-view-usage-hero-item">
@@ -2243,6 +2354,19 @@ const emptyUsageSummary = {
   totalCostUsd: 0
 }
 
+// 额度阶段按重置时间持久化，当前阶段和历史阶段分别展示。
+const codexCurrentQuotaStages = computed(() => {
+  return (codexAccountDetail.value?.quotaStages || []).filter(
+    stage => stage.active
+  )
+})
+
+const codexQuotaStageHistory = computed(() => {
+  return (codexAccountDetail.value?.quotaStages || [])
+    .filter(stage => !stage.active)
+    .slice(0, 12)
+})
+
 const codexAccountUsageProviderIds = computed(() => {
   if (!codexAccountDetailTarget.value) {
     return []
@@ -2822,6 +2946,16 @@ function formatUnixTime(value) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(normalizedTimestamp))
+}
+
+function formatQuotaPercent(value) {
+  const percent = Math.min(100, Math.max(0, Number(value || 0)))
+
+  return Number.isInteger(percent) ? String(percent) : percent.toFixed(1)
+}
+
+function formatQuotaStageRange(stage) {
+  return `${formatUnixTime(stage.startsAt)} - ${formatUnixTime(stage.resetAt)}`
 }
 
 function formatJson(value) {
@@ -5253,6 +5387,176 @@ watch(
         font-size: 0.84rem;
         font-weight: 700;
         box-shadow: 0 10px 24px rgba(31, 52, 78, 0.1);
+      }
+    }
+
+    .providers-view-quota-stage-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+
+      .providers-view-quota-stage-card {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 14px;
+        border: 1px solid #cddaea;
+        border-radius: 8px;
+        background: #f8fbff;
+
+        .providers-view-quota-stage-head {
+          display: flex;
+          align-items: flex-start;
+          justify-content: space-between;
+          gap: 12px;
+
+          .providers-view-quota-stage-title {
+            display: flex;
+            min-width: 0;
+            align-items: center;
+            gap: 8px;
+
+            .providers-view-quota-stage-name {
+              overflow: hidden;
+              color: #172033;
+              font-size: 0.9rem;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+
+            .providers-view-quota-stage-status {
+              flex: none;
+              color: #1682ff;
+              font-size: 0.72rem;
+              font-weight: 700;
+            }
+          }
+
+          .providers-view-quota-stage-percent {
+            flex: none;
+            color: #126a50;
+            font-size: 0.86rem;
+          }
+        }
+
+        .providers-view-quota-stage-track {
+          height: 7px;
+          overflow: hidden;
+          border-radius: 4px;
+          background: #dce6f1;
+
+          .providers-view-quota-stage-fill {
+            display: block;
+            height: 100%;
+            border-radius: inherit;
+            background: #1682ff;
+          }
+        }
+
+        .providers-view-quota-stage-metrics {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 12px;
+
+          .providers-view-quota-stage-metric {
+            display: flex;
+            min-width: 0;
+            flex: 1 1 100px;
+            align-items: baseline;
+            gap: 4px;
+            color: #697789;
+            font-size: 0.74rem;
+
+            .providers-view-quota-stage-metric-value {
+              overflow: hidden;
+              color: #243447;
+              font-size: 0.82rem;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+          }
+        }
+
+        .providers-view-quota-stage-range {
+          color: #8492a5;
+          font-size: 0.72rem;
+        }
+      }
+    }
+
+    .providers-view-quota-history {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      padding-top: 4px;
+
+      .providers-view-quota-history-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        color: #697789;
+        font-size: 0.76rem;
+
+        .providers-view-quota-history-title {
+          color: #3c4a5e;
+          font-size: 0.78rem;
+        }
+
+        .providers-view-quota-history-count {
+          flex: none;
+        }
+      }
+
+      .providers-view-quota-history-row {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 10px 12px;
+        border: 1px solid #dde4ed;
+        border-radius: 6px;
+        background: #ffffff;
+
+        .providers-view-quota-history-main,
+        .providers-view-quota-history-metrics {
+          display: flex;
+          min-width: 0;
+          flex-direction: column;
+          gap: 3px;
+        }
+
+        .providers-view-quota-history-main {
+          .providers-view-quota-history-name {
+            color: #243447;
+            font-size: 0.8rem;
+          }
+
+          .providers-view-quota-history-range {
+            overflow: hidden;
+            color: #8492a5;
+            font-size: 0.7rem;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+        }
+
+        .providers-view-quota-history-metrics {
+          flex: none;
+          align-items: flex-end;
+
+          .providers-view-quota-history-token {
+            color: #243447;
+            font-size: 0.82rem;
+          }
+
+          .providers-view-quota-history-usage,
+          .providers-view-quota-history-cost {
+            color: #697789;
+            font-size: 0.7rem;
+          }
+        }
       }
     }
   }
