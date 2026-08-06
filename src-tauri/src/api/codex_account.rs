@@ -1,7 +1,8 @@
 use crate::api::runtime_provider;
+use crate::api::usage;
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
-use crate::core::provider_store;
+use crate::core::{provider_store, usage_store};
 use base64::Engine;
 use bytes::Bytes;
 use http_body_util::Full;
@@ -425,9 +426,14 @@ pub async fn account_detail(
         .find(|account| string_value(account.get("id")) == account_id)
         .ok_or_else(|| ManagerError::System("Codex 官方账号不存在".to_string()))?;
 
+    let quota_stages = usage::get_codex_quota_stage_stats(paths, &account_id)?;
+
     Ok(json!({
       "status": "ok",
-      "data": public_account(&account, &active_account_id, true),
+      "data": merge_object(
+        public_account(&account, &active_account_id, true),
+        json!({ "quotaStages": quota_stages })
+      ),
       "message": ""
     }))
 }
@@ -1086,6 +1092,7 @@ async fn save_account(
         .token_updated_at
         .max(parse_timestamp(&tokens.last_refresh))
         .max(now_millis());
+    let quota_stages = create_quota_stage_samples(&usage, now_millis());
     let next_account = json!({
       "id": account_id,
       "provider": "codex",
@@ -1136,7 +1143,42 @@ async fn save_account(
     });
 
     replace_account(paths, &next_account).await?;
+    usage_store::record_codex_quota_stages(paths, &account_id, &quota_stages)?;
     Ok(next_account)
+}
+
+fn create_quota_stage_samples(usage: &Value, observed_at: u64) -> Vec<Value> {
+    let rate_limit = usage.get("rate_limit").unwrap_or(&Value::Null);
+
+    [
+        ("primary", rate_limit.get("primary_window")),
+        ("secondary", rate_limit.get("secondary_window")),
+    ]
+    .into_iter()
+    .filter_map(|(window_key, window)| {
+        let window = window?;
+        let reset_at = number_value(window.get("reset_at"), 0);
+        let reset_at = if reset_at < 10_000_000_000 {
+            reset_at.saturating_mul(1000)
+        } else {
+            reset_at
+        };
+        let limit_window_seconds = number_value(window.get("limit_window_seconds"), 0);
+
+        if reset_at == 0 || limit_window_seconds == 0 {
+            return None;
+        }
+
+        Some(json!({
+          "windowKey": window_key,
+          "limitWindowSeconds": limit_window_seconds,
+          "startsAt": reset_at.saturating_sub(limit_window_seconds.saturating_mul(1000)),
+          "resetAt": reset_at,
+          "observedAt": observed_at,
+          "usedPercent": decimal_value(window.get("used_percent"), 0.0).clamp(0.0, 100.0)
+        }))
+    })
+    .collect()
 }
 
 async fn replace_account(paths: &AppPaths, next_account: &Value) -> Result<(), ManagerError> {
@@ -1689,6 +1731,13 @@ fn number_value(value: Option<&Value>, fallback: u64) -> u64 {
     value.and_then(Value::as_u64).unwrap_or(fallback)
 }
 
+fn decimal_value(value: Option<&Value>, fallback: f64) -> f64 {
+    value
+        .and_then(Value::as_f64)
+        .or_else(|| value.and_then(Value::as_str).and_then(|value| value.parse().ok()))
+        .unwrap_or(fallback)
+}
+
 fn string_value(value: Option<&Value>) -> String {
     runtime_provider::string_value(value)
 }
@@ -1720,5 +1769,40 @@ impl EmptyStringExt for String {
         } else {
             self
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_quota_stage_samples;
+    use serde_json::json;
+
+    #[test]
+    fn creates_quota_stages_from_second_and_millisecond_resets() {
+        let stages = create_quota_stage_samples(
+            &json!({
+              "rate_limit": {
+                "primary_window": {
+                  "limit_window_seconds": 300,
+                  "reset_at": 2_000_000_000,
+                  "used_percent": 25
+                },
+                "secondary_window": {
+                  "limit_window_seconds": 604_800,
+                  "reset_at": 2_000_000_000_000_u64,
+                  "used_percent": "40.5"
+                }
+              }
+            }),
+            1_900_000_000_000,
+        );
+
+        assert_eq!(stages.len(), 2);
+        assert_eq!(stages[0]["resetAt"], 2_000_000_000_000_u64);
+        assert_eq!(stages[0]["startsAt"], 1_999_999_700_000_u64);
+        assert_eq!(stages[0]["usedPercent"], 25.0);
+        assert_eq!(stages[1]["resetAt"], 2_000_000_000_000_u64);
+        assert_eq!(stages[1]["startsAt"], 1_999_395_200_000_u64);
+        assert_eq!(stages[1]["usedPercent"], 40.5);
     }
 }

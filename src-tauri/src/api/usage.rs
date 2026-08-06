@@ -106,6 +106,58 @@ pub async fn get_stats(paths: &AppPaths, payload: Value) -> Result<Value, Manage
     }))
 }
 
+pub fn get_codex_quota_stage_stats(
+    paths: &AppPaths,
+    account_id: &str,
+) -> Result<Vec<Value>, ManagerError> {
+    let stages = usage_store::read_codex_quota_stages(paths, account_id)?;
+
+    if stages.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let pricing_config = read_pricing(paths)?;
+    let pricing_index = create_pricing_index(&pricing_config);
+    let logs = usage_store::query_logs(
+        paths,
+        &UsageLogQuery {
+            app_type: "codex".to_string(),
+            provider_id: "all".to_string(),
+            provider_ids: vec![
+                format!("codex-account:{account_id}"),
+                format!("account:{account_id}"),
+            ],
+            model: "all".to_string(),
+            request_source: "all".to_string(),
+            start_at: 0,
+            end_at: 0,
+        },
+    )?
+    .into_iter()
+    .map(|log| enrich_usage_log(&log, &pricing_config, &pricing_index))
+    .collect::<Vec<_>>();
+
+    Ok(stages
+        .into_iter()
+        .map(|mut stage| {
+            let starts_at = number_value(stage.get("startsAt"), 0);
+            let reset_at = number_value(stage.get("resetAt"), 0);
+            let mut summary = create_empty_summary();
+
+            for log in logs.iter().filter(|log| {
+                let created_at = number_value(log.get("createdAt"), 0);
+
+                (starts_at == 0 || created_at >= starts_at)
+                    && (reset_at == 0 || created_at < reset_at)
+            }) {
+                append_usage_summary(&mut summary, log);
+            }
+            stage["summary"] = finalize_summary(summary);
+            stage
+        })
+        .collect())
+}
+
 pub async fn sync_usage(
     paths: &AppPaths,
     payload: Value,
@@ -342,8 +394,13 @@ fn read_priced_usage_logs(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> 
 
 pub async fn save_pricing(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
     let pricing = normalize_pricing_config(payload)?;
+    let current_pricing = read_pricing(paths)?;
+
+    // 价格变更前先冻结已有计费，新价格只用于尚未计价和后续产生的请求。
+    lock_existing_usage_costs(paths, &current_pricing)?;
 
     write_pricing(paths, &pricing).await?;
+    lock_existing_usage_costs(paths, &pricing)?;
     Ok(json!({
       "status": "ok",
       "data": pricing,
@@ -663,6 +720,8 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         .as_millis() as u64;
     usage_store::ensure_session_parser_version(paths, "codex", CODEX_USAGE_PARSER_VERSION)?;
     let session_versions = usage_store::read_session_versions(paths)?;
+    let pricing_config = read_pricing(paths)?;
+    let pricing_index = create_pricing_index(&pricing_config);
 
     for mut session in collect_usage_sessions(paths, state)? {
         let app_type = normalize_app_type(&string_value(session.get("cli")));
@@ -693,6 +752,10 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
                     state,
                     workspace_created_at,
                 );
+                let logs = logs
+                    .into_iter()
+                    .map(|log| lock_usage_log_cost(log, &pricing_config, &pricing_index))
+                    .collect();
 
                 updates.push(UsageSessionUpdate {
                     raw_path,
@@ -1258,7 +1321,17 @@ fn enrich_usage_log(
         source_log["providerType"] = json!("");
     }
 
-    let costs = calculate_cost_usd(&source_log, pricing_config, pricing_index);
+    let costs = if number_value(source_log.get("costLockedAt"), 0) > 0 {
+        json!({
+          "inputCostUsd": price_number(source_log.get("inputCostUsd"), 0.0),
+          "outputCostUsd": price_number(source_log.get("outputCostUsd"), 0.0),
+          "cacheReadCostUsd": price_number(source_log.get("cacheReadCostUsd"), 0.0),
+          "cacheCreationCostUsd": price_number(source_log.get("cacheCreationCostUsd"), 0.0),
+          "totalCostUsd": price_number(source_log.get("totalCostUsd"), 0.0)
+        })
+    } else {
+        calculate_cost_usd(&source_log, pricing_config, pricing_index)
+    };
 
     source_log["actualTokens"] = json!(to_actual_tokens(&source_log));
     source_log["inputCostUsd"] = costs["inputCostUsd"].clone();
@@ -1267,6 +1340,57 @@ fn enrich_usage_log(
     source_log["cacheCreationCostUsd"] = costs["cacheCreationCostUsd"].clone();
     source_log["totalCostUsd"] = costs["totalCostUsd"].clone();
     source_log
+}
+
+fn lock_usage_log_cost(
+    mut log: Value,
+    pricing_config: &Value,
+    pricing_index: &HashMap<String, Value>,
+) -> Value {
+    if number_value(log.get("costLockedAt"), 0) > 0 {
+        return log;
+    }
+
+    let Some(pricing) = find_model_pricing(&log, pricing_index) else {
+        return log;
+    };
+    let costs = calculate_cost_usd(&log, pricing_config, pricing_index);
+    let locked_at = now_millis();
+
+    log["actualTokens"] = json!(to_actual_tokens(&log));
+    log["inputCostUsd"] = costs["inputCostUsd"].clone();
+    log["outputCostUsd"] = costs["outputCostUsd"].clone();
+    log["cacheReadCostUsd"] = costs["cacheReadCostUsd"].clone();
+    log["cacheCreationCostUsd"] = costs["cacheCreationCostUsd"].clone();
+    log["totalCostUsd"] = costs["totalCostUsd"].clone();
+    log["costLockedAt"] = json!(locked_at);
+    log["pricingSnapshot"] = json!({
+      "pricingId": pricing["id"],
+      "modelId": pricing["modelId"],
+      "currency": pricing["currency"],
+      "exchangeRate": price_number(pricing_config.get("exchangeRate"), DEFAULT_EXCHANGE_RATE),
+      "inputCostPerMillion": pricing["inputCostPerMillion"],
+      "outputCostPerMillion": pricing["outputCostPerMillion"],
+      "cacheReadCostPerMillion": pricing["cacheReadCostPerMillion"],
+      "cacheCreationCostPerMillion": pricing["cacheCreationCostPerMillion"],
+      "lockedAt": locked_at
+    });
+    log
+}
+
+fn lock_existing_usage_costs(
+    paths: &AppPaths,
+    pricing_config: &Value,
+) -> Result<(), ManagerError> {
+    let pricing_index = create_pricing_index(pricing_config);
+    let logs = usage_store::read_all_logs(paths)?
+        .into_iter()
+        .filter(|log| number_value(log.get("costLockedAt"), 0) == 0)
+        .map(|log| lock_usage_log_cost(log, pricing_config, &pricing_index))
+        .filter(|log| number_value(log.get("costLockedAt"), 0) > 0)
+        .collect::<Vec<_>>();
+
+    usage_store::write_usage_cost_snapshots(paths, &logs)
 }
 
 fn calculate_cost_usd(
@@ -1353,7 +1477,7 @@ fn append_priced_usage_summary(
     summary.cache_creation_tokens += to_number(log.get("cacheCreationTokens"));
     summary.actual_tokens += to_actual_tokens(log);
     summary.total_cost_usd += price_number(
-        calculate_cost_usd(log, pricing_config, pricing_index).get("totalCostUsd"),
+        enrich_usage_log(log, pricing_config, pricing_index).get("totalCostUsd"),
         0.0,
     );
     summary.last_used_at = summary
@@ -3720,8 +3844,9 @@ fn decode_report_image_data_url(value: &str) -> Result<Vec<u8>, ManagerError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_session_record_texts, decode_report_image_data_url, dollar_skill_regex,
-        extract_codex_logs, extract_skill_references, file_modified_at, path_skill_regex,
+        collect_session_record_texts, create_pricing_index, decode_report_image_data_url,
+        dollar_skill_regex, enrich_usage_log, extract_codex_logs, extract_skill_references,
+        file_modified_at, get_codex_quota_stage_stats, lock_usage_log_cost, path_skill_regex,
         read_priced_usage_logs, read_session_records, refresh_usage, scan_skill_roots,
         skill_resource_regex, slash_skill_regex, sync_pending_usage,
     };
@@ -3729,6 +3854,136 @@ mod tests {
     use serde_json::json;
     use std::path::Path;
     use std::time::Duration;
+
+    #[test]
+    fn locks_request_cost_against_later_pricing_changes() {
+        let old_pricing = json!({
+          "exchangeRate": 7.2,
+          "items": [{
+            "id": "pricing-old",
+            "modelId": "gpt-test",
+            "currency": "USD",
+            "inputCostPerMillion": 1,
+            "outputCostPerMillion": 2,
+            "cacheReadCostPerMillion": 0,
+            "cacheCreationCostPerMillion": 0
+          }]
+        });
+        let new_pricing = json!({
+          "exchangeRate": 7.2,
+          "items": [{
+            "id": "pricing-new",
+            "modelId": "gpt-test",
+            "currency": "USD",
+            "inputCostPerMillion": 10,
+            "outputCostPerMillion": 20,
+            "cacheReadCostPerMillion": 0,
+            "cacheCreationCostPerMillion": 0
+          }]
+        });
+        let log = json!({
+          "requestId": "request-old",
+          "appType": "codex",
+          "model": "gpt-test",
+          "inputTokens": 1_000_000,
+          "outputTokens": 500_000,
+          "cacheReadTokens": 0,
+          "cacheCreationTokens": 0
+        });
+        let locked_log = lock_usage_log_cost(
+            log.clone(),
+            &old_pricing,
+            &create_pricing_index(&old_pricing),
+        );
+        let enriched_old_log = enrich_usage_log(
+            &locked_log,
+            &new_pricing,
+            &create_pricing_index(&new_pricing),
+        );
+        let locked_new_log = lock_usage_log_cost(
+            log,
+            &new_pricing,
+            &create_pricing_index(&new_pricing),
+        );
+
+        assert_eq!(enriched_old_log["totalCostUsd"], 2.0);
+        assert_eq!(enriched_old_log["pricingSnapshot"]["pricingId"], "pricing-old");
+        assert_eq!(locked_new_log["totalCostUsd"], 20.0);
+        assert_eq!(locked_new_log["pricingSnapshot"]["pricingId"], "pricing-new");
+    }
+
+    #[test]
+    fn summarizes_only_account_logs_inside_quota_stage() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-codex-quota-summary-{}-{}",
+            std::process::id(),
+            super::now_millis()
+        ));
+        let paths = resolve_app_paths(Path::new(&root));
+
+        usage_store::record_codex_quota_stages(
+            &paths,
+            "account-1",
+            &[json!({
+              "windowKey": "primary",
+              "limitWindowSeconds": 1,
+              "startsAt": 1_000,
+              "resetAt": 2_000,
+              "observedAt": 1_500,
+              "usedPercent": 25.0
+            })],
+        )
+        .unwrap();
+        usage_store::replace_sessions(
+            &paths,
+            &[usage_store::UsageSessionUpdate {
+                raw_path: "session.jsonl".to_string(),
+                app_type: "codex".to_string(),
+                updated_at: 2_100,
+                logs: vec![
+                    json!({
+                      "requestId": "inside",
+                      "rawPath": "session.jsonl",
+                      "createdAt": 1_500,
+                      "appType": "codex",
+                      "providerId": "codex-account:account-1",
+                      "inputTokens": 100,
+                      "outputTokens": 10,
+                      "cacheReadTokens": 40,
+                      "cacheCreationTokens": 0,
+                      "totalCostUsd": 0.5,
+                      "costLockedAt": 1_600
+                    }),
+                    json!({
+                      "requestId": "outside",
+                      "rawPath": "session.jsonl",
+                      "createdAt": 2_000,
+                      "appType": "codex",
+                      "providerId": "codex-account:account-1",
+                      "inputTokens": 200
+                    }),
+                    json!({
+                      "requestId": "other-account",
+                      "rawPath": "session.jsonl",
+                      "createdAt": 1_600,
+                      "appType": "codex",
+                      "providerId": "codex-account:account-2",
+                      "inputTokens": 300
+                    }),
+                ],
+                records: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        let stages = get_codex_quota_stage_stats(&paths, "account-1").unwrap();
+        assert_eq!(stages.len(), 1);
+        assert_eq!(stages[0]["summary"]["requestCount"], 1);
+        assert_eq!(stages[0]["summary"]["actualTokens"], 110);
+        assert_eq!(stages[0]["summary"]["totalCostUsd"], 0.5);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn skill_usage_regexes_are_valid() {
