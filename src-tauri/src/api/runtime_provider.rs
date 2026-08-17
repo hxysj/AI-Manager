@@ -79,8 +79,19 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
         });
     }
 
-    if payload.get("apiKey").is_some() {
-        set_provider_key(&mut keys, &provider_id, string_value(payload.get("apiKey")))?;
+    if let Some(api_keys) = payload.get("apiKeys").and_then(Value::as_array) {
+        set_provider_keys(
+            &mut keys,
+            &provider_id,
+            api_keys,
+            string_value(payload.get("activeApiKeyId")),
+        )?;
+    } else if payload.get("apiKey").is_some() {
+        update_active_provider_key(
+            &mut keys,
+            &provider_id,
+            string_value(payload.get("apiKey")),
+        )?;
     }
 
     let model_name = string_value(payload.get("model"));
@@ -150,6 +161,32 @@ pub async fn delete_provider(paths: &AppPaths, payload: Value) -> Result<(), Man
     keys.remove(&provider_id);
 
     provider_store::write_provider_bundle(paths, &providers, &models, &profiles, &keys)
+}
+
+pub async fn sync_active_provider_config(
+    paths: &AppPaths,
+    provider_id: &str,
+    cli_targets: &Value,
+) -> Result<(), ManagerError> {
+    if provider_id.is_empty() {
+        return Ok(());
+    }
+
+    let profiles = provider_store::read_profiles(paths)?;
+
+    for profile in profiles {
+        if string_value(profile.get("providerId")) != provider_id {
+            continue;
+        }
+
+        let cli = string_value(profile.get("cli"));
+        if proxy::is_proxy_enabled(paths, &cli)? {
+            continue;
+        }
+        write_cli_config(paths, &cli, find_cli_target(cli_targets, &cli)?).await?;
+    }
+
+    Ok(())
 }
 
 pub async fn save_runtime_model(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
@@ -343,13 +380,7 @@ pub fn build_runtime_env(paths: &AppPaths, payload: Value) -> Result<Value, Mana
     let profile = find_runtime_profile(paths, &cli)?;
     let provider = find_provider(paths, &string_value(profile.get("providerId")))?;
     let provider_id = string_value(provider.get("id"));
-    let keys = provider_store::read_keys(paths)?;
-    let api_key = keys
-        .get(&provider_id)
-        .and_then(Value::as_str)
-        .map(decrypt_provider_key)
-        .transpose()?
-        .unwrap_or_default();
+    let api_key = get_provider_api_key(paths, &provider_id)?;
     let base_url = first_string(profile.get("baseUrl"), provider.get("baseUrl"));
     let proxy = first_string(profile.get("proxy"), provider.get("proxy"));
     let mut env = profile
@@ -1021,14 +1052,12 @@ pub fn read_public_providers(paths: &AppPaths) -> Result<Value, ManagerError> {
         .into_iter()
         .map(|mut provider| {
             let provider_id = string_value(provider.get("id"));
-            let api_key = keys
-                .get(&provider_id)
-                .and_then(Value::as_str)
-                .and_then(|value| decrypt_provider_key(value).ok())
-                .unwrap_or_default();
+            let (active_key_id, api_keys, api_key) = public_provider_keys(keys.get(&provider_id));
 
             provider["apiKey"] = json!(api_key);
-            provider["hasApiKey"] = json!(keys.contains_key(&provider_id));
+            provider["apiKeys"] = json!(api_keys);
+            provider["activeApiKeyId"] = json!(active_key_id);
+            provider["hasApiKey"] = json!(has_provider_key(keys.get(&provider_id)));
             provider
         })
         .collect::<Vec<_>>()))
@@ -1050,7 +1079,7 @@ pub fn read_public_profiles(paths: &AppPaths) -> Result<Value, ManagerError> {
             {
                 profile["providerName"] = provider.get("name").cloned().unwrap_or(Value::Null);
                 profile["providerType"] = provider.get("type").cloned().unwrap_or(Value::Null);
-                profile["hasApiKey"] = json!(keys.contains_key(&provider_id));
+                profile["hasApiKey"] = json!(has_provider_key(keys.get(&provider_id)));
             }
 
             profile
@@ -1333,7 +1362,7 @@ fn to_public_profile(paths: &AppPaths, mut profile: Value) -> Result<Value, Mana
     {
         profile["providerName"] = provider.get("name").cloned().unwrap_or(Value::Null);
         profile["providerType"] = provider.get("type").cloned().unwrap_or(Value::Null);
-        profile["hasApiKey"] = json!(keys.contains_key(&provider_id));
+        profile["hasApiKey"] = json!(has_provider_key(keys.get(&provider_id)));
     }
 
     Ok(profile)
@@ -1753,8 +1782,15 @@ fn toml_literal(value: &Value) -> String {
 }
 
 pub(crate) fn get_provider_api_key(paths: &AppPaths, provider_id: &str) -> Result<String, ManagerError> {
-    Ok(provider_store::read_keys(paths)?
-        .get(provider_id)
+    let keys = provider_store::read_keys(paths)?;
+    let value = keys.get(provider_id);
+    let records = provider_key_records(value);
+    let active_key_id = active_provider_key_id(value, &records);
+
+    Ok(records
+        .iter()
+        .find(|item| string_value(item.get("id")) == active_key_id)
+        .and_then(|item| item.get("value"))
         .and_then(Value::as_str)
         .map(decrypt_provider_key)
         .transpose()?
@@ -2448,6 +2484,201 @@ pub(crate) fn set_provider_key(
     Ok(())
 }
 
+fn update_active_provider_key(
+    keys: &mut Map<String, Value>,
+    provider_id: &str,
+    api_key: String,
+) -> Result<(), ManagerError> {
+    let existing_value = keys.get(provider_id).cloned();
+    let mut records = provider_key_records(existing_value.as_ref());
+
+    if api_key.is_empty()
+        || existing_value.as_ref().and_then(Value::as_object).is_none()
+        || records.is_empty()
+    {
+        return set_provider_key(keys, provider_id, api_key);
+    }
+
+    let active_key_id = active_provider_key_id(existing_value.as_ref(), &records);
+    let encrypted = encrypt_provider_key(&api_key)?;
+
+    for record in &mut records {
+        if string_value(record.get("id")) == active_key_id {
+            record["value"] = json!(encrypted);
+            break;
+        }
+    }
+
+    keys.insert(
+        provider_id.to_string(),
+        json!({
+          "activeKeyId": active_key_id,
+          "keys": records
+        }),
+    );
+
+    Ok(())
+}
+
+pub(crate) fn set_provider_keys(
+    keys: &mut Map<String, Value>,
+    provider_id: &str,
+    requested_keys: &[Value],
+    requested_active_id: String,
+) -> Result<(), ManagerError> {
+    let existing = provider_key_records(keys.get(provider_id));
+    let mut records = Vec::new();
+
+    for (index, requested) in requested_keys.iter().enumerate() {
+        let id = non_empty_string(
+            requested.get("id"),
+            None,
+            &format!("key-{}-{}", now_millis(), index),
+        );
+        let name = non_empty_string(
+            requested.get("name"),
+            None,
+            &format!("Key {}", index + 1),
+        );
+        let note = string_value(requested.get("note"));
+        let api_key = string_value(requested.get("apiKey"));
+        let encrypted = if !api_key.is_empty() {
+            Some(encrypt_provider_key(&api_key)?)
+        } else {
+            existing
+                .iter()
+                .find(|item| string_value(item.get("id")) == id)
+                .and_then(|item| item.get("value"))
+                .and_then(Value::as_str)
+                .map(ToString::to_string)
+        };
+
+        if let Some(value) = encrypted {
+            records.push(json!({
+              "id": id,
+              "name": name,
+              "note": note,
+              "value": value
+            }));
+        }
+    }
+
+    if records.is_empty() {
+        keys.remove(provider_id);
+        return Ok(());
+    }
+
+    let active_key_id = if records
+        .iter()
+        .any(|item| string_value(item.get("id")) == requested_active_id)
+    {
+        requested_active_id
+    } else {
+        string_value(records[0].get("id"))
+    };
+
+    keys.insert(
+        provider_id.to_string(),
+        json!({
+          "activeKeyId": active_key_id,
+          "keys": records
+        }),
+    );
+
+    Ok(())
+}
+
+pub(crate) fn provider_key_records(value: Option<&Value>) -> Vec<Value> {
+    if let Some(value) = value.and_then(Value::as_str) {
+        if value.is_empty() {
+            return Vec::new();
+        }
+
+        return vec![json!({
+          "id": "default",
+          "name": "默认 Key",
+          "note": "",
+          "value": value
+        })];
+    }
+
+    value
+        .and_then(Value::as_object)
+        .and_then(|item| item.get("keys"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|item| !string_value(item.get("value")).is_empty())
+        .collect()
+}
+
+pub(crate) fn active_provider_key_id(value: Option<&Value>, records: &[Value]) -> String {
+    let requested = value
+        .and_then(Value::as_object)
+        .map(|item| string_value(item.get("activeKeyId")))
+        .unwrap_or_default();
+
+    if records
+        .iter()
+        .any(|item| string_value(item.get("id")) == requested)
+    {
+        return requested;
+    }
+
+    records
+        .first()
+        .map(|item| string_value(item.get("id")))
+        .unwrap_or_default()
+}
+
+fn has_provider_key(value: Option<&Value>) -> bool {
+    !provider_key_records(value).is_empty()
+}
+
+fn public_provider_keys(value: Option<&Value>) -> (String, Vec<Value>, String) {
+    let records = provider_key_records(value);
+    let active_key_id = active_provider_key_id(value, &records);
+    let mut active_key = String::new();
+    let mut public_keys = Vec::new();
+
+    for record in records {
+        let id = string_value(record.get("id"));
+        let decrypted = record
+            .get("value")
+            .and_then(Value::as_str)
+            .and_then(|item| decrypt_provider_key(item).ok())
+            .unwrap_or_default();
+
+        if id == active_key_id {
+            active_key = decrypted.clone();
+        }
+
+        public_keys.push(json!({
+          "id": id,
+          "name": non_empty_string(record.get("name"), None, "API Key"),
+          "note": string_value(record.get("note")),
+          "masked": if decrypted.is_empty() { "已保存".to_string() } else { mask_provider_key(&decrypted) }
+        }));
+    }
+
+    (active_key_id, public_keys, active_key)
+}
+
+fn mask_provider_key(value: &str) -> String {
+    let chars = value.chars().collect::<Vec<_>>();
+
+    if chars.len() <= 8 {
+        return "••••••••".to_string();
+    }
+
+    format!(
+        "{}••••{}",
+        chars.iter().take(4).collect::<String>(),
+        chars.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<String>()
+    )
+}
+
 fn encrypt_provider_key(value: &str) -> Result<String, ManagerError> {
     let mut iv = [0u8; 12];
     getrandom::getrandom(&mut iv).map_err(|error| ManagerError::System(error.to_string()))?;
@@ -2731,6 +2962,69 @@ mod tests {
     use crate::core::paths::{resolve_app_paths, AppPaths};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn reads_legacy_provider_key_as_default_key() {
+        let encrypted = encrypt_provider_key("sk-legacy-123456").unwrap();
+        let value = json!(encrypted);
+        let (active_key_id, public_keys, active_key) = public_provider_keys(Some(&value));
+
+        assert_eq!(active_key_id, "default");
+        assert_eq!(active_key, "sk-legacy-123456");
+        assert_eq!(public_keys.len(), 1);
+        assert_eq!(public_keys[0]["name"], "默认 Key");
+    }
+
+    #[test]
+    fn switches_active_provider_key_without_reentering_saved_values() {
+        let mut keys = Map::new();
+        set_provider_keys(
+            &mut keys,
+            "provider-a",
+            &[
+                json!({
+                  "id": "key-production",
+                  "name": "生产 Key",
+                  "note": "生产环境",
+                  "apiKey": "sk-production-123456"
+                }),
+                json!({
+                  "id": "key-backup",
+                  "name": "备用 Key",
+                  "note": "备用额度",
+                  "apiKey": "sk-backup-123456"
+                }),
+            ],
+            "key-production".to_string(),
+        )
+        .unwrap();
+
+        set_provider_keys(
+            &mut keys,
+            "provider-a",
+            &[
+                json!({
+                  "id": "key-production",
+                  "name": "生产 Key",
+                  "note": "生产环境"
+                }),
+                json!({
+                  "id": "key-backup",
+                  "name": "备用 Key",
+                  "note": "备用额度"
+                }),
+            ],
+            "key-backup".to_string(),
+        )
+        .unwrap();
+
+        let value = keys.get("provider-a").unwrap();
+        let (active_key_id, public_keys, active_key) = public_provider_keys(Some(value));
+
+        assert_eq!(active_key_id, "key-backup");
+        assert_eq!(active_key, "sk-backup-123456");
+        assert_eq!(public_keys[1]["note"], "备用额度");
+    }
 
     #[test]
     fn write_codex_config_updates_existing_custom_provider_base_url_only() {

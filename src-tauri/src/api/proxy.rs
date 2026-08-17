@@ -171,6 +171,17 @@ pub fn read_proxy_state(paths: &AppPaths, cli: &str) -> Result<Value, ManagerErr
     Ok(state)
 }
 
+pub fn is_proxy_enabled(paths: &AppPaths, cli: &str) -> Result<bool, ManagerError> {
+    if !["claude", "codex"].contains(&cli) {
+        return Ok(false);
+    }
+
+    Ok(read_proxy_config(paths, cli)?
+        .get("enabled")
+        .and_then(Value::as_bool)
+        == Some(true))
+}
+
 pub async fn enable_proxy(
     registry: &ProxyServerRegistry,
     paths: &AppPaths,

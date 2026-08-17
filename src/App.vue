@@ -1523,13 +1523,14 @@ async function deleteSession(sessionId) {
   await runAction(() => sessionApi.deleteSession({ sessionId }))
 }
 
-async function saveProvider(payload) {
+async function saveProvider(payload, onSuccess) {
   const restoringProvider =
     state.providers.find((item) => item.id === payload.id)?.enabled === false &&
     payload.enabled === true
   const success = await runAction(() => providerApi.saveProvider(payload))
 
   if (success) {
+    onSuccess?.()
     showSuccessMessage(
       payload.enabled === false
         ? "Provider 已禁用。"

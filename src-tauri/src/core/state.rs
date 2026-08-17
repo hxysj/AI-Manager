@@ -6,6 +6,7 @@ use crate::core::error::ManagerError;
 use crate::core::paths::{
     ensure_app_directories, resolve_app_paths, AppPaths, DEFAULT_USER_DATA_PATH,
 };
+use crate::core::provider_store;
 use crate::core::settings::{load_app_settings, AppSettings};
 use crate::core::storage_state::{create_initial_state, refresh_runtime_provider_state};
 use serde_json::{json, Value};
@@ -1021,8 +1022,62 @@ impl ManagerState {
                 Ok(result)
             }
             "provider:save" => {
-                runtime_provider::save_provider(&self.paths, payload.unwrap_or_else(|| json!({})))
-                    .await?;
+                let payload = payload.unwrap_or_else(|| json!({}));
+                let provider_id = payload
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                let should_sync_api_key =
+                    payload.get("apiKeys").is_some() || payload.get("apiKey").is_some();
+                let previous_provider_bundle = if should_sync_api_key {
+                    Some((
+                        provider_store::read_providers(&self.paths)?,
+                        provider_store::read_models(&self.paths)?,
+                        provider_store::read_profiles(&self.paths)?,
+                        provider_store::read_keys(&self.paths)?,
+                    ))
+                } else {
+                    None
+                };
+                runtime_provider::save_provider(&self.paths, payload).await?;
+                if should_sync_api_key {
+                    let sync_result = runtime_provider::sync_active_provider_config(
+                        &self.paths,
+                        &provider_id,
+                        &self.state["cliTargets"],
+                    )
+                    .await;
+
+                    if let Err(sync_error) = sync_result {
+                        if let Some((providers, models, profiles, keys)) = previous_provider_bundle {
+                            provider_store::write_provider_bundle(
+                                &self.paths,
+                                &providers,
+                                &models,
+                                &profiles,
+                                &keys,
+                            )?;
+                            let rollback_sync_result =
+                                runtime_provider::sync_active_provider_config(
+                                    &self.paths,
+                                    &provider_id,
+                                    &self.state["cliTargets"],
+                                )
+                                .await;
+                            self.refresh_state().await?;
+
+                            if let Err(rollback_error) = rollback_sync_result {
+                                return Err(ManagerError::System(format!(
+                                    "API Key 同步失败，管理器数据已恢复，但 CLI 配置恢复失败：{}；原始错误：{}",
+                                    rollback_error, sync_error
+                                )));
+                            }
+                        }
+
+                        return Err(sync_error);
+                    }
+                }
                 self.refresh_state().await?;
                 Ok(self.state.clone())
             }
