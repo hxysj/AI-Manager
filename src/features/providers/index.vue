@@ -585,6 +585,18 @@
                   v-if="item.provider.enabled !== false"
                   class="providers-view__icon-button"
                   type="button"
+                  title="管理 API Key"
+                  aria-label="管理 API Key"
+                  @click.stop="openApiKeyManager(item.provider)"
+                >
+                  <KeyRound :size="16" />
+                </button>
+                <button
+                  v-if="item.provider.enabled !== false"
+                  class="providers-view__icon-button"
+                  type="button"
+                  title="编辑 Provider"
+                  aria-label="编辑 Provider"
                   @click.stop="editProvider(item.provider)"
                 >
                   <SquarePen :size="16" />
@@ -701,17 +713,66 @@
             <span>官网链接</span>
             <input v-model.trim="draft.website" type="text" />
           </label>
-          <label class="providers-view__field providers-view__field--wide">
-            <span>API Key</span>
-            <el-input
-              v-model="draft.apiKey"
-              type="password"
-              show-password
-              :placeholder="
-                selectedProvider?.hasApiKey ? '已保存，留空则保持不变' : ''
-              "
-            />
-          </label>
+          <section class="providers-view__api-keys providers-view__field--wide">
+            <div class="providers-view__api-keys-header">
+              <span>API Key</span>
+              <button type="button" @click="addApiKey()">
+                <Plus :size="14" />
+                添加 Key
+              </button>
+            </div>
+            <div class="providers-view__api-key-list">
+              <div
+                v-for="(item, index) in draft.apiKeys"
+                :key="item.id"
+                class="providers-view__api-key-item"
+              >
+                <div class="providers-view__api-key-meta">
+                  <input
+                    v-model.trim="item.name"
+                    class="providers-view__api-key-name"
+                    type="text"
+                    placeholder="Key 名称"
+                  />
+                  <button
+                    type="button"
+                    :class="{
+                      'providers-view__api-key-active':
+                        draft.activeApiKeyId === item.id
+                    }"
+                    @click="activateApiKey(item.id)"
+                  >
+                    {{
+                      draft.activeApiKeyId === item.id ? "当前生效" : "设为生效"
+                    }}
+                  </button>
+                  <button
+                    type="button"
+                    title="删除 API Key"
+                    aria-label="删除 API Key"
+                    @click="removeApiKey(index)"
+                  >
+                    <Trash2 :size="14" />
+                  </button>
+                </div>
+                <input
+                  v-model.trim="item.note"
+                  class="providers-view__api-key-note"
+                  type="text"
+                  placeholder="备注信息，例如：生产环境 / 备用额度"
+                />
+                <el-input
+                  v-model="item.apiKey"
+                  type="password"
+                  show-password
+                  :placeholder="
+                    item.masked ? `${item.masked}，留空则保持不变` : '输入 API Key'
+                  "
+                />
+              </div>
+            </div>
+            <small>可保存多个 Key，但同时只会使用当前生效的一个。</small>
+          </section>
           <label class="providers-view__field providers-view__field--wide">
             <span>请求地址</span>
             <input v-model.trim="draft.baseUrl" type="text" />
@@ -920,17 +981,66 @@
             <span>官网链接</span>
             <input v-model.trim="draft.website" type="text" />
           </label>
-          <label class="providers-view__field providers-view__field--wide">
-            <span>API Key</span>
-            <el-input
-              v-model="draft.apiKey"
-              type="password"
-              show-password
-              :placeholder="
-                selectedProvider?.hasApiKey ? '已保存，留空则保持不变' : ''
-              "
-            />
-          </label>
+          <section class="providers-view__api-keys providers-view__field--wide">
+            <div class="providers-view__api-keys-header">
+              <span>API Key</span>
+              <button type="button" @click="addApiKey()">
+                <Plus :size="14" />
+                添加 Key
+              </button>
+            </div>
+            <div class="providers-view__api-key-list">
+              <div
+                v-for="(item, index) in draft.apiKeys"
+                :key="item.id"
+                class="providers-view__api-key-item"
+              >
+                <div class="providers-view__api-key-meta">
+                  <input
+                    v-model.trim="item.name"
+                    class="providers-view__api-key-name"
+                    type="text"
+                    placeholder="Key 名称"
+                  />
+                  <button
+                    type="button"
+                    :class="{
+                      'providers-view__api-key-active':
+                        draft.activeApiKeyId === item.id
+                    }"
+                    @click="activateApiKey(item.id)"
+                  >
+                    {{
+                      draft.activeApiKeyId === item.id ? "当前生效" : "设为生效"
+                    }}
+                  </button>
+                  <button
+                    type="button"
+                    title="删除 API Key"
+                    aria-label="删除 API Key"
+                    @click="removeApiKey(index)"
+                  >
+                    <Trash2 :size="14" />
+                  </button>
+                </div>
+                <input
+                  v-model.trim="item.note"
+                  class="providers-view__api-key-note"
+                  type="text"
+                  placeholder="备注信息，例如：生产环境 / 备用额度"
+                />
+                <el-input
+                  v-model="item.apiKey"
+                  type="password"
+                  show-password
+                  :placeholder="
+                    item.masked ? `${item.masked}，留空则保持不变` : '输入 API Key'
+                  "
+                />
+              </div>
+            </div>
+            <small>可保存多个 Key，但同时只会使用当前生效的一个。</small>
+          </section>
           <label class="providers-view__field providers-view__field--wide">
             <span>请求地址</span>
             <input v-model.trim="draft.baseUrl" type="text" />
@@ -1060,6 +1170,92 @@
           保存
         </button>
       </footer>
+    </BaseModal>
+
+    <BaseModal
+      v-if="showApiKeyManager"
+      class="providers-view__api-key-modal"
+      title="API Key 管理"
+      @close="closeApiKeyManager"
+    >
+      <section class="providers-view__api-key-manager">
+        <header class="providers-view__api-key-manager-header">
+          <strong>{{ apiKeyManagerProvider?.name || "Provider" }}</strong>
+          <span>仅当前生效的 Key 会被运行时使用。</span>
+        </header>
+        <div class="providers-view__api-key-list">
+          <div
+            v-for="(item, index) in apiKeyManagerDraft.apiKeys"
+            :key="item.id"
+            class="providers-view__api-key-item"
+          >
+            <div class="providers-view__api-key-meta">
+              <input
+                v-model.trim="item.name"
+                class="providers-view__api-key-name"
+                type="text"
+                placeholder="Key 名称"
+              />
+              <button
+                type="button"
+                :class="{
+                  'providers-view__api-key-active':
+                    apiKeyManagerDraft.activeApiKeyId === item.id
+                }"
+                @click="activateApiKey(item.id, apiKeyManagerDraft)"
+              >
+                {{
+                  apiKeyManagerDraft.activeApiKeyId === item.id
+                    ? "当前生效"
+                    : "设为生效"
+                }}
+              </button>
+              <button
+                type="button"
+                title="删除 API Key"
+                aria-label="删除 API Key"
+                @click="removeApiKey(index, apiKeyManagerDraft)"
+              >
+                <Trash2 :size="14" />
+              </button>
+            </div>
+            <input
+              v-model.trim="item.note"
+              class="providers-view__api-key-note"
+              type="text"
+              placeholder="备注信息，例如：生产环境 / 备用额度"
+            />
+            <el-input
+              v-model="item.apiKey"
+              type="password"
+              show-password
+              :placeholder="
+                item.masked ? `${item.masked}，留空则保持不变` : '输入 API Key'
+              "
+            />
+          </div>
+        </div>
+        <button
+          class="providers-view__api-key-add"
+          type="button"
+          @click="addApiKey(apiKeyManagerDraft)"
+        >
+          <Plus :size="15" />
+          添加 API Key
+        </button>
+        <footer class="providers-view__api-key-manager-footer">
+          <button type="button" @click="closeApiKeyManager">取消</button>
+          <button
+            class="providers-view__primary"
+            type="button"
+            :disabled="pending"
+            @click="saveApiKeyManager"
+          >
+            <Save :size="16" />
+            保存并应用
+          </button>
+        </footer>
+      </section>
     </BaseModal>
 
     <BaseModal
@@ -1933,6 +2129,7 @@ import {
   GripVertical,
   Eye,
   EyeOff,
+  KeyRound,
   Play,
   Plus,
   RefreshCw,
@@ -2075,6 +2272,8 @@ const draft = reactive({
   baseUrl: "",
   proxy: "",
   apiKey: "",
+  apiKeys: [],
+  activeApiKeyId: "",
   authField: "ANTHROPIC_AUTH_TOKEN",
   enabled: true,
   hideAiSignature: false,
@@ -2100,6 +2299,7 @@ const viewMode = ref("list")
 const showIconPicker = ref(false)
 const showCodexCreateOptions = ref(false)
 const showProviderCreateModal = ref(false)
+const showApiKeyManager = ref(false)
 const showCodexLoginModal = ref(false)
 const showCodexProxyModal = ref(false)
 const showCodexAccountDrawer = ref(false)
@@ -2134,6 +2334,13 @@ const proxySwitchEnabled = ref(false)
 const showDisabledItems = ref(false)
 const providerDetail = ref(null)
 const providerDetailTab = ref("config")
+const apiKeyManagerProvider = ref(null)
+const apiKeyManagerDraft = reactive({
+  providerId: "",
+  apiKey: "",
+  apiKeys: [],
+  activeApiKeyId: ""
+})
 const manualCallbackUrl = ref("")
 const countdownNow = ref(Date.now())
 let countdownTimer = null
@@ -2204,8 +2411,8 @@ const activeCliName = computed(() => {
   )
 })
 
-const selectedProvider = computed(() => {
-  return props.providers.find((item) => item.id === draft.id) || null
+const activeDraftApiKey = computed(() => {
+  return draft.apiKeys.find((item) => item.id === draft.activeApiKeyId) || null
 })
 
 const scopedProviders = computed(() => {
@@ -2533,10 +2740,11 @@ function formatConfigPreview(file, content) {
 }
 
 function applyConfigTemplate(template) {
+  const activeApiKey = activeDraftApiKey.value?.apiKey || draft.apiKey
   const values = {
     authField: draft.authField,
-    apiKey: draft.apiKey,
-    hasApiKey: Boolean(draft.apiKey),
+    apiKey: activeApiKey,
+    hasApiKey: Boolean(activeApiKey || activeDraftApiKey.value?.masked),
     baseUrl: draft.baseUrl,
     hasBaseUrl: Boolean(draft.baseUrl),
     mainModel: modelDrafts.mainModel,
@@ -2586,6 +2794,7 @@ function selectCli(cli) {
   activeCli.value = cli
   closeCodexAccountDetail()
   closeProviderDetail()
+  closeApiKeyManager()
   closeProviderCreateModal()
   clearDraft()
 
@@ -2607,6 +2816,15 @@ function editProvider(provider) {
   draft.baseUrl = provider.baseUrl || ""
   draft.proxy = provider.proxy || ""
   draft.apiKey = provider.apiKey || ""
+  draft.apiKeys = normalizeApiKeyDrafts(provider)
+  draft.activeApiKeyId =
+    provider.activeApiKeyId || draft.apiKeys[0]?.id || ""
+  const activeApiKey = draft.apiKeys.find(
+    (item) => item.id === draft.activeApiKeyId
+  )
+  if (activeApiKey && provider.apiKey) {
+    activeApiKey.apiKey = provider.apiKey
+  }
   draft.authField = provider.authField || "ANTHROPIC_AUTH_TOKEN"
   draft.enabled = provider.enabled !== false
   modelDrafts.mainModel = provider.runtimeConfig?.mainModel || ""
@@ -2797,6 +3015,60 @@ function closeProviderDetail() {
   showProviderDrawer.value = false
   providerDetail.value = null
   providerDetailTab.value = "config"
+}
+
+function openApiKeyManager(provider) {
+  closeCodexAccountDetail()
+  closeProviderDetail()
+  apiKeyManagerProvider.value = provider
+  apiKeyManagerDraft.providerId = provider.id
+  apiKeyManagerDraft.apiKey = provider.apiKey || ""
+  apiKeyManagerDraft.apiKeys = normalizeApiKeyDrafts(provider)
+  apiKeyManagerDraft.activeApiKeyId =
+    provider.activeApiKeyId || apiKeyManagerDraft.apiKeys[0]?.id || ""
+
+  const activeApiKey = apiKeyManagerDraft.apiKeys.find(
+    (item) => item.id === apiKeyManagerDraft.activeApiKeyId
+  )
+  if (activeApiKey && provider.apiKey) {
+    activeApiKey.apiKey = provider.apiKey
+  }
+
+  showApiKeyManager.value = true
+}
+
+function closeApiKeyManager() {
+  showApiKeyManager.value = false
+  apiKeyManagerProvider.value = null
+  apiKeyManagerDraft.providerId = ""
+  apiKeyManagerDraft.apiKey = ""
+  apiKeyManagerDraft.apiKeys = []
+  apiKeyManagerDraft.activeApiKeyId = ""
+}
+
+function saveApiKeyManager() {
+  if (
+    apiKeyManagerDraft.apiKeys.some((item) => !item.apiKey && !item.masked)
+  ) {
+    createMessage.error("请填写新增的 API Key，或删除空白项。")
+    return
+  }
+
+  emit(
+    "save-provider",
+    {
+      ...apiKeyManagerProvider.value,
+      id: apiKeyManagerDraft.providerId,
+      apiKeys: apiKeyManagerDraft.apiKeys.map((item) => ({
+        id: item.id,
+        name: item.name,
+        note: item.note,
+        ...(item.apiKey ? { apiKey: item.apiKey } : {})
+      })),
+      activeApiKeyId: apiKeyManagerDraft.activeApiKeyId
+    },
+    closeApiKeyManager
+  )
 }
 
 async function ensureUsageStatsReady() {
@@ -3125,6 +3397,79 @@ function refreshCodexAccount(account, options = {}) {
   })
 }
 
+// 已保存的 Key 只保留标识和掩码，留空时由后端复用原密文。
+function createApiKeyDraft(index, item = {}) {
+  return {
+    id:
+      item.id ||
+      `key-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    name: item.name || `Key ${index + 1}`,
+    note: item.note || "",
+    apiKey: item.apiKey || "",
+    masked: item.masked || ""
+  }
+}
+
+function normalizeApiKeyDrafts(provider) {
+  const items = Array.isArray(provider.apiKeys) ? provider.apiKeys : []
+
+  if (items.length) {
+    return items.map((item, index) => createApiKeyDraft(index, item))
+  }
+
+  if (provider.apiKey || provider.hasApiKey) {
+    return [
+      createApiKeyDraft(0, {
+        id: provider.activeApiKeyId || "default",
+        name: "默认 Key",
+        apiKey: provider.apiKey || "",
+        masked: provider.apiKey ? maskApiKey(provider.apiKey) : "已保存"
+      })
+    ]
+  }
+
+  return [createApiKeyDraft(0)]
+}
+
+function maskApiKey(value) {
+  const text = String(value || "")
+
+  if (text.length <= 8) {
+    return "••••••••"
+  }
+
+  return `${text.slice(0, 4)}••••${text.slice(-4)}`
+}
+
+function addApiKey(target = draft) {
+  const item = createApiKeyDraft(target.apiKeys.length)
+  target.apiKeys.push(item)
+
+  if (!target.activeApiKeyId) {
+    activateApiKey(item.id, target)
+  }
+}
+
+function activateApiKey(id, target = draft) {
+  target.activeApiKeyId = id
+  target.apiKey = target.apiKeys.find((item) => item.id === id)?.apiKey || ""
+}
+
+function removeApiKey(index, target = draft) {
+  const removed = target.apiKeys.splice(index, 1)[0]
+
+  if (removed?.id !== target.activeApiKeyId) {
+    return
+  }
+
+  if (target.apiKeys.length) {
+    activateApiKey(target.apiKeys[0].id, target)
+  } else {
+    target.activeApiKeyId = ""
+    target.apiKey = ""
+  }
+}
+
 function clearDraft() {
   draft.id = ""
   draft.cli = activeCli.value
@@ -3136,6 +3481,8 @@ function clearDraft() {
   draft.baseUrl = ""
   draft.proxy = ""
   draft.apiKey = ""
+  draft.apiKeys = [createApiKeyDraft(0)]
+  draft.activeApiKeyId = draft.apiKeys[0].id
   draft.authField =
     activeRuntimeSchema.value.authFields[0] || "ANTHROPIC_AUTH_TOKEN"
   draft.enabled = true
@@ -3226,6 +3573,13 @@ function submitProvider() {
     baseUrl: draft.baseUrl,
     proxy: draft.proxy,
     authField: draft.authField,
+    apiKeys: draft.apiKeys.map((item) => ({
+      id: item.id,
+      name: item.name,
+      note: item.note,
+      ...(item.apiKey ? { apiKey: item.apiKey } : {})
+    })),
+    activeApiKeyId: draft.activeApiKeyId,
     model: modelDrafts.mainModel,
     runtimeConfig: {
       mainModel: modelDrafts.mainModel,
@@ -3246,10 +3600,6 @@ function submitProvider() {
       modelAutoCompactTokenLimit: draft.modelAutoCompactTokenLimit
     },
     enabled: draft.enabled
-  }
-
-  if (draft.apiKey) {
-    payload.apiKey = draft.apiKey
   }
 
   emit("save-provider", payload)
@@ -4815,6 +5165,165 @@ watch(
     border-radius: 8px;
     background: #ffffff;
     color: #111827;
+  }
+
+  &__api-keys {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  &__api-keys-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  &__api-keys-header button,
+  &__api-key-meta button {
+    display: inline-flex;
+    height: 30px;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    padding: 0 9px;
+    border: 1px solid #dfe3e8;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #667085;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-weight: 700;
+  }
+
+  &__api-keys-header button:hover,
+  &__api-key-meta button:hover {
+    border-color: #9fc7f8;
+    background: #f4f9ff;
+    color: #1769aa;
+  }
+
+  &__api-key-list {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  &__api-key-item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid #e5e7eb;
+    border-radius: 9px;
+    background: #fbfcfe;
+  }
+
+  &__api-key-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__api-key-name {
+    flex: 1;
+  }
+
+  &__api-key-note {
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid #dfe3e8;
+    border-radius: 7px;
+    background: #ffffff;
+    color: #111827;
+  }
+
+  &__api-key-manager {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  &__api-key-modal {
+    :deep(.base-modal__panel) {
+      width: min(680px, calc(100vw - 48px));
+    }
+
+    :deep(.base-modal__content) {
+      overflow: hidden;
+    }
+
+    .providers-view__api-key-list {
+      min-height: 0;
+      flex: 1;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+  }
+
+  &__api-key-manager-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    color: #667085;
+    font-size: 0.82rem;
+  }
+
+  &__api-key-manager-header strong {
+    color: #111827;
+    font-size: 1rem;
+  }
+
+  &__api-key-add {
+    display: inline-flex;
+    width: fit-content;
+    height: 34px;
+    align-items: center;
+    gap: 6px;
+    padding: 0 11px;
+    border: 1px dashed #9fc7f8;
+    border-radius: 8px;
+    background: #f7fbff;
+    color: #1769aa;
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  &__api-key-manager-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 4px;
+  }
+
+  &__api-key-manager-footer > button {
+    min-height: 36px;
+    padding: 0 14px;
+    border: 1px solid #dfe3e8;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #667085;
+    cursor: pointer;
+    font-weight: 700;
+  }
+
+  &__api-key-meta button.providers-view__api-key-active {
+    border-color: #9fc7f8;
+    background: #eef7ff;
+    color: #1769aa;
+  }
+
+  &__api-keys small {
+    color: #667085;
+    font-size: 0.78rem;
   }
 
   &__warning {

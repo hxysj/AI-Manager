@@ -18,7 +18,7 @@
 
 | 模块 | 能力 |
 | --- | --- |
-| Provider 管理 | 统一维护 Claude Code、Codex 的兼容 Provider、模型映射和 Runtime 配置，检测本地配置漂移并支持快速切换。 |
+| Provider 管理 | 统一维护 Claude Code、Codex 的兼容 Provider、模型映射和 Runtime 配置；同一 Provider 可保存多个带名称和备注的 API Key，并随时切换当前生效项。 |
 | Codex 官方账号 | 支持官方登录、`auth.json` 导入、多账号维护、额度刷新、代理配置和账号接管。 |
 | Proxy 接管 | 为 Claude Code 与 Codex 管理本机代理服务和接管池，可在多个 Provider 或 Codex 账号之间切换。 |
 | Usage 统计 | 从会话与请求记录同步用量，按时间、应用、Provider、来源和模型筛选，展示 Token、缓存命中、费用趋势及明细，并可导出 PNG 长图。 |
@@ -35,6 +35,19 @@
 
 - Claude Code
 - Codex
+
+### Provider 多 API Key 管理
+
+兼容 Provider 可以保存多个 API Key，但运行时始终只使用一个当前生效的 Key：
+
+1. 在 `Providers` 列表中找到目标 Provider，点击钥匙图标打开 `API Key 管理`。
+2. 添加 API Key，并按用途填写名称和备注，例如“生产环境”或“备用额度”。
+3. 点击 `设为生效` 选择当前使用的 Key，然后点击 `保存并应用`。
+4. 不再需要的 Key 可以直接删除；删除当前生效项后，应用会自动将剩余的第一个 Key 设为生效项。
+
+已保存的 Key 在界面中只显示掩码。切换当前启用 Provider 的生效 Key 后，应用会同步更新对应 CLI 配置；Proxy 接管开启时，请求会动态使用当前 Key，不会覆盖本地代理配置。
+
+Codex 官方账号通过 OAuth 或 `auth.json` 管理认证信息，不提供 API Key 管理入口。
 
 ## 安装与使用
 
@@ -126,7 +139,7 @@ D:\ai-manager-data\
 
 备份文件使用 `.aimbackup` 加密格式。手动导出、本地自动备份和 WebDAV 云端备份使用同一份白名单，只包含：
 
-- Provider 配置、模型和加密保存的 API Key。
+- Provider 配置、模型，以及加密保存的多个 API Key、名称、备注和当前生效项。
 - Codex 官方账号登录信息。
 - Skills 索引、分组、仓库配置及 `workspace/skills` 中的实际内容。
 - Rules 索引及 `workspace/prompts` 中的实际内容。

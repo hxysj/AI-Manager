@@ -2397,13 +2397,40 @@ fn export_provider_keys(paths: &AppPaths) -> Result<Value, ManagerError> {
 
     for provider in providers {
         let provider_id = string_value(provider.get("id"));
-        let Some(encrypted_key) = keys.get(&provider_id).and_then(Value::as_str) else {
-            continue;
-        };
-        let api_key = runtime_provider::decrypt_provider_key(encrypted_key)?;
+        let stored_value = keys.get(&provider_id);
+        let records = runtime_provider::provider_key_records(stored_value);
 
-        if !api_key.is_empty() {
-            exported.insert(provider_id, json!(api_key));
+        if records.is_empty() {
+            continue;
+        }
+
+        let active_key_id = runtime_provider::active_provider_key_id(stored_value, &records);
+        let mut exported_keys = Vec::new();
+
+        for record in records {
+            let Some(encrypted_key) = record.get("value").and_then(Value::as_str) else {
+                continue;
+            };
+            let api_key = runtime_provider::decrypt_provider_key(encrypted_key)?;
+
+            if !api_key.is_empty() {
+                exported_keys.push(json!({
+                  "id": string_value(record.get("id")),
+                  "name": string_value(record.get("name")),
+                  "note": string_value(record.get("note")),
+                  "apiKey": api_key
+                }));
+            }
+        }
+
+        if !exported_keys.is_empty() {
+            exported.insert(
+                provider_id,
+                json!({
+                  "activeApiKeyId": active_key_id,
+                  "apiKeys": exported_keys
+                }),
+            );
         }
     }
 
@@ -2429,10 +2456,15 @@ async fn merge_provider_keys(
         &create_restore_database_table_key("storage/ai-manager.db", "providers"),
     ) == "backup";
 
-    for (provider_id, api_key) in api_keys.as_object().cloned().unwrap_or_default() {
-        let key = string_value(Some(&api_key));
+    for (provider_id, api_key_data) in api_keys.as_object().cloned().unwrap_or_default() {
+        let legacy_key = string_value(Some(&api_key_data));
+        let requested_keys = api_key_data
+            .get("apiKeys")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
 
-        if key.is_empty() {
+        if legacy_key.is_empty() && requested_keys.is_empty() {
             continue;
         }
 
@@ -2453,7 +2485,16 @@ async fn merge_provider_keys(
             continue;
         }
 
-        runtime_provider::set_provider_key(&mut next_keys, &provider_id, key)?;
+        if !requested_keys.is_empty() {
+            runtime_provider::set_provider_keys(
+                &mut next_keys,
+                &provider_id,
+                &requested_keys,
+                string_value(api_key_data.get("activeApiKeyId")),
+            )?;
+        } else {
+            runtime_provider::set_provider_key(&mut next_keys, &provider_id, legacy_key)?;
+        }
     }
 
     provider_store::write_keys(paths, &next_keys)
@@ -3586,7 +3627,13 @@ mod tests {
                 &paths,
                 &json!({
                   "provider-a": "backup-key-a",
-                  "provider-b": "backup-key-b",
+                  "provider-b": {
+                    "activeApiKeyId": "key-b2",
+                    "apiKeys": [
+                      { "id": "key-b1", "name": "主 Key", "note": "生产", "apiKey": "backup-key-b1" },
+                      { "id": "key-b2", "name": "备用 Key", "note": "备用", "apiKey": "backup-key-b2" }
+                    ]
+                  },
                   "provider-c": "backup-key-c"
                 }),
                 &choices,
@@ -3599,7 +3646,13 @@ mod tests {
         );
         assert_eq!(
             runtime_provider::get_provider_api_key(&paths, "provider-b").unwrap(),
-            "backup-key-b"
+            "backup-key-b2"
+        );
+        assert_eq!(
+            runtime_provider::provider_key_records(
+                provider_store::read_keys(&paths).unwrap().get("provider-b")
+            )[1]["note"],
+            "备用"
         );
         assert!(!provider_store::read_keys(&paths)
             .unwrap()
