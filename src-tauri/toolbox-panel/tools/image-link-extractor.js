@@ -38,7 +38,18 @@ function renderImageLinkExtractorTool(container) {
             <strong>图片内容</strong>
             <span class="image-tool__summary">已提取 0 个图片链接。</span>
           </div>
+          <div class="image-tool__export-actions">
+            <button class="toolbox-button image-tool__select-all" type="button" disabled>全选</button>
+            <select class="image-tool__export-format" aria-label="导出格式">
+              <option value="pdf">PDF</option>
+              <option value="zip">ZIP</option>
+            </select>
+            <button class="toolbox-button toolbox-button--primary image-tool__export" type="button" disabled>
+              导出所选
+            </button>
+          </div>
         </div>
+        <div class="image-tool__notice" role="status" hidden></div>
         <div class="image-tool__result"></div>
       </section>
 
@@ -61,13 +72,46 @@ function renderImageLinkExtractorTool(container) {
   const textarea = container.querySelector('.image-tool__textarea')
   const result = container.querySelector('.image-tool__result')
   const summary = container.querySelector('.image-tool__summary')
+  const selectAllButton = container.querySelector('.image-tool__select-all')
+  const exportFormat = container.querySelector('.image-tool__export-format')
+  const exportButton = container.querySelector('.image-tool__export')
+  const notice = container.querySelector('.image-tool__notice')
   const preview = container.querySelector('.image-preview')
   const previewImage = container.querySelector('.image-preview__image')
   const previewLink = container.querySelector('.image-preview__link')
+  const selectedLinks = new Set()
+  let links = []
+  let exporting = false
+
+  function updateSelectionState() {
+    const selectedCount = selectedLinks.size
+    const allSelected = Boolean(links.length) && selectedCount === links.length
+
+    summary.textContent = `已提取 ${links.length} 个图片链接，已选择 ${selectedCount} 个。`
+    selectAllButton.disabled = !links.length || exporting
+    selectAllButton.textContent = allSelected ? '取消全选' : '全选'
+    exportFormat.disabled = !links.length || exporting
+    exportButton.disabled = !selectedCount || exporting
+    exportButton.textContent = exporting ? '导出中...' : '导出所选'
+  }
+
+  function showNotice(message, type = '') {
+    notice.textContent = message
+    notice.className = `image-tool__notice${type ? ` image-tool__notice--${type}` : ''}`
+    notice.hidden = !message
+  }
 
   function renderImages() {
-    const links = extractImageLinks(textarea.value)
-    summary.textContent = `已提取 ${links.length} 个图片链接。`
+    links = extractImageLinks(textarea.value)
+
+    // 输入变化时仅保留仍然存在的图片选择。
+    for (const selectedLink of selectedLinks) {
+      if (!links.includes(selectedLink)) {
+        selectedLinks.delete(selectedLink)
+      }
+    }
+    showNotice('')
+    updateSelectionState()
 
     if (!textarea.value.trim()) {
       result.innerHTML = '<div class="image-tool__empty">输入字符串后会自动提取图片链接。</div>'
@@ -82,7 +126,11 @@ function renderImageLinkExtractorTool(container) {
     result.innerHTML = links
       .map(
         (link, index) => `
-          <article class="image-card">
+          <article class="image-card${selectedLinks.has(link) ? ' image-card--selected' : ''}">
+            <label class="image-card__select" title="选择图片">
+              <input type="checkbox" data-image-index="${index}" ${selectedLinks.has(link) ? 'checked' : ''}>
+              <span>选择图片 ${index + 1}</span>
+            </label>
             <button class="image-card__preview" type="button" data-image-url="${escapeHtml(link)}">
               <img src="${escapeHtml(link)}" alt="提取到的图片 ${index + 1}" loading="lazy">
             </button>
@@ -110,6 +158,53 @@ function renderImageLinkExtractorTool(container) {
     previewLink.textContent = ''
   }
 
+  async function exportSelectedImages() {
+    const selectedUrls = links.filter(link => selectedLinks.has(link))
+
+    if (!selectedUrls.length || exporting) {
+      return
+    }
+
+    exporting = true
+    showNotice(`正在生成 ${exportFormat.value.toUpperCase()} 文件...`)
+    updateSelectionState()
+
+    try {
+      // 由本地服务下载远程图片，避免浏览器跨域限制。
+      const response = await fetch('/api/images/export', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          format: exportFormat.value,
+          urls: selectedUrls
+        })
+      })
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => null)
+        throw new Error(error?.message || `导出失败（${response.status}）`)
+      }
+
+      const blob = await response.blob()
+      const downloadUrl = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      const timestamp = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+
+      link.href = downloadUrl
+      link.download = `images-${timestamp}.${exportFormat.value}`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000)
+      showNotice(`已导出 ${selectedUrls.length} 张图片。`, 'success')
+    } catch (error) {
+      showNotice(error?.message || String(error), 'error')
+    } finally {
+      exporting = false
+      updateSelectionState()
+    }
+  }
+
   textarea.addEventListener('input', renderImages)
   container.querySelector('.image-tool__sample').addEventListener('click', () => {
     textarea.value = sampleText
@@ -117,8 +212,38 @@ function renderImageLinkExtractorTool(container) {
   })
   container.querySelector('.image-tool__clear').addEventListener('click', () => {
     textarea.value = ''
+    selectedLinks.clear()
     renderImages()
     textarea.focus()
+  })
+  selectAllButton.addEventListener('click', () => {
+    if (selectedLinks.size === links.length) {
+      selectedLinks.clear()
+    } else {
+      links.forEach(link => selectedLinks.add(link))
+    }
+
+    renderImages()
+  })
+  exportButton.addEventListener('click', exportSelectedImages)
+  result.addEventListener('change', event => {
+    const input = event.target.closest('[data-image-index]')
+
+    if (!input) {
+      return
+    }
+
+    const link = links[Number(input.dataset.imageIndex)]
+
+    if (input.checked) {
+      selectedLinks.add(link)
+    } else {
+      selectedLinks.delete(link)
+    }
+
+    input.closest('.image-card')?.classList.toggle('image-card--selected', input.checked)
+    showNotice('')
+    updateSelectionState()
   })
   result.addEventListener('click', event => {
     const button = event.target.closest('[data-image-url]')
