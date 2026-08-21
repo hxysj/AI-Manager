@@ -2,8 +2,10 @@ use crate::core::error::ManagerError;
 use crate::core::paths::{path_text, AppPaths};
 use base64::Engine;
 use bytes::Bytes;
+use flate2::write::ZlibEncoder;
+use flate2::Compression;
 use http::{Method, StatusCode};
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
@@ -11,13 +13,18 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::fmt::Write as FmtWrite;
+use std::io::{Cursor, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 use tokio::net::TcpListener;
 #[cfg(target_os = "windows")]
 use tokio::process::Command;
 use tokio::task::JoinHandle;
+use url::Url;
+use zip::write::SimpleFileOptions;
 
 const INDEX_HTML: &str = include_str!("../../toolbox-panel/index.html");
 const STYLE_CSS: &str = include_str!("../../toolbox-panel/styles.css");
@@ -26,6 +33,10 @@ const TOOL_REGISTRY_JS: &str = include_str!("../../toolbox-panel/tools/registry.
 const IMAGE_LINK_EXTRACTOR_JS: &str =
     include_str!("../../toolbox-panel/tools/image-link-extractor.js");
 const STRING_DIFF_JS: &str = include_str!("../../toolbox-panel/tools/string-diff.js");
+const MAX_IMAGE_EXPORT_COUNT: usize = 100;
+const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
+const MAX_EXPORT_BYTES: usize = 200 * 1024 * 1024;
+const MAX_PNG_PIXELS: u64 = 40_000_000;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -101,7 +112,21 @@ async fn ensure_toolbox_server(
 async fn handle_toolbox_request(
     request: Request<Incoming>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
-    if request.method() != Method::GET {
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+
+    if method == Method::POST && path == "/api/images/export" {
+        return Ok(match export_images_response(request).await {
+            Ok(response) => response,
+            Err(error) => response(
+                StatusCode::BAD_REQUEST,
+                "application/json; charset=utf-8",
+                &json!({ "message": error.to_string() }).to_string(),
+            ),
+        });
+    }
+
+    if method != Method::GET {
         return Ok(response(
             StatusCode::METHOD_NOT_ALLOWED,
             "text/plain; charset=utf-8",
@@ -109,8 +134,7 @@ async fn handle_toolbox_request(
         ));
     }
 
-    let path = request.uri().path();
-    let response = match path {
+    let response = match path.as_str() {
         "/" | "/index.html" => response(StatusCode::OK, "text/html; charset=utf-8", INDEX_HTML),
         "/styles.css" => response(StatusCode::OK, "text/css; charset=utf-8", STYLE_CSS),
         "/app.js" => response(StatusCode::OK, "text/javascript; charset=utf-8", APP_JS),
@@ -146,6 +170,504 @@ fn response(status: StatusCode, content_type: &str, body: &str) -> Response<Full
         .header("cache-control", "no-store")
         .body(Full::new(Bytes::copy_from_slice(body.as_bytes())))
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+}
+
+fn download_response(content_type: &str, file_name: &str, body: Vec<u8>) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", content_type)
+        .header(
+            "content-disposition",
+            format!("attachment; filename=\"{}\"", file_name),
+        )
+        .header("cache-control", "no-store")
+        .body(Full::new(Bytes::from(body)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
+}
+
+#[derive(Deserialize)]
+struct ImageExportPayload {
+    format: String,
+    urls: Vec<String>,
+}
+
+struct DownloadedImage {
+    file_name: String,
+    extension: String,
+    bytes: Vec<u8>,
+}
+
+struct PdfImage {
+    width: u32,
+    height: u32,
+    color_space: &'static str,
+    filter: &'static str,
+    decode: Option<&'static str>,
+    data: Vec<u8>,
+}
+
+async fn export_images_response(
+    request: Request<Incoming>,
+) -> Result<Response<Full<Bytes>>, ManagerError> {
+    let is_json = request
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+
+    if !is_json {
+        return Err(ManagerError::System("图片导出请求格式不正确。".to_string()));
+    }
+
+    let body = request
+        .into_body()
+        .collect()
+        .await
+        .map_err(|error| ManagerError::System(format!("读取导出请求失败：{}", error)))?
+        .to_bytes();
+
+    if body.len() > 256 * 1024 {
+        return Err(ManagerError::System("导出请求内容过大。".to_string()));
+    }
+
+    let payload: ImageExportPayload = serde_json::from_slice(&body)?;
+    let format = payload.format.trim().to_ascii_lowercase();
+
+    if !matches!(format.as_str(), "pdf" | "zip") {
+        return Err(ManagerError::System("仅支持导出 PDF 或 ZIP。".to_string()));
+    }
+
+    let images = download_export_images(&payload.urls).await?;
+
+    if format == "zip" {
+        return Ok(download_response(
+            "application/zip",
+            "images-export.zip",
+            create_images_zip(&images)?,
+        ));
+    }
+
+    Ok(download_response(
+        "application/pdf",
+        "images-export.pdf",
+        create_images_pdf(&images)?,
+    ))
+}
+
+async fn download_export_images(urls: &[String]) -> Result<Vec<DownloadedImage>, ManagerError> {
+    if urls.is_empty() {
+        return Err(ManagerError::System("请选择要导出的图片。".to_string()));
+    }
+    if urls.len() > MAX_IMAGE_EXPORT_COUNT {
+        return Err(ManagerError::System(format!(
+            "单次最多导出 {} 张图片。",
+            MAX_IMAGE_EXPORT_COUNT
+        )));
+    }
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
+        .user_agent("AI-Manager-Image-Exporter/1.0")
+        .build()
+        .map_err(|error| ManagerError::System(format!("创建图片下载客户端失败：{}", error)))?;
+    let mut images = Vec::with_capacity(urls.len());
+    let mut total_bytes = 0_usize;
+
+    for (index, value) in urls.iter().enumerate() {
+        let url = Url::parse(value.trim())
+            .map_err(|_| ManagerError::System(format!("第 {} 个图片链接无效。", index + 1)))?;
+
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(ManagerError::System(format!(
+                "第 {} 个图片链接不是 HTTP 地址。",
+                index + 1
+            )));
+        }
+
+        let response = client.get(url).send().await.map_err(|error| {
+            ManagerError::System(format!("第 {} 张图片下载失败：{}", index + 1, error))
+        })?;
+
+        if !response.status().is_success() {
+            return Err(ManagerError::System(format!(
+                "第 {} 张图片下载失败，服务返回 {}。",
+                index + 1,
+                response.status()
+            )));
+        }
+        if response.content_length().unwrap_or_default() > MAX_IMAGE_BYTES as u64 {
+            return Err(ManagerError::System(format!(
+                "第 {} 张图片超过 25 MB 限制。",
+                index + 1
+            )));
+        }
+
+        let bytes = response.bytes().await.map_err(|error| {
+            ManagerError::System(format!("读取第 {} 张图片失败：{}", index + 1, error))
+        })?;
+
+        if bytes.is_empty() {
+            return Err(ManagerError::System(format!(
+                "第 {} 张图片内容为空。",
+                index + 1
+            )));
+        }
+        if bytes.len() > MAX_IMAGE_BYTES {
+            return Err(ManagerError::System(format!(
+                "第 {} 张图片超过 25 MB 限制。",
+                index + 1
+            )));
+        }
+
+        total_bytes = total_bytes.saturating_add(bytes.len());
+        if total_bytes > MAX_EXPORT_BYTES {
+            return Err(ManagerError::System(
+                "所选图片总大小超过 200 MB 限制。".to_string(),
+            ));
+        }
+
+        let extension = detect_image_extension(&bytes).ok_or_else(|| {
+            ManagerError::System(format!("第 {} 个链接返回的内容不是支持的图片。", index + 1))
+        })?;
+
+        images.push(DownloadedImage {
+            file_name: format!("image-{:03}.{}", index + 1, extension),
+            extension: extension.to_string(),
+            bytes: bytes.to_vec(),
+        });
+    }
+
+    Ok(images)
+}
+
+fn detect_image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return Some("jpg");
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return Some("png");
+    }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        return Some("gif");
+    }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        return Some("webp");
+    }
+    if bytes.starts_with(b"BM") {
+        return Some("bmp");
+    }
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" && matches!(&bytes[8..12], b"avif" | b"avis") {
+        return Some("avif");
+    }
+
+    let text = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
+    if text
+        .trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n'])
+        .starts_with("<svg")
+        || text.contains("<svg")
+    {
+        return Some("svg");
+    }
+
+    None
+}
+
+fn create_images_zip(images: &[DownloadedImage]) -> Result<Vec<u8>, ManagerError> {
+    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+    for image in images {
+        archive
+            .start_file(&image.file_name, options)
+            .map_err(|error| ManagerError::System(format!("创建 ZIP 文件失败：{}", error)))?;
+        archive.write_all(&image.bytes)?;
+    }
+
+    archive
+        .finish()
+        .map(Cursor::into_inner)
+        .map_err(|error| ManagerError::System(format!("完成 ZIP 文件失败：{}", error)))
+}
+
+fn create_images_pdf(images: &[DownloadedImage]) -> Result<Vec<u8>, ManagerError> {
+    let pdf_images = images
+        .iter()
+        .map(prepare_pdf_image)
+        .collect::<Result<Vec<_>, _>>()?;
+    let object_count = 2 + pdf_images.len() * 3;
+    let mut offsets = vec![0_usize; object_count + 1];
+    let mut output = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
+
+    append_pdf_object(
+        &mut output,
+        &mut offsets,
+        1,
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+    )?;
+
+    let mut pages = format!("<< /Type /Pages /Count {} /Kids [", pdf_images.len());
+    for index in 0..pdf_images.len() {
+        write!(&mut pages, " {} 0 R", 3 + index * 3)
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+    }
+    pages.push_str(" ] >>");
+    append_pdf_object(&mut output, &mut offsets, 2, pages.as_bytes())?;
+
+    for (index, image) in pdf_images.iter().enumerate() {
+        let page_object = 3 + index * 3;
+        let content_object = page_object + 1;
+        let image_object = page_object + 2;
+        let (page_width, page_height) = if image.width > image.height {
+            (841.89_f64, 595.28_f64)
+        } else {
+            (595.28_f64, 841.89_f64)
+        };
+        let scale = ((page_width - 48.0) / f64::from(image.width))
+            .min((page_height - 48.0) / f64::from(image.height));
+        let image_width = f64::from(image.width) * scale;
+        let image_height = f64::from(image.height) * scale;
+        let offset_x = (page_width - image_width) / 2.0;
+        let offset_y = (page_height - image_height) / 2.0;
+        let page = format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] /Resources << /XObject << /Im0 {} 0 R >> >> /Contents {} 0 R >>",
+            page_width, page_height, image_object, content_object
+        );
+        let content = format!(
+            "q\n{:.3} 0 0 {:.3} {:.3} {:.3} cm\n/Im0 Do\nQ",
+            image_width, image_height, offset_x, offset_y
+        );
+        let mut image_dictionary = format!(
+            "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /{} /BitsPerComponent 8 /Filter /{}",
+            image.width, image.height, image.color_space, image.filter
+        );
+
+        if let Some(decode) = image.decode {
+            write!(&mut image_dictionary, " /Decode {}", decode)
+                .map_err(|error| ManagerError::System(error.to_string()))?;
+        }
+
+        append_pdf_object(&mut output, &mut offsets, page_object, page.as_bytes())?;
+        append_pdf_stream_object(
+            &mut output,
+            &mut offsets,
+            content_object,
+            "<<",
+            content.as_bytes(),
+        )?;
+        append_pdf_stream_object(
+            &mut output,
+            &mut offsets,
+            image_object,
+            &image_dictionary,
+            &image.data,
+        )?;
+    }
+
+    let xref_offset = output.len();
+    write!(&mut output, "xref\n0 {}\n", object_count + 1)?;
+    output.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in offsets.iter().skip(1) {
+        writeln!(&mut output, "{:010} 00000 n ", offset)?;
+    }
+    write!(
+        &mut output,
+        "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{}\n%%EOF\n",
+        object_count + 1,
+        xref_offset
+    )?;
+
+    Ok(output)
+}
+
+fn prepare_pdf_image(image: &DownloadedImage) -> Result<PdfImage, ManagerError> {
+    if image.extension == "jpg" {
+        let (width, height, components) = jpeg_metadata(&image.bytes).ok_or_else(|| {
+            ManagerError::System(format!("无法读取 JPEG 图片：{}", image.file_name))
+        })?;
+        let (color_space, decode) = match components {
+            1 => ("DeviceGray", None),
+            3 => ("DeviceRGB", None),
+            4 => ("DeviceCMYK", Some("[1 0 1 0 1 0 1 0]")),
+            _ => {
+                return Err(ManagerError::System(format!(
+                    "JPEG 色彩格式暂不支持：{}",
+                    image.file_name
+                )))
+            }
+        };
+
+        return Ok(PdfImage {
+            width,
+            height,
+            color_space,
+            filter: "DCTDecode",
+            decode,
+            data: image.bytes.clone(),
+        });
+    }
+
+    if image.extension != "png" {
+        return Err(ManagerError::System(format!(
+            "PDF 导出暂不支持 {} 图片，请改用 ZIP 导出。",
+            image.extension.to_ascii_uppercase()
+        )));
+    }
+
+    // PNG 统一转换为 RGB，并将透明区域铺为白色，保证 PDF 阅读器兼容。
+    let mut decoder = png::Decoder::new(Cursor::new(&image.bytes));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder
+        .read_info()
+        .map_err(|error| ManagerError::System(format!("无法读取 PNG 图片：{}", error)))?;
+    let width = reader.info().width;
+    let height = reader.info().height;
+    let pixels = u64::from(width) * u64::from(height);
+
+    if pixels > MAX_PNG_PIXELS {
+        return Err(ManagerError::System(format!(
+            "PNG 图片像素过大：{}",
+            image.file_name
+        )));
+    }
+
+    let mut source = vec![0_u8; reader.output_buffer_size()];
+    let info = reader
+        .next_frame(&mut source)
+        .map_err(|error| ManagerError::System(format!("解码 PNG 图片失败：{}", error)))?;
+    let source = &source[..info.buffer_size()];
+    let mut rgb = Vec::with_capacity(pixels as usize * 3);
+
+    match info.color_type {
+        png::ColorType::Rgb => rgb.extend_from_slice(source),
+        png::ColorType::Rgba => {
+            for pixel in source.chunks_exact(4) {
+                let alpha = u16::from(pixel[3]);
+                for channel in &pixel[..3] {
+                    rgb.push(((u16::from(*channel) * alpha + 255 * (255 - alpha)) / 255) as u8);
+                }
+            }
+        }
+        png::ColorType::Grayscale => {
+            for value in source {
+                rgb.extend_from_slice(&[*value, *value, *value]);
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            for pixel in source.chunks_exact(2) {
+                let alpha = u16::from(pixel[1]);
+                let value = ((u16::from(pixel[0]) * alpha + 255 * (255 - alpha)) / 255) as u8;
+                rgb.extend_from_slice(&[value, value, value]);
+            }
+        }
+        png::ColorType::Indexed => {
+            return Err(ManagerError::System(format!(
+                "无法展开 PNG 调色板：{}",
+                image.file_name
+            )))
+        }
+    }
+
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&rgb)?;
+
+    Ok(PdfImage {
+        width,
+        height,
+        color_space: "DeviceRGB",
+        filter: "FlateDecode",
+        decode: None,
+        data: encoder.finish()?,
+    })
+}
+
+fn jpeg_metadata(bytes: &[u8]) -> Option<(u32, u32, u8)> {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+
+    let mut cursor = 2_usize;
+    while cursor + 3 < bytes.len() {
+        while cursor < bytes.len() && bytes[cursor] != 0xff {
+            cursor += 1;
+        }
+        while cursor < bytes.len() && bytes[cursor] == 0xff {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() {
+            break;
+        }
+
+        let marker = bytes[cursor];
+        cursor += 1;
+        if marker == 0xd8 || marker == 0xd9 || marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
+            continue;
+        }
+        if cursor + 2 > bytes.len() {
+            break;
+        }
+
+        let length = usize::from(u16::from_be_bytes([bytes[cursor], bytes[cursor + 1]]));
+        if length < 2 || cursor + length > bytes.len() {
+            break;
+        }
+
+        if matches!(
+            marker,
+            0xc0 | 0xc1
+                | 0xc2
+                | 0xc3
+                | 0xc5
+                | 0xc6
+                | 0xc7
+                | 0xc9
+                | 0xca
+                | 0xcb
+                | 0xcd
+                | 0xce
+                | 0xcf
+        ) && length >= 8
+        {
+            let height = u32::from(u16::from_be_bytes([bytes[cursor + 3], bytes[cursor + 4]]));
+            let width = u32::from(u16::from_be_bytes([bytes[cursor + 5], bytes[cursor + 6]]));
+            let components = bytes[cursor + 7];
+
+            return (width > 0 && height > 0).then_some((width, height, components));
+        }
+
+        cursor += length;
+    }
+
+    None
+}
+
+fn append_pdf_object(
+    output: &mut Vec<u8>,
+    offsets: &mut [usize],
+    number: usize,
+    body: &[u8],
+) -> Result<(), ManagerError> {
+    offsets[number] = output.len();
+    writeln!(output, "{} 0 obj", number)?;
+    output.extend_from_slice(body);
+    output.extend_from_slice(b"\nendobj\n");
+    Ok(())
+}
+
+fn append_pdf_stream_object(
+    output: &mut Vec<u8>,
+    offsets: &mut [usize],
+    number: usize,
+    dictionary: &str,
+    data: &[u8],
+) -> Result<(), ManagerError> {
+    offsets[number] = output.len();
+    writeln!(output, "{} 0 obj", number)?;
+    writeln!(output, "{} /Length {} >>", dictionary, data.len())?;
+    output.extend_from_slice(b"stream\n");
+    output.extend_from_slice(data);
+    output.extend_from_slice(b"\nendstream\nendobj\n");
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -807,6 +1329,144 @@ async fn copy_pet_dir(source_path: &Path, target_path: &Path) -> Result<(), Mana
 mod tests {
     use super::*;
     use crate::core::paths::resolve_app_paths;
+    use std::io::Read;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    fn test_png() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut bytes, 2, 1);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer
+                .write_image_data(&[255, 0, 0, 255, 0, 0, 255, 128])
+                .unwrap();
+        }
+        bytes
+    }
+
+    #[test]
+    fn detects_supported_image_signatures() {
+        assert_eq!(
+            detect_image_extension(&[0xff, 0xd8, 0xff, 0xe0]),
+            Some("jpg")
+        );
+        assert_eq!(detect_image_extension(&test_png()), Some("png"));
+        assert_eq!(detect_image_extension(b"GIF89a"), Some("gif"));
+        assert_eq!(
+            detect_image_extension(b"<svg viewBox=\"0 0 1 1\"></svg>"),
+            Some("svg")
+        );
+        assert_eq!(detect_image_extension(b"plain text"), None);
+    }
+
+    #[test]
+    fn creates_zip_with_ordered_image_names() {
+        let images = vec![
+            DownloadedImage {
+                file_name: "image-001.jpg".to_string(),
+                extension: "jpg".to_string(),
+                bytes: vec![0xff, 0xd8, 0xff],
+            },
+            DownloadedImage {
+                file_name: "image-002.png".to_string(),
+                extension: "png".to_string(),
+                bytes: test_png(),
+            },
+        ];
+        let zip = create_images_zip(&images).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(zip)).unwrap();
+        let mut first = Vec::new();
+
+        archive
+            .by_name("image-001.jpg")
+            .unwrap()
+            .read_to_end(&mut first)
+            .unwrap();
+        assert_eq!(first, vec![0xff, 0xd8, 0xff]);
+        assert!(archive.by_name("image-002.png").is_ok());
+    }
+
+    #[test]
+    fn creates_pdf_from_transparent_png() {
+        let pdf = create_images_pdf(&[DownloadedImage {
+            file_name: "image-001.png".to_string(),
+            extension: "png".to_string(),
+            bytes: test_png(),
+        }])
+        .unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+
+        assert!(pdf.starts_with(b"%PDF-1.4"));
+        assert!(text.contains("/Count 1"));
+        assert!(text.contains("/Filter /FlateDecode"));
+        assert!(text.ends_with("%%EOF\n"));
+    }
+
+    #[test]
+    fn reads_jpeg_dimensions_and_components() {
+        let jpeg = [
+            0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00,
+            0x20, 0x00, 0x30, 0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00,
+        ];
+
+        assert_eq!(jpeg_metadata(&jpeg), Some((48, 32, 3)));
+    }
+
+    #[test]
+    fn exports_images_through_toolbox_http_endpoint() {
+        tauri::async_runtime::block_on(async {
+            let image = test_png();
+            let source_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let source_url = format!(
+                "http://127.0.0.1:{}/image.png",
+                source_listener.local_addr().unwrap().port()
+            );
+            let source_task = tokio::spawn(async move {
+                let (mut stream, _) = source_listener.accept().await.unwrap();
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request).await.unwrap();
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    image.len()
+                );
+
+                stream.write_all(head.as_bytes()).await.unwrap();
+                stream.write_all(&image).await.unwrap();
+            });
+            let mut registry = ToolboxServerRegistry::new();
+            let toolbox_url = ensure_toolbox_server(&mut registry).await.unwrap();
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .post(format!("{}api/images/export", toolbox_url))
+                .json(&json!({ "format": "zip", "urls": [source_url] }))
+                .send()
+                .await
+                .unwrap();
+
+            assert_eq!(response.status(), reqwest::StatusCode::OK);
+            assert_eq!(
+                response.headers().get("content-type").unwrap(),
+                "application/zip"
+            );
+            assert!(response
+                .headers()
+                .get("content-disposition")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains("images-export.zip"));
+            assert!(response.bytes().await.unwrap().starts_with(&[0x50, 0x4b]));
+            source_task.await.unwrap();
+
+            if let Some(runtime) = registry.runtime.take() {
+                runtime._handle.abort();
+            }
+        });
+    }
 
     #[test]
     fn protects_system_port_processes() {
