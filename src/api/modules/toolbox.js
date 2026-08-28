@@ -1,7 +1,7 @@
 import { request } from '../request'
 
 export const toolboxApi = {
-  openToolbox: () => request('tools:open-toolbox'),
+  exportImages: payload => request('tools:export-images', payload),
   // 端口写操作始终携带启动时间，由后端再次校验进程身份。
   listPorts: () => request('tools:list-ports'),
   terminatePortProcess: payload =>

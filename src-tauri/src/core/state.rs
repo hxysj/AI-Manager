@@ -25,7 +25,6 @@ pub struct ManagerState {
     codex_login_cache: codex_account::CodexLoginCache,
     proxy_server_registry: proxy::ProxyServerRegistry,
     lan_share_registry: lan_share::LanShareServerRegistry,
-    toolbox_server_registry: tools::ToolboxServerRegistry,
     state: Value,
 }
 
@@ -157,7 +156,6 @@ impl ManagerState {
             codex_login_cache: codex_account::CodexLoginCache::new(),
             proxy_server_registry: proxy::ProxyServerRegistry::new(),
             lan_share_registry: lan_share::LanShareServerRegistry::new(),
-            toolbox_server_registry: tools::ToolboxServerRegistry::new(),
             state,
         })
     }
@@ -1593,8 +1591,8 @@ impl ManagerState {
             "system:save-file" => system::save_file(&app, payload),
             "system:open-path" => system::open_path(&app, payload),
             "system:open-external" => system::open_external(&app, payload),
-            "tools:open-toolbox" => {
-                tools::open_toolbox(&app, &mut self.toolbox_server_registry).await
+            "tools:export-images" => {
+                tools::export_images(payload.unwrap_or_else(|| json!({}))).await
             }
             "tools:list-ports" => tools::list_ports().await,
             "tools:terminate-port-process" => {
