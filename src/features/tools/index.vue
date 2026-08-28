@@ -4,7 +4,7 @@
       <header class="tools-view-list-head">
         <div>
           <p class="tools-view-mark">Tools</p>
-          <h1>其他工具</h1>
+          <h1>工具中心</h1>
         </div>
         <span>{{ toolItems.length }} 个工具</span>
       </header>
@@ -31,7 +31,7 @@
 
     <section v-else class="tools-view-detail-page">
       <header class="tools-view-detail-head">
-        <button class="tools-view-back" type="button" @click="activeTool = ''">
+        <button class="tools-view-back" type="button" @click="closeTool">
           <ArrowLeft :size="15" />
           工具列表
         </button>
@@ -66,75 +66,29 @@
       <LanShareView v-else-if="activeTool === 'lan-share'" />
       <CodexPetManager v-else-if="activeTool === 'codex-pets'" />
       <PortMonitor v-else-if="activeTool === 'port-monitor'" />
-      <section v-else-if="activeTool === 'utility'" class="tools-view-utility">
-        <div class="tools-view-utility-card">
-          <span class="tools-view-utility-icon">
-            <Hammer :size="28" />
-          </span>
-          <div class="tools-view-utility-main">
-            <p class="tools-view-mark">Utility Toolbox</p>
-            <h2 class="tools-view-utility-title">实用工具大全</h2>
-            <p class="tools-view-utility-desc">
-              启用后会启动本机浏览器工具服务，并在浏览器打开与桌面端风格一致的工具面板。
-            </p>
-            <div class="tools-view-utility-actions">
-              <button
-                class="tools-view-enable"
-                type="button"
-                :disabled="utilityPending"
-                @click="enableUtilityToolbox"
-              >
-                <Power :size="16" />
-                {{ utilityPending ? "正在启用" : "启用" }}
-              </button>
-              <span class="tools-view-utility-status">按需启动本机服务</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="tools-view-utility-grid">
-          <article class="tools-view-utility-tool">
-            <strong>差异对比工具</strong>
-            <span>对比两个字符串或 JSON 内容的差异，支持仅查看变化项。</span>
-          </article>
-          <article class="tools-view-utility-tool">
-            <strong>图片链接提取</strong>
-            <span>从文本、Markdown、HTML 或 JSON 中提取图片链接并预览。</span>
-          </article>
-        </div>
-
-        <div class="tools-view-utility-info">
-          <strong class="tools-view-utility-info-title">当前工具</strong>
-          <span class="tools-view-utility-info-desc">
-            已内置差异对比工具和图片链接提取工具，打开后可在浏览器面板左侧切换。
-          </span>
-          <small v-if="utilityUrl" class="tools-view-utility-info-url">
-            服务地址：{{ utilityUrl }}
-          </small>
-        </div>
-      </section>
+      <StringDiff v-else-if="activeTool === 'string-diff'" />
+      <ImageLinkExtractor v-else-if="activeTool === 'image-link-extractor'" />
     </section>
   </section>
 </template>
 
 <script setup>
-import { computed, ref } from "vue"
+import { computed, onBeforeUnmount, ref, watch } from "vue"
 import {
   ArrowLeft,
+  FileDiff,
   GitBranchIcon,
-  Hammer,
+  Images,
   Network,
   PawPrint,
-  Power,
-  Share2,
-  Wrench
+  Share2
 } from "lucide-vue-next"
 import GitToolView from "@/features/gitTool/index.vue"
 import LanShareView from "@/features/lanShare/index.vue"
 import CodexPetManager from "@/features/tools/components/CodexPetManager.vue"
+import ImageLinkExtractor from "@/features/tools/components/ImageLinkExtractor.vue"
 import PortMonitor from "@/features/tools/components/PortMonitor.vue"
-import { toolboxApi } from "@/api"
-import { createMessage } from "@/utils/message"
+import StringDiff from "@/features/tools/components/StringDiff.vue"
 
 const props = defineProps({
   cliTargets: {
@@ -147,12 +101,10 @@ const props = defineProps({
   }
 })
 
-defineEmits(["add-repo"])
+const emit = defineEmits(["add-repo", "detail-change"])
 
 const activeTool = ref("")
 const gitToolStatus = ref([])
-const utilityPending = ref(false)
-const utilityUrl = ref("")
 
 const codexInstalled = computed(() =>
   props.cliTargets.some(
@@ -163,11 +115,18 @@ const codexInstalled = computed(() =>
 const toolItems = computed(() => {
   const items = [
     {
-      id: "utility",
-      label: "实用工具",
-      summary: "启动浏览器工具大全面板，集中使用轻量辅助工具。",
-      meta: "2 个工具",
-      icon: Wrench
+      id: "string-diff",
+      label: "差异对比",
+      summary: "对比两个字符串或 JSON 内容，定位路径、行和字符差异。",
+      meta: "文本 / JSON",
+      icon: FileDiff
+    },
+    {
+      id: "image-link-extractor",
+      label: "图片链接提取",
+      summary: "从文本、Markdown、HTML 或 JSON 中提取图片并批量导出。",
+      meta: "图片 / 导出",
+      icon: Images
     },
     {
       // 端口监测直接使用桌面端系统权限，不依赖浏览器工具服务。
@@ -215,19 +174,13 @@ function openTool(toolId) {
   activeTool.value = toolId
 }
 
-async function enableUtilityToolbox() {
-  utilityPending.value = true
-
-  try {
-    const result = await toolboxApi.openToolbox()
-    utilityUrl.value = result.url || ""
-    createMessage.success("实用工具大全已在浏览器打开。")
-  } catch (error) {
-    createMessage.error(error.message || String(error))
-  } finally {
-    utilityPending.value = false
-  }
+function closeTool() {
+  activeTool.value = ""
 }
+
+// 工具详情独占工作区，退出详情或组件卸载时恢复全局侧栏。
+watch(activeTool, (toolId) => emit("detail-change", Boolean(toolId)))
+onBeforeUnmount(() => emit("detail-change", false))
 </script>
 
 <style scoped lang="less">
@@ -452,146 +405,5 @@ async function enableUtilityToolbox() {
       }
     }
   }
-}
-
-.tools-view-utility {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 12px;
-  overflow: auto;
-}
-
-.tools-view-utility-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 18px;
-  padding: 20px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background:
-    linear-gradient(135deg, rgba(237, 242, 248, 0.72), transparent 42%),
-    #ffffff;
-  box-shadow: var(--shadow-panel);
-}
-
-.tools-view-utility-icon {
-  display: grid;
-  width: 56px;
-  height: 56px;
-  flex: 0 0 56px;
-  place-items: center;
-  border: 1px solid #c9d9e7;
-  border-radius: 8px;
-  background: #eef5fb;
-  color: #2f5f91;
-}
-
-.tools-view-utility-main {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.tools-view-utility-title {
-  margin: 0;
-  color: var(--color-text);
-  font-size: 1.18rem;
-  line-height: 1.25;
-}
-
-.tools-view-utility-desc {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: 0.86rem;
-  line-height: 1.7;
-}
-
-.tools-view-utility-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.tools-view-enable {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  height: 34px;
-  padding: 0 13px;
-  border: 1px solid var(--color-primary);
-  border-radius: 7px;
-  background: var(--color-primary);
-  color: #ffffff;
-  cursor: pointer;
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.tools-view-enable:disabled {
-  cursor: not-allowed;
-  opacity: 0.58;
-}
-
-.tools-view-utility-status {
-  color: var(--color-text-soft);
-  font-size: 0.78rem;
-  font-weight: 700;
-}
-
-.tools-view-utility-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.tools-view-utility-tool {
-  display: flex;
-  min-height: 86px;
-  flex-direction: column;
-  justify-content: center;
-  gap: 7px;
-  padding: 14px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: #ffffff;
-}
-
-.tools-view-utility-tool strong {
-  color: var(--color-text);
-  font-size: 0.9rem;
-}
-
-.tools-view-utility-tool span {
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
-  line-height: 1.55;
-}
-
-.tools-view-utility-info {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 14px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel-soft);
-}
-
-.tools-view-utility-info-title {
-  color: var(--color-text);
-  font-size: 0.86rem;
-}
-
-.tools-view-utility-info-desc,
-.tools-view-utility-info-url {
-  color: var(--color-text-muted);
-  font-size: 0.8rem;
-  line-height: 1.5;
 }
 </style>

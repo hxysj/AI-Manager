@@ -5,8 +5,12 @@
     @state-updated="updateState"
   />
 
-  <div v-else class="app-shell">
+  <div
+    v-else
+    :class="['app-shell', { 'app-shell--tool-workspace': toolWorkspaceActive }]"
+  >
     <AppSidebar
+      v-if="!toolWorkspaceActive"
       :active-view="activeView"
       :cli-targets="state.cliTargets"
       :collapsed="sidebarCollapsed"
@@ -137,6 +141,7 @@
           :cli-targets="state.cliTargets"
           :repos="state.repos"
           @add-repo="showAddRepo = true"
+          @detail-change="toolWorkspaceActive = $event"
         />
 
         <SettingsView
@@ -570,6 +575,7 @@ const sidebarTitleClickCount = ref(0)
 const appLogs = ref([])
 const appLogPath = ref("")
 const sidebarCollapsed = ref(false)
+const toolWorkspaceActive = ref(false)
 const selectedSkillName = ref("")
 const skillTrashItems = ref([])
 const showCreateSkill = ref(false)
@@ -2106,6 +2112,14 @@ onBeforeUnmount(() => {
     margin: 0 0 18px;
     color: var(--color-text-muted);
     line-height: 1.7;
+  }
+}
+
+.app-shell.app-shell--tool-workspace {
+  grid-template-columns: minmax(0, 1fr);
+
+  .app-shell__main {
+    padding: 12px;
   }
 }
 

@@ -1,38 +1,20 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::{path_text, AppPaths};
 use base64::Engine;
-use bytes::Bytes;
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use http::{Method, StatusCode};
-use http_body_util::{BodyExt, Full};
-use hyper::body::Incoming;
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{Request, Response};
-use hyper_util::rt::TokioIo;
+use image::ImageDecoder;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fmt::Write as FmtWrite;
 use std::io::{Cursor, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
-use tauri::AppHandle;
-use tauri_plugin_opener::OpenerExt;
-use tokio::net::TcpListener;
 #[cfg(target_os = "windows")]
 use tokio::process::Command;
-use tokio::task::JoinHandle;
 use url::Url;
 use zip::write::SimpleFileOptions;
 
-const INDEX_HTML: &str = include_str!("../../toolbox-panel/index.html");
-const STYLE_CSS: &str = include_str!("../../toolbox-panel/styles.css");
-const APP_JS: &str = include_str!("../../toolbox-panel/app.js");
-const TOOL_REGISTRY_JS: &str = include_str!("../../toolbox-panel/tools/registry.js");
-const IMAGE_LINK_EXTRACTOR_JS: &str =
-    include_str!("../../toolbox-panel/tools/image-link-extractor.js");
-const STRING_DIFF_JS: &str = include_str!("../../toolbox-panel/tools/string-diff.js");
 const MAX_IMAGE_EXPORT_COUNT: usize = 100;
 const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 const MAX_EXPORT_BYTES: usize = 200 * 1024 * 1024;
@@ -41,154 +23,12 @@ const MAX_PNG_PIXELS: u64 = 40_000_000;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-pub struct ToolboxServerRegistry {
-    runtime: Option<ToolboxServerRuntime>,
-}
-
-struct ToolboxServerRuntime {
-    url: String,
-    _handle: JoinHandle<()>,
-}
-
-impl ToolboxServerRegistry {
-    pub fn new() -> Self {
-        Self { runtime: None }
-    }
-}
-
-pub async fn open_toolbox(
-    app: &AppHandle,
-    registry: &mut ToolboxServerRegistry,
-) -> Result<Value, ManagerError> {
-    let url = ensure_toolbox_server(registry).await?;
-
-    app.opener()
-        .open_url(url.clone(), None::<&str>)
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-
-    Ok(json!({
-      "url": url
-    }))
-}
-
-async fn ensure_toolbox_server(
-    registry: &mut ToolboxServerRegistry,
-) -> Result<String, ManagerError> {
-    if let Some(runtime) = &registry.runtime {
-        if !runtime._handle.is_finished() {
-            return Ok(runtime.url.clone());
-        }
-    }
-
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-    let url = format!("http://127.0.0.1:{}/", port);
-    let handle = tokio::spawn(async move {
-        loop {
-            let Ok((stream, _addr)) = listener.accept().await else {
-                break;
-            };
-
-            tokio::spawn(async move {
-                let io = TokioIo::new(stream);
-                if let Err(error) = http1::Builder::new()
-                    .serve_connection(io, service_fn(handle_toolbox_request))
-                    .await
-                {
-                    eprintln!("[实用工具服务] 请求处理失败: {}", error);
-                }
-            });
-        }
-    });
-
-    registry.runtime = Some(ToolboxServerRuntime {
-        url: url.clone(),
-        _handle: handle,
-    });
-
-    Ok(url)
-}
-
-async fn handle_toolbox_request(
-    request: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
-    let method = request.method().clone();
-    let path = request.uri().path().to_string();
-
-    if method == Method::POST && path == "/api/images/export" {
-        return Ok(match export_images_response(request).await {
-            Ok(response) => response,
-            Err(error) => response(
-                StatusCode::BAD_REQUEST,
-                "application/json; charset=utf-8",
-                &json!({ "message": error.to_string() }).to_string(),
-            ),
-        });
-    }
-
-    if method != Method::GET {
-        return Ok(response(
-            StatusCode::METHOD_NOT_ALLOWED,
-            "text/plain; charset=utf-8",
-            "仅支持 GET 请求",
-        ));
-    }
-
-    let response = match path.as_str() {
-        "/" | "/index.html" => response(StatusCode::OK, "text/html; charset=utf-8", INDEX_HTML),
-        "/styles.css" => response(StatusCode::OK, "text/css; charset=utf-8", STYLE_CSS),
-        "/app.js" => response(StatusCode::OK, "text/javascript; charset=utf-8", APP_JS),
-        "/tools/registry.js" => response(
-            StatusCode::OK,
-            "text/javascript; charset=utf-8",
-            TOOL_REGISTRY_JS,
-        ),
-        "/tools/image-link-extractor.js" => response(
-            StatusCode::OK,
-            "text/javascript; charset=utf-8",
-            IMAGE_LINK_EXTRACTOR_JS,
-        ),
-        "/tools/string-diff.js" => response(
-            StatusCode::OK,
-            "text/javascript; charset=utf-8",
-            STRING_DIFF_JS,
-        ),
-        _ => response(
-            StatusCode::NOT_FOUND,
-            "text/plain; charset=utf-8",
-            "未找到工具资源",
-        ),
-    };
-
-    Ok(response)
-}
-
-fn response(status: StatusCode, content_type: &str, body: &str) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(status)
-        .header("content-type", content_type)
-        .header("cache-control", "no-store")
-        .body(Full::new(Bytes::copy_from_slice(body.as_bytes())))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
-}
-
-fn download_response(content_type: &str, file_name: &str, body: Vec<u8>) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", content_type)
-        .header(
-            "content-disposition",
-            format!("attachment; filename=\"{}\"", file_name),
-        )
-        .header("cache-control", "no-store")
-        .body(Full::new(Bytes::from(body)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
-}
-
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ImageExportPayload {
     format: String,
     urls: Vec<String>,
+    target_path: String,
 }
 
 struct DownloadedImage {
@@ -206,52 +46,32 @@ struct PdfImage {
     data: Vec<u8>,
 }
 
-async fn export_images_response(
-    request: Request<Incoming>,
-) -> Result<Response<Full<Bytes>>, ManagerError> {
-    let is_json = request
-        .headers()
-        .get("content-type")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| value.starts_with("application/json"));
-
-    if !is_json {
-        return Err(ManagerError::System("图片导出请求格式不正确。".to_string()));
-    }
-
-    let body = request
-        .into_body()
-        .collect()
-        .await
-        .map_err(|error| ManagerError::System(format!("读取导出请求失败：{}", error)))?
-        .to_bytes();
-
-    if body.len() > 256 * 1024 {
-        return Err(ManagerError::System("导出请求内容过大。".to_string()));
-    }
-
-    let payload: ImageExportPayload = serde_json::from_slice(&body)?;
+pub async fn export_images(payload: Value) -> Result<Value, ManagerError> {
+    let payload: ImageExportPayload = serde_json::from_value(payload)?;
     let format = payload.format.trim().to_ascii_lowercase();
 
     if !matches!(format.as_str(), "pdf" | "zip") {
         return Err(ManagerError::System("仅支持导出 PDF 或 ZIP。".to_string()));
     }
-
-    let images = download_export_images(&payload.urls).await?;
-
-    if format == "zip" {
-        return Ok(download_response(
-            "application/zip",
-            "images-export.zip",
-            create_images_zip(&images)?,
-        ));
+    if payload.target_path.trim().is_empty() {
+        return Err(ManagerError::System("请选择图片导出位置。".to_string()));
     }
 
-    Ok(download_response(
-        "application/pdf",
-        "images-export.pdf",
-        create_images_pdf(&images)?,
-    ))
+    let images = download_export_images(&payload.urls).await?;
+    let image_count = images.len();
+    let output = if format == "zip" {
+        create_images_zip(&images)?
+    } else {
+        create_images_pdf(&images)?
+    };
+
+    tokio::fs::write(&payload.target_path, output).await?;
+
+    Ok(json!({
+      "filePath": payload.target_path,
+      "imageCount": image_count,
+      "format": format
+    }))
 }
 
 async fn download_export_images(urls: &[String]) -> Result<Vec<DownloadedImage>, ManagerError> {
@@ -507,6 +327,16 @@ fn prepare_pdf_image(image: &DownloadedImage) -> Result<PdfImage, ManagerError> 
         });
     }
 
+    if image.extension == "webp" {
+        let png_image = DownloadedImage {
+            file_name: image.file_name.replace(".webp", ".png"),
+            extension: "png".to_string(),
+            bytes: convert_webp_to_png(image)?,
+        };
+
+        return prepare_pdf_image(&png_image);
+    }
+
     if image.extension != "png" {
         return Err(ManagerError::System(format!(
             "PDF 导出暂不支持 {} 图片，请改用 ZIP 导出。",
@@ -579,6 +409,50 @@ fn prepare_pdf_image(image: &DownloadedImage) -> Result<PdfImage, ManagerError> 
         decode: None,
         data: encoder.finish()?,
     })
+}
+
+fn convert_webp_to_png(image: &DownloadedImage) -> Result<Vec<u8>, ManagerError> {
+    let decoder = image::codecs::webp::WebPDecoder::new(Cursor::new(&image.bytes))
+        .map_err(|error| ManagerError::System(format!("无法读取 WEBP 图片：{}", error)))?;
+    let (width, height) = decoder.dimensions();
+    let pixels = u64::from(width) * u64::from(height);
+
+    if pixels > MAX_PNG_PIXELS {
+        return Err(ManagerError::System(format!(
+            "WEBP 图片像素过大：{}",
+            image.file_name
+        )));
+    }
+
+    let color_type = match decoder.color_type() {
+        image::ColorType::Rgb8 => png::ColorType::Rgb,
+        image::ColorType::Rgba8 => png::ColorType::Rgba,
+        _ => {
+            return Err(ManagerError::System(format!(
+                "WEBP 色彩格式暂不支持：{}",
+                image.file_name
+            )))
+        }
+    };
+    let mut source = vec![0_u8; decoder.total_bytes() as usize];
+    decoder
+        .read_image(&mut source)
+        .map_err(|error| ManagerError::System(format!("解码 WEBP 图片失败：{}", error)))?;
+    let mut png_bytes = Vec::new();
+
+    {
+        let mut encoder = png::Encoder::new(&mut png_bytes, width, height);
+        encoder.set_color(color_type);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder
+            .write_header()
+            .map_err(|error| ManagerError::System(format!("创建 PNG 图片失败：{}", error)))?;
+        writer
+            .write_image_data(&source)
+            .map_err(|error| ManagerError::System(format!("转换 PNG 图片失败：{}", error)))?;
+    }
+
+    Ok(png_bytes)
 }
 
 fn jpeg_metadata(bytes: &[u8]) -> Option<(u32, u32, u8)> {
@@ -1331,6 +1205,7 @@ mod tests {
     use crate::core::paths::resolve_app_paths;
     use std::io::Read;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     fn test_png() -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -1343,6 +1218,19 @@ mod tests {
                 .write_image_data(&[255, 0, 0, 255, 0, 0, 255, 128])
                 .unwrap();
         }
+        bytes
+    }
+
+    fn test_webp() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut bytes)
+            .encode(
+                &[255, 0, 0, 255, 0, 0, 255, 128],
+                2,
+                1,
+                image::ExtendedColorType::Rgba8,
+            )
+            .unwrap();
         bytes
     }
 
@@ -1405,6 +1293,24 @@ mod tests {
     }
 
     #[test]
+    fn converts_webp_to_png_before_creating_pdf() {
+        let image = DownloadedImage {
+            file_name: "image-001.webp".to_string(),
+            extension: "webp".to_string(),
+            bytes: test_webp(),
+        };
+        let png = convert_webp_to_png(&image).unwrap();
+        let pdf = create_images_pdf(&[image]).unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+
+        assert_eq!(detect_image_extension(&png), Some("png"));
+        assert!(pdf.starts_with(b"%PDF-1.4"));
+        assert!(text.contains("/Count 1"));
+        assert!(text.contains("/Filter /FlateDecode"));
+        assert!(text.ends_with("%%EOF\n"));
+    }
+
+    #[test]
     fn reads_jpeg_dimensions_and_components() {
         let jpeg = [
             0xff, 0xd8, 0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00,
@@ -1415,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn exports_images_through_toolbox_http_endpoint() {
+    fn exports_images_to_selected_path() {
         tauri::async_runtime::block_on(async {
             let image = test_png();
             let source_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1435,36 +1341,25 @@ mod tests {
                 stream.write_all(head.as_bytes()).await.unwrap();
                 stream.write_all(&image).await.unwrap();
             });
-            let mut registry = ToolboxServerRegistry::new();
-            let toolbox_url = ensure_toolbox_server(&mut registry).await.unwrap();
-            let response = reqwest::Client::builder()
-                .no_proxy()
-                .build()
-                .unwrap()
-                .post(format!("{}api/images/export", toolbox_url))
-                .json(&json!({ "format": "zip", "urls": [source_url] }))
-                .send()
+            let target_path = std::env::temp_dir().join(format!(
+                "monkey-thief-image-export-{}.zip",
+                std::process::id()
+            ));
+            let result = export_images(json!({
+              "format": "zip",
+              "urls": [source_url],
+              "targetPath": path_text(&target_path)
+            }))
+            .await
+            .unwrap();
+
+            assert_eq!(result["imageCount"], 1);
+            assert!(tokio::fs::read(&target_path)
                 .await
-                .unwrap();
-
-            assert_eq!(response.status(), reqwest::StatusCode::OK);
-            assert_eq!(
-                response.headers().get("content-type").unwrap(),
-                "application/zip"
-            );
-            assert!(response
-                .headers()
-                .get("content-disposition")
                 .unwrap()
-                .to_str()
-                .unwrap()
-                .contains("images-export.zip"));
-            assert!(response.bytes().await.unwrap().starts_with(&[0x50, 0x4b]));
+                .starts_with(&[0x50, 0x4b]));
             source_task.await.unwrap();
-
-            if let Some(runtime) = registry.runtime.take() {
-                runtime._handle.abort();
-            }
+            tokio::fs::remove_file(target_path).await.unwrap();
         });
     }
 
