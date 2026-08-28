@@ -1594,6 +1594,14 @@ impl ManagerState {
             "tools:export-images" => {
                 tools::export_images(payload.unwrap_or_else(|| json!({}))).await
             }
+            "tools:json-agent-request" => {
+                proxy::request_active_codex_provider(
+                    &app,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
             "tools:list-ports" => tools::list_ports().await,
             "tools:terminate-port-process" => {
                 tools::terminate_port_process(payload.unwrap_or_else(|| json!({}))).await

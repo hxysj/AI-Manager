@@ -2,7 +2,10 @@ use crate::api::{codex_account, runtime_provider};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use crate::core::provider_store;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine;
 use bytes::Bytes;
+use futures_util::StreamExt;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -16,6 +19,7 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
+use tauri::{AppHandle, Emitter, Runtime};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
@@ -23,6 +27,7 @@ const PROXY_MANAGED_API_KEY: &str = "PROXY_MANAGED";
 const PROXY_PROVIDER_INSTANCE_TOKEN_PREFIX: &str = "AI_MANAGER_PROVIDER:";
 const CODEX_ACCOUNT_PREFIX: &str = "account:";
 const CODEX_OFFICIAL_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const JSON_AGENT_STREAM_EVENT: &str = "tools:json-agent-stream";
 
 #[derive(Clone)]
 pub struct ProxyServerRegistry {
@@ -52,6 +57,205 @@ struct ForwardResult {
     target: ProxyTarget,
     upstream_url: String,
     latency_ms: u64,
+}
+
+pub(crate) async fn request_active_codex_provider<R: Runtime>(
+    app: &AppHandle<R>,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    request_active_codex_provider_with_emitter(paths, payload, |event| {
+        app.emit(JSON_AGENT_STREAM_EVENT, event)
+            .map_err(|error| ManagerError::System(error.to_string()))
+    })
+    .await
+}
+
+async fn request_active_codex_provider_with_emitter<F>(
+    paths: &AppPaths,
+    payload: Value,
+    mut emit: F,
+) -> Result<Value, ManagerError>
+where
+    F: FnMut(Value) -> Result<(), ManagerError> + Send,
+{
+    let endpoint = string_value(payload.get("endpoint"));
+
+    if endpoint != "/responses" {
+        return Err(ManagerError::System(
+            "JSON Agent 仅允许调用 /responses".to_string(),
+        ));
+    }
+
+    if string_value(payload.get("method")).to_ascii_uppercase() != "POST" {
+        return Err(ManagerError::System(
+            "JSON Agent 仅允许 POST 请求".to_string(),
+        ));
+    }
+
+    let request_id = string_value(payload.get("requestId"));
+
+    if request_id.is_empty() {
+        return Err(ManagerError::System(
+            "JSON Agent 流请求缺少 requestId".to_string(),
+        ));
+    }
+
+    let profile = provider_store::read_profiles(paths)?
+        .into_iter()
+        .find(|item| item.get("cli").and_then(Value::as_str) == Some("codex"))
+        .ok_or_else(|| ManagerError::System("请先配置 Codex Runtime Profile".to_string()))?;
+    let provider_id = string_value(profile.get("providerId"));
+    let target = get_target(paths, "codex", &json!({}), &provider_id)?;
+    let provider = target
+        .provider
+        .as_ref()
+        .ok_or_else(|| ManagerError::System("JSON Agent 仅支持 Codex Provider".to_string()))?;
+    let mut request_body = payload
+        .get("body")
+        .and_then(Value::as_object)
+        .cloned()
+        .ok_or_else(|| ManagerError::System("JSON Agent 请求体无效".to_string()))?;
+    let requested_model = string_value(payload.get("model"));
+    let profile_model = string_value(profile.get("model"));
+    let active_model = if profile_model.is_empty() {
+        target.model.clone()
+    } else {
+        profile_model
+    };
+    let model = if requested_model.is_empty() {
+        active_model.clone()
+    } else {
+        requested_model
+    };
+    let model_belongs_to_provider = provider_store::read_models(paths)?.into_iter().any(|item| {
+        string_value(item.get("providerId")) == provider_id
+            && [string_value(item.get("id")), string_value(item.get("name"))].contains(&model)
+    });
+
+    if model.is_empty() {
+        return Err(ManagerError::System(
+            "当前 Codex Provider 未配置模型".to_string(),
+        ));
+    }
+
+    if model != active_model && model != target.model && !model_belongs_to_provider {
+        return Err(ManagerError::System(
+            "所选模型不属于当前 Codex Provider".to_string(),
+        ));
+    }
+
+    request_body.insert("model".to_string(), json!(model));
+    request_body.insert("stream".to_string(), json!(true));
+
+    let upstream_url = build_upstream_url(&target.base_url, &endpoint, "")?;
+    let upstream_path = url::Url::parse(&upstream_url)
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .path()
+        .trim_end_matches('/')
+        .to_ascii_lowercase();
+
+    if !upstream_path.ends_with("/responses") {
+        return Err(ManagerError::System(
+            "当前 Codex Provider 不支持 Responses API".to_string(),
+        ));
+    }
+
+    let mut headers = HeaderMap::new();
+    headers.insert("accept", HeaderValue::from_static("text/event-stream"));
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    headers.insert("accept-encoding", HeaderValue::from_static("identity"));
+
+    if let Some(provider_headers) = provider.get("headers").and_then(Value::as_object) {
+        for (key, value) in provider_headers {
+            let name = key.trim().to_ascii_lowercase();
+
+            if [
+                "authorization",
+                "x-api-key",
+                "host",
+                "content-length",
+                "accept-encoding",
+            ]
+            .contains(&name.as_str())
+            {
+                continue;
+            }
+
+            if let (Ok(header_name), Ok(header_value)) = (
+                HeaderName::from_bytes(name.as_bytes()),
+                HeaderValue::from_str(&string_value(Some(value))),
+            ) {
+                headers.insert(header_name, header_value);
+            }
+        }
+    }
+
+    let api_key = get_provider_api_key(paths, "codex", &provider_id)?;
+    headers.insert(
+        "authorization",
+        HeaderValue::from_str(&format!("Bearer {}", api_key))
+            .map_err(|error| ManagerError::System(error.to_string()))?,
+    );
+
+    let response = http_client(&target.proxy)?
+        .post(upstream_url)
+        .headers(headers)
+        .json(&Value::Object(request_body))
+        .send()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let status = response.status().as_u16();
+    let response_headers = response
+        .headers()
+        .iter()
+        .filter_map(|(key, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (key.as_str().to_string(), json!(value)))
+        })
+        .collect::<serde_json::Map<String, Value>>();
+    emit(json!({
+      "requestId": request_id,
+      "type": "start",
+      "status": status,
+      "headers": response_headers
+    }))?;
+
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        match chunk {
+            Ok(bytes) => {
+                emit(json!({
+                  "requestId": request_id,
+                  "type": "chunk",
+                  "data": BASE64_STANDARD.encode(bytes)
+                }))?;
+            }
+            Err(error) => {
+                let message = error.to_string();
+                let _ = emit(json!({
+                  "requestId": request_id,
+                  "type": "error",
+                  "message": message
+                }));
+                return Err(ManagerError::System(message));
+            }
+        }
+    }
+
+    emit(json!({
+      "requestId": request_id,
+      "type": "done"
+    }))?;
+
+    Ok(json!({
+      "requestId": request_id,
+      "status": status,
+      "streamed": true
+    }))
 }
 
 impl ProxyServerRegistry {
@@ -1725,4 +1929,201 @@ fn first_string(value: Option<&Value>, fallback: Option<&Value>, default_value: 
 
 fn now_millis() -> u64 {
     runtime_provider::now_millis()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::request_active_codex_provider_with_emitter;
+    use crate::api::runtime_provider;
+    use crate::core::paths::{resolve_app_paths, AppPaths};
+    use crate::core::provider_store;
+    use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+    use base64::Engine;
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
+    use hyper::Response;
+    use hyper_util::rt::TokioIo;
+    use serde_json::{json, Map, Value};
+    use std::convert::Infallible;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex as StdMutex};
+    use tokio::net::TcpListener;
+
+    fn create_json_agent_paths() -> (AppPaths, PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-json-agent-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(root.join("workspace/storage")).unwrap();
+        std::fs::create_dir_all(root.join("workspace/logs")).unwrap();
+        (resolve_app_paths(Path::new(&root)), root)
+    }
+
+    fn write_json_agent_provider(paths: &AppPaths, base_url: &str) {
+        let providers = vec![json!({
+          "id": "provider-active",
+          "cli": "codex",
+          "name": "Active Provider",
+          "baseUrl": base_url,
+          "proxy": "",
+          "headers": { "x-provider-header": "provider-value" },
+          "enabled": true,
+          "runtimeConfig": { "mainModel": "model-active" }
+        })];
+        let models = vec![json!({
+          "id": "model-active",
+          "providerId": "provider-active",
+          "name": "model-active"
+        })];
+        let profiles = vec![json!({
+          "id": "codex",
+          "cli": "codex",
+          "providerId": "provider-active",
+          "model": "model-active"
+        })];
+        let mut keys = Map::new();
+        runtime_provider::set_provider_key(
+            &mut keys,
+            "provider-active",
+            "secret-test-key".to_string(),
+        )
+        .unwrap();
+        provider_store::write_provider_bundle(paths, &providers, &models, &profiles, &keys)
+            .unwrap();
+    }
+
+    #[test]
+    fn json_agent_uses_active_provider_and_rejects_out_of_scope_requests() {
+        tauri::async_runtime::block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tauri::async_runtime::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                http1::Builder::new()
+                    .serve_connection(
+                        TokioIo::new(stream),
+                        service_fn(|request: hyper::Request<hyper::body::Incoming>| async move {
+                            let path = request.uri().path().to_string();
+                            let authorization = request
+                                .headers()
+                                .get("authorization")
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or_default()
+                                .to_string();
+                            let provider_header = request
+                                .headers()
+                                .get("x-provider-header")
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or_default()
+                                .to_string();
+                            let body = request.into_body().collect().await.unwrap().to_bytes();
+                            let payload: Value = serde_json::from_slice(&body).unwrap();
+                            let response_body = json!({
+                              "path": path,
+                              "authorization": authorization,
+                              "providerHeader": provider_header,
+                              "model": payload["model"],
+                              "stream": payload["stream"]
+                            });
+                            Ok::<_, Infallible>(
+                                Response::builder()
+                                    .header("content-type", "text/event-stream")
+                                    .body(Full::new(Bytes::from(format!(
+                                        "data: {}\n\n",
+                                        response_body
+                                    ))))
+                                    .unwrap(),
+                            )
+                        }),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let (paths, root) = create_json_agent_paths();
+            write_json_agent_provider(&paths, &format!("http://{}/v1", address));
+            let stream_events = Arc::new(StdMutex::new(Vec::<Value>::new()));
+            let observed_events = stream_events.clone();
+            let emit = move |event| {
+                observed_events.lock().unwrap().push(event);
+                Ok(())
+            };
+
+            let result = request_active_codex_provider_with_emitter(
+                &paths,
+                json!({
+                  "requestId": "request-active",
+                  "endpoint": "/responses",
+                  "method": "POST",
+                  "model": "model-active",
+                  "body": {
+                    "model": "untrusted-model",
+                    "input": "repair json",
+                    "stream": true
+                  }
+                }),
+                emit,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(result["status"], 200);
+            assert_eq!(result["streamed"], true);
+            let events = stream_events.lock().unwrap();
+            assert_eq!(events.len(), 3);
+            assert_eq!(events[0]["type"], "start");
+            assert_eq!(events[0]["requestId"], "request-active");
+            assert_eq!(events[1]["type"], "chunk");
+            assert_eq!(events[2]["type"], "done");
+            let chunk = BASE64_STANDARD
+                .decode(events[1]["data"].as_str().unwrap())
+                .unwrap();
+            let chunk_text = String::from_utf8(chunk).unwrap();
+            let response_body: Value =
+                serde_json::from_str(chunk_text.trim().strip_prefix("data: ").unwrap()).unwrap();
+            assert_eq!(response_body["path"], "/v1/responses");
+            assert_eq!(response_body["authorization"], "Bearer secret-test-key");
+            assert_eq!(response_body["providerHeader"], "provider-value");
+            assert_eq!(response_body["model"], "model-active");
+            assert_eq!(response_body["stream"], true);
+            drop(events);
+
+            let model_error = request_active_codex_provider_with_emitter(
+                &paths,
+                json!({
+                  "requestId": "request-model-error",
+                  "endpoint": "/responses",
+                  "method": "POST",
+                  "model": "foreign-model",
+                  "body": {}
+                }),
+                |_| Ok(()),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(model_error.contains("不属于当前 Codex Provider"));
+
+            let endpoint_error = request_active_codex_provider_with_emitter(
+                &paths,
+                json!({
+                  "requestId": "request-endpoint-error",
+                  "endpoint": "/models",
+                  "method": "POST",
+                  "model": "model-active",
+                  "body": {}
+                }),
+                |_| Ok(()),
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+            assert!(endpoint_error.contains("仅允许调用 /responses"));
+
+            server.await.unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+        });
+    }
 }
