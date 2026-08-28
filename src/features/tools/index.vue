@@ -68,14 +68,27 @@
       <PortMonitor v-else-if="activeTool === 'port-monitor'" />
       <StringDiff v-else-if="activeTool === 'string-diff'" />
       <ImageLinkExtractor v-else-if="activeTool === 'image-link-extractor'" />
+      <JsonAgentTool
+        v-else-if="activeTool === 'json-agent'"
+        :providers="providers"
+        :runtime-models="runtimeModels"
+        :runtime-profiles="runtimeProfiles"
+      />
     </section>
   </section>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from "vue"
+import {
+  computed,
+  defineAsyncComponent,
+  onBeforeUnmount,
+  ref,
+  watch
+} from "vue"
 import {
   ArrowLeft,
+  Braces,
   FileDiff,
   GitBranchIcon,
   Images,
@@ -90,12 +103,28 @@ import ImageLinkExtractor from "@/features/tools/components/ImageLinkExtractor.v
 import PortMonitor from "@/features/tools/components/PortMonitor.vue"
 import StringDiff from "@/features/tools/components/StringDiff.vue"
 
+const JsonAgentTool = defineAsyncComponent(
+  () => import("@/features/tools/components/JsonAgentTool.vue")
+)
+
 const props = defineProps({
   cliTargets: {
     type: Array,
     default: () => []
   },
   repos: {
+    type: Array,
+    default: () => []
+  },
+  providers: {
+    type: Array,
+    default: () => []
+  },
+  runtimeModels: {
+    type: Array,
+    default: () => []
+  },
+  runtimeProfiles: {
     type: Array,
     default: () => []
   }
@@ -114,6 +143,13 @@ const codexInstalled = computed(() =>
 
 const toolItems = computed(() => {
   const items = [
+    {
+      id: "json-agent",
+      label: "JSON 智能解析",
+      summary: "格式化 JSON，并通过 Codex Agent 按指令修复异常内容。",
+      meta: "JSON / Agent",
+      icon: Braces
+    },
     {
       id: "string-diff",
       label: "差异对比",

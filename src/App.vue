@@ -139,7 +139,10 @@
         <ToolsView
           v-else-if="activeView === 'tools'"
           :cli-targets="state.cliTargets"
+          :providers="state.providers"
           :repos="state.repos"
+          :runtime-models="state.runtimeModels"
+          :runtime-profiles="state.runtimeProfiles"
           @add-repo="showAddRepo = true"
           @detail-change="toolWorkspaceActive = $event"
         />
