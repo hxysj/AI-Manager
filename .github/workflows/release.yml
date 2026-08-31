@@ -61,7 +61,6 @@ jobs:
           CARGO_INCREMENTAL: 0
           SCCACHE_GHA_ENABLED: "true"
           RUSTC_WRAPPER: sccache
-          AI_MANAGER_GITHUB_TOKEN: ${{ secrets.AI_MANAGER_GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run dist:win
