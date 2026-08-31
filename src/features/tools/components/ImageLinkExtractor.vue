@@ -811,6 +811,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
         position: relative;
         display: flex;
         min-width: 0;
+        align-self: start;
         flex-direction: column;
         overflow: hidden;
         border: 1px solid var(--color-line);
@@ -853,7 +854,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
 
         .image-extractor-preview-button {
           display: grid;
-          height: 154px;
           padding: 0;
           overflow: hidden;
           border: 0;
@@ -877,14 +877,17 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           }
 
           .image-extractor-image {
+            display: block;
             width: 100%;
-            height: 100%;
-            object-fit: contain;
+            height: auto;
           }
 
           .image-extractor-broken {
             display: flex;
+            width: 100%;
+            min-height: 154px;
             align-items: center;
+            justify-content: center;
             flex-direction: column;
             gap: 7px;
             color: var(--color-text-soft);
