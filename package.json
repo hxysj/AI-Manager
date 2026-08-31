@@ -6,10 +6,9 @@
   "scripts": {
     "dev": "tauri dev",
     "dev:renderer": "vite",
-    "build": "npm run build:update-config && tauri build",
+    "build": "tauri build",
     "build:renderer": "vite build",
-    "build:update-config": "node scripts/generate-update-config.cjs",
-    "dist:win": "npm run build:update-config && tauri build --bundles nsis --ci",
+    "dist:win": "tauri build --bundles nsis --ci",
     "preview": "vite preview"
   },
   "dependencies": {

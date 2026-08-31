@@ -99,7 +99,6 @@ Tauri 开发窗口使用 `http://127.0.0.1:5173` 作为前端开发服务。仅�
 构建 Windows NSIS 安装包：
 
 ```powershell
-$env:AI_MANAGER_GITHUB_TOKEN = "你的 GitHub Token"
 npm run dist:win
 ```
 

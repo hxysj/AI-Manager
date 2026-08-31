@@ -1,8 +1,5 @@
 mod api;
 mod core;
-mod update_config {
-    include!(concat!(env!("OUT_DIR"), "/update_config.rs"));
-}
 
 use crate::api::{app, app_logs};
 use crate::core::state::{AppState, ManagerState};
@@ -60,21 +57,12 @@ async fn dispatch_api(
 }
 
 pub fn run() {
-    let mut updater_builder = tauri_plugin_updater::Builder::new();
-    let github_token = update_config::GITHUB_TOKEN.trim();
-
-    if !github_token.is_empty() {
-        updater_builder = updater_builder
-            .header("Authorization", format!("Bearer {}", github_token))
-            .expect("配置更新鉴权请求头失败");
-    }
-
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(updater_builder.build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
             if window.label() != "main" {
                 return;
