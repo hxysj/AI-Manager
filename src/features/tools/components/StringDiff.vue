@@ -8,28 +8,25 @@
 
       <div class="string-diff-actions">
         <button
-          class="string-diff-button"
-          type="button"
-          @click="loadJsonSample"
-        >
-          <Braces :size="15" />
-          JSON 示例
-        </button>
-        <button
-          class="string-diff-button"
-          type="button"
-          @click="loadTextSample"
-        >
-          <Text :size="15" />
-          文本示例
-        </button>
-        <button
           class="string-diff-button string-diff-button-primary"
           type="button"
           @click="clearContent"
         >
           <Trash2 :size="15" />
           清空
+        </button>
+        <button
+          class="string-diff-button string-diff-detail-button"
+          type="button"
+          :class="{ 'string-diff-detail-button-active': resultVisible }"
+          :disabled="!comparison.rows.length"
+          @click="resultVisible = !resultVisible"
+        >
+          <PanelRight :size="15" />
+          差异详情
+          <span v-if="comparison.rows.length" class="string-diff-detail-count">
+            {{ comparison.rows.filter((row) => !row.same).length }}
+          </span>
         </button>
       </div>
     </div>
@@ -38,43 +35,83 @@
       <article class="string-diff-panel">
         <header class="string-diff-panel-head">
           <strong class="string-diff-panel-title">左侧内容</strong>
-          <span class="string-diff-counter">{{ leftText.length }} 字符</span>
+          <span class="string-diff-panel-meta">
+            <span v-if="leftParseState" class="string-diff-parse-state">{{
+              leftParseState
+            }}</span>
+            <span class="string-diff-counter">{{ leftText.length }} 字符</span>
+          </span>
         </header>
-        <textarea
-          ref="leftInput"
-          v-model="leftText"
-          class="string-diff-textarea"
-          spellcheck="false"
-          placeholder="在这里输入 JSON 或字符串"
-        ></textarea>
+        <div class="string-diff-editor">
+          <pre
+            ref="leftHighlight"
+            class="string-diff-highlight"
+            aria-hidden="true"
+            v-html="leftHighlightHtml"
+          ></pre>
+          <textarea
+            ref="leftInput"
+            v-model="leftText"
+            class="string-diff-textarea"
+            wrap="off"
+            spellcheck="false"
+            placeholder="在这里输入 JSON 或字符串"
+            @scroll="syncEditorScroll('left', $event)"
+          ></textarea>
+        </div>
       </article>
+
+      <div class="string-diff-navigation" aria-label="差异导航">
+        <button
+          v-for="marker in diffMarkers"
+          :key="marker.key"
+          class="string-diff-navigation-dot"
+          :class="{
+            'string-diff-navigation-dot-active': activeDiffKey === marker.key
+          }"
+          :style="{ top: `${marker.position}%` }"
+          type="button"
+          :aria-label="marker.label"
+          :title="marker.label"
+          @click.stop="jumpToDiff(marker)"
+        ></button>
+      </div>
 
       <article class="string-diff-panel">
         <header class="string-diff-panel-head">
           <strong class="string-diff-panel-title">右侧内容</strong>
-          <span class="string-diff-counter">{{ rightText.length }} 字符</span>
+          <span class="string-diff-panel-meta">
+            <span v-if="rightParseState" class="string-diff-parse-state">{{
+              rightParseState
+            }}</span>
+            <span class="string-diff-counter">{{ rightText.length }} 字符</span>
+          </span>
         </header>
-        <textarea
-          v-model="rightText"
-          class="string-diff-textarea"
-          spellcheck="false"
-          placeholder="在这里输入 JSON 或字符串"
-        ></textarea>
+        <div class="string-diff-editor">
+          <pre
+            ref="rightHighlight"
+            class="string-diff-highlight"
+            aria-hidden="true"
+            v-html="rightHighlightHtml"
+          ></pre>
+          <textarea
+            ref="rightInput"
+            v-model="rightText"
+            class="string-diff-textarea"
+            wrap="off"
+            spellcheck="false"
+            placeholder="在这里输入 JSON 或字符串"
+            @scroll="syncEditorScroll('right', $event)"
+          ></textarea>
+        </div>
       </article>
     </section>
 
-    <section class="string-diff-summary" aria-label="统计">
-      <article
-        v-for="metric in summaryMetrics"
-        :key="metric.label"
-        class="string-diff-metric"
-      >
-        <strong class="string-diff-metric-value">{{ metric.value }}</strong>
-        <span class="string-diff-metric-label">{{ metric.label }}</span>
-      </article>
-    </section>
-
-    <section class="string-diff-result" aria-label="对比结果">
+    <aside
+      v-if="resultVisible"
+      class="string-diff-result-drawer"
+      aria-label="对比结果"
+    >
       <header class="string-diff-result-head">
         <div class="string-diff-result-mode">
           <span
@@ -87,16 +124,37 @@
           </span>
           <span class="string-diff-parse-info">{{ comparison.info }}</span>
         </div>
-        <button
-          class="string-diff-button"
-          type="button"
-          :disabled="!comparison.rows.length"
-          @click="copyResult"
-        >
-          <Copy :size="15" />
-          {{ copyLabel }}
-        </button>
+        <div class="string-diff-result-actions">
+          <button
+            class="string-diff-button"
+            type="button"
+            :disabled="!comparison.rows.length"
+            @click="copyResult"
+          >
+            <Copy :size="15" />
+            {{ copyLabel }}
+          </button>
+          <button
+            class="string-diff-icon-button"
+            type="button"
+            title="关闭差异详情"
+            @click="resultVisible = false"
+          >
+            <X :size="15" />
+          </button>
+        </div>
       </header>
+
+      <div class="string-diff-drawer-summary" aria-label="统计">
+        <article
+          v-for="metric in summaryMetrics"
+          :key="metric.label"
+          class="string-diff-metric"
+        >
+          <strong class="string-diff-metric-value">{{ metric.value }}</strong>
+          <span class="string-diff-metric-label">{{ metric.label }}</span>
+        </article>
+      </div>
 
       <div class="string-diff-result-body">
         <div v-if="!visibleRows.length" class="string-diff-empty">
@@ -154,55 +212,34 @@
           </tbody>
         </table>
       </div>
-    </section>
+    </aside>
   </section>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, ref } from "vue"
-import { Braces, Copy, Text, Trash2 } from "lucide-vue-next"
+import { Copy, PanelRight, Trash2, X } from "lucide-vue-next"
 import { createMessage } from "@/utils/message"
 
-const samples = {
-  jsonLeft: {
-    name: "订单 A1024",
-    status: "paid",
-    buyer: { name: "张三", level: 3 },
-    items: [
-      { sku: "P-100", count: 2, price: 39.9 },
-      { sku: "P-208", count: 1, price: 88 }
-    ],
-    tags: ["new", "vip"]
-  },
-  jsonRight: {
-    name: "订单 A1024",
-    status: "refunded",
-    buyer: { name: "张三", level: 4 },
-    items: [
-      { sku: "P-100", count: 2, price: 39.9 },
-      { sku: "P-209", count: 1, price: 92 }
-    ],
-    tags: ["vip", "urgent"],
-    remark: "客服已跟进"
-  },
-  textLeft: "用户ID: 10086\n状态: 已支付\n金额: 128.50\n备注: 周五下午配送",
-  textRight:
-    "用户ID: 10086\n状态: 已退款\n金额: 126.50\n备注: 周六上午配送\n客服: 李明"
-}
-
 const leftInput = ref(null)
+const rightInput = ref(null)
+const leftHighlight = ref(null)
+const rightHighlight = ref(null)
 const leftText = ref("")
 const rightText = ref("")
 const diffOnly = ref(true)
 const copyLabel = ref("复制结果")
+const resultVisible = ref(false)
+const activeDiffKey = ref("")
 let copyTimer = null
+let syncingScroll = false
 
 const comparison = computed(() => {
-  if (!leftText.value && !rightText.value) {
+  if (!leftText.value.trim() || !rightText.value.trim()) {
     return {
       rows: [],
       mode: "待输入",
-      info: "左右两侧输入后自动对比。",
+      info: "请在左右两侧都输入内容后开始对比。",
       warn: false
     }
   }
@@ -236,6 +273,29 @@ const visibleRows = computed(() =>
     : comparison.value.rows
 )
 
+const editorRows = computed(() => {
+  if (!leftText.value.trim() || !rightText.value.trim()) {
+    return []
+  }
+
+  return buildTextRows(leftText.value, rightText.value)
+})
+
+const leftHighlightHtml = computed(() =>
+  renderEditorHighlight(leftText.value, editorRows.value, "left")
+)
+
+const rightHighlightHtml = computed(() =>
+  renderEditorHighlight(rightText.value, editorRows.value, "right")
+)
+
+const diffMarkers = computed(() =>
+  buildDiffMarkers(editorRows.value, leftText.value, rightText.value)
+)
+
+const leftParseState = computed(() => getParseState(leftText.value))
+const rightParseState = computed(() => getParseState(rightText.value))
+
 const summaryMetrics = computed(() => {
   const differentCount = comparison.value.rows.filter((row) => !row.same).length
   return [
@@ -249,20 +309,168 @@ const summaryMetrics = computed(() => {
   ]
 })
 
-function loadJsonSample() {
-  leftText.value = JSON.stringify(samples.jsonLeft, null, 2)
-  rightText.value = JSON.stringify(samples.jsonRight, null, 2)
-}
-
-function loadTextSample() {
-  leftText.value = samples.textLeft
-  rightText.value = samples.textRight
-}
-
 function clearContent() {
   leftText.value = ""
   rightText.value = ""
+  resultVisible.value = false
+  activeDiffKey.value = ""
   leftInput.value?.focus()
+}
+
+function getParseState(text) {
+  if (!text.trim()) {
+    return ""
+  }
+
+  return tryParseJson(text).ok ? "JSON" : "文本"
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;")
+}
+
+function renderEditorHighlight(text, rows, side) {
+  if (!text) {
+    return ""
+  }
+
+  const lineKey = side === "left" ? "leftLineNo" : "rightLineNo"
+  const changedClass =
+    side === "left"
+      ? "string-diff-highlight-mark-left"
+      : "string-diff-highlight-mark-right"
+  const lines = text.split(/\r?\n/)
+  const html = lines.map((line, index) => {
+    const row = rows.find((item) => item[lineKey] === index + 1)
+
+    if (!row) {
+      return escapeHtml(line)
+    }
+
+    const parts = side === "left" ? row.leftParts : row.rightParts
+    if (!parts.length) {
+      return row.same ? "" : `<span class="${changedClass}">&nbsp;</span>`
+    }
+
+    return parts
+      .map((part) =>
+        part.changed
+          ? `<span class="${changedClass}">${escapeHtml(part.text)}</span>`
+          : `<span class="string-diff-highlight-neutral">${escapeHtml(part.text)}</span>`
+      )
+      .join("")
+  })
+
+  return html.join("\n")
+}
+
+function buildDiffMarkers(rows, leftValue, rightValue) {
+  if (!leftValue.trim() || !rightValue.trim()) {
+    return []
+  }
+
+  const totalLines = Math.max(
+    leftValue.split(/\r?\n/).length,
+    rightValue.split(/\r?\n/).length
+  )
+  const lastPosition = Math.max(totalLines - 1, 1)
+
+  return rows
+    .filter((row) => !row.same && (row.leftLineNo || row.rightLineNo))
+    .map((row, index) => {
+      const lineNo = Math.max(row.leftLineNo || 0, row.rightLineNo || 0)
+      const position = 8 + ((lineNo - 1) / lastPosition) * 84
+      return {
+        key: `diff-${row.key}-${index}`,
+        leftLineNo: row.leftLineNo,
+        rightLineNo: row.rightLineNo,
+        position,
+        label: `差异：${row.key}，${row.status}（左：${compactMarkerValue(
+          row.leftText
+        )}；右：${compactMarkerValue(row.rightText)}）`
+      }
+    })
+}
+
+function compactMarkerValue(value) {
+  const text = String(value || "缺失").replace(/\s+/g, " ")
+  return text.length > 54 ? `${text.slice(0, 54)}...` : text
+}
+
+function syncEditorScroll(side, event) {
+  if (syncingScroll) {
+    return
+  }
+
+  const source = event.currentTarget
+  const target = side === "left" ? rightInput.value : leftInput.value
+  const sourceHighlight =
+    side === "left" ? leftHighlight.value : rightHighlight.value
+  const targetHighlight =
+    side === "left" ? rightHighlight.value : leftHighlight.value
+
+  if (!source || !target || !sourceHighlight || !targetHighlight) {
+    return
+  }
+
+  // 用滚动比例同步，避免左右文本行数不同导致定位偏移。
+  syncingScroll = true
+  const sourceMax = Math.max(source.scrollHeight - source.clientHeight, 0)
+  const targetMax = Math.max(target.scrollHeight - target.clientHeight, 0)
+  const progress = sourceMax ? source.scrollTop / sourceMax : 0
+  const targetTop = targetMax * progress
+
+  sourceHighlight.scrollTop = source.scrollTop
+  sourceHighlight.scrollLeft = source.scrollLeft
+  target.scrollTop = targetTop
+  target.scrollLeft = source.scrollLeft
+  targetHighlight.scrollTop = targetTop
+  targetHighlight.scrollLeft = source.scrollLeft
+
+  window.requestAnimationFrame(() => {
+    syncingScroll = false
+  })
+}
+
+function jumpToDiff(marker) {
+  if (!leftInput.value || !rightInput.value) {
+    return
+  }
+
+  activeDiffKey.value = marker.key
+  const leftLineNo = marker.leftLineNo || marker.rightLineNo || 1
+  const rightLineNo = marker.rightLineNo || marker.leftLineNo || 1
+  syncingScroll = true
+  scrollInputToLine(leftInput.value, leftHighlight.value, leftLineNo)
+  scrollInputToLine(rightInput.value, rightHighlight.value, rightLineNo)
+  const focusInput = marker.rightLineNo ? rightInput.value : leftInput.value
+  focusInput.focus({ preventScroll: true })
+  window.requestAnimationFrame(() => {
+    syncingScroll = false
+  })
+}
+
+function scrollInputToLine(input, highlight, lineNo) {
+  if (!input || !highlight || !lineNo) {
+    return
+  }
+
+  // 将目标行放在编辑区中上方，点击导航后能立即看见上下文。
+  const lineHeight =
+    Number.parseFloat(window.getComputedStyle(input).lineHeight) || 18
+  const targetTop = Math.max(
+    0,
+    (lineNo - 1) * lineHeight - input.clientHeight * 0.35
+  )
+  const maxTop = Math.max(0, input.scrollHeight - input.clientHeight)
+  const scrollTop = Math.min(targetTop, maxTop)
+  input.scrollTop = scrollTop
+  highlight.scrollTop = scrollTop
 }
 
 async function copyResult() {
@@ -514,6 +722,8 @@ function buildTextRows(leftValue, rightValue) {
 
     rows.push({
       key: `${leftNo || "-"} / ${rightNo || "-"}`,
+      leftLineNo: leftNo || null,
+      rightLineNo: rightNo || null,
       status: same ? "相同" : status,
       same,
       leftText: leftLine,
@@ -613,12 +823,13 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
 
 <style scoped lang="less">
 .string-diff {
+  position: relative;
   display: flex;
   min-height: 0;
   flex: 1;
   flex-direction: column;
   gap: 10px;
-  overflow: auto;
+  overflow: hidden;
 
   .string-diff-toolbar {
     display: flex;
@@ -690,13 +901,40 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
     }
   }
 
+  .string-diff-detail-button {
+    position: relative;
+  }
+
+  .string-diff-detail-button-active {
+    border-color: #9bb9b0;
+    background: #edf7f3;
+    color: #17604f;
+  }
+
+  .string-diff-detail-count {
+    display: inline-flex;
+    min-width: 17px;
+    height: 17px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9px;
+    background: #fce4d7;
+    color: #9b5638;
+    font-size: 0.62rem;
+    line-height: 1;
+  }
+
   .string-diff-inputs {
     display: grid;
-    flex: none;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-height: 0;
+    flex: 1;
+    grid-template-columns: minmax(0, 1fr) 16px minmax(0, 1fr);
     gap: 10px;
 
     .string-diff-panel {
+      display: flex;
+      min-height: 0;
+      flex-direction: column;
       overflow: hidden;
       border: 1px solid var(--color-line);
       border-radius: 8px;
@@ -717,6 +955,18 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
           font-size: 0.8rem;
         }
 
+        .string-diff-panel-meta {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .string-diff-parse-state {
+          color: #5c8a7b;
+          font-size: 0.66rem;
+          font-weight: 700;
+        }
+
         .string-diff-counter {
           flex: none;
           color: var(--color-text-soft);
@@ -725,75 +975,138 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
         }
       }
 
-      .string-diff-textarea {
-        display: block;
-        width: 100%;
-        min-height: 180px;
-        resize: vertical;
-        border: 0;
-        outline: 0;
-        padding: 11px;
-        background: #ffffff;
-        color: var(--color-text);
-        font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-        font-size: 0.76rem;
-        line-height: 1.55;
-        tab-size: 2;
+      .string-diff-editor {
+        position: relative;
+        min-height: 0;
+        flex: 1;
+        overflow: hidden;
 
-        &:focus {
+        .string-diff-highlight,
+        .string-diff-textarea {
+          position: absolute;
+          inset: 0;
+          box-sizing: border-box;
+          width: 100%;
+          height: 100%;
+          margin: 0;
+          padding: 11px;
+          border: 0;
+          font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+          font-size: 0.76rem;
+          line-height: 1.55;
+          tab-size: 2;
+          white-space: pre;
+          overflow-wrap: normal;
+          word-break: normal;
+        }
+
+        .string-diff-highlight {
+          z-index: 0;
+          overflow: auto;
+          color: transparent;
+          pointer-events: none;
+          scrollbar-width: none;
+        }
+
+        .string-diff-highlight::-webkit-scrollbar {
+          display: none;
+        }
+
+        .string-diff-highlight {
+          :deep(.string-diff-highlight-mark-left),
+          :deep(.string-diff-highlight-mark-right) {
+            border-radius: 3px;
+            color: transparent;
+          }
+
+          :deep(.string-diff-highlight-mark-left) {
+            background: #ffe1de;
+            box-shadow: inset 0 -2px 0 rgba(180, 35, 24, 0.5);
+          }
+
+          :deep(.string-diff-highlight-mark-right) {
+            background: #def4e7;
+            box-shadow: inset 0 -2px 0 rgba(23, 128, 61, 0.5);
+          }
+        }
+
+        .string-diff-textarea {
+          z-index: 1;
+          display: block;
+          resize: none;
+          outline: 0;
+          background: transparent;
+          color: var(--color-text);
+          caret-color: var(--color-text);
+        }
+
+        .string-diff-textarea::placeholder {
+          color: var(--color-text-soft);
+        }
+
+        .string-diff-textarea:focus {
           box-shadow: inset 0 0 0 2px rgba(47, 95, 145, 0.18);
         }
       }
     }
-  }
 
-  .string-diff-summary {
-    display: grid;
-    flex: none;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 8px;
+    .string-diff-navigation {
+      position: relative;
+      z-index: 3;
+      min-height: 0;
+      margin: 7px 0;
+      border: 1px solid rgba(159, 177, 191, 0.7);
+      border-radius: 7px;
+      background: rgba(241, 246, 249, 0.88);
 
-    .string-diff-metric {
-      min-width: 0;
-      min-height: 58px;
-      padding: 9px 11px;
-      border: 1px solid var(--color-line);
-      border-radius: 8px;
-      background: #ffffff;
-
-      .string-diff-metric-value {
-        display: block;
-        overflow: hidden;
-        margin-bottom: 4px;
-        color: var(--color-primary);
-        font-size: 1.12rem;
-        line-height: 1;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+      .string-diff-navigation-dot {
+        position: absolute;
+        left: 3px;
+        width: 8px;
+        height: 8px;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        background: #d14d43;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.92);
+        cursor: pointer;
+        transform: translateY(-50%);
       }
 
-      .string-diff-metric-label {
-        color: var(--color-text-muted);
-        font-size: 0.7rem;
-        font-weight: 700;
+      .string-diff-navigation-dot:hover,
+      .string-diff-navigation-dot-active {
+        left: 2px;
+        width: 10px;
+        height: 10px;
+        background: #a92e26;
+        box-shadow: 0 0 0 2px rgba(209, 77, 67, 0.2);
       }
     }
   }
 
-  .string-diff-result {
-    min-height: 220px;
-    flex: 1;
+  .string-diff-result-drawer {
+    position: absolute;
+    z-index: 10;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    width: min(680px, calc(100% - 24px));
+    min-width: 0;
+    flex-direction: column;
     overflow: hidden;
-    border: 1px solid var(--color-line);
+    border: 1px solid #9fb1bf;
     border-radius: 8px;
     background: #ffffff;
+    box-shadow: -16px 0 42px rgba(31, 52, 69, 0.16);
 
     .string-diff-result-head {
       display: flex;
+      min-height: 48px;
+      flex: none;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      min-height: 42px;
       padding: 7px 9px;
       border-bottom: 1px solid var(--color-line);
       background: #f8fafc;
@@ -832,10 +1145,73 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
           white-space: nowrap;
         }
       }
+
+      .string-diff-result-actions {
+        display: flex;
+        flex: none;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .string-diff-icon-button {
+        display: inline-flex;
+        width: 30px;
+        height: 30px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        background: #ffffff;
+        color: #51687a;
+        cursor: pointer;
+      }
+
+      .string-diff-icon-button:hover {
+        border-color: #9eb3c4;
+        background: #f5f9fc;
+        color: #234d72;
+      }
+    }
+
+    .string-diff-drawer-summary {
+      display: grid;
+      flex: none;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      padding: 9px;
+      border-bottom: 1px solid var(--color-line);
+      background: #fbfcfd;
+    }
+
+    .string-diff-metric {
+      min-width: 0;
+      min-height: 52px;
+      padding: 8px 10px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: #ffffff;
+
+      .string-diff-metric-value {
+        display: block;
+        overflow: hidden;
+        margin-bottom: 4px;
+        color: var(--color-primary);
+        font-size: 1rem;
+        line-height: 1;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .string-diff-metric-label {
+        color: var(--color-text-muted);
+        font-size: 0.68rem;
+        font-weight: 700;
+      }
     }
 
     .string-diff-result-body {
-      max-height: 390px;
+      min-height: 0;
+      flex: 1;
       overflow: auto;
 
       .string-diff-empty {
