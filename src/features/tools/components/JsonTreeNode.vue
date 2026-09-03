@@ -392,7 +392,7 @@ function emitCopy() {
     padding-right: 7px;
     padding-bottom: 2px;
     border-left: 2px solid transparent;
-    color: #253c4d;
+    color: var(--color-text);
     font-family: Consolas, "Courier New", monospace;
     font-size: 0.78rem;
     line-height: 1.45;
@@ -400,7 +400,7 @@ function emitCopy() {
   }
 
   .json-tree-row:hover {
-    background: #f2f7f8;
+    background: var(--color-primary-soft);
 
     .json-tree-row-actions {
       opacity: 1;
@@ -419,7 +419,7 @@ function emitCopy() {
     justify-content: center;
     border: 0;
     background: transparent;
-    color: #6b8592;
+    color: var(--color-text-muted);
     cursor: pointer;
   }
 
@@ -432,7 +432,7 @@ function emitCopy() {
 
   .json-tree-toggle:hover,
   .json-tree-inline-control:hover {
-    color: #1f6f71;
+    color: var(--color-primary);
   }
 
   .json-tree-toggle-spacer {
@@ -447,12 +447,12 @@ function emitCopy() {
   }
 
   .json-tree-colon {
-    color: #8a99a3;
+    color: var(--color-text-soft);
   }
 
   .json-tree-type-label,
   .json-tree-container-label {
-    color: #2e7786;
+    color: var(--color-primary);
     font-weight: 700;
   }
 
@@ -478,18 +478,18 @@ function emitCopy() {
   .json-tree-brace,
   .json-tree-closing,
   .json-tree-comma {
-    color: #657882;
+    color: var(--color-text-muted);
   }
 
   .json-tree-edit-input {
     min-width: 54px;
     height: 24px;
-    border: 1px solid #78a7a2;
+    border: 1px solid var(--color-primary);
     border-radius: 4px;
     outline: 0;
     padding: 1px 5px;
-    background: #ffffff;
-    color: #203b48;
+    background: var(--color-panel);
+    color: var(--color-text);
     font: inherit;
   }
 
@@ -521,13 +521,13 @@ function emitCopy() {
   .json-tree-closing {
     min-height: 24px;
     padding-top: 2px;
-    color: #657882;
+    color: var(--color-text-muted);
     font-family: Consolas, "Courier New", monospace;
     font-size: 0.78rem;
   }
 
   .json-tree-children {
-    border-left: 1px solid #dce8e9;
+    border-left: 1px solid var(--color-line);
   }
 }
 </style>

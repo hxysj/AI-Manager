@@ -37,11 +37,6 @@
         </div>
       </header>
 
-      <div class="json-agent-history-notice">
-        <ShieldCheck :size="15" />
-        <span>数据仅存储在浏览器本地，不会上传至任何服务器，请放心使用。</span>
-      </div>
-
       <div class="json-agent-history-list">
         <div v-if="!historyEntries.length" class="json-agent-history-empty">
           <History :size="22" />
@@ -1642,7 +1637,7 @@ onBeforeUnmount(() => {
     flex-direction: column;
     border: 1px solid var(--color-line);
     border-right: 0;
-    background: #fbfcfd;
+    background: var(--color-panel);
     overflow: hidden;
 
     .json-agent-history-head {
@@ -1654,7 +1649,7 @@ onBeforeUnmount(() => {
       gap: 8px;
       padding: 0 8px 0 10px;
       border-bottom: 1px solid var(--color-line);
-      background: #f8fafc;
+      background: var(--color-panel-soft);
 
       .json-agent-history-title,
       .json-agent-history-actions {
@@ -1664,11 +1659,11 @@ onBeforeUnmount(() => {
 
       .json-agent-history-title {
         gap: 6px;
-        color: #475866;
+        color: var(--color-text);
         font-size: 0.73rem;
 
         span {
-          color: #8a98a4;
+          color: var(--color-text-soft);
           font-size: 0.65rem;
         }
       }
@@ -1686,7 +1681,7 @@ onBeforeUnmount(() => {
       justify-content: center;
       border: 0;
       background: transparent;
-      color: #6f808b;
+      color: var(--color-text-muted);
       cursor: pointer;
     }
 
@@ -1700,8 +1695,8 @@ onBeforeUnmount(() => {
     .json-agent-history-icon:hover,
     .json-agent-history-page-button:hover,
     .json-agent-history-item-delete:hover {
-      background: #eaf2f3;
-      color: #1f6c6e;
+      background: var(--color-primary-soft);
+      color: var(--color-primary);
     }
 
     .json-agent-history-icon:disabled,
@@ -1716,15 +1711,15 @@ onBeforeUnmount(() => {
       align-items: flex-start;
       gap: 8px;
       padding: 10px;
-      border-bottom: 1px solid #dfe9e8;
-      background: #edf7f3;
-      color: #536e68;
+      border-bottom: 1px solid var(--color-line);
+      background: var(--color-primary-soft);
+      color: var(--color-text-muted);
       font-size: 0.65rem;
       line-height: 1.45;
 
       .lucide {
         flex: 0 0 auto;
-        color: #159447;
+        color: var(--color-primary);
       }
     }
 
@@ -1739,7 +1734,7 @@ onBeforeUnmount(() => {
       display: flex;
       min-height: 52px;
       align-items: stretch;
-      border-bottom: 1px solid #edf1f3;
+      border-bottom: 1px solid var(--color-line);
       background: transparent;
 
       .json-agent-history-item-main {
@@ -1751,7 +1746,7 @@ onBeforeUnmount(() => {
         padding: 9px 6px 8px 9px;
         border: 0;
         background: transparent;
-        color: #71818c;
+        color: var(--color-text-muted);
         cursor: pointer;
         text-align: left;
 
@@ -1763,7 +1758,7 @@ onBeforeUnmount(() => {
 
           strong {
             overflow: hidden;
-            color: #3f4f5c;
+            color: var(--color-text);
             font-size: 0.72rem;
             font-weight: 600;
             text-overflow: ellipsis;
@@ -1771,7 +1766,7 @@ onBeforeUnmount(() => {
           }
 
           small {
-            color: #a0aab1;
+            color: var(--color-text-soft);
             font-size: 0.61rem;
           }
         }
@@ -1787,7 +1782,7 @@ onBeforeUnmount(() => {
 
     .json-agent-history-item:hover,
     .json-agent-history-item-active {
-      background: #f0f7f6;
+      background: var(--color-primary-soft);
 
       .json-agent-history-item-delete {
         opacity: 1;
@@ -1801,7 +1796,7 @@ onBeforeUnmount(() => {
       justify-content: center;
       flex-direction: column;
       gap: 8px;
-      color: #9aa7ae;
+      color: var(--color-text-soft);
       font-size: 0.7rem;
     }
 
@@ -1813,27 +1808,27 @@ onBeforeUnmount(() => {
       justify-content: center;
       gap: 7px;
       border-top: 1px solid var(--color-line);
-      background: #f8fafb;
-      color: #687984;
+      background: var(--color-panel-soft);
+      color: var(--color-text-muted);
       font-size: 0.64rem;
 
       .json-agent-history-page-button {
         width: 27px;
         height: 27px;
         padding: 0;
-        border: 1px solid #e0e7eb;
+        border: 1px solid var(--color-line);
         border-radius: 4px;
       }
 
       .json-agent-history-page-select {
         height: 27px;
         min-width: 66px;
-        border: 1px solid #d8e2e7;
+        border: 1px solid var(--color-line);
         border-radius: 4px;
         outline: 0;
         padding: 0 4px;
-        background: #ffffff;
-        color: #40515d;
+        background: var(--color-panel);
+        color: var(--color-text);
         font-size: 0.65rem;
       }
     }
@@ -1846,7 +1841,7 @@ onBeforeUnmount(() => {
     flex: 1;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     overflow: hidden;
 
     .json-agent-pane {
@@ -1865,7 +1860,7 @@ onBeforeUnmount(() => {
         gap: 12px;
         padding: 0 12px;
         border-bottom: 1px solid var(--color-line);
-        background: #f8fafc;
+        background: var(--color-panel-soft);
 
         .json-agent-pane-title {
           display: flex;
@@ -1874,7 +1869,7 @@ onBeforeUnmount(() => {
           gap: 8px;
 
           .json-agent-pane-kicker {
-            color: #7a8997;
+            color: var(--color-text-soft);
             font-family: Consolas, "Courier New", monospace;
             font-size: 0.66rem;
             font-weight: 700;
@@ -1898,13 +1893,19 @@ onBeforeUnmount(() => {
           height: 30px;
           align-items: center;
           justify-content: center;
-          border: 1px solid #ced9e2;
+          border: 1px solid var(--color-line);
           border-radius: 6px;
-          background: #ffffff;
-          color: #405468;
+          background: var(--color-panel);
+          color: var(--color-primary);
           cursor: pointer;
           font-size: 0.74rem;
           font-weight: 700;
+          line-height: 1;
+
+          :deep(svg) {
+            display: block;
+            flex: none;
+          }
         }
 
         .json-agent-action {
@@ -1919,9 +1920,9 @@ onBeforeUnmount(() => {
 
         .json-agent-action:hover,
         .json-agent-icon-action:hover {
-          border-color: #9eb3c4;
-          background: #f5f9fc;
-          color: #234d72;
+          border-color: var(--color-line-strong);
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
         }
 
         .json-agent-action:disabled,
@@ -1931,9 +1932,9 @@ onBeforeUnmount(() => {
         }
 
         .json-agent-ai-action {
-          border-color: #9bb9b0;
-          background: #edf7f3;
-          color: #17604f;
+          border-color: var(--color-line-strong);
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
         }
       }
 
@@ -1946,8 +1947,8 @@ onBeforeUnmount(() => {
         border: 0;
         outline: 0;
         padding: 16px;
-        background: #ffffff;
-        color: #253240;
+        background: var(--color-panel);
+        color: var(--color-text);
         font-family: Consolas, "Courier New", monospace;
         font-size: 0.8rem;
         line-height: 1.65;
@@ -1960,13 +1961,13 @@ onBeforeUnmount(() => {
         min-height: 0;
         flex: 1;
         overflow: auto;
-        background: #fdfefe;
+        background: var(--color-panel);
 
         .json-agent-tree {
           min-width: 100%;
           min-height: 100%;
           padding: 14px 16px 18px;
-          background: #fdfefe;
+          background: var(--color-panel);
 
           :deep(.json-tree-row) {
             min-width: max-content;
@@ -1980,15 +1981,15 @@ onBeforeUnmount(() => {
           justify-content: center;
           flex-direction: column;
           gap: 9px;
-          color: #9aa7b2;
+          color: var(--color-text-soft);
           font-size: 0.78rem;
         }
       }
 
       .json-agent-icon-action-active {
-        border-color: #8dbbb1;
-        background: #edf7f3;
-        color: #17604f;
+        border-color: var(--color-line-strong);
+        background: var(--color-primary-soft);
+        color: var(--color-primary);
       }
 
       .json-agent-search-float {
@@ -2002,24 +2003,24 @@ onBeforeUnmount(() => {
         align-items: center;
         gap: 6px;
         padding: 0 5px 0 9px;
-        border: 1px solid #9bbab6;
+        border: 1px solid var(--color-line-strong);
         border-radius: 6px;
-        background: #ffffff;
-        box-shadow: 0 8px 24px rgba(40, 67, 77, 0.16);
-        color: #2f7770;
+        background: var(--color-panel);
+        box-shadow: var(--shadow-panel);
+        color: var(--color-primary);
 
         input {
           min-width: 0;
           flex: 1;
           border: 0;
           outline: 0;
-          color: #304652;
+          color: var(--color-text);
           font-size: 0.72rem;
         }
 
         span {
           flex: none;
-          color: #84929a;
+          color: var(--color-text-soft);
           font-size: 0.62rem;
         }
 
@@ -2032,13 +2033,13 @@ onBeforeUnmount(() => {
           border: 0;
           border-radius: 4px;
           background: transparent;
-          color: #71818a;
+          color: var(--color-text-muted);
           cursor: pointer;
         }
 
         button:hover {
-          background: #edf3f4;
-          color: #1f6d6f;
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
         }
       }
 
@@ -2051,24 +2052,24 @@ onBeforeUnmount(() => {
         gap: 12px;
         padding: 0 12px;
         border-top: 1px solid var(--color-line);
-        background: #fbfcfd;
-        color: #788794;
+        background: var(--color-panel-soft);
+        color: var(--color-text-muted);
         font-size: 0.69rem;
 
         .json-agent-parse-state {
           min-width: 0;
           overflow: hidden;
-          color: #2d7766;
+          color: var(--color-success);
           text-overflow: ellipsis;
           white-space: nowrap;
         }
 
         .json-agent-parse-state-error {
-          color: #b34c4c;
+          color: var(--color-danger);
         }
 
         .json-agent-result-state {
-          color: #2d7766;
+          color: var(--color-success);
         }
 
         .json-agent-character-count {
@@ -2096,10 +2097,10 @@ onBeforeUnmount(() => {
     min-width: 520px;
     min-height: 420px;
     flex-direction: column;
-    border: 1px solid #9aabb8;
+    border: 1px solid var(--color-line-strong);
     border-radius: 8px;
-    background: #f7f9fb;
-    box-shadow: 0 24px 64px rgba(26, 43, 57, 0.24);
+    background: var(--color-panel-soft);
+    box-shadow: var(--shadow-panel);
     overflow: hidden;
 
     .json-agent-window-head {
@@ -2110,9 +2111,9 @@ onBeforeUnmount(() => {
       justify-content: space-between;
       gap: 12px;
       padding: 0 10px 0 12px;
-      border-bottom: 1px solid #c9d3db;
-      background: #263b49;
-      color: #ffffff;
+      border-bottom: 1px solid var(--color-line);
+      background: var(--color-panel);
+      color: var(--color-text);
       cursor: move;
       touch-action: none;
       user-select: none;
@@ -2131,8 +2132,8 @@ onBeforeUnmount(() => {
           align-items: center;
           justify-content: center;
           border-radius: 6px;
-          background: #d9eee7;
-          color: #185f50;
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
         }
 
         .json-agent-window-title {
@@ -2148,7 +2149,7 @@ onBeforeUnmount(() => {
           .json-agent-window-provider {
             max-width: 350px;
             overflow: hidden;
-            color: #c5d1d8;
+            color: var(--color-text-muted);
             font-size: 0.66rem;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -2166,17 +2167,17 @@ onBeforeUnmount(() => {
           width: 7px;
           height: 7px;
           border-radius: 50%;
-          background: #87a098;
+          background: var(--color-text-soft);
         }
 
         .json-agent-running-dot-active {
-          background: #77d1b3;
-          box-shadow: 0 0 0 4px rgba(119, 209, 179, 0.14);
+          background: var(--color-success);
+          box-shadow: 0 0 0 4px rgba(23, 128, 61, 0.12);
         }
 
         .json-agent-running-text {
           margin-right: 3px;
-          color: #c8d3da;
+          color: var(--color-text-muted);
           font-size: 0.66rem;
         }
 
@@ -2189,13 +2190,13 @@ onBeforeUnmount(() => {
           border: 0;
           border-radius: 5px;
           background: transparent;
-          color: #dbe4e9;
+          color: var(--color-text-muted);
           cursor: pointer;
         }
 
         .json-agent-window-control:hover {
-          background: rgba(255, 255, 255, 0.12);
-          color: #ffffff;
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
         }
       }
     }
@@ -2207,8 +2208,8 @@ onBeforeUnmount(() => {
       align-items: stretch;
       gap: 2px;
       padding: 4px 6px 0;
-      border-bottom: 1px solid #d6dee4;
-      background: #edf1f4;
+      border-bottom: 1px solid var(--color-line);
+      background: var(--color-panel-soft);
 
       .json-agent-window-tab {
         position: relative;
@@ -2221,7 +2222,7 @@ onBeforeUnmount(() => {
         border: 0;
         border-radius: 6px 6px 0 0;
         background: transparent;
-        color: #61717e;
+        color: var(--color-text-muted);
         cursor: pointer;
         font-size: 0.72rem;
         font-weight: 700;
@@ -2233,20 +2234,20 @@ onBeforeUnmount(() => {
           align-items: center;
           justify-content: center;
           border-radius: 9px;
-          background: #d8e2e8;
-          color: #526672;
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
           font-size: 0.62rem;
         }
       }
 
       .json-agent-window-tab:hover {
-        color: #27495f;
+        color: var(--color-primary);
       }
 
       .json-agent-window-tab-active {
-        background: #ffffff;
-        color: #174f65;
-        box-shadow: inset 0 2px 0 #3d8b78;
+        background: var(--color-panel);
+        color: var(--color-primary);
+        box-shadow: inset 0 2px 0 var(--color-primary);
       }
     }
 
@@ -2264,7 +2265,7 @@ onBeforeUnmount(() => {
       flex-direction: column;
       gap: 10px;
       padding: 14px;
-      background: #ffffff;
+      background: var(--color-panel);
 
       .json-agent-chat-empty {
         display: flex;
@@ -2274,7 +2275,7 @@ onBeforeUnmount(() => {
         justify-content: center;
         flex-direction: column;
         gap: 8px;
-        color: #96a2ac;
+        color: var(--color-text-soft);
         font-size: 0.74rem;
       }
 
@@ -2290,33 +2291,33 @@ onBeforeUnmount(() => {
           gap: 5px;
 
           .json-agent-message-role {
-            color: #81909b;
+            color: var(--color-text-soft);
             font-size: 0.65rem;
             font-weight: 700;
           }
 
           .json-agent-message-streaming {
-            color: #4a806f;
+            color: var(--color-primary);
             animation: json-agent-spin 0.9s linear infinite;
           }
         }
 
         .json-agent-message-reasoning {
           padding: 5px 8px;
-          border-left: 2px solid #8eb5a8;
-          background: #f2f7f5;
+          border-left: 2px solid var(--color-primary);
+          background: var(--color-primary-soft);
 
           .json-agent-message-reasoning-label {
             display: block;
             margin-bottom: 3px;
-            color: #527767;
+            color: var(--color-primary);
             font-size: 0.63rem;
             font-weight: 700;
           }
 
           .json-agent-message-reasoning-content {
             margin: 0;
-            color: #60736c;
+            color: var(--color-text-muted);
             font-size: 0.7rem;
             line-height: 1.5;
             overflow-wrap: anywhere;
@@ -2327,10 +2328,10 @@ onBeforeUnmount(() => {
         .json-agent-message-content {
           margin: 0;
           padding: 9px 11px;
-          border: 1px solid #d6e0e6;
+          border: 1px solid var(--color-line);
           border-radius: 7px;
-          background: #f5f8fa;
-          color: #324653;
+          background: var(--color-panel-soft);
+          color: var(--color-text);
           font-size: 0.76rem;
           line-height: 1.55;
           overflow-wrap: anywhere;
@@ -2339,7 +2340,7 @@ onBeforeUnmount(() => {
 
         .json-agent-message-placeholder {
           margin: 0;
-          color: #7d8d97;
+          color: var(--color-text-muted);
           font-size: 0.7rem;
         }
       }
@@ -2349,17 +2350,17 @@ onBeforeUnmount(() => {
         align-items: flex-end;
 
         .json-agent-message-content {
-          border-color: #aed0c5;
-          background: #edf7f3;
-          color: #1d5549;
+          border-color: var(--color-line-strong);
+          background: var(--color-primary-soft);
+          color: var(--color-text);
         }
       }
 
       .json-agent-message-error {
         .json-agent-message-content {
-          border-color: #e4b9b9;
-          background: #fff3f3;
-          color: #934141;
+          border-color: #ffc7c2;
+          background: var(--color-danger-soft);
+          color: var(--color-danger);
         }
       }
 
@@ -2367,7 +2368,7 @@ onBeforeUnmount(() => {
         display: flex;
         align-items: center;
         gap: 7px;
-        color: #527767;
+        color: var(--color-primary);
         font-size: 0.7rem;
 
         .lucide {
@@ -2381,15 +2382,15 @@ onBeforeUnmount(() => {
       flex-direction: column;
       gap: 10px;
       padding: 12px;
-      background: #f8fafb;
+      background: var(--color-panel-soft);
 
       .json-agent-context-meta {
         display: flex;
         flex: none;
         flex-direction: column;
-        border: 1px solid #d8e0e5;
+        border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
 
         .json-agent-context-row {
           display: flex;
@@ -2397,19 +2398,19 @@ onBeforeUnmount(() => {
           align-items: center;
           gap: 12px;
           padding: 0 10px;
-          border-bottom: 1px solid #edf0f2;
+          border-bottom: 1px solid var(--color-line);
 
           .json-agent-context-label {
             width: 72px;
             flex: 0 0 72px;
-            color: #7b8994;
+            color: var(--color-text-muted);
             font-size: 0.68rem;
           }
 
           .json-agent-context-value {
             min-width: 0;
             overflow: hidden;
-            color: #304754;
+            color: var(--color-text);
             font-size: 0.72rem;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -2426,9 +2427,9 @@ onBeforeUnmount(() => {
         min-height: 150px;
         flex: 1;
         flex-direction: column;
-        border: 1px solid #d8e0e5;
+        border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         overflow: hidden;
 
         .json-agent-context-head {
@@ -2439,17 +2440,17 @@ onBeforeUnmount(() => {
           justify-content: space-between;
           gap: 10px;
           padding: 0 9px;
-          border-bottom: 1px solid #e4e9ed;
-          background: #f5f7f9;
+          border-bottom: 1px solid var(--color-line);
+          background: var(--color-panel-soft);
 
           .json-agent-context-name {
-            color: #425967;
+            color: var(--color-text);
             font-size: 0.7rem;
             font-weight: 700;
           }
 
           .json-agent-context-size {
-            color: #8a98a3;
+            color: var(--color-text-soft);
             font-size: 0.64rem;
           }
         }
@@ -2460,7 +2461,7 @@ onBeforeUnmount(() => {
           margin: 0;
           overflow: auto;
           padding: 10px;
-          color: #38505e;
+          color: var(--color-text-muted);
           font-family: Consolas, "Courier New", monospace;
           font-size: 0.7rem;
           line-height: 1.5;
@@ -2475,7 +2476,7 @@ onBeforeUnmount(() => {
       flex-direction: column;
       gap: 9px;
       padding: 12px;
-      background: #f8fafb;
+      background: var(--color-panel-soft);
 
       .json-agent-tool-definition {
         display: flex;
@@ -2484,9 +2485,9 @@ onBeforeUnmount(() => {
         align-items: center;
         gap: 9px;
         padding: 7px 9px;
-        border: 1px solid #c9d9d4;
+        border: 1px solid var(--color-line-strong);
         border-radius: 7px;
-        background: #f0f8f5;
+        background: var(--color-primary-soft);
 
         .json-agent-tool-definition-icon {
           display: inline-flex;
@@ -2496,8 +2497,8 @@ onBeforeUnmount(() => {
           align-items: center;
           justify-content: center;
           border-radius: 6px;
-          background: #d8eee7;
-          color: #256c59;
+          background: var(--color-panel);
+          color: var(--color-primary);
         }
 
         .json-agent-tool-definition-main {
@@ -2508,14 +2509,14 @@ onBeforeUnmount(() => {
           gap: 2px;
 
           .json-agent-tool-definition-name {
-            color: #244d42;
+            color: var(--color-primary);
             font-family: Consolas, "Courier New", monospace;
             font-size: 0.72rem;
           }
 
           .json-agent-tool-definition-desc {
             overflow: hidden;
-            color: #6c8079;
+            color: var(--color-text-muted);
             font-size: 0.66rem;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -2523,7 +2524,7 @@ onBeforeUnmount(() => {
         }
 
         .json-agent-tool-definition-state {
-          color: #387461;
+          color: var(--color-primary);
           font-size: 0.64rem;
           font-weight: 700;
         }
@@ -2537,7 +2538,7 @@ onBeforeUnmount(() => {
         justify-content: center;
         flex-direction: column;
         gap: 8px;
-        color: #97a3ac;
+        color: var(--color-text-soft);
         font-size: 0.72rem;
       }
 
@@ -2547,9 +2548,9 @@ onBeforeUnmount(() => {
         flex-direction: column;
         gap: 8px;
         padding: 9px;
-        border: 1px solid #d7dfe4;
+        border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
 
         .json-agent-tool-call-head {
           display: flex;
@@ -2562,7 +2563,7 @@ onBeforeUnmount(() => {
             min-width: 0;
             align-items: center;
             gap: 6px;
-            color: #304c5a;
+            color: var(--color-text);
             font-size: 0.72rem;
           }
 
@@ -2573,15 +2574,15 @@ onBeforeUnmount(() => {
           }
 
           .json-agent-tool-call-state-running {
-            color: #9a6a20;
+            color: var(--color-warning);
           }
 
           .json-agent-tool-call-state-success {
-            color: #2d7760;
+            color: var(--color-success);
           }
 
           .json-agent-tool-call-state-error {
-            color: #ae4848;
+            color: var(--color-danger);
           }
         }
 
@@ -2591,7 +2592,7 @@ onBeforeUnmount(() => {
           gap: 4px;
 
           .json-agent-tool-call-label {
-            color: #81909a;
+            color: var(--color-text-soft);
             font-size: 0.63rem;
             font-weight: 700;
           }
@@ -2601,10 +2602,10 @@ onBeforeUnmount(() => {
             margin: 0;
             overflow: auto;
             padding: 7px;
-            border: 1px solid #e2e7ea;
+            border: 1px solid var(--color-line);
             border-radius: 5px;
-            background: #f7f9fa;
-            color: #425866;
+            background: var(--color-panel-soft);
+            color: var(--color-text-muted);
             font-family: Consolas, "Courier New", monospace;
             font-size: 0.66rem;
             line-height: 1.45;
@@ -2622,19 +2623,19 @@ onBeforeUnmount(() => {
       align-items: flex-end;
       gap: 7px;
       padding: 9px;
-      border-top: 1px solid #d3dce2;
-      background: #eef2f4;
+      border-top: 1px solid var(--color-line);
+      background: var(--color-panel-soft);
 
       .json-agent-model-select {
         width: 154px;
         height: 34px;
         flex: 0 0 154px;
-        border: 1px solid #bccbd5;
+        border: 1px solid var(--color-line-strong);
         border-radius: 6px;
         outline: 0;
         padding: 0 8px;
-        background: #ffffff;
-        color: #405563;
+        background: var(--color-panel);
+        color: var(--color-text);
         font-size: 0.68rem;
       }
 
@@ -2643,20 +2644,20 @@ onBeforeUnmount(() => {
         height: 54px;
         flex: 1;
         resize: none;
-        border: 1px solid #b8c8d2;
+        border: 1px solid var(--color-line-strong);
         border-radius: 6px;
         outline: 0;
         padding: 8px 9px;
-        background: #ffffff;
-        color: #2e424f;
+        background: var(--color-panel);
+        color: var(--color-text);
         font-size: 0.73rem;
         line-height: 1.4;
       }
 
       .json-agent-instruction:focus,
       .json-agent-model-select:focus {
-        border-color: #4d8c7c;
-        box-shadow: 0 0 0 2px rgba(77, 140, 124, 0.12);
+        border-color: var(--color-primary);
+        box-shadow: 0 0 0 2px rgba(47, 95, 145, 0.12);
       }
 
       .json-agent-send {
@@ -2668,13 +2669,13 @@ onBeforeUnmount(() => {
         justify-content: center;
         border: 0;
         border-radius: 6px;
-        background: #2f7766;
+        background: var(--color-primary);
         color: #ffffff;
         cursor: pointer;
       }
 
       .json-agent-send:hover {
-        background: #286655;
+        background: #284f79;
       }
 
       .json-agent-send:disabled {
