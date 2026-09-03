@@ -1,5 +1,116 @@
 <template>
   <section class="json-agent-tool">
+    <aside v-if="historyVisible" class="json-agent-history">
+      <header class="json-agent-history-head">
+        <div class="json-agent-history-title">
+          <History :size="15" />
+          <strong>历史记录</strong>
+          <span>({{ historyEntries.length }})</span>
+        </div>
+        <div class="json-agent-history-actions">
+          <button
+            class="json-agent-history-icon"
+            type="button"
+            title="导出历史记录"
+            :disabled="!historyEntries.length"
+            @click="exportHistory"
+          >
+            <Download :size="14" />
+          </button>
+          <button
+            class="json-agent-history-icon"
+            type="button"
+            title="清空历史记录"
+            :disabled="!historyEntries.length"
+            @click="clearHistory"
+          >
+            <Trash2 :size="14" />
+          </button>
+          <button
+            class="json-agent-history-icon"
+            type="button"
+            title="关闭历史记录"
+            @click="historyVisible = false"
+          >
+            <ChevronLeft :size="14" />
+          </button>
+        </div>
+      </header>
+
+      <div class="json-agent-history-notice">
+        <ShieldCheck :size="15" />
+        <span>数据仅存储在浏览器本地，不会上传至任何服务器，请放心使用。</span>
+      </div>
+
+      <div class="json-agent-history-list">
+        <div v-if="!historyEntries.length" class="json-agent-history-empty">
+          <History :size="22" />
+          <span>暂无解析记录</span>
+        </div>
+        <article
+          v-for="entry in pagedHistoryEntries"
+          :key="entry.id"
+          class="json-agent-history-item"
+          :class="{
+            'json-agent-history-item-active': entry.id === activeHistoryId
+          }"
+        >
+          <button
+            class="json-agent-history-item-main"
+            type="button"
+            @click="loadHistory(entry)"
+          >
+            <FileJson :size="14" />
+            <span class="json-agent-history-item-content">
+              <strong :title="entry.title">{{ entry.title }}</strong>
+              <small
+                >{{ formatHistoryTime(entry.updatedAt) }} ·
+                {{ formatHistorySize(entry.size) }}</small
+              >
+            </span>
+          </button>
+          <button
+            class="json-agent-history-item-delete"
+            type="button"
+            title="删除记录"
+            @click="deleteHistory(entry.id)"
+          >
+            <X :size="13" />
+          </button>
+        </article>
+      </div>
+
+      <footer class="json-agent-history-foot">
+        <button
+          class="json-agent-history-page-button"
+          type="button"
+          title="上一页"
+          :disabled="historyPage <= 1"
+          @click="historyPage -= 1"
+        >
+          <ChevronLeft :size="14" />
+        </button>
+        <span>{{ historyPageSize }} 条/页</span>
+        <select
+          v-model.number="historyPage"
+          class="json-agent-history-page-select"
+        >
+          <option v-for="page in historyPageCount" :key="page" :value="page">
+            {{ page }} / {{ historyPageCount }}
+          </option>
+        </select>
+        <button
+          class="json-agent-history-page-button"
+          type="button"
+          title="下一页"
+          :disabled="historyPage >= historyPageCount"
+          @click="historyPage += 1"
+        >
+          <ChevronRight :size="14" />
+        </button>
+      </footer>
+    </aside>
+
     <div class="json-agent-workspace">
       <section class="json-agent-pane json-agent-source-pane">
         <header class="json-agent-pane-head">
@@ -67,27 +178,77 @@
             <span class="json-agent-pane-kicker">OUTPUT</span>
             <strong class="json-agent-pane-name">格式化结果</strong>
           </div>
-          <button
-            class="json-agent-icon-action"
-            type="button"
-            title="复制格式化结果"
-            :disabled="!formattedJson"
-            @click="copyResult"
-          >
-            <Check v-if="copied" :size="15" />
-            <Copy v-else :size="15" />
-          </button>
+          <div class="json-agent-pane-actions">
+            <button
+              class="json-agent-icon-action"
+              type="button"
+              title="搜索 JSON（Ctrl+F）"
+              :class="{ 'json-agent-icon-action-active': searchVisible }"
+              :disabled="!formattedJson"
+              @click="openSearch"
+            >
+              <Search :size="15" />
+            </button>
+            <button
+              class="json-agent-icon-action"
+              type="button"
+              title="历史记录"
+              :class="{ 'json-agent-icon-action-active': historyVisible }"
+              @click="historyVisible = !historyVisible"
+            >
+              <History :size="15" />
+            </button>
+            <button
+              class="json-agent-icon-action"
+              type="button"
+              title="复制格式化结果"
+              :disabled="!formattedJson"
+              @click="copyResult"
+            >
+              <Check v-if="copied" :size="15" />
+              <Copy v-else :size="15" />
+            </button>
+          </div>
         </header>
 
         <div class="json-agent-result-scroll">
-          <pre
-            v-if="formattedJson"
-            class="json-agent-result-code"
-          ><code>{{ formattedJson }}</code></pre>
+          <div
+            v-if="formattedJson && parsedJson !== undefined"
+            class="json-agent-tree"
+          >
+            <JsonTreeNode
+              :value="parsedJson"
+              :path="[]"
+              :depth="0"
+              :expanded-paths="expandedPaths"
+              :search-query="searchQuery"
+              :match-paths="searchMatchPaths"
+              :is-root="true"
+              @toggle="toggleJsonPath"
+              @update-value="updateJsonValue"
+              @rename-key="renameJsonKey"
+              @copy="copyJsonNode"
+            />
+          </div>
           <div v-else class="json-agent-result-empty">
             <Braces :size="28" />
             <span>等待有效 JSON</span>
           </div>
+        </div>
+
+        <div v-if="searchVisible" class="json-agent-search-float">
+          <Search :size="14" />
+          <input
+            ref="searchInput"
+            v-model="searchQuery"
+            type="search"
+            placeholder="搜索键名或值"
+            @keydown.esc.prevent="closeSearch"
+          />
+          <span>{{ searchQuery ? `${searchMatchCount} 项` : "Ctrl+F" }}</span>
+          <button type="button" title="关闭搜索" @click="closeSearch">
+            <X :size="14" />
+          </button>
         </div>
 
         <footer class="json-agent-pane-foot">
@@ -378,20 +539,28 @@ import {
   Bot,
   Braces,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Copy,
+  Download,
   FileText,
+  FileJson,
+  History,
   ListTree,
   LoaderCircle,
   Maximize2,
   MessageSquareText,
   Minus,
+  Search,
   Send,
+  ShieldCheck,
   Trash2,
   Wrench,
   X
 } from "lucide-vue-next"
 import { toolboxApi } from "@/api"
 import { createMessage } from "@/utils/message"
+import JsonTreeNode from "@/features/tools/components/JsonTreeNode.vue"
 
 const props = defineProps({
   providers: {
@@ -419,8 +588,18 @@ const agentPanel = ref(null)
 const messageList = ref(null)
 const sourceText = ref("")
 const formattedJson = ref("")
+const parsedJson = ref(undefined)
 const parseError = ref("")
 const copied = ref(false)
+const expandedPaths = ref(new Set())
+const searchVisible = ref(false)
+const searchQuery = ref("")
+const searchInput = ref(null)
+const historyVisible = ref(true)
+const historyEntries = ref([])
+const historyPage = ref(1)
+const historyPageSize = 12
+const activeHistoryId = ref("")
 const agentVisible = ref(false)
 const agentMinimized = ref(false)
 const agentTab = ref("chat")
@@ -436,6 +615,8 @@ let copiedTimer = null
 let messageId = 0
 let positionInitialized = false
 let dragState = null
+let historySaveTimer = null
+const historyStorageKey = "monkey-thief-json-agent-history"
 
 const codexProfile = computed(() =>
   props.runtimeProfiles.find((item) => item.cli === "codex")
@@ -498,6 +679,51 @@ const agentWindowStyle = computed(() => ({
   top: `${agentPosition.value.top}px`
 }))
 
+const historyPageCount = computed(() =>
+  Math.max(1, Math.ceil(historyEntries.value.length / historyPageSize))
+)
+
+const pagedHistoryEntries = computed(() => {
+  const start = (historyPage.value - 1) * historyPageSize
+  return historyEntries.value.slice(start, start + historyPageSize)
+})
+
+const searchMatchPaths = computed(() => {
+  const matches = new Set()
+  const query = searchQuery.value.trim().toLocaleLowerCase()
+
+  if (!query || parsedJson.value === undefined) {
+    return matches
+  }
+
+  // 记录键和值的路径，父节点随后可据此自动展开。
+  function walk(value, path) {
+    const isContainer = value !== null && typeof value === "object"
+    const text = isContainer ? "" : value === null ? "null" : String(value)
+    const keyText = path.length ? String(path[path.length - 1]) : ""
+
+    if (
+      text.toLocaleLowerCase().includes(query) ||
+      keyText.toLocaleLowerCase().includes(query)
+    ) {
+      matches.add(JSON.stringify(path))
+    }
+
+    if (value === null || typeof value !== "object") {
+      return
+    }
+
+    Object.keys(value).forEach((key) =>
+      walk(value[key], [...path, Array.isArray(value) ? Number(key) : key])
+    )
+  }
+
+  walk(parsedJson.value, [])
+  return matches
+})
+
+const searchMatchCount = computed(() => searchMatchPaths.value.size)
+
 watch(
   modelOptions,
   (options) => {
@@ -519,18 +745,48 @@ watch(
   }
 )
 
+watch(historyEntries, () => {
+  historyPage.value = Math.min(historyPage.value, historyPageCount.value)
+  persistHistory()
+})
+
+watch(searchQuery, (query) => {
+  if (!query.trim()) {
+    return
+  }
+
+  const nextExpanded = new Set(expandedPaths.value)
+  searchMatchPaths.value.forEach((pathKey) => {
+    const path = JSON.parse(pathKey)
+    path.forEach((_part, index) =>
+      nextExpanded.add(JSON.stringify(path.slice(0, index)))
+    )
+  })
+  expandedPaths.value = nextExpanded
+})
+
 function formatSource(showNotice) {
   const text = sourceText.value.trim()
 
   if (!text) {
     formattedJson.value = ""
+    parsedJson.value = undefined
     parseError.value = ""
     return
   }
 
   try {
-    formattedJson.value = JSON.stringify(JSON.parse(text), null, 2)
+    const parsed = JSON.parse(text)
+    parsedJson.value = parsed
+    formattedJson.value = JSON.stringify(parsed, null, 2)
     parseError.value = ""
+    expandRoot(parsed)
+
+    if (showNotice) {
+      saveHistory()
+    } else {
+      scheduleHistorySave()
+    }
 
     if (showNotice) {
       createMessage.success("JSON 格式化完成。")
@@ -547,7 +803,9 @@ function formatSource(showNotice) {
 function clearContent() {
   sourceText.value = ""
   formattedJson.value = ""
+  parsedJson.value = undefined
   parseError.value = ""
+  searchQuery.value = ""
   sourceInput.value?.focus()
 }
 
@@ -566,6 +824,299 @@ async function copyResult() {
   } catch (error) {
     createMessage.error(error.message || String(error))
   }
+}
+
+function expandRoot(value) {
+  if (value !== null && typeof value === "object") {
+    expandedPaths.value = new Set([JSON.stringify([])])
+  } else {
+    expandedPaths.value = new Set()
+  }
+}
+
+function toggleJsonPath(path) {
+  const nextExpanded = new Set(expandedPaths.value)
+  const key = JSON.stringify(path)
+
+  if (nextExpanded.has(key)) {
+    nextExpanded.delete(key)
+  } else {
+    nextExpanded.add(key)
+  }
+
+  expandedPaths.value = nextExpanded
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
+function updateJsonValue({ path, value }) {
+  // 复制 JSON 后按路径写入，避免直接修改子组件收到的对象引用。
+  const nextJson = cloneJson(parsedJson.value)
+
+  if (!path.length) {
+    parsedJson.value = value
+  } else {
+    let parent = nextJson
+    path.slice(0, -1).forEach((part) => {
+      parent = parent[part]
+    })
+    parent[path[path.length - 1]] = value
+    parsedJson.value = nextJson
+  }
+
+  formattedJson.value = JSON.stringify(parsedJson.value, null, 2)
+  parseError.value = ""
+  saveHistory()
+}
+
+function renameJsonKey({ path, nextKey }) {
+  if (!path.length || Array.isArray(parsedJson.value)) {
+    return
+  }
+
+  const nextJson = cloneJson(parsedJson.value)
+  const parentPath = path.slice(0, -1)
+  const currentKey = path[path.length - 1]
+  let parent = nextJson
+
+  parentPath.forEach((part) => {
+    parent = parent[part]
+  })
+
+  if (Array.isArray(parent)) {
+    return
+  }
+
+  if (Object.prototype.hasOwnProperty.call(parent, nextKey)) {
+    createMessage.warning("该对象中已存在同名键。")
+    return
+  }
+
+  const entries = Object.entries(parent)
+  const renamed = {}
+  entries.forEach(([key, value]) => {
+    renamed[key === currentKey ? nextKey : key] = value
+  })
+  Object.keys(parent).forEach((key) => delete parent[key])
+  Object.assign(parent, renamed)
+  parsedJson.value = nextJson
+  formattedJson.value = JSON.stringify(nextJson, null, 2)
+  const nextExpanded = new Set()
+  expandedPaths.value.forEach((pathKey) => {
+    const expandedPath = JSON.parse(pathKey)
+    const isChildPath = path.every(
+      (part, index) => expandedPath[index] === part
+    )
+    nextExpanded.add(
+      JSON.stringify(
+        isChildPath
+          ? [...parentPath, nextKey, ...expandedPath.slice(path.length)]
+          : expandedPath
+      )
+    )
+  })
+  expandedPaths.value = nextExpanded
+  saveHistory()
+}
+
+async function copyJsonNode({ value, nodeKey }) {
+  try {
+    const text =
+      typeof value === "string" ? value : JSON.stringify(value, null, 2)
+    await navigator.clipboard.writeText(text)
+    createMessage.success(
+      `${nodeKey === null ? "节点" : `键 ${nodeKey}`} 已复制。`
+    )
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  }
+}
+
+function openSearch() {
+  searchVisible.value = true
+  nextTick(() => {
+    searchInput.value?.focus()
+    searchInput.value?.select()
+  })
+}
+
+function closeSearch() {
+  searchVisible.value = false
+  searchQuery.value = ""
+}
+
+function handleGlobalKeydown(event) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f") {
+    event.preventDefault()
+    openSearch()
+    return
+  }
+
+  if (event.key === "Escape" && searchVisible.value) {
+    closeSearch()
+  }
+}
+
+function loadHistory(entry) {
+  try {
+    const parsed = JSON.parse(entry.formattedJson)
+    sourceText.value = entry.sourceText
+    formattedJson.value = entry.formattedJson
+    parsedJson.value = parsed
+    parseError.value = ""
+    activeHistoryId.value = entry.id
+    expandRoot(parsed)
+    createMessage.success("已恢复历史解析记录。")
+  } catch {
+    createMessage.error("历史记录内容已损坏，无法恢复。")
+  }
+}
+
+function saveHistory() {
+  window.clearTimeout(historySaveTimer)
+
+  if (!formattedJson.value || parsedJson.value === undefined) {
+    return
+  }
+
+  // 以格式化结果去重，连续输入不会生成同一条历史记录。
+  const now = Date.now()
+  const id = `${now}-${Math.random().toString(36).slice(2, 8)}`
+  const existing = historyEntries.value.find(
+    (entry) => entry.formattedJson === formattedJson.value
+  )
+  const entry = {
+    id: existing?.id || id,
+    title: getHistoryTitle(parsedJson.value),
+    sourceText: sourceText.value,
+    formattedJson: formattedJson.value,
+    updatedAt: now,
+    size: new TextEncoder().encode(formattedJson.value).length
+  }
+
+  historyEntries.value = [
+    entry,
+    ...historyEntries.value.filter((item) => item.id !== entry.id)
+  ].slice(0, 100)
+  activeHistoryId.value = entry.id
+}
+
+function scheduleHistorySave() {
+  // 输入框实时解析时延迟写入，避免连续按键产生大量重复历史。
+  window.clearTimeout(historySaveTimer)
+  historySaveTimer = window.setTimeout(saveHistory, 650)
+}
+
+function getHistoryTitle(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const first = Object.entries(value).find(([, item]) =>
+      ["string", "number", "boolean"].includes(typeof item)
+    )
+
+    if (first) {
+      return `${first[0]}: ${String(first[1]).slice(0, 38)}`
+    }
+  }
+
+  if (Array.isArray(value)) {
+    return `JSON 数组 (${value.length})`
+  }
+
+  return value !== null && typeof value === "object" ? "JSON 对象" : "JSON 值"
+}
+
+function persistHistory() {
+  try {
+    localStorage.setItem(
+      historyStorageKey,
+      JSON.stringify(historyEntries.value)
+    )
+  } catch {
+    // 浏览器禁用本地存储时，历史仍可在当前页面使用。
+  }
+}
+
+function loadStoredHistory() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(historyStorageKey) || "[]")
+    historyEntries.value = Array.isArray(stored)
+      ? stored
+          .filter((entry) => entry && typeof entry.formattedJson === "string")
+          .map((entry) => ({
+            id: String(
+              entry.id ||
+                `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+            ),
+            title: entry.title || "JSON 对象",
+            sourceText: entry.sourceText || entry.formattedJson,
+            formattedJson: entry.formattedJson,
+            updatedAt: Number(entry.updatedAt || Date.now()),
+            size: Number(
+              entry.size || new TextEncoder().encode(entry.formattedJson).length
+            )
+          }))
+      : []
+  } catch {
+    historyEntries.value = []
+  }
+}
+
+function deleteHistory(id) {
+  historyEntries.value = historyEntries.value.filter((entry) => entry.id !== id)
+
+  if (activeHistoryId.value === id) {
+    activeHistoryId.value = ""
+  }
+}
+
+function clearHistory() {
+  if (!window.confirm("确定清空全部 JSON 解析历史吗？")) {
+    return
+  }
+
+  historyEntries.value = []
+  activeHistoryId.value = ""
+  createMessage.success("历史记录已清空。")
+}
+
+function formatHistoryTime(timestamp) {
+  const elapsed = Math.max(0, Date.now() - Number(timestamp || 0))
+  const minutes = Math.floor(elapsed / 60000)
+
+  if (minutes < 1) {
+    return "刚刚"
+  }
+  if (minutes < 60) {
+    return `${minutes} 分钟前`
+  }
+  if (minutes < 1440) {
+    return `${Math.floor(minutes / 60)} 小时前`
+  }
+
+  return new Date(timestamp).toLocaleDateString("zh-CN")
+}
+
+function formatHistorySize(size) {
+  if (size < 1024) {
+    return `${size} B`
+  }
+
+  return `${(size / 1024).toFixed(1)} KB`
+}
+
+function exportHistory() {
+  const blob = new Blob([JSON.stringify(historyEntries.value, null, 2)], {
+    type: "application/json"
+  })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = url
+  link.download = "json-agent-history.json"
+  link.click()
+  URL.revokeObjectURL(url)
+  createMessage.success("历史记录已导出。")
 }
 
 async function openAgent() {
@@ -917,8 +1468,11 @@ async function runAgent() {
   const outputJsonTool = tool(
     async ({ value }) => {
       const parsed = JSON.parse(value)
+      parsedJson.value = parsed
       formattedJson.value = JSON.stringify(parsed, null, 2)
       parseError.value = ""
+      expandRoot(parsed)
+      saveHistory()
       outputCompleted = true
       return "JSON 已校验并写入右侧格式化结果区"
     },
@@ -1057,10 +1611,16 @@ async function runAgent() {
   }
 }
 
-onMounted(() => window.addEventListener("resize", clampAgentPosition))
+onMounted(() => {
+  loadStoredHistory()
+  window.addEventListener("resize", clampAgentPosition)
+  window.addEventListener("keydown", handleGlobalKeydown)
+})
 onBeforeUnmount(() => {
   window.clearTimeout(copiedTimer)
+  window.clearTimeout(historySaveTimer)
   window.removeEventListener("resize", clampAgentPosition)
+  window.removeEventListener("keydown", handleGlobalKeydown)
   window.removeEventListener("pointermove", moveAgentWindow)
   window.removeEventListener("pointerup", stopAgentDrag)
 })
@@ -1073,6 +1633,211 @@ onBeforeUnmount(() => {
   min-height: 0;
   flex: 1;
   overflow: hidden;
+
+  .json-agent-history {
+    display: flex;
+    width: 242px;
+    min-width: 242px;
+    min-height: 0;
+    flex-direction: column;
+    border: 1px solid var(--color-line);
+    border-right: 0;
+    background: #fbfcfd;
+    overflow: hidden;
+
+    .json-agent-history-head {
+      display: flex;
+      min-height: 40px;
+      flex: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 8px 0 10px;
+      border-bottom: 1px solid var(--color-line);
+      background: #f8fafc;
+
+      .json-agent-history-title,
+      .json-agent-history-actions {
+        display: flex;
+        align-items: center;
+      }
+
+      .json-agent-history-title {
+        gap: 6px;
+        color: #475866;
+        font-size: 0.73rem;
+
+        span {
+          color: #8a98a4;
+          font-size: 0.65rem;
+        }
+      }
+
+      .json-agent-history-actions {
+        gap: 1px;
+      }
+    }
+
+    .json-agent-history-icon,
+    .json-agent-history-page-button,
+    .json-agent-history-item-delete {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
+      background: transparent;
+      color: #6f808b;
+      cursor: pointer;
+    }
+
+    .json-agent-history-icon {
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border-radius: 4px;
+    }
+
+    .json-agent-history-icon:hover,
+    .json-agent-history-page-button:hover,
+    .json-agent-history-item-delete:hover {
+      background: #eaf2f3;
+      color: #1f6c6e;
+    }
+
+    .json-agent-history-icon:disabled,
+    .json-agent-history-page-button:disabled {
+      cursor: not-allowed;
+      opacity: 0.38;
+    }
+
+    .json-agent-history-notice {
+      display: flex;
+      flex: none;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 10px;
+      border-bottom: 1px solid #dfe9e8;
+      background: #edf7f3;
+      color: #536e68;
+      font-size: 0.65rem;
+      line-height: 1.45;
+
+      .lucide {
+        flex: 0 0 auto;
+        color: #159447;
+      }
+    }
+
+    .json-agent-history-list {
+      min-height: 0;
+      flex: 1;
+      overflow: auto;
+    }
+
+    .json-agent-history-item {
+      position: relative;
+      display: flex;
+      min-height: 52px;
+      align-items: stretch;
+      border-bottom: 1px solid #edf1f3;
+      background: transparent;
+
+      .json-agent-history-item-main {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        align-items: flex-start;
+        gap: 7px;
+        padding: 9px 6px 8px 9px;
+        border: 0;
+        background: transparent;
+        color: #71818c;
+        cursor: pointer;
+        text-align: left;
+
+        .json-agent-history-item-content {
+          display: flex;
+          min-width: 0;
+          flex-direction: column;
+          gap: 2px;
+
+          strong {
+            overflow: hidden;
+            color: #3f4f5c;
+            font-size: 0.72rem;
+            font-weight: 600;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          small {
+            color: #a0aab1;
+            font-size: 0.61rem;
+          }
+        }
+      }
+
+      .json-agent-history-item-delete {
+        width: 27px;
+        flex: 0 0 27px;
+        padding: 0;
+        opacity: 0;
+      }
+    }
+
+    .json-agent-history-item:hover,
+    .json-agent-history-item-active {
+      background: #f0f7f6;
+
+      .json-agent-history-item-delete {
+        opacity: 1;
+      }
+    }
+
+    .json-agent-history-empty {
+      display: flex;
+      min-height: 180px;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 8px;
+      color: #9aa7ae;
+      font-size: 0.7rem;
+    }
+
+    .json-agent-history-foot {
+      display: flex;
+      min-height: 38px;
+      flex: none;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      border-top: 1px solid var(--color-line);
+      background: #f8fafb;
+      color: #687984;
+      font-size: 0.64rem;
+
+      .json-agent-history-page-button {
+        width: 27px;
+        height: 27px;
+        padding: 0;
+        border: 1px solid #e0e7eb;
+        border-radius: 4px;
+      }
+
+      .json-agent-history-page-select {
+        height: 27px;
+        min-width: 66px;
+        border: 1px solid #d8e2e7;
+        border-radius: 4px;
+        outline: 0;
+        padding: 0 4px;
+        background: #ffffff;
+        color: #40515d;
+        font-size: 0.65rem;
+      }
+    }
+  }
 
   .json-agent-workspace {
     display: flex;
@@ -1197,16 +1962,15 @@ onBeforeUnmount(() => {
         overflow: auto;
         background: #fdfefe;
 
-        .json-agent-result-code {
+        .json-agent-tree {
           min-width: 100%;
           min-height: 100%;
-          margin: 0;
-          padding: 16px;
-          color: #183e50;
-          font-family: Consolas, "Courier New", monospace;
-          font-size: 0.8rem;
-          line-height: 1.65;
-          white-space: pre;
+          padding: 14px 16px 18px;
+          background: #fdfefe;
+
+          :deep(.json-tree-row) {
+            min-width: max-content;
+          }
         }
 
         .json-agent-result-empty {
@@ -1218,6 +1982,63 @@ onBeforeUnmount(() => {
           gap: 9px;
           color: #9aa7b2;
           font-size: 0.78rem;
+        }
+      }
+
+      .json-agent-icon-action-active {
+        border-color: #8dbbb1;
+        background: #edf7f3;
+        color: #17604f;
+      }
+
+      .json-agent-search-float {
+        position: absolute;
+        z-index: 5;
+        top: 55px;
+        right: 10px;
+        display: flex;
+        width: min(330px, calc(100% - 20px));
+        height: 34px;
+        align-items: center;
+        gap: 6px;
+        padding: 0 5px 0 9px;
+        border: 1px solid #9bbab6;
+        border-radius: 6px;
+        background: #ffffff;
+        box-shadow: 0 8px 24px rgba(40, 67, 77, 0.16);
+        color: #2f7770;
+
+        input {
+          min-width: 0;
+          flex: 1;
+          border: 0;
+          outline: 0;
+          color: #304652;
+          font-size: 0.72rem;
+        }
+
+        span {
+          flex: none;
+          color: #84929a;
+          font-size: 0.62rem;
+        }
+
+        button {
+          display: inline-flex;
+          width: 25px;
+          height: 25px;
+          align-items: center;
+          justify-content: center;
+          border: 0;
+          border-radius: 4px;
+          background: transparent;
+          color: #71818a;
+          cursor: pointer;
+        }
+
+        button:hover {
+          background: #edf3f4;
+          color: #1f6d6f;
         }
       }
 
@@ -1255,6 +2076,10 @@ onBeforeUnmount(() => {
           font-variant-numeric: tabular-nums;
         }
       }
+    }
+
+    .json-agent-result-pane {
+      position: relative;
     }
 
     .json-agent-source-pane {
