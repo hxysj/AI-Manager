@@ -1384,7 +1384,7 @@ function installRepositorySkill(skill) {
     padding: 0 12px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
@@ -1393,19 +1393,19 @@ function installRepositorySkill(skill) {
   }
 
   .skills-view-button:hover {
-    border-color: #b9ccda;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
   }
 
   .skills-view-button.primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   .skills-view-button.primary:hover {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
   }
 
   .skills-view-button.danger {
@@ -1433,7 +1433,7 @@ function installRepositorySkill(skill) {
     padding: 0 12px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
@@ -1447,7 +1447,7 @@ function installRepositorySkill(skill) {
     padding: 12px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
   }
 
@@ -1484,7 +1484,7 @@ function installRepositorySkill(skill) {
     padding: 0 10px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
     font-size: 0.84rem;
@@ -1492,7 +1492,7 @@ function installRepositorySkill(skill) {
   }
 
   .skills-view-field-control:focus {
-    border-color: #8eb6d9;
+    border-color: var(--color-info-line);
     box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.1);
   }
 
@@ -1516,7 +1516,7 @@ function installRepositorySkill(skill) {
     padding: 0 10px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.8rem;
@@ -1532,7 +1532,7 @@ function installRepositorySkill(skill) {
     padding: 10px 12px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
   }
 
@@ -1641,7 +1641,7 @@ function installRepositorySkill(skill) {
     gap: 8px;
     border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     text-align: center;
   }
@@ -1677,14 +1677,14 @@ function installRepositorySkill(skill) {
     padding: 0 10px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
     outline: none;
   }
 
   .skills-view-dialog-control:focus {
-    border-color: #8eb6d9;
+    border-color: var(--color-info-line);
     box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.1);
   }
 
@@ -1841,7 +1841,7 @@ function installRepositorySkill(skill) {
   }
 
   .skills-view-move-target:hover {
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   .skills-view-move-target.active {
@@ -1871,7 +1871,7 @@ function installRepositorySkill(skill) {
 
   .skills-view-move-target.active .skills-view-move-radio {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
   }
 
   .skills-view-move-target:focus-within {
@@ -2019,7 +2019,7 @@ function installRepositorySkill(skill) {
   .skills-view-group-manage-item:hover,
   .skills-view-group-manage-item.editing,
   .skills-view-group-manage-item.deleting {
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   .skills-view-group-manage-item:last-child {
@@ -2130,12 +2130,12 @@ function installRepositorySkill(skill) {
 
   .skills-view-group-icon-button.primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   .skills-view-group-icon-button.danger:hover {
-    border-color: #ffc7c2;
+    border-color: var(--color-danger-line);
     background: var(--color-danger-soft);
     color: var(--color-danger);
   }
@@ -2222,7 +2222,7 @@ function installRepositorySkill(skill) {
     padding: 0 14px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
@@ -2231,7 +2231,7 @@ function installRepositorySkill(skill) {
 
   .skills-view-dialog-button.primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 

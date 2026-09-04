@@ -84,7 +84,7 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 12px;
-    background: #ffffff;
+    background: var(--color-panel);
     box-shadow: 0 20px 60px rgba(15, 23, 42, 0.25);
 
     .lan-share-access-head {
@@ -94,7 +94,7 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
       justify-content: space-between;
       padding: 14px 16px;
       border-bottom: 1px solid var(--color-line);
-      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      background: linear-gradient(180deg, var(--color-panel) 0%, var(--color-panel-soft) 100%);
 
       .lan-share-access-heading {
         color: var(--color-text);
@@ -110,7 +110,7 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
         justify-content: center;
         border: 1px solid var(--color-line);
         border-radius: 8px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-text-muted);
         cursor: pointer;
         transition: all 0.2s;
@@ -136,7 +136,7 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
         padding: 12px;
         border: 1px solid var(--color-line);
         border-radius: 10px;
-        background: #f8fafc;
+        background: var(--color-panel-soft);
 
         :deep(svg) {
           max-width: 100%;
@@ -167,7 +167,7 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
           padding: 10px 12px;
           border: 1px solid var(--color-line);
           border-radius: 8px;
-          background: #f4f7fa;
+          background: var(--color-panel-soft);
           color: var(--color-primary);
           font-family: "JetBrains Mono", "Consolas", monospace;
           font-size: clamp(0.75rem, 1.8vw, 0.82rem);
@@ -183,7 +183,7 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
       gap: 8px;
       padding: 14px 16px;
       border-top: 1px solid var(--color-line);
-      background: #f8fafc;
+      background: var(--color-panel-soft);
 
       .lan-share-access-button {
         display: inline-flex;
@@ -194,7 +194,7 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
         gap: 6px;
         border: 1px solid var(--color-line);
         border-radius: 8px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
         font-size: clamp(0.82rem, 2vw, 0.9rem);
@@ -203,16 +203,16 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
 
         &:hover {
           border-color: var(--color-primary);
-          background: #eef6ff;
+          background: var(--color-primary-soft);
         }
       }
 
       .lan-share-access-button-danger {
-        border-color: #ef4444;
-        color: #ef4444;
+        border-color: var(--color-danger);
+        color: var(--color-danger);
 
         &:hover {
-          background: #fef2f2;
+          background: var(--color-danger-soft);
         }
       }
     }

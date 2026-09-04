@@ -486,7 +486,7 @@ function formatSkillFileType(file) {
     gap: 18px;
     padding: 20px 22px 16px;
     border-bottom: 1px solid var(--color-line);
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   &__hero {
@@ -606,7 +606,7 @@ function formatSkillFileType(file) {
     gap: 7px;
     height: 34px;
     padding: 0 11px;
-    border: 1px solid #ead1d1;
+    border: 1px solid var(--color-danger-line);
     border-radius: 8px;
     background: var(--color-danger-soft);
     color: var(--color-danger);
@@ -617,18 +617,18 @@ function formatSkillFileType(file) {
   }
 
   &__enable-button:hover {
-    border-color: #e3b7b7;
+    border-color: var(--color-danger-line);
     background: var(--color-danger-soft);
   }
 
   &__enable-button--disabled {
-    border-color: #d8e4ee;
-    background: #edf3f8;
+    border-color: var(--color-line);
+    background: var(--color-primary-soft);
     color: var(--color-primary);
   }
 
   &__close:hover {
-    border-color: #b9ccda;
+    border-color: var(--color-line-strong);
     background: var(--color-primary-soft);
     color: var(--color-primary);
   }
@@ -664,7 +664,7 @@ function formatSkillFileType(file) {
     bottom: -1px;
     height: 2px;
     border-radius: 999px;
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
   }
 
   &__content {
@@ -832,7 +832,7 @@ function formatSkillFileType(file) {
   }
 
   &__path-button:hover {
-    border-color: #b9ccda;
+    border-color: var(--color-line-strong);
     background: var(--color-primary-soft);
   }
 
@@ -865,7 +865,7 @@ function formatSkillFileType(file) {
     min-height: 38px;
     padding: 0 10px;
     border-bottom: 1px solid var(--color-line);
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   &__file-tree-head span,
@@ -943,7 +943,7 @@ function formatSkillFileType(file) {
     margin: 0;
     overflow: auto;
     padding: 12px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text);
     font-family: "JetBrains Mono", "Consolas", monospace;
     font-size: 0.76rem;
@@ -982,19 +982,19 @@ function formatSkillFileType(file) {
   font-weight: 600;
 
   &:hover {
-    border-color: #b9ccda;
+    border-color: var(--color-line-strong);
     background: var(--color-primary-soft);
   }
 
   &--primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #fff;
   }
 
   &--primary:hover {
-    border-color: #2a4f6f;
-    background: #2a4f6f;
+    border-color: var(--color-primary-solid);
+    background: var(--color-primary-solid);
   }
 
   &--alert {
@@ -1004,7 +1004,7 @@ function formatSkillFileType(file) {
   }
 
   &--alert:hover {
-    border-color: #ead1d1;
+    border-color: var(--color-danger-line);
     background: var(--color-danger-soft);
   }
 

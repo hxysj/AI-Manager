@@ -145,7 +145,7 @@ function submit() {
 
   &--primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #fff;
   }
 }

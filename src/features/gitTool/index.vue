@@ -2851,7 +2851,7 @@ function showErrorMessage(error) {
 
 .git-tool :deep(.base-modal__panel) {
   width: 420px;
-  border-color: #cbddec;
+  border-color: var(--color-line-strong);
   box-shadow: 0 20px 52px rgba(15, 23, 42, 0.2);
 }
 
@@ -2886,9 +2886,9 @@ function showErrorMessage(error) {
   display: flex;
   gap: 12px;
   padding: 12px;
-  border: 1px solid #d8e4ee;
+  border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #f8fbff;
+  background: var(--color-panel-soft);
 }
 
 .git-tool-confirm-icon {
@@ -2897,9 +2897,9 @@ function showErrorMessage(error) {
   height: 34px;
   flex: none;
   place-items: center;
-  border: 1px solid #c4d8ea;
+  border: 1px solid var(--color-info-line);
   border-radius: 8px;
-  background: #eef6ff;
+  background: var(--color-primary-soft);
   color: var(--color-primary);
 }
 
@@ -2944,7 +2944,7 @@ function showErrorMessage(error) {
   padding: 0 9px;
   border: 1px solid var(--color-line);
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-text);
   font-size: 0.8rem;
   font-weight: 700;
@@ -2965,7 +2965,7 @@ function showErrorMessage(error) {
   justify-content: center;
   border: 1px solid var(--color-line);
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.8rem;
@@ -2973,19 +2973,19 @@ function showErrorMessage(error) {
 }
 
 .git-tool-confirm-button:hover {
-  border-color: #b9ccda;
-  background: #f7f9fc;
+  border-color: var(--color-line-strong);
+  background: var(--color-panel-soft);
 }
 
 .git-tool-confirm-button-primary {
   border-color: var(--color-primary);
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   color: #ffffff;
 }
 
 .git-tool-confirm-button-primary:hover {
   border-color: var(--color-primary);
-  background: #284f79;
+  background: var(--color-primary-solid);
 }
 
 .git-tool-action,
@@ -2998,7 +2998,7 @@ function showErrorMessage(error) {
   padding: 0 12px;
   border: 1px solid var(--color-line);
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.82rem;
@@ -3007,8 +3007,8 @@ function showErrorMessage(error) {
 
 .git-tool-action:hover,
 .git-tool-icon-button:hover {
-  border-color: #b9ccda;
-  background: #f7f9fc;
+  border-color: var(--color-line-strong);
+  background: var(--color-panel-soft);
 }
 
 .git-tool-action:disabled,
@@ -3019,13 +3019,13 @@ function showErrorMessage(error) {
 
 .git-tool-action-primary {
   border-color: var(--color-primary);
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   color: #ffffff;
 }
 
 .git-tool-action-primary:hover {
   border-color: var(--color-primary);
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
 }
 
 .git-tool {
@@ -3046,7 +3046,7 @@ function showErrorMessage(error) {
     gap: 8px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
 
     .git-tool-loading-icon {
@@ -3127,7 +3127,7 @@ function showErrorMessage(error) {
   padding: 0 10px;
   border: 1px solid var(--color-line);
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-text);
   font-size: 0.82rem;
 }
@@ -3139,9 +3139,9 @@ function showErrorMessage(error) {
   gap: 3px;
   height: 32px;
   padding: 3px;
-  border: 1px solid #e4edf5;
+  border: 1px solid var(--color-line);
   border-radius: 17px;
-  background: #f5f8fb;
+  background: var(--color-panel-soft);
 
   .git-tool-tab {
     display: inline-flex;
@@ -3153,15 +3153,15 @@ function showErrorMessage(error) {
     border: 0;
     border-radius: 14px;
     background: transparent;
-    color: #2c4667;
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.8rem;
     font-weight: 800;
   }
 
   .git-tool-tab-active {
-    background: #ffffff;
-    color: #11395f;
+    background: var(--color-panel);
+    color: var(--color-primary);
     box-shadow: 0 1px 4px rgba(47, 95, 145, 0.12);
   }
 }
@@ -3175,7 +3175,7 @@ function showErrorMessage(error) {
   gap: 12px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-text-muted);
 }
 
@@ -3206,7 +3206,7 @@ function showErrorMessage(error) {
 .git-tool-branch-panel {
   width: 240px;
   flex: 0 0 240px;
-  background: #ffffff;
+  background: var(--color-panel);
 }
 
 .git-tool-commit-panel {
@@ -3222,7 +3222,7 @@ function showErrorMessage(error) {
   min-height: 56px;
   padding: 11px 12px;
   border-bottom: 1px solid var(--color-line);
-  background: #ffffff;
+  background: var(--color-panel);
 }
 
 .git-tool-panel-title {
@@ -3279,7 +3279,7 @@ function showErrorMessage(error) {
   flex-direction: column;
   gap: 7px;
   padding: 12px 10px 9px;
-  background: #ffffff;
+  background: var(--color-panel);
 }
 
 .git-tool-branch-title-row,
@@ -3306,14 +3306,14 @@ function showErrorMessage(error) {
 .git-tool-branch-path {
   display: block;
   overflow: hidden;
-  color: #2f5f91;
+  color: var(--color-primary);
   font-size: 0.72rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .git-tool-branch-summary-row {
-  color: #2f5f91;
+  color: var(--color-primary);
   font-size: 0.76rem;
 }
 
@@ -3326,9 +3326,9 @@ function showErrorMessage(error) {
 .git-tool-branch-toolbar-button {
   height: 28px;
   padding: 0 9px;
-  border: 1px solid #c9dff2;
+  border: 1px solid var(--color-info-line);
   border-radius: 7px;
-  background: #eef6ff;
+  background: var(--color-primary-soft);
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.76rem;
@@ -3362,17 +3362,17 @@ function showErrorMessage(error) {
   gap: 6px;
   height: 28px;
   padding: 0 8px;
-  border: 1px solid #cfe0ef;
+  border: 1px solid var(--color-line-strong);
   border-radius: 7px;
-  background: #eef5fb;
-  color: #2f5f91;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
   cursor: pointer;
   text-align: left;
 }
 
 .git-tool-branch-group-head:hover {
-  border-color: #bad4ea;
-  background: #e6f1fa;
+  border-color: var(--color-info-line);
+  background: var(--color-primary-soft);
 }
 
 .git-tool-branch-group-head strong {
@@ -3394,7 +3394,7 @@ function showErrorMessage(error) {
 .git-tool-branch-group-body {
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #cfe0ef;
+  border-left: 1px solid var(--color-line-strong);
   margin-left: 8px;
   padding-top: 4px;
 }
@@ -3433,21 +3433,21 @@ function showErrorMessage(error) {
 }
 
 .git-tool-branch-main:hover {
-  background: #f2f7fb;
+  background: var(--color-panel-soft);
 }
 
 .git-tool-branch-active .git-tool-branch-main {
-  background: #e9f4ff;
+  background: var(--color-primary-soft);
   color: var(--color-primary);
 }
 
 .git-tool-branch-current .git-tool-branch-main {
-  background: #4d7fa8;
+  background: var(--color-primary-solid);
   color: #ffffff;
 }
 
 .git-tool-branch-current .git-tool-branch-main:hover {
-  background: #4d7fa8;
+  background: var(--color-primary-solid);
 }
 
 .git-tool-branch-name,
@@ -3477,8 +3477,8 @@ function showErrorMessage(error) {
   flex: none;
   padding: 2px 6px;
   border-radius: 999px;
-  background: #ffe3a6;
-  color: #7a4a00;
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
   font-size: 0.68rem;
   font-weight: 700;
 }
@@ -3497,7 +3497,7 @@ function showErrorMessage(error) {
 .git-tool-commit-table {
   gap: 0;
   padding: 0;
-  background: #ffffff;
+  background: var(--color-panel);
 
   .git-tool-commit-table-head {
     position: sticky;
@@ -3509,9 +3509,9 @@ function showErrorMessage(error) {
     align-items: center;
     min-width: 890px;
     height: 28px;
-    border-bottom: 1px solid #dce7f1;
-    background: #f3f7fb;
-    color: #4d6680;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
     font-size: 0.72rem;
     font-weight: 700;
 
@@ -3532,12 +3532,12 @@ function showErrorMessage(error) {
     gap: 0;
     padding: 0;
     border: 0;
-    border-bottom: 1px solid #edf2f7;
+    border-bottom: 1px solid var(--color-line);
     border-radius: 0;
-    background: #ffffff;
+    background: var(--color-panel);
 
     &:hover {
-      background: #f7fbff;
+      background: var(--color-primary-soft);
     }
 
     .git-tool-commit-graph-cell {
@@ -3582,7 +3582,7 @@ function showErrorMessage(error) {
       height: 100%;
       overflow: hidden;
       padding: 0 10px;
-      color: #11395f;
+      color: var(--color-primary);
       font-size: 0.78rem;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -3601,10 +3601,10 @@ function showErrorMessage(error) {
         gap: 3px;
         overflow: hidden;
         padding: 0 6px;
-        border: 1px solid #91ccf7;
+        border: 1px solid var(--color-info-line);
         border-radius: 4px;
-        background: #e5f4ff;
-        color: #075985;
+        background: var(--color-primary-soft);
+        color: var(--color-primary);
         font-size: 0.68rem;
         font-weight: 800;
         line-height: 18px;
@@ -3623,26 +3623,26 @@ function showErrorMessage(error) {
         }
 
         &.git-tool-commit-ref-current {
-          border-color: #31a8ff;
-          background: #1295e8;
+          border-color: var(--color-info-line);
+          background: var(--color-primary-solid);
           color: #ffffff;
         }
 
         &.git-tool-commit-ref-remote {
-          border-color: #9dc4e8;
-          background: #f1f7fd;
-          color: #1e5f9c;
+          border-color: var(--color-info-line);
+          background: var(--color-panel-soft);
+          color: var(--color-primary);
         }
 
         &.git-tool-commit-ref-tag {
-          border-color: #7dd3fc;
-          background: #dff6ff;
-          color: #006885;
+          border-color: var(--color-info-line);
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
         }
 
         &.git-tool-commit-ref-more {
-          border-color: #d7e3ee;
-          background: #f6f9fc;
+          border-color: var(--color-line);
+          background: var(--color-panel-soft);
           color: var(--color-text-muted);
         }
       }
@@ -3662,7 +3662,7 @@ function showErrorMessage(error) {
     }
 
     &.git-tool-commit-active {
-      background: #e6f3ff;
+      background: var(--color-primary-soft);
     }
 
     &.git-tool-commit-graph {
@@ -3680,7 +3680,7 @@ function showErrorMessage(error) {
   padding: 8px;
   border: 1px solid transparent;
   border-radius: 6px;
-  background: #f8fafc;
+  background: var(--color-panel-soft);
   color: var(--color-text);
   cursor: pointer;
   text-align: left;
@@ -3691,13 +3691,13 @@ function showErrorMessage(error) {
 }
 
 .git-tool-commit:hover {
-  border-color: #cbddec;
-  background: #ffffff;
+  border-color: var(--color-line-strong);
+  background: var(--color-panel);
 }
 
 .git-tool-commit-active {
-  border-color: #8eb6d9;
-  background: #eef6ff;
+  border-color: var(--color-info-line);
+  background: var(--color-primary-soft);
 }
 
 .git-tool-commit-graph {
@@ -3765,9 +3765,9 @@ function showErrorMessage(error) {
   flex-direction: column;
   gap: 2px;
   padding: 8px;
-  border: 1px solid #cbddec;
+  border: 1px solid var(--color-line-strong);
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--color-panel);
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
 }
 
@@ -3780,14 +3780,14 @@ function showErrorMessage(error) {
   border: 0;
   border-radius: 5px;
   background: transparent;
-  color: #355b7e;
+  color: var(--color-primary);
   cursor: pointer;
   font-size: 0.8rem;
   text-align: left;
 }
 
 .git-tool-context-menu-button:hover {
-  background: #eef6ff;
+  background: var(--color-primary-soft);
   color: var(--color-primary);
 }
 
@@ -3818,7 +3818,7 @@ function showErrorMessage(error) {
   padding: 8px;
   border: 1px solid transparent;
   border-radius: 6px;
-  background: #f8fafc;
+  background: var(--color-panel-soft);
 }
 
 .git-tool-archive-main,
@@ -3874,8 +3874,8 @@ function showErrorMessage(error) {
     gap: 10px;
     padding: 8px 12px;
     border-bottom: 1px solid var(--color-line);
-    background: #f8fafc;
-    color: #2f5f91;
+    background: var(--color-panel-soft);
+    color: var(--color-primary);
     font-size: 0.76rem;
   }
 
@@ -3923,7 +3923,7 @@ function showErrorMessage(error) {
   gap: 14px;
   padding: 14px;
   border-bottom: 1px solid var(--color-line);
-  background: #f8fafc;
+  background: var(--color-panel-soft);
 }
 
 .git-tool-drawer-title {
@@ -3961,7 +3961,7 @@ function showErrorMessage(error) {
 }
 
 .git-tool-drawer-back:hover {
-  color: #1f4f7e;
+  color: var(--color-primary);
 }
 
 .git-tool-drawer-actions {
@@ -3974,9 +3974,9 @@ function showErrorMessage(error) {
 .git-tool-drawer-hash {
   height: 28px;
   padding: 0 10px;
-  border: 1px solid #c9dff2;
+  border: 1px solid var(--color-info-line);
   border-radius: 7px;
-  background: #eef6ff;
+  background: var(--color-primary-soft);
   color: var(--color-primary);
   font-family: "JetBrains Mono", "Consolas", monospace;
   font-size: 0.72rem;
@@ -3991,7 +3991,7 @@ function showErrorMessage(error) {
 
 .git-tool-archive-detail {
   flex-direction: column;
-  background: #ffffff;
+  background: var(--color-panel);
 }
 
 .git-tool-drawer-body-detail {
@@ -4011,7 +4011,7 @@ function showErrorMessage(error) {
   gap: 8px;
   overflow: auto;
   padding: 10px;
-  background: #f8fafc;
+  background: var(--color-panel-soft);
 
   .git-tool-archive-tools {
     display: flex;
@@ -4021,7 +4021,7 @@ function showErrorMessage(error) {
     justify-content: space-between;
     gap: 10px;
     padding: 0 2px 2px;
-    color: #2f5f91;
+    color: var(--color-primary);
     font-size: 0.76rem;
   }
 
@@ -4059,17 +4059,17 @@ function showErrorMessage(error) {
     gap: 7px;
     height: 32px;
     padding: 0 9px;
-    border: 1px solid #cfe0ef;
+    border: 1px solid var(--color-line-strong);
     border-radius: 7px;
-    background: #eef5fb;
-    color: #2f5f91;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
     cursor: pointer;
     text-align: left;
   }
 
   .git-tool-archive-group-toggle:hover {
-    border-color: #bad4ea;
-    background: #e6f1fa;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
   }
 
   .git-tool-archive-group-toggle strong {
@@ -4092,7 +4092,7 @@ function showErrorMessage(error) {
     display: flex;
     flex-direction: column;
     gap: 7px;
-    border-left: 1px solid #cfe0ef;
+    border-left: 1px solid var(--color-line-strong);
     margin-left: 8px;
     padding-left: 8px;
   }
@@ -4100,13 +4100,13 @@ function showErrorMessage(error) {
   .git-tool-archive {
     min-height: 66px;
     padding: 10px 11px;
-    border-color: #d9e5ee;
-    background: #ffffff;
+    border-color: var(--color-line);
+    background: var(--color-panel);
   }
 
   .git-tool-archive:hover {
-    border-color: #bfd5e8;
-    background: #f7fbff;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
   }
 
   .git-tool-archive-main {
@@ -4125,7 +4125,7 @@ function showErrorMessage(error) {
     code {
       padding: 2px 6px;
       border-radius: 5px;
-      background: #eef6ff;
+      background: var(--color-primary-soft);
       color: var(--color-primary);
       font-family: "JetBrains Mono", "Consolas", monospace;
       font-size: 0.72rem;
@@ -4143,8 +4143,8 @@ function showErrorMessage(error) {
   min-height: 38px;
   padding: 0 16px;
   border-bottom: 1px solid var(--color-line);
-  background: #eef5fb;
-  color: #2f5f91;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
   font-size: 0.76rem;
 }
 
@@ -4182,8 +4182,8 @@ function showErrorMessage(error) {
   align-items: center;
   height: 31px;
   border-bottom: 1px solid var(--color-line);
-  background: #edf3f8;
-  color: #3d5874;
+  background: var(--color-primary-soft);
+  color: var(--color-text-muted);
   font-size: 0.72rem;
   font-weight: 700;
 }
@@ -4211,19 +4211,19 @@ function showErrorMessage(error) {
   min-height: 33px;
   border: 0;
   border-bottom: 1px solid var(--color-line);
-  background: #ffffff;
-  color: #11395f;
+  background: var(--color-panel);
+  color: var(--color-primary);
   cursor: pointer;
   font-size: 0.78rem;
   text-align: left;
 }
 
 .git-tool-archive-commit:hover {
-  background: #f7fbff;
+  background: var(--color-primary-soft);
 }
 
 .git-tool-archive-commit-active {
-  background: #e8f2fb;
+  background: var(--color-primary-soft);
 }
 
 .git-tool-archive-commit-title {
@@ -4241,14 +4241,14 @@ function showErrorMessage(error) {
   flex: 1;
   min-height: 0;
   padding: 12px;
-  background: #f8fafc;
+  background: var(--color-panel-soft);
 }
 
 .git-tool-archive-detail-content .git-change-view {
   overflow: hidden;
-  border: 1px solid #cbddec;
+  border: 1px solid var(--color-line-strong);
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--color-panel);
 }
 
 .git-change-view {
@@ -4262,7 +4262,7 @@ function showErrorMessage(error) {
   flex: none;
   padding: 10px 12px;
   border-bottom: 1px solid var(--color-line);
-  background: #ffffff;
+  background: var(--color-panel);
 }
 
 .git-change-view-summary {
@@ -4330,7 +4330,7 @@ function showErrorMessage(error) {
   min-height: 0;
   flex-direction: column;
   border-right: 1px solid var(--color-line);
-  background: #f8fafc;
+  background: var(--color-panel-soft);
 }
 
 .git-change-view-tree-head {
@@ -4385,7 +4385,7 @@ function showErrorMessage(error) {
 }
 
 .git-change-view-tree-directory:hover {
-  background: #edf3f8;
+  background: var(--color-primary-soft);
 }
 
 .git-change-view-tree-file {
@@ -4394,18 +4394,18 @@ function showErrorMessage(error) {
 }
 
 .git-change-view-tree-file:hover {
-  background: #edf3f8;
+  background: var(--color-primary-soft);
 }
 
 .git-change-view-tree-file-active {
   border-left-color: var(--color-primary);
-  background: #e9f4ff;
+  background: var(--color-primary-soft);
 }
 
 .git-change-view-tree-caret,
 .git-change-view-tree-folder {
   flex: none;
-  color: #6d85a5;
+  color: var(--color-text-muted);
 }
 
 .git-change-view-tree-directory strong {
@@ -4422,8 +4422,8 @@ function showErrorMessage(error) {
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: #e8eef5;
-  color: #506b91;
+  background: var(--color-panel-soft);
+  color: var(--color-primary);
   font-size: 0.68rem;
 }
 
@@ -4483,7 +4483,7 @@ function showErrorMessage(error) {
   height: 32px;
   padding: 0 10px;
   border-bottom: 1px solid var(--color-line);
-  background: #f8fafc;
+  background: var(--color-panel-soft);
 }
 
 .git-change-view-file-head strong {
@@ -4503,7 +4503,7 @@ function showErrorMessage(error) {
   min-height: 0;
   margin: 0;
   overflow: auto;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-text);
   font-family: "JetBrains Mono", "Consolas", monospace;
   font-size: 0.7rem;
@@ -4519,24 +4519,24 @@ function showErrorMessage(error) {
 }
 
 .git-change-view-line-add {
-  background: #effaf2;
-  color: #176238;
+  background: var(--color-success-soft);
+  color: var(--color-success);
 }
 
 .git-change-view-line-delete {
-  background: #fff0ee;
-  color: #9f241b;
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 
 .git-change-view-line-chunk {
-  background: #eef5fb;
-  color: #2f5f91;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
   font-weight: 700;
 }
 
 .git-change-view-line-meta {
-  background: #f4f6f8;
-  color: #637386;
+  background: var(--color-panel-soft);
+  color: var(--color-text-muted);
 }
 
 .git-tool {
@@ -4551,7 +4551,7 @@ function showErrorMessage(error) {
     flex: none;
     padding: 10px 12px;
     border-bottom: 1px solid var(--color-line);
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   :deep(.git-change-view-summary) {
@@ -4629,7 +4629,7 @@ function showErrorMessage(error) {
     min-height: 0;
     flex-direction: column;
     border-right: 1px solid var(--color-line);
-    background: #f8fafc;
+    background: var(--color-panel-soft);
   }
 
   :deep(.git-change-view-tree-head) {
@@ -4684,7 +4684,7 @@ function showErrorMessage(error) {
   }
 
   :deep(.git-change-view-tree-directory:hover) {
-    background: #edf3f8;
+    background: var(--color-primary-soft);
   }
 
   :deep(.git-change-view-tree-file) {
@@ -4693,18 +4693,18 @@ function showErrorMessage(error) {
   }
 
   :deep(.git-change-view-tree-file:hover) {
-    background: #edf3f8;
+    background: var(--color-primary-soft);
   }
 
   :deep(.git-change-view-tree-file-active) {
     border-left-color: var(--color-primary);
-    background: #e9f4ff;
+    background: var(--color-primary-soft);
   }
 
   :deep(.git-change-view-tree-caret),
   :deep(.git-change-view-tree-folder) {
     flex: none;
-    color: #6d85a5;
+    color: var(--color-text-muted);
   }
 
   :deep(.git-change-view-tree-directory strong) {
@@ -4721,8 +4721,8 @@ function showErrorMessage(error) {
     align-items: center;
     justify-content: center;
     border-radius: 999px;
-    background: #e8eef5;
-    color: #506b91;
+    background: var(--color-panel-soft);
+    color: var(--color-primary);
     font-size: 0.68rem;
   }
 
@@ -4782,7 +4782,7 @@ function showErrorMessage(error) {
     height: 32px;
     padding: 0 10px;
     border-bottom: 1px solid var(--color-line);
-    background: #f8fafc;
+    background: var(--color-panel-soft);
   }
 
   :deep(.git-change-view-file-head strong) {
@@ -4802,7 +4802,7 @@ function showErrorMessage(error) {
     min-height: 0;
     margin: 0;
     overflow: auto;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text);
     font-family: "JetBrains Mono", "Consolas", monospace;
     font-size: 0.7rem;
@@ -4818,24 +4818,24 @@ function showErrorMessage(error) {
   }
 
   :deep(.git-change-view-line-add) {
-    background: #effaf2;
-    color: #176238;
+    background: var(--color-success-soft);
+    color: var(--color-success);
   }
 
   :deep(.git-change-view-line-delete) {
-    background: #fff0ee;
-    color: #9f241b;
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
   }
 
   :deep(.git-change-view-line-chunk) {
-    background: #eef5fb;
-    color: #2f5f91;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
     font-weight: 700;
   }
 
   :deep(.git-change-view-line-meta) {
-    background: #f4f6f8;
-    color: #637386;
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
   }
 
   :deep(.git-change-view .git-tool-detail-empty),

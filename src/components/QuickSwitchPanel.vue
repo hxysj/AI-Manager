@@ -921,9 +921,9 @@ onBeforeUnmount(() => {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid #b8cce5;
-  background: #eef4fb;
-  color: #101828;
+  border: 1px solid var(--color-info-line);
+  background: var(--color-primary-soft);
+  color: var(--color-text);
 
   :deep(.token-count) {
     font-size: inherit;
@@ -941,8 +941,8 @@ onBeforeUnmount(() => {
     gap: 8px;
     height: 34px;
     padding: 0 8px 0 10px;
-    border-bottom: 1px solid #d7e3f1;
-    background: #fbfdff;
+    border-bottom: 1px solid var(--color-line-strong);
+    background: var(--color-panel-soft);
     -webkit-app-region: drag;
   }
 
@@ -962,7 +962,7 @@ onBeforeUnmount(() => {
     .quick-switch-panel-title-desc {
       overflow: hidden;
       min-width: 0;
-      color: #667085;
+      color: var(--color-text-muted);
       font-size: 12px;
       line-height: 1;
       text-overflow: ellipsis;
@@ -975,7 +975,7 @@ onBeforeUnmount(() => {
     height: 7px;
     flex: none;
     border-radius: 999px;
-    background: #18a058;
+    background: var(--color-success);
     box-shadow: 0 0 0 3px #e3f5ec;
   }
 
@@ -996,13 +996,13 @@ onBeforeUnmount(() => {
     border: 1px solid transparent;
     border-radius: 6px;
     background: transparent;
-    color: #2d6cdf;
+    color: var(--color-primary);
     cursor: pointer;
   }
 
   .quick-switch-panel-icon-button:hover {
-    border-color: #bdd6f7;
-    background: #eef6ff;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
   }
 
   .quick-switch-panel-logo-button {
@@ -1078,24 +1078,24 @@ onBeforeUnmount(() => {
     flex: none;
     gap: 4px;
     padding: 6px 7px;
-    background: #fbfdff;
+    background: var(--color-panel-soft);
   }
 
   .quick-switch-panel-cli-tab {
     height: 24px;
     flex: 1;
-    border: 1px solid #dce6f2;
+    border: 1px solid var(--color-line);
     border-radius: 6px;
-    background: #f0f4f9;
-    color: #516070;
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: 11px;
     font-weight: 700;
   }
 
   .quick-switch-panel-cli-tab-active {
-    border-color: #1677ff;
-    background: #1677ff;
+    border-color: var(--color-primary-solid);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
@@ -1117,9 +1117,9 @@ onBeforeUnmount(() => {
     gap: 8px;
     height: 34px;
     padding: 0 8px;
-    border: 1px solid #d6e4f3;
+    border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
 
     .quick-switch-panel-hero-copy {
       display: grid;
@@ -1133,8 +1133,8 @@ onBeforeUnmount(() => {
       align-self: center;
       padding: 2px 6px;
       border-radius: 5px;
-      background: #eef6ff;
-      color: #1677ff;
+      background: var(--color-primary-soft);
+      color: var(--color-primary);
       font-size: 10px;
       font-weight: 800;
     }
@@ -1152,7 +1152,7 @@ onBeforeUnmount(() => {
     }
 
     .quick-switch-panel-hero-desc {
-      color: #667085;
+      color: var(--color-text-muted);
       font-size: 11px;
       line-height: 1.15;
     }
@@ -1165,18 +1165,18 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: center;
     padding: 0 10px;
-    border: 1px solid #b9d4f4;
+    border: 1px solid var(--color-info-line);
     border-radius: 6px;
-    background: #f7fbff;
-    color: #1769c2;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
     cursor: pointer;
     font-size: 11px;
     font-weight: 800;
   }
 
   .quick-switch-panel-manage-button:hover {
-    border-color: #7fb7f5;
-    background: #eaf5ff;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
   }
 
   .quick-switch-panel-metrics {
@@ -1192,20 +1192,20 @@ onBeforeUnmount(() => {
       gap: 6px;
       height: 28px;
       padding: 0 7px;
-      border: 1px solid #d8e6f4;
+      border: 1px solid var(--color-line);
       border-radius: 7px;
-      background: #ffffff;
+      background: var(--color-panel);
     }
 
     .quick-switch-panel-metric-label {
-      color: #667085;
+      color: var(--color-text-muted);
       font-size: 10px;
       font-weight: 700;
     }
 
     .quick-switch-panel-metric-value {
       overflow: hidden;
-      color: #101828;
+      color: var(--color-text);
       font-size: 12px;
       line-height: 1.2;
       text-overflow: ellipsis;
@@ -1228,9 +1228,9 @@ onBeforeUnmount(() => {
     gap: 4px;
     overflow: hidden;
     padding: 6px 7px;
-    border: 1px solid #d8e6f4;
+    border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
 
     .quick-switch-panel-usage-head {
       display: flex;
@@ -1240,12 +1240,12 @@ onBeforeUnmount(() => {
     }
 
     .quick-switch-panel-usage-title {
-      color: #101828;
+      color: var(--color-text);
       font-size: 11px;
     }
 
     .quick-switch-panel-usage-count {
-      color: #667085;
+      color: var(--color-text-muted);
       font-size: 10px;
       font-weight: 700;
     }
@@ -1275,12 +1275,12 @@ onBeforeUnmount(() => {
       display: block;
       min-height: 6px;
       border-radius: 4px 4px 2px 2px;
-      background: #1677ff;
+      background: var(--color-primary-solid);
     }
 
     .quick-switch-panel-bar-label {
       overflow: hidden;
-      color: #667085;
+      color: var(--color-text-muted);
       font-size: 9px;
       line-height: 1;
       text-align: center;
@@ -1319,12 +1319,12 @@ onBeforeUnmount(() => {
     }
 
     .quick-switch-panel-provider-name {
-      color: #101828;
+      color: var(--color-text);
     }
 
     .quick-switch-panel-provider-cost {
       flex: none;
-      color: #667085;
+      color: var(--color-text-muted);
       font-weight: 700;
     }
 
@@ -1332,14 +1332,14 @@ onBeforeUnmount(() => {
       height: 6px;
       overflow: hidden;
       border-radius: 999px;
-      background: #edf2f7;
+      background: var(--color-panel-soft);
     }
 
     .quick-switch-panel-provider-fill {
       display: block;
       height: 100%;
       border-radius: inherit;
-      background: #18a058;
+      background: var(--color-success);
     }
   }
 
@@ -1361,9 +1361,9 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 8px;
     padding: 8px 9px;
-    border: 1px solid #d8e6f4;
+    border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
 
     .quick-switch-panel-manager-copy {
       display: flex;
@@ -1380,13 +1380,13 @@ onBeforeUnmount(() => {
     }
 
     .quick-switch-panel-manager-title {
-      color: #101828;
+      color: var(--color-text);
       font-size: 12px;
       line-height: 1.2;
     }
 
     .quick-switch-panel-manager-desc {
-      color: #667085;
+      color: var(--color-text-muted);
       font-size: 11px;
       line-height: 1.2;
     }
@@ -1399,10 +1399,10 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 8px;
     padding: 8px 9px;
-    border: 1px solid #dfe8f3;
+    border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
-    color: #101828;
+    background: var(--color-panel);
+    color: var(--color-text);
     text-align: left;
     transition:
       border-color 0.18s ease,
@@ -1412,16 +1412,16 @@ onBeforeUnmount(() => {
   }
 
   .quick-switch-panel-item:hover {
-    border-color: #9dc9ff;
-    background: #fbfdff;
+    border-color: var(--color-info-line);
+    background: var(--color-panel-soft);
     box-shadow: 0 7px 18px rgba(22, 119, 255, 0.12);
     transform: translateY(-1px);
   }
 
   .quick-switch-panel-item-active {
-    border-color: #56a7ff;
-    background: #eef7ff;
-    box-shadow: inset 3px 0 0 #1677ff;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
+    box-shadow: inset 3px 0 0 var(--color-primary-solid);
   }
 
   .quick-switch-panel-item-account {
@@ -1449,7 +1449,7 @@ onBeforeUnmount(() => {
     }
 
     .quick-switch-panel-item-desc {
-      color: #667085;
+      color: var(--color-text-muted);
       font-size: 12px;
     }
   }
@@ -1468,16 +1468,16 @@ onBeforeUnmount(() => {
     flex: none;
     align-items: center;
     justify-content: center;
-    border: 1px solid #d8e7f7;
+    border: 1px solid var(--color-line);
     border-radius: 6px;
-    background: #ffffff;
-    color: #2d6cdf;
+    background: var(--color-panel);
+    color: var(--color-primary);
     cursor: pointer;
   }
 
   .quick-switch-panel-item-icon-button:hover {
-    border-color: #9dc9ff;
-    background: #eef6ff;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
   }
 
   .quick-switch-panel-item-action {
@@ -1487,36 +1487,36 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: center;
     padding: 0 10px;
-    border: 1px solid #9dc9ff;
+    border: 1px solid var(--color-info-line);
     border-radius: 6px;
-    background: #f0f7ff;
-    color: #1677ff;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
     cursor: pointer;
     font-size: 12px;
     font-weight: 700;
   }
 
   .quick-switch-panel-item-action:hover {
-    border-color: #56a7ff;
-    background: #e4f1ff;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
   }
 
   .quick-switch-panel-item-action:disabled {
-    border-color: #d0d5dd;
-    background: #f3f4f6;
-    color: #98a2b3;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
+    color: var(--color-text-soft);
     cursor: not-allowed;
   }
 
   .quick-switch-panel-item-danger-action {
-    border-color: #ffc7be;
-    background: #fff6f4;
-    color: #b42318;
+    border-color: var(--color-danger-line);
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
   }
 
   .quick-switch-panel-item-danger-action:hover {
-    border-color: #ffafa3;
-    background: #fff0ee;
+    border-color: var(--color-danger-line);
+    background: var(--color-danger-soft);
   }
 
   .quick-switch-panel-quota-list {
@@ -1532,16 +1532,16 @@ onBeforeUnmount(() => {
     align-items: center;
     gap: 4px;
     padding: 0 6px;
-    border: 1px solid #d8e7f7;
+    border: 1px solid var(--color-line);
     border-radius: 5px;
-    background: #f7fbff;
-    color: #49627d;
+    background: var(--color-primary-soft);
+    color: var(--color-text-muted);
     font-size: 11px;
     line-height: 18px;
     white-space: nowrap;
 
     .quick-switch-panel-quota-value {
-      color: #1677ff;
+      color: var(--color-primary);
       font-size: 11px;
       line-height: 18px;
     }
@@ -1552,7 +1552,7 @@ onBeforeUnmount(() => {
     flex: 1;
     align-items: center;
     justify-content: center;
-    color: #667085;
+    color: var(--color-text-muted);
   }
 }
 

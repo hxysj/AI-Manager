@@ -524,7 +524,7 @@ function formatRepositorySkillAction(skill) {
     height: 34px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
@@ -542,8 +542,8 @@ function formatRepositorySkillAction(skill) {
 
   .skill-repository-list-back:hover,
   .skill-repository-list-button:hover {
-    border-color: #b9ccda;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
   }
 
   .skill-repository-list-button:disabled {
@@ -553,19 +553,19 @@ function formatRepositorySkillAction(skill) {
 
   .skill-repository-list-button.primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   .skill-repository-list-button.primary:hover {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
   }
 
   .skill-repository-list-button.installed {
-    border-color: #91c7aa;
-    background: #e9f7ef;
-    color: #16834f;
+    border-color: var(--color-success-line);
+    background: var(--color-success-soft);
+    color: var(--color-success);
   }
 
   .skill-repository-list-filter-card {
@@ -575,7 +575,7 @@ function formatRepositorySkillAction(skill) {
     padding: 12px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
   }
 
@@ -607,7 +607,7 @@ function formatRepositorySkillAction(skill) {
     padding: 0 10px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
     font-size: 0.84rem;
@@ -615,7 +615,7 @@ function formatRepositorySkillAction(skill) {
   }
 
   .skill-repository-list-field-control:focus {
-    border-color: #8eb6d9;
+    border-color: var(--color-info-line);
     box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.1);
   }
 
@@ -628,12 +628,12 @@ function formatRepositorySkillAction(skill) {
     padding: 0 10px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-text-soft);
   }
 
   .skill-repository-list-search-control:focus-within {
-    border-color: #8eb6d9;
+    border-color: var(--color-info-line);
     box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.1);
   }
 
@@ -677,7 +677,7 @@ function formatRepositorySkillAction(skill) {
     padding: 14px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     box-shadow: 0 10px 26px rgba(34, 56, 83, 0.045);
   }
 
@@ -719,7 +719,7 @@ function formatRepositorySkillAction(skill) {
   }
 
   .skill-repository-list-card-status.disabled {
-    background: #edf3f8;
+    background: var(--color-primary-soft);
     color: var(--color-text-soft);
   }
 
@@ -759,9 +759,9 @@ function formatRepositorySkillAction(skill) {
     height: 24px;
     flex: none;
     place-items: center;
-    border: 1px solid #c9d9e6;
+    border: 1px solid var(--color-line);
     border-radius: 999px;
-    background: #eef5fb;
+    background: var(--color-primary-soft);
     color: var(--color-primary);
   }
 
@@ -772,9 +772,9 @@ function formatRepositorySkillAction(skill) {
     height: 24px;
     padding: 0 8px;
     overflow: hidden;
-    border: 1px solid #d8e4ee;
+    border: 1px solid var(--color-line);
     border-radius: 999px;
-    background: #f6f9fc;
+    background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 0.72rem;
     font-weight: 700;
@@ -799,7 +799,7 @@ function formatRepositorySkillAction(skill) {
     padding: 0 11px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.78rem;
@@ -807,20 +807,20 @@ function formatRepositorySkillAction(skill) {
   }
 
   .skill-repository-list-card-action:hover {
-    border-color: #b9ccda;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
   }
 
   .skill-repository-list-card-action.install {
-    border-color: #14945f;
-    background: #14945f;
+    border-color: var(--color-success);
+    background: var(--color-success);
     color: #ffffff;
   }
 
   .skill-repository-list-card-action.install.installed {
-    border-color: #91c7aa;
-    background: #e9f7ef;
-    color: #16834f;
+    border-color: var(--color-success-line);
+    background: var(--color-success-soft);
+    color: var(--color-success);
   }
 
   .skill-repository-list-card-action:disabled {
@@ -837,7 +837,7 @@ function formatRepositorySkillAction(skill) {
     gap: 8px;
     border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     text-align: center;
   }
@@ -872,7 +872,7 @@ function formatRepositorySkillAction(skill) {
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     box-shadow: 0 24px 64px rgba(15, 23, 42, 0.18);
   }
 
@@ -883,7 +883,7 @@ function formatRepositorySkillAction(skill) {
     gap: 12px;
     padding: 14px;
     border-bottom: 1px solid var(--color-line);
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   .skill-repository-list-detail-title {
@@ -927,7 +927,7 @@ function formatRepositorySkillAction(skill) {
     padding: 11px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   .skill-repository-list-detail-section.content {
@@ -978,9 +978,9 @@ function formatRepositorySkillAction(skill) {
     gap: 6px;
     min-height: 26px;
     padding: 0 9px;
-    border: 1px solid #d8e4ee;
+    border: 1px solid var(--color-line);
     border-radius: 999px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     font-size: 0.74rem;
     font-weight: 700;
@@ -993,7 +993,7 @@ function formatRepositorySkillAction(skill) {
     padding: 0 8px;
     border: 1px solid var(--color-line);
     border-radius: 999px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     font-size: 0.72rem;
   }

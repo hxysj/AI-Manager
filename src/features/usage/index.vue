@@ -4,8 +4,10 @@
     :class="['usage-view', { 'usage-view-loading-active': pageLoading }]"
   >
     <div v-if="pageLoading" class="usage-view-loading">
-      <RefreshCw class="usage-view-loading-icon" :size="22" />
-      <span>正在加载用量数据...</span>
+      <div class="usage-view-loading-content" role="status" aria-live="polite">
+        <RefreshCw class="usage-view-loading-icon" :size="20" />
+        <span class="usage-view-loading-text">正在加载用量数据...</span>
+      </div>
     </div>
 
     <header class="usage-view__toolbar">
@@ -2818,6 +2820,44 @@ function formatSessionLabel(item) {
     overflow-y: hidden;
   }
 
+  .usage-view-loading {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--color-page) 68%, transparent);
+    backdrop-filter: blur(2px);
+
+    .usage-view-loading-content {
+      display: inline-flex;
+      min-height: 52px;
+      align-items: center;
+      gap: 10px;
+      padding: 0 18px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--color-panel) 96%, transparent);
+      box-shadow: var(--shadow-panel);
+      color: var(--color-text);
+      font-size: 0.9rem;
+      font-weight: 700;
+    }
+
+    .usage-view-loading-icon {
+      flex: none;
+      color: var(--color-primary);
+      animation: usage-loading-spin 0.8s linear infinite;
+    }
+
+    .usage-view-loading-text {
+      line-height: 1.4;
+      white-space: nowrap;
+    }
+  }
+
   &__toolbar {
     position: sticky;
     top: 0;
@@ -2866,7 +2906,7 @@ function formatSessionLabel(item) {
     height: 36px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.86rem;
@@ -2944,7 +2984,7 @@ function formatSessionLabel(item) {
     height: 36px;
     min-width: 0;
     border-radius: 8px;
-    background: #fff;
+    background: var(--color-panel);
     box-shadow: 0 0 0 1px var(--color-line) inset;
   }
 
@@ -3035,26 +3075,6 @@ function formatSessionLabel(item) {
     min-height: 0;
   }
 
-  .usage-view-loading {
-    position: absolute;
-    inset: 0;
-    z-index: 20;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: rgba(248, 251, 255, 0.82);
-    color: var(--color-primary);
-    font-size: 0.92rem;
-    font-weight: 700;
-
-    .usage-view-loading-icon {
-      animation: usage-loading-spin 0.8s linear infinite;
-    }
-  }
-
   &__section-header {
     display: flex;
     align-items: center;
@@ -3088,7 +3108,7 @@ function formatSessionLabel(item) {
     padding: 0 10px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.78rem;
@@ -3126,7 +3146,7 @@ function formatSessionLabel(item) {
   }
 
   &__chart-tab--active {
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
@@ -3235,13 +3255,13 @@ function formatSessionLabel(item) {
     position: sticky;
     top: 0;
     z-index: 1;
-    background: #edf2f8;
+    background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-weight: 700;
   }
 
   &__table-row {
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &__table-row:last-child {
@@ -3275,7 +3295,7 @@ function formatSessionLabel(item) {
     height: 32px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-text);
     cursor: pointer;
     font-size: 0.78rem;
@@ -3291,7 +3311,7 @@ function formatSessionLabel(item) {
     justify-content: center;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
   }
@@ -3384,7 +3404,7 @@ function formatSessionLabel(item) {
     gap: 6px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
@@ -3454,7 +3474,7 @@ function formatSessionLabel(item) {
     gap: 6px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
@@ -3480,7 +3500,7 @@ function formatSessionLabel(item) {
     resize: vertical;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text);
     font-family: Consolas, "Courier New", monospace;
     font-size: 0.78rem;
@@ -3490,7 +3510,7 @@ function formatSessionLabel(item) {
 
   &__import-success {
     margin: 0;
-    color: #197447;
+    color: var(--color-success);
     font-size: 0.82rem;
     font-weight: 800;
   }
@@ -3502,7 +3522,7 @@ function formatSessionLabel(item) {
     overflow: auto;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &__pricing-head,
@@ -3520,7 +3540,7 @@ function formatSessionLabel(item) {
     min-height: 36px;
     padding: 0 12px;
     border-bottom: 1px solid var(--color-line);
-    background: #edf2f8;
+    background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 0.72rem;
     font-weight: 700;
@@ -3530,7 +3550,7 @@ function formatSessionLabel(item) {
     min-height: 42px;
     padding: 0 12px;
     border-bottom: 1px solid var(--color-line);
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &__pricing-row:last-child {
@@ -3564,8 +3584,8 @@ function formatSessionLabel(item) {
     align-items: center;
     padding: 0 9px;
     border-radius: 7px;
-    background: #e8eef6;
-    color: #28415f;
+    background: var(--color-primary-soft);
+    color: var(--color-text-muted);
     font-size: 0.74rem;
     font-weight: 800;
     text-overflow: ellipsis;
@@ -3611,7 +3631,7 @@ function formatSessionLabel(item) {
 
   &__dialog-actions button:last-child {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
@@ -3622,7 +3642,7 @@ function formatSessionLabel(item) {
 
   &__error {
     margin: 0;
-    color: #b42318;
+    color: var(--color-danger);
     font-size: 0.82rem;
     font-weight: 700;
   }
@@ -3633,4 +3653,5 @@ function formatSessionLabel(item) {
     transform: rotate(360deg);
   }
 }
+
 </style>

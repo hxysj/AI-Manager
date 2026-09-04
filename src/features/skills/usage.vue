@@ -765,7 +765,7 @@ function formatUsageItems(items, type) {
     height: 36px;
     min-width: 0;
     border-radius: 8px;
-    background: #fff;
+    background: var(--color-panel);
     box-shadow: 0 0 0 1px var(--color-line) inset;
   }
 
@@ -938,13 +938,13 @@ function formatUsageItems(items, type) {
     position: sticky;
     top: 0;
     z-index: 1;
-    background: #edf2f8;
+    background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-weight: 700;
   }
 
   &__table-row {
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &__table-row:last-child {
@@ -1011,14 +1011,14 @@ function formatUsageItems(items, type) {
   padding: 0 12px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #fbfcfd;
+  background: var(--color-panel-soft);
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.88rem;
   font-weight: 600;
 
   &:hover {
-    border-color: #b9ccda;
+    border-color: var(--color-line-strong);
     background: var(--color-primary-soft);
   }
 
@@ -1033,13 +1033,13 @@ function formatUsageItems(items, type) {
 
   &--primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   &--primary:hover {
-    border-color: #2a4f6f;
-    background: #2a4f6f;
+    border-color: var(--color-primary-solid);
+    background: var(--color-primary-solid);
   }
 }
 </style>

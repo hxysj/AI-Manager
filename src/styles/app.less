@@ -5,8 +5,8 @@
     "Bahnschrift", "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  background: #ffffff;
-  color: #14213a;
+  background: var(--color-page);
+  color: var(--color-text);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -20,16 +20,74 @@
   --color-text-muted: #5f7087;
   --color-text-soft: #93a2b3;
   --color-primary: #2f5f91;
+  --color-primary-solid: #2f5f91;
   --color-primary-soft: #edf2f8;
   --color-accent: #496984;
   --color-accent-soft: #eef3f7;
   --color-success: #17803d;
   --color-success-soft: #eaf8ef;
+  --color-success-line: #a9e5bd;
   --color-warning: #9a6500;
   --color-warning-soft: #fff6df;
+  --color-warning-line: #ffe0a3;
   --color-danger: #b42318;
   --color-danger-soft: #fff0ee;
+  --color-danger-line: #ffc7c2;
+  --color-info-line: #b7d9f6;
+  --color-json-key: #a02c97;
+  --color-json-string: #279645;
+  --color-json-number: #1671bd;
+  --color-json-boolean: #bd6d19;
+  --color-json-null: #89939a;
+  --color-search-match: #fff8e9;
+  --color-search-match-line: #e4a62d;
   --shadow-panel: 0 14px 36px rgba(34, 56, 83, 0.08);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-page: #101214;
+  --color-panel: #191c1f;
+  --color-panel-soft: #22262a;
+  --color-line: #343a40;
+  --color-line-strong: #4a535c;
+  --color-text: #f2f4f5;
+  --color-text-muted: #b5bdc5;
+  --color-text-soft: #818c96;
+  --color-primary: #8db7dc;
+  --color-primary-solid: #3f739b;
+  --color-primary-soft: #263746;
+  --color-accent: #a2c3dc;
+  --color-accent-soft: #283640;
+  --color-success: #62cf88;
+  --color-success-soft: #193728;
+  --color-success-line: #326c49;
+  --color-warning: #efbd63;
+  --color-warning-soft: #3b301d;
+  --color-warning-line: #745b2e;
+  --color-danger: #ff8b84;
+  --color-danger-soft: #3e2424;
+  --color-danger-line: #793f3b;
+  --color-info-line: #426987;
+  --color-json-key: #ec9be5;
+  --color-json-string: #79d98d;
+  --color-json-number: #78baf0;
+  --color-json-boolean: #f0b56d;
+  --color-json-null: #9ca7af;
+  --color-search-match: #49391d;
+  --color-search-match-line: #d9a441;
+  --shadow-panel: 0 16px 42px rgba(0, 0, 0, 0.34);
+  --el-bg-color: var(--color-panel);
+  --el-bg-color-overlay: var(--color-panel);
+  --el-fill-color-blank: var(--color-panel);
+  --el-fill-color-light: var(--color-panel-soft);
+  --el-border-color: var(--color-line);
+  --el-border-color-light: var(--color-line);
+  --el-border-color-lighter: var(--color-line);
+  --el-text-color-primary: var(--color-text);
+  --el-text-color-regular: var(--color-text-muted);
+  --el-text-color-placeholder: var(--color-text-soft);
+  --el-color-primary: var(--color-primary);
 }
 
 * {
@@ -66,8 +124,13 @@ button:focus-visible,
 input:focus-visible,
 textarea:focus-visible,
 select:focus-visible {
-  outline: 2px solid rgba(47, 70, 104, 0.24);
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 32%, transparent);
   outline-offset: 2px;
+}
+
+::selection {
+  background: var(--color-primary-soft);
+  color: var(--color-text);
 }
 
 .app-message {
@@ -101,19 +164,19 @@ select:focus-visible {
 }
 
 .app-message__item--success {
-  border-color: #a9e5bd;
+  border-color: var(--color-success-line);
   background: var(--color-success-soft);
   color: var(--color-success);
 }
 
 .app-message__item--error {
-  border-color: #ffc7c2;
+  border-color: var(--color-danger-line);
   background: var(--color-danger-soft);
   color: var(--color-danger);
 }
 
 .app-message__item--warning {
-  border-color: #ffe0a3;
+  border-color: var(--color-warning-line);
   background: var(--color-warning-soft);
   color: var(--color-warning);
 }

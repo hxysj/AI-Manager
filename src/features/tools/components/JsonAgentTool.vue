@@ -2358,7 +2358,7 @@ onBeforeUnmount(() => {
 
       .json-agent-message-error {
         .json-agent-message-content {
-          border-color: #ffc7c2;
+          border-color: var(--color-danger-line);
           background: var(--color-danger-soft);
           color: var(--color-danger);
         }
@@ -2669,13 +2669,13 @@ onBeforeUnmount(() => {
         justify-content: center;
         border: 0;
         border-radius: 6px;
-        background: var(--color-primary);
+        background: var(--color-primary-solid);
         color: #ffffff;
         cursor: pointer;
       }
 
       .json-agent-send:hover {
-        background: #284f79;
+        background: var(--color-primary-solid);
       }
 
       .json-agent-send:disabled {

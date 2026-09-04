@@ -221,7 +221,7 @@ function toFileUrl(value) {
   }
 
   .skill-card-group {
-    background: #edf3f8;
+    background: var(--color-primary-soft);
     color: var(--color-primary);
   }
 
@@ -298,15 +298,15 @@ function toFileUrl(value) {
   }
 
   .skill-card-state-action {
-    border-color: #ead1d1;
+    border-color: var(--color-danger-line);
     background: var(--color-danger-soft);
     color: var(--color-danger);
     cursor: pointer;
   }
 
   .skill-card-state-action-disabled {
-    border-color: #d8e4ee;
-    background: #edf3f8;
+    border-color: var(--color-line);
+    background: var(--color-primary-soft);
     color: var(--color-primary);
   }
 
@@ -317,13 +317,13 @@ function toFileUrl(value) {
   }
 
   .skill-card-target-pill-installed {
-    border-color: #cbd6e4;
+    border-color: var(--color-line);
     background: var(--color-success-soft);
     color: var(--color-success);
   }
 
   .skill-card-target-pill-broken-link {
-    border-color: #ead1d1;
+    border-color: var(--color-danger-line);
     background: var(--color-danger-soft);
     color: var(--color-danger);
   }

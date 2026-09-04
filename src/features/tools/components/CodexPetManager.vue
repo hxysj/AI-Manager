@@ -405,7 +405,7 @@ onMounted(loadPets)
     place-items: center;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
   }
@@ -424,13 +424,13 @@ onMounted(loadPets)
   .codex-pet-manager-icon-button:hover,
   .codex-pet-manager-icon-button.active,
   .codex-pet-manager-button:hover {
-    border-color: #b9ccda;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
     color: var(--color-primary);
   }
 
   .codex-pet-manager-icon-button.danger:hover {
-    border-color: #edb9b9;
+    border-color: var(--color-danger-line);
     background: var(--color-danger-soft);
     color: var(--color-danger);
   }
@@ -443,7 +443,7 @@ onMounted(loadPets)
 
   .codex-pet-manager-button.primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
@@ -463,15 +463,15 @@ onMounted(loadPets)
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-text-muted);
     cursor: pointer;
     text-align: left;
   }
 
   .codex-pet-manager-path:hover {
-    border-color: #b9ccda;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
   }
 
   .codex-pet-manager-path:disabled {
@@ -512,7 +512,7 @@ onMounted(loadPets)
     padding: 10px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     cursor: pointer;
     transition:
       border-color 0.18s ease,
@@ -521,13 +521,13 @@ onMounted(loadPets)
 
   .codex-pet-manager-item:hover,
   .codex-pet-manager-item:focus-visible {
-    border-color: #b9ccda;
-    background: #f8fbff;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
     outline: none;
   }
 
   .codex-pet-manager-item.disabled {
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   .codex-pet-manager-preview {
@@ -535,9 +535,9 @@ onMounted(loadPets)
     aspect-ratio: 192 / 208;
     flex: 0 0 88px;
     overflow: hidden;
-    border: 1px solid #d6e2ec;
+    border: 1px solid var(--color-line);
     border-radius: 7px;
-    background-color: #ffffff;
+    background-color: var(--color-panel);
     background-position: 0 0;
     background-repeat: no-repeat;
     background-size: 800% auto;
@@ -593,7 +593,7 @@ onMounted(loadPets)
   }
 
   .codex-pet-manager-status.disabled {
-    background: #eef2f5;
+    background: var(--color-panel-soft);
     color: var(--color-text-soft);
   }
 
@@ -617,8 +617,8 @@ onMounted(loadPets)
   }
 
   .codex-pet-manager-shape {
-    border: 1px solid #d8e4ee;
-    background: #f8fafc;
+    border: 1px solid var(--color-line);
+    background: var(--color-panel-soft);
     color: var(--color-text-soft);
   }
 
@@ -638,16 +638,16 @@ onMounted(loadPets)
     padding: 9px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   .codex-pet-manager-row-preview {
     width: 72px;
     aspect-ratio: 192 / 208;
     flex: 0 0 72px;
-    border: 1px solid #d6e2ec;
+    border: 1px solid var(--color-line);
     border-radius: 6px;
-    background-color: #ffffff;
+    background-color: var(--color-panel);
     background-position-x: 0;
     background-repeat: no-repeat;
     background-size: 800% 900%;
@@ -704,7 +704,7 @@ onMounted(loadPets)
     gap: 8px;
     border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     font-size: 0.82rem;
     text-align: center;
@@ -744,7 +744,7 @@ onMounted(loadPets)
     padding: 0 10px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
     font-size: 0.86rem;
@@ -752,7 +752,7 @@ onMounted(loadPets)
   }
 
   .codex-pet-manager-name-input:focus {
-    border-color: #8eb6d9;
+    border-color: var(--color-info-line);
     box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.1);
   }
 

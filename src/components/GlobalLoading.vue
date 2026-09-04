@@ -32,7 +32,7 @@ const { loading } = useGlobalLoading()
     padding: 16px 20px;
     border: 1px solid var(--color-line);
     border-radius: 10px;
-    background: rgba(255, 255, 255, 0.96);
+    background: color-mix(in srgb, var(--color-panel) 96%, transparent);
     box-shadow: 0 18px 42px rgba(34, 56, 83, 0.18);
     color: var(--color-text);
   }
@@ -40,7 +40,7 @@ const { loading } = useGlobalLoading()
   &__spinner {
     width: 18px;
     height: 18px;
-    border: 2px solid #d7e0ea;
+    border: 2px solid var(--color-line);
     border-top-color: var(--color-primary);
     border-radius: 50%;
     animation: global-loading-spin 0.8s linear infinite;
