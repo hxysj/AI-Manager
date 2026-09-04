@@ -257,13 +257,13 @@ function formatUpdateBytes(value) {
       justify-content: center;
       border: 1px solid var(--color-line);
       border-radius: 7px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-text-muted);
       cursor: pointer;
 
       &:hover {
-        border-color: #c8d2df;
-        background: #f7f9fc;
+        border-color: var(--color-line-strong);
+        background: var(--color-panel-soft);
         color: var(--color-text);
       }
 
@@ -286,10 +286,10 @@ function formatUpdateBytes(value) {
       flex: 0 0 auto;
       align-items: center;
       justify-content: center;
-      border: 1px solid #b7d9f6;
+      border: 1px solid var(--color-info-line);
       border-radius: 8px;
-      background: #e8f4ff;
-      color: #0b78d0;
+      background: var(--color-primary-soft);
+      color: var(--color-primary);
     }
 
     .app-update-copy {
@@ -315,7 +315,7 @@ function formatUpdateBytes(value) {
     padding: 12px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #f8fbff;
+    background: var(--color-panel-soft);
 
     .app-update-progress-head {
       display: flex;
@@ -335,12 +335,12 @@ function formatUpdateBytes(value) {
       height: 8px;
       overflow: hidden;
       border-radius: 999px;
-      background: #e6edf5;
+      background: var(--color-panel-soft);
 
       .app-update-progress-bar {
         height: 100%;
         border-radius: inherit;
-        background: var(--color-primary);
+        background: var(--color-primary-solid);
       }
     }
   }
@@ -351,7 +351,7 @@ function formatUpdateBytes(value) {
     overflow: auto;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #f8fafc;
+    background: var(--color-panel-soft);
     color: var(--color-text);
     font-family: "JetBrains Mono", "Consolas", monospace;
     font-size: 0.76rem;
@@ -375,7 +375,7 @@ function formatUpdateBytes(value) {
       height: 34px;
       border: 1px solid var(--color-line);
       border-radius: 7px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-primary);
       font-size: 0.86rem;
       font-weight: 700;
@@ -383,7 +383,7 @@ function formatUpdateBytes(value) {
 
       &:hover {
         border-color: var(--color-primary);
-        background: #f7f9fc;
+        background: var(--color-panel-soft);
       }
 
       &:disabled {
@@ -394,12 +394,12 @@ function formatUpdateBytes(value) {
 
     .app-update-primary-button {
       border-color: var(--color-primary);
-      background: var(--color-primary);
+      background: var(--color-primary-solid);
       color: #ffffff;
 
       &:hover {
         border-color: var(--color-primary);
-        background: var(--color-primary);
+        background: var(--color-primary-solid);
       }
     }
   }

@@ -231,7 +231,7 @@ async function openRepository(repository) {
     height: 34px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
@@ -249,19 +249,19 @@ async function openRepository(repository) {
 
   .skill-repository-manager-back:hover,
   .skill-repository-manager-button:hover {
-    border-color: #b9ccda;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
   }
 
   .skill-repository-manager-button.primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   .skill-repository-manager-button.primary:hover {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
   }
 
   .skill-repository-manager-title {
@@ -289,7 +289,7 @@ async function openRepository(repository) {
   .skill-repository-manager-list-card {
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     box-shadow: 0 10px 28px rgba(34, 56, 83, 0.05);
   }
 
@@ -350,7 +350,7 @@ async function openRepository(repository) {
     padding: 0 10px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
     font-size: 0.84rem;
@@ -358,7 +358,7 @@ async function openRepository(repository) {
   }
 
   .skill-repository-manager-field-control:focus {
-    border-color: #8eb6d9;
+    border-color: var(--color-info-line);
     box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.1);
   }
 
@@ -408,12 +408,12 @@ async function openRepository(repository) {
     padding: 12px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   .skill-repository-manager-item.error {
-    border-color: #efc6c6;
-    background: #fff8f8;
+    border-color: var(--color-danger-line);
+    background: var(--color-danger-soft);
   }
 
   .skill-repository-manager-item-main {
@@ -476,9 +476,9 @@ async function openRepository(repository) {
     align-items: center;
     height: 24px;
     padding: 0 8px;
-    border: 1px solid #d8e4ee;
+    border: 1px solid var(--color-line);
     border-radius: 999px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     font-size: 0.72rem;
     font-weight: 700;
@@ -509,18 +509,18 @@ async function openRepository(repository) {
     place-items: center;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
   }
 
   .skill-repository-manager-icon-button:hover {
-    border-color: #b9ccda;
+    border-color: var(--color-line-strong);
     color: var(--color-primary);
   }
 
   .skill-repository-manager-icon-button.danger:hover {
-    border-color: #edb9b9;
+    border-color: var(--color-danger-line);
     background: var(--color-danger-soft);
     color: var(--color-danger);
   }
@@ -536,7 +536,7 @@ async function openRepository(repository) {
     margin: 10px;
     border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     text-align: center;
   }

@@ -636,7 +636,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
 
     .image-extractor-panel-head {
       display: flex;
@@ -647,7 +647,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       gap: 10px;
       padding: 8px 10px;
       border-bottom: 1px solid var(--color-line);
-      background: #f8fafc;
+      background: var(--color-panel-soft);
 
       .image-extractor-panel-title {
         display: flex;
@@ -687,15 +687,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       padding: 0 9px;
       border: 1px solid var(--color-line);
       border-radius: 7px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-primary);
       cursor: pointer;
       font-size: 0.72rem;
       font-weight: 700;
 
       &:hover:not(:disabled) {
-        border-color: #b9ccda;
-        background: #f3f7fb;
+        border-color: var(--color-line-strong);
+        background: var(--color-panel-soft);
       }
 
       &:disabled {
@@ -706,12 +706,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
 
     .image-extractor-button-primary {
       border-color: var(--color-primary);
-      background: var(--color-primary);
+      background: var(--color-primary-solid);
       color: #ffffff;
 
       &:hover:not(:disabled) {
-        border-color: #263f63;
-        background: #263f63;
+        border-color: var(--color-primary-solid);
+        background: var(--color-primary-solid);
       }
     }
 
@@ -721,7 +721,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       border-radius: 7px;
       outline: 0;
       padding: 0 24px 0 8px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-text);
       cursor: pointer;
       font-size: 0.72rem;
@@ -749,7 +749,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       border: 0;
       outline: 0;
       padding: 12px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-text);
       font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
       font-size: 0.76rem;
@@ -765,8 +765,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
     .image-extractor-notice {
       flex: none;
       padding: 7px 10px;
-      border-bottom: 1px solid #d7e2ec;
-      background: #edf4fa;
+      border-bottom: 1px solid var(--color-line);
+      background: var(--color-panel-soft);
       color: var(--color-primary);
       font-size: 0.7rem;
       font-weight: 700;
@@ -774,15 +774,15 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
     }
 
     .image-extractor-notice-success {
-      border-color: #cde9d5;
-      background: #eaf8ef;
-      color: #177a3b;
+      border-color: var(--color-success-line);
+      background: var(--color-success-soft);
+      color: var(--color-success);
     }
 
     .image-extractor-notice-error {
-      border-color: #f1d0ca;
-      background: #fdebea;
-      color: #a32920;
+      border-color: var(--color-danger-line);
+      background: var(--color-danger-soft);
+      color: var(--color-danger);
     }
 
     .image-extractor-result {
@@ -802,7 +802,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
         place-items: center;
         border: 1px dashed var(--color-line-strong);
         border-radius: 8px;
-        background: #f8fafc;
+        background: var(--color-panel-soft);
         color: var(--color-text-muted);
         font-size: 0.78rem;
       }
@@ -816,13 +816,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
         overflow: hidden;
         border: 1px solid var(--color-line);
         border-radius: 8px;
-        background: #ffffff;
+        background: var(--color-panel);
         transition:
           border-color 0.18s ease,
           box-shadow 0.18s ease;
 
         &:hover {
-          border-color: #b8c9d8;
+          border-color: var(--color-line-strong);
           box-shadow: 0 8px 20px rgba(34, 56, 83, 0.08);
         }
 
@@ -836,9 +836,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           height: 28px;
           align-items: center;
           justify-content: center;
-          border: 1px solid rgba(200, 214, 224, 0.92);
+          border: 1px solid
+            color-mix(in srgb, var(--color-line-strong) 92%, transparent);
           border-radius: 7px;
-          background: rgba(255, 255, 255, 0.94);
+          background: color-mix(
+            in srgb,
+            var(--color-panel) 94%,
+            transparent
+          );
           box-shadow: 0 4px 10px rgba(20, 33, 58, 0.12);
           cursor: pointer;
 
@@ -859,10 +864,27 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           border: 0;
           border-bottom: 1px solid var(--color-line);
           background:
-            linear-gradient(45deg, #eef3f7 25%, transparent 25%),
-            linear-gradient(-45deg, #eef3f7 25%, transparent 25%),
-            linear-gradient(45deg, transparent 75%, #eef3f7 75%),
-            linear-gradient(-45deg, transparent 75%, #eef3f7 75%), #ffffff;
+            linear-gradient(
+              45deg,
+              var(--color-panel-soft) 25%,
+              transparent 25%
+            ),
+            linear-gradient(
+              -45deg,
+              var(--color-panel-soft) 25%,
+              transparent 25%
+            ),
+            linear-gradient(
+              45deg,
+              transparent 75%,
+              var(--color-panel-soft) 75%
+            ),
+            linear-gradient(
+                -45deg,
+                transparent 75%,
+                var(--color-panel-soft) 75%
+              ),
+            var(--color-panel);
           background-position:
             0 0,
             0 9px,
@@ -977,7 +999,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       overflow: hidden;
       border: 1px solid rgba(255, 255, 255, 0.45);
       border-radius: 8px;
-      background: #ffffff;
+      background: var(--color-panel);
       box-shadow: 0 24px 68px rgba(15, 23, 42, 0.24);
 
       .image-extractor-dialog-head {
@@ -988,7 +1010,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
         gap: 12px;
         padding: 9px 10px;
         border-bottom: 1px solid var(--color-line);
-        background: #f8fafc;
+        background: var(--color-panel-soft);
 
         .image-extractor-dialog-heading {
           display: flex;
@@ -1016,7 +1038,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           padding: 0;
           border: 1px solid var(--color-line);
           border-radius: 7px;
-          background: #ffffff;
+          background: var(--color-panel);
           color: var(--color-primary);
           cursor: pointer;
           place-items: center;
@@ -1029,7 +1051,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
         min-height: 0;
         flex: 1;
         overflow: hidden;
-        background: #f3f6fa;
+        background: var(--color-panel-soft);
 
         .image-extractor-dialog-body {
           width: 100%;
@@ -1073,9 +1095,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           width: 36px;
           height: 42px;
           padding: 0;
-          border: 1px solid #cdd9e4;
+          border: 1px solid var(--color-line);
           border-radius: 7px;
-          background: rgba(255, 255, 255, 0.94);
+          background: color-mix(
+            in srgb,
+            var(--color-panel) 94%,
+            transparent
+          );
           box-shadow: 0 7px 18px rgba(34, 56, 83, 0.14);
           color: var(--color-primary);
           cursor: pointer;
@@ -1084,7 +1110,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
 
           &:hover:not(:disabled) {
             border-color: var(--color-primary);
-            background: #ffffff;
+            background: var(--color-panel);
           }
 
           &:disabled {
@@ -1167,7 +1193,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
         padding: 9px 11px;
         border: 0;
         border-top: 1px solid var(--color-line);
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
         font-family: ui-monospace, SFMono-Regular, Consolas, monospace;

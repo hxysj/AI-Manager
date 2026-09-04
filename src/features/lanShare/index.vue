@@ -743,7 +743,7 @@ function isTextPreviewFile(name, mimeType) {
     padding: 6px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #f8fafc;
+    background: var(--color-panel-soft);
 
     &__button {
       display: inline-flex;
@@ -760,8 +760,8 @@ function isTextPreviewFile(name, mimeType) {
     }
 
     &__button--active {
-      border-color: #8db7dc;
-      background: #ffffff;
+      border-color: var(--color-info-line);
+      background: var(--color-panel);
       color: var(--color-primary);
       box-shadow: 0 6px 18px rgba(42, 67, 101, 0.08);
     }

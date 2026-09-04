@@ -334,7 +334,7 @@ function toggleSelectAllFiles() {
     min-height: 48px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--color-line);
-    background: #f8fafc;
+    background: var(--color-panel-soft);
 
     .lan-share-files-title {
       display: flex;
@@ -368,7 +368,7 @@ function toggleSelectAllFiles() {
         padding: 0 9px;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
         font-size: 0.76rem;
@@ -399,7 +399,7 @@ function toggleSelectAllFiles() {
       padding: 9px;
       border: 1px solid var(--color-line);
       border-radius: 8px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-text);
 
       .lan-share-files-check {
@@ -426,12 +426,12 @@ function toggleSelectAllFiles() {
           height: 16px;
           border: 1px solid var(--color-line);
           border-radius: 4px;
-          background: #ffffff;
+          background: var(--color-panel);
         }
 
         .lan-share-files-check-input:checked + .lan-share-files-check-mark {
           border-color: var(--color-primary);
-          background: var(--color-primary);
+          background: var(--color-primary-solid);
         }
       }
 
@@ -443,8 +443,8 @@ function toggleSelectAllFiles() {
         align-items: center;
         justify-content: center;
         border-radius: 7px;
-        background: #eef5fb;
-        color: #356b9b;
+        background: var(--color-primary-soft);
+        color: var(--color-primary);
       }
 
       .lan-share-files-main {
@@ -488,7 +488,7 @@ function toggleSelectAllFiles() {
           gap: 6px;
           border: 1px solid var(--color-line);
           border-radius: 7px;
-          background: #ffffff;
+          background: var(--color-panel);
           color: var(--color-primary);
           cursor: pointer;
           font-weight: 700;

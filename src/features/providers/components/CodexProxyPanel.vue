@@ -759,9 +759,9 @@ defineExpose({
   gap: 10px;
   margin: 14px 14px 0;
   padding: 12px 16px 14px;
-  border: 1px solid #d8e0eb;
+  border: 1px solid var(--color-line);
   border-radius: 12px;
-  background: #f8fafc;
+  background: var(--color-panel-soft);
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06);
 
   &-summary {
@@ -816,8 +816,8 @@ defineExpose({
     flex: none;
     padding: 3px 8px;
     border-radius: 999px;
-    background: #ecfdf3;
-    color: #027a48;
+    background: var(--color-success-soft);
+    color: var(--color-success);
     font-size: 12px;
     font-weight: 700;
   }
@@ -826,7 +826,7 @@ defineExpose({
   &-provider strong,
   &-picker-main strong {
     overflow: hidden;
-    color: #111827;
+    color: var(--color-text);
     font-size: 0.95rem;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -838,7 +838,7 @@ defineExpose({
   &-provider span,
   &-picker-main small {
     overflow: hidden;
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.8rem;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -858,18 +858,18 @@ defineExpose({
     justify-content: center;
     gap: 6px;
     padding: 0 12px;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 12px;
-    background: #ffffff;
-    color: #475467;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.84rem;
     font-weight: 700;
   }
 
   &-pool-button:hover {
-    border-color: #9bb7ff;
-    color: #1d4ed8;
+    border-color: var(--color-info-line);
+    color: var(--color-primary);
   }
 
   &-pool-button:disabled,
@@ -891,7 +891,7 @@ defineExpose({
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.8rem;
   }
 
@@ -904,7 +904,7 @@ defineExpose({
 
   &-pool-head strong {
     overflow: hidden;
-    color: #1d4ed8;
+    color: var(--color-primary);
     font-size: 0.82rem;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -925,9 +925,9 @@ defineExpose({
     min-width: 0;
     align-items: center;
     gap: 10px;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &-pool-item {
@@ -936,20 +936,20 @@ defineExpose({
   }
 
   &-pool-item-active {
-    border-color: #9bb7ff;
-    background: #f5f8ff;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
     box-shadow: inset 3px 0 0 #2f6fed;
   }
 
   &-pool-item-disabled {
-    border-color: #cbd5e1;
-    background: #f8fafc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
     opacity: 0.72;
   }
 
   &-pool-item-disabled:hover {
-    border-color: #94a3b8;
-    background: #f1f5f9;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
     box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
   }
 
@@ -960,10 +960,10 @@ defineExpose({
     flex: none;
     place-items: center;
     overflow: hidden;
-    border: 1px solid #edf1f6;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
-    color: #1d4ed8;
+    background: var(--color-panel);
+    color: var(--color-primary);
     font-weight: 700;
   }
 
@@ -984,14 +984,14 @@ defineExpose({
     align-items: center;
     gap: 8px;
     padding: 8px 10px;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &-account-model span {
     flex: none;
-    color: #475467;
+    color: var(--color-text-muted);
     font-size: 12px;
     font-weight: 700;
   }
@@ -1001,10 +1001,10 @@ defineExpose({
     flex: 1;
     height: 28px;
     padding: 0 8px;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
-    color: #111827;
+    background: var(--color-panel);
+    color: var(--color-text);
     font-size: 12px;
     font-weight: 700;
   }
@@ -1013,10 +1013,10 @@ defineExpose({
     height: 28px;
     flex: none;
     padding: 0 8px;
-    border: 1px solid #9bb7ff;
+    border: 1px solid var(--color-info-line);
     border-radius: 8px;
-    background: #ffffff;
-    color: #1d4ed8;
+    background: var(--color-panel);
+    color: var(--color-primary);
     cursor: pointer;
     font-size: 12px;
     font-weight: 700;
@@ -1032,16 +1032,16 @@ defineExpose({
     min-width: 68px;
     padding: 4px 8px;
     border-radius: 999px;
-    background: #f2f4f7;
-    color: #667085;
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
     font-size: 12px;
     font-weight: 700;
     text-align: center;
   }
 
   &-status-active {
-    background: #eef4ff;
-    color: #1d4ed8;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
     text-align: center;
   }
 
@@ -1050,10 +1050,10 @@ defineExpose({
     height: 28px;
     flex: none;
     place-items: center;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
-    color: #475467;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
     cursor: pointer;
   }
 
@@ -1065,10 +1065,10 @@ defineExpose({
     align-items: center;
     justify-content: center;
     padding: 0 10px;
-    border: 1px solid #9bb7ff;
+    border: 1px solid var(--color-info-line);
     border-radius: 8px;
-    background: #ffffff;
-    color: #1d4ed8;
+    background: var(--color-panel);
+    color: var(--color-primary);
     cursor: pointer;
     font-size: 12px;
     font-weight: 700;
@@ -1083,9 +1083,9 @@ defineExpose({
     min-height: 54px;
     align-items: center;
     justify-content: center;
-    border: 1px dashed #cbd5e1;
+    border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.84rem;
   }
 
@@ -1100,7 +1100,7 @@ defineExpose({
   &-picker-item {
     height: 58px;
     padding: 0 12px;
-    color: #111827;
+    color: var(--color-text);
     cursor: pointer;
     text-align: left;
   }
@@ -1117,7 +1117,7 @@ defineExpose({
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.8rem;
   }
 
@@ -1129,12 +1129,12 @@ defineExpose({
   }
 
   &-logs-head span {
-    color: #111827;
+    color: var(--color-text);
     font-weight: 700;
   }
 
   &-logs-head small {
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.76rem;
   }
 
@@ -1142,9 +1142,9 @@ defineExpose({
     display: flex;
     flex: none;
     overflow: hidden;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &-logs-filter button {
@@ -1154,9 +1154,9 @@ defineExpose({
     justify-content: center;
     padding: 0 12px;
     border: 0;
-    border-right: 1px solid #d8e0eb;
+    border-right: 1px solid var(--color-line);
     background: transparent;
-    color: #475467;
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.78rem;
     font-weight: 700;
@@ -1168,8 +1168,8 @@ defineExpose({
 
   &-logs-filter button:hover,
   &-logs-filter-active {
-    background: #eef4ff;
-    color: #1d4ed8;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
   }
 
   &-logs-body {
@@ -1196,7 +1196,7 @@ defineExpose({
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.78rem;
     font-weight: 700;
   }
@@ -1210,10 +1210,10 @@ defineExpose({
   &-logs-pager select {
     height: 30px;
     padding: 0 8px;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
-    color: #111827;
+    background: var(--color-panel);
+    color: var(--color-text);
     cursor: pointer;
     font-size: 0.78rem;
     font-weight: 700;
@@ -1225,10 +1225,10 @@ defineExpose({
     align-items: center;
     justify-content: center;
     padding: 0 10px;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
-    color: #1d4ed8;
+    background: var(--color-panel);
+    color: var(--color-primary);
     cursor: pointer;
     font-size: 0.78rem;
     font-weight: 700;
@@ -1240,7 +1240,7 @@ defineExpose({
   }
 
   &-logs-pager strong {
-    color: #111827;
+    color: var(--color-text);
     font-size: 0.78rem;
     white-space: nowrap;
   }
@@ -1251,21 +1251,21 @@ defineExpose({
     align-items: center;
     gap: 12px;
     padding: 9px 10px;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     cursor: pointer;
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   }
 
   &-log-item-error {
-    border-color: #f4b7ae;
-    background: #ffffff;
+    border-color: var(--color-danger-line);
+    background: var(--color-panel);
   }
 
   &-log-item:hover {
-    border-color: #9bb7ff;
-    background: #f8fbff;
+    border-color: var(--color-info-line);
+    background: var(--color-panel-soft);
   }
 
   &-log-code {
@@ -1277,16 +1277,16 @@ defineExpose({
     align-items: center;
     justify-content: center;
     gap: 2px;
-    border: 1px solid #f4b7ae;
+    border: 1px solid var(--color-danger-line);
     border-radius: 8px;
-    background: #fff7f6;
-    color: #b42318;
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
   }
 
   &-log-code-ok {
-    border-color: #abefc6;
-    background: #f6fef9;
-    color: #027a48;
+    border-color: var(--color-success-line);
+    background: var(--color-success-soft);
+    color: var(--color-success);
   }
 
   &-log-code span {
@@ -1333,7 +1333,7 @@ defineExpose({
 
   &-log-title strong {
     min-width: 0;
-    color: #111827;
+    color: var(--color-text);
     font-size: 0.84rem;
   }
 
@@ -1341,31 +1341,31 @@ defineExpose({
     flex: none;
     padding: 2px 7px;
     border-radius: 999px;
-    background: #f2f4f7;
-    color: #475467;
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
     font-size: 11px;
     font-weight: 700;
   }
 
   &-log-meta span {
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.76rem;
   }
 
   &-log-meta span:first-child {
     flex: none;
-    color: #344054;
+    color: var(--color-text);
     font-weight: 800;
   }
 
   &-log-meta span:nth-child(2) {
     min-width: 90px;
-    color: #1d4ed8;
+    color: var(--color-primary);
   }
 
   &-log-main small {
     padding-top: 1px;
-    color: #b42318;
+    color: var(--color-danger);
     font-size: 0.75rem;
   }
 
@@ -1374,8 +1374,8 @@ defineExpose({
     min-width: 42px;
     padding: 5px 8px;
     border-radius: 999px;
-    background: #f2f4f7;
-    color: #475467;
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
     font-size: 12px;
     font-weight: 700;
     text-align: center;
@@ -1397,8 +1397,8 @@ defineExpose({
     width: 460px;
     height: 100vh;
     flex-direction: column;
-    border-left: 1px solid #d8e0eb;
-    background: #ffffff;
+    border-left: 1px solid var(--color-line);
+    background: var(--color-panel);
     box-shadow: -18px 0 40px rgba(15, 23, 42, 0.16);
   }
 
@@ -1409,7 +1409,7 @@ defineExpose({
     justify-content: space-between;
     gap: 12px;
     padding: 16px 18px;
-    border-bottom: 1px solid #edf1f6;
+    border-bottom: 1px solid var(--color-line);
   }
 
   &-log-drawer-head div {
@@ -1420,12 +1420,12 @@ defineExpose({
   }
 
   &-log-drawer-head strong {
-    color: #111827;
+    color: var(--color-text);
     font-size: 1rem;
   }
 
   &-log-drawer-head span {
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.78rem;
   }
 
@@ -1435,10 +1435,10 @@ defineExpose({
     height: 32px;
     flex: none;
     place-items: center;
-    border: 1px solid #d8e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
-    color: #475467;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
     cursor: pointer;
   }
 
@@ -1459,27 +1459,27 @@ defineExpose({
     flex-direction: column;
     gap: 6px;
     padding: 10px 12px;
-    border: 1px solid #edf1f6;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #f8fafc;
+    background: var(--color-panel-soft);
   }
 
   &-log-detail-row span,
   &-log-detail-block span {
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.76rem;
   }
 
   &-log-detail-row strong {
     overflow-wrap: anywhere;
-    color: #111827;
+    color: var(--color-text);
     font-size: 0.84rem;
   }
 
   &-log-detail-block pre {
     overflow: visible;
     margin: 0;
-    color: #111827;
+    color: var(--color-text);
     font-family: Consolas, "SFMono-Regular", monospace;
     font-size: 0.78rem;
     line-height: 1.5;

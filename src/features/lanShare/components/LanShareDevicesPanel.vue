@@ -237,7 +237,7 @@ function deviceSessionCount(deviceId) {
     min-height: 52px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--color-line);
-    background: #f8fafc;
+    background: var(--color-panel-soft);
 
     .lan-share-devices-title {
       display: flex;
@@ -268,7 +268,7 @@ function deviceSessionCount(deviceId) {
         min-width: 0;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-text);
       }
 
@@ -302,7 +302,7 @@ function deviceSessionCount(deviceId) {
       padding: 10px;
       border: 1px solid var(--color-line);
       border-radius: 8px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-text);
       cursor: pointer;
       text-align: left;
@@ -316,8 +316,8 @@ function deviceSessionCount(deviceId) {
         align-items: center;
         justify-content: center;
         border-radius: 8px;
-        background: #eef5fb;
-        color: #356b9b;
+        background: var(--color-primary-soft);
+        color: var(--color-primary);
 
         .lan-share-devices-status {
           position: absolute;
@@ -335,7 +335,7 @@ function deviceSessionCount(deviceId) {
         }
 
         .lan-share-devices-status-online {
-          background: #22a35a;
+          background: var(--color-success);
         }
       }
 
@@ -379,7 +379,7 @@ function deviceSessionCount(deviceId) {
           gap: 6px;
           border: 1px solid var(--color-line);
           border-radius: 7px;
-          background: #ffffff;
+          background: var(--color-panel);
           color: var(--color-primary);
           cursor: pointer;
           font-weight: 700;
@@ -393,8 +393,8 @@ function deviceSessionCount(deviceId) {
     }
 
     .lan-share-devices-item-active {
-      border-color: #8db7dc;
-      background: #eef6ff;
+      border-color: var(--color-info-line);
+      background: var(--color-primary-soft);
     }
 
     .lan-share-devices-empty {
@@ -417,7 +417,7 @@ function deviceSessionCount(deviceId) {
     gap: 10px;
     padding: 9px 10px;
     border-top: 1px solid var(--color-line);
-    background: #f8fafc;
+    background: var(--color-panel-soft);
 
     .lan-share-devices-page-info,
     .lan-share-devices-current-page {
@@ -440,7 +440,7 @@ function deviceSessionCount(deviceId) {
         padding: 0 9px;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
         font-size: 0.76rem;

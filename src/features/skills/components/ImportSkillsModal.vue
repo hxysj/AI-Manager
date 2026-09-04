@@ -209,9 +209,9 @@ function handleClose() {
 
   &__loading {
     padding: 10px 12px;
-    border: 1px solid #d8e2ec;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #f6f9fc;
+    background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 0.84rem;
     font-weight: 600;
@@ -281,7 +281,7 @@ function handleClose() {
   }
 
   &__item:hover {
-    border-color: #b9ccda;
+    border-color: var(--color-line-strong);
     background: var(--color-primary-soft);
   }
 
@@ -290,7 +290,7 @@ function handleClose() {
   }
 
   &__item--radio {
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &__content {
@@ -349,14 +349,14 @@ function handleClose() {
   padding: 0 14px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #fbfcfd;
+  background: var(--color-panel-soft);
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.88rem;
   font-weight: 600;
 
   &:hover {
-    border-color: #b9ccda;
+    border-color: var(--color-line-strong);
     background: var(--color-primary-soft);
   }
 
@@ -367,13 +367,13 @@ function handleClose() {
 
   &--primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #fff;
   }
 
   &--primary:hover {
-    border-color: #2a4f6f;
-    background: #2a4f6f;
+    border-color: var(--color-primary-solid);
+    background: var(--color-primary-solid);
   }
 }
 </style>

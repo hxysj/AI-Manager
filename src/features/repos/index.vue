@@ -266,7 +266,7 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
 
   &--primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #fff;
   }
 

@@ -1069,7 +1069,7 @@ onBeforeUnmount(() => {
   display: flex;
   min-height: 100%;
   flex-direction: column;
-  background: #ffffff;
+  background: var(--color-panel);
 
   &__toolbar,
   &__toolbar-actions,
@@ -1086,8 +1086,8 @@ onBeforeUnmount(() => {
     gap: 12px;
     min-height: 58px;
     padding: 0 14px;
-    border-bottom: 1px solid #edf0f3;
-    background: #ffffff;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-panel);
   }
 
   &__toolbar-actions {
@@ -1099,7 +1099,7 @@ onBeforeUnmount(() => {
     gap: 4px;
     padding: 4px;
     border-radius: 12px;
-    background: #f5f6f8;
+    background: var(--color-panel-soft);
   }
 
   &__cli-tab {
@@ -1111,14 +1111,14 @@ onBeforeUnmount(() => {
     border: 0;
     border-radius: 10px;
     background: transparent;
-    color: #667085;
+    color: var(--color-text-muted);
     cursor: pointer;
     font-weight: 600;
   }
 
   &__cli-tab--active {
-    background: #ffffff;
-    color: #111827;
+    background: var(--color-panel);
+    color: var(--color-text);
     box-shadow: 0 1px 5px rgba(15, 23, 42, 0.08);
   }
 
@@ -1137,23 +1137,23 @@ onBeforeUnmount(() => {
     justify-content: center;
     border: 0;
     background: transparent;
-    color: #667085;
+    color: var(--color-text-muted);
     cursor: pointer;
   }
 
   &__secondary {
     height: 38px;
     padding: 0 14px;
-    border: 1px solid #dfe3e8;
+    border: 1px solid var(--color-line);
     border-radius: 10px;
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &__add {
     width: 38px;
     height: 38px;
     border-radius: 12px;
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
@@ -1172,23 +1172,23 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 12px;
     padding: 15px 16px;
-    border: 1px solid #dfe3e8;
+    border: 1px solid var(--color-line);
     border-radius: 14px;
-    background: #ffffff;
+    background: var(--color-panel);
     cursor: pointer;
   }
 
   &__prompt-card--selected {
-    border-color: #1682ff;
+    border-color: var(--color-primary-solid);
   }
 
   &__prompt-card--active {
-    background: #eef7ff;
+    background: var(--color-primary-soft);
   }
 
   &__prompt-card--modified {
-    border-color: #d92d20;
-    background: #fff7f7;
+    border-color: var(--color-danger);
+    background: var(--color-danger-soft);
   }
 
   &__prompt-main {
@@ -1200,13 +1200,13 @@ onBeforeUnmount(() => {
   }
 
   &__prompt-main strong {
-    color: #111827;
+    color: var(--color-text);
   }
 
   &__prompt-main span,
   &__prompt-main small {
     overflow: hidden;
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.82rem;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1231,23 +1231,23 @@ onBeforeUnmount(() => {
     overflow: hidden;
     border: 1px solid transparent;
     border-radius: 50%;
-    background: #ffffff;
-    color: #667085;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.74rem;
     font-weight: 700;
   }
 
   &__target-button--active {
-    border-color: #cbd6e4;
-    background: #e8f8ee;
-    color: #17803d;
+    border-color: var(--color-line);
+    background: var(--color-success-soft);
+    color: var(--color-success);
   }
 
   &__target-button--modified {
-    border-color: #f7c879;
-    background: #fff4e5;
-    color: #c25a00;
+    border-color: var(--color-warning-line);
+    background: var(--color-warning-soft);
+    color: var(--color-warning);
   }
 
   &__target-button:disabled {
@@ -1268,15 +1268,15 @@ onBeforeUnmount(() => {
   }
 
   &__icon-button--danger {
-    color: #c12626;
+    color: var(--color-danger);
   }
 
   &__state-button {
     height: 30px;
     padding: 0 10px;
-    border: 1px solid #dfe3e8;
+    border: 1px solid var(--color-line);
     border-radius: 999px;
-    background: #ffffff;
+    background: var(--color-panel);
     font-size: 0.78rem;
     font-weight: 700;
   }
@@ -1284,10 +1284,10 @@ onBeforeUnmount(() => {
   &__compare-button {
     height: 30px;
     padding: 0 10px;
-    border: 1px solid #d92d20;
+    border: 1px solid var(--color-danger);
     border-radius: 999px;
-    background: #ffffff;
-    color: #b42318;
+    background: var(--color-panel);
+    color: var(--color-danger);
     font-size: 0.78rem;
     font-weight: 700;
   }
@@ -1295,7 +1295,7 @@ onBeforeUnmount(() => {
   &__active-tag {
     padding: 3px 8px;
     border-radius: 999px;
-    background: #1682ff;
+    background: var(--color-primary-solid);
     color: #ffffff;
     font-size: 0.72rem;
     font-weight: 700;
@@ -1305,8 +1305,8 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 14px;
     padding: 14px 16px;
-    border-bottom: 1px solid #edf0f3;
-    background: #fbfcfd;
+    border-bottom: 1px solid var(--color-line);
+    background: var(--color-panel-soft);
   }
 
   &__runtime div {
@@ -1317,12 +1317,12 @@ onBeforeUnmount(() => {
   }
 
   &__runtime strong {
-    color: #111827;
+    color: var(--color-text);
   }
 
   &__runtime span {
     overflow: hidden;
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.84rem;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1332,22 +1332,22 @@ onBeforeUnmount(() => {
     flex: none;
     padding: 5px 10px;
     border-radius: 999px;
-    background: #edf0f4;
-    color: #667085;
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
     font-size: 0.78rem;
     font-weight: 700;
   }
 
   &__status--SYNCED {
-    background: #e8f8ee;
-    color: #17803d;
+    background: var(--color-success-soft);
+    color: var(--color-success);
   }
 
   &__status--MODIFIED_EXTERNALLY,
   &__status--DIRTY_MANAGER,
   &__status--CONFLICT {
-    background: #fff4e5;
-    color: #c25a00;
+    background: var(--color-warning-soft);
+    color: var(--color-warning);
   }
 
   &__empty {
@@ -1355,9 +1355,9 @@ onBeforeUnmount(() => {
     min-height: 220px;
     align-items: center;
     justify-content: center;
-    border: 1px dashed #d8dde5;
+    border: 1px dashed var(--color-line);
     border-radius: 14px;
-    color: #667085;
+    color: var(--color-text-muted);
     text-align: center;
   }
 
@@ -1393,7 +1393,7 @@ onBeforeUnmount(() => {
   }
 
   &__field span {
-    color: #667085;
+    color: var(--color-text-muted);
     font-size: 0.88rem;
   }
 
@@ -1402,10 +1402,10 @@ onBeforeUnmount(() => {
   &__field textarea {
     min-width: 0;
     padding: 0 12px;
-    border: 1px solid #dfe3e8;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
-    color: #111827;
+    background: var(--color-panel);
+    color: var(--color-text);
   }
 
   &__field input,
@@ -1426,7 +1426,7 @@ onBeforeUnmount(() => {
     justify-content: flex-end;
     gap: 10px;
     padding-top: 4px;
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &__editor-footer button {
@@ -1439,14 +1439,14 @@ onBeforeUnmount(() => {
   }
 
   &__editor-footer button[type="submit"] {
-    background: #1682ff;
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   &__editor-footer button[type="button"] {
-    border: 1px solid #dfe3e8;
-    background: #ffffff;
-    color: #667085;
+    border: 1px solid var(--color-line);
+    background: var(--color-panel);
+    color: var(--color-text-muted);
   }
 
   &__diff-modal {
@@ -1459,7 +1459,7 @@ onBeforeUnmount(() => {
     }
 
     :deep(.base-modal__header h2) {
-      color: #1f2937;
+      color: var(--color-text);
       font-size: 1.05rem;
       line-height: 1.35;
     }
@@ -1472,7 +1472,7 @@ onBeforeUnmount(() => {
 
   &__diff-editor {
     height: 560px;
-    border: 1px solid #dfe3e8;
+    border: 1px solid var(--color-line);
   }
 
   &__diff-footer {
@@ -1482,37 +1482,37 @@ onBeforeUnmount(() => {
     justify-content: flex-end;
     gap: 8px;
     padding-top: 12px;
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &__diff-button {
     min-width: 176px;
     height: 34px;
     padding: 0 14px;
-    border: 1px solid #d0d5dd;
+    border: 1px solid var(--color-line-strong);
     border-radius: 7px;
-    background: #ffffff;
-    color: #475467;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.86rem;
     font-weight: 600;
   }
 
   &__diff-button:hover:not(:disabled) {
-    border-color: #b9c0cb;
-    background: #f8fafc;
-    color: #344054;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
+    color: var(--color-text);
   }
 
   &__diff-button--primary {
-    border-color: #1570ef;
-    background: #1570ef;
+    border-color: var(--color-primary-solid);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   &__diff-button--primary:hover:not(:disabled) {
-    border-color: #175cd3;
-    background: #175cd3;
+    border-color: var(--color-primary-solid);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
@@ -1553,7 +1553,7 @@ onBeforeUnmount(() => {
     gap: 18px;
     padding: 20px 22px 16px;
     border-bottom: 1px solid var(--color-line);
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
   }
 
   &__hero {
@@ -1636,7 +1636,7 @@ onBeforeUnmount(() => {
     bottom: -1px;
     height: 2px;
     border-radius: 999px;
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
   }
 
   &__content {
@@ -1745,15 +1745,15 @@ onBeforeUnmount(() => {
   }
 
   &__primary {
-    background: #1682ff;
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   &__secondary,
   &__directory-button {
-    border: 1px solid #dfe3e8;
-    background: #ffffff;
-    color: #667085;
+    border: 1px solid var(--color-line);
+    background: var(--color-panel);
+    color: var(--color-text-muted);
   }
 
   &__directory-button {
@@ -1762,8 +1762,8 @@ onBeforeUnmount(() => {
   }
 
   &__danger {
-    background: #fff1f1;
-    color: #c12626;
+    background: var(--color-danger-soft);
+    color: var(--color-danger);
   }
 }
 </style>

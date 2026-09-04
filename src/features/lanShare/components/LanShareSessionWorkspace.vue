@@ -653,7 +653,7 @@ function copyInviteText() {
     padding: 10px 12px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    background: linear-gradient(180deg, var(--color-panel) 0%, var(--color-panel-soft) 100%);
 
     .lan-share-session-back {
       display: inline-flex;
@@ -664,7 +664,7 @@ function copyInviteText() {
       justify-content: center;
       border: 1px solid var(--color-line);
       border-radius: 7px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-primary);
       cursor: pointer;
     }
@@ -685,8 +685,8 @@ function copyInviteText() {
         align-items: center;
         justify-content: center;
         border-radius: 8px;
-        background: #eef5fb;
-        color: #356b9b;
+        background: var(--color-primary-soft);
+        color: var(--color-primary);
 
         .lan-share-session-status {
           position: absolute;
@@ -704,7 +704,7 @@ function copyInviteText() {
         }
 
         .lan-share-session-status-online {
-          background: #22a35a;
+          background: var(--color-success);
         }
       }
 
@@ -746,7 +746,7 @@ function copyInviteText() {
         padding: 3px;
         border: 1px solid var(--color-line);
         border-radius: 8px;
-        background: #f7fafc;
+        background: var(--color-panel-soft);
         gap: 3px;
 
         .lan-share-session-mode-button {
@@ -766,7 +766,7 @@ function copyInviteText() {
         }
 
         .lan-share-session-mode-button-active {
-          background: #ffffff;
+          background: var(--color-panel);
           color: var(--color-primary);
           box-shadow: 0 4px 12px rgba(42, 67, 101, 0.08);
         }
@@ -782,7 +782,7 @@ function copyInviteText() {
         padding: 0 10px;
         border: 1px solid var(--color-primary);
         border-radius: 7px;
-        background: var(--color-primary);
+        background: var(--color-primary-solid);
         color: #ffffff;
         cursor: pointer;
         font-weight: 700;
@@ -790,7 +790,7 @@ function copyInviteText() {
 
       .lan-share-session-button-ghost {
         border-color: var(--color-line);
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
       }
 
@@ -829,7 +829,7 @@ function copyInviteText() {
         min-height: 46px;
         padding: 10px 12px;
         border-bottom: 1px solid var(--color-line);
-        background: #f8fafc;
+        background: var(--color-panel-soft);
 
         .lan-share-session-sidebar-title {
           color: var(--color-text);
@@ -861,7 +861,7 @@ function copyInviteText() {
           padding: 6px;
           border: 1px solid var(--color-line);
           border-radius: 8px;
-          background: #ffffff;
+          background: var(--color-panel);
           color: var(--color-text);
           text-align: left;
 
@@ -887,8 +887,8 @@ function copyInviteText() {
               align-items: center;
               justify-content: center;
               border-radius: 7px;
-              background: #eef5fb;
-              color: #356b9b;
+              background: var(--color-primary-soft);
+              color: var(--color-primary);
             }
 
             .lan-share-session-item-main {
@@ -931,7 +931,7 @@ function copyInviteText() {
               justify-content: center;
               border: 1px solid var(--color-line);
               border-radius: 7px;
-              background: #ffffff;
+              background: var(--color-panel);
               color: var(--color-text-muted);
               cursor: pointer;
             }
@@ -939,8 +939,8 @@ function copyInviteText() {
         }
 
         .lan-share-session-item-active {
-          border-color: #8db7dc;
-          background: #eef6ff;
+          border-color: var(--color-info-line);
+          background: var(--color-primary-soft);
         }
 
         .lan-share-session-list-empty {
@@ -976,7 +976,7 @@ function copyInviteText() {
         padding: 0 10px;
         border: 1px solid var(--color-primary);
         border-radius: 7px;
-        background: var(--color-primary);
+        background: var(--color-primary-solid);
         color: #ffffff;
         cursor: pointer;
         font-weight: 700;
@@ -984,13 +984,13 @@ function copyInviteText() {
 
       .lan-share-session-button-ghost {
         border-color: var(--color-line);
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
       }
 
       .lan-share-session-button-danger {
-        border-color: #d76565;
-        background: #d76565;
+        border-color: var(--color-danger);
+        background: var(--color-danger);
       }
 
       .lan-share-session-group-field {
@@ -1010,7 +1010,7 @@ function copyInviteText() {
         min-width: 0;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-text);
         padding: 0 9px;
       }
@@ -1023,7 +1023,7 @@ function copyInviteText() {
         overflow: hidden;
         border: 1px solid var(--color-line);
         border-radius: 8px;
-        background: #ffffff;
+        background: var(--color-panel);
         padding: 10px;
 
         .lan-share-session-manager-head {
@@ -1045,7 +1045,7 @@ function copyInviteText() {
             justify-content: center;
             border: 1px solid var(--color-line);
             border-radius: 7px;
-            background: #ffffff;
+            background: var(--color-panel);
             color: var(--color-text-muted);
             cursor: pointer;
           }
@@ -1063,9 +1063,9 @@ function copyInviteText() {
           align-items: center;
           gap: 10px;
           min-height: 70px;
-          border: 1px dashed #c8d8e8;
+          border: 1px dashed var(--color-line-strong);
           border-radius: 8px;
-          background: #f8fbff;
+          background: var(--color-panel-soft);
           padding: 8px;
 
           .lan-share-session-invite-qr {
@@ -1078,7 +1078,7 @@ function copyInviteText() {
             overflow: hidden;
             border: 1px solid var(--color-line);
             border-radius: 7px;
-            background: #ffffff;
+            background: var(--color-panel);
           }
 
           .lan-share-session-invite-qr :deep(svg) {
@@ -1115,7 +1115,7 @@ function copyInviteText() {
             padding: 0 10px;
             border: 1px solid var(--color-line);
             border-radius: 7px;
-            background: #ffffff;
+            background: var(--color-panel);
             color: var(--color-primary);
             cursor: pointer;
             font-weight: 700;
@@ -1138,7 +1138,7 @@ function copyInviteText() {
             padding: 0 7px 0 9px;
             border: 1px solid var(--color-line);
             border-radius: 8px;
-            background: #ffffff;
+            background: var(--color-panel);
 
             .lan-share-session-member-main {
               display: flex;
@@ -1164,7 +1164,7 @@ function copyInviteText() {
               justify-content: center;
               border: 0;
               border-radius: 6px;
-              background: #f1f5f9;
+              background: var(--color-panel-soft);
               color: var(--color-text-muted);
               cursor: pointer;
             }
@@ -1185,7 +1185,7 @@ function copyInviteText() {
         padding: 8px;
         border: 1px solid var(--color-line);
         border-radius: 8px;
-        background: #f8fafc;
+        background: var(--color-panel-soft);
 
         .lan-share-session-tab {
           display: inline-flex;
@@ -1203,8 +1203,8 @@ function copyInviteText() {
         }
 
         .lan-share-session-tab-active {
-          border-color: #8db7dc;
-          background: #ffffff;
+          border-color: var(--color-info-line);
+          background: var(--color-panel);
           color: var(--color-primary);
           box-shadow: 0 6px 18px rgba(42, 67, 101, 0.08);
         }
@@ -1224,7 +1224,7 @@ function copyInviteText() {
           padding: 0 11px;
           border: 1px solid var(--color-line);
           border-radius: 7px;
-          background: #ffffff;
+          background: var(--color-panel);
           color: var(--color-primary);
           cursor: pointer;
           font-weight: 800;
@@ -1246,7 +1246,7 @@ function copyInviteText() {
     justify-content: center;
     border: 1px dashed var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     font-size: 0.86rem;
   }

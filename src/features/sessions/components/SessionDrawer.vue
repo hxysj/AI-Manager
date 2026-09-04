@@ -638,7 +638,7 @@ async function copyText(value) {
     bottom: -1px;
     height: 2px;
     border-radius: 999px;
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
   }
 
   &__body {
@@ -707,9 +707,9 @@ async function copyText(value) {
     bottom: 24px;
     z-index: 4;
     width: 42px;
-    border: 1px solid #d7e0ea;
+    border: 1px solid var(--color-line);
     border-radius: 999px;
-    background: #f4f7fb;
+    background: var(--color-panel-soft);
     cursor: pointer;
     user-select: none;
   }
@@ -751,7 +751,7 @@ async function copyText(value) {
     place-items: center;
     border: 1px solid #ffffff;
     border-radius: 50%;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
     pointer-events: auto;
@@ -763,28 +763,28 @@ async function copyText(value) {
   }
 
   &__message-nav-item:hover {
-    background: #e9eef3;
+    background: var(--color-panel-soft);
     color: var(--color-primary);
   }
 
   &__message-nav-item--user {
-    background: #eef4f8;
+    background: var(--color-panel-soft);
     color: var(--color-primary);
   }
 
   &__message-nav-item--assistant {
-    background: #f1f5f9;
-    color: #42526b;
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
   }
 
   &__message-nav-item--tool {
-    background: #fff8df;
+    background: var(--color-warning-soft);
     color: var(--color-warning);
   }
 
   &__message-nav-item--system {
-    background: #f6f7f9;
-    color: #6b7280;
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
   }
 
   &__message-nav-item--active {
@@ -829,25 +829,25 @@ async function copyText(value) {
     place-items: center;
     border: 1px solid var(--color-line);
     border-radius: 50%;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
   }
 
   &__chat-message--user &__chat-avatar {
-    border-color: #9fb5c8;
-    background: var(--color-primary);
+    border-color: var(--color-line-strong);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   &__chat-message--assistant &__chat-avatar {
-    border-color: #cbd8e3;
-    background: #eef4f8;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
     color: var(--color-primary);
   }
 
   &__chat-message--tool &__chat-avatar {
-    border-color: #e2d3a5;
-    background: #fff8df;
+    border-color: var(--color-warning-line);
+    background: var(--color-warning-soft);
     color: var(--color-warning);
   }
 
@@ -896,18 +896,18 @@ async function copyText(value) {
     padding: 12px 14px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     box-shadow: 0 8px 20px rgba(34, 56, 83, 0.05);
   }
 
   &__chat-message--user &__chat-bubble {
-    border-color: #d6e2ec;
-    background: #eef4f8;
+    border-color: var(--color-line);
+    background: var(--color-panel-soft);
   }
 
   &__chat-message--tool &__chat-bubble {
-    border-color: #eadba8;
-    background: #fffaf0;
+    border-color: var(--color-warning-line);
+    background: var(--color-warning-soft);
   }
 
   &__chat-message--system &__chat-bubble {

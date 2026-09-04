@@ -1195,7 +1195,7 @@ onBeforeUnmount(() => {
         gap: 16px;
         padding: 16px 18px 14px;
         border-bottom: 1px solid var(--color-line);
-        background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+        background: linear-gradient(180deg, var(--color-panel) 0%, var(--color-primary-soft) 100%);
 
         .sessions-view-modal-title {
           display: flex;
@@ -1245,7 +1245,7 @@ onBeforeUnmount(() => {
         align-items: end;
         padding: 12px;
         border-bottom: 1px solid var(--color-line);
-        background: #fbfdff;
+        background: var(--color-panel-soft);
 
         .sessions-view-recycle-search,
         .sessions-view-recycle-select {
@@ -1290,9 +1290,9 @@ onBeforeUnmount(() => {
           justify-content: space-between;
           gap: 14px;
           padding: 12px 14px;
-          border: 1px solid #dbe7f3;
+          border: 1px solid var(--color-line);
           border-radius: 8px;
-          background: #ffffff;
+          background: var(--color-panel);
 
           .sessions-view-recycle-main {
             display: flex;
@@ -1330,7 +1330,7 @@ onBeforeUnmount(() => {
                 align-items: center;
                 padding: 0 7px;
                 border-radius: 6px;
-                background: #edf4ff;
+                background: var(--color-primary-soft);
                 color: var(--color-primary);
                 font-size: 0.7rem;
                 font-weight: 700;
@@ -1372,8 +1372,8 @@ onBeforeUnmount(() => {
         }
 
         .sessions-view-recycle-card:hover {
-          border-color: #b8d5f2;
-          background: #f8fbff;
+          border-color: var(--color-info-line);
+          background: var(--color-panel-soft);
         }
       }
 
@@ -1384,7 +1384,7 @@ onBeforeUnmount(() => {
         gap: 12px;
         padding: 10px 12px;
         border-top: 1px solid var(--color-line);
-        background: #fbfdff;
+        background: var(--color-panel-soft);
 
         .sessions-view-recycle-page-info {
           color: var(--color-text-muted);
@@ -1435,7 +1435,7 @@ onBeforeUnmount(() => {
         font-size: 0.86rem;
 
         .sessions-view-recycle-empty-icon {
-          color: #9ab0c8;
+          color: var(--color-text-muted);
         }
       }
     }
@@ -1471,7 +1471,7 @@ onBeforeUnmount(() => {
     padding: 0 12px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #fbfcfd;
+    background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.88rem;
@@ -1505,7 +1505,7 @@ onBeforeUnmount(() => {
 
   .action-button:hover,
   .icon-button:not(:disabled):hover {
-    border-color: #b9ccda;
+    border-color: var(--color-line-strong);
     background: var(--color-primary-soft);
   }
 }

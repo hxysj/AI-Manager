@@ -33,7 +33,7 @@ const tokenCountParts = computed(() => formatTokenCountParts(props.value))
   line-height: inherit;
 
   .token-count-exact {
-    color: #7890a6;
+    color: var(--color-text-muted);
     font-size: 0.72em;
     font-weight: 500;
     line-height: 1.1;

@@ -180,7 +180,7 @@ async function selectLocalDirectory() {
     padding: 0 12px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
@@ -189,8 +189,8 @@ async function selectLocalDirectory() {
   }
 
   &__directory-button:hover {
-    border-color: #b9ccda;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
   }
 
   &__actions {
@@ -217,7 +217,7 @@ async function selectLocalDirectory() {
 
   &--primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #fff;
   }
 }

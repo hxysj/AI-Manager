@@ -15,7 +15,9 @@
       :cli-targets="state.cliTargets"
       :collapsed="sidebarCollapsed"
       :nav-items="navItems"
+      :theme-mode="themeMode"
       @toggle="sidebarCollapsed = !sidebarCollapsed"
+      @toggle-theme="toggleTheme"
       @select-view="activeView = $event"
       @title-click="handleSidebarTitleClick"
     />
@@ -143,8 +145,10 @@
           :repos="state.repos"
           :runtime-models="state.runtimeModels"
           :runtime-profiles="state.runtimeProfiles"
+          :theme-mode="themeMode"
           @add-repo="showAddRepo = true"
           @detail-change="toolWorkspaceActive = $event"
+          @toggle-theme="toggleTheme"
         />
 
         <SettingsView
@@ -364,6 +368,8 @@
 </template>
 
 <script setup>
+import { setTheme as setNativeTheme } from "@tauri-apps/api/app"
+import { isTauri } from "@tauri-apps/api/core"
 import {
   computed,
   defineAsyncComponent,
@@ -457,6 +463,28 @@ const baseNavItems = [
   { id: "tools", label: "Tools", icon: Wrench },
   { id: "settings", label: "Settings", icon: Settings }
 ]
+
+const themeStorageKey = "ai-manager-theme"
+
+function readSavedTheme() {
+  try {
+    const savedTheme = window.localStorage.getItem(themeStorageKey)
+    return savedTheme === "dark" ? "dark" : "light"
+  } catch {
+    return "light"
+  }
+}
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme
+
+  if (isTauri()) {
+    setNativeTheme(theme).catch(showErrorMessage)
+  }
+}
+
+const themeMode = ref(readSavedTheme())
+applyTheme(themeMode.value)
 
 const queryParams = new URLSearchParams(window.location.search)
 const queryView = queryParams.get("view")
@@ -611,6 +639,29 @@ const { loading: pending, withGlobalLoading } = useGlobalLoading()
 let unsubscribe = null
 let unsubscribeClose = null
 let unsubscribeUpdate = null
+
+function toggleTheme() {
+  themeMode.value = themeMode.value === "dark" ? "light" : "dark"
+  applyTheme(themeMode.value)
+
+  try {
+    window.localStorage.setItem(themeStorageKey, themeMode.value)
+  } catch {
+    // 本地存储不可用时，仍保留当前窗口的主题切换能力。
+  }
+}
+
+function handleStoredThemeChange(event) {
+  if (
+    event.key !== themeStorageKey ||
+    (event.newValue !== "light" && event.newValue !== "dark")
+  ) {
+    return
+  }
+
+  themeMode.value = event.newValue
+  applyTheme(themeMode.value)
+}
 
 const navItems = computed(() =>
   showLogsTab.value
@@ -1986,6 +2037,8 @@ async function uninstallWithoutTrace() {
 }
 
 onMounted(() => {
+  window.addEventListener("storage", handleStoredThemeChange)
+
   if (isQuickSwitchPanel) {
     document.documentElement.classList.add("quick-switch-html")
     document.body.classList.add("quick-switch-body")
@@ -2021,6 +2074,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener("storage", handleStoredThemeChange)
+
   if (typeof unsubscribe === "function") {
     unsubscribe()
   }
@@ -2131,13 +2186,13 @@ onBeforeUnmount(() => {
   padding: 0 16px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #fbfcfd;
+  background: var(--color-panel-soft);
   color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
 
   &:hover {
-    border-color: #b9ccda;
+    border-color: var(--color-line-strong);
     background: var(--color-primary-soft);
   }
 
@@ -2202,8 +2257,8 @@ onBeforeUnmount(() => {
   }
 
   &__entry--active {
-    border-color: #8eb6d9;
-    background: #eef6ff;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
   }
 
   &__entry strong {
@@ -2228,7 +2283,7 @@ onBeforeUnmount(() => {
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
   }
 
   &__head {
@@ -2238,7 +2293,7 @@ onBeforeUnmount(() => {
     gap: 12px;
     padding: 12px;
     border-bottom: 1px solid var(--color-line);
-    background: #f7fafc;
+    background: var(--color-panel-soft);
   }
 
   &__head div {
@@ -2341,14 +2396,14 @@ onBeforeUnmount(() => {
     place-items: center;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
   }
 
   &__icon-button:hover {
-    border-color: #c8d2df;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
     color: var(--color-text);
   }
 
@@ -2364,10 +2419,10 @@ onBeforeUnmount(() => {
     height: 44px;
     flex: 0 0 auto;
     place-items: center;
-    border: 1px solid #b7d9f6;
+    border: 1px solid var(--color-info-line);
     border-radius: 8px;
-    background: #e8f4ff;
-    color: #0b78d0;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
   }
 
   &__copy {
@@ -2431,7 +2486,7 @@ onBeforeUnmount(() => {
     padding: 0 12px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.8rem;
@@ -2439,19 +2494,19 @@ onBeforeUnmount(() => {
   }
 
   &__button:hover {
-    border-color: #b9ccda;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
   }
 
   &__button--primary {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
     color: #ffffff;
   }
 
   &__button--primary:hover {
     border-color: var(--color-primary);
-    background: var(--color-primary);
+    background: var(--color-primary-solid);
   }
 }
 </style>

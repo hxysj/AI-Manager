@@ -426,7 +426,7 @@ function filterStartAt() {
     min-height: 48px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--color-line);
-    background: #f8fafc;
+    background: var(--color-panel-soft);
 
     .lan-share-messages-title {
       display: flex;
@@ -458,7 +458,7 @@ function filterStartAt() {
         min-width: 0;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-text);
       }
 
@@ -482,7 +482,7 @@ function filterStartAt() {
         padding: 0 10px;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
         font-size: 0.76rem;
@@ -505,7 +505,7 @@ function filterStartAt() {
     gap: 8px;
     overflow: auto;
     padding: 12px;
-    background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+    background: linear-gradient(180deg, var(--color-panel) 0%, var(--color-panel-soft) 100%);
 
     .lan-share-messages-item {
       display: flex;
@@ -515,9 +515,9 @@ function filterStartAt() {
       flex-direction: column;
       gap: 5px;
       padding: 9px 10px;
-      border: 1px solid #dce7f2;
+      border: 1px solid var(--color-line);
       border-radius: 8px;
-      background: #ffffff;
+      background: var(--color-panel);
       box-shadow: 0 6px 18px rgba(42, 67, 101, 0.08);
 
       .lan-share-messages-item-head {
@@ -552,13 +552,13 @@ function filterStartAt() {
             height: 16px;
             border: 1px solid var(--color-line);
             border-radius: 4px;
-            background: #ffffff;
+            background: var(--color-panel);
           }
 
           .lan-share-messages-check-input:checked
             + .lan-share-messages-check-mark {
             border-color: var(--color-primary);
-            background: var(--color-primary);
+            background: var(--color-primary-solid);
           }
         }
 
@@ -607,8 +607,8 @@ function filterStartAt() {
 
     .lan-share-messages-item-desktop {
       align-self: flex-end;
-      border-color: #b9dec4;
-      background: #effaf2;
+      border-color: var(--color-success-line);
+      background: var(--color-success-soft);
     }
 
     .lan-share-messages-item-mobile {
@@ -616,8 +616,8 @@ function filterStartAt() {
     }
 
     .lan-share-messages-item-file {
-      border-color: #c7d9ea;
-      background: #f4f9ff;
+      border-color: var(--color-line-strong);
+      background: var(--color-primary-soft);
 
       .lan-share-messages-content {
         display: inline-flex;
@@ -650,7 +650,7 @@ function filterStartAt() {
     gap: 8px;
     padding: 10px;
     border-top: 1px solid var(--color-line);
-    background: #f8fafc;
+    background: var(--color-panel-soft);
 
     .lan-share-messages-composer-input {
       height: 32px;
@@ -659,7 +659,7 @@ function filterStartAt() {
       padding: 0 10px;
       border: 1px solid var(--color-line);
       border-radius: 7px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-text);
     }
 
@@ -672,7 +672,7 @@ function filterStartAt() {
       padding: 0 12px;
       border: 1px solid var(--color-line);
       border-radius: 7px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-primary);
       cursor: pointer;
       font-weight: 700;
@@ -680,7 +680,7 @@ function filterStartAt() {
 
     .lan-share-messages-button-primary {
       border-color: var(--color-primary);
-      background: var(--color-primary);
+      background: var(--color-primary-solid);
       color: #ffffff;
     }
 

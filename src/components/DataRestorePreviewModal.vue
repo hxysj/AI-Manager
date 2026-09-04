@@ -850,9 +850,9 @@ function createRestoreCompareRows(currentContent, backupContent) {
   justify-content: space-between;
   gap: 12px;
   padding: 12px;
-  border: 1px solid #d8e2ec;
+  border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #f7fafc;
+  background: var(--color-panel-soft);
 
   .restore-stats {
     display: flex;
@@ -869,7 +869,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
       padding: 8px 10px;
       border: 1px solid var(--color-line);
       border-radius: 8px;
-      background: #ffffff;
+      background: var(--color-panel);
 
       .restore-stat-value {
         color: var(--color-text);
@@ -887,23 +887,23 @@ function createRestoreCompareRows(currentContent, backupContent) {
     }
 
     .restore-stat-added {
-      border-color: #b8d9ca;
-      background: #f2fbf6;
+      border-color: var(--color-success-line);
+      background: var(--color-success-soft);
     }
 
     .restore-stat-conflict {
-      border-color: #ffd2a6;
-      background: #fff7ed;
+      border-color: var(--color-warning-line);
+      background: var(--color-warning-soft);
     }
 
     .restore-stat-current {
-      border-color: #cbd5e1;
-      background: #f8fafc;
+      border-color: var(--color-line-strong);
+      background: var(--color-panel-soft);
     }
 
     .restore-stat-backup {
-      border-color: #bfdbfe;
-      background: #eff6ff;
+      border-color: var(--color-info-line);
+      background: var(--color-primary-soft);
     }
   }
 
@@ -919,9 +919,9 @@ function createRestoreCompareRows(currentContent, backupContent) {
   flex: none;
   margin: 0;
   padding: 10px 12px;
-  border: 1px solid #d8e2ec;
+  border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-text-muted);
   font-size: 0.84rem;
   line-height: 1.6;
@@ -988,7 +988,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
         .restore-nav-count {
           padding: 2px 6px;
           border-radius: 999px;
-          background: #ffffff;
+          background: var(--color-panel);
           color: var(--color-text-muted);
           font-size: 0.68rem;
           font-weight: 700;
@@ -1008,13 +1008,13 @@ function createRestoreCompareRows(currentContent, backupContent) {
     }
 
     .restore-nav-button:hover {
-      border-color: #b9ccda;
-      background: #ffffff;
+      border-color: var(--color-line-strong);
+      background: var(--color-panel);
     }
 
     .restore-nav-button-active {
-      border-color: #80b7dd;
-      background: #eef7ff;
+      border-color: var(--color-info-line);
+      background: var(--color-primary-soft);
       box-shadow: inset 3px 0 0 var(--color-primary);
     }
   }
@@ -1028,7 +1028,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
 
     .restore-list {
       display: flex;
@@ -1078,9 +1078,9 @@ function createRestoreCompareRows(currentContent, backupContent) {
     justify-content: space-between;
     gap: 12px;
     padding: 8px 10px;
-    border: 1px solid #d8e2ec;
+    border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #f8fafc;
+    background: var(--color-panel-soft);
 
     .restore-group-title {
       min-width: 0;
@@ -1118,7 +1118,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    border-left: 2px solid #b7c7d9;
+    border-left: 2px solid var(--color-line-strong);
     color: var(--color-text);
     font-size: 0.8rem;
 
@@ -1154,8 +1154,8 @@ function createRestoreCompareRows(currentContent, backupContent) {
     bottom: 13px;
     left: -10px;
     width: 8px;
-    border-bottom: 1px solid #b7c7d9;
-    border-left: 1px solid #b7c7d9;
+    border-bottom: 1px solid var(--color-line-strong);
+    border-left: 1px solid var(--color-line-strong);
     content: "";
   }
 }
@@ -1185,7 +1185,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
 }
 
 .restore-conflict {
-  background: #ffffff;
+  background: var(--color-panel);
 
   .restore-conflict-head {
     display: flex;
@@ -1215,7 +1215,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
       padding: 8px 10px 8px 30px;
       border: 1px solid var(--color-line);
       border-radius: 8px;
-      background: #f8fafc;
+      background: var(--color-panel-soft);
       color: var(--color-text-muted);
       cursor: pointer;
 
@@ -1247,13 +1247,13 @@ function createRestoreCompareRows(currentContent, backupContent) {
     }
 
     .restore-choice-backup.restore-choice-active {
-      border-color: #73b4e8;
-      background: #edf7ff;
+      border-color: var(--color-info-line);
+      background: var(--color-primary-soft);
     }
 
     .restore-choice-active {
-      border-color: #9aaec2;
-      background: #f1f5f9;
+      border-color: var(--color-line-strong);
+      background: var(--color-panel-soft);
       box-shadow: inset 0 0 0 1px rgba(63, 114, 175, 0.14);
     }
   }
@@ -1266,7 +1266,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
   padding: 0 10px;
   border: 1px solid var(--color-line);
   border-radius: 7px;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.74rem;
@@ -1280,12 +1280,12 @@ function createRestoreCompareRows(currentContent, backupContent) {
 }
 
 .restore-mini-button-current {
-  color: #475569;
+  color: var(--color-text-muted);
 }
 
 .restore-mini-button-backup {
-  border-color: #b8d7f0;
-  color: #1769aa;
+  border-color: var(--color-info-line);
+  color: var(--color-primary);
 }
 
 .restore-empty {
@@ -1313,14 +1313,14 @@ function createRestoreCompareRows(currentContent, backupContent) {
   padding: 0 16px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #fbfcfd;
+  background: var(--color-panel-soft);
   color: var(--color-primary);
   cursor: pointer;
   font-weight: 600;
 }
 
 .restore-action-button:hover {
-  border-color: #b9ccda;
+  border-color: var(--color-line-strong);
   background: var(--color-primary-soft);
 }
 
@@ -1331,13 +1331,13 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
 .restore-action-button-primary {
   border-color: var(--color-primary);
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
   color: #ffffff;
 }
 
 .restore-action-button-primary:hover {
   border-color: var(--color-primary);
-  background: var(--color-primary);
+  background: var(--color-primary-solid);
 }
 
 .restore-compare {
@@ -1380,7 +1380,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
   overflow: auto;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-text);
   font-family: "JetBrains Mono", "Consolas", monospace;
   font-size: 0.74rem;
@@ -1404,15 +1404,15 @@ function createRestoreCompareRows(currentContent, backupContent) {
 }
 
 .restore-compare-line-current-only {
-  background: #fff2f0;
+  background: var(--color-danger-soft);
 }
 
 .restore-compare-line-backup-only {
-  background: #eff8ff;
+  background: var(--color-primary-soft);
 }
 
 .restore-compare-line-empty {
-  background: #f8fafc;
+  background: var(--color-panel-soft);
   color: var(--color-text-soft);
 }
 

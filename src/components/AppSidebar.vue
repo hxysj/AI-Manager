@@ -16,6 +16,19 @@
       >
         Monkey Thief
       </span>
+      <button
+        v-if="!collapsed"
+        class="app-sidebar__theme-toggle"
+        type="button"
+        :title="themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'"
+        :aria-label="
+          themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'
+        "
+        @click="$emit('toggle-theme')"
+      >
+        <Sun v-if="themeMode === 'dark'" :size="17" :stroke-width="1.9" />
+        <Moon v-else :size="17" :stroke-width="1.9" />
+      </button>
     </div>
 
     <nav class="app-sidebar__nav">
@@ -84,10 +97,12 @@
         </article>
       </div>
     </section>
+
   </aside>
 </template>
 
 <script setup>
+import { Moon, Sun } from 'lucide-vue-next'
 import AiIcon from '@/components/AiIcon.vue'
 import logoUrl from '@/assets/ai-manager-logo.svg?url'
 
@@ -107,10 +122,14 @@ defineProps({
   navItems: {
     type: Array,
     required: true
+  },
+  themeMode: {
+    type: String,
+    default: 'light'
   }
 })
 
-defineEmits(['toggle', 'select-view', 'title-click'])
+defineEmits(['toggle', 'toggle-theme', 'select-view', 'title-click'])
 
 const colorMap = {
   claude: '#c58f72',
@@ -185,7 +204,7 @@ const colorMap = {
   }
 
   &--collapsed &__cli-card:hover {
-    background: #f4f6fa;
+    background: var(--color-panel-soft);
   }
 
   &__header {
@@ -217,6 +236,33 @@ const colorMap = {
     font-weight: 700;
   }
 
+  &__theme-toggle {
+    display: grid;
+    width: 32px;
+    height: 32px;
+    flex: none;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+  }
+
+  &:not(.app-sidebar--collapsed) &__theme-toggle {
+    margin-left: auto;
+  }
+
+  &__theme-toggle:hover {
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  &__theme-toggle :deep(svg) {
+    display: block;
+  }
+
   &__nav {
     display: flex;
     flex: 1;
@@ -244,13 +290,13 @@ const colorMap = {
   }
 
   &__nav-item:hover {
-    background: #f4f6fa;
+    background: var(--color-panel-soft);
     transform: translateX(2px);
   }
 
   &__nav-item--active {
-    background: #edf1f7;
-    color: #263f63;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
   }
 
   &__nav-item--active::before {
@@ -261,7 +307,7 @@ const colorMap = {
     bottom: 9px;
     width: 3px;
     border-radius: 999px;
-    background: #506b91;
+    background: var(--color-primary-solid);
   }
 
   &__nav-icon {
@@ -269,7 +315,7 @@ const colorMap = {
     width: 20px;
     height: 20px;
     flex: 0 0 20px;
-    color: #6a7890;
+    color: var(--color-text-muted);
     place-items: center;
   }
 
@@ -360,5 +406,6 @@ const colorMap = {
   &__cli-dot--offline {
     background: #9ca3af;
   }
+
 }
 </style>

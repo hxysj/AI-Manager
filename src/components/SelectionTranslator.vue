@@ -126,9 +126,9 @@ function closeTranslator() {
   width: 360px;
   max-height: 420px;
   overflow: hidden;
-  border: 1px solid #c7d3e2;
+  border: 1px solid var(--color-line-strong);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-panel);
   box-shadow: 0 18px 42px rgba(34, 56, 83, 0.18);
 
   &__header {
@@ -138,7 +138,7 @@ function closeTranslator() {
     gap: 12px;
     padding: 12px 14px;
     border-bottom: 1px solid var(--color-line);
-    background: #f7f9fc;
+    background: var(--color-panel-soft);
   }
 
   &__header strong {
@@ -153,7 +153,7 @@ function closeTranslator() {
     place-items: center;
     border: 1px solid var(--color-line);
     border-radius: 6px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
     line-height: 1;

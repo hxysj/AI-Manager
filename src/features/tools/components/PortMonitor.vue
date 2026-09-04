@@ -444,9 +444,9 @@ onUnmounted(() => {
           height: 18px;
           align-items: center;
           padding: 2px;
-          border: 1px solid #c9d5df;
+          border: 1px solid var(--color-line);
           border-radius: 999px;
-          background: #e8edf2;
+          background: var(--color-panel-soft);
           transition:
             border-color 0.18s ease,
             background-color 0.18s ease;
@@ -455,7 +455,7 @@ onUnmounted(() => {
             width: 12px;
             height: 12px;
             border-radius: 50%;
-            background: #ffffff;
+            background: var(--color-panel);
             box-shadow: 0 1px 3px rgba(34, 56, 83, 0.26);
             transition: transform 0.18s ease;
           }
@@ -463,7 +463,7 @@ onUnmounted(() => {
 
         .port-monitor-auto-refresh-input:checked + .port-monitor-auto-refresh-track {
           border-color: var(--color-primary);
-          background: var(--color-primary);
+          background: var(--color-primary-solid);
 
           .port-monitor-auto-refresh-thumb {
             transform: translateX(12px);
@@ -484,14 +484,14 @@ onUnmounted(() => {
         justify-content: center;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
       }
 
       .port-monitor-icon-button:hover:not(:disabled) {
-        border-color: #b9ccda;
-        background: #f7f9fc;
+        border-color: var(--color-line-strong);
+        background: var(--color-panel-soft);
       }
 
       .port-monitor-icon-button:disabled {
@@ -533,7 +533,7 @@ onUnmounted(() => {
         padding: 0 34px 0 32px;
         border: 1px solid var(--color-line);
         border-radius: 6px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-text);
         font-size: 0.78rem;
       }
@@ -558,7 +558,7 @@ onUnmounted(() => {
       }
 
       .port-monitor-search-clear:hover {
-        background: #edf1f5;
+        background: var(--color-panel-soft);
         color: var(--color-text);
       }
     }
@@ -570,7 +570,7 @@ onUnmounted(() => {
       padding: 2px;
       border: 1px solid var(--color-line);
       border-radius: 7px;
-      background: #ffffff;
+      background: var(--color-panel);
 
       .port-monitor-protocol-button {
         display: inline-flex;
@@ -621,7 +621,7 @@ onUnmounted(() => {
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
 
     .port-monitor-state {
       display: flex;
@@ -653,7 +653,7 @@ onUnmounted(() => {
         padding: 0 12px;
         border: 1px solid var(--color-primary);
         border-radius: 6px;
-        background: var(--color-primary);
+        background: var(--color-primary-solid);
         color: #ffffff;
         cursor: pointer;
         font-size: 0.76rem;
@@ -704,7 +704,7 @@ onUnmounted(() => {
           position: sticky;
           top: 0;
           z-index: 1;
-          background: #f7f9fb;
+          background: var(--color-panel-soft);
 
           .port-monitor-table-heading {
             height: 35px;
@@ -729,7 +729,7 @@ onUnmounted(() => {
             .port-monitor-table-cell {
               height: 58px;
               padding: 8px 12px;
-              border-bottom: 1px solid #edf1f4;
+              border-bottom: 1px solid var(--color-line);
               color: var(--color-text-muted);
               font-size: 0.76rem;
               vertical-align: middle;
@@ -748,13 +748,13 @@ onUnmounted(() => {
                   align-items: center;
                   justify-content: center;
                   border-radius: 6px;
-                  background: #eaf2f8;
-                  color: #35688f;
+                  background: var(--color-primary-soft);
+                  color: var(--color-primary);
                 }
 
                 .port-monitor-process-icon.protected {
-                  background: #f0f2f4;
-                  color: #718092;
+                  background: var(--color-panel-soft);
+                  color: var(--color-text-muted);
                 }
 
                 .port-monitor-process-main {
@@ -809,18 +809,18 @@ onUnmounted(() => {
                 height: 22px;
                 align-items: center;
                 justify-content: center;
-                border: 1px solid #c9dbe8;
+                border: 1px solid var(--color-line);
                 border-radius: 5px;
-                background: #eef6fb;
-                color: #2d668f;
+                background: var(--color-primary-soft);
+                color: var(--color-primary);
                 font-size: 0.67rem;
                 font-weight: 800;
               }
 
               .port-monitor-protocol.udp {
-                border-color: #d8d3aa;
-                background: #faf8e8;
-                color: #776b21;
+                border-color: var(--color-warning-line);
+                background: var(--color-warning-soft);
+                color: var(--color-warning);
               }
 
               .port-monitor-pid {
@@ -847,22 +847,22 @@ onUnmounted(() => {
                 height: 30px;
                 align-items: center;
                 justify-content: center;
-                border: 1px solid #e7c8c5;
+                border: 1px solid var(--color-danger-line);
                 border-radius: 6px;
-                background: #fff8f7;
+                background: var(--color-danger-soft);
                 color: var(--color-danger);
                 cursor: pointer;
               }
 
               .port-monitor-stop-button:hover:not(:disabled) {
-                border-color: #d89e98;
+                border-color: var(--color-danger-line);
                 background: var(--color-danger-soft);
               }
 
               .port-monitor-stop-button:disabled {
                 border-color: var(--color-line);
-                background: #f4f6f8;
-                color: #a7b1bc;
+                background: var(--color-panel-soft);
+                color: var(--color-text-muted);
                 cursor: not-allowed;
               }
             }
@@ -873,7 +873,7 @@ onUnmounted(() => {
           }
 
           .port-monitor-table-row:hover {
-            background: #fafcfd;
+            background: var(--color-panel-soft);
           }
 
           .port-monitor-table-row:last-child {

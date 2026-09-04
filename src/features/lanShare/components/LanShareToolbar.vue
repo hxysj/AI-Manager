@@ -76,7 +76,7 @@ const emit = defineEmits(["start", "show-access", "stop"])
   padding: 12px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: linear-gradient(135deg, #ffffff 0%, #f8fbfe 100%);
+  background: linear-gradient(135deg, var(--color-panel) 0%, var(--color-panel-soft) 100%);
 
   .lan-share-toolbar-title {
     display: flex;
@@ -115,10 +115,10 @@ const emit = defineEmits(["start", "show-access", "stop"])
     align-items: center;
     gap: 7px;
     padding: 0 10px;
-    border: 1px solid #d6e0eb;
+    border: 1px solid var(--color-line);
     border-radius: 999px;
-    background: #ffffff;
-    color: #526176;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
     font-size: 0.76rem;
     font-weight: 800;
 
@@ -130,7 +130,7 @@ const emit = defineEmits(["start", "show-access", "stop"])
     }
 
     .lan-share-toolbar-dot-active {
-      background: #19a35b;
+      background: var(--color-success);
     }
   }
 
@@ -149,7 +149,7 @@ const emit = defineEmits(["start", "show-access", "stop"])
       padding: 0 12px;
       border: 1px solid var(--color-line);
       border-radius: 7px;
-      background: #ffffff;
+      background: var(--color-panel);
       color: var(--color-primary);
       cursor: pointer;
       font-weight: 700;
@@ -157,7 +157,7 @@ const emit = defineEmits(["start", "show-access", "stop"])
 
     .lan-share-toolbar-button-primary {
       border-color: var(--color-primary);
-      background: var(--color-primary);
+      background: var(--color-primary-solid);
       color: #ffffff;
     }
 

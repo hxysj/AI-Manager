@@ -408,8 +408,8 @@ function emitCopy() {
   }
 
   .json-tree-row-match {
-    border-left-color: #e4a62d;
-    background: #fff8e9;
+    border-left-color: var(--color-search-match-line);
+    background: var(--color-search-match);
   }
 
   .json-tree-toggle,
@@ -441,7 +441,7 @@ function emitCopy() {
   }
 
   .json-tree-key {
-    color: #a02c97;
+    color: var(--color-json-key);
     cursor: text;
     font-weight: 700;
   }
@@ -458,21 +458,21 @@ function emitCopy() {
 
   .json-tree-value {
     overflow: hidden;
-    color: #279645;
+    color: var(--color-json-string);
     text-overflow: ellipsis;
     cursor: text;
   }
 
   .json-tree-value-number {
-    color: #1671bd;
+    color: var(--color-json-number);
   }
 
   .json-tree-value-boolean {
-    color: #bd6d19;
+    color: var(--color-json-boolean);
   }
 
   .json-tree-value-null {
-    color: #89939a;
+    color: var(--color-json-null);
   }
 
   .json-tree-brace,

@@ -147,7 +147,7 @@ function formatSize(value) {
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     box-shadow: 0 20px 54px rgba(15, 23, 42, 0.22);
 
     .lan-share-preview-head {
@@ -195,7 +195,7 @@ function formatSize(value) {
         gap: 6px;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
         font-weight: 700;
@@ -209,7 +209,7 @@ function formatSize(value) {
       align-items: center;
       justify-content: center;
       overflow: auto;
-      background: #f7fafc;
+      background: var(--color-panel-soft);
 
       .lan-share-preview-media {
         display: block;
@@ -225,7 +225,7 @@ function formatSize(value) {
         width: 100%;
         height: 68vh;
         border: 0;
-        background: #ffffff;
+        background: var(--color-panel);
       }
 
       .lan-share-preview-text {
@@ -259,7 +259,7 @@ function formatSize(value) {
       gap: 8px;
       padding: 12px 16px;
       border-top: 1px solid var(--color-line);
-      background: #ffffff;
+      background: var(--color-panel);
 
       .lan-share-preview-button {
         display: inline-flex;
@@ -270,7 +270,7 @@ function formatSize(value) {
         padding: 0 12px;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: #ffffff;
+        background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
         font-weight: 700;
@@ -278,7 +278,7 @@ function formatSize(value) {
 
       .lan-share-preview-button-primary {
         border-color: var(--color-primary);
-        background: var(--color-primary);
+        background: var(--color-primary-solid);
         color: #ffffff;
       }
     }

@@ -124,7 +124,7 @@ function sessionTitle(session) {
     min-height: 52px;
     padding: 10px 12px;
     border-bottom: 1px solid var(--color-line);
-    background: #f8fafc;
+    background: var(--color-panel-soft);
   }
 
   .lan-share-sessions-back,
@@ -135,7 +135,7 @@ function sessionTitle(session) {
     gap: 6px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-weight: 700;
@@ -209,15 +209,15 @@ function sessionTitle(session) {
     padding: 9px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-text);
     cursor: pointer;
     text-align: left;
   }
 
   .lan-share-sessions-item-active {
-    border-color: #8db7dc;
-    background: #eef6ff;
+    border-color: var(--color-info-line);
+    background: var(--color-primary-soft);
   }
 
   .lan-share-sessions-icon {
@@ -228,8 +228,8 @@ function sessionTitle(session) {
     align-items: center;
     justify-content: center;
     border-radius: 7px;
-    background: #eef5fb;
-    color: #356b9b;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
   }
 
   .lan-share-sessions-main {

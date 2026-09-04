@@ -55,6 +55,20 @@
             }}</strong>
           </div>
         </div>
+        <button
+          class="tools-view-theme"
+          type="button"
+          :title="
+            themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'
+          "
+          :aria-label="
+            themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'
+          "
+          @click="$emit('toggle-theme')"
+        >
+          <Sun v-if="themeMode === 'dark'" :size="17" :stroke-width="1.9" />
+          <Moon v-else :size="17" :stroke-width="1.9" />
+        </button>
       </header>
 
       <GitToolView
@@ -92,9 +106,11 @@ import {
   FileDiff,
   GitBranchIcon,
   Images,
+  Moon,
   Network,
   PawPrint,
-  Share2
+  Share2,
+  Sun
 } from "lucide-vue-next"
 import GitToolView from "@/features/gitTool/index.vue"
 import LanShareView from "@/features/lanShare/index.vue"
@@ -127,10 +143,14 @@ const props = defineProps({
   runtimeProfiles: {
     type: Array,
     default: () => []
+  },
+  themeMode: {
+    type: String,
+    default: "light"
   }
 })
 
-const emit = defineEmits(["add-repo", "detail-change"])
+const emit = defineEmits(["add-repo", "detail-change", "toggle-theme"])
 
 const activeTool = ref("")
 const gitToolStatus = ref([])
@@ -287,7 +307,7 @@ onBeforeUnmount(() => emit("detail-change", false))
   padding: 13px 14px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: #ffffff;
+  background: var(--color-panel);
   color: var(--color-text);
   cursor: pointer;
   text-align: left;
@@ -299,8 +319,8 @@ onBeforeUnmount(() => emit("detail-change", false))
 }
 
 .tools-view-tool:hover {
-  border-color: #b8c9d8;
-  background: #f8fbff;
+  border-color: var(--color-line-strong);
+  background: var(--color-panel-soft);
   box-shadow: 0 10px 26px rgba(34, 56, 83, 0.08);
   transform: translateY(-1px);
 }
@@ -313,8 +333,8 @@ onBeforeUnmount(() => emit("detail-change", false))
   align-items: center;
   justify-content: center;
   border-radius: 7px;
-  background: #e8f1fa;
-  color: #2f5f91;
+  background: var(--color-primary-soft);
+  color: var(--color-primary);
 }
 
 .tools-view-tool-main {
@@ -338,9 +358,9 @@ onBeforeUnmount(() => emit("detail-change", false))
 .tools-view-tool-meta {
   flex: none;
   padding: 4px 8px;
-  border: 1px solid #d6e2ec;
+  border: 1px solid var(--color-line);
   border-radius: 999px;
-  background: #f7fafc;
+  background: var(--color-panel-soft);
   color: var(--color-text-soft);
   font-size: 0.78rem;
   font-weight: 700;
@@ -368,7 +388,7 @@ onBeforeUnmount(() => emit("detail-change", false))
     padding: 0 10px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
-    background: #ffffff;
+    background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.8rem;
@@ -376,8 +396,8 @@ onBeforeUnmount(() => emit("detail-change", false))
   }
 
   .tools-view-back:hover {
-    border-color: #b9ccda;
-    background: #f7f9fc;
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
   }
 
   .tools-view-detail-title {
@@ -401,6 +421,31 @@ onBeforeUnmount(() => emit("detail-change", false))
     white-space: nowrap;
   }
 
+  .tools-view-theme {
+    display: grid;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
+    padding: 0;
+    place-items: center;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .tools-view-theme:hover {
+    border-color: var(--color-line-strong);
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
+
+  .tools-view-theme :deep(svg) {
+    display: block;
+  }
+
   .tools-view-git-status {
     display: grid;
     width: 318px;
@@ -410,7 +455,7 @@ onBeforeUnmount(() => emit("detail-change", false))
     padding: 7px 8px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: #f8fafc;
+    background: var(--color-panel-soft);
 
     .tools-view-git-status-item {
       display: flex;
