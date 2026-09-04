@@ -15,9 +15,9 @@
 
     <section class="skill-repository-manager-form-card">
       <div class="skill-repository-manager-form-head">
-        <strong class="skill-repository-manager-form-title">
+        <span data-emphasis class="skill-repository-manager-form-title">
           添加 GitHub 仓库
-        </strong>
+        </span>
         <span class="skill-repository-manager-form-desc">
           识别仓库里的 SKILL.md，并将父目录作为 Skill 来源。
         </span>
@@ -50,7 +50,7 @@
 
     <section class="skill-repository-manager-list-card">
       <div class="skill-repository-manager-list-head">
-        <strong class="skill-repository-manager-list-title">已添加仓库</strong>
+        <span data-emphasis class="skill-repository-manager-list-title">已添加仓库</span>
         <span class="skill-repository-manager-list-count">
           {{ repositorySkillCount }} 个 Skill
         </span>
@@ -69,12 +69,12 @@
         >
           <div class="skill-repository-manager-item-main">
             <div class="skill-repository-manager-item-title-row">
-              <strong
+              <span data-emphasis
                 class="skill-repository-manager-item-name"
                 :title="repository.name"
               >
                 {{ repository.name }}
-              </strong>
+              </span>
               <span
                 :class="[
                   'skill-repository-manager-status',
@@ -135,7 +135,7 @@
       </div>
 
       <div v-else class="skill-repository-manager-empty">
-        <strong class="skill-repository-manager-empty-title">暂无技能仓库</strong>
+        <span data-emphasis class="skill-repository-manager-empty-title">暂无技能仓库</span>
         <span class="skill-repository-manager-empty-desc">
           添加 GitHub 仓库后会在这里显示扫描结果。
         </span>
@@ -235,7 +235,6 @@ async function openRepository(repository) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
     white-space: nowrap;
   }
 
@@ -282,7 +281,6 @@ async function openRepository(repository) {
   .skill-repository-manager-title-desc {
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   .skill-repository-manager-form-card,
@@ -341,7 +339,6 @@ async function openRepository(repository) {
   .skill-repository-manager-field-label {
     color: var(--color-text-muted);
     font-size: 0.74rem;
-    font-weight: 700;
   }
 
   .skill-repository-manager-field-control {
@@ -388,7 +385,6 @@ async function openRepository(repository) {
   .skill-repository-manager-list-count {
     color: var(--color-text-muted);
     font-size: 0.8rem;
-    font-weight: 700;
   }
 
   .skill-repository-manager-list {
@@ -450,7 +446,6 @@ async function openRepository(repository) {
     background: var(--color-success-soft);
     color: var(--color-success);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   .skill-repository-manager-status.error {
@@ -481,7 +476,6 @@ async function openRepository(repository) {
     background: var(--color-panel);
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   .skill-repository-manager-error {
@@ -491,7 +485,6 @@ async function openRepository(repository) {
     margin: 0;
     color: var(--color-danger);
     font-size: 0.78rem;
-    font-weight: 700;
     line-height: 1.45;
   }
 

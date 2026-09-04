@@ -24,7 +24,7 @@
         </div>
 
         <section v-if="showRuntimeWarning" class="providers-view__runtime">
-          <strong>{{ activeCliName }} Runtime 配置不一致</strong>
+          <span data-emphasis>{{ activeCliName }} Runtime 配置不一致</span>
         </section>
 
         <div class="providers-view__toolbar-actions">
@@ -209,9 +209,9 @@
             </span>
             <div class="providers-view__account-main">
               <div class="providers-view__account-title">
-                <strong :title="item.account.email">
+                <span data-emphasis :title="item.account.email">
                   {{ item.account.email }}
-                </strong>
+                </span>
                 <span
                   :class="[
                     'providers-view__account-tag',
@@ -306,9 +306,9 @@
                         }"
                       ></span>
                       <div class="providers-view__quota-meta">
-                        <strong class="providers-view__quota-value">
+                        <span data-emphasis class="providers-view__quota-value">
                           {{ 100 - (quota.window.used_percent || 0) }}% ·
-                        </strong>
+                        </span>
                         <span class="providers-view__quota-reset">
                           {{
                             formatResetCountdown(quota.window.reset_at)
@@ -332,7 +332,7 @@
                       style="width: 56%"
                     ></span>
                     <div class="providers-view__quota-meta">
-                      <strong class="providers-view__quota-value"> ... </strong>
+                      <span data-emphasis class="providers-view__quota-value"> ... </span>
                       <span class="providers-view__quota-reset"> 请稍候 </span>
                     </div>
                   </div>
@@ -467,7 +467,7 @@
             </span>
             <div class="providers-view__provider-main">
               <div class="providers-view__provider-title">
-                <strong>{{ item.provider.name }}</strong>
+                <span data-emphasis>{{ item.provider.name }}</span>
                 <span
                   v-if="item.provider.enabled === false"
                   class="providers-view__account-tag providers-view__account-tag--disabled"
@@ -842,7 +842,7 @@
 
         <section class="providers-view__json">
           <div class="providers-view__json-title">
-            <strong>配置 JSON</strong>
+            <span data-emphasis>配置 JSON</span>
           </div>
           <div class="providers-view__check-row">
             <label
@@ -1110,7 +1110,7 @@
 
         <section class="providers-view__json">
           <div class="providers-view__json-title">
-            <strong>配置 JSON</strong>
+            <span data-emphasis>配置 JSON</span>
           </div>
           <div class="providers-view__check-row">
             <label
@@ -1180,7 +1180,7 @@
     >
       <section class="providers-view__api-key-manager">
         <header class="providers-view__api-key-manager-header">
-          <strong>{{ apiKeyManagerProvider?.name || "Provider" }}</strong>
+          <span data-emphasis>{{ apiKeyManagerProvider?.name || "Provider" }}</span>
           <span>仅当前生效的 Key 会被运行时使用。</span>
         </header>
         <div class="providers-view__api-key-list">
@@ -1272,7 +1272,7 @@
         >
           <div class="option-logo">
             <ShieldCheck :size="28" />
-            <strong>官方登录</strong>
+            <span data-emphasis>官方登录</span>
           </div>
           <span
             >通过 OAuth 管理 Codex 账号，后续使用独立
@@ -1286,7 +1286,7 @@
         >
           <div class="option-logo">
             <Server :size="28" />
-            <strong>供应商</strong>
+            <span data-emphasis>供应商</span>
           </div>
           <span>使用当前 API Key、Base URL 和模型映射方案。</span>
         </button>
@@ -1562,16 +1562,16 @@
                   >
                     <div class="providers-view-quota-stage-head">
                       <div class="providers-view-quota-stage-title">
-                        <strong class="providers-view-quota-stage-name">{{
+                        <span data-emphasis class="providers-view-quota-stage-name">{{
                           formatRateWindowName(stage.limitWindowSeconds)
-                        }}</strong>
+                        }}</span>
                         <span class="providers-view-quota-stage-status">
                           当前阶段
                         </span>
                       </div>
-                      <strong class="providers-view-quota-stage-percent">
+                      <span data-emphasis class="providers-view-quota-stage-percent">
                         剩余 {{ formatQuotaPercent(stage.remainingPercent) }}%
-                      </strong>
+                      </span>
                     </div>
                     <div class="providers-view-quota-stage-track">
                       <span
@@ -1584,29 +1584,29 @@
                     <div class="providers-view-quota-stage-metrics">
                       <span class="providers-view-quota-stage-metric">
                         已使用
-                        <strong class="providers-view-quota-stage-metric-value">
+                        <span data-emphasis class="providers-view-quota-stage-metric-value">
                           {{ formatQuotaPercent(stage.usedPercent) }}%
-                        </strong>
+                        </span>
                       </span>
                       <span class="providers-view-quota-stage-metric">
                         Token
-                        <strong class="providers-view-quota-stage-metric-value">
+                        <span data-emphasis class="providers-view-quota-stage-metric-value">
                           <TokenCount :value="stage.summary?.actualTokens" />
-                        </strong>
+                        </span>
                       </span>
                       <span class="providers-view-quota-stage-metric">
                         请求
-                        <strong class="providers-view-quota-stage-metric-value">
+                        <span data-emphasis class="providers-view-quota-stage-metric-value">
                           {{
                             formatProviderNumber(stage.summary?.requestCount)
                           }}
-                        </strong>
+                        </span>
                       </span>
                       <span class="providers-view-quota-stage-metric">
                         已计费
-                        <strong class="providers-view-quota-stage-metric-value">
+                        <span data-emphasis class="providers-view-quota-stage-metric-value">
                           {{ formatProviderCost(stage.summary?.totalCostUsd) }}
-                        </strong>
+                        </span>
                       </span>
                     </div>
                     <span class="providers-view-quota-stage-range">
@@ -1622,9 +1622,9 @@
                   class="providers-view-quota-history"
                 >
                   <div class="providers-view-quota-history-head">
-                    <strong class="providers-view-quota-history-title">
+                    <span data-emphasis class="providers-view-quota-history-title">
                       历史阶段
-                    </strong>
+                    </span>
                     <span class="providers-view-quota-history-count">
                       {{ codexQuotaStageHistory.length }} 个
                     </span>
@@ -1635,9 +1635,9 @@
                     class="providers-view-quota-history-row"
                   >
                     <div class="providers-view-quota-history-main">
-                      <strong class="providers-view-quota-history-name">{{
+                      <span data-emphasis class="providers-view-quota-history-name">{{
                         formatRateWindowName(stage.limitWindowSeconds)
-                      }}</strong>
+                      }}</span>
                       <span class="providers-view-quota-history-range">
                         {{ formatQuotaStageRange(stage) }}
                       </span>
@@ -1650,9 +1650,9 @@
                         }}
                         次
                       </span>
-                      <strong class="providers-view-quota-history-token">
+                      <span data-emphasis class="providers-view-quota-history-token">
                         <TokenCount :value="stage.summary?.actualTokens" />
-                      </strong>
+                      </span>
                       <span class="providers-view-quota-history-cost">{{
                         formatProviderCost(stage.summary?.totalCostUsd)
                       }}</span>
@@ -1665,11 +1665,11 @@
                 <div class="providers-view-usage-hero">
                   <div class="providers-view-usage-hero-item">
                     <span class="providers-view-usage-label">全部 Token</span>
-                    <strong class="providers-view-usage-total">
+                    <span data-emphasis class="providers-view-usage-total">
                       <TokenCount
                         :value="codexAccountUsageSummary.actualTokens"
                       />
-                    </strong>
+                    </span>
                     <span class="providers-view-usage-subtext">
                       {{
                         formatProviderNumber(
@@ -1681,11 +1681,11 @@
                   </div>
                   <div class="providers-view-usage-hero-item">
                     <span class="providers-view-usage-label">今日 Token</span>
-                    <strong class="providers-view-usage-total">
+                    <span data-emphasis class="providers-view-usage-total">
                       <TokenCount
                         :value="codexAccountUsageTodaySummary.actualTokens"
                       />
-                    </strong>
+                    </span>
                     <span class="providers-view-usage-subtext">
                       {{
                         formatProviderNumber(
@@ -1697,13 +1697,13 @@
                   </div>
                   <div class="providers-view-usage-hero-side">
                     <span class="providers-view-usage-label">费用</span>
-                    <strong class="providers-view-usage-cost">
+                    <span data-emphasis class="providers-view-usage-cost">
                       {{
                         formatProviderCost(
                           codexAccountUsageSummary.totalCostUsd
                         )
                       }}
-                    </strong>
+                    </span>
                     <span class="providers-view-usage-subtext">
                       今日
                       {{
@@ -1720,11 +1720,11 @@
                 <div class="providers-view-usage-token-grid">
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">输入</span>
-                    <strong class="providers-view-usage-value">
+                    <span data-emphasis class="providers-view-usage-value">
                       <TokenCount
                         :value="codexAccountUsageSummary.inputTokens"
                       />
-                    </strong>
+                    </span>
                     <small>
                       今日
                       <TokenCount
@@ -1734,11 +1734,11 @@
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">输出</span>
-                    <strong class="providers-view-usage-value">
+                    <span data-emphasis class="providers-view-usage-value">
                       <TokenCount
                         :value="codexAccountUsageSummary.outputTokens"
                       />
-                    </strong>
+                    </span>
                     <small>
                       今日
                       <TokenCount
@@ -1748,11 +1748,11 @@
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">缓存读取</span>
-                    <strong class="providers-view-usage-value">
+                    <span data-emphasis class="providers-view-usage-value">
                       <TokenCount
                         :value="codexAccountUsageSummary.cacheReadTokens"
                       />
-                    </strong>
+                    </span>
                     <small>
                       今日
                       <TokenCount
@@ -1762,11 +1762,11 @@
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">缓存写入</span>
-                    <strong class="providers-view-usage-value">
+                    <span data-emphasis class="providers-view-usage-value">
                       <TokenCount
                         :value="codexAccountUsageSummary.cacheCreationTokens"
                       />
-                    </strong>
+                    </span>
                     <small>
                       今日
                       <TokenCount
@@ -1788,20 +1788,20 @@
                     class="providers-view-usage-row"
                   >
                     <div class="providers-view-usage-row-main">
-                      <strong
+                      <span data-emphasis
                         class="providers-view-usage-value"
                         :title="item.model"
                       >
                         {{ item.model }}
-                      </strong>
+                      </span>
                       <span class="providers-view-usage-label">
                         {{ formatProviderNumber(item.requestCount) }} 次请求
                       </span>
                     </div>
                     <div class="providers-view-usage-row-side">
-                      <strong class="providers-view-usage-value">
+                      <span data-emphasis class="providers-view-usage-value">
                         <TokenCount :value="item.actualTokens" />
-                      </strong>
+                      </span>
                       <span class="providers-view-usage-label">
                         {{ formatProviderCost(item.totalCostUsd) }}
                       </span>
@@ -1905,9 +1905,9 @@
                 <div class="providers-view-usage-hero">
                   <div class="providers-view-usage-hero-item">
                     <span class="providers-view-usage-label">全部 Token</span>
-                    <strong class="providers-view-usage-total">
+                    <span data-emphasis class="providers-view-usage-total">
                       <TokenCount :value="providerUsageSummary.actualTokens" />
-                    </strong>
+                    </span>
                     <span class="providers-view-usage-subtext">
                       {{
                         formatProviderNumber(providerUsageSummary.requestCount)
@@ -1917,11 +1917,11 @@
                   </div>
                   <div class="providers-view-usage-hero-item">
                     <span class="providers-view-usage-label">今日 Token</span>
-                    <strong class="providers-view-usage-total">
+                    <span data-emphasis class="providers-view-usage-total">
                       <TokenCount
                         :value="providerUsageTodaySummary.actualTokens"
                       />
-                    </strong>
+                    </span>
                     <span class="providers-view-usage-subtext">
                       {{
                         formatProviderNumber(
@@ -1933,11 +1933,11 @@
                   </div>
                   <div class="providers-view-usage-hero-side">
                     <span class="providers-view-usage-label">费用</span>
-                    <strong class="providers-view-usage-cost">
+                    <span data-emphasis class="providers-view-usage-cost">
                       {{
                         formatProviderCost(providerUsageSummary.totalCostUsd)
                       }}
-                    </strong>
+                    </span>
                     <span class="providers-view-usage-subtext">
                       今日
                       {{
@@ -1954,9 +1954,9 @@
                 <div class="providers-view-usage-token-grid">
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">输入</span>
-                    <strong class="providers-view-usage-value">
+                    <span data-emphasis class="providers-view-usage-value">
                       <TokenCount :value="providerUsageSummary.inputTokens" />
-                    </strong>
+                    </span>
                     <small>
                       今日
                       <TokenCount
@@ -1966,9 +1966,9 @@
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">输出</span>
-                    <strong class="providers-view-usage-value">
+                    <span data-emphasis class="providers-view-usage-value">
                       <TokenCount :value="providerUsageSummary.outputTokens" />
-                    </strong>
+                    </span>
                     <small>
                       今日
                       <TokenCount
@@ -1978,11 +1978,11 @@
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">缓存读取</span>
-                    <strong class="providers-view-usage-value">
+                    <span data-emphasis class="providers-view-usage-value">
                       <TokenCount
                         :value="providerUsageSummary.cacheReadTokens"
                       />
-                    </strong>
+                    </span>
                     <small>
                       今日
                       <TokenCount
@@ -1992,11 +1992,11 @@
                   </article>
                   <article class="providers-view-usage-token-item">
                     <span class="providers-view-usage-label">缓存写入</span>
-                    <strong class="providers-view-usage-value">
+                    <span data-emphasis class="providers-view-usage-value">
                       <TokenCount
                         :value="providerUsageSummary.cacheCreationTokens"
                       />
-                    </strong>
+                    </span>
                     <small>
                       今日
                       <TokenCount
@@ -2018,20 +2018,20 @@
                     class="providers-view-usage-row"
                   >
                     <div class="providers-view-usage-row-main">
-                      <strong
+                      <span data-emphasis
                         class="providers-view-usage-value"
                         :title="item.model"
                       >
                         {{ item.model }}
-                      </strong>
+                      </span>
                       <span class="providers-view-usage-label">
                         {{ formatProviderNumber(item.requestCount) }} 次请求
                       </span>
                     </div>
                     <div class="providers-view-usage-row-side">
-                      <strong class="providers-view-usage-value">
+                      <span data-emphasis class="providers-view-usage-value">
                         <TokenCount :value="item.actualTokens" />
-                      </strong>
+                      </span>
                       <span class="providers-view-usage-label">
                         {{ formatProviderCost(item.totalCostUsd) }}
                       </span>
@@ -4041,7 +4041,6 @@ watch(
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-weight: 600;
   }
 
   &__cli-tab--active {
@@ -4104,7 +4103,6 @@ watch(
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   &-proxy-switch input {
@@ -4158,7 +4156,6 @@ watch(
     color: var(--color-warning);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   &-proxy-manage {
@@ -4167,7 +4164,7 @@ watch(
     color: var(--color-text-muted);
   }
 
-  &-proxy-manage span {
+  &-proxy-manage span:not([data-emphasis]) {
     display: grid;
     min-width: 18px;
     height: 18px;
@@ -4208,7 +4205,6 @@ watch(
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   &-proxy-tab-active {
@@ -4288,7 +4284,6 @@ watch(
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.8rem;
-    font-weight: 700;
     transition:
       border-color 0.18s ease,
       background 0.18s ease,
@@ -4362,7 +4357,7 @@ watch(
     background: var(--color-warning-soft);
   }
 
-  &__runtime strong {
+  &__runtime [data-emphasis] {
     overflow: hidden;
     color: var(--color-text);
     font-size: 0.86rem;
@@ -4504,7 +4499,7 @@ watch(
     min-width: 0;
   }
 
-  &__account-title strong {
+  &__account-title [data-emphasis] {
     overflow: hidden;
     min-width: 0;
     color: var(--color-text);
@@ -4584,7 +4579,6 @@ watch(
   &__account-error-title {
     color: var(--color-danger);
     font-size: 0.72rem;
-    font-weight: 800;
   }
 
   &__account-error-message {
@@ -4595,28 +4589,24 @@ watch(
     border-color: #8b5cf6;
     background: var(--color-accent-soft);
     color: #6d28d9;
-    font-weight: 800;
   }
 
   &__account-tag--plus {
     border-color: var(--color-primary-solid);
     background: var(--color-primary-soft);
     color: var(--color-primary);
-    font-weight: 800;
   }
 
   &__account-tag--error {
     border-color: var(--color-danger-line);
     background: var(--color-danger-soft);
     color: var(--color-danger);
-    font-weight: 800;
   }
 
   &__account-tag--disabled {
     border-color: var(--color-line-strong);
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-weight: 800;
   }
 
   &__quota-list {
@@ -4703,7 +4693,6 @@ watch(
     gap: 7px;
     color: var(--color-text-muted);
     font-size: 0.76rem;
-    font-weight: 700;
   }
 
   &__quota-name {
@@ -4806,7 +4795,6 @@ watch(
     border-radius: 12px;
     background: var(--color-panel-soft);
     color: #ff6a00;
-    font-weight: 700;
     transition:
       border-color 0.18s ease,
       background 0.18s ease,
@@ -4862,12 +4850,12 @@ watch(
     gap: 8px;
   }
 
-  &__provider-main strong {
+  &__provider-main [data-emphasis] {
     color: var(--color-text);
     font-size: 1rem;
   }
 
-  &__provider-main span {
+  &__provider-main span:not([data-emphasis]) {
     overflow: hidden;
     color: var(--color-primary);
     font-size: 0.9rem;
@@ -4914,7 +4902,6 @@ watch(
     background: var(--color-success-soft);
     color: var(--color-success);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__state-dot {
@@ -4944,7 +4931,6 @@ watch(
     border: 0;
     border-radius: 8px;
     cursor: pointer;
-    font-weight: 600;
   }
 
   &__enable,
@@ -5079,7 +5065,6 @@ watch(
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.84rem;
-    font-weight: 700;
   }
 
   &-icon-upload input {
@@ -5124,7 +5109,7 @@ watch(
     flex: none;
   }
 
-  &__icon-option span {
+  &__icon-option span:not([data-emphasis]) {
     overflow: hidden;
     width: 100%;
     font-size: 0.78rem;
@@ -5151,7 +5136,7 @@ watch(
     flex-basis: 100%;
   }
 
-  &__field span,
+  &__field span:not([data-emphasis]),
   &__section-title p {
     color: var(--color-text-muted);
   }
@@ -5194,7 +5179,6 @@ watch(
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__api-keys-header button:hover,
@@ -5276,7 +5260,7 @@ watch(
     font-size: 0.82rem;
   }
 
-  &__api-key-manager-header strong {
+  &__api-key-manager-header [data-emphasis] {
     color: var(--color-text);
     font-size: 1rem;
   }
@@ -5294,7 +5278,6 @@ watch(
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   &__api-key-manager-footer {
@@ -5312,7 +5295,6 @@ watch(
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-weight: 700;
   }
 
   &__api-key-meta button.providers-view__api-key-active {
@@ -5343,7 +5325,6 @@ watch(
 
   &__advanced summary {
     cursor: pointer;
-    font-weight: 700;
   }
 
   &__advanced &__field {
@@ -5434,11 +5415,10 @@ watch(
     padding: 12px 14px;
     cursor: pointer;
     color: var(--color-text);
-    font-weight: 700;
     list-style-position: inside;
   }
 
-  &__config-preview summary span {
+  &__config-preview summary span:not([data-emphasis]) {
     font-size: 0.95rem;
   }
 
@@ -5513,11 +5493,11 @@ watch(
     color: var(--color-primary);
   }
 
-  &__create-option strong {
+  &__create-option [data-emphasis] {
     font-size: 1.05rem;
   }
 
-  &__create-option span {
+  &__create-option span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.9rem;
     line-height: 1.6;
@@ -5726,7 +5706,6 @@ watch(
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.86rem;
-    font-weight: 600;
   }
 
   &__diff-button--primary {
@@ -5802,7 +5781,6 @@ watch(
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   .providers-view-drawer-tab-active {
@@ -5894,7 +5872,6 @@ watch(
         background: var(--color-panel);
         color: var(--color-primary);
         font-size: 0.84rem;
-        font-weight: 700;
         box-shadow: 0 10px 24px rgba(31, 52, 78, 0.1);
       }
     }
@@ -5937,7 +5914,6 @@ watch(
               flex: none;
               color: var(--color-primary);
               font-size: 0.72rem;
-              font-weight: 700;
             }
           }
 
@@ -6122,7 +6098,6 @@ watch(
     overflow: hidden;
     color: var(--color-text);
     font-size: 1.46rem;
-    font-weight: 800;
     line-height: 1.12;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -6131,7 +6106,6 @@ watch(
   .providers-view-usage-cost {
     color: var(--color-primary);
     font-size: 1.22rem;
-    font-weight: 800;
     line-height: 1.1;
   }
 
@@ -6224,7 +6198,6 @@ watch(
     cursor: pointer;
     font-size: 0.72rem;
     line-height: 0.72rem;
-    font-weight: 700;
     white-space: nowrap;
   }
 
@@ -6245,10 +6218,9 @@ watch(
     flex-direction: column;
     gap: 8px;
 
-    span {
+    span:not([data-emphasis]) {
       color: var(--color-text-muted);
       font-size: 0.76rem;
-      font-weight: 700;
     }
   }
 
@@ -6270,7 +6242,6 @@ watch(
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__login-copy-row input,
@@ -6303,7 +6274,6 @@ watch(
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-weight: 700;
   }
 
   &__login-copy-row button {
@@ -6322,7 +6292,6 @@ watch(
     background: linear-gradient(90deg, #1f66f2, #10a5aa);
     color: #ffffff;
     cursor: pointer;
-    font-weight: 800;
   }
 
   &__login-primary:disabled {
@@ -6360,7 +6329,6 @@ watch(
       background: var(--color-panel);
       color: var(--color-text);
       cursor: pointer;
-      font-weight: 700;
     }
 
     button:disabled {

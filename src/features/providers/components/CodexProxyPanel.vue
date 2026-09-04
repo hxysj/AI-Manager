@@ -9,13 +9,13 @@
     <div v-if="mode !== 'manage'" class="codex-proxy-panel-summary">
       <div class="codex-proxy-panel-main">
         <div class="codex-proxy-panel-title-row">
-          <strong>
+          <span data-emphasis>
             {{
               proxyState.enabled
                 ? `${cliName} 代理正在接管`
                 : `${cliName} 代理未接管`
             }}
-          </strong>
+          </span>
           <span class="codex-proxy-panel-running">运行中</span>
         </div>
         <!-- <div class="codex-proxy-panel-meta">
@@ -51,13 +51,13 @@
           <!-- <small>已加入 {{ proxyProviders.length }} 个 Provider</small> -->
         </div>
         <div class="codex-proxy-panel-pool-actions">
-          <strong>
+          <span data-emphasis>
             {{
               activeProxyProvider
                 ? `当前激活：${activeProxyProvider.name}`
                 : "当前激活：未启用"
             }}
-          </strong>
+          </span>
           <button
             v-if="mode === 'manage'"
             class="codex-proxy-panel-pool-button"
@@ -95,7 +95,7 @@
               <template v-else>{{ provider.name.slice(0, 1) }}</template>
             </span>
             <div class="codex-proxy-panel-provider">
-              <strong>{{ provider.name }}</strong>
+              <span data-emphasis>{{ provider.name }}</span>
               <span>{{ provider.description }}</span>
             </div>
             <span
@@ -243,11 +243,11 @@
               ]"
             >
               <span>{{ log.ok ? "OK" : "ERR" }}</span>
-              <strong>{{ log.statusCode || "--" }}</strong>
+              <span data-emphasis>{{ log.statusCode || "--" }}</span>
             </div>
             <div class="codex-proxy-panel-log-main">
               <div class="codex-proxy-panel-log-title">
-                <strong>{{ logProviderName(log) }}</strong>
+                <span data-emphasis>{{ logProviderName(log) }}</span>
                 <span>{{ formatTargetType(log.targetType) }}</span>
                 <span>{{ formatProxyLogSource(log) }}</span>
               </div>
@@ -282,7 +282,7 @@
             >
               上一页
             </button>
-            <strong>第 {{ proxyLogPage }} / {{ proxyLogPageCount }} 页</strong>
+            <span data-emphasis>第 {{ proxyLogPage }} / {{ proxyLogPageCount }} 页</span>
             <button
               type="button"
               :disabled="proxyLogPage >= proxyLogPageCount"
@@ -307,7 +307,7 @@
   <aside v-if="selectedProxyLog" class="codex-proxy-panel-log-drawer">
     <header class="codex-proxy-panel-log-drawer-head">
       <div>
-        <strong>请求详情</strong>
+        <span data-emphasis>请求详情</span>
         <span>{{ formatProxyLogTime(selectedProxyLog.createdAt) }}</span>
       </div>
       <button
@@ -321,58 +321,58 @@
     <section class="codex-proxy-panel-log-detail">
       <div class="codex-proxy-panel-log-detail-row">
         <span>Provider</span>
-        <strong>{{ logProviderName(selectedProxyLog) }}</strong>
+        <span data-emphasis>{{ logProviderName(selectedProxyLog) }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>Provider ID</span>
-        <strong>{{ selectedProxyLog.providerId }}</strong>
+        <span data-emphasis>{{ selectedProxyLog.providerId }}</span>
       </div>
       <div
         v-if="selectedProxyLog.instanceProviderId"
         class="codex-proxy-panel-log-detail-row"
       >
         <span>实例 Provider</span>
-        <strong>{{ instanceProviderName(selectedProxyLog) }}</strong>
+        <span data-emphasis>{{ instanceProviderName(selectedProxyLog) }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>请求来源</span>
-        <strong>{{ formatProxyLogSource(selectedProxyLog) }}</strong>
+        <span data-emphasis>{{ formatProxyLogSource(selectedProxyLog) }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>类型</span>
-        <strong>{{ selectedProxyLog.targetType }}</strong>
+        <span data-emphasis>{{ selectedProxyLog.targetType }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>Endpoint</span>
-        <strong>{{ selectedProxyLog.endpoint }}</strong>
+        <span data-emphasis>{{ selectedProxyLog.endpoint }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>Method</span>
-        <strong>{{ selectedProxyLog.method }}</strong>
+        <span data-emphasis>{{ selectedProxyLog.method }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>请求地址</span>
-        <strong>{{ selectedProxyLog.requestUrl }}</strong>
+        <span data-emphasis>{{ selectedProxyLog.requestUrl }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>上游地址</span>
-        <strong>{{ selectedProxyLog.upstreamUrl }}</strong>
+        <span data-emphasis>{{ selectedProxyLog.upstreamUrl }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>状态码</span>
-        <strong>{{ selectedProxyLog.statusCode || "无" }}</strong>
+        <span data-emphasis>{{ selectedProxyLog.statusCode || "无" }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>状态</span>
-        <strong>{{ selectedProxyLog.ok ? "成功" : "失败" }}</strong>
+        <span data-emphasis>{{ selectedProxyLog.ok ? "成功" : "失败" }}</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>耗时</span>
-        <strong>{{ selectedProxyLog.latencyMs }} ms</strong>
+        <span data-emphasis>{{ selectedProxyLog.latencyMs }} ms</span>
       </div>
       <div class="codex-proxy-panel-log-detail-row">
         <span>响应大小</span>
-        <strong>{{ selectedProxyLog.responseSize || 0 }} bytes</strong>
+        <span data-emphasis>{{ selectedProxyLog.responseSize || 0 }} bytes</span>
       </div>
       <div
         v-if="selectedProxyLog.errorMessage"
@@ -418,7 +418,7 @@
           <template v-else>{{ provider.name.slice(0, 1) }}</template>
         </span>
         <span class="codex-proxy-panel-picker-main">
-          <strong>{{ provider.name }}</strong>
+          <span data-emphasis>{{ provider.name }}</span>
           <small>{{ provider.description }}</small>
         </span>
         <Plus :size="16" />
@@ -819,12 +819,11 @@ defineExpose({
     background: var(--color-success-soft);
     color: var(--color-success);
     font-size: 12px;
-    font-weight: 700;
   }
 
-  &-main strong,
-  &-provider strong,
-  &-picker-main strong {
+  &-main [data-emphasis],
+  &-provider [data-emphasis],
+  &-picker-main [data-emphasis] {
     overflow: hidden;
     color: var(--color-text);
     font-size: 0.95rem;
@@ -832,10 +831,10 @@ defineExpose({
     white-space: nowrap;
   }
 
-  &-main span,
+  &-main span:not([data-emphasis]),
   &-main small,
   &-pool-title small,
-  &-provider span,
+  &-provider span:not([data-emphasis]),
   &-picker-main small {
     overflow: hidden;
     color: var(--color-text-muted);
@@ -864,7 +863,6 @@ defineExpose({
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.84rem;
-    font-weight: 700;
   }
 
   &-pool-button:hover {
@@ -902,7 +900,7 @@ defineExpose({
     gap: 10px;
   }
 
-  &-pool-head strong {
+  &-pool-head [data-emphasis] {
     overflow: hidden;
     color: var(--color-primary);
     font-size: 0.82rem;
@@ -964,7 +962,6 @@ defineExpose({
     border-radius: 8px;
     background: var(--color-panel);
     color: var(--color-primary);
-    font-weight: 700;
   }
 
   &-avatar-icon {
@@ -989,11 +986,10 @@ defineExpose({
     background: var(--color-panel);
   }
 
-  &-account-model span {
+  &-account-model span:not([data-emphasis]) {
     flex: none;
     color: var(--color-text-muted);
     font-size: 12px;
-    font-weight: 700;
   }
 
   &-account-model input {
@@ -1006,7 +1002,6 @@ defineExpose({
     background: var(--color-panel);
     color: var(--color-text);
     font-size: 12px;
-    font-weight: 700;
   }
 
   &-account-model button {
@@ -1019,7 +1014,6 @@ defineExpose({
     color: var(--color-primary);
     cursor: pointer;
     font-size: 12px;
-    font-weight: 700;
   }
 
   &-account-model button:disabled {
@@ -1035,7 +1029,6 @@ defineExpose({
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 12px;
-    font-weight: 700;
     text-align: center;
   }
 
@@ -1071,7 +1064,6 @@ defineExpose({
     color: var(--color-primary);
     cursor: pointer;
     font-size: 12px;
-    font-weight: 700;
   }
 
   &-remove {
@@ -1128,9 +1120,8 @@ defineExpose({
     gap: 3px;
   }
 
-  &-logs-head span {
+  &-logs-head span:not([data-emphasis]) {
     color: var(--color-text);
-    font-weight: 700;
   }
 
   &-logs-head small {
@@ -1159,7 +1150,6 @@ defineExpose({
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &-logs-filter button:last-child {
@@ -1198,7 +1188,6 @@ defineExpose({
     gap: 12px;
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &-logs-pager div {
@@ -1216,7 +1205,6 @@ defineExpose({
     color: var(--color-text);
     cursor: pointer;
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &-logs-pager button {
@@ -1231,7 +1219,6 @@ defineExpose({
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &-logs-pager button:disabled {
@@ -1239,7 +1226,7 @@ defineExpose({
     opacity: 0.5;
   }
 
-  &-logs-pager strong {
+  &-logs-pager [data-emphasis] {
     color: var(--color-text);
     font-size: 0.78rem;
     white-space: nowrap;
@@ -1289,13 +1276,12 @@ defineExpose({
     color: var(--color-success);
   }
 
-  &-log-code span {
+  &-log-code span:not([data-emphasis]) {
     font-size: 10px;
-    font-weight: 800;
     line-height: 1;
   }
 
-  &-log-code strong {
+  &-log-code [data-emphasis] {
     font-size: 15px;
     line-height: 1.1;
   }
@@ -1323,42 +1309,40 @@ defineExpose({
     gap: 10px;
   }
 
-  &-log-title strong,
-  &-log-meta span,
+  &-log-title [data-emphasis],
+  &-log-meta span:not([data-emphasis]),
   &-log-main small {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  &-log-title strong {
+  &-log-title [data-emphasis] {
     min-width: 0;
     color: var(--color-text);
     font-size: 0.84rem;
   }
 
-  &-log-title span {
+  &-log-title span:not([data-emphasis]) {
     flex: none;
     padding: 2px 7px;
     border-radius: 999px;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 11px;
-    font-weight: 700;
   }
 
-  &-log-meta span {
+  &-log-meta span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.76rem;
   }
 
-  &-log-meta span:first-child {
+  &-log-meta span:not([data-emphasis]):first-child {
     flex: none;
     color: var(--color-text);
-    font-weight: 800;
   }
 
-  &-log-meta span:nth-child(2) {
+  &-log-meta span:not([data-emphasis]):nth-child(2) {
     min-width: 90px;
     color: var(--color-primary);
   }
@@ -1377,7 +1361,6 @@ defineExpose({
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 12px;
-    font-weight: 700;
     text-align: center;
   }
 
@@ -1419,12 +1402,12 @@ defineExpose({
     gap: 4px;
   }
 
-  &-log-drawer-head strong {
+  &-log-drawer-head [data-emphasis] {
     color: var(--color-text);
     font-size: 1rem;
   }
 
-  &-log-drawer-head span {
+  &-log-drawer-head span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.78rem;
   }
@@ -1464,13 +1447,13 @@ defineExpose({
     background: var(--color-panel-soft);
   }
 
-  &-log-detail-row span,
-  &-log-detail-block span {
+  &-log-detail-row span:not([data-emphasis]),
+  &-log-detail-block span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.76rem;
   }
 
-  &-log-detail-row strong {
+  &-log-detail-row [data-emphasis] {
     overflow-wrap: anywhere;
     color: var(--color-text);
     font-size: 0.84rem;

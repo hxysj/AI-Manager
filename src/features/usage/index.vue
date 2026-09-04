@@ -109,22 +109,22 @@
     <section class="usage-view__metrics">
       <article class="usage-view__metric">
         <span>真实消耗 Tokens</span>
-        <strong><TokenCount :value="summary.actualTokens" /></strong>
+        <span data-emphasis><TokenCount :value="summary.actualTokens" /></span>
         <small>新增输入 <TokenCount :value="summary.inputTokens" /></small>
       </article>
       <article class="usage-view__metric">
         <span>输出 Tokens</span>
-        <strong><TokenCount :value="summary.outputTokens" /></strong>
+        <span data-emphasis><TokenCount :value="summary.outputTokens" /></span>
         <small>请求 {{ formatNumber(summary.requestCount) }} 次</small>
       </article>
       <article class="usage-view__metric">
         <span>缓存读取</span>
-        <strong><TokenCount :value="summary.cacheReadTokens" /></strong>
+        <span data-emphasis><TokenCount :value="summary.cacheReadTokens" /></span>
         <small>命中率 {{ formatPercent(summary.cacheHitRate) }}</small>
       </article>
       <article class="usage-view__metric">
         <span>费用估算</span>
-        <strong>{{ formatCost(summary.totalCostUsd) }}</strong>
+        <span data-emphasis>{{ formatCost(summary.totalCostUsd) }}</span>
         <small
           >{{ displayCurrencyLabel }} · 汇率
           {{ formatExchangeRate(exchangeRate) }}</small
@@ -221,11 +221,11 @@
             class="usage-view__stat-card"
           >
             <div>
-              <strong>{{ item.providerName }}</strong>
+              <span data-emphasis>{{ item.providerName }}</span>
               <span>{{ item.providerType || "未识别类型" }}</span>
             </div>
             <div>
-              <strong><TokenCount :value="item.actualTokens" /></strong>
+              <span data-emphasis><TokenCount :value="item.actualTokens" /></span>
               <span
                 >{{ formatNumber(item.requestCount) }} 次 ·
                 {{ formatCost(item.totalCostUsd) }}</span
@@ -251,14 +251,14 @@
             class="usage-view__stat-card"
           >
             <div>
-              <strong>{{ item.model }}</strong>
+              <span data-emphasis>{{ item.model }}</span>
               <span
                 >{{ formatAppName(item.appType) }} ·
                 {{ item.providerName }}</span
               >
             </div>
             <div>
-              <strong><TokenCount :value="item.actualTokens" /></strong>
+              <span data-emphasis><TokenCount :value="item.actualTokens" /></span>
               <span
                 >缓存 <TokenCount :value="item.cacheReadTokens" /> ·
                 {{ formatCost(item.totalCostUsd) }}</span
@@ -342,7 +342,7 @@
             <button type="button" :disabled="logPage <= 1" @click="prevLogPage">
               <ChevronLeft :size="16" />
             </button>
-            <strong>第 {{ logPage }} / {{ totalLogPages }} 页</strong>
+            <span data-emphasis>第 {{ logPage }} / {{ totalLogPages }} 页</span>
             <button
               type="button"
               :disabled="logPage >= totalLogPages"
@@ -2843,7 +2843,6 @@ function formatSessionLabel(item) {
       box-shadow: var(--shadow-panel);
       color: var(--color-text);
       font-size: 0.9rem;
-      font-weight: 700;
     }
 
     .usage-view-loading-icon {
@@ -2877,7 +2876,6 @@ function formatSessionLabel(item) {
     margin: 0 0 5px;
     color: var(--color-text-soft);
     font-size: 0.72rem;
-    font-weight: 700;
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
@@ -2910,7 +2908,6 @@ function formatSessionLabel(item) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.86rem;
-    font-weight: 600;
   }
 
   &__actions button {
@@ -2926,7 +2923,6 @@ function formatSessionLabel(item) {
     gap: 6px;
     color: var(--color-text-muted);
     font-size: 0.76rem;
-    font-weight: 700;
   }
 
   &__currency select {
@@ -2960,10 +2956,9 @@ function formatSessionLabel(item) {
     gap: 6px;
   }
 
-  &__field span {
+  &__field span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   &__field select {
@@ -3026,7 +3021,7 @@ function formatSessionLabel(item) {
     padding: 14px;
   }
 
-  &__metric span,
+  &__metric span:not([data-emphasis]),
   &__metric small {
     overflow: hidden;
     color: var(--color-text-muted);
@@ -3035,7 +3030,7 @@ function formatSessionLabel(item) {
     white-space: nowrap;
   }
 
-  &__metric strong {
+  &__metric [data-emphasis] {
     overflow: hidden;
     font-size: 1.32rem;
     line-height: 1.1;
@@ -3088,7 +3083,7 @@ function formatSessionLabel(item) {
     line-height: 1.25;
   }
 
-  &__section-header span {
+  &__section-header span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.76rem;
   }
@@ -3112,7 +3107,6 @@ function formatSessionLabel(item) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__section-actions button:disabled {
@@ -3142,7 +3136,6 @@ function formatSessionLabel(item) {
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.74rem;
-    font-weight: 800;
   }
 
   &__chart-tab--active {
@@ -3198,19 +3191,19 @@ function formatSessionLabel(item) {
     align-items: flex-end;
   }
 
-  &__stat-card strong,
-  &__stat-card span {
+  &__stat-card [data-emphasis],
+  &__stat-card span:not([data-emphasis]) {
     overflow: hidden;
     max-width: 100%;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  &__stat-card strong {
+  &__stat-card [data-emphasis] {
     font-size: 0.86rem;
   }
 
-  &__stat-card span {
+  &__stat-card span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.74rem;
   }
@@ -3257,7 +3250,6 @@ function formatSessionLabel(item) {
     z-index: 1;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-weight: 700;
   }
 
   &__table-row {
@@ -3268,7 +3260,7 @@ function formatSessionLabel(item) {
     border-bottom: 0;
   }
 
-  &__table-row span {
+  &__table-row span:not([data-emphasis]) {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -3282,7 +3274,6 @@ function formatSessionLabel(item) {
     gap: 12px;
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__pager div {
@@ -3299,7 +3290,6 @@ function formatSessionLabel(item) {
     color: var(--color-text);
     cursor: pointer;
     font-size: 0.78rem;
-    font-weight: 700;
     padding: 0 8px;
   }
 
@@ -3321,7 +3311,7 @@ function formatSessionLabel(item) {
     opacity: 0.48;
   }
 
-  &__pager strong {
+  &__pager [data-emphasis] {
     color: var(--color-text);
     font-size: 0.8rem;
     white-space: nowrap;
@@ -3408,7 +3398,6 @@ function formatSessionLabel(item) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   &__dialog-header button,
@@ -3441,7 +3430,6 @@ function formatSessionLabel(item) {
     gap: 6px;
     color: var(--color-text-muted);
     font-size: 0.76rem;
-    font-weight: 700;
   }
 
   &__pricing-export select {
@@ -3478,20 +3466,17 @@ function formatSessionLabel(item) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
-  &__import-file span {
+  &__import-file span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__import-tip {
     margin: 0;
     color: var(--color-text-muted);
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   &__import-textarea {
@@ -3512,7 +3497,6 @@ function formatSessionLabel(item) {
     margin: 0;
     color: var(--color-success);
     font-size: 0.82rem;
-    font-weight: 800;
   }
 
   &__pricing-list {
@@ -3543,7 +3527,6 @@ function formatSessionLabel(item) {
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   &__pricing-row {
@@ -3570,7 +3553,6 @@ function formatSessionLabel(item) {
     padding: 0 2px;
     color: var(--color-text);
     font-size: 0.82rem;
-    font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -3587,7 +3569,6 @@ function formatSessionLabel(item) {
     background: var(--color-primary-soft);
     color: var(--color-text-muted);
     font-size: 0.74rem;
-    font-weight: 800;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -3610,7 +3591,6 @@ function formatSessionLabel(item) {
     gap: 8px;
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__pricing-pagination label {
@@ -3644,7 +3624,6 @@ function formatSessionLabel(item) {
     margin: 0;
     color: var(--color-danger);
     font-size: 0.82rem;
-    font-weight: 700;
   }
 }
 

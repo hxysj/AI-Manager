@@ -5,9 +5,9 @@
       <header class="lan-share-preview-head">
         <div class="lan-share-preview-title">
           <span class="lan-share-preview-mark">文件预览</span>
-          <strong class="lan-share-preview-heading" :title="file?.name || ''">
+          <span data-emphasis class="lan-share-preview-heading" :title="file?.name || ''">
             {{ file?.name || "文件预览" }}
-          </strong>
+          </span>
           <small class="lan-share-preview-meta">
             {{ formatSize(file?.size) }} · {{ file?.mimeType || "文件" }}
           </small>
@@ -168,7 +168,6 @@ function formatSize(value) {
         .lan-share-preview-mark {
           color: var(--color-text-soft);
           font-size: 0.72rem;
-          font-weight: 700;
         }
 
         .lan-share-preview-heading {
@@ -198,7 +197,6 @@ function formatSize(value) {
         background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
-        font-weight: 700;
       }
     }
 
@@ -273,7 +271,6 @@ function formatSize(value) {
         background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
-        font-weight: 700;
       }
 
       .lan-share-preview-button-primary {

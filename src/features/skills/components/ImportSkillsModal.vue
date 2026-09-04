@@ -35,7 +35,7 @@
                 :disabled="loading"
               />
               <span class="import-skills-modal__content">
-                <strong>{{ candidate.name }}</strong>
+                <span data-emphasis>{{ candidate.name }}</span>
                 <span>{{ candidate.description || "未提供描述" }}</span>
                 <small>{{ candidate.cliNames.join("、") }}</small>
               </span>
@@ -54,7 +54,7 @@
             class="import-skills-modal__conflict"
           >
             <div class="import-skills-modal__conflict-head">
-              <strong>{{ conflict.name }}</strong>
+              <span data-emphasis>{{ conflict.name }}</span>
               <span>名称相同但内容不同，请选择保留版本</span>
             </div>
 
@@ -71,9 +71,9 @@
                 :disabled="loading"
               />
               <span class="import-skills-modal__content">
-                <strong>{{
+                <span data-emphasis>{{
                   option.alreadyManaged ? "保留 Manager 版本" : option.name
-                }}</strong>
+                }}</span>
                 <span>{{ option.description || "未提供描述" }}</span>
                 <small>{{ option.cliNames.join("、") }}</small>
               </span>
@@ -198,10 +198,9 @@ function handleClose() {
     gap: 8px;
     color: var(--color-text-muted);
     font-size: 0.84rem;
-    font-weight: 700;
   }
 
-  &__summary span {
+  &__summary span:not([data-emphasis]) {
     padding: 4px 8px;
     border-radius: 999px;
     background: var(--color-primary-soft);
@@ -214,7 +213,6 @@ function handleClose() {
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 0.84rem;
-    font-weight: 600;
   }
 
   &__body {
@@ -259,12 +257,12 @@ function handleClose() {
     gap: 2px;
   }
 
-  &__conflict-head strong {
+  &__conflict-head [data-emphasis] {
     color: var(--color-text);
     font-size: 0.92rem;
   }
 
-  &__conflict-head span {
+  &__conflict-head span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.78rem;
   }
@@ -301,7 +299,7 @@ function handleClose() {
     gap: 3px;
   }
 
-  &__content strong {
+  &__content [data-emphasis] {
     overflow: hidden;
     color: var(--color-text);
     font-size: 0.9rem;
@@ -309,7 +307,7 @@ function handleClose() {
     white-space: nowrap;
   }
 
-  &__content span {
+  &__content span:not([data-emphasis]) {
     overflow: hidden;
     color: var(--color-text-muted);
     font-size: 0.8rem;
@@ -321,7 +319,6 @@ function handleClose() {
     overflow: hidden;
     color: var(--color-accent);
     font-size: 0.74rem;
-    font-weight: 700;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -353,7 +350,6 @@ function handleClose() {
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.88rem;
-  font-weight: 600;
 
   &:hover {
     border-color: var(--color-line-strong);

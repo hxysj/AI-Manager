@@ -1188,9 +1188,9 @@ fn mobile_page_html() -> String {
     .page-shell { display: flex; height: 100vh; min-height: 0; flex-direction: column; }
     .page-head { position: sticky; top: 0; z-index: 4; display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid rgba(216, 227, 238, 0.72); background: rgba(247, 251, 255, 0.94); backdrop-filter: blur(14px); box-shadow: 0 8px 28px rgba(35, 55, 80, 0.06); }
     .page-title { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-    .page-title strong { color: var(--text); font-size: 20px; line-height: 1.15; letter-spacing: 0; }
-    .page-title span { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-    .page-badge { display: inline-flex; height: 30px; flex: none; align-items: center; justify-content: center; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 999px; background: #ffffff; color: var(--primary); font-size: 12px; font-weight: 800; box-shadow: 0 6px 16px rgba(37, 106, 168, 0.08); }
+    .page-title [data-emphasis] { color: var(--text); font-size: 20px; line-height: 1.15; letter-spacing: 0; }
+    .page-title span:not([data-emphasis]) { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+    .page-badge { display: inline-flex; height: 30px; flex: none; align-items: center; justify-content: center; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 999px; background: #ffffff; color: var(--primary); font-size: 12px; box-shadow: 0 6px 16px rgba(37, 106, 168, 0.08); }
     .page-main { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: hidden; padding: 12px; }
     .card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid rgba(216, 227, 238, 0.92); border-radius: 8px; background: rgba(255, 255, 255, 0.96); box-shadow: var(--shadow); }
     .device-card { flex: none; }
@@ -1198,13 +1198,13 @@ fn mobile_page_html() -> String {
     .content-detail { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: hidden; }
     .content-detail.hidden { display: none; }
     .view-tabs { display: flex; flex: none; gap: 6px; padding: 4px; border: 1px solid rgba(198, 213, 228, 0.9); border-radius: 8px; background: rgba(247, 250, 253, 0.9); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8); }
-    .view-tab, .mode-tab { display: inline-flex; height: 34px; flex: 1; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #5f6f83; font-size: 14px; font-weight: 800; }
+    .view-tab, .mode-tab { display: inline-flex; height: 34px; flex: 1; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #5f6f83; font-size: 14px; }
     .view-tab.active, .mode-tab.active { border-color: var(--line-strong); background: #ffffff; color: var(--primary); box-shadow: 0 8px 18px rgba(37, 106, 168, 0.12); }
     .view-panel { display: none; min-height: 0; flex: 1; }
     .view-panel.active { display: flex; }
     .card-head { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-bottom: 1px solid rgba(237, 242, 247, 0.95); background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%); }
-    .card-head strong { color: var(--text); font-size: 15px; }
-    .card-head span { color: var(--muted); font-size: 12px; }
+    .card-head [data-emphasis] { color: var(--text); font-size: 15px; }
+    .card-head span:not([data-emphasis]) { color: var(--muted); font-size: 12px; }
     .device-row { display: flex; gap: 8px; padding: 10px 12px; }
     .group-list-view { display: none; min-height: 0; flex: 1; }
     .group-list-view.active { display: flex; }
@@ -1212,11 +1212,11 @@ fn mobile_page_html() -> String {
     .group-session-list { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 10px; overflow: auto; padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
     .group-session-item { display: flex; width: 100%; min-height: 64px; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border: 1px solid #d7e4f0; border-radius: 8px; background: #ffffff; color: var(--text); text-align: left; box-shadow: 0 8px 18px rgba(38, 62, 88, 0.05); }
     .group-session-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-    .group-session-name { overflow: hidden; font-size: 14px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .group-session-name { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
     .group-session-meta { color: var(--muted); font-size: 12px; }
     .field-input { min-width: 0; height: 36px; flex: 1; padding: 0 10px; border: 1px solid #cbd8e6; border-radius: 7px; background: #ffffff; color: var(--text); font-size: 14px; outline: none; box-shadow: inset 0 1px 2px rgba(38, 62, 88, 0.03); }
     .field-input:focus { border-color: #8ab5dc; box-shadow: 0 0 0 3px rgba(37, 106, 168, 0.1); }
-    .text-button, .icon-button { display: inline-flex; height: 36px; flex: none; align-items: center; justify-content: center; gap: 5px; border: 1px solid #c7d5e4; border-radius: 7px; background: #ffffff; color: var(--primary); font-size: 13px; font-weight: 800; text-decoration: none; box-shadow: 0 4px 12px rgba(38, 62, 88, 0.05); }
+    .text-button, .icon-button { display: inline-flex; height: 36px; flex: none; align-items: center; justify-content: center; gap: 5px; border: 1px solid #c7d5e4; border-radius: 7px; background: #ffffff; color: var(--primary); font-size: 13px; text-decoration: none; box-shadow: 0 4px 12px rgba(38, 62, 88, 0.05); }
     .text-button.group-back { display: none; flex: none; min-width: 52px; padding: 0 8px; }
     .text-button.group-back.active { display: inline-flex; }
     .primary-button { border-color: var(--primary); background: var(--primary); color: #ffffff; box-shadow: 0 8px 18px rgba(37, 106, 168, 0.2); }
@@ -1224,7 +1224,7 @@ fn mobile_page_html() -> String {
     .file-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid #edf2f7; background: #ffffff; }
     .file-item:last-child { border-bottom: 0; }
     .file-main { min-width: 0; flex: 1; }
-    .file-name { display: block; overflow: hidden; color: var(--text); font-size: 14px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
+    .file-name { display: block; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
     .file-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
     .file-actions { display: flex; flex: none; gap: 6px; }
     .message-list { padding: 12px; gap: 10px; background: linear-gradient(180deg, #fbfdff 0%, #ffffff 44%, #f5f9fd 100%); }
@@ -1239,8 +1239,8 @@ fn mobile_page_html() -> String {
     .preview-panel { position: relative; display: flex; width: min(720px, 100%); max-height: calc(100vh - 28px); flex-direction: column; overflow: hidden; border: 1px solid #dbe4ee; border-radius: 8px; background: #ffffff; box-shadow: 0 20px 54px rgba(15, 23, 42, 0.26); }
     .preview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid #edf2f7; }
     .preview-title { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-    .preview-title strong { overflow: hidden; color: #172033; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
-    .preview-title span { color: #748195; font-size: 12px; }
+    .preview-title [data-emphasis] { overflow: hidden; color: #172033; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+    .preview-title span:not([data-emphasis]) { color: #748195; font-size: 12px; }
     .preview-body { display: flex; min-height: 260px; flex: 1; align-items: center; justify-content: center; overflow: auto; background: #f7fafd; }
     .preview-body img, .preview-body video { display: block; max-width: 100%; max-height: 68vh; }
     .preview-body audio { width: calc(100% - 28px); }
@@ -1254,14 +1254,14 @@ fn mobile_page_html() -> String {
   <div class="page-shell">
     <header class="page-head">
       <div class="page-title">
-        <strong>设备快传</strong>
+        <span data-emphasis>设备快传</span>
         <span id="status">正在连接电脑端服务...</span>
       </div>
       <span class="page-badge">同网访问</span>
     </header>
     <main class="page-main">
     <section class="card device-card">
-      <div class="card-head"><strong>设备名称</strong><span>用于电脑端识别</span></div>
+      <div class="card-head"><span data-emphasis>设备名称</span><span>用于电脑端识别</span></div>
       <div class="device-row">
         <input id="deviceName" class="field-input" maxlength="40" />
         <button id="saveDeviceName" class="text-button" type="button">保存</button>
@@ -1273,7 +1273,7 @@ fn mobile_page_html() -> String {
           <button class="mode-tab" data-mode="group" type="button">群聊</button>
         </nav>
         <section id="groupListView" class="card group-list-view">
-          <div class="card-head"><strong>已加入群聊</strong><span>点击群聊进入消息和共享文件</span></div>
+          <div class="card-head"><span data-emphasis>已加入群聊</span><span>点击群聊进入消息和共享文件</span></div>
           <div class="group-join-row">
             <input id="inviteCode" class="field-input" maxlength="16" placeholder="输入群邀请码" />
             <button id="joinGroup" class="text-button" type="button">加入</button>
@@ -1288,7 +1288,7 @@ fn mobile_page_html() -> String {
             <button id="leaveGroup" class="text-button group-back" type="button" title="退出群聊">退出</button>
           </nav>
           <section id="messagesView" class="card view-panel active">
-            <div class="card-head"><strong id="messagesTitle">消息</strong><button id="createSession" class="text-button" type="button">新会话</button></div>
+            <div class="card-head"><span data-emphasis id="messagesTitle">消息</span><button id="createSession" class="text-button" type="button">新会话</button></div>
             <div id="messages" class="message-list" aria-label="点击消息可复制"></div>
             <div class="composer">
               <input id="messageInput" class="field-input" placeholder="输入消息" />
@@ -1296,7 +1296,7 @@ fn mobile_page_html() -> String {
             </div>
           </section>
           <section id="filesView" class="card view-panel">
-            <div class="card-head"><strong id="filesTitle">共享文件</strong><button id="refreshFiles" class="text-button" type="button">刷新</button></div>
+            <div class="card-head"><span data-emphasis id="filesTitle">共享文件</span><button id="refreshFiles" class="text-button" type="button">刷新</button></div>
             <div id="files" class="file-list"><div class="empty">正在读取文件列表</div></div>
           </section>
         </section>
@@ -1308,7 +1308,7 @@ fn mobile_page_html() -> String {
     <section class="preview-panel">
       <header class="preview-head">
         <div class="preview-title">
-          <strong id="previewName">文件预览</strong>
+          <span data-emphasis id="previewName">文件预览</span>
           <span id="previewMeta"></span>
         </div>
         <button id="closePreview" class="icon-button" type="button">关闭</button>

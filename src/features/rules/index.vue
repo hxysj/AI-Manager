@@ -44,7 +44,7 @@
 
     <section class="rules-view__runtime">
       <div>
-        <strong>{{ runtimeTitle }}</strong>
+        <span data-emphasis>{{ runtimeTitle }}</span>
         <span>{{ runtimePathText }}</span>
       </div>
       <span
@@ -71,7 +71,7 @@
         @click="openDrawer(prompt.id)"
       >
         <div class="rules-view__prompt-main">
-          <strong>{{ prompt.name }}</strong>
+          <span data-emphasis>{{ prompt.name }}</span>
           <span>{{ prompt.description || "未填写描述" }}</span>
           <small>{{ formatTime(prompt.updatedAt) }}</small>
         </div>
@@ -312,19 +312,19 @@
             <div class="rules-drawer__grid">
               <article>
                 <span>CLI</span>
-                <strong>{{ promptScopeName(drawerPrompt.cli) }}</strong>
+                <span data-emphasis>{{ promptScopeName(drawerPrompt.cli) }}</span>
               </article>
               <article>
                 <span>ID</span>
-                <strong>{{ drawerPrompt.id }}</strong>
+                <span data-emphasis>{{ drawerPrompt.id }}</span>
               </article>
               <article>
                 <span>CreatedAt</span>
-                <strong>{{ formatTime(drawerPrompt.createdAt) }}</strong>
+                <span data-emphasis>{{ formatTime(drawerPrompt.createdAt) }}</span>
               </article>
               <article>
                 <span>UpdatedAt</span>
-                <strong>{{ formatTime(drawerPrompt.updatedAt) }}</strong>
+                <span data-emphasis>{{ formatTime(drawerPrompt.updatedAt) }}</span>
               </article>
             </div>
             <div class="rules-drawer__block">
@@ -1113,7 +1113,6 @@ onBeforeUnmount(() => {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-weight: 600;
   }
 
   &__cli-tab--active {
@@ -1199,11 +1198,11 @@ onBeforeUnmount(() => {
     gap: 6px;
   }
 
-  &__prompt-main strong {
+  &__prompt-main [data-emphasis] {
     color: var(--color-text);
   }
 
-  &__prompt-main span,
+  &__prompt-main span:not([data-emphasis]),
   &__prompt-main small {
     overflow: hidden;
     color: var(--color-text-muted);
@@ -1235,7 +1234,6 @@ onBeforeUnmount(() => {
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.74rem;
-    font-weight: 700;
   }
 
   &__target-button--active {
@@ -1278,7 +1276,6 @@ onBeforeUnmount(() => {
     border-radius: 999px;
     background: var(--color-panel);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__compare-button {
@@ -1289,7 +1286,6 @@ onBeforeUnmount(() => {
     background: var(--color-panel);
     color: var(--color-danger);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__active-tag {
@@ -1298,7 +1294,6 @@ onBeforeUnmount(() => {
     background: var(--color-primary-solid);
     color: #ffffff;
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   &__runtime {
@@ -1316,11 +1311,11 @@ onBeforeUnmount(() => {
     gap: 5px;
   }
 
-  &__runtime strong {
+  &__runtime [data-emphasis] {
     color: var(--color-text);
   }
 
-  &__runtime span {
+  &__runtime span:not([data-emphasis]) {
     overflow: hidden;
     color: var(--color-text-muted);
     font-size: 0.84rem;
@@ -1335,7 +1330,6 @@ onBeforeUnmount(() => {
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   &__status--SYNCED {
@@ -1392,7 +1386,7 @@ onBeforeUnmount(() => {
     flex-basis: 100%;
   }
 
-  &__field span {
+  &__field span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.88rem;
   }
@@ -1435,7 +1429,6 @@ onBeforeUnmount(() => {
     border: 0;
     border-radius: 8px;
     cursor: pointer;
-    font-weight: 600;
   }
 
   &__editor-footer button[type="submit"] {
@@ -1495,7 +1488,6 @@ onBeforeUnmount(() => {
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.86rem;
-    font-weight: 600;
   }
 
   &__diff-button:hover:not(:disabled) {
@@ -1571,7 +1563,6 @@ onBeforeUnmount(() => {
     margin: 0 0 5px;
     color: var(--color-text-soft);
     font-size: 0.72rem;
-    font-weight: 700;
     letter-spacing: 0.14em;
     text-overflow: ellipsis;
     text-transform: uppercase;
@@ -1588,7 +1579,7 @@ onBeforeUnmount(() => {
     white-space: nowrap;
   }
 
-  &__title-wrap span {
+  &__title-wrap span:not([data-emphasis]) {
     color: var(--color-text-muted);
   }
 
@@ -1621,7 +1612,6 @@ onBeforeUnmount(() => {
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.86rem;
-    font-weight: 700;
   }
 
   &__tab--active {
@@ -1664,10 +1654,9 @@ onBeforeUnmount(() => {
     box-shadow: 0 8px 22px rgba(34, 56, 83, 0.04);
   }
 
-  &__block span {
+  &__block span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
@@ -1704,17 +1693,16 @@ onBeforeUnmount(() => {
     background: var(--color-panel-soft);
   }
 
-  &__grid span {
+  &__grid span:not([data-emphasis]) {
     display: block;
     margin-bottom: 6px;
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
 
-  &__grid strong {
+  &__grid [data-emphasis] {
     color: var(--color-text);
     font-size: 0.88rem;
     line-height: 1.45;
@@ -1741,7 +1729,6 @@ onBeforeUnmount(() => {
     border: 0;
     border-radius: 8px;
     cursor: pointer;
-    font-weight: 600;
   }
 
   &__primary {

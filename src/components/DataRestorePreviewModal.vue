@@ -88,7 +88,7 @@
               class="restore-section"
             >
               <div class="restore-section-head">
-                <strong class="restore-section-title">将新增</strong>
+                <span data-emphasis class="restore-section-title">将新增</span>
                 <span class="restore-section-count">
                   {{ restoreFilteredAddedItems.length }} 项
                 </span>
@@ -99,7 +99,7 @@
                 class="restore-group"
               >
                 <div class="restore-group-head">
-                  <strong class="restore-group-title">{{ group.path }}</strong>
+                  <span data-emphasis class="restore-group-title">{{ group.path }}</span>
                   <span class="restore-group-count">
                     {{ group.items.length }} 项
                   </span>
@@ -111,9 +111,9 @@
                       class="restore-tree-folder"
                       :style="{ paddingLeft: `${row.depth * 18 + 10}px` }"
                     >
-                      <strong class="restore-tree-folder-name">{{
+                      <span data-emphasis class="restore-tree-folder-name">{{
                         row.name
-                      }}</strong>
+                      }}</span>
                       <span class="restore-tree-folder-count">
                         {{ row.itemCount }} 项
                       </span>
@@ -123,8 +123,8 @@
                       class="restore-item restore-tree-item"
                       :style="{ marginLeft: `${row.depth * 18}px` }"
                     >
-                      <strong class="restore-item-name"
-                        >{{ row.item.type }}：{{ row.item.name }}</strong
+                      <span data-emphasis class="restore-item-name"
+                        >{{ row.item.type }}：{{ row.item.name }}</span
                       >
                       <span class="restore-item-path">{{
                         row.relativePath
@@ -140,7 +140,7 @@
               class="restore-section"
             >
               <div class="restore-section-head">
-                <strong class="restore-section-title">需要决策</strong>
+                <span data-emphasis class="restore-section-title">需要决策</span>
                 <span class="restore-section-count">
                   {{ restoreFilteredConflictItems.length }} 项
                 </span>
@@ -151,7 +151,7 @@
                 class="restore-group"
               >
                 <div class="restore-group-head">
-                  <strong class="restore-group-title">{{ group.path }}</strong>
+                  <span data-emphasis class="restore-group-title">{{ group.path }}</span>
                   <div class="restore-group-actions">
                     <span class="restore-group-count">
                       {{ group.items.length }} 项
@@ -181,9 +181,9 @@
                       class="restore-tree-folder"
                       :style="{ paddingLeft: `${row.depth * 18 + 10}px` }"
                     >
-                      <strong class="restore-tree-folder-name">{{
+                      <span data-emphasis class="restore-tree-folder-name">{{
                         row.name
-                      }}</strong>
+                      }}</span>
                       <div class="restore-directory-actions">
                         <span class="restore-tree-folder-count">
                           {{ row.itemCount }} 项
@@ -213,8 +213,8 @@
                     >
                       <div class="restore-conflict-head">
                         <div class="restore-conflict-info">
-                          <strong class="restore-item-name"
-                            >{{ row.item.type }}：{{ row.item.name }}</strong
+                          <span data-emphasis class="restore-item-name"
+                            >{{ row.item.type }}：{{ row.item.name }}</span
                           >
                           <span class="restore-item-path">{{
                             row.relativePath
@@ -324,7 +324,7 @@
       </div>
       <div class="restore-compare restore-compare-dialog">
         <section class="restore-compare-panel">
-          <strong class="restore-compare-title">当前内容</strong>
+          <span data-emphasis class="restore-compare-title">当前内容</span>
           <div
             ref="restoreCurrentCompareCodeRef"
             class="restore-compare-code"
@@ -349,7 +349,7 @@
           </div>
         </section>
         <section class="restore-compare-panel">
-          <strong class="restore-compare-title">备份内容</strong>
+          <span data-emphasis class="restore-compare-title">备份内容</span>
           <div
             ref="restoreBackupCompareCodeRef"
             class="restore-compare-code"
@@ -874,14 +874,12 @@ function createRestoreCompareRows(currentContent, backupContent) {
       .restore-stat-value {
         color: var(--color-text);
         font-size: 1.04rem;
-        font-weight: 800;
         line-height: 1.1;
       }
 
       .restore-stat-label {
         color: var(--color-text-muted);
         font-size: 0.72rem;
-        font-weight: 700;
         line-height: 1.2;
       }
     }
@@ -967,7 +965,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
           min-width: 0;
           overflow: hidden;
           font-size: 0.84rem;
-          font-weight: 800;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
@@ -976,7 +973,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
           flex: none;
           color: var(--color-text-muted);
           font-size: 0.72rem;
-          font-weight: 700;
         }
       }
 
@@ -991,7 +987,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
           background: var(--color-panel);
           color: var(--color-text-muted);
           font-size: 0.68rem;
-          font-weight: 700;
           line-height: 1.4;
         }
       }
@@ -1058,7 +1053,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
           .restore-section-count {
             color: var(--color-text-muted);
             font-size: 0.74rem;
-            font-weight: 700;
           }
         }
       }
@@ -1095,7 +1089,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
       flex: none;
       color: var(--color-text-muted);
       font-size: 0.74rem;
-      font-weight: 700;
     }
 
     .restore-group-actions {
@@ -1133,7 +1126,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
       flex: none;
       color: var(--color-text-muted);
       font-size: 0.72rem;
-      font-weight: 700;
     }
 
     .restore-directory-actions {
@@ -1232,14 +1224,12 @@ function createRestoreCompareRows(currentContent, backupContent) {
       .restore-choice-title {
         color: var(--color-text);
         font-size: 0.78rem;
-        font-weight: 800;
         line-height: 1.25;
       }
 
       .restore-choice-desc {
         overflow: hidden;
         font-size: 0.7rem;
-        font-weight: 700;
         line-height: 1.25;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1270,7 +1260,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.74rem;
-  font-weight: 800;
 }
 
 .restore-mini-button:disabled,
@@ -1297,7 +1286,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
   border-radius: 8px;
   color: var(--color-text-muted);
   font-size: 0.9rem;
-  font-weight: 700;
 }
 
 .restore-actions {
@@ -1316,7 +1304,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
   background: var(--color-panel-soft);
   color: var(--color-primary);
   cursor: pointer;
-  font-weight: 600;
 }
 
 .restore-action-button:hover {
@@ -1370,7 +1357,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
   grid-column: 1 / -1;
   color: var(--color-text-muted);
   font-size: 0.78rem;
-  font-weight: 700;
 }
 
 .restore-compare-code {
@@ -1424,7 +1410,6 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
 .restore-compare-marker {
   color: var(--color-text-muted);
-  font-weight: 700;
   user-select: none;
 }
 

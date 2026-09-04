@@ -74,22 +74,22 @@
         <section class="skill-usage-view__metrics">
           <article class="skill-usage-view__metric">
             <span>Skill 总数</span>
-            <strong>{{ formatNumber(summary.skillCount) }}</strong>
+            <span data-emphasis>{{ formatNumber(summary.skillCount) }}</span>
             <small>已使用 {{ formatNumber(summary.usedSkillCount) }} 个</small>
           </article>
           <article class="skill-usage-view__metric">
             <span>调用次数</span>
-            <strong>{{ formatNumber(summary.usageCount) }}</strong>
+            <span data-emphasis>{{ formatNumber(summary.usageCount) }}</span>
             <small>命中请求 {{ formatNumber(summary.requestCount) }} 次</small>
           </article>
           <article class="skill-usage-view__metric">
             <span>Token 消耗</span>
-            <strong><TokenCount :value="summary.actualTokens" /></strong>
+            <span data-emphasis><TokenCount :value="summary.actualTokens" /></span>
             <small>按 Session 用量区间归因</small>
           </article>
           <article class="skill-usage-view__metric">
             <span>最近使用</span>
-            <strong>{{ formatDate(summary.lastUsedAt) }}</strong>
+            <span data-emphasis>{{ formatDate(summary.lastUsedAt) }}</span>
             <small>来自 history / session 记录</small>
           </article>
         </section>
@@ -157,7 +157,7 @@
             class="skill-usage-view__table-row"
           >
             <span>
-              <strong>{{ item.name }}</strong>
+              <span data-emphasis>{{ item.name }}</span>
               <small :title="item.sourcePaths.join('\n')">
                 {{ item.description || item.sourcePaths[0] || "未记录来源" }}
               </small>
@@ -165,7 +165,7 @@
             <span>{{ formatCliList(item.cliTypes) }}</span>
             <span>{{ formatNumber(item.usageCount) }}</span>
             <span>
-              <strong><TokenCount :value="item.actualTokens" /></strong>
+              <span data-emphasis><TokenCount :value="item.actualTokens" /></span>
               <small>{{ formatCost(item.totalCostUsd) }}</small>
             </span>
             <span
@@ -705,7 +705,6 @@ function formatUsageItems(items, type) {
     margin: 0 0 5px;
     color: var(--color-text-soft);
     font-size: 0.72rem;
-    font-weight: 700;
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
@@ -741,10 +740,9 @@ function formatUsageItems(items, type) {
     gap: 6px;
   }
 
-  &__field span {
+  &__field span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.74rem;
-    font-weight: 700;
   }
 
   &__field input,
@@ -815,7 +813,6 @@ function formatUsageItems(items, type) {
     background: rgba(248, 251, 255, 0.78);
     color: var(--color-primary);
     font-size: 0.92rem;
-    font-weight: 700;
   }
 
   &__loading-icon {
@@ -840,7 +837,7 @@ function formatUsageItems(items, type) {
     background: var(--color-panel);
   }
 
-  &__metric span,
+  &__metric span:not([data-emphasis]),
   &__metric small {
     overflow: hidden;
     color: var(--color-text-muted);
@@ -849,7 +846,7 @@ function formatUsageItems(items, type) {
     white-space: nowrap;
   }
 
-  &__metric strong {
+  &__metric [data-emphasis] {
     overflow: hidden;
     font-size: 1.18rem;
     line-height: 1.2;
@@ -888,7 +885,7 @@ function formatUsageItems(items, type) {
     line-height: 1.25;
   }
 
-  &__section-header span {
+  &__section-header span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.74rem;
   }
@@ -940,7 +937,6 @@ function formatUsageItems(items, type) {
     z-index: 1;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-weight: 700;
   }
 
   &__table-row {
@@ -951,7 +947,7 @@ function formatUsageItems(items, type) {
     border-bottom: 0;
   }
 
-  &__table-row > span {
+  &__table-row > span:not([data-emphasis]) {
     display: flex;
     min-width: 0;
     flex-direction: column;
@@ -961,7 +957,7 @@ function formatUsageItems(items, type) {
     white-space: nowrap;
   }
 
-  &__table-row strong,
+  &__table-row [data-emphasis],
   &__table-row small {
     min-width: 0;
     overflow: hidden;
@@ -1015,7 +1011,6 @@ function formatUsageItems(items, type) {
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.88rem;
-  font-weight: 600;
 
   &:hover {
     border-color: var(--color-line-strong);

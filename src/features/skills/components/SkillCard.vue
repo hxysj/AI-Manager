@@ -217,7 +217,6 @@ function toFileUrl(value) {
   .skill-card-status {
     padding: 2px 7px;
     border-radius: 999px;
-    font-weight: 600;
   }
 
   .skill-card-group {
@@ -282,7 +281,6 @@ function toFileUrl(value) {
     border-radius: 50%;
     color: var(--color-text-muted);
     font-size: 0.74rem;
-    font-weight: 700;
     overflow: hidden;
   }
 

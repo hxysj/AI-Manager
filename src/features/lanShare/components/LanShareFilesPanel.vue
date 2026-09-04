@@ -2,7 +2,7 @@
   <section class="lan-share-files-panel">
     <header class="lan-share-files-head">
       <div class="lan-share-files-title">
-        <strong class="lan-share-files-name">共享文件</strong>
+        <span data-emphasis class="lan-share-files-name">共享文件</span>
         <span class="lan-share-files-subtitle">{{ files.length }} 个文件</span>
       </div>
       <div class="lan-share-files-actions">
@@ -74,9 +74,9 @@
           <FileText :size="16" />
         </span>
         <div class="lan-share-files-main">
-          <strong class="lan-share-files-file-name" :title="file.name">
+          <span data-emphasis class="lan-share-files-file-name" :title="file.name">
             {{ file.name }}
-          </strong>
+          </span>
           <span class="lan-share-files-meta" :title="file.path">
             {{ formatSize(file.size) }} · {{ file.mimeType || "文件" }} ·
             {{ formatDateTime(file.updatedAt) }}
@@ -372,7 +372,6 @@ function toggleSelectAllFiles() {
         color: var(--color-primary);
         cursor: pointer;
         font-size: 0.76rem;
-        font-weight: 700;
       }
 
       .lan-share-files-mini-button:disabled {
@@ -491,7 +490,6 @@ function toggleSelectAllFiles() {
           background: var(--color-panel);
           color: var(--color-primary);
           cursor: pointer;
-          font-weight: 700;
         }
 
         .lan-share-files-icon-button:disabled {

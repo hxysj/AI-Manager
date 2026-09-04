@@ -85,7 +85,7 @@
 
       <div v-else-if="loadError && !ports.length" class="port-monitor-state error">
         <TriangleAlert :size="21" />
-        <strong class="port-monitor-state-title">端口读取失败</strong>
+        <span data-emphasis class="port-monitor-state-title">端口读取失败</span>
         <span class="port-monitor-state-text">{{ loadError }}</span>
         <button class="port-monitor-retry-button" type="button" @click="loadPorts">
           重新读取
@@ -94,9 +94,9 @@
 
       <div v-else-if="!filteredPorts.length" class="port-monitor-state">
         <Network :size="23" />
-        <strong class="port-monitor-state-title">
+        <span data-emphasis class="port-monitor-state-title">
           {{ ports.length ? '没有匹配的端口' : '未检测到监听端口' }}
-        </strong>
+        </span>
       </div>
 
       <div v-else class="port-monitor-table-scroll">
@@ -137,9 +137,9 @@
                     <AppWindow v-else :size="16" />
                   </span>
                   <span class="port-monitor-process-main">
-                    <strong class="port-monitor-process-name">
+                    <span data-emphasis class="port-monitor-process-name">
                       {{ port.processName || '未知进程' }}
-                    </strong>
+                    </span>
                     <span
                       v-if="port.serviceNames?.length"
                       class="port-monitor-service-name"
@@ -158,7 +158,7 @@
               </td>
               <td class="port-monitor-table-cell">
                 <div class="port-monitor-endpoint">
-                  <strong class="port-monitor-port">{{ port.localPort }}</strong>
+                  <span data-emphasis class="port-monitor-port">{{ port.localPort }}</span>
                   <span class="port-monitor-address" :title="port.localAddress">
                     {{ formatAddress(port.localAddress) }}
                   </span>
@@ -390,7 +390,6 @@ onUnmounted(() => {
         margin: 0;
         color: var(--color-text-soft);
         font-size: 0.7rem;
-        font-weight: 700;
         letter-spacing: 0;
         text-transform: uppercase;
       }
@@ -410,7 +409,6 @@ onUnmounted(() => {
         .port-monitor-summary {
           color: var(--color-text-muted);
           font-size: 0.77rem;
-          font-weight: 700;
         }
       }
     }
@@ -428,7 +426,6 @@ onUnmounted(() => {
         color: var(--color-text-muted);
         cursor: pointer;
         font-size: 0.76rem;
-        font-weight: 700;
 
         .port-monitor-auto-refresh-input {
           position: absolute;
@@ -584,7 +581,6 @@ onUnmounted(() => {
         color: var(--color-text-muted);
         cursor: pointer;
         font-size: 0.72rem;
-        font-weight: 700;
 
         .port-monitor-protocol-count {
           color: var(--color-text-soft);
@@ -657,7 +653,6 @@ onUnmounted(() => {
         color: #ffffff;
         cursor: pointer;
         font-size: 0.76rem;
-        font-weight: 700;
       }
     }
 
@@ -712,7 +707,6 @@ onUnmounted(() => {
             border-bottom: 1px solid var(--color-line);
             color: var(--color-text-soft);
             font-size: 0.69rem;
-            font-weight: 700;
             text-align: left;
             white-space: nowrap;
           }
@@ -814,7 +808,6 @@ onUnmounted(() => {
                 background: var(--color-primary-soft);
                 color: var(--color-primary);
                 font-size: 0.67rem;
-                font-weight: 800;
               }
 
               .port-monitor-protocol.udp {

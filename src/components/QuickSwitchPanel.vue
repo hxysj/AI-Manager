@@ -88,9 +88,9 @@
       <template v-else>
         <div class="quick-switch-panel-title">
           <span class="quick-switch-panel-dot"></span>
-          <strong class="quick-switch-panel-title-name">
+          <span data-emphasis class="quick-switch-panel-title-name">
             {{ activeCli?.name || "未选择" }}
-          </strong>
+          </span>
           <small class="quick-switch-panel-title-desc">{{ activeName }}</small>
         </div>
         <div class="quick-switch-panel-actions">
@@ -136,9 +136,9 @@
         <div class="quick-switch-panel-hero">
           <div class="quick-switch-panel-hero-copy">
             <span class="quick-switch-panel-hero-label">当前用量</span>
-            <strong class="quick-switch-panel-hero-name">
+            <span data-emphasis class="quick-switch-panel-hero-name">
               {{ activeCli?.name || "未选择" }}
-            </strong>
+            </span>
             <small class="quick-switch-panel-hero-desc">{{ activeName }}</small>
           </div>
           <button
@@ -153,28 +153,28 @@
         <div class="quick-switch-panel-metrics">
           <article class="quick-switch-panel-metric">
             <span class="quick-switch-panel-metric-label">请求</span>
-            <strong class="quick-switch-panel-metric-value">
+            <span data-emphasis class="quick-switch-panel-metric-value">
               {{ formatQuickNumber(usageSummary.requestCount) }}
-            </strong>
+            </span>
           </article>
           <article class="quick-switch-panel-metric">
             <span class="quick-switch-panel-metric-label">Token</span>
-            <strong class="quick-switch-panel-metric-value">
+            <span data-emphasis class="quick-switch-panel-metric-value">
               <TokenCount :value="usageSummary.actualTokens" />
-            </strong>
+            </span>
           </article>
           <article class="quick-switch-panel-metric">
             <span class="quick-switch-panel-metric-label">费用</span>
-            <strong class="quick-switch-panel-metric-value">
+            <span data-emphasis class="quick-switch-panel-metric-value">
               {{ formatQuickCost(usageSummary.totalCostUsd) }}
-            </strong>
+            </span>
           </article>
         </div>
 
         <div class="quick-switch-panel-summary-row">
           <section class="quick-switch-panel-usage-panel">
             <div class="quick-switch-panel-usage-head">
-              <strong class="quick-switch-panel-usage-title">最近用量</strong>
+              <span data-emphasis class="quick-switch-panel-usage-title">最近用量</span>
               <span class="quick-switch-panel-usage-count">
                 {{ usageTrend.length }} 天
               </span>
@@ -202,7 +202,7 @@
             class="quick-switch-panel-usage-panel quick-switch-panel-provider-panel"
           >
             <div class="quick-switch-panel-usage-head">
-              <strong class="quick-switch-panel-usage-title">Provider</strong>
+              <span data-emphasis class="quick-switch-panel-usage-title">Provider</span>
               <span class="quick-switch-panel-usage-count">
                 {{ usageProviders.length }} 个
               </span>
@@ -217,9 +217,9 @@
                 class="quick-switch-panel-provider-bar"
               >
                 <div class="quick-switch-panel-provider-bar-head">
-                  <strong class="quick-switch-panel-provider-name">
+                  <span data-emphasis class="quick-switch-panel-provider-name">
                     {{ item.providerName }}
-                  </strong>
+                  </span>
                   <span class="quick-switch-panel-provider-cost">
                     {{ formatQuickCost(item.totalCostUsd) }}
                   </span>
@@ -240,9 +240,9 @@
       <section v-else class="quick-switch-panel-list">
         <div class="quick-switch-panel-manager-head">
           <div class="quick-switch-panel-manager-copy">
-            <strong class="quick-switch-panel-manager-title">
+            <span data-emphasis class="quick-switch-panel-manager-title">
               Provider 管理
-            </strong>
+            </span>
             <span class="quick-switch-panel-manager-desc">
               {{ activeCli?.name || "未选择" }} · {{ activeName }}
             </span>
@@ -267,9 +267,9 @@
           ]"
         >
           <span class="quick-switch-panel-item-copy">
-            <strong class="quick-switch-panel-item-title">
+            <span data-emphasis class="quick-switch-panel-item-title">
               {{ item.label }}
-            </strong>
+            </span>
             <small class="quick-switch-panel-item-desc">
               {{ item.description }}
             </small>
@@ -286,9 +286,9 @@
                 <span class="quick-switch-panel-quota-label">
                   {{ quota.label }}
                 </span>
-                <strong class="quick-switch-panel-quota-value">
+                <span data-emphasis class="quick-switch-panel-quota-value">
                   {{ quota.remaining }}%
-                </strong>
+                </span>
               </span>
             </span>
           </span>
@@ -1090,7 +1090,6 @@ onBeforeUnmount(() => {
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 11px;
-    font-weight: 700;
   }
 
   .quick-switch-panel-cli-tab-active {
@@ -1136,7 +1135,6 @@ onBeforeUnmount(() => {
       background: var(--color-primary-soft);
       color: var(--color-primary);
       font-size: 10px;
-      font-weight: 800;
     }
 
     .quick-switch-panel-hero-name,
@@ -1171,7 +1169,6 @@ onBeforeUnmount(() => {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 11px;
-    font-weight: 800;
   }
 
   .quick-switch-panel-manage-button:hover {
@@ -1200,7 +1197,6 @@ onBeforeUnmount(() => {
     .quick-switch-panel-metric-label {
       color: var(--color-text-muted);
       font-size: 10px;
-      font-weight: 700;
     }
 
     .quick-switch-panel-metric-value {
@@ -1247,7 +1243,6 @@ onBeforeUnmount(() => {
     .quick-switch-panel-usage-count {
       color: var(--color-text-muted);
       font-size: 10px;
-      font-weight: 700;
     }
   }
 
@@ -1325,7 +1320,6 @@ onBeforeUnmount(() => {
     .quick-switch-panel-provider-cost {
       flex: none;
       color: var(--color-text-muted);
-      font-weight: 700;
     }
 
     .quick-switch-panel-provider-track {
@@ -1493,7 +1487,6 @@ onBeforeUnmount(() => {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 12px;
-    font-weight: 700;
   }
 
   .quick-switch-panel-item-action:hover {

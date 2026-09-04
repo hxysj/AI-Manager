@@ -30,7 +30,7 @@
       <div v-if="dialog.phase === 'downloading'" class="app-update-progress">
         <div class="app-update-progress-head">
           <span class="app-update-transfer">{{ updateTransferText }}</span>
-          <strong class="app-update-percent">{{ updateProgressText }}</strong>
+          <span data-emphasis class="app-update-percent">{{ updateProgressText }}</span>
         </div>
         <div class="app-update-progress-track">
           <div
@@ -235,7 +235,6 @@ function formatUpdateBytes(value) {
       .app-update-eyebrow {
         color: var(--color-text-soft);
         font-size: 0.68rem;
-        font-weight: 700;
         letter-spacing: 0.12em;
         line-height: 1;
         text-transform: uppercase;
@@ -324,7 +323,6 @@ function formatUpdateBytes(value) {
       gap: 12px;
       color: var(--color-text-muted);
       font-size: 0.8rem;
-      font-weight: 700;
 
       .app-update-percent {
         color: var(--color-primary);
@@ -378,7 +376,6 @@ function formatUpdateBytes(value) {
       background: var(--color-panel);
       color: var(--color-primary);
       font-size: 0.86rem;
-      font-weight: 700;
       cursor: pointer;
 
       &:hover {

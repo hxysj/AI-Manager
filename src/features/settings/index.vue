@@ -99,7 +99,7 @@
             >
               <div class="settings-view__cli-title">
                 <div>
-                  <strong>{{ item.name }}</strong>
+                  <span data-emphasis>{{ item.name }}</span>
                   <small>{{ item.statusText }}</small>
                 </div>
                 <span
@@ -162,7 +162,7 @@
         <div class="settings-view__data-list">
           <article class="settings-view__data-card">
             <div class="settings-view__data-copy">
-              <strong>导出到本地文件</strong>
+              <span data-emphasis>导出到本地文件</span>
               <span
                 >选择保存位置，生成加密的 .aimbackup 本地备份文件。</span
               >
@@ -175,7 +175,7 @@
 
           <article class="settings-view__data-card">
             <div class="settings-view__data-copy">
-              <strong>从本地备份文件恢复</strong>
+              <span data-emphasis>从本地备份文件恢复</span>
               <span>选择 .aimbackup 文件，预览冲突后再恢复并保留本机启用状态。</span>
             </div>
             <button type="button" @click="$emit('restore-data')">
@@ -188,7 +188,7 @@
         <section class="settings-view__cloud">
           <div class="settings-view__cloud-header">
             <div>
-              <strong>本地自动备份</strong>
+              <span data-emphasis>本地自动备份</span>
               <span
                 >按固定间隔生成本地加密备份，超过保留数量后删除最久的备份。</span
               >
@@ -302,7 +302,7 @@
               class="settings-view__backup-item"
             >
               <div>
-                <strong>{{ backup.fileName }}</strong>
+                <span data-emphasis>{{ backup.fileName }}</span>
                 <span
                   >{{ formatBackupTime(backup.createdAt) }} ·
                   {{ formatBackupSize(backup.size) }}</span
@@ -327,7 +327,7 @@
         >
           <div class="settings-view__cloud-header">
             <div>
-              <strong>{{ syncItem.label }}同步</strong>
+              <span data-emphasis>{{ syncItem.label }}同步</span>
               <span>{{ syncItem.description }}</span>
             </div>
             <span class="settings-view__cloud-time">
@@ -415,7 +415,7 @@
         <div class="settings-view__system-list">
           <article class="settings-view__system-card">
             <div class="settings-view__data-copy">
-              <strong>开机自动启动</strong>
+              <span data-emphasis>开机自动启动</span>
               <span>开启后登录 Windows 时自动启动软件，可随时关闭。</span>
             </div>
             <div class="settings-view__choice-group">
@@ -457,7 +457,7 @@
           </article>
           <article class="settings-view__system-card">
             <div class="settings-view__data-copy">
-              <strong>关闭按钮行为</strong>
+              <span data-emphasis>关闭按钮行为</span>
               <span
                 >点击窗口关闭按钮时，选择询问、最小化到托盘或直接关闭软件。</span
               >
@@ -486,7 +486,7 @@
           </article>
           <article class="settings-view__system-card">
             <div class="settings-view__data-copy">
-              <strong>悬浮快速切换窗</strong>
+              <span data-emphasis>悬浮快速切换窗</span>
               <span>开启后，主界面最小化时显示 Provider 快速切换悬浮窗。</span>
             </div>
             <div class="settings-view__choice-group">
@@ -528,7 +528,7 @@
           </article>
           <article class="settings-view__system-card">
             <div class="settings-view__data-copy">
-              <strong>关闭程序</strong>
+              <span data-emphasis>关闭程序</span>
               <span>立即退出桌面端，不最小化到托盘。</span>
             </div>
             <button
@@ -542,7 +542,7 @@
           </article>
           <article class="settings-view__system-card">
             <div class="settings-view__data-copy">
-              <strong>无痕卸载</strong>
+              <span data-emphasis>无痕卸载</span>
               <span>删除所有本地用户数据，并自动启动静默卸载。</span>
             </div>
             <button
@@ -943,7 +943,6 @@ watch(
     margin: 0 0 5px;
     color: var(--color-text-soft);
     font-size: 0.68rem;
-    font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
@@ -988,7 +987,6 @@ watch(
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.78rem;
-    font-weight: 600;
   }
 
   &__tab--active {
@@ -1015,7 +1013,6 @@ watch(
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.8rem;
-    font-weight: 600;
   }
 
   &__save {
@@ -1082,7 +1079,7 @@ watch(
     line-height: 1.35;
   }
 
-  &__panel-header span,
+  &__panel-header span:not([data-emphasis]),
   &__hint {
     color: var(--color-text-muted);
     font-size: 0.78rem;
@@ -1096,10 +1093,9 @@ watch(
     gap: 7px;
   }
 
-  &__field > span {
+  &__field > span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.7rem;
-    font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
@@ -1192,7 +1188,7 @@ watch(
     gap: 4px;
   }
 
-  &__cli-title strong {
+  &__cli-title [data-emphasis] {
     font-size: 0.9rem;
     line-height: 1.35;
   }
@@ -1216,7 +1212,6 @@ watch(
     background: var(--color-success-soft);
     color: var(--color-success);
     font-size: 0.7rem;
-    font-weight: 700;
   }
 
   &__cli-status--offline {
@@ -1276,7 +1271,6 @@ watch(
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.78rem;
-    font-weight: 600;
   }
 
   &__choice input {
@@ -1304,7 +1298,6 @@ watch(
     color: var(--color-danger);
     cursor: pointer;
     font-size: 0.8rem;
-    font-weight: 700;
   }
 
   &__cloud {
@@ -1330,12 +1323,12 @@ watch(
     gap: 4px;
   }
 
-  &__cloud-header strong {
+  &__cloud-header [data-emphasis] {
     font-size: 0.9rem;
     line-height: 1.35;
   }
 
-  &__cloud-header span {
+  &__cloud-header span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.78rem;
     line-height: 1.5;
@@ -1376,7 +1369,7 @@ watch(
     background: var(--color-panel);
   }
 
-  &__backup-directory span {
+  &__backup-directory span:not([data-emphasis]) {
     min-width: 0;
     color: var(--color-text-muted);
     font-size: 0.78rem;
@@ -1426,7 +1419,7 @@ watch(
     gap: 4px;
   }
 
-  &__backup-item strong {
+  &__backup-item [data-emphasis] {
     overflow: hidden;
     font-size: 0.82rem;
     line-height: 1.35;
@@ -1434,7 +1427,7 @@ watch(
     white-space: nowrap;
   }
 
-  &__backup-item span {
+  &__backup-item span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.76rem;
     line-height: 1.45;
@@ -1446,12 +1439,12 @@ watch(
     gap: 4px;
   }
 
-  &__data-copy strong {
+  &__data-copy [data-emphasis] {
     font-size: 0.9rem;
     line-height: 1.35;
   }
 
-  &__data-copy span {
+  &__data-copy span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.78rem;
     line-height: 1.5;

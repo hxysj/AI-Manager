@@ -2,7 +2,7 @@
   <header class="lan-share-toolbar">
     <div class="lan-share-toolbar-title">
       <span class="lan-share-toolbar-mark">Device Drop</span>
-      <strong class="lan-share-toolbar-name">设备快传</strong>
+      <span data-emphasis class="lan-share-toolbar-name">设备快传</span>
       <small class="lan-share-toolbar-summary">{{ serviceSummary }}</small>
     </div>
     <div class="lan-share-toolbar-status">
@@ -88,7 +88,6 @@ const emit = defineEmits(["start", "show-access", "stop"])
     .lan-share-toolbar-mark {
       color: var(--color-text-soft);
       font-size: 0.68rem;
-      font-weight: 800;
       letter-spacing: 0.12em;
       text-transform: uppercase;
     }
@@ -120,7 +119,6 @@ const emit = defineEmits(["start", "show-access", "stop"])
     background: var(--color-panel);
     color: var(--color-text-muted);
     font-size: 0.76rem;
-    font-weight: 800;
 
     .lan-share-toolbar-dot {
       width: 7px;
@@ -152,7 +150,6 @@ const emit = defineEmits(["start", "show-access", "stop"])
       background: var(--color-panel);
       color: var(--color-primary);
       cursor: pointer;
-      font-weight: 700;
     }
 
     .lan-share-toolbar-button-primary {

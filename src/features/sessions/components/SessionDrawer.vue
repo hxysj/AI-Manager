@@ -72,7 +72,7 @@
                   </div>
                   <div class="session-drawer__chat-body">
                     <div class="session-drawer__chat-meta">
-                      <strong>{{ roleLabel(item.message.role) }}</strong>
+                      <span data-emphasis>{{ roleLabel(item.message.role) }}</span>
                       <span>{{ formatDateTime(item.message.timestamp) }}</span>
                       <button
                         type="button"
@@ -166,23 +166,23 @@
             <div class="session-drawer__grid">
               <article>
                 <span>CLI</span>
-                <strong>{{ session.cliName || session.cli }}</strong>
+                <span data-emphasis>{{ session.cliName || session.cli }}</span>
               </article>
               <article>
                 <span>Model</span>
-                <strong>{{ session.model || "未识别" }}</strong>
+                <span data-emphasis>{{ session.model || "未识别" }}</span>
               </article>
               <article>
                 <span>CreatedAt</span>
-                <strong>{{ formatDateTime(session.createdAt) }}</strong>
+                <span data-emphasis>{{ formatDateTime(session.createdAt) }}</span>
               </article>
               <article>
                 <span>UpdatedAt</span>
-                <strong>{{ formatDateTime(session.updatedAt) }}</strong>
+                <span data-emphasis>{{ formatDateTime(session.updatedAt) }}</span>
               </article>
               <article>
                 <span>Messages</span>
-                <strong>{{ session.messageCount }}</strong>
+                <span data-emphasis>{{ session.messageCount }}</span>
               </article>
               <article>
                 <span>RawPath</span>
@@ -580,7 +580,6 @@ async function copyText(value) {
     margin: 0 0 8px;
     color: var(--color-text-soft);
     font-size: 0.78rem;
-    font-weight: 700;
     letter-spacing: 0.16em;
     text-transform: uppercase;
   }
@@ -591,7 +590,7 @@ async function copyText(value) {
     line-height: 1.15;
   }
 
-  &__header span {
+  &__header span:not([data-emphasis]) {
     color: var(--color-text-muted);
   }
 
@@ -623,7 +622,6 @@ async function copyText(value) {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-weight: 700;
   }
 
   &__tab--active {
@@ -682,13 +680,12 @@ async function copyText(value) {
     background: var(--color-panel-soft);
   }
 
-  &__message-search span,
-  &__info-card span,
-  &__tool span,
-  &__grid span {
+  &__message-search span:not([data-emphasis]),
+  &__info-card span:not([data-emphasis]),
+  &__tool span:not([data-emphasis]),
+  &__grid span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.76rem;
-    font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
@@ -871,7 +868,7 @@ async function copyText(value) {
     font-size: 0.76rem;
   }
 
-  &__chat-meta strong {
+  &__chat-meta [data-emphasis] {
     color: var(--color-text-muted);
   }
 
@@ -949,7 +946,6 @@ async function copyText(value) {
 
   &__tool summary {
     cursor: pointer;
-    font-weight: 700;
   }
 
   &__tool div {
@@ -971,7 +967,7 @@ async function copyText(value) {
     gap: 8px;
   }
 
-  &__grid strong,
+  &__grid [data-emphasis],
   &__grid button {
     font-size: 0.92rem;
     line-height: 1.5;

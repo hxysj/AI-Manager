@@ -443,7 +443,6 @@ function emitCopy() {
   .json-tree-key {
     color: var(--color-json-key);
     cursor: text;
-    font-weight: 700;
   }
 
   .json-tree-colon {
@@ -453,7 +452,6 @@ function emitCopy() {
   .json-tree-type-label,
   .json-tree-container-label {
     color: var(--color-primary);
-    font-weight: 700;
   }
 
   .json-tree-value {

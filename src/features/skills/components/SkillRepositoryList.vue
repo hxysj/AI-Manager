@@ -100,9 +100,9 @@
         class="skill-repository-list-card"
       >
         <div class="skill-repository-list-card-head">
-          <strong class="skill-repository-list-card-name" :title="skill.name">
+          <span data-emphasis class="skill-repository-list-card-name" :title="skill.name">
             {{ skill.name }}
-          </strong>
+          </span>
           <span
             :class="[
               'skill-repository-list-card-status',
@@ -168,9 +168,9 @@
     </div>
 
     <div v-else class="skill-repository-list-empty">
-      <strong class="skill-repository-list-empty-title">{{
+      <span data-emphasis class="skill-repository-list-empty-title">{{
         emptyTitle
-      }}</strong>
+      }}</span>
       <span class="skill-repository-list-empty-desc">{{
         emptyDescription
       }}</span>
@@ -191,9 +191,9 @@
             返回
           </button>
           <div class="skill-repository-list-detail-title">
-            <strong class="skill-repository-list-detail-name">
+            <span data-emphasis class="skill-repository-list-detail-name">
               {{ repositoryDetailSkill.name }}
-            </strong>
+            </span>
             <span class="skill-repository-list-detail-repo">
               {{ repositoryDetailSkill.repositorySources.length }} 个仓库来源
             </span>
@@ -254,19 +254,19 @@
           <section class="skill-repository-list-detail-section">
             <span class="skill-repository-list-detail-label">标签</span>
             <div class="skill-repository-list-detail-tags">
-              <strong
+              <span data-emphasis
                 v-for="tag in repositoryDetailSkill.tags"
                 :key="tag"
                 class="skill-repository-list-detail-tag"
               >
                 {{ tag }}
-              </strong>
-              <strong
+              </span>
+              <span data-emphasis
                 v-if="!repositoryDetailSkill.tags.length"
                 class="skill-repository-list-detail-tag"
               >
                 暂无标签
-              </strong>
+              </span>
             </div>
           </section>
           <section class="skill-repository-list-detail-section content">
@@ -505,7 +505,6 @@ function formatRepositorySkillAction(skill) {
   .skill-repository-list-title-desc {
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   .skill-repository-list-actions {
@@ -528,7 +527,6 @@ function formatRepositorySkillAction(skill) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
     white-space: nowrap;
   }
 
@@ -598,7 +596,6 @@ function formatRepositorySkillAction(skill) {
   .skill-repository-list-field-label {
     color: var(--color-text-muted);
     font-size: 0.74rem;
-    font-weight: 700;
   }
 
   .skill-repository-list-field-control {
@@ -657,7 +654,6 @@ function formatRepositorySkillAction(skill) {
     gap: 12px;
     color: var(--color-text-muted);
     font-size: 0.8rem;
-    font-weight: 700;
   }
 
   .skill-repository-list-grid {
@@ -710,7 +706,6 @@ function formatRepositorySkillAction(skill) {
     background: var(--color-primary-soft);
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   .skill-repository-list-card-status.installed {
@@ -740,7 +735,6 @@ function formatRepositorySkillAction(skill) {
     overflow: hidden;
     color: var(--color-text-soft);
     font-size: 0.76rem;
-    font-weight: 700;
     line-height: 18px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -777,7 +771,6 @@ function formatRepositorySkillAction(skill) {
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -803,7 +796,6 @@ function formatRepositorySkillAction(skill) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   .skill-repository-list-card-action:hover {
@@ -937,7 +929,6 @@ function formatRepositorySkillAction(skill) {
   .skill-repository-list-detail-label {
     color: var(--color-text-soft);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   .skill-repository-list-detail-text {
@@ -983,7 +974,6 @@ function formatRepositorySkillAction(skill) {
     background: var(--color-panel);
     color: var(--color-text-muted);
     font-size: 0.74rem;
-    font-weight: 700;
   }
 
   .skill-repository-list-detail-tag {

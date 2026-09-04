@@ -267,7 +267,7 @@
               type="button"
               @click="selectedCloudBackupPath = entry.path"
             >
-              <strong>{{ entry.typeName }}</strong>
+              <span data-emphasis>{{ entry.typeName }}</span>
               <span>{{ entry.path }}</span>
             </button>
           </aside>
@@ -278,7 +278,7 @@
               class="cloud-backup-modal__head"
             >
               <div>
-                <strong>{{ selectedCloudBackupEntry.typeName }}</strong>
+                <span data-emphasis>{{ selectedCloudBackupEntry.typeName }}</span>
                 <span>{{ selectedCloudBackupEntry.path }}</span>
               </div>
               <small>{{
@@ -323,7 +323,7 @@
             <Info :size="22" />
           </div>
           <div class="close-confirm__copy">
-            <strong>关闭按钮要执行什么操作？</strong>
+            <span data-emphasis>关闭按钮要执行什么操作？</span>
             <span>可以最小化到托盘继续运行，也可以直接关闭软件。</span>
           </div>
         </div>
@@ -2189,7 +2189,6 @@ onBeforeUnmount(() => {
   background: var(--color-panel-soft);
   color: var(--color-primary);
   cursor: pointer;
-  font-weight: 600;
 
   &:hover {
     border-color: var(--color-line-strong);
@@ -2214,10 +2213,9 @@ onBeforeUnmount(() => {
     gap: 8px;
     color: var(--color-text-muted);
     font-size: 0.84rem;
-    font-weight: 700;
   }
 
-  &__summary span {
+  &__summary span:not([data-emphasis]) {
     padding: 4px 8px;
     border-radius: 999px;
     background: var(--color-primary-soft);
@@ -2261,11 +2259,11 @@ onBeforeUnmount(() => {
     background: var(--color-primary-soft);
   }
 
-  &__entry strong {
+  &__entry [data-emphasis] {
     font-size: 0.82rem;
   }
 
-  &__entry span {
+  &__entry span:not([data-emphasis]) {
     width: 100%;
     overflow: hidden;
     color: var(--color-text-muted);
@@ -2303,12 +2301,12 @@ onBeforeUnmount(() => {
     gap: 3px;
   }
 
-  &__head strong {
+  &__head [data-emphasis] {
     color: var(--color-text);
     font-size: 0.88rem;
   }
 
-  &__head span {
+  &__head span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.78rem;
     line-height: 1.35;
@@ -2319,7 +2317,6 @@ onBeforeUnmount(() => {
     flex: none;
     color: var(--color-text-muted);
     font-size: 0.76rem;
-    font-weight: 700;
   }
 
   &__content pre {
@@ -2371,12 +2368,11 @@ onBeforeUnmount(() => {
     border-bottom: 1px solid var(--color-line);
   }
 
-  &__header span {
+  &__header span:not([data-emphasis]) {
     display: block;
     margin-bottom: 5px;
     color: var(--color-text-soft);
     font-size: 0.68rem;
-    font-weight: 700;
     letter-spacing: 0.12em;
     line-height: 1;
     text-transform: uppercase;
@@ -2433,13 +2429,13 @@ onBeforeUnmount(() => {
     padding-top: 2px;
   }
 
-  &__copy strong {
+  &__copy [data-emphasis] {
     color: var(--color-primary);
     font-size: 1rem;
     line-height: 1.35;
   }
 
-  &__copy span {
+  &__copy span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.84rem;
     line-height: 1.6;
@@ -2462,7 +2458,6 @@ onBeforeUnmount(() => {
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.8rem;
-    font-weight: 600;
   }
 
   &__remember input {
@@ -2490,7 +2485,6 @@ onBeforeUnmount(() => {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.8rem;
-    font-weight: 700;
   }
 
   &__button:hover {
