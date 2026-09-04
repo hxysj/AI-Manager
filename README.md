@@ -11,7 +11,7 @@
     <img src="https://img.shields.io/badge/Vue-3-42B883" alt="Vue 3" />
   </p>
   <p>
-    <a href="https://github.com/hxysj/AI-Manager/releases/latest"><strong>下载最新版本</strong></a>
+    <a href="https://github.com/hxysj/AI-Manager/releases/latest"><span>下载最新版本</span></a>
     ·
     <a href="#快速开始">快速开始</a>
     ·

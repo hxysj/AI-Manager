@@ -92,29 +92,29 @@
           <div class="skill-drawer__block">
             <span>标签</span>
             <div class="skill-drawer__tag-list">
-              <strong v-for="tag in skill.tags" :key="tag">{{ tag }}</strong>
-              <strong v-if="!skill.tags.length" class="skill-drawer__muted-tag">
+              <span data-emphasis v-for="tag in skill.tags" :key="tag">{{ tag }}</span>
+              <span data-emphasis v-if="!skill.tags.length" class="skill-drawer__muted-tag">
                 暂无标签
-              </strong>
+              </span>
             </div>
           </div>
 
           <div class="skill-drawer__grid">
             <article>
               <span>Entry</span>
-              <strong>{{ skill.entry }}</strong>
+              <span data-emphasis>{{ skill.entry }}</span>
             </article>
             <article>
               <span>创建时间</span>
-              <strong>{{ formatDateTime(skill.createdAt) }}</strong>
+              <span data-emphasis>{{ formatDateTime(skill.createdAt) }}</span>
             </article>
             <article>
               <span>更新时间</span>
-              <strong>{{ formatDateTime(skill.updatedAt) }}</strong>
+              <span data-emphasis>{{ formatDateTime(skill.updatedAt) }}</span>
             </article>
             <article>
               <span>作者</span>
-              <strong>{{ skill.author || "未声明" }}</strong>
+              <span data-emphasis>{{ skill.author || "未声明" }}</span>
             </article>
           </div>
         </section>
@@ -224,7 +224,7 @@
             <div class="skill-drawer__file-tree">
               <div class="skill-drawer__file-tree-head">
                 <span>目录内容</span>
-                <strong>{{ skillFileRows.length }} 项</strong>
+                <span data-emphasis>{{ skillFileRows.length }} 项</span>
               </div>
 
               <div v-if="skillFilesLoading" class="skill-drawer__file-message">
@@ -272,11 +272,11 @@
             <div class="skill-drawer__file-preview">
               <div class="skill-drawer__file-preview-head">
                 <span>{{ selectedSkillFile?.path || "未选择文件" }}</span>
-                <strong>{{
+                <span data-emphasis>{{
                   selectedSkillFile
                     ? formatSkillFileType(selectedSkillFile)
                     : "内容预览"
-                }}</strong>
+                }}</span>
               </div>
 
               <pre
@@ -512,7 +512,6 @@ function formatSkillFileType(file) {
     border-radius: 8px;
     color: var(--color-text-muted);
     font-size: 1.1rem;
-    font-weight: 700;
     letter-spacing: 0.08em;
     overflow: hidden;
   }
@@ -532,7 +531,6 @@ function formatSkillFileType(file) {
     margin: 0 0 5px;
     color: var(--color-text-soft);
     font-size: 0.72rem;
-    font-weight: 700;
     letter-spacing: 0.14em;
     text-overflow: ellipsis;
     text-transform: uppercase;
@@ -558,7 +556,6 @@ function formatSkillFileType(file) {
     padding: 4px 9px;
     border-radius: 999px;
     font-size: 0.7rem;
-    font-weight: 700;
     line-height: 1.2;
   }
 
@@ -612,7 +609,6 @@ function formatSkillFileType(file) {
     color: var(--color-danger);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
     white-space: nowrap;
   }
 
@@ -649,7 +645,6 @@ function formatSkillFileType(file) {
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.86rem;
-    font-weight: 700;
   }
 
   &__tab--active {
@@ -692,10 +687,9 @@ function formatSkillFileType(file) {
     box-shadow: 0 8px 22px rgba(34, 56, 83, 0.04);
   }
 
-  &__block span {
+  &__block span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   &__block p {
@@ -723,7 +717,7 @@ function formatSkillFileType(file) {
     flex-wrap: wrap;
   }
 
-  &__tag-list strong {
+  &__tag-list [data-emphasis] {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -754,15 +748,14 @@ function formatSkillFileType(file) {
     box-shadow: 0 8px 22px rgba(34, 56, 83, 0.04);
   }
 
-  &__grid article span {
+  &__grid article span:not([data-emphasis]) {
     display: block;
     margin-bottom: 6px;
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
-  &__grid article strong {
+  &__grid article [data-emphasis] {
     color: var(--color-text);
     font-size: 0.88rem;
     line-height: 1.45;
@@ -813,7 +806,6 @@ function formatSkillFileType(file) {
   &__target-note {
     color: var(--color-text-soft);
     font-size: 0.76rem;
-    font-weight: 700;
   }
 
   &__path-button {
@@ -868,19 +860,18 @@ function formatSkillFileType(file) {
     background: var(--color-panel-soft);
   }
 
-  &__file-tree-head span,
-  &__file-preview-head span {
+  &__file-tree-head span:not([data-emphasis]),
+  &__file-preview-head span:not([data-emphasis]) {
     min-width: 0;
     overflow: hidden;
     color: var(--color-text-muted);
     font-size: 0.74rem;
-    font-weight: 700;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  &__file-tree-head strong,
-  &__file-preview-head strong {
+  &__file-tree-head [data-emphasis],
+  &__file-preview-head [data-emphasis] {
     flex: none;
     color: var(--color-text-soft);
     font-size: 0.72rem;
@@ -918,7 +909,7 @@ function formatSkillFileType(file) {
     flex: 0 0 auto;
   }
 
-  &__file-row span {
+  &__file-row span:not([data-emphasis]) {
     min-width: 0;
     overflow: hidden;
     flex: 1;
@@ -934,7 +925,6 @@ function formatSkillFileType(file) {
 
   &__file-row--dir {
     color: var(--color-text);
-    font-weight: 700;
   }
 
   &__file-content {
@@ -979,7 +969,6 @@ function formatSkillFileType(file) {
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.84rem;
-  font-weight: 600;
 
   &:hover {
     border-color: var(--color-line-strong);

@@ -2,7 +2,7 @@
   <section class="lan-share-devices-panel">
     <header class="lan-share-devices-head">
       <div class="lan-share-devices-title">
-        <strong class="lan-share-devices-name">设备管理</strong>
+        <span data-emphasis class="lan-share-devices-name">设备管理</span>
         <span class="lan-share-devices-subtitle">
           {{ devices.length }} 台设备 · {{ onlineDevices || 0 }} 台在线
         </span>
@@ -47,9 +47,9 @@
           </span>
         </span>
         <span class="lan-share-devices-main">
-          <strong class="lan-share-devices-device-name">
+          <span data-emphasis class="lan-share-devices-device-name">
             {{ deviceName(device) }}
-          </strong>
+          </span>
           <small class="lan-share-devices-meta">
             {{ device.online ? "在线" : "离线" }} ·
             {{ device.ip || "未知 IP" }} ·
@@ -98,9 +98,9 @@
           <ChevronLeft :size="14" />
           上一页
         </button>
-        <strong class="lan-share-devices-current-page">
+        <span data-emphasis class="lan-share-devices-current-page">
           {{ currentPage }} / {{ pageCount }}
-        </strong>
+        </span>
         <button
           class="lan-share-devices-page-button"
           type="button"
@@ -382,7 +382,6 @@ function deviceSessionCount(deviceId) {
           background: var(--color-panel);
           color: var(--color-primary);
           cursor: pointer;
-          font-weight: 700;
         }
 
         .lan-share-devices-icon-button:disabled {
@@ -423,7 +422,6 @@ function deviceSessionCount(deviceId) {
     .lan-share-devices-current-page {
       color: var(--color-text-muted);
       font-size: 0.76rem;
-      font-weight: 700;
     }
 
     .lan-share-devices-page-actions {
@@ -444,7 +442,6 @@ function deviceSessionCount(deviceId) {
         color: var(--color-primary);
         cursor: pointer;
         font-size: 0.76rem;
-        font-weight: 700;
       }
 
       .lan-share-devices-page-button:disabled {

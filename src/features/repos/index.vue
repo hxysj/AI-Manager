@@ -40,19 +40,19 @@
           <div class="repos-view__grid">
             <div>
               <span>本地路径</span>
-              <strong>{{ repo.localPath }}</strong>
+              <span data-emphasis>{{ repo.localPath }}</span>
             </div>
             <div>
               <span>Skill 数量</span>
-              <strong>{{ repo.skillCount }}</strong>
+              <span data-emphasis>{{ repo.skillCount }}</span>
             </div>
             <div>
               <span>最近同步</span>
-              <strong>{{ formatDateTime(repo.lastSyncedAt) }}</strong>
+              <span data-emphasis>{{ formatDateTime(repo.lastSyncedAt) }}</span>
             </div>
             <div>
               <span>状态</span>
-              <strong>{{ repo.status }}</strong>
+              <span data-emphasis>{{ repo.status }}</span>
             </div>
           </div>
         </div>
@@ -127,7 +127,6 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
     margin: 0 0 5px;
     color: var(--color-text-soft);
     font-size: 0.7rem;
-    font-weight: 700;
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
@@ -189,7 +188,6 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
     background: var(--color-primary-soft);
     color: var(--color-text-muted);
     font-size: 0.76rem;
-    font-weight: 700;
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
@@ -207,17 +205,16 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
     background: var(--color-panel-soft);
   }
 
-  &__grid span {
+  &__grid span:not([data-emphasis]) {
     display: block;
     margin-bottom: 8px;
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
 
-  &__grid strong {
+  &__grid [data-emphasis] {
     line-height: 1.6;
     word-break: break-all;
   }
@@ -262,7 +259,6 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.84rem;
-  font-weight: 700;
 
   &--primary {
     border-color: var(--color-primary);

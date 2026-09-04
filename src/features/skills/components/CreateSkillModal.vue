@@ -94,10 +94,9 @@ function submit() {
     gap: 8px;
   }
 
-  & span {
+  & span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.84rem;
-    font-weight: 700;
   }
 
   & input,
@@ -141,7 +140,6 @@ function submit() {
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-weight: 600;
 
   &--primary {
     border-color: var(--color-primary);

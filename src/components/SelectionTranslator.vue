@@ -5,7 +5,7 @@
     :style="{ left: `${position.x}px`, top: `${position.y}px` }"
   >
     <header class="selection-translator__header">
-      <strong>划词翻译</strong>
+      <span data-emphasis>划词翻译</span>
       <button type="button" @click="closeTranslator">×</button>
     </header>
 
@@ -141,7 +141,7 @@ function closeTranslator() {
     background: var(--color-panel-soft);
   }
 
-  &__header strong {
+  &__header [data-emphasis] {
     color: var(--color-text);
     font-size: 0.92rem;
   }

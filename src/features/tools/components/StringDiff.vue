@@ -34,7 +34,7 @@
     <section class="string-diff-inputs" aria-label="输入区">
       <article class="string-diff-panel">
         <header class="string-diff-panel-head">
-          <strong class="string-diff-panel-title">左侧内容</strong>
+          <span data-emphasis class="string-diff-panel-title">左侧内容</span>
           <span class="string-diff-panel-meta">
             <span v-if="leftParseState" class="string-diff-parse-state">{{
               leftParseState
@@ -79,7 +79,7 @@
 
       <article class="string-diff-panel">
         <header class="string-diff-panel-head">
-          <strong class="string-diff-panel-title">右侧内容</strong>
+          <span data-emphasis class="string-diff-panel-title">右侧内容</span>
           <span class="string-diff-panel-meta">
             <span v-if="rightParseState" class="string-diff-parse-state">{{
               rightParseState
@@ -151,7 +151,7 @@
           :key="metric.label"
           class="string-diff-metric"
         >
-          <strong class="string-diff-metric-value">{{ metric.value }}</strong>
+          <span data-emphasis class="string-diff-metric-value">{{ metric.value }}</span>
           <span class="string-diff-metric-label">{{ metric.label }}</span>
         </article>
       </div>
@@ -850,7 +850,6 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
       color: var(--color-text-muted);
       cursor: pointer;
       font-size: 0.78rem;
-      font-weight: 700;
 
       .string-diff-toggle-label {
         line-height: 1;
@@ -877,7 +876,6 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.76rem;
-    font-weight: 700;
 
     &:hover:not(:disabled) {
       border-color: var(--color-line-strong);
@@ -964,7 +962,6 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
         .string-diff-parse-state {
           color: var(--color-success);
           font-size: 0.66rem;
-          font-weight: 700;
         }
 
         .string-diff-counter {
@@ -1134,7 +1131,6 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
           background: var(--color-panel);
           color: var(--color-primary);
           font-size: 0.7rem;
-          font-weight: 800;
         }
 
         .string-diff-badge-warning {
@@ -1211,7 +1207,6 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
       .string-diff-metric-label {
         color: var(--color-text-muted);
         font-size: 0.68rem;
-        font-weight: 700;
       }
     }
 
@@ -1247,7 +1242,6 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
               background: var(--color-panel-soft);
               color: var(--color-text-muted);
               font-size: 0.7rem;
-              font-weight: 800;
               text-align: left;
             }
           }
@@ -1272,7 +1266,6 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
 
             .string-diff-key-cell {
               color: var(--color-primary);
-              font-weight: 700;
             }
 
             .string-diff-status {
@@ -1285,7 +1278,6 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
               color: var(--color-warning);
               font-family: inherit;
               font-size: 0.68rem;
-              font-weight: 800;
               white-space: nowrap;
             }
 

@@ -78,7 +78,7 @@
             ></span>
           </span>
           <div v-if="!collapsed" class="app-sidebar__cli-info">
-            <strong>{{ cli.name }}</strong>
+            <span data-emphasis>{{ cli.name }}</span>
             <small>{{
               cli.installed && cli.version
                 ? cli.version
@@ -233,7 +233,6 @@ const colorMap = {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 1.02rem;
-    font-weight: 700;
   }
 
   &__theme-toggle {
@@ -321,7 +320,6 @@ const colorMap = {
 
   &__nav-label {
     font-size: 0.92rem;
-    font-weight: 600;
   }
 
   &__section {
@@ -333,7 +331,6 @@ const colorMap = {
     padding: 14px 8px 10px;
     color: var(--color-text-soft);
     font-size: 0.72rem;
-    font-weight: 700;
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
@@ -387,7 +384,7 @@ const colorMap = {
     gap: 2px;
   }
 
-  &__cli-info strong {
+  &__cli-info [data-emphasis] {
     font-size: 0.88rem;
   }
 

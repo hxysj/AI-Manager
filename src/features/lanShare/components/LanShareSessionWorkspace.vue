@@ -25,9 +25,9 @@
           </span>
         </span>
         <span class="lan-share-session-device-main">
-          <strong class="lan-share-session-device-name">
+          <span data-emphasis class="lan-share-session-device-name">
             {{ deviceName }}
-          </strong>
+          </span>
           <small class="lan-share-session-device-meta">
             {{ currentDevice?.online ? "在线" : "离线" }} ·
             {{ currentDevice?.ip || "未知 IP" }} · {{ sessions.length }} 个会话
@@ -39,9 +39,9 @@
           <Users :size="18" />
         </span>
         <span class="lan-share-session-device-main">
-          <strong class="lan-share-session-device-name">
+          <span data-emphasis class="lan-share-session-device-name">
             {{ currentGroup?.name || "群聊模式" }}
-          </strong>
+          </span>
           <small class="lan-share-session-device-meta">
             {{ groups.length }} 个群聊 · {{ currentGroupMemberCount }} 位成员
           </small>
@@ -111,7 +111,7 @@
     >
       <aside class="lan-share-session-sidebar">
         <header class="lan-share-session-sidebar-head">
-          <strong class="lan-share-session-sidebar-title">会话记录</strong>
+          <span data-emphasis class="lan-share-session-sidebar-title">会话记录</span>
           <span class="lan-share-session-sidebar-count">
             {{ sortedSessions.length }} 条
           </span>
@@ -137,9 +137,9 @@
                 <MessagesSquare :size="15" />
               </span>
               <span class="lan-share-session-item-main">
-                <strong class="lan-share-session-item-title">
+                <span data-emphasis class="lan-share-session-item-title">
                   {{ sessionTitle(session) }}
-                </strong>
+                </span>
                 <small class="lan-share-session-item-meta">
                   {{ formatDateTime(session.updatedAt) }}
                 </small>
@@ -217,7 +217,7 @@
     <div v-else-if="chatMode === 'group'" class="lan-share-session-body">
       <aside class="lan-share-session-sidebar">
         <header class="lan-share-session-sidebar-head">
-          <strong class="lan-share-session-sidebar-title">群聊列表</strong>
+          <span data-emphasis class="lan-share-session-sidebar-title">群聊列表</span>
           <span class="lan-share-session-sidebar-count">
             {{ groups.length }} 个
           </span>
@@ -242,9 +242,9 @@
                 <Users :size="15" />
               </span>
               <span class="lan-share-session-item-main">
-                <strong class="lan-share-session-item-title">
+                <span data-emphasis class="lan-share-session-item-title">
                   {{ group.name }}
-                </strong>
+                </span>
                 <small class="lan-share-session-item-meta">
                   {{ group.members?.length || 0 }} 人 ·
                   {{ visibilityLabel(group.messageVisibility) }}
@@ -296,7 +296,7 @@
 
           <div v-if="groupManagerOpen" class="lan-share-session-group-manager">
             <header class="lan-share-session-manager-head">
-              <strong class="lan-share-session-manager-title">群管理</strong>
+              <span data-emphasis class="lan-share-session-manager-title">群管理</span>
               <button
                 class="lan-share-session-manager-close"
                 type="button"
@@ -360,9 +360,9 @@
                 v-html="currentGroup.qrSvg"
               ></div>
               <div class="lan-share-session-invite-copy">
-                <strong class="lan-share-session-invite-code">
+                <span data-emphasis class="lan-share-session-invite-code">
                   邀请码 {{ currentGroup.inviteCode }}
-                </strong>
+                </span>
                 <span class="lan-share-session-invite-url">
                   {{ currentGroup.inviteUrl || "启动服务后生成群二维码" }}
                 </span>
@@ -382,9 +382,9 @@
                 class="lan-share-session-member"
               >
                 <span class="lan-share-session-member-main">
-                  <strong class="lan-share-session-member-name">
+                  <span data-emphasis class="lan-share-session-member-name">
                     {{ member.deviceName || member.deviceId }}
-                  </strong>
+                  </span>
                   <small class="lan-share-session-member-status">
                     {{ member.online ? "在线" : "离线" }}
                   </small>
@@ -762,7 +762,6 @@ function copyInviteText() {
           color: var(--color-text-muted);
           cursor: pointer;
           font-size: 0.74rem;
-          font-weight: 800;
         }
 
         .lan-share-session-mode-button-active {
@@ -785,7 +784,6 @@ function copyInviteText() {
         background: var(--color-primary-solid);
         color: #ffffff;
         cursor: pointer;
-        font-weight: 700;
       }
 
       .lan-share-session-button-ghost {
@@ -839,7 +837,6 @@ function copyInviteText() {
         .lan-share-session-sidebar-count {
           color: var(--color-text-muted);
           font-size: 0.74rem;
-          font-weight: 700;
         }
       }
 
@@ -979,7 +976,6 @@ function copyInviteText() {
         background: var(--color-primary-solid);
         color: #ffffff;
         cursor: pointer;
-        font-weight: 700;
       }
 
       .lan-share-session-button-ghost {
@@ -1001,7 +997,6 @@ function copyInviteText() {
         gap: 4px;
         color: var(--color-text-muted);
         font-size: 0.72rem;
-        font-weight: 700;
       }
 
       .lan-share-session-group-input,
@@ -1118,7 +1113,6 @@ function copyInviteText() {
             background: var(--color-panel);
             color: var(--color-primary);
             cursor: pointer;
-            font-weight: 700;
           }
         }
 
@@ -1199,7 +1193,6 @@ function copyInviteText() {
           background: transparent;
           color: var(--color-text-muted);
           cursor: pointer;
-          font-weight: 700;
         }
 
         .lan-share-session-tab-active {
@@ -1227,7 +1220,6 @@ function copyInviteText() {
           background: var(--color-panel);
           color: var(--color-primary);
           cursor: pointer;
-          font-weight: 800;
         }
       }
 

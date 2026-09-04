@@ -21,7 +21,7 @@
             <component :is="tool.icon" :size="20" />
           </span>
           <span class="tools-view-tool-main">
-            <strong class="tools-view-tool-name">{{ tool.label }}</strong>
+            <span data-emphasis class="tools-view-tool-name">{{ tool.label }}</span>
             <span class="tools-view-tool-desc">{{ tool.summary }}</span>
           </span>
           <span class="tools-view-tool-meta">{{ tool.meta }}</span>
@@ -36,9 +36,9 @@
           工具列表
         </button>
         <div class="tools-view-detail-title">
-          <strong class="tools-view-detail-name">{{
+          <span data-emphasis class="tools-view-detail-name">{{
             activeToolMeta?.label || "工具"
-          }}</strong>
+          }}</span>
           <span class="tools-view-detail-summary">{{
             activeToolMeta?.summary || ""
           }}</span>
@@ -50,9 +50,9 @@
             class="tools-view-git-status-item"
           >
             <span class="tools-view-git-status-label">{{ item.label }}</span>
-            <strong class="tools-view-git-status-value">{{
+            <span data-emphasis class="tools-view-git-status-value">{{
               item.value
-            }}</strong>
+            }}</span>
           </div>
         </div>
         <button
@@ -275,17 +275,15 @@ onBeforeUnmount(() => emit("detail-change", false))
   line-height: 1.2;
 }
 
-.tools-view-list-head span {
+.tools-view-list-head span:not([data-emphasis]) {
   color: var(--color-text-muted);
   font-size: 0.82rem;
-  font-weight: 700;
 }
 
 .tools-view-mark {
   margin: 0 0 5px;
   color: var(--color-text-soft);
   font-size: 0.7rem;
-  font-weight: 700;
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -363,7 +361,6 @@ onBeforeUnmount(() => emit("detail-change", false))
   background: var(--color-panel-soft);
   color: var(--color-text-soft);
   font-size: 0.78rem;
-  font-weight: 700;
 }
 
 .tools-view-detail-page {
@@ -392,7 +389,6 @@ onBeforeUnmount(() => emit("detail-change", false))
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.8rem;
-    font-weight: 700;
   }
 
   .tools-view-back:hover {
@@ -470,7 +466,6 @@ onBeforeUnmount(() => emit("detail-change", false))
         overflow: hidden;
         color: var(--color-text-soft);
         font-size: 0.72rem;
-        font-weight: 700;
         text-overflow: ellipsis;
         white-space: nowrap;
       }

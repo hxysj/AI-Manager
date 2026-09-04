@@ -2,7 +2,7 @@
   <section class="lan-share-messages-panel">
     <header class="lan-share-messages-head">
       <div class="lan-share-messages-title">
-        <strong class="lan-share-messages-name">消息通信</strong>
+        <span data-emphasis class="lan-share-messages-name">消息通信</span>
         <span class="lan-share-messages-subtitle">
           {{ sessionSummary }}
         </span>
@@ -486,7 +486,6 @@ function filterStartAt() {
         color: var(--color-primary);
         cursor: pointer;
         font-size: 0.76rem;
-        font-weight: 700;
       }
 
       .lan-share-messages-mini-button:disabled {
@@ -566,7 +565,6 @@ function filterStartAt() {
           min-width: 0;
           flex: 1;
           overflow: hidden;
-          font-weight: 700;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
@@ -623,7 +621,6 @@ function filterStartAt() {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        font-weight: 700;
 
         .lan-share-messages-content-icon {
           flex: none;
@@ -675,7 +672,6 @@ function filterStartAt() {
       background: var(--color-panel);
       color: var(--color-primary);
       cursor: pointer;
-      font-weight: 700;
     }
 
     .lan-share-messages-button-primary {

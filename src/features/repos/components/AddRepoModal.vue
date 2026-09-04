@@ -139,10 +139,9 @@ async function selectLocalDirectory() {
     gap: 6px;
   }
 
-  & span {
+  & span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.76rem;
-    font-weight: 700;
   }
 
   & input,
@@ -184,7 +183,6 @@ async function selectLocalDirectory() {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
     white-space: nowrap;
   }
 
@@ -213,7 +211,6 @@ async function selectLocalDirectory() {
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.84rem;
-  font-weight: 700;
 
   &--primary {
     border-color: var(--color-primary);

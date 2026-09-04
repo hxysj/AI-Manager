@@ -4,7 +4,7 @@
       <header class="json-agent-history-head">
         <div class="json-agent-history-title">
           <History :size="15" />
-          <strong>历史记录</strong>
+          <span data-emphasis>历史记录</span>
           <span>({{ historyEntries.length }})</span>
         </div>
         <div class="json-agent-history-actions">
@@ -57,7 +57,7 @@
           >
             <FileJson :size="14" />
             <span class="json-agent-history-item-content">
-              <strong :title="entry.title">{{ entry.title }}</strong>
+              <span data-emphasis :title="entry.title">{{ entry.title }}</span>
               <small
                 >{{ formatHistoryTime(entry.updatedAt) }} ·
                 {{ formatHistorySize(entry.size) }}</small
@@ -111,7 +111,7 @@
         <header class="json-agent-pane-head">
           <div class="json-agent-pane-title">
             <span class="json-agent-pane-kicker">INPUT</span>
-            <strong class="json-agent-pane-name">原始内容</strong>
+            <span data-emphasis class="json-agent-pane-name">原始内容</span>
           </div>
           <div class="json-agent-pane-actions">
             <button
@@ -171,7 +171,7 @@
         <header class="json-agent-pane-head">
           <div class="json-agent-pane-title">
             <span class="json-agent-pane-kicker">OUTPUT</span>
-            <strong class="json-agent-pane-name">格式化结果</strong>
+            <span data-emphasis class="json-agent-pane-name">格式化结果</span>
           </div>
           <div class="json-agent-pane-actions">
             <button
@@ -276,7 +276,7 @@
             <Bot :size="16" />
           </span>
           <div class="json-agent-window-title">
-            <strong class="json-agent-window-name">JSON Agent</strong>
+            <span data-emphasis class="json-agent-window-name">JSON Agent</span>
             <span class="json-agent-window-provider">
               {{ currentProviderName }} · {{ selectedModel || "未配置模型" }}
             </span>
@@ -394,21 +394,21 @@
           <div class="json-agent-context-meta">
             <div class="json-agent-context-row">
               <span class="json-agent-context-label">Provider</span>
-              <strong class="json-agent-context-value">
+              <span data-emphasis class="json-agent-context-value">
                 {{ currentProviderName }}
-              </strong>
+              </span>
             </div>
             <div class="json-agent-context-row">
               <span class="json-agent-context-label">模型</span>
-              <strong class="json-agent-context-value">
+              <span data-emphasis class="json-agent-context-value">
                 {{ selectedModel || "未配置" }}
-              </strong>
+              </span>
             </div>
             <div class="json-agent-context-row">
               <span class="json-agent-context-label">当前指令</span>
-              <strong class="json-agent-context-value">
+              <span data-emphasis class="json-agent-context-value">
                 {{ activeInstruction || instruction || "暂无" }}
-              </strong>
+              </span>
             </div>
           </div>
           <div class="json-agent-context-block">
@@ -441,9 +441,9 @@
               <Wrench :size="15" />
             </span>
             <div class="json-agent-tool-definition-main">
-              <strong class="json-agent-tool-definition-name">
+              <span data-emphasis class="json-agent-tool-definition-name">
                 output_json
-              </strong>
+              </span>
               <span class="json-agent-tool-definition-desc">
                 校验并写入右侧 JSON 格式化结果区
               </span>
@@ -463,7 +463,7 @@
             <header class="json-agent-tool-call-head">
               <div class="json-agent-tool-call-name">
                 <Wrench :size="13" />
-                <strong>{{ call.name }}</strong>
+                <span data-emphasis>{{ call.name }}</span>
               </div>
               <span
                 :class="[
@@ -1662,7 +1662,7 @@ onBeforeUnmount(() => {
         color: var(--color-text);
         font-size: 0.73rem;
 
-        span {
+        span:not([data-emphasis]) {
           color: var(--color-text-soft);
           font-size: 0.65rem;
         }
@@ -1756,11 +1756,10 @@ onBeforeUnmount(() => {
           flex-direction: column;
           gap: 2px;
 
-          strong {
+          [data-emphasis] {
             overflow: hidden;
             color: var(--color-text);
             font-size: 0.72rem;
-            font-weight: 600;
             text-overflow: ellipsis;
             white-space: nowrap;
           }
@@ -1872,7 +1871,6 @@ onBeforeUnmount(() => {
             color: var(--color-text-soft);
             font-family: Consolas, "Courier New", monospace;
             font-size: 0.66rem;
-            font-weight: 700;
           }
 
           .json-agent-pane-name {
@@ -1899,7 +1897,6 @@ onBeforeUnmount(() => {
           color: var(--color-primary);
           cursor: pointer;
           font-size: 0.74rem;
-          font-weight: 700;
           line-height: 1;
 
           :deep(svg) {
@@ -2018,7 +2015,7 @@ onBeforeUnmount(() => {
           font-size: 0.72rem;
         }
 
-        span {
+        span:not([data-emphasis]) {
           flex: none;
           color: var(--color-text-soft);
           font-size: 0.62rem;
@@ -2225,7 +2222,6 @@ onBeforeUnmount(() => {
         color: var(--color-text-muted);
         cursor: pointer;
         font-size: 0.72rem;
-        font-weight: 700;
 
         .json-agent-tab-count {
           display: inline-flex;
@@ -2293,7 +2289,6 @@ onBeforeUnmount(() => {
           .json-agent-message-role {
             color: var(--color-text-soft);
             font-size: 0.65rem;
-            font-weight: 700;
           }
 
           .json-agent-message-streaming {
@@ -2312,7 +2307,6 @@ onBeforeUnmount(() => {
             margin-bottom: 3px;
             color: var(--color-primary);
             font-size: 0.63rem;
-            font-weight: 700;
           }
 
           .json-agent-message-reasoning-content {
@@ -2446,7 +2440,6 @@ onBeforeUnmount(() => {
           .json-agent-context-name {
             color: var(--color-text);
             font-size: 0.7rem;
-            font-weight: 700;
           }
 
           .json-agent-context-size {
@@ -2526,7 +2519,6 @@ onBeforeUnmount(() => {
         .json-agent-tool-definition-state {
           color: var(--color-primary);
           font-size: 0.64rem;
-          font-weight: 700;
         }
       }
 
@@ -2570,7 +2562,6 @@ onBeforeUnmount(() => {
           .json-agent-tool-call-state {
             flex: none;
             font-size: 0.64rem;
-            font-weight: 700;
           }
 
           .json-agent-tool-call-state-running {
@@ -2594,7 +2585,6 @@ onBeforeUnmount(() => {
           .json-agent-tool-call-label {
             color: var(--color-text-soft);
             font-size: 0.63rem;
-            font-weight: 700;
           }
 
           .json-agent-tool-call-content {

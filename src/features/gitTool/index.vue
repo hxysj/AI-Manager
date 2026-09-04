@@ -64,7 +64,7 @@
     </section>
 
     <section v-if="!repos.length" class="git-tool-empty">
-      <strong class="git-tool-empty-title">当前没有项目</strong>
+      <span data-emphasis class="git-tool-empty-title">当前没有项目</span>
       <button
         class="git-tool-action git-tool-action-primary"
         type="button"
@@ -76,7 +76,7 @@
 
     <section v-else-if="gitLoading" class="git-tool-loading">
       <RefreshCw class="git-tool-loading-icon" :size="22" />
-      <strong class="git-tool-loading-title">正在加载 Git 数据</strong>
+      <span data-emphasis class="git-tool-loading-title">正在加载 Git 数据</span>
       <span class="git-tool-loading-desc">{{
         selectedRepo?.name || "当前项目"
       }}</span>
@@ -86,7 +86,7 @@
       <aside class="git-tool-branch-panel">
         <div class="git-tool-branch-head">
           <div class="git-tool-branch-title-row">
-            <strong>本地分支</strong>
+            <span data-emphasis>本地分支</span>
             <span>{{ currentBranch || "-" }}</span>
           </div>
           <div class="git-tool-branch-summary-row">
@@ -131,7 +131,7 @@
                 :is="isBranchGroupClosed(group.id) ? ChevronRight : ChevronDown"
                 :size="13"
               />
-              <strong>{{ group.label }}</strong>
+              <span data-emphasis>{{ group.label }}</span>
               <span>{{ group.branches.length }}</span>
             </button>
             <div
@@ -180,9 +180,9 @@
       <section class="git-tool-commit-panel">
         <div class="git-tool-panel-head">
           <div>
-            <strong class="git-tool-panel-title">{{
+            <span data-emphasis class="git-tool-panel-title">{{
               selectedBranch || "提交记录"
-            }}</strong>
+            }}</span>
             <span class="git-tool-panel-subtitle"
               >{{ commits.length }} 条提交</span
             >
@@ -303,9 +303,9 @@
                 >
                   +{{ getHiddenCommitRefBadgeCount(commit) }}
                 </span>
-                <strong class="git-tool-commit-title" :title="commit.subject">{{
+                <span data-emphasis class="git-tool-commit-title" :title="commit.subject">{{
                   commit.subject
-                }}</strong>
+                }}</span>
                 <span
                   v-if="commit.checkStatus !== 'none'"
                   :class="[
@@ -344,7 +344,7 @@
       <section class="git-tool-stash-panel">
         <div class="git-tool-panel-head">
           <div>
-            <strong class="git-tool-panel-title">当前 Stash</strong>
+            <span data-emphasis class="git-tool-panel-title">当前 Stash</span>
             <span class="git-tool-panel-subtitle"
               >{{ stashes.length }} 条记录</span
             >
@@ -406,12 +406,12 @@
                 type="button"
                 @click="openStashDetail(stash)"
               >
-                <strong
+                <span data-emphasis
                   class="git-tool-stash-name"
                   :title="`${stash.stashRef} ${stash.subject}`"
                 >
                   {{ stash.stashRef }} {{ stash.subject }}
-                </strong>
+                </span>
                 <span class="git-tool-stash-meta">
                   {{ stash.shortHash }} · {{ stash.author }} ·
                   {{ formatDate(stash.date) }}
@@ -436,7 +436,7 @@
       <section class="git-tool-stash-panel">
         <div class="git-tool-panel-head">
           <div>
-            <strong class="git-tool-panel-title">Stash 归档</strong>
+            <span data-emphasis class="git-tool-panel-title">Stash 归档</span>
             <span class="git-tool-panel-subtitle"
               >{{ stashArchives.length }} 条记录</span
             >
@@ -458,12 +458,12 @@
                 type="button"
                 @click="openStashArchiveDetail(archive)"
               >
-                <strong
+                <span data-emphasis
                   class="git-tool-stash-name"
                   :title="`${archive.stashRef} ${archive.message}`"
                 >
                   {{ archive.stashRef }} {{ archive.message }}
-                </strong>
+                </span>
                 <span class="git-tool-stash-meta">
                   {{ formatHash(archive.commitHash) }} ·
                   {{ formatDate(archive.archivedAt) }}
@@ -522,9 +522,9 @@
               <span class="git-tool-drawer-back-text">返回归档列表</span>
             </button>
             <span v-else class="git-tool-label">{{ detailDrawerEyebrow }}</span>
-            <strong class="git-tool-drawer-title">{{
+            <span data-emphasis class="git-tool-drawer-title">{{
               detailDrawerTitle
-            }}</strong>
+            }}</span>
           </div>
           <div class="git-tool-drawer-actions">
             <span
@@ -597,7 +597,7 @@
                     "
                     :size="13"
                   />
-                  <strong>{{ group.label }}</strong>
+                  <span data-emphasis>{{ group.label }}</span>
                   <span>{{ group.archives.length }}</span>
                 </button>
                 <button
@@ -629,10 +629,10 @@
                     type="button"
                     @click="openArchiveDetail(archive)"
                   >
-                    <strong
+                    <span data-emphasis
                       class="git-tool-archive-name"
                       :title="archive.branchName"
-                      >{{ archive.branchName }}</strong
+                      >{{ archive.branchName }}</span
                     >
                     <span class="git-tool-archive-path">{{
                       archive.projectPath
@@ -674,7 +674,7 @@
         >
           <div class="git-tool-archive-detail-meta">
             <span>{{ selectedArchive?.projectPath || "" }}</span>
-            <strong>{{ formatFullDate(selectedArchive?.archivedAt) }}</strong>
+            <span data-emphasis>{{ formatFullDate(selectedArchive?.archivedAt) }}</span>
           </div>
 
           <div class="git-tool-archive-commit-table">
@@ -813,7 +813,7 @@
           <Archive :size="19" />
         </div>
         <div class="git-tool-confirm-content">
-          <strong>{{ confirmDialog.message }}</strong>
+          <span data-emphasis>{{ confirmDialog.message }}</span>
           <span v-if="confirmDialog.detail">{{ confirmDialog.detail }}</span>
           <label v-if="confirmDialog.input" class="git-tool-confirm-field">
             <span>{{ confirmDialog.inputLabel }}</span>
@@ -940,8 +940,9 @@ const GitChangeDetail = defineComponent({
                 h("div", { class: "git-change-view-summary" }, [
                   h("span", { class: "git-tool-label" }, "提交详情"),
                   h(
-                    "strong",
+                    "span",
                     {
+                      "data-emphasis": true,
                       class: "git-change-view-title",
                       title: detailProps.title
                     },
@@ -954,11 +955,19 @@ const GitChangeDetail = defineComponent({
                     ]),
                     h("span", {}, [
                       h("small", {}, "作者"),
-                      h("strong", {}, detailProps.detail.author || "-")
+                      h(
+                        "span",
+                        { "data-emphasis": true },
+                        detailProps.detail.author || "-"
+                      )
                     ]),
                     h("span", {}, [
                       h("small", {}, "提交时间"),
-                      h("strong", {}, formatDate(detailProps.detail.date))
+                      h(
+                        "span",
+                        { "data-emphasis": true },
+                        formatDate(detailProps.detail.date)
+                      )
                     ])
                   ])
                 ])
@@ -967,7 +976,11 @@ const GitChangeDetail = defineComponent({
                 h("aside", { class: "git-change-view-tree" }, [
                   h("div", { class: "git-change-view-tree-head" }, [
                     h("span", {}, "变更文件"),
-                    h("strong", {}, `${detailProps.detail.files.length} 个文件`)
+                    h(
+                      "span",
+                      { "data-emphasis": true },
+                      `${detailProps.detail.files.length} 个文件`
+                    )
                   ]),
                   h(
                     "div",
@@ -990,7 +1003,7 @@ const GitChangeDetail = defineComponent({
                 h("section", { class: "git-change-view-diff-panel" }, [
                   h("header", { class: "git-change-view-file-head" }, [
                     h(
-                      "strong",
+                      "span",
                       { title: selectedPath.value },
                       selectedPath.value || "请选择文件"
                     )
@@ -1117,7 +1130,7 @@ function renderFileTreeNodes(
               class: "git-change-view-tree-folder",
               size: 13
             }),
-            h("strong", { title: node.path }, node.name),
+            h("span", { "data-emphasis": true, title: node.path }, node.name),
             h("small", {}, node.count)
           ]
         )
@@ -2911,13 +2924,13 @@ function showErrorMessage(error) {
   gap: 5px;
 }
 
-.git-tool-confirm-content strong {
+.git-tool-confirm-content [data-emphasis] {
   color: var(--color-text);
   font-size: 0.86rem;
   line-height: 1.5;
 }
 
-.git-tool-confirm-content span {
+.git-tool-confirm-content span:not([data-emphasis]) {
   overflow: hidden;
   color: var(--color-text-muted);
   font-size: 0.76rem;
@@ -2933,10 +2946,9 @@ function showErrorMessage(error) {
   padding-top: 5px;
 }
 
-.git-tool-confirm-field span {
+.git-tool-confirm-field span:not([data-emphasis]) {
   color: var(--color-text-muted);
   font-size: 0.72rem;
-  font-weight: 700;
 }
 
 .git-tool-confirm-field input {
@@ -2947,7 +2959,6 @@ function showErrorMessage(error) {
   background: var(--color-panel);
   color: var(--color-text);
   font-size: 0.8rem;
-  font-weight: 700;
 }
 
 .git-tool-confirm-actions {
@@ -2969,7 +2980,6 @@ function showErrorMessage(error) {
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.8rem;
-  font-weight: 700;
 }
 
 .git-tool-confirm-button:hover {
@@ -3002,7 +3012,6 @@ function showErrorMessage(error) {
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.82rem;
-  font-weight: 700;
 }
 
 .git-tool-action:hover,
@@ -3106,7 +3115,6 @@ function showErrorMessage(error) {
 .git-tool-label {
   color: var(--color-text-muted);
   font-size: 0.72rem;
-  font-weight: 700;
 }
 
 .git-tool-repo-path {
@@ -3156,7 +3164,6 @@ function showErrorMessage(error) {
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.8rem;
-    font-weight: 800;
   }
 
   .git-tool-tab-active {
@@ -3290,12 +3297,12 @@ function showErrorMessage(error) {
   gap: 10px;
 }
 
-.git-tool-branch-title-row strong {
+.git-tool-branch-title-row [data-emphasis] {
   color: var(--color-text);
   font-size: 0.84rem;
 }
 
-.git-tool-branch-title-row span {
+.git-tool-branch-title-row span:not([data-emphasis]) {
   overflow: hidden;
   color: var(--color-text-muted);
   font-size: 0.72rem;
@@ -3332,7 +3339,6 @@ function showErrorMessage(error) {
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.76rem;
-  font-weight: 700;
 }
 
 .git-tool-branch-toolbar-button:disabled {
@@ -3375,7 +3381,7 @@ function showErrorMessage(error) {
   background: var(--color-primary-soft);
 }
 
-.git-tool-branch-group-head strong {
+.git-tool-branch-group-head [data-emphasis] {
   min-width: 0;
   flex: 1;
   overflow: hidden;
@@ -3385,7 +3391,7 @@ function showErrorMessage(error) {
   white-space: nowrap;
 }
 
-.git-tool-branch-group-head span {
+.git-tool-branch-group-head span:not([data-emphasis]) {
   flex: none;
   color: var(--color-text-muted);
   font-size: 0.72rem;
@@ -3466,7 +3472,6 @@ function showErrorMessage(error) {
   flex: 1;
   color: var(--color-primary);
   font-size: 0.78rem;
-  font-weight: 700;
 }
 
 .git-tool-branch-current .git-tool-branch-name {
@@ -3480,7 +3485,6 @@ function showErrorMessage(error) {
   background: var(--color-warning-soft);
   color: var(--color-warning);
   font-size: 0.68rem;
-  font-weight: 700;
 }
 
 .git-tool-commit-layout {
@@ -3513,7 +3517,6 @@ function showErrorMessage(error) {
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
 
     .git-tool-commit-table-head-cell {
       min-width: 0;
@@ -3606,7 +3609,6 @@ function showErrorMessage(error) {
         background: var(--color-primary-soft);
         color: var(--color-primary);
         font-size: 0.68rem;
-        font-weight: 800;
         line-height: 18px;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -3739,7 +3741,6 @@ function showErrorMessage(error) {
   padding: 2px 6px;
   border-radius: 999px;
   font-size: 0.68rem;
-  font-weight: 700;
 }
 
 .git-tool-check-exists-hash {
@@ -3807,7 +3808,6 @@ function showErrorMessage(error) {
   border-radius: 8px;
   color: var(--color-text-muted);
   font-size: 0.84rem;
-  font-weight: 700;
 }
 
 .git-tool-archive,
@@ -3944,7 +3944,6 @@ function showErrorMessage(error) {
   color: var(--color-primary);
   cursor: pointer;
   font-size: 0.76rem;
-  font-weight: 700;
   line-height: 1;
 
   .git-tool-drawer-back-icon {
@@ -4072,7 +4071,7 @@ function showErrorMessage(error) {
     background: var(--color-primary-soft);
   }
 
-  .git-tool-archive-group-toggle strong {
+  .git-tool-archive-group-toggle [data-emphasis] {
     min-width: 0;
     flex: 1;
     overflow: hidden;
@@ -4082,7 +4081,7 @@ function showErrorMessage(error) {
     white-space: nowrap;
   }
 
-  .git-tool-archive-group-toggle span {
+  .git-tool-archive-group-toggle span:not([data-emphasis]) {
     flex: none;
     color: var(--color-text-muted);
     font-size: 0.72rem;
@@ -4129,7 +4128,6 @@ function showErrorMessage(error) {
       color: var(--color-primary);
       font-family: "JetBrains Mono", "Consolas", monospace;
       font-size: 0.72rem;
-      font-weight: 700;
     }
   }
 }
@@ -4148,17 +4146,16 @@ function showErrorMessage(error) {
   font-size: 0.76rem;
 }
 
-.git-tool-archive-detail-meta span,
-.git-tool-archive-detail-meta strong {
+.git-tool-archive-detail-meta span:not([data-emphasis]),
+.git-tool-archive-detail-meta [data-emphasis] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.git-tool-archive-detail-meta strong {
+.git-tool-archive-detail-meta [data-emphasis] {
   flex: none;
-  font-weight: 600;
 }
 
 .git-tool-archive-commit-table {
@@ -4185,11 +4182,10 @@ function showErrorMessage(error) {
   background: var(--color-primary-soft);
   color: var(--color-text-muted);
   font-size: 0.72rem;
-  font-weight: 700;
 }
 
-.git-tool-archive-commit-head span,
-.git-tool-archive-commit span {
+.git-tool-archive-commit-head span:not([data-emphasis]),
+.git-tool-archive-commit span:not([data-emphasis]) {
   min-width: 0;
   overflow: hidden;
   padding: 0 12px;
@@ -4228,7 +4224,6 @@ function showErrorMessage(error) {
 
 .git-tool-archive-commit-title {
   color: var(--color-text);
-  font-weight: 700;
 }
 
 .git-tool-archive-commit-hash {
@@ -4288,7 +4283,7 @@ function showErrorMessage(error) {
   font-size: 0.72rem;
 }
 
-.git-change-view-meta-row span {
+.git-change-view-meta-row span:not([data-emphasis]) {
   display: inline-flex;
   min-width: 0;
   align-items: center;
@@ -4302,17 +4297,15 @@ function showErrorMessage(error) {
   flex: none;
   color: var(--color-text-soft);
   font-size: 0.68rem;
-  font-weight: 700;
 }
 
 .git-change-view-meta-row code,
-.git-change-view-meta-row strong {
+.git-change-view-meta-row [data-emphasis] {
   min-width: 0;
   overflow: hidden;
   color: var(--color-text-muted);
   font-family: "JetBrains Mono", "Consolas", monospace;
   font-size: 0.72rem;
-  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4345,7 +4338,7 @@ function showErrorMessage(error) {
   font-size: 0.74rem;
 }
 
-.git-change-view-tree-head strong {
+.git-change-view-tree-head [data-emphasis] {
   color: var(--color-primary);
   font-size: 0.72rem;
 }
@@ -4381,7 +4374,6 @@ function showErrorMessage(error) {
   cursor: pointer;
   color: var(--color-primary);
   font-size: 0.76rem;
-  font-weight: 700;
 }
 
 .git-change-view-tree-directory:hover {
@@ -4408,7 +4400,7 @@ function showErrorMessage(error) {
   color: var(--color-text-muted);
 }
 
-.git-change-view-tree-directory strong {
+.git-change-view-tree-directory [data-emphasis] {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4436,7 +4428,6 @@ function showErrorMessage(error) {
   justify-content: center;
   border-radius: 4px;
   font-size: 0.64rem;
-  font-weight: 700;
 }
 
 .git-change-view-file-status-add {
@@ -4486,7 +4477,7 @@ function showErrorMessage(error) {
   background: var(--color-panel-soft);
 }
 
-.git-change-view-file-head strong {
+.git-change-view-file-head [data-emphasis] {
   display: block;
   overflow: hidden;
   color: var(--color-primary);
@@ -4531,7 +4522,6 @@ function showErrorMessage(error) {
 .git-change-view-line-chunk {
   background: var(--color-primary-soft);
   color: var(--color-primary);
-  font-weight: 700;
 }
 
 .git-change-view-line-meta {
@@ -4564,7 +4554,6 @@ function showErrorMessage(error) {
   :deep(.git-change-view .git-tool-label) {
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   :deep(.git-change-view-title) {
@@ -4587,7 +4576,7 @@ function showErrorMessage(error) {
     font-size: 0.72rem;
   }
 
-  :deep(.git-change-view-meta-row span) {
+  :deep(.git-change-view-meta-row span:not([data-emphasis])) {
     display: inline-flex;
     min-width: 0;
     align-items: center;
@@ -4601,17 +4590,15 @@ function showErrorMessage(error) {
     flex: none;
     color: var(--color-text-soft);
     font-size: 0.68rem;
-    font-weight: 700;
   }
 
   :deep(.git-change-view-meta-row code),
-  :deep(.git-change-view-meta-row strong) {
+  :deep(.git-change-view-meta-row [data-emphasis]) {
     min-width: 0;
     overflow: hidden;
     color: var(--color-text-muted);
     font-family: "JetBrains Mono", "Consolas", monospace;
     font-size: 0.72rem;
-    font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -4644,7 +4631,7 @@ function showErrorMessage(error) {
     font-size: 0.74rem;
   }
 
-  :deep(.git-change-view-tree-head strong) {
+  :deep(.git-change-view-tree-head [data-emphasis]) {
     color: var(--color-primary);
     font-size: 0.72rem;
   }
@@ -4680,7 +4667,6 @@ function showErrorMessage(error) {
     cursor: pointer;
     color: var(--color-primary);
     font-size: 0.76rem;
-    font-weight: 700;
   }
 
   :deep(.git-change-view-tree-directory:hover) {
@@ -4707,7 +4693,7 @@ function showErrorMessage(error) {
     color: var(--color-text-muted);
   }
 
-  :deep(.git-change-view-tree-directory strong) {
+  :deep(.git-change-view-tree-directory [data-emphasis]) {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -4735,7 +4721,6 @@ function showErrorMessage(error) {
     justify-content: center;
     border-radius: 4px;
     font-size: 0.64rem;
-    font-weight: 700;
   }
 
   :deep(.git-change-view-file-status-add) {
@@ -4785,7 +4770,7 @@ function showErrorMessage(error) {
     background: var(--color-panel-soft);
   }
 
-  :deep(.git-change-view-file-head strong) {
+  :deep(.git-change-view-file-head [data-emphasis]) {
     display: block;
     overflow: hidden;
     color: var(--color-primary);
@@ -4830,7 +4815,6 @@ function showErrorMessage(error) {
   :deep(.git-change-view-line-chunk) {
     background: var(--color-primary-soft);
     color: var(--color-primary);
-    font-weight: 700;
   }
 
   :deep(.git-change-view-line-meta) {
@@ -4848,7 +4832,6 @@ function showErrorMessage(error) {
     border-radius: 8px;
     color: var(--color-text-muted);
     font-size: 0.84rem;
-    font-weight: 700;
   }
 }
 </style>

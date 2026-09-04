@@ -51,7 +51,7 @@
           <option value="pending">进行中</option>
         </select>
       </label>
-      <strong class="logs-view-count">{{ filteredLogs.length }} 条</strong>
+      <span data-emphasis class="logs-view-count">{{ filteredLogs.length }} 条</span>
     </div>
 
     <div v-if="filteredLogs.length" class="logs-view-list">
@@ -64,7 +64,7 @@
         ]"
       >
         <div class="logs-view-item-head">
-          <strong class="logs-view-item-title">{{ formatLogTitle(item) }}</strong>
+          <span data-emphasis class="logs-view-item-title">{{ formatLogTitle(item) }}</span>
           <span class="logs-view-item-status">{{
             formatLogStatus(item.status)
           }}</span>
@@ -107,9 +107,9 @@
       >
         上一页
       </button>
-      <strong class="logs-view-page-current">
+      <span data-emphasis class="logs-view-page-current">
         {{ currentPage }} / {{ pageCount }}
-      </strong>
+      </span>
       <button
         class="logs-view-page-button"
         type="button"
@@ -281,7 +281,6 @@ function goPage(nextPage) {
       .logs-view-mark {
         color: var(--color-text-soft);
         font-size: 0.72rem;
-        font-weight: 700;
         letter-spacing: 0.14em;
       }
 
@@ -313,7 +312,6 @@ function goPage(nextPage) {
         background: var(--color-panel-soft);
         color: var(--color-primary);
         cursor: pointer;
-        font-weight: 700;
       }
     }
   }
@@ -336,7 +334,6 @@ function goPage(nextPage) {
       .logs-view-filter-label {
         color: var(--color-text-muted);
         font-size: 0.78rem;
-        font-weight: 700;
       }
 
       .logs-view-select {
@@ -347,7 +344,6 @@ function goPage(nextPage) {
         border-radius: 8px;
         background: var(--color-panel-soft);
         color: var(--color-primary);
-        font-weight: 700;
       }
     }
 
@@ -389,7 +385,6 @@ function goPage(nextPage) {
       .logs-view-item-status {
         color: var(--color-text-muted);
         font-size: 0.82rem;
-        font-weight: 700;
       }
 
       .logs-view-item-message {
@@ -440,7 +435,6 @@ function goPage(nextPage) {
     background: var(--color-panel);
     color: var(--color-text-muted);
     font-size: 0.84rem;
-    font-weight: 700;
 
     .logs-view-page-select,
     .logs-view-page-button {
@@ -451,7 +445,6 @@ function goPage(nextPage) {
       background: var(--color-panel-soft);
       color: var(--color-primary);
       cursor: pointer;
-      font-weight: 700;
     }
 
     .logs-view-page-button {

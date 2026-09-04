@@ -36,7 +36,7 @@
         class="dashboard-view__metric-card"
       >
         <span>{{ item.label }}</span>
-        <strong>{{ item.value }}</strong>
+        <span data-emphasis>{{ item.value }}</span>
         <small>{{ item.hint }}</small>
       </article>
     </div>
@@ -81,7 +81,7 @@
             class="dashboard-view__cli-card"
           >
             <div>
-              <strong>{{ item.name }}</strong>
+              <span data-emphasis>{{ item.name }}</span>
               <p>
                 {{
                   item.installed
@@ -116,7 +116,7 @@
             :key="`${item.type}-${item.sourcePath}`"
             class="dashboard-view__diagnostic"
           >
-            <strong>{{ item.type }}</strong>
+            <span data-emphasis>{{ item.type }}</span>
             <p>{{ item.message }}</p>
             <small>{{ item.sourcePath }}</small>
           </article>
@@ -215,7 +215,6 @@ const metrics = computed(() => {
     margin: 0 0 10px;
     color: var(--color-text-soft);
     font-size: 0.78rem;
-    font-weight: 700;
     letter-spacing: 0.18em;
     text-transform: uppercase;
   }
@@ -255,15 +254,14 @@ const metrics = computed(() => {
     background: var(--color-panel);
   }
 
-  &__metric-card span {
+  &__metric-card span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
-  &__metric-card strong {
+  &__metric-card [data-emphasis] {
     font-size: 2.2rem;
     line-height: 1;
   }
@@ -301,7 +299,7 @@ const metrics = computed(() => {
     font-size: 1.2rem;
   }
 
-  &__panel-header span {
+  &__panel-header span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.82rem;
   }
@@ -325,10 +323,9 @@ const metrics = computed(() => {
     background: var(--color-panel-soft);
   }
 
-  &__path-list span {
+  &__path-list span:not([data-emphasis]) {
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
     letter-spacing: 0.1em;
     text-transform: uppercase;
   }
@@ -364,8 +361,8 @@ const metrics = computed(() => {
     background: var(--color-panel-soft);
   }
 
-  &__cli-card strong,
-  &__diagnostic strong {
+  &__cli-card [data-emphasis],
+  &__diagnostic [data-emphasis] {
     display: block;
     margin-bottom: 4px;
     font-size: 0.98rem;
@@ -413,7 +410,6 @@ const metrics = computed(() => {
   background: var(--color-success-soft);
   color: var(--color-success);
   font-size: 0.76rem;
-  font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 
@@ -431,7 +427,6 @@ const metrics = computed(() => {
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-weight: 600;
 
   &--primary {
     border-color: var(--color-primary);

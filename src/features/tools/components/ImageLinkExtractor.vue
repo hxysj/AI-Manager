@@ -3,7 +3,7 @@
     <section class="image-extractor-panel image-extractor-input-panel">
       <header class="image-extractor-panel-head">
         <div class="image-extractor-panel-title">
-          <strong class="image-extractor-title">字符串内容</strong>
+          <span data-emphasis class="image-extractor-title">字符串内容</span>
           <span class="image-extractor-subtitle"
             >文本 / Markdown / HTML / JSON</span
           >
@@ -39,7 +39,7 @@
     <section class="image-extractor-panel image-extractor-result-panel">
       <header class="image-extractor-panel-head">
         <div class="image-extractor-panel-title">
-          <strong class="image-extractor-title">图片内容</strong>
+          <span data-emphasis class="image-extractor-title">图片内容</span>
           <span class="image-extractor-subtitle">
             已提取 {{ links.length }} 个，已选择 {{ selectedLinks.length }} 个
           </span>
@@ -140,7 +140,7 @@
             </button>
 
             <footer class="image-extractor-card-meta">
-              <strong class="image-extractor-index">#{{ index + 1 }}</strong>
+              <span data-emphasis class="image-extractor-index">#{{ index + 1 }}</span>
               <button
                 class="image-extractor-link"
                 type="button"
@@ -166,7 +166,7 @@
       <section class="image-extractor-dialog" role="dialog" aria-modal="true">
         <header class="image-extractor-dialog-head">
           <div class="image-extractor-dialog-heading">
-            <strong class="image-extractor-dialog-title">图片预览</strong>
+            <span data-emphasis class="image-extractor-dialog-title">图片预览</span>
             <span class="image-extractor-dialog-count">
               {{ previewIndex + 1 }} / {{ links.length }}
             </span>
@@ -691,7 +691,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       color: var(--color-primary);
       cursor: pointer;
       font-size: 0.72rem;
-      font-weight: 700;
 
       &:hover:not(:disabled) {
         border-color: var(--color-line-strong);
@@ -725,7 +724,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       color: var(--color-text);
       cursor: pointer;
       font-size: 0.72rem;
-      font-weight: 700;
 
       &:focus-visible {
         outline: 2px solid rgba(47, 70, 104, 0.22);
@@ -769,7 +767,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       background: var(--color-panel-soft);
       color: var(--color-primary);
       font-size: 0.7rem;
-      font-weight: 700;
       line-height: 1.4;
     }
 
@@ -914,7 +911,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
             gap: 7px;
             color: var(--color-text-soft);
             font-size: 0.72rem;
-            font-weight: 700;
           }
         }
 
@@ -1171,7 +1167,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
             color: #ffffff;
             font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
             font-size: 0.72rem;
-            font-weight: 800;
             text-align: center;
           }
 

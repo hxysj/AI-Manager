@@ -29,13 +29,11 @@ const tokenCountParts = computed(() => formatTokenCountParts(props.value))
   gap: 2px;
   color: inherit;
   font-size: inherit;
-  font-weight: inherit;
   line-height: inherit;
 
   .token-count-exact {
     color: var(--color-text-muted);
     font-size: 0.72em;
-    font-weight: 500;
     line-height: 1.1;
     white-space: nowrap;
   }

@@ -219,7 +219,7 @@
       </div>
 
       <div v-else class="skills-view-empty">
-        <strong class="skills-view-empty-title">没有匹配的 Skill</strong>
+        <span data-emphasis class="skills-view-empty-title">没有匹配的 Skill</span>
         <span class="skills-view-empty-desc">
           可以先在本地 skills 目录创建 Skill，或者调整搜索条件。
         </span>
@@ -301,7 +301,7 @@
             />
           </label>
           <div class="skills-view-trash-main">
-            <strong class="skills-view-trash-name">{{ item.name }}</strong>
+            <span data-emphasis class="skills-view-trash-name">{{ item.name }}</span>
             <span class="skills-view-trash-path" :title="item.sourcePath">
               {{ item.sourcePath }}
             </span>
@@ -314,7 +314,7 @@
       </div>
 
       <div v-else class="skills-view-empty">
-        <strong class="skills-view-empty-title">回收站为空</strong>
+        <span data-emphasis class="skills-view-empty-title">回收站为空</span>
         <span class="skills-view-empty-desc">
           删除的 Skill 会保留 10 天，过期后自动清理。
         </span>
@@ -355,9 +355,9 @@
             <FolderInput :size="18" />
           </span>
           <div class="skills-view-move-selection-main">
-            <strong class="skills-view-move-selection-title">
+            <span data-emphasis class="skills-view-move-selection-title">
               已选择 {{ selectedSkillIds.length }} 个 Skill
-            </strong>
+            </span>
             <span
               class="skills-view-move-selection-names"
               :title="selectedSkillNames.join('、')"
@@ -393,13 +393,13 @@
                 <Check v-if="moveGroupId === group.id" :size="13" />
               </span>
               <span class="skills-view-move-target-main">
-                <strong
+                <span data-emphasis
                   class="skills-view-move-target-name"
                   :title="group.name"
                 >
                   <Folder :size="15" />
                   {{ group.name }}
-                </strong>
+                </span>
                 <span class="skills-view-move-target-meta">
                   {{ group.skills.length }} 个 Skill
                   <template v-if="group.missingCount">
@@ -452,7 +452,7 @@
           class="skills-view-group-create"
           @submit.prevent="createManagedGroup"
         >
-          <strong class="skills-view-group-section-title">新建分组</strong>
+          <span data-emphasis class="skills-view-group-section-title">新建分组</span>
           <label class="skills-view-group-create-field">
             <span class="skills-view-sr-only">分组名称</span>
             <input
@@ -523,7 +523,7 @@
               <div class="skills-view-group-manage-main">
                 <div class="skills-view-group-name-row">
                   <Folder :size="16" />
-                  <strong :title="group.name">{{ group.name }}</strong>
+                  <span data-emphasis :title="group.name">{{ group.name }}</span>
                 </div>
                 <div class="skills-view-group-manage-meta">
                   <span>{{ group.skills.length }} 个 Skill</span>
@@ -1351,7 +1351,6 @@ function installRepositorySkill(skill) {
     margin: 0;
     color: var(--color-text-soft);
     font-size: 0.72rem;
-    font-weight: 700;
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
@@ -1388,7 +1387,6 @@ function installRepositorySkill(skill) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
     white-space: nowrap;
   }
 
@@ -1437,7 +1435,6 @@ function installRepositorySkill(skill) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   .skills-view-filter-card {
@@ -1475,7 +1472,6 @@ function installRepositorySkill(skill) {
   .skills-view-field-label {
     color: var(--color-text-muted);
     font-size: 0.74rem;
-    font-weight: 700;
   }
 
   .skills-view-field-control {
@@ -1520,7 +1516,6 @@ function installRepositorySkill(skill) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.8rem;
-    font-weight: 700;
   }
 
   .skills-view-batch-card {
@@ -1542,7 +1537,6 @@ function installRepositorySkill(skill) {
     gap: 8px;
     color: var(--color-text-muted);
     font-size: 0.8rem;
-    font-weight: 700;
   }
 
   .skills-view-check-input {
@@ -1568,7 +1562,6 @@ function installRepositorySkill(skill) {
     gap: 12px;
     color: var(--color-text-muted);
     font-size: 0.8rem;
-    font-weight: 700;
   }
 
   .skills-view-list {
@@ -1668,7 +1661,6 @@ function installRepositorySkill(skill) {
     gap: 7px;
     color: var(--color-text-muted);
     font-size: 0.8rem;
-    font-weight: 700;
   }
 
   .skills-view-dialog-control {
@@ -1706,7 +1698,6 @@ function installRepositorySkill(skill) {
     background: var(--color-panel-soft);
     color: var(--color-text);
     font-size: 0.84rem;
-    font-weight: 700;
   }
 
   .skills-view-group-modal,
@@ -1918,7 +1909,6 @@ function installRepositorySkill(skill) {
     background: var(--color-success-soft);
     color: var(--color-success);
     font-size: 0.7rem;
-    font-weight: 700;
     text-align: center;
   }
 
@@ -1991,10 +1981,9 @@ function installRepositorySkill(skill) {
     border-bottom: 1px solid var(--color-line);
     color: var(--color-text-soft);
     font-size: 0.7rem;
-    font-weight: 700;
   }
 
-  .skills-view-group-list-head span:last-child {
+  .skills-view-group-list-head span:not([data-emphasis]):last-child {
     text-align: right;
   }
 
@@ -2046,7 +2035,7 @@ function installRepositorySkill(skill) {
     color: var(--color-primary);
   }
 
-  .skills-view-group-name-row strong {
+  .skills-view-group-name-row [data-emphasis] {
     overflow: hidden;
     font-size: 0.84rem;
     text-overflow: ellipsis;
@@ -2165,11 +2154,10 @@ function installRepositorySkill(skill) {
     gap: 6px;
   }
 
-  .skills-view-group-delete-confirm > span {
+  .skills-view-group-delete-confirm > span:not([data-emphasis]) {
     margin-right: 2px;
     color: var(--color-danger);
     font-size: 0.75rem;
-    font-weight: 700;
     white-space: nowrap;
   }
 
@@ -2182,7 +2170,6 @@ function installRepositorySkill(skill) {
     color: var(--color-text-muted);
     cursor: pointer;
     font-size: 0.75rem;
-    font-weight: 700;
   }
 
   .skills-view-group-confirm-button.danger {
@@ -2226,7 +2213,6 @@ function installRepositorySkill(skill) {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   .skills-view-dialog-button.primary {

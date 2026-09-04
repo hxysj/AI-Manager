@@ -3,7 +3,7 @@
     <div v-if="loading" class="global-loading">
       <div class="global-loading__card">
         <span class="global-loading__spinner"></span>
-        <strong>正在处理中...</strong>
+        <span data-emphasis>正在处理中...</span>
       </div>
     </div>
   </Teleport>

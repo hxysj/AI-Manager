@@ -9,9 +9,9 @@
         <ArrowLeft :size="14" />
       </button>
       <div class="lan-share-sessions-title">
-        <strong class="lan-share-sessions-name">
+        <span data-emphasis class="lan-share-sessions-name">
           {{ deviceName(currentDevice) }}
-        </strong>
+        </span>
         <span class="lan-share-sessions-subtitle">
           {{ currentDevice?.online ? "在线" : "离线" }} ·
           {{ currentDevice?.ip || "未知 IP" }} · {{ sessions.length }} 个会话
@@ -53,9 +53,9 @@
           <MessagesSquare :size="16" />
         </span>
         <span class="lan-share-sessions-main">
-          <strong class="lan-share-sessions-session-name">
+          <span data-emphasis class="lan-share-sessions-session-name">
             {{ sessionTitle(session) }}
-          </strong>
+          </span>
           <small class="lan-share-sessions-meta">
             {{ formatDateTime(session.updatedAt) }} ·
             {{ session.ip || currentDevice?.ip || "未知 IP" }}
@@ -138,7 +138,6 @@ function sessionTitle(session) {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-weight: 700;
   }
 
   .lan-share-sessions-back {

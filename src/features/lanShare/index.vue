@@ -756,7 +756,6 @@ function isTextPreviewFile(name, mimeType) {
       background: transparent;
       color: var(--color-text-muted);
       cursor: pointer;
-      font-weight: 800;
     }
 
     &__button--active {

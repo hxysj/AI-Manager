@@ -56,7 +56,7 @@
     </section>
     <section v-else-if="!pets.length" class="codex-pet-manager-empty">
       <PawPrint :size="26" />
-      <strong class="codex-pet-manager-empty-title">暂无可管理宠物</strong>
+      <span data-emphasis class="codex-pet-manager-empty-title">暂无可管理宠物</span>
       <span class="codex-pet-manager-empty-desc">
         在 Codex pets 目录中放入包含 pet.json 和 spritesheet.webp 的宠物目录后，刷新即可显示。
       </span>
@@ -80,9 +80,9 @@
         ></div>
         <div class="codex-pet-manager-item-main">
           <div class="codex-pet-manager-item-title-row">
-            <strong class="codex-pet-manager-item-name" :title="pet.displayName || pet.id">
+            <span data-emphasis class="codex-pet-manager-item-name" :title="pet.displayName || pet.id">
               {{ pet.displayName || pet.id }}
-            </strong>
+            </span>
             <span :class="['codex-pet-manager-status', { disabled: !pet.enabled }]">
               {{ pet.enabled ? '已启用' : '已禁用' }}
             </span>
@@ -152,7 +152,7 @@
             :aria-label="`${row.label}动画预览`"
           ></div>
           <div class="codex-pet-manager-animation-row-info">
-            <strong class="codex-pet-manager-animation-row-name">{{ row.label }}</strong>
+            <span data-emphasis class="codex-pet-manager-animation-row-name">{{ row.label }}</span>
             <span class="codex-pet-manager-animation-row-meta">
               {{ row.frameCount }} 帧 · {{ row.duration }} ms
             </span>
@@ -371,7 +371,6 @@ onMounted(loadPets)
     margin: 0;
     color: var(--color-text-soft);
     font-size: 0.7rem;
-    font-weight: 700;
     letter-spacing: 0;
     text-transform: uppercase;
   }
@@ -386,7 +385,6 @@ onMounted(loadPets)
   .codex-pet-manager-title-desc {
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   .codex-pet-manager-head-actions,
@@ -418,7 +416,6 @@ onMounted(loadPets)
     padding: 0 12px;
     color: var(--color-primary);
     font-size: 0.82rem;
-    font-weight: 700;
   }
 
   .codex-pet-manager-icon-button:hover,
@@ -482,7 +479,6 @@ onMounted(loadPets)
     flex: none;
     color: var(--color-primary);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   .codex-pet-manager-path-value {
@@ -584,7 +580,6 @@ onMounted(loadPets)
     padding: 0 8px;
     border-radius: 999px;
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   .codex-pet-manager-status {
@@ -690,7 +685,6 @@ onMounted(loadPets)
   .codex-pet-manager-animation-row-meta {
     color: var(--color-text-muted);
     font-size: 0.72rem;
-    font-weight: 700;
   }
 
   .codex-pet-manager-state,
@@ -736,7 +730,6 @@ onMounted(loadPets)
   .codex-pet-manager-name-label {
     color: var(--color-text-muted);
     font-size: 0.78rem;
-    font-weight: 700;
   }
 
   .codex-pet-manager-name-input {

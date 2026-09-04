@@ -61,7 +61,7 @@
             type="button"
             @click="selectProjectFilter('all')"
           >
-            <strong class="sessions-view-project-name">全部项目</strong>
+            <span data-emphasis class="sessions-view-project-name">全部项目</span>
             <span class="sessions-view-project-path">
               显示当前范围内的全部 Session
             </span>
@@ -73,7 +73,7 @@
             type="button"
             @click="selectProjectFilter(item.value)"
           >
-            <strong class="sessions-view-project-name">{{ item.name }}</strong>
+            <span data-emphasis class="sessions-view-project-name">{{ item.name }}</span>
             <span class="sessions-view-project-path">{{ item.path }}</span>
           </button>
         </div>
@@ -208,9 +208,9 @@
             <span class="sessions-view-modal-eyebrow">Recycle Bin</span>
             <h2 class="sessions-view-modal-heading">Session 回收站</h2>
             <p class="sessions-view-modal-count">
-              <strong class="sessions-view-modal-count-value">
+              <span data-emphasis class="sessions-view-modal-count-value">
                 {{ filteredRecycledSessions.length }}
-              </strong>
+              </span>
               / {{ recycledSessions.length }} 个已移动的 Session
             </p>
           </div>
@@ -905,7 +905,6 @@ onBeforeUnmount(() => {
         margin: 0 0 5px;
         color: var(--color-text-soft);
         font-size: 0.72rem;
-        font-weight: 700;
         letter-spacing: 0.14em;
         text-transform: uppercase;
       }
@@ -947,7 +946,6 @@ onBeforeUnmount(() => {
     .sessions-view-filter-label {
       color: var(--color-text-muted);
       font-size: 0.74rem;
-      font-weight: 700;
     }
 
     .sessions-view-search-input,
@@ -1145,7 +1143,6 @@ onBeforeUnmount(() => {
     }
 
     .sessions-view-page-label {
-      font-weight: 700;
     }
 
     .sessions-view-page-size {
@@ -1206,7 +1203,6 @@ onBeforeUnmount(() => {
           .sessions-view-modal-eyebrow {
             color: var(--color-text-soft);
             font-size: 0.68rem;
-            font-weight: 800;
             letter-spacing: 0.12em;
             line-height: 1;
             text-transform: uppercase;
@@ -1226,7 +1222,6 @@ onBeforeUnmount(() => {
 
             .sessions-view-modal-count-value {
               color: var(--color-primary);
-              font-weight: 800;
             }
           }
         }
@@ -1258,7 +1253,6 @@ onBeforeUnmount(() => {
         .sessions-view-recycle-filter-label {
           color: var(--color-text-muted);
           font-size: 0.72rem;
-          font-weight: 700;
         }
 
         .sessions-view-recycle-search-input,
@@ -1333,7 +1327,6 @@ onBeforeUnmount(() => {
                 background: var(--color-primary-soft);
                 color: var(--color-primary);
                 font-size: 0.7rem;
-                font-weight: 700;
               }
             }
 
@@ -1353,7 +1346,6 @@ onBeforeUnmount(() => {
               overflow: hidden;
               color: var(--color-text-soft);
               font-size: 0.74rem;
-              font-weight: 600;
               white-space: nowrap;
 
               .sessions-view-recycle-meta-text {
@@ -1407,7 +1399,6 @@ onBeforeUnmount(() => {
           }
 
           .sessions-view-recycle-page-label {
-            font-weight: 700;
           }
 
           .sessions-view-recycle-page-size {
@@ -1475,7 +1466,6 @@ onBeforeUnmount(() => {
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.88rem;
-    font-weight: 600;
 
     .action-button-icon {
       flex: 0 0 auto;

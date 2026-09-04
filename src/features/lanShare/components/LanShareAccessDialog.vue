@@ -3,7 +3,7 @@
     <div class="lan-share-access-overlay" @click="emit('close')"></div>
     <div class="lan-share-access-panel">
       <header class="lan-share-access-head">
-        <strong class="lan-share-access-heading">设备快传</strong>
+        <span data-emphasis class="lan-share-access-heading">设备快传</span>
         <button
           class="lan-share-access-close"
           type="button"
@@ -99,7 +99,6 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
       .lan-share-access-heading {
         color: var(--color-text);
         font-size: clamp(1rem, 2.5vw, 1.1rem);
-        font-weight: 700;
       }
 
       .lan-share-access-close {
@@ -159,7 +158,6 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
         .lan-share-access-label {
           color: var(--color-text-soft);
           font-size: clamp(0.75rem, 1.8vw, 0.8rem);
-          font-weight: 700;
         }
 
         .lan-share-access-url {
@@ -198,7 +196,6 @@ const emit = defineEmits(["close", "copy-url", "stop-service"])
         color: var(--color-primary);
         cursor: pointer;
         font-size: clamp(0.82rem, 2vw, 0.9rem);
-        font-weight: 700;
         transition: all 0.2s;
 
         &:hover {
