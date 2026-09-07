@@ -110,6 +110,13 @@ impl DesktopPaths {
     }
 }
 
+pub(super) fn skills_data_root(platform: &str, home: &Path, local: Option<&Path>) -> Option<PathBuf> {
+    DesktopPaths::resolve(platform, home, local)?
+        .threep
+        .parent()
+        .map(Path::to_path_buf)
+}
+
 fn error(message: &str) -> ManagerError {
     ManagerError::System(message.to_string())
 }

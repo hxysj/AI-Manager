@@ -13,6 +13,9 @@ use std::time::Duration;
 use tokio::process::Command;
 use url::Url;
 
+#[path = "claude_desktop_skill_link.rs"]
+mod desktop_skill_link;
+
 const IGNORE_DIRS: [&str; 6] = [".git", "node_modules", "dist", "build", ".cache", "temp"];
 const SKILL_PREVIEW_MAX_SIZE: u64 = 512 * 1024;
 const SKILL_TRASH_RETENTION_MS: u128 = 10 * 24 * 60 * 60 * 1000;
@@ -205,7 +208,7 @@ async fn refresh_skills_state_inner(
             if matches!(
                 state.get("state").and_then(Value::as_str),
                 Some("installed") | Some("broken-link")
-            ) {
+            ) || state.get("managed").and_then(Value::as_bool) == Some(true) {
                 installed_targets.push(cli_target.get("id").cloned().unwrap_or(Value::Null));
             }
 
@@ -2377,6 +2380,13 @@ async fn get_install_state(skill: &Value, cli_target: &Value, skill_disabled: bo
         });
     }
 
+    if target_id == "claude-desktop" {
+        return match desktop_skill_link::install_state(cli_target, skill).await {
+            Ok(state) => json!({"targetId": target_id, "state": state, "targetPath": path_text(target_path), "managed": state != "not-installed"}),
+            Err(cause) => json!({"targetId": target_id, "state": "disabled", "targetPath": path_text(target_path), "reason": cause.to_string()}),
+        };
+    }
+
     let Ok(target_stat) = tokio::fs::symlink_metadata(&target_path).await else {
         return json!({
           "targetId": target_id,
@@ -2404,15 +2414,7 @@ async fn get_install_state(skill: &Value, cli_target: &Value, skill_disabled: bo
     }
 
     let resolved_target = tokio::fs::canonicalize(&target_path).await;
-    let expected_source = if target_id == "claude-desktop" {
-        match desktop_skill_snapshot(cli_target, skill) {
-            Ok(path) => path,
-            Err(cause) => return json!({"targetId": target_id, "state": "broken-link", "targetPath": path_text(target_path), "reason": cause.to_string()}),
-        }
-    } else {
-        source_path
-    };
-    let resolved_source = tokio::fs::canonicalize(&expected_source).await;
+    let resolved_source = tokio::fs::canonicalize(&source_path).await;
 
     match (resolved_target, resolved_source) {
         (Ok(target), Ok(source)) if same_path(&target, &source) => json!({
@@ -2448,7 +2450,7 @@ async fn install_skill_link(
         )));
     }
 
-    let mut source_path = PathBuf::from(string_value(skill.get("sourcePath")));
+    let source_path = PathBuf::from(string_value(skill.get("sourcePath")));
 
     if !source_path.exists() {
         return Err(ManagerError::System(format!(
@@ -2460,11 +2462,11 @@ async fn install_skill_link(
     let skills_path = PathBuf::from(string_value(cli_target.get("skillsPath")));
     let target_path = skill_target_path(&cli_target, &string_value(skill.get("name")));
 
-    tokio::fs::create_dir_all(&skills_path).await?;
-
     if target_id == "claude-desktop" {
-        source_path = prepare_desktop_skill(&cli_target, skill).await?;
+        return desktop_skill_link::install(&cli_target, skill).await;
     }
+
+    tokio::fs::create_dir_all(&skills_path).await?;
 
     if let Ok(target_stat) = tokio::fs::symlink_metadata(&target_path).await {
         if !target_stat.file_type().is_symlink() {
@@ -2504,6 +2506,9 @@ async fn uninstall_skill_link(
             target_id
         )));
     };
+    if target_id == "claude-desktop" {
+        return desktop_skill_link::uninstall(cli_target, skill_name).await;
+    }
     let skills_path = string_value(cli_target.get("skillsPath"));
 
     if skills_path.is_empty() {
@@ -2515,7 +2520,7 @@ async fn uninstall_skill_link(
 
 fn skill_target_path(target: &Value, name: &str) -> PathBuf {
     let name = if string_value(target.get("id")) == "claude-desktop" {
-        format!("ai-manager-{}", sha1_hex(name))
+        desktop_skill_link::directory_name(name)
     } else {
         name.to_string()
     };
@@ -2574,19 +2579,18 @@ async fn remove_managed_link(target_path: &Path) -> Result<(), ManagerError> {
 async fn create_junction(source_path: &Path, target_path: &Path) -> Result<(), ManagerError> {
     #[cfg(windows)]
     {
-        let mut command = Command::new("cmd");
-
-        #[cfg(windows)]
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let request = STANDARD.encode(serde_json::to_vec(&json!({
+            "target": target_path, "source": source_path
+        }))?);
+        let script = format!("$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $request = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{request}')) | ConvertFrom-Json; New-Item -ItemType Junction -Path $request.target -Target ([System.Management.Automation.WildcardPattern]::Escape($request.source)) | Out-Null");
+        let encoded = STANDARD.encode(script.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>());
+        let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()))
+            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let mut command = Command::new(powershell);
         command.creation_flags(CREATE_NO_WINDOW);
-
         let output = command
-            .args([
-                "/C",
-                "mklink",
-                "/J",
-                &path_text(target_path),
-                &path_text(source_path),
-            ])
+            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-EncodedCommand", &encoded])
             .output()
             .await?;
 
@@ -3580,39 +3584,94 @@ mod tests {
     }
 
     #[test]
-    fn claude_desktop_skills_use_native_plugin_packages_and_existing_install_actions() {
+    fn claude_desktop_skills_register_personal_manifest_and_reuse_install_actions() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!("ai-manager-desktop-skills-{}", uuid::Uuid::new_v4()));
-            let source = root.join("managed/demo");
+            let paths = resolve_app_paths(&root);
+            let source = Path::new(&paths.skills_dir).join("demo");
             std::fs::create_dir_all(&source).unwrap();
             write_test_skill(&source, "demo");
-            let target = json!({"id": "claude-desktop", "name": "Claude Desktop", "installed": true, "skillsPath": root.join("org-plugins"), "managedSkillsPath": root.join("desktop-plugins")});
+            let plugin = root.join("Claude-3p/local-agent-mode-sessions/skills-plugin/org/account");
+            std::fs::create_dir_all(plugin.join("skills")).unwrap();
+            std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+            std::fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name":"anthropic-skills"}"#).unwrap();
+            let builtin = json!({"skillId": "bundled:pdf", "name": "pdf", "creatorType": "anthropic", "enabled": true});
+            let personal = json!({"skillId": "external", "name": "external", "creatorType": "user", "syncManaged": false, "enabled": false});
+            let original = json!({"lastUpdated": 1, "skills": [builtin.clone(), personal.clone()], "preserve": true});
+            super::write_json(&path_text(plugin.join("manifest.json")), &original).await.unwrap();
+            let target = json!({"id": "claude-desktop", "name": "Claude Desktop", "installed": true, "skillsPath": plugin.join("skills"), "managedSkillsPath": root.join("desktop-plugins")});
             let skill = json!({"name": "demo", "description": "test", "sourcePath": source});
-            let state = json!({"skills": [skill.clone()], "cliTargets": [target.clone()]});
+            let mut state = json!({"skills": [skill.clone()], "cliTargets": [target.clone()]});
             super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
             let installed = super::get_install_state(&skill, &target, false).await;
             assert_eq!(installed["state"], "installed");
             let target_path = super::skill_target_path(&target, "demo");
-            let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(target_path.join(".claude-plugin/plugin.json")).unwrap()).unwrap();
-            assert_eq!(manifest["skills"], json!(["./skills/skill"]));
-            assert_eq!(manifest["installationPreference"], "auto_install");
-            assert!(manifest["name"].as_str().unwrap().starts_with("ai-manager-"));
-            assert!(target_path.join("skills/skill/SKILL.md").is_file());
+            let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(plugin.join("manifest.json")).unwrap()).unwrap();
+            assert_eq!(target_path, plugin.join("skills/demo"));
+            assert_eq!(manifest["skills"][0], builtin);
+            assert_eq!(manifest["skills"][1], personal);
+            assert_eq!(manifest["preserve"], true);
+            assert_eq!(manifest["skills"][2]["name"], "demo");
+            assert_eq!(manifest["skills"][2]["skillId"], "demo");
+            assert_eq!(manifest["skills"][2]["creatorType"], "user");
+            assert_eq!(manifest["skills"][2]["syncManaged"], false);
+            assert_eq!(manifest["skills"][2]["enabled"], true);
+            assert!(target_path.join("SKILL.md").is_file());
             assert!(!source.join(".claude-plugin").exists());
+            manifest["skills"][2]["enabled"] = json!(false);
+            super::write_json(&path_text(plugin.join("manifest.json")), &manifest).await.unwrap();
+            assert_eq!(super::get_install_state(&skill, &target, false).await["state"], "disabled");
+            super::refresh_skills_state(&paths, &mut state).await.unwrap();
+            assert_eq!(state["skills"][0]["installedTargets"], json!(["claude-desktop"]));
+            super::set_skill_enabled(&paths, &mut state, json!({"skillName": "demo", "enabled": false})).await.unwrap();
+            assert!(!target_path.exists());
+            assert!(source.join("SKILL.md").is_file());
+            super::set_skill_enabled(&paths, &mut state, json!({"skillName": "demo", "enabled": true})).await.unwrap();
+            super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
+            assert_eq!(super::get_install_state(&skill, &target, false).await["state"], "installed");
             std::fs::write(source.join("extra.md"), "new content").unwrap();
             assert_eq!(super::get_install_state(&skill, &target, false).await["state"], "broken-link");
             super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
-            assert_eq!(std::fs::read_to_string(target_path.join("skills/skill/extra.md")).unwrap(), "new content");
+            assert_eq!(std::fs::read_to_string(target_path.join("extra.md")).unwrap(), "new content");
+            super::write_json(&path_text(plugin.join("manifest.json")), &original).await.unwrap();
+            assert_eq!(super::get_install_state(&skill, &target, false).await["state"], "broken-link");
+            super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
             super::uninstall_skill_link(&[target.clone()], "demo", "claude-desktop").await.unwrap();
             assert!(std::fs::symlink_metadata(&target_path).is_err());
             assert!(source.join("SKILL.md").is_file());
+            manifest = serde_json::from_slice(&std::fs::read(plugin.join("manifest.json")).unwrap()).unwrap();
+            assert_eq!(manifest["skills"], original["skills"]);
+            for name in ["pdf", "external", "..", "bad."] {
+                let conflict = json!({"name": name, "description": "test", "sourcePath": source});
+                assert!(super::install_skill_link(&state, &conflict, "claude-desktop").await.is_err());
+            }
             std::fs::create_dir_all(&target_path).unwrap();
             std::fs::write(target_path.join("keep.txt"), "foreign").unwrap();
             assert!(super::install_skill_link(&state, &skill, "claude-desktop").await.is_err());
+            assert!(super::uninstall_skill_link(&[target.clone()], "demo", "claude-desktop").await.is_err());
             assert_eq!(std::fs::read_to_string(target_path.join("keep.txt")).unwrap(), "foreign");
             let resolved = root.canonicalize().unwrap();
             assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
             assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-skills-"));
+            std::fs::remove_dir_all(resolved).unwrap();
+        });
+    }
+
+    #[test]
+    fn claude_desktop_skills_links_preserve_literal_windows_paths() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("ai-manager-desktop-literal-{}", uuid::Uuid::new_v4()));
+            let source = root.join("中文 source & [files] %PATH% !");
+            let target = root.join("中文 target & [files] %PATH% !");
+            std::fs::create_dir_all(&source).unwrap();
+            write_test_skill(&source, "literal");
+            super::create_junction(&source, &target).await.unwrap();
+            assert_eq!(source.canonicalize().unwrap(), target.canonicalize().unwrap());
+            super::remove_managed_link(&target).await.unwrap();
+            assert!(source.join("SKILL.md").is_file());
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-literal-"));
             std::fs::remove_dir_all(resolved).unwrap();
         });
     }

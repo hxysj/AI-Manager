@@ -1,4 +1,5 @@
 use crate::core::error::ManagerError;
+use base64::{engine::general_purpose::STANDARD, Engine};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -45,19 +46,52 @@ fn target(platform: &str, home: &Path, local: Option<&Path>) -> Option<Value> {
             ]
         })
         .collect::<Vec<_>>();
-    let skills = if platform == "windows" {
-        PathBuf::from(r"C:\Program Files\Claude\org-plugins")
-    } else {
-        PathBuf::from("/Library/Application Support/Claude/org-plugins")
+    let skills_root = super::claude_desktop::skills_data_root(platform, home, local)?;
+    let (skills, skills_hint) = match personal_skills_path(&skills_root) {
+        Ok(path) => (path.to_string_lossy().into_owned(), "安装到 Desktop 当前第三方账号的个人 Skills，并登记原生清单。重新打开 Desktop 的 Skills 页面查看；源文件修改后点击修复同步。官方模式使用独立账号，不共用此目录。".to_string()),
+        Err(cause) => (String::new(), cause.to_string()),
     };
     Some(json!({
         "id": APP_ID, "type": APP_ID, "name": "Claude Desktop", "icon": "claude.svg",
         "configPath": root.join("Claude"), "skillsPath": skills,
-        "skillsHint": "由本项目打包到原生第三方插件目录，安装可能需要管理员权限。挂载后重启 Desktop；官方模式不使用此目录。源文件修改后需点击修复同步。",
+        "skillsHint": skills_hint,
         "sessionsPath": sessions[0], "sessionPaths": sessions,
         "installed": roots.iter().any(|root| root.is_dir()),
         "executablePath": "", "version": ""
     }))
+}
+
+fn personal_skills_path(root: &Path) -> Result<PathBuf, ManagerError> {
+    let unavailable = || ManagerError::System("尚未识别 Desktop 个人 Skills 目录，请先以第三方模式启动 Desktop 并打开一次 Cowork，再刷新应用状态".to_string());
+    let encoded = std::fs::read_to_string(root.join("ant-did")).map_err(|_| unavailable())?;
+    let decoded = STANDARD.decode(encoded.trim()).map_err(|_| unavailable())?;
+    let account = String::from_utf8(decoded).map_err(|_| unavailable())?;
+    let account = account.trim();
+    uuid::Uuid::parse_str(account).map_err(|_| unavailable())?;
+    let plugins = root.join("local-agent-mode-sessions/skills-plugin");
+    let mut candidates = Vec::new();
+    for organization in std::fs::read_dir(&plugins).map_err(|_| unavailable())? {
+        let organization = organization?;
+        if !organization.file_type()?.is_dir()
+            || uuid::Uuid::parse_str(&organization.file_name().to_string_lossy()).is_err()
+        {
+            continue;
+        }
+        let plugin = organization.path().join(account);
+        let manifest = plugin.join("manifest.json");
+        if !manifest.is_file() {
+            continue;
+        }
+        let metadata: Value = serde_json::from_slice(&std::fs::read(plugin.join(".claude-plugin/plugin.json"))?)?;
+        if metadata["name"] == "anthropic-skills" && plugin.join("skills").is_dir() {
+            candidates.push(plugin.join("skills"));
+        }
+    }
+    match candidates.len() {
+        1 => Ok(candidates.remove(0)),
+        0 => Err(unavailable()),
+        _ => Err(ManagerError::System("检测到当前 Desktop 安装身份下有多个组织的个人 Skills 目录，无法确定当前组织，已停止自动挂载以免写入错误账号".to_string())),
+    }
 }
 
 pub(crate) fn is_session_file(name: &str) -> bool {
@@ -145,13 +179,42 @@ mod tests {
         let windows = target("windows", home, Some(Path::new("/test-local"))).unwrap();
         assert_eq!(windows["id"], APP_ID);
         assert!(windows["sessionPaths"].as_array().unwrap().len() >= 4);
-        assert!(windows["skillsPath"]
-            .as_str()
-            .unwrap()
-            .ends_with("org-plugins"));
+        assert_eq!(windows["skillsPath"], "");
+        assert!(windows["skillsHint"].as_str().unwrap().contains("第三方模式"));
         assert!(target("linux", home, None).is_none());
         let mac = target("macos", home, None).unwrap();
         assert_eq!(mac["sessionPaths"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn claude_desktop_skills_resolve_install_identity_without_guessing_an_account() {
+        let root = std::env::temp_dir().join(format!("ai-manager-desktop-skill-paths-{}", uuid::Uuid::new_v4()));
+        let data = root.join("Claude-3p");
+        let account = uuid::Uuid::new_v4().to_string();
+        let organization = uuid::Uuid::new_v4().to_string();
+        let plugin = data.join("local-agent-mode-sessions/skills-plugin").join(&organization).join(&account);
+        assert!(personal_skills_path(&data).is_err());
+        std::fs::create_dir_all(plugin.join("skills")).unwrap();
+        std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+        std::fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name":"anthropic-skills"}"#).unwrap();
+        std::fs::write(plugin.join("manifest.json"), r#"{"skills":[]}"#).unwrap();
+        std::fs::write(data.join("ant-did"), STANDARD.encode(&account)).unwrap();
+        assert_eq!(personal_skills_path(&data).unwrap(), plugin.join("skills"));
+        std::fs::write(data.join("ant-did"), STANDARD.encode(uuid::Uuid::new_v4().to_string())).unwrap();
+        assert!(personal_skills_path(&data).is_err());
+        std::fs::write(data.join("ant-did"), STANDARD.encode(&account)).unwrap();
+        let other = data.join("local-agent-mode-sessions/skills-plugin").join(uuid::Uuid::new_v4().to_string()).join(&account);
+        std::fs::create_dir_all(other.join("skills")).unwrap();
+        std::fs::create_dir_all(other.join(".claude-plugin")).unwrap();
+        std::fs::write(other.join(".claude-plugin/plugin.json"), r#"{"name":"anthropic-skills"}"#).unwrap();
+        std::fs::write(other.join("manifest.json"), r#"{"skills":[]}"#).unwrap();
+        assert!(personal_skills_path(&data).unwrap_err().to_string().contains("多个组织"));
+        std::fs::write(data.join("ant-did"), STANDARD.encode("../invalid-account")).unwrap();
+        assert!(personal_skills_path(&data).is_err());
+        let resolved = root.canonicalize().unwrap();
+        assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-skill-paths-"));
+        std::fs::remove_dir_all(resolved).unwrap();
     }
 
     #[test]
