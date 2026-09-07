@@ -23,11 +23,17 @@
           </button>
         </div>
 
-        <section v-if="showRuntimeWarning" class="providers-view__runtime">
+        <section
+          v-if="activeCli !== 'claude-desktop' && showRuntimeWarning"
+          class="providers-view__runtime"
+        >
           <span data-emphasis>{{ activeCliName }} Runtime 配置不一致</span>
         </section>
 
-        <div class="providers-view__toolbar-actions">
+        <div
+          v-if="activeCli !== 'claude-desktop'"
+          class="providers-view__toolbar-actions"
+        >
           <div v-if="activeProxyEnabled" class="providers-view-proxy-tabs">
             <button
               :class="[
@@ -73,12 +79,16 @@
             v-if="activeProxyState && !activeProxyEnabled"
             class="providers-view-proxy-manage"
             type="button"
+            title="管理接管池"
+            :aria-label="`管理接管池，共 ${activeProxyProviderIds.length} 个 Provider`"
             :disabled="pending"
             @click="showProxyManager = true"
           >
             <SlidersHorizontal :size="16" />
-            接管池
-            <span>{{ activeProxyProviderIds.length }}</span>
+            <span class="providers-view-proxy-manage-label">接管池</span>
+            <span class="providers-toolbar-count" aria-hidden="true">
+              {{ activeProxyProviderIds.length }}
+            </span>
           </button>
           <button
             v-if="
@@ -109,6 +119,7 @@
                 : '显示已禁用的 Provider 与官方账号'
             "
             :aria-pressed="showDisabledItems"
+            :aria-label="`${showDisabledItems ? '隐藏禁用项' : '显示禁用项'}，共 ${disabledItemCount} 项`"
             @click="showDisabledItems = !showDisabledItems"
           >
             <EyeOff v-if="!showDisabledItems" :size="16" />
@@ -118,7 +129,9 @@
             </span>
             <span
               v-if="disabledItemCount"
-              class="providers-disabled-filter-count"
+              class="providers-toolbar-count"
+              :class="{ 'providers-toolbar-count-active': showDisabledItems }"
+              aria-hidden="true"
             >
               {{ disabledItemCount }}
             </span>
@@ -141,7 +154,197 @@
             <Plus :size="22" />
           </button>
         </div>
+        <div
+          v-if="activeCli === 'claude-desktop'"
+          id="claude-desktop-toolbar"
+          class="providers-view__toolbar-actions"
+        ></div>
       </header>
+
+      <ClaudeDesktopPanel
+        v-if="activeCli === 'claude-desktop'"
+        ref="desktopPanelRef"
+        @edit-provider="openDesktopProviderEditor"
+        @view-config="openDesktopRuntimeConfig"
+        @busy-change="desktopBusy = $event"
+      >
+        <template
+          #providers="{
+            providers,
+            current,
+            ready,
+            busy,
+            supported,
+            empty,
+            modes,
+            formats,
+            actions
+          }"
+        >
+          <section class="providers-view__list-panel">
+            <article
+              v-for="provider in providers"
+              :key="provider.id"
+              class="providers-view__provider-card"
+              :class="{
+                'providers-view__provider-card--active':
+                  provider.id === current && ready,
+                'providers-view__provider-card--disabled':
+                  provider.enabled === false
+              }"
+            >
+              <span class="providers-view__avatar">
+                <AiIcon
+                  class="providers-view__avatar-icon"
+                  :name="provider.icon || 'claude'"
+                  :alt="`${provider.name} 图标`"
+                />
+              </span>
+              <div class="providers-view__provider-main">
+                <div class="providers-view__provider-title">
+                  <span data-emphasis>{{ provider.name }}</span>
+                  <span
+                    v-if="provider.enabled === false"
+                    class="providers-view__account-tag providers-view__account-tag--disabled"
+                    >已禁用</span
+                  >
+                  <span
+                    v-if="provider.mode !== 'official'"
+                    class="providers-view__account-tag"
+                  >
+                    {{ modes[provider.mode]
+                    }}{{
+                      provider.mode === "proxy"
+                        ? " · " + formats[provider.apiFormat]
+                        : ""
+                    }}
+                  </span>
+                </div>
+                <span
+                  v-if="provider.note"
+                  class="providers-view__provider-note"
+                  :title="provider.note"
+                >
+                  {{ provider.note }}
+                </span>
+                <span>{{
+                  provider.mode === "official"
+                    ? "Claude 官方登录"
+                    : provider.baseUrl
+                }}</span>
+              </div>
+              <div class="providers-view__provider-actions">
+                <div class="providers-view__action-main">
+                  <span
+                    v-if="provider.enabled === false"
+                    class="providers-view__state-pill providers-view__state-pill--disabled"
+                    >已禁用</span
+                  >
+                  <span
+                    v-else-if="provider.id === current && ready"
+                    class="providers-view__state-pill"
+                  >
+                    <span class="providers-view__state-dot"></span>
+                    已启用
+                  </span>
+                  <span v-else class="providers-view__state-pill providers-view__state-pill--disabled">未启用</span>
+                  <button
+                    v-if="provider.enabled === false"
+                    class="providers-view__enable"
+                    type="button"
+                    :disabled="busy"
+                    @click.stop="actions.toggle(provider, true)"
+                  >
+                    <RefreshCw :size="15" />
+                    取消禁用
+                  </button>
+                  <button
+                    v-else-if="provider.id === current && ready"
+                    class="providers-view__using"
+                    type="button"
+                    :disabled="busy || !supported"
+                    @click.stop="actions.clear()"
+                  >
+                    <X :size="15" />
+                    取消使用
+                  </button>
+                  <button
+                    v-else
+                    class="providers-view__enable"
+                    type="button"
+                    :disabled="busy || !supported"
+                    @click.stop="actions.apply(provider)"
+                  >
+                    <Play :size="15" />
+                    启用
+                  </button>
+                </div>
+                <div class="providers-view__icon-actions">
+                  <button
+                    class="providers-view__icon-button"
+                    type="button"
+                    title="查看详情"
+                    aria-label="查看详情"
+                    :disabled="busy"
+                    @click.stop="openProviderDetail(provider)"
+                  >
+                    <Eye :size="16" />
+                  </button>
+                  <button
+                    v-if="provider.mode !== 'official'"
+                    class="providers-view__icon-button"
+                    type="button"
+                    title="管理 API Key"
+                    aria-label="管理 API Key"
+                    :disabled="busy"
+                    @click.stop="openApiKeyManager(provider)"
+                  >
+                    <KeyRound :size="16" />
+                  </button>
+                  <button
+                    v-if="provider.mode !== 'official'"
+                    class="providers-view__icon-button"
+                    type="button"
+                    title="编辑 Provider"
+                    aria-label="编辑 Provider"
+                    :disabled="busy"
+                    @click.stop="actions.edit(provider)"
+                  >
+                    <SquarePen :size="16" />
+                  </button>
+                  <button
+                    v-if="
+                      provider.mode !== 'official' && provider.enabled !== false
+                    "
+                    class="providers-view__icon-button providers-view__icon-button--warning"
+                    type="button"
+                    title="禁用供应商并取消使用"
+                    aria-label="禁用 Provider"
+                    :disabled="busy"
+                    @click.stop="actions.toggle(provider, false)"
+                  >
+                    <Ban :size="16" />
+                  </button>
+                  <button
+                    v-if="provider.mode !== 'official'"
+                    class="providers-view__icon-button providers-view__icon-button--danger"
+                    type="button"
+                    title="删除供应商（需先取消使用）"
+                    aria-label="删除 Provider"
+                    :disabled="busy || provider.id === current"
+                    @click.stop="actions.remove(provider)"
+                  >
+                    <Trash2 :size="16" />
+                  </button>
+                </div>
+              </div>
+            </article>
+            <div v-if="empty" class="providers-view__empty">
+              还没有第三方供应商，可从 Claude Code 导入，或点击右上角 + 新增。
+            </div>
+          </section>
+        </template>
+      </ClaudeDesktopPanel>
 
       <CodexProxyPanel
         v-if="activeProxyState && (!activeProxyEnabled || proxyTab === 'proxy')"
@@ -166,7 +369,7 @@
       />
 
       <BaseModal
-        v-if="showProxyManager"
+        v-if="activeCli !== 'claude-desktop' && showProxyManager"
         class="providers-view-proxy-modal"
         title="接管池管理"
         description=""
@@ -195,7 +398,10 @@
       </BaseModal>
 
       <section
-        v-if="!activeProxyEnabled || proxyTab === 'providers'"
+        v-if="
+          activeCli !== 'claude-desktop' &&
+          (!activeProxyEnabled || proxyTab === 'providers')
+        "
         class="providers-view__list-panel"
       >
         <article
@@ -332,7 +538,9 @@
                       style="width: 56%"
                     ></span>
                     <div class="providers-view__quota-meta">
-                      <span data-emphasis class="providers-view__quota-value"> ... </span>
+                      <span data-emphasis class="providers-view__quota-value">
+                        ...
+                      </span>
                       <span class="providers-view__quota-reset"> 请稍候 </span>
                     </div>
                   </div>
@@ -625,7 +833,11 @@
         </article>
 
         <div v-if="!mixedItems.length" class="providers-view__empty">
-          {{ showDisabledItems ? "当前 CLI 还没有 Provider。" : "当前 CLI 暂无启用的 Provider。" }}
+          {{
+            showDisabledItems
+              ? "当前 CLI 还没有 Provider。"
+              : "当前 CLI 暂无启用的 Provider。"
+          }}
         </div>
       </section>
     </div>
@@ -766,7 +978,9 @@
                   type="password"
                   show-password
                   :placeholder="
-                    item.masked ? `${item.masked}，留空则保持不变` : '输入 API Key'
+                    item.masked
+                      ? `${item.masked}，留空则保持不变`
+                      : '输入 API Key'
                   "
                 />
               </div>
@@ -816,7 +1030,10 @@
           </label>
         </details>
 
-        <section class="providers-view__models">
+        <section
+          v-if="draft.cli !== 'claude-desktop'"
+          class="providers-view__models"
+        >
           <div class="providers-view__section-title">
             <div>
               <h2>模型映射</h2>
@@ -840,7 +1057,10 @@
           </div>
         </section>
 
-        <section class="providers-view__json">
+        <section
+          v-if="draft.cli !== 'claude-desktop'"
+          class="providers-view__json"
+        >
           <div class="providers-view__json-title">
             <span data-emphasis>配置 JSON</span>
           </div>
@@ -1034,7 +1254,9 @@
                   type="password"
                   show-password
                   :placeholder="
-                    item.masked ? `${item.masked}，留空则保持不变` : '输入 API Key'
+                    item.masked
+                      ? `${item.masked}，留空则保持不变`
+                      : '输入 API Key'
                   "
                 />
               </div>
@@ -1084,7 +1306,10 @@
           </label>
         </details>
 
-        <section class="providers-view__models">
+        <section
+          v-if="draft.cli !== 'claude-desktop'"
+          class="providers-view__models"
+        >
           <div class="providers-view__section-title">
             <div>
               <h2>模型映射</h2>
@@ -1108,7 +1333,10 @@
           </div>
         </section>
 
-        <section class="providers-view__json">
+        <section
+          v-if="draft.cli !== 'claude-desktop'"
+          class="providers-view__json"
+        >
           <div class="providers-view__json-title">
             <span data-emphasis>配置 JSON</span>
           </div>
@@ -1157,13 +1385,120 @@
             <p>{{ file.description }}</p>
           </details>
         </section>
+        <section
+          v-if="draft.cli === 'claude-desktop'"
+          class="providers-view-desktop-fields"
+        >
+          <div class="providers-view__form-grid">
+            <label class="providers-view__field">
+              <span>连接方式</span>
+              <select v-model="desktopDraft.mode" @change="changeDesktopMode">
+                <option value="direct">直连网关</option>
+                <option value="proxy">本地模型路由</option>
+              </select>
+            </label>
+            <label
+              v-if="desktopDraft.mode === 'proxy'"
+              class="providers-view__field"
+            >
+              <span>上游 API 协议</span>
+              <select
+                v-model="desktopDraft.apiFormat"
+                @change="changeDesktopApiFormat"
+              >
+                <option value="anthropic">Anthropic Messages</option>
+                <option value="openai_chat">OpenAI Chat Completions</option>
+                <option value="openai_responses">OpenAI Responses</option>
+              </select>
+            </label>
+            <label
+              v-if="desktopDraft.mode === 'proxy'"
+              class="providers-view__field"
+            >
+              <span>认证字段</span>
+              <select
+                v-model="draft.authField"
+                :disabled="desktopDraft.apiFormat !== 'anthropic'"
+              >
+                <option value="ANTHROPIC_AUTH_TOKEN">
+                  Authorization: Bearer
+                </option>
+                <option value="ANTHROPIC_API_KEY">x-api-key</option>
+              </select>
+            </label>
+            <label
+              v-if="desktopDraft.mode === 'proxy'"
+              class="providers-view__field"
+            >
+              <span>网络代理（可选）</span>
+              <input
+                v-model.trim="draft.proxy"
+                placeholder="http://127.0.0.1:7890"
+              />
+            </label>
+          </div>
+          <div class="providers-view__section-title">
+            <div>
+              <h2>模型映射</h2>
+              <p>
+                {{
+                  desktopDraft.mode === "proxy"
+                    ? "至少填写一个真实上游模型，空档位继承首个已配置模型。"
+                    : "可全部留空查询网关模型目录；指定模型时需填写安全的 Claude 模型名。直连使用 Bearer 认证。"
+                }}
+              </p>
+            </div>
+          </div>
+          <div
+            v-for="route in desktopDraft.routes"
+            :key="route.id"
+            class="providers-view-desktop-route"
+          >
+            <label class="providers-view__field">
+              <span :title="route.id">{{ route.label }} 模型</span>
+              <input
+                v-model.trim="route.model"
+                :placeholder="
+                  desktopDraft.mode === 'proxy' ? '留空继承首个模型' : route.id
+                "
+              />
+            </label>
+            <label class="providers-view__field">
+              <span>显示名称（可选）</span>
+              <input
+                v-model.trim="route.labelOverride"
+                placeholder="使用默认名称"
+              />
+            </label>
+            <label class="providers-view-desktop-capability">
+              <input
+                v-model="route.supports1m"
+                type="checkbox"
+                :aria-label="`${route.label} 支持 1M`"
+              />
+              1M
+            </label>
+          </div>
+          <label
+            v-if="desktopDraft.mode === 'proxy'"
+            class="providers-view__field"
+          >
+            <span>自定义请求头（JSON，可选）</span>
+            <textarea
+              v-model="desktopDraft.headersText"
+              class="providers-view-desktop-headers"
+              rows="3"
+              spellcheck="false"
+            ></textarea>
+          </label>
+        </section>
       </section>
 
       <footer class="providers-view__create-footer">
         <button
           class="providers-view__primary"
           type="button"
-          :disabled="pending"
+          :disabled="pending || desktopBusy"
           @click="submitProvider"
         >
           <Save :size="16" />
@@ -1180,7 +1515,9 @@
     >
       <section class="providers-view__api-key-manager">
         <header class="providers-view__api-key-manager-header">
-          <span data-emphasis>{{ apiKeyManagerProvider?.name || "Provider" }}</span>
+          <span data-emphasis>{{
+            apiKeyManagerProvider?.name || "Provider"
+          }}</span>
           <span>仅当前生效的 Key 会被运行时使用。</span>
         </header>
         <div class="providers-view__api-key-list">
@@ -1248,7 +1585,7 @@
           <button
             class="providers-view__primary"
             type="button"
-            :disabled="pending"
+            :disabled="pending || desktopBusy"
             @click="saveApiKeyManager"
           >
             <Save :size="16" />
@@ -1562,14 +1899,21 @@
                   >
                     <div class="providers-view-quota-stage-head">
                       <div class="providers-view-quota-stage-title">
-                        <span data-emphasis class="providers-view-quota-stage-name">{{
-                          formatRateWindowName(stage.limitWindowSeconds)
-                        }}</span>
+                        <span
+                          data-emphasis
+                          class="providers-view-quota-stage-name"
+                          >{{
+                            formatRateWindowName(stage.limitWindowSeconds)
+                          }}</span
+                        >
                         <span class="providers-view-quota-stage-status">
                           当前阶段
                         </span>
                       </div>
-                      <span data-emphasis class="providers-view-quota-stage-percent">
+                      <span
+                        data-emphasis
+                        class="providers-view-quota-stage-percent"
+                      >
                         剩余 {{ formatQuotaPercent(stage.remainingPercent) }}%
                       </span>
                     </div>
@@ -1584,19 +1928,28 @@
                     <div class="providers-view-quota-stage-metrics">
                       <span class="providers-view-quota-stage-metric">
                         已使用
-                        <span data-emphasis class="providers-view-quota-stage-metric-value">
+                        <span
+                          data-emphasis
+                          class="providers-view-quota-stage-metric-value"
+                        >
                           {{ formatQuotaPercent(stage.usedPercent) }}%
                         </span>
                       </span>
                       <span class="providers-view-quota-stage-metric">
                         Token
-                        <span data-emphasis class="providers-view-quota-stage-metric-value">
+                        <span
+                          data-emphasis
+                          class="providers-view-quota-stage-metric-value"
+                        >
                           <TokenCount :value="stage.summary?.actualTokens" />
                         </span>
                       </span>
                       <span class="providers-view-quota-stage-metric">
                         请求
-                        <span data-emphasis class="providers-view-quota-stage-metric-value">
+                        <span
+                          data-emphasis
+                          class="providers-view-quota-stage-metric-value"
+                        >
                           {{
                             formatProviderNumber(stage.summary?.requestCount)
                           }}
@@ -1604,7 +1957,10 @@
                       </span>
                       <span class="providers-view-quota-stage-metric">
                         已计费
-                        <span data-emphasis class="providers-view-quota-stage-metric-value">
+                        <span
+                          data-emphasis
+                          class="providers-view-quota-stage-metric-value"
+                        >
                           {{ formatProviderCost(stage.summary?.totalCostUsd) }}
                         </span>
                       </span>
@@ -1622,7 +1978,10 @@
                   class="providers-view-quota-history"
                 >
                   <div class="providers-view-quota-history-head">
-                    <span data-emphasis class="providers-view-quota-history-title">
+                    <span
+                      data-emphasis
+                      class="providers-view-quota-history-title"
+                    >
                       历史阶段
                     </span>
                     <span class="providers-view-quota-history-count">
@@ -1635,9 +1994,13 @@
                     class="providers-view-quota-history-row"
                   >
                     <div class="providers-view-quota-history-main">
-                      <span data-emphasis class="providers-view-quota-history-name">{{
-                        formatRateWindowName(stage.limitWindowSeconds)
-                      }}</span>
+                      <span
+                        data-emphasis
+                        class="providers-view-quota-history-name"
+                        >{{
+                          formatRateWindowName(stage.limitWindowSeconds)
+                        }}</span
+                      >
                       <span class="providers-view-quota-history-range">
                         {{ formatQuotaStageRange(stage) }}
                       </span>
@@ -1645,12 +2008,13 @@
                     <div class="providers-view-quota-history-metrics">
                       <span class="providers-view-quota-history-usage">
                         使用 {{ formatQuotaPercent(stage.usedPercent) }}% /
-                        {{
-                          formatProviderNumber(stage.summary?.requestCount)
-                        }}
+                        {{ formatProviderNumber(stage.summary?.requestCount) }}
                         次
                       </span>
-                      <span data-emphasis class="providers-view-quota-history-token">
+                      <span
+                        data-emphasis
+                        class="providers-view-quota-history-token"
+                      >
                         <TokenCount :value="stage.summary?.actualTokens" />
                       </span>
                       <span class="providers-view-quota-history-cost">{{
@@ -1770,7 +2134,9 @@
                     <small>
                       今日
                       <TokenCount
-                        :value="codexAccountUsageTodaySummary.cacheCreationTokens"
+                        :value="
+                          codexAccountUsageTodaySummary.cacheCreationTokens
+                        "
                       />
                     </small>
                   </article>
@@ -1788,7 +2154,8 @@
                     class="providers-view-usage-row"
                   >
                     <div class="providers-view-usage-row-main">
-                      <span data-emphasis
+                      <span
+                        data-emphasis
                         class="providers-view-usage-value"
                         :title="item.model"
                       >
@@ -1866,6 +2233,7 @@
               }
             ]"
             type="button"
+            v-if="providerDetail?.cli !== 'claude-desktop'"
             @click="providerDetailTab = 'usage'"
           >
             用量
@@ -1886,6 +2254,10 @@
                   apiKey: providerDetail.apiKey,
                   authField: providerDetail.authField,
                   enabled: providerDetail.enabled,
+                  mode: providerDetail.mode,
+                  apiFormat: providerDetail.apiFormat,
+                  apiKeys: providerDetail.apiKeys,
+                  activeApiKeyId: providerDetail.activeApiKeyId,
                   website: providerDetail.website,
                   note: providerDetail.note
                 })
@@ -1894,7 +2266,14 @@
             <section class="providers-view__drawer-section">
               <h3>Runtime 配置</h3>
               <pre class="providers-view__drawer-json">{{
-                formatJson(providerDetail.runtimeConfig)
+                formatJson(
+                  providerDetail.cli === "claude-desktop"
+                    ? {
+                        routes: providerDetail.routes,
+                        headers: providerDetail.headers
+                      }
+                    : providerDetail.runtimeConfig
+                )
               }}</pre>
             </section>
           </template>
@@ -2018,7 +2397,8 @@
                     class="providers-view-usage-row"
                   >
                     <div class="providers-view-usage-row-main">
-                      <span data-emphasis
+                      <span
+                        data-emphasis
                         class="providers-view-usage-value"
                         :title="item.model"
                       >
@@ -2062,12 +2442,68 @@
       @close="closeRuntimeConfigDialog"
     >
       <section class="providers-view__runtime-config-panel">
+        <nav
+          v-if="desktopConfigFiles.length"
+          class="providers-view-drawer-tabs"
+        >
+          <button
+            v-for="file in desktopConfigFiles"
+            :key="file.path"
+            class="providers-view-drawer-tab"
+            :class="{
+              'providers-view-drawer-tab-active':
+                runtimeConfigPath === file.path
+            }"
+            type="button"
+            @click="selectDesktopConfigFile(file)"
+          >
+            {{ file.label }}
+          </button>
+        </nav>
+        <p
+          v-if="desktopConfigFiles.length"
+          class="providers-view-desktop-config-hint"
+        >
+          配置只读展示，敏感字段已脱敏。切换供应商后请完全退出并重启 Claude
+          Desktop。
+        </p>
         <pre
           v-if="runtimeConfigContent"
           class="providers-view__drawer-json providers-view__runtime-config-json"
           >{{ runtimeConfigContent }}</pre
         >
-        <p v-else class="providers-view__drawer-empty">当前系统配置为空</p>
+        <p v-else class="providers-view__drawer-empty">
+          {{
+            desktopConfigFiles.length
+              ? "当前配置文件尚不存在"
+              : "当前系统配置为空"
+          }}
+        </p>
+        <div
+          v-if="
+            desktopConfigFiles.length && desktopConfigStatus.mode === 'proxy'
+          "
+          class="providers-view-desktop-gateway"
+        >
+          <label class="providers-view__field">
+            <span>本地网关端口</span>
+            <input
+              v-model.number="desktopConfigStatus.port"
+              type="number"
+              min="1"
+              max="65535"
+              :disabled="desktopBusy"
+            />
+          </label>
+          <button
+            class="providers-view__primary"
+            type="button"
+            :disabled="desktopBusy"
+            @click="applyDesktopGatewayPort"
+          >
+            启动网关 / 应用端口
+          </button>
+        </div>
       </section>
     </BaseModal>
 
@@ -2145,9 +2581,11 @@ import {
 } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
+import ClaudeDesktopPanel from "./components/ClaudeDesktopPanel.vue"
 import TokenCount from "@/components/TokenCount.vue"
 import CodexProxyPanel from "@/features/providers/components/CodexProxyPanel.vue"
 import { accountApi, runtimeApi, systemApi, usageApi } from "@/api"
+import { claudeDesktopApi } from "@/api/modules/providers"
 import { formatTokenCount } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
@@ -2287,6 +2725,18 @@ const draft = reactive({
   modelAutoCompactTokenLimit: 900000
 })
 
+const desktopPanelRef = ref(null)
+const desktopBusy = ref(false)
+const desktopDraft = reactive({
+  provider: {},
+  mode: "direct",
+  apiFormat: "anthropic",
+  routes: [],
+  headersText: "{}"
+})
+const desktopConfigFiles = ref([])
+const desktopConfigStatus = reactive({ mode: "official", port: 15723 })
+
 const modelDrafts = reactive({
   mainModel: "",
   haikuModel: "",
@@ -2355,9 +2805,12 @@ const iconOptions = Object.keys(iconModules)
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
-  return props.cliTargets.filter((item) => {
-    return props.runtimeConfigSchemas[item.id]?.enabled
-  })
+  return [
+    ...props.cliTargets.filter((item) => {
+      return props.runtimeConfigSchemas[item.id]?.enabled
+    }),
+    { id: "claude-desktop", name: "Claude Desktop", icon: "claude" }
+  ]
 })
 
 const activeRuntimeSchema = computed(() => {
@@ -2434,9 +2887,7 @@ const disabledItemCount = computed(() => {
 
 const mixedItems = computed(() => {
   const providerItems = scopedProviders.value
-    .filter(
-      (provider) => showDisabledItems.value || provider.enabled !== false
-    )
+    .filter((provider) => showDisabledItems.value || provider.enabled !== false)
     .map((provider) => ({
       type: "provider",
       provider,
@@ -2564,13 +3015,13 @@ const emptyUsageSummary = {
 // 额度阶段按重置时间持久化，当前阶段和历史阶段分别展示。
 const codexCurrentQuotaStages = computed(() => {
   return (codexAccountDetail.value?.quotaStages || []).filter(
-    stage => stage.active
+    (stage) => stage.active
   )
 })
 
 const codexQuotaStageHistory = computed(() => {
   return (codexAccountDetail.value?.quotaStages || [])
-    .filter(stage => !stage.active)
+    .filter((stage) => !stage.active)
     .slice(0, 12)
 })
 
@@ -2796,6 +3247,7 @@ function selectCli(cli) {
   closeProviderDetail()
   closeApiKeyManager()
   closeProviderCreateModal()
+  closeRuntimeConfigDialog()
   clearDraft()
 
   if (cli === "codex" && previousCli !== "codex") {
@@ -2817,8 +3269,7 @@ function editProvider(provider) {
   draft.proxy = provider.proxy || ""
   draft.apiKey = provider.apiKey || ""
   draft.apiKeys = normalizeApiKeyDrafts(provider)
-  draft.activeApiKeyId =
-    provider.activeApiKeyId || draft.apiKeys[0]?.id || ""
+  draft.activeApiKeyId = provider.activeApiKeyId || draft.apiKeys[0]?.id || ""
   const activeApiKey = draft.apiKeys.find(
     (item) => item.id === draft.activeApiKeyId
   )
@@ -2867,6 +3318,7 @@ function startProviderCreate() {
 }
 
 function closeProviderCreateModal() {
+  if (desktopBusy.value && draft.cli === "claude-desktop") return
   showProviderCreateModal.value = false
   showIconPicker.value = false
   iconKeyword.value = ""
@@ -3038,6 +3490,11 @@ function openApiKeyManager(provider) {
 }
 
 function closeApiKeyManager() {
+  if (
+    desktopBusy.value &&
+    apiKeyManagerProvider.value?.cli === "claude-desktop"
+  )
+    return
   showApiKeyManager.value = false
   apiKeyManagerProvider.value = null
   apiKeyManagerDraft.providerId = ""
@@ -3046,11 +3503,28 @@ function closeApiKeyManager() {
   apiKeyManagerDraft.activeApiKeyId = ""
 }
 
-function saveApiKeyManager() {
-  if (
-    apiKeyManagerDraft.apiKeys.some((item) => !item.apiKey && !item.masked)
-  ) {
+async function saveApiKeyManager() {
+  if (apiKeyManagerDraft.apiKeys.some((item) => !item.apiKey && !item.masked)) {
     createMessage.error("请填写新增的 API Key，或删除空白项。")
+    return
+  }
+
+  if (apiKeyManagerProvider.value?.cli === "claude-desktop") {
+    if (!apiKeyManagerDraft.apiKeys.length) {
+      createMessage.error("至少保留一个 API Key。")
+      return
+    }
+    const result = await desktopPanelRef.value.saveProvider({
+      id: apiKeyManagerDraft.providerId,
+      apiKeys: apiKeyManagerDraft.apiKeys.map((item) => ({
+        id: item.id,
+        name: item.name,
+        note: item.note,
+        ...(item.apiKey ? { apiKey: item.apiKey } : {})
+      })),
+      activeApiKeyId: apiKeyManagerDraft.activeApiKeyId
+    })
+    if (result) closeApiKeyManager()
     return
   }
 
@@ -3561,7 +4035,7 @@ function uploadCustomIcon(event) {
   reader.readAsDataURL(file)
 }
 
-function submitProvider() {
+async function submitProvider() {
   const payload = {
     id: draft.id || undefined,
     cli: draft.cli,
@@ -3600,6 +4074,51 @@ function submitProvider() {
       modelAutoCompactTokenLimit: draft.modelAutoCompactTokenLimit
     },
     enabled: draft.enabled
+  }
+
+  if (draft.cli === "claude-desktop") {
+    if (
+      !draft.apiKeys.length ||
+      draft.apiKeys.some((item) => !item.apiKey && !item.masked)
+    ) {
+      createMessage.error("至少保留一个 API Key，并填写新增的 Key。")
+      return
+    }
+    const routes =
+      desktopDraft.mode === desktopDraft.provider.mode
+        ? { ...desktopDraft.provider.routes }
+        : {}
+    for (const route of desktopDraft.routes) {
+      if (route.originalId) delete routes[route.originalId]
+    }
+    for (const route of desktopDraft.routes) {
+      if (!route.model) continue
+      const model = route.model.replace(/\[1m\]$/i, "").trim()
+      routes[desktopDraft.mode === "proxy" ? route.id : model] = {
+        model,
+        labelOverride: route.labelOverride,
+        supports1m: route.supports1m || /\[1m\]$/i.test(route.model)
+      }
+    }
+    let headers = {}
+    try {
+      if (desktopDraft.mode === "proxy")
+        headers = JSON.parse(desktopDraft.headersText || "{}")
+    } catch {
+      createMessage.error("自定义请求头必须是有效 JSON 对象")
+      return
+    }
+    const result = await desktopPanelRef.value.saveProvider({
+      ...payload,
+      mode: desktopDraft.mode,
+      apiFormat:
+        desktopDraft.mode === "direct" ? "anthropic" : desktopDraft.apiFormat,
+      proxy: desktopDraft.mode === "proxy" ? draft.proxy : "",
+      routes,
+      headers
+    })
+    if (result) closeProviderCreateModal()
+    return
   }
 
   emit("save-provider", payload)
@@ -3744,7 +4263,75 @@ async function openRuntimeConfigDialog() {
   }
 }
 
+function openDesktopProviderEditor(provider, defaultRoutes) {
+  if (provider.id) {
+    editProvider(provider)
+  } else {
+    startProviderCreate()
+  }
+  Object.assign(desktopDraft, {
+    provider: JSON.parse(JSON.stringify(provider)),
+    mode: provider.mode || "direct",
+    apiFormat: provider.apiFormat || "anthropic",
+    headersText: JSON.stringify(provider.headers || {}, null, 2),
+    routes: defaultRoutes.map((route) => {
+      const entry = Object.entries(provider.routes || {}).find(([name]) =>
+        provider.mode === "proxy"
+          ? name === route.id
+          : name
+              .replace("anthropic/", "")
+              .startsWith(`claude-${route.label.toLowerCase()}-`)
+      )
+      return {
+        ...route,
+        originalId: entry?.[0],
+        model: entry?.[1].model || "",
+        labelOverride: entry?.[1].labelOverride || "",
+        supports1m: entry?.[1].supports1m || false
+      }
+    })
+  })
+}
+
+function changeDesktopMode() {
+  if (desktopDraft.mode === "direct") desktopDraft.apiFormat = "anthropic"
+}
+
+function changeDesktopApiFormat() {
+  if (desktopDraft.apiFormat !== "anthropic")
+    draft.authField = "ANTHROPIC_AUTH_TOKEN"
+}
+
+function selectDesktopConfigFile(file) {
+  runtimeConfigPath.value = file.path
+  runtimeConfigContent.value = file.content || ""
+}
+
+async function openDesktopRuntimeConfig(status) {
+  try {
+    const result = await claudeDesktopApi.getConfig()
+    Object.assign(desktopConfigStatus, status)
+    desktopConfigFiles.value = result.files
+    selectDesktopConfigFile(
+      result.files.find((file) => file.path === runtimeConfigPath.value) ||
+        result.files[0]
+    )
+    showRuntimeConfig.value = true
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  }
+}
+
+async function applyDesktopGatewayPort() {
+  const result = await desktopPanelRef.value.setGateway(
+    true,
+    desktopConfigStatus.port
+  )
+  if (result) await openDesktopRuntimeConfig(result.status)
+}
+
 function closeRuntimeConfigDialog() {
+  desktopConfigFiles.value = []
   showRuntimeConfig.value = false
   runtimeConfigContent.value = ""
   runtimeConfigPath.value = ""
@@ -3918,6 +4505,7 @@ watch(
   (providers) => {
     if (
       providerDetail.value &&
+      providerDetail.value.cli !== "claude-desktop" &&
       !providers.find((item) => item.id === providerDetail.value.id)
     ) {
       closeProviderDetail()
@@ -3989,6 +4577,38 @@ watch(
     padding: 0 14px;
     border-bottom: 1px solid var(--color-line);
     background: var(--color-panel);
+
+    :deep(.providers-toolbar-count) {
+      position: absolute;
+      top: -7px;
+      right: -7px;
+      display: inline-flex;
+      box-sizing: border-box;
+      min-width: 20px;
+      height: 20px;
+      align-items: center;
+      justify-content: center;
+      padding: 0 4px;
+      border: 2px solid var(--color-panel);
+      border-radius: 999px;
+      background: var(--color-primary-solid);
+      color: #ffffff;
+      box-shadow: 0 2px 4px rgba(15, 23, 42, 0.14);
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
+      white-space: nowrap;
+      pointer-events: none;
+      transition:
+        background-color 0.18s ease,
+        color 0.18s ease;
+    }
+
+    :deep(.providers-toolbar-count-active) {
+      background: var(--color-warning);
+      color: var(--color-panel);
+    }
   }
 
   &__list-shell {
@@ -4159,20 +4779,15 @@ watch(
   }
 
   &-proxy-manage {
+    position: relative;
+    flex-shrink: 0;
     border-color: var(--color-line);
     background: var(--color-panel);
     color: var(--color-text-muted);
-  }
 
-  &-proxy-manage span:not([data-emphasis]) {
-    display: grid;
-    min-width: 18px;
-    height: 18px;
-    place-items: center;
-    border-radius: 999px;
-    background: var(--color-panel-soft);
-    color: var(--color-text-muted);
-    font-size: 12px;
+    .providers-view-proxy-manage-label {
+      white-space: nowrap;
+    }
   }
 
   &-proxy-manage:hover {
@@ -4273,7 +4888,9 @@ watch(
   }
 
   .providers-disabled-filter {
+    position: relative;
     display: inline-flex;
+    flex-shrink: 0;
     align-items: center;
     gap: 7px;
     height: 38px;
@@ -4300,20 +4917,6 @@ watch(
     .providers-disabled-filter-label {
       white-space: nowrap;
     }
-
-    .providers-disabled-filter-count {
-      display: inline-flex;
-      min-width: 18px;
-      height: 18px;
-      align-items: center;
-      justify-content: center;
-      padding: 0 4px;
-      border-radius: 999px;
-      background: var(--color-panel-soft);
-      color: var(--color-text-muted);
-      font-size: 0.7rem;
-      font-variant-numeric: tabular-nums;
-    }
   }
 
   .providers-disabled-filter-active,
@@ -4322,10 +4925,19 @@ watch(
     background: var(--color-warning-soft);
     color: var(--color-warning);
     box-shadow: none;
+  }
 
-    .providers-disabled-filter-count {
-      background: var(--color-warning-soft);
-      color: var(--color-warning);
+  @media (width < 1100px) {
+    .providers-view-proxy-manage,
+    .providers-disabled-filter {
+      width: 38px;
+      padding: 0;
+      justify-content: center;
+
+      .providers-view-proxy-manage-label,
+      .providers-disabled-filter-label {
+        display: none;
+      }
     }
   }
 
@@ -4915,6 +5527,7 @@ watch(
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
   }
+
 
   &__enable,
   &__using,
@@ -5561,6 +6174,34 @@ watch(
     bottom: 0;
   }
 
+  .providers-view-desktop-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    .providers-view-desktop-route {
+      display: flex;
+      align-items: flex-end;
+      gap: 16px;
+      .providers-view-desktop-capability {
+        display: inline-flex;
+        flex-shrink: 0;
+        align-items: center;
+        gap: 6px;
+        height: 38px;
+      }
+    }
+    .providers-view__field {
+      .providers-view-desktop-headers {
+        padding: 10px 12px;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        background: var(--color-panel);
+        color: var(--color-text);
+        resize: vertical;
+      }
+    }
+  }
+
   &__codex-login-modal {
     :deep(.base-modal__panel) {
       width: 560px;
@@ -5675,6 +6316,17 @@ watch(
     display: flex;
     min-height: 0;
     flex-direction: column;
+    .providers-view-desktop-config-hint {
+      color: var(--color-text-muted);
+      font-size: 0.8rem;
+    }
+    .providers-view-desktop-gateway {
+      display: flex;
+      flex: none;
+      align-items: flex-end;
+      gap: 12px;
+      padding-top: 12px;
+    }
   }
 
   &__runtime-config-json {
@@ -6055,7 +6707,11 @@ watch(
     padding: 16px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: linear-gradient(135deg, var(--color-panel-soft) 0%, var(--color-primary-soft) 100%);
+    background: linear-gradient(
+      135deg,
+      var(--color-panel-soft) 0%,
+      var(--color-primary-soft) 100%
+    );
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
   }
 

@@ -18,6 +18,30 @@ pub fn read_providers(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     read_collection(paths, "providers")
 }
 
+pub fn read_desktop_providers(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
+    read_collection(paths, "claude_desktop_providers")
+}
+
+pub fn read_desktop_settings(paths: &AppPaths) -> Result<Map<String, Value>, ManagerError> {
+    read_map(paths, "claude_desktop_settings", "setting_key")
+}
+
+pub fn write_desktop_bundle(
+    paths: &AppPaths,
+    providers: &[Value],
+    settings: &Map<String, Value>,
+    keys: &Map<String, Value>,
+) -> Result<(), ManagerError> {
+    initialize(paths)?;
+    let mut connection = database::open(paths)?;
+    let transaction = connection.transaction()?;
+    replace_collection(&transaction, "claude_desktop_providers", providers, &["id"])?;
+    replace_map(&transaction, "claude_desktop_settings", "setting_key", settings)?;
+    replace_map(&transaction, "provider_keys", "provider_id", keys)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 pub fn read_models(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     read_collection(paths, "provider_models")
 }
@@ -133,6 +157,15 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
          CREATE TABLE IF NOT EXISTS providers (
            item_key TEXT PRIMARY KEY,
            sort_order INTEGER NOT NULL,
+           payload_json TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS claude_desktop_providers (
+           item_key TEXT PRIMARY KEY,
+           sort_order INTEGER NOT NULL,
+           payload_json TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS claude_desktop_settings (
+           setting_key TEXT PRIMARY KEY,
            payload_json TEXT NOT NULL
          );
          CREATE TABLE IF NOT EXISTS provider_models (

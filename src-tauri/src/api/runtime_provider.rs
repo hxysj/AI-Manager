@@ -2636,7 +2636,7 @@ fn has_provider_key(value: Option<&Value>) -> bool {
     !provider_key_records(value).is_empty()
 }
 
-fn public_provider_keys(value: Option<&Value>) -> (String, Vec<Value>, String) {
+pub(crate) fn public_provider_keys(value: Option<&Value>) -> (String, Vec<Value>, String) {
     let records = provider_key_records(value);
     let active_key_id = active_provider_key_id(value, &records);
     let mut active_key = String::new();

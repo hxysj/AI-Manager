@@ -1494,7 +1494,7 @@ fn build_upstream_url(base_url: &str, endpoint: &str, search: &str) -> Result<St
     Ok(format!("{}{}{}{}", clean_base, path_prefix, endpoint, search).replace("/v1/v1/", "/v1/"))
 }
 
-fn build_anthropic_upstream_url(
+pub(crate) fn build_anthropic_upstream_url(
     base_url: &str,
     endpoint: &str,
     search: &str,
@@ -1748,7 +1748,7 @@ fn set_toml_section_value(content: &str, section_name: &str, key: &str, value: &
     format!("{}\n", lines.join("\n").trim_end())
 }
 
-fn http_client(proxy: &str) -> Result<reqwest::Client, ManagerError> {
+pub(crate) fn http_client(proxy: &str) -> Result<reqwest::Client, ManagerError> {
     let mut builder = reqwest::Client::builder();
     let proxy = proxy.trim();
 
