@@ -2357,8 +2357,7 @@ fn collect_cli_skill_imports(
 
 async fn get_install_state(skill: &Value, cli_target: &Value, skill_disabled: bool) -> Value {
     let target_id = string_value(cli_target.get("id"));
-    let skills_path = string_value(cli_target.get("skillsPath"));
-    let target_path = Path::new(&skills_path).join(string_value(skill.get("name")));
+    let target_path = skill_target_path(cli_target, &string_value(skill.get("name")));
 
     if skill_disabled {
         return json!({
@@ -2405,7 +2404,15 @@ async fn get_install_state(skill: &Value, cli_target: &Value, skill_disabled: bo
     }
 
     let resolved_target = tokio::fs::canonicalize(&target_path).await;
-    let resolved_source = tokio::fs::canonicalize(&source_path).await;
+    let expected_source = if target_id == "claude-desktop" {
+        match desktop_skill_snapshot(cli_target, skill) {
+            Ok(path) => path,
+            Err(cause) => return json!({"targetId": target_id, "state": "broken-link", "targetPath": path_text(target_path), "reason": cause.to_string()}),
+        }
+    } else {
+        source_path
+    };
+    let resolved_source = tokio::fs::canonicalize(&expected_source).await;
 
     match (resolved_target, resolved_source) {
         (Ok(target), Ok(source)) if same_path(&target, &source) => json!({
@@ -2441,7 +2448,7 @@ async fn install_skill_link(
         )));
     }
 
-    let source_path = PathBuf::from(string_value(skill.get("sourcePath")));
+    let mut source_path = PathBuf::from(string_value(skill.get("sourcePath")));
 
     if !source_path.exists() {
         return Err(ManagerError::System(format!(
@@ -2451,9 +2458,13 @@ async fn install_skill_link(
     }
 
     let skills_path = PathBuf::from(string_value(cli_target.get("skillsPath")));
-    let target_path = skills_path.join(string_value(skill.get("name")));
+    let target_path = skill_target_path(&cli_target, &string_value(skill.get("name")));
 
     tokio::fs::create_dir_all(&skills_path).await?;
+
+    if target_id == "claude-desktop" {
+        source_path = prepare_desktop_skill(&cli_target, skill).await?;
+    }
 
     if let Ok(target_stat) = tokio::fs::symlink_metadata(&target_path).await {
         if !target_stat.file_type().is_symlink() {
@@ -2499,7 +2510,44 @@ async fn uninstall_skill_link(
         return Ok(());
     }
 
-    remove_managed_link(&Path::new(&skills_path).join(skill_name)).await
+    remove_managed_link(&skill_target_path(cli_target, skill_name)).await
+}
+
+fn skill_target_path(target: &Value, name: &str) -> PathBuf {
+    let name = if string_value(target.get("id")) == "claude-desktop" {
+        format!("ai-manager-{}", sha1_hex(name))
+    } else {
+        name.to_string()
+    };
+    Path::new(&string_value(target.get("skillsPath"))).join(name)
+}
+
+fn desktop_skill_snapshot(target: &Value, skill: &Value) -> Result<PathBuf, ManagerError> {
+    let root = string_value(target.get("managedSkillsPath"));
+    if root.is_empty() {
+        return Err(ManagerError::System("Desktop 技能托管目录未配置，请刷新应用状态".to_string()));
+    }
+    Ok(Path::new(&root).join(create_skill_signature(skill)?))
+}
+
+async fn prepare_desktop_skill(target: &Value, skill: &Value) -> Result<PathBuf, ManagerError> {
+    let destination = desktop_skill_snapshot(target, skill)?;
+    let source = PathBuf::from(string_value(skill.get("sourcePath")));
+    let manifest_path = destination.join(".claude-plugin/plugin.json");
+    let mut files = Vec::new();
+    collect_skill_files_inner(&source, &source, &mut files, true)?;
+    if manifest_path.is_file() {
+        return Ok(destination);
+    }
+    copy_dir_all(&source, &destination.join("skills/skill")).await?;
+    let name = format!("ai-manager-{}", sha1_hex(&string_value(skill.get("name"))));
+    let signature = destination.file_name().unwrap_or_default().to_string_lossy();
+    crate::api::runtime_provider::write_json(&path_text(manifest_path), &json!({
+        "name": name, "version": format!("0.0.0-ai-manager-{signature}"),
+        "description": string_value(skill.get("description")),
+        "skills": ["./skills/skill"], "installationPreference": "auto_install"
+    })).await?;
+    Ok(destination)
 }
 
 async fn remove_managed_link(target_path: &Path) -> Result<(), ManagerError> {
@@ -2832,7 +2880,7 @@ fn create_skill_signature(skill: &Value) -> Result<String, ManagerError> {
 fn collect_skill_files(root_path: &Path) -> Result<Vec<Value>, ManagerError> {
     let mut files = Vec::new();
 
-    collect_skill_files_inner(root_path, root_path, &mut files)?;
+    collect_skill_files_inner(root_path, root_path, &mut files, false)?;
     files.sort_by(|left, right| {
         string_value(left.get("path")).cmp(&string_value(right.get("path")))
     });
@@ -2843,6 +2891,7 @@ fn collect_skill_files_inner(
     root_path: &Path,
     current_path: &Path,
     files: &mut Vec<Value>,
+    reject_links: bool,
 ) -> Result<(), ManagerError> {
     let mut children = std::fs::read_dir(current_path)?.collect::<Result<Vec<_>, _>>()?;
 
@@ -2853,11 +2902,14 @@ fn collect_skill_files_inner(
         let stat = std::fs::symlink_metadata(&child_path)?;
 
         if stat.file_type().is_symlink() {
+            if reject_links {
+                return Err(ManagerError::System("Desktop 技能打包不支持内部符号链接，请使用真实文件后重试".to_string()));
+            }
             continue;
         }
 
         if stat.is_dir() {
-            collect_skill_files_inner(root_path, &child_path, files)?;
+            collect_skill_files_inner(root_path, &child_path, files, reject_links)?;
             continue;
         }
 
@@ -3525,6 +3577,44 @@ mod tests {
             format!("---\nname: {}\ndescription: test\n---\ncontent\n", name),
         )
         .unwrap();
+    }
+
+    #[test]
+    fn claude_desktop_skills_use_native_plugin_packages_and_existing_install_actions() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("ai-manager-desktop-skills-{}", uuid::Uuid::new_v4()));
+            let source = root.join("managed/demo");
+            std::fs::create_dir_all(&source).unwrap();
+            write_test_skill(&source, "demo");
+            let target = json!({"id": "claude-desktop", "name": "Claude Desktop", "installed": true, "skillsPath": root.join("org-plugins"), "managedSkillsPath": root.join("desktop-plugins")});
+            let skill = json!({"name": "demo", "description": "test", "sourcePath": source});
+            let state = json!({"skills": [skill.clone()], "cliTargets": [target.clone()]});
+            super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
+            let installed = super::get_install_state(&skill, &target, false).await;
+            assert_eq!(installed["state"], "installed");
+            let target_path = super::skill_target_path(&target, "demo");
+            let manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(target_path.join(".claude-plugin/plugin.json")).unwrap()).unwrap();
+            assert_eq!(manifest["skills"], json!(["./skills/skill"]));
+            assert_eq!(manifest["installationPreference"], "auto_install");
+            assert!(manifest["name"].as_str().unwrap().starts_with("ai-manager-"));
+            assert!(target_path.join("skills/skill/SKILL.md").is_file());
+            assert!(!source.join(".claude-plugin").exists());
+            std::fs::write(source.join("extra.md"), "new content").unwrap();
+            assert_eq!(super::get_install_state(&skill, &target, false).await["state"], "broken-link");
+            super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
+            assert_eq!(std::fs::read_to_string(target_path.join("skills/skill/extra.md")).unwrap(), "new content");
+            super::uninstall_skill_link(&[target.clone()], "demo", "claude-desktop").await.unwrap();
+            assert!(std::fs::symlink_metadata(&target_path).is_err());
+            assert!(source.join("SKILL.md").is_file());
+            std::fs::create_dir_all(&target_path).unwrap();
+            std::fs::write(target_path.join("keep.txt"), "foreign").unwrap();
+            assert!(super::install_skill_link(&state, &skill, "claude-desktop").await.is_err());
+            assert_eq!(std::fs::read_to_string(target_path.join("keep.txt")).unwrap(), "foreign");
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-skills-"));
+            std::fs::remove_dir_all(resolved).unwrap();
+        });
     }
 
     #[test]

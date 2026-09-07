@@ -129,6 +129,7 @@
               <div>
                 <h3>{{ cli.name }}</h3>
                 <p>{{ cli.skillsPath || "该 CLI 不支持 Skill 目录" }}</p>
+                <p v-if="cli.skillsHint">{{ cli.skillsHint }}</p>
               </div>
               <span
                 :class="[

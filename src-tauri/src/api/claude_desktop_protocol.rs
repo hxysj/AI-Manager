@@ -351,7 +351,6 @@ pub(super) async fn forward(
     provider: &Value,
     key: &str,
     payload: Value,
-    model: &str,
 ) -> Result<Response<GatewayBody>, ManagerError> {
     if key.is_empty() {
         return Ok(gateway_error(
@@ -359,6 +358,7 @@ pub(super) async fn forward(
             "供应商 API Key 缺失",
         ));
     }
+    let model = text(&payload, "model");
     let responses = text(provider, "apiFormat") == "openai_responses";
     let request = match convert_request(&payload, responses) {
         Ok(request) => request,
@@ -718,7 +718,7 @@ struct StreamState {
     ended: bool,
 }
 
-fn frame_boundary(buffer: &[u8]) -> Option<usize> {
+pub(super) fn frame_boundary(buffer: &[u8]) -> Option<usize> {
     let unix = buffer
         .windows(2)
         .position(|window| window == b"\n\n")
@@ -1049,17 +1049,22 @@ mod tests {
                     });
                     let provider = json!({"apiFormat": if responses { "openai_responses" } else { "openai_chat" }, "baseUrl": format!("http://127.0.0.1:{port}/v1")});
                     let mut input = payload(); input["stream"] = json!(streaming);
-                    let response = forward(&provider, "upstream-secret", input, "claude-sonnet-4-6").await.unwrap();
+                    let response = forward(&provider, "upstream-secret", input).await.unwrap();
                     assert_eq!(response.status(), StatusCode::OK);
                     let output = response.into_body().collect().await.unwrap().to_bytes();
                     let output = String::from_utf8(output.to_vec()).unwrap();
                     if streaming {
+                        let start = output.lines().find_map(|line| {
+                            let event: Value = serde_json::from_str(line.strip_prefix("data: ")?).ok()?;
+                            (event["type"] == "message_start").then_some(event)
+                        }).unwrap();
+                        assert_eq!(start["message"]["model"], "upstream-model");
                         assert!(output.contains(" 你好 "));
                         assert!(output.contains("event: message_stop"));
                         assert!(!output.contains("event: error"), "{output}");
                     } else {
                         let output: Value = serde_json::from_str(&output).unwrap();
-                        assert_eq!(output["model"], "claude-sonnet-4-6");
+                        assert_eq!(output["model"], "upstream-model");
                         assert_eq!(output["content"][1]["input"]["city"], "New York");
                     }
                     server.abort();

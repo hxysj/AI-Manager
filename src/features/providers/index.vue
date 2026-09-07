@@ -2233,7 +2233,6 @@
               }
             ]"
             type="button"
-            v-if="providerDetail?.cli !== 'claude-desktop'"
             @click="providerDetailTab = 'usage'"
           >
             用量
@@ -3106,12 +3105,14 @@ const providerUsageProviderId = computed(() => {
   return providerDetail.value.id
 })
 
+const providerUsageAppType = computed(() => providerDetail.value?.cli || "all")
+
 const providerUsageTarget = computed(() => {
   if (!providerUsageProviderId.value) {
     return ""
   }
 
-  return `provider:${providerUsageProviderId.value}`
+  return `provider:${providerUsageAppType.value}:${providerUsageProviderId.value}`
 })
 
 const providerUsageLogs = computed(() => {
@@ -3120,7 +3121,8 @@ const providerUsageLogs = computed(() => {
   }
 
   return (usageStats.value.logs || []).filter((item) => {
-    return item.providerId === providerUsageProviderId.value
+    return item.providerId === providerUsageProviderId.value &&
+      (providerUsageAppType.value === "all" || item.appType === providerUsageAppType.value)
   })
 })
 
@@ -3129,10 +3131,11 @@ const providerUsageSummary = computed(() => {
     return usageStats.value.summary || emptyUsageSummary
   }
 
-  return (
-    (usageStats.value.providerStats || []).find((item) => {
-      return item.providerId === providerUsageProviderId.value
-    }) || emptyUsageSummary
+  return mergeUsageSummaries(
+    (usageStats.value.modelStats || []).filter((item) => {
+      return item.providerId === providerUsageProviderId.value &&
+        (providerUsageAppType.value === "all" || item.appType === providerUsageAppType.value)
+    })
   )
 })
 
@@ -3161,7 +3164,8 @@ const providerUsageModelStats = computed(() => {
     (usageStats.value.modelStats || []).filter((item) => {
       return (
         usageStatsTarget.value === providerUsageTarget.value ||
-        item.providerId === providerUsageProviderId.value
+        (item.providerId === providerUsageProviderId.value &&
+          (providerUsageAppType.value === "all" || item.appType === providerUsageAppType.value))
       )
     }),
     providerUsageTodayModelStats.value
@@ -3562,6 +3566,7 @@ async function ensureUsageStatsReady() {
     target = providerUsageTarget.value
     payload = {
       statsScope: "provider",
+      appType: providerUsageAppType.value,
       providerId: providerUsageProviderId.value
     }
   }

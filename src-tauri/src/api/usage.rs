@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 const DEFAULT_EXCHANGE_RATE: f64 = 7.2;
 const CODEX_USAGE_PARSER_VERSION: u64 = 2;
+const DESKTOP_USAGE_PARSER_VERSION: u64 = 2;
 const SKILL_USAGE_PARSER_VERSION: u64 = 1;
 static PRICING_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static USAGE_LOG_CACHE: OnceLock<Mutex<Option<UsageLogCache>>> = OnceLock::new();
@@ -719,6 +720,7 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         .map_err(|error| ManagerError::System(error.to_string()))?
         .as_millis() as u64;
     usage_store::ensure_session_parser_version(paths, "codex", CODEX_USAGE_PARSER_VERSION)?;
+    usage_store::ensure_session_parser_version(paths, "claude-desktop", DESKTOP_USAGE_PARSER_VERSION)?;
     let session_versions = usage_store::read_session_versions(paths)?;
     let pricing_config = read_pricing(paths)?;
     let pricing_index = create_pricing_index(&pricing_config);
@@ -727,25 +729,36 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         let app_type = normalize_app_type(&string_value(session.get("cli")));
         let raw_path = string_value(session.get("rawPath"));
 
-        if !["claude", "codex", "gemini"].contains(&app_type.as_str()) || raw_path.is_empty() {
+        if !["claude", "codex", "gemini", "claude-desktop"].contains(&app_type.as_str()) || raw_path.is_empty() {
             continue;
         }
 
-        let session_updated_at = file_modified_at(&raw_path);
+        let session_updated_at = session_file_modified_at(&app_type, &raw_path);
         session["updatedAt"] = json!(session_updated_at);
 
-        if session_versions.get(&raw_path) == Some(&session_updated_at) {
+        if session_versions.get(&raw_path).is_some_and(|(source, version)| source == &app_type && *version == session_updated_at) {
             continue;
         }
 
         match parse_usage_session(&session, state, workspace_created_at).await {
-            Ok(logs) => {
+            Ok(mut logs) => {
+                if app_type == "claude-desktop" {
+                    bind_desktop_providers(paths, &mut logs)?;
+                }
                 let request_ids = logs
                     .iter()
                     .map(|log| string_value(log.get("requestId")))
                     .filter(|request_id| !request_id.is_empty())
                     .collect::<Vec<_>>();
-                let record_map = usage_store::read_request_records(paths, &request_ids)?;
+                let mut record_map = usage_store::read_request_records(paths, &request_ids)?;
+                record_map.retain(|_, record| string_value(record.get("appType")) == app_type);
+                if app_type == "claude-desktop" {
+                    for log in &logs {
+                        if log["requestSource"] == "proxy-managed" {
+                            record_map.remove(&string_value(log.get("requestId")));
+                        }
+                    }
+                }
                 let (logs, records) = merge_usage_records(
                     logs,
                     record_map,
@@ -784,7 +797,11 @@ async fn parse_usage_session(
 ) -> Result<Vec<Value>, ManagerError> {
     let app_type = normalize_app_type(&string_value(session.get("cli")));
     let raw_path = string_value(session.get("rawPath"));
-    let content = tokio::fs::read_to_string(&raw_path).await?;
+    let content = if app_type == "claude-desktop" {
+        read_session_content(&app_type, &raw_path)?
+    } else {
+        tokio::fs::read_to_string(&raw_path).await?
+    };
     let extension = Path::new(&raw_path)
         .extension()
         .and_then(|value| value.to_str())
@@ -827,6 +844,19 @@ async fn parse_usage_session(
     };
     let provider_info = create_session_provider_info(&usage_session, &fallback_provider);
 
+    if app_type == "claude-desktop" {
+        if extension == "jsonl" {
+            let mut logs = extract_claude_logs(&usage_session, &content, &provider_info)?;
+            for log in &mut logs {
+                log["dataSource"] = json!("desktop_code");
+                log["requestSource"] = json!("desktop-session");
+                log["desktopResponseIds"] = json!([string_value(log.get("requestId"))
+                    .strip_prefix("session:").unwrap_or("")]);
+            }
+            return Ok(logs);
+        }
+        return extract_desktop_logs(&usage_session, &content, &provider_info);
+    }
     if app_type == "claude" {
         return extract_claude_logs(&usage_session, &content, &provider_info);
     }
@@ -840,6 +870,62 @@ async fn parse_usage_session(
     }
 
     Ok(Vec::new())
+}
+
+fn bind_desktop_providers(paths: &AppPaths, logs: &mut [Value]) -> Result<(), ManagerError> {
+    let request_ids = logs
+        .iter()
+        .flat_map(|log| string_array(log.get("desktopResponseIds")))
+        .map(|id| format!("desktop-response:{id}"))
+        .collect::<Vec<_>>();
+    let records = usage_store::read_request_records(paths, &request_ids)?;
+    for log in logs {
+        let response_ids = log["desktopResponseIds"]
+            .as_array()
+            .map(|ids| {
+                ids.iter()
+                    .map(|id| string_value(Some(id)))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if let Some(object) = log.as_object_mut() {
+            object.remove("desktopResponseIds");
+        }
+        let matches = response_ids
+            .iter()
+            .map(|id| records.get(&format!("desktop-response:{id}")))
+            .collect::<Option<Vec<_>>>();
+        let Some(matches) = matches else {
+            continue;
+        };
+        let Some(first) = matches.first() else {
+            continue;
+        };
+        let provider_id = string_value(first.get("providerId"));
+        if provider_id.is_empty()
+            || !matches.iter().all(|record| {
+                record["appType"] == "claude-desktop" && record["providerId"] == provider_id
+            })
+        {
+            continue;
+        }
+        for field in [
+            "providerId",
+            "providerName",
+            "providerType",
+            "requestSource",
+        ] {
+            log[field] = first[field].clone();
+        }
+        for field in ["model", "requestModel"] {
+            if !string_value(first.get(field)).is_empty()
+                && matches.iter().all(|record| record[field] == first[field])
+            {
+                log[field] = first[field].clone();
+            }
+        }
+    }
+    Ok(())
 }
 
 fn merge_usage_records(
@@ -1002,12 +1088,65 @@ fn normalize_pricing_item(input: Value) -> Result<Value, ManagerError> {
     }))
 }
 
+fn extract_desktop_logs(session: &Value, content: &str, provider: &Value) -> Result<Vec<Value>, ManagerError> {
+    let mut logs = Vec::new();
+    let mut request_model = string_value(session.get("model"));
+    let mut response_model = None;
+    let mut response_ids = HashSet::new();
+    for line in content.lines().filter(|line| !line.trim().is_empty()) {
+        let record: Value = serde_json::from_str(line)?;
+        if record["type"] == "assistant" {
+            response_ids.insert(string_value(record["message"].get("id")));
+            if let Some(model) = record["message"]["model"].as_str().filter(|model| !model.is_empty()) {
+                response_model = Some(model.to_string());
+            }
+        } else if record["type"] != "result" {
+            if let Some(model) = record["model"].as_str().filter(|model| !model.is_empty()) {
+                request_model = model.to_string();
+            }
+        }
+        if record["type"] != "result" {
+            continue;
+        }
+        let model = response_model.take().unwrap_or_else(|| request_model.clone());
+        let turn_response_ids = std::mem::take(&mut response_ids).into_iter().collect::<Vec<_>>();
+        if !record["usage"].is_object() {
+            continue;
+        }
+        let usage = &record["usage"];
+        let id = non_empty_text(record.get("uuid"), &create_hash_id(&[
+            string_value(session.get("rawPath")), value_to_text(record.get("timestamp")), logs.len().to_string()
+        ]));
+        let mut log = create_usage_log(
+            session, provider, &format!("desktop-turn:{id}"), model, &request_model,
+            to_number(usage.get("input_tokens")), to_number(usage.get("output_tokens")),
+            to_number(usage.get("cache_read_input_tokens")), to_number(usage.get("cache_creation_input_tokens")),
+            "desktop_audit", to_timestamp(record.get("timestamp").or_else(|| record.get("_audit_timestamp")), number_value(session.get("updatedAt"), 0)),
+        );
+        log["requestSource"] = json!("desktop-session");
+        log["desktopResponseIds"] = json!(turn_response_ids);
+        log["latencyMs"] = record["duration_api_ms"].clone();
+        if record["is_error"] == true {
+            log["statusCode"] = json!(number_value(record.get("api_error_status"), 0));
+            log["errorMessage"] = json!("Desktop 回合失败，详情请查看会话");
+        }
+        logs.push(log);
+    }
+    Ok(logs)
+}
+
 fn extract_claude_logs(
     session: &Value,
     content: &str,
     provider_info: &Value,
 ) -> Result<Vec<Value>, ManagerError> {
     let mut logs = Vec::new();
+    let is_desktop = session["cli"] == "claude-desktop";
+    let mut request_model = if is_desktop {
+        string_value(session.get("requestModel"))
+    } else {
+        String::new()
+    };
 
     for line in content.lines() {
         let text = line.trim();
@@ -1017,6 +1156,11 @@ fn extract_claude_logs(
         }
 
         let record: Value = serde_json::from_str(text)?;
+        if is_desktop && record["type"] == "system" {
+            if let Some(model) = record["model"].as_str().filter(|model| !model.is_empty()) {
+                request_model = model.to_string();
+            }
+        }
         let message = record.get("message").or_else(|| {
             record
                 .get("payload")
@@ -1060,7 +1204,7 @@ fn extract_claude_logs(
                 .and_then(|message| message.get("model"))
                 .map(|value| value_to_text(Some(value)))
                 .unwrap_or_default(),
-            "",
+            &request_model,
             to_number(usage.and_then(|usage| usage.get("input_tokens"))),
             to_number(usage.and_then(|usage| usage.get("output_tokens"))),
             to_number(usage.and_then(|usage| usage.get("cache_read_input_tokens"))),
@@ -2018,6 +2162,9 @@ fn create_session_provider_info(session: &Value, fallback: &Value) -> Value {
 }
 
 fn resolve_provider(cli: &str, state: &Value) -> Value {
+    if cli == "claude-desktop" {
+        return json!({"providerId": cli, "providerName": "Claude Desktop", "providerType": ""});
+    }
     let proxy_state = state.get(&format!("{}ProxyState", cli)).or_else(|| {
         if cli == "codex" {
             state.get("codexProxyState")
@@ -2269,7 +2416,25 @@ pub(crate) fn collect_cli_session_files(
         }
     }
 
-    Ok(files)
+    let transcripts = files.iter().enumerate().filter_map(|(index, item)| {
+        if string_value(item.get("cli")) != "claude" { return None; }
+        let path = string_value(item.get("filePath"));
+        Some((Path::new(&path).file_stem()?.to_str()?.to_string(), index))
+    }).collect::<HashMap<_, _>>();
+    let mut duplicates = HashSet::new();
+    for index in 0..files.len() {
+        if string_value(files[index].get("cli")) != "claude-desktop" { continue; }
+        let path = string_value(files[index].get("filePath"));
+        if !Path::new(&path).components().any(|part| part.as_os_str() == "claude-code-sessions") { continue; }
+        let Some(metadata) = std::fs::read_to_string(&path).ok().and_then(|content| serde_json::from_str::<Value>(&content).ok()) else { continue; };
+        let Some(transcript_index) = transcripts.get(&string_value(metadata.get("cliSessionId"))) else { continue; };
+        files[*transcript_index]["cli"] = json!("claude-desktop");
+        files[*transcript_index]["cliName"] = json!("Claude Desktop");
+        files[*transcript_index]["title"] = metadata["title"].clone();
+        files[*transcript_index]["requestModel"] = metadata["model"].clone();
+        duplicates.insert(index);
+    }
+    Ok(files.into_iter().enumerate().filter_map(|(index, item)| (!duplicates.contains(&index)).then_some(item)).collect())
 }
 
 fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
@@ -2281,9 +2446,11 @@ fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>,
     let scan_start_at = usage_session_scan_start_at(paths);
     let mut seen_paths = sessions
         .iter()
-        .map(|item| string_value(item.get("rawPath")))
-        .filter(|item| !item.is_empty())
-        .map(|item| (item, true))
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let path = string_value(item.get("rawPath"));
+            (!path.is_empty()).then_some((path, index))
+        })
         .collect::<HashMap<_, _>>();
     let cli_targets = state
         .get("cliTargets")
@@ -2294,15 +2461,23 @@ fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>,
     for item in collect_cli_session_files(&cli_targets)? {
         let raw_path = string_value(item.get("filePath"));
 
-        if raw_path.is_empty() || seen_paths.contains_key(&raw_path) {
+        if raw_path.is_empty() {
+            continue;
+        }
+        if let Some(index) = seen_paths.get(&raw_path) {
+            sessions[*index]["cli"] = item["cli"].clone();
+            sessions[*index]["cliName"] = item["cliName"].clone();
+            if let Some(request_model) = item.get("requestModel") {
+                sessions[*index]["requestModel"] = request_model.clone();
+            }
             continue;
         }
 
-        if scan_start_at > 0 && file_modified_at(&raw_path) < scan_start_at {
+        if scan_start_at > 0 && session_file_modified_at(&string_value(item.get("cli")), &raw_path) < scan_start_at {
             continue;
         }
 
-        seen_paths.insert(raw_path.clone(), true);
+        seen_paths.insert(raw_path.clone(), sessions.len());
         sessions.push(create_scanned_usage_session(&item, &raw_path));
     }
 
@@ -2340,6 +2515,7 @@ fn create_scanned_usage_session(item: &Value, raw_path: &str) -> Value {
       "projectName": "",
       "projectPath": "",
       "model": "",
+      "requestModel": string_value(item.get("requestModel")),
       "rawPath": raw_path,
       "updatedAt": updated_at,
       "archived": false
@@ -2395,6 +2571,22 @@ impl CodexSubagentBoundary {
     }
 }
 
+pub(crate) fn session_file_modified_at(cli: &str, path: &str) -> u64 {
+    if cli == "claude-desktop" {
+        crate::api::claude_desktop_runtime::modified_at(Path::new(path))
+    } else {
+        file_modified_at(path)
+    }
+}
+
+pub(crate) fn read_session_content(cli: &str, path: &str) -> Result<String, ManagerError> {
+    if cli == "claude-desktop" {
+        crate::api::claude_desktop_runtime::read_content(Path::new(path))
+    } else {
+        Ok(std::fs::read_to_string(path)?)
+    }
+}
+
 fn file_modified_at(path: &str) -> u64 {
     std::fs::metadata(path)
         .ok()
@@ -2409,7 +2601,7 @@ fn read_session_records(
     stored_records: Option<&(u64, Vec<Value>)>,
 ) -> Result<(Arc<Vec<Value>>, bool), ManagerError> {
     let raw_path = string_value(item.get("filePath"));
-    let updated_at = file_modified_at(&raw_path);
+    let updated_at = session_file_modified_at(&string_value(item.get("cli")), &raw_path);
     let cache = SKILL_SESSION_RECORD_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
 
     if let Some(records) = cache
@@ -2437,7 +2629,7 @@ fn read_session_records(
         return Ok((records, false));
     }
 
-    let content = std::fs::read_to_string(&raw_path)?;
+    let content = read_session_content(&string_value(item.get("cli")), &raw_path)?;
     let is_codex = string_value(item.get("cli")) == "codex";
     let mut subagent_boundary = CodexSubagentBoundary::default();
     let mut records = Vec::new();
@@ -3045,6 +3237,13 @@ fn scan_session_files(
         let entry_path = entry.path();
         let file_name = entry.file_name().to_string_lossy().to_string();
 
+        if get_cli_type(cli_target) == "claude-desktop"
+            && (entry.file_type()?.is_symlink()
+                || ["skills-plugin", "cowork_plugins", ".claude", "rpm", "remote_cowork_plugins"].contains(&file_name.as_str()))
+        {
+            continue;
+        }
+
         if entry_path.is_dir() {
             if !["node_modules", ".git", "dist", "build"].contains(&file_name.as_str()) {
                 files.extend(scan_session_files(
@@ -3065,6 +3264,9 @@ fn scan_session_files(
 }
 
 fn match_session_file(file_name: &str, cli_target: &Value) -> bool {
+    if get_cli_type(cli_target) == "claude-desktop" {
+        return crate::api::claude_desktop_runtime::is_session_file(file_name);
+    }
     let rules = session_scan_rules(cli_target);
     let extension = Path::new(file_name)
         .extension()
@@ -3506,6 +3708,7 @@ fn normalize_model_category(value: Option<&Value>) -> String {
 fn format_app_provider_name(cli: &str) -> String {
     match cli {
         "claude" => "Claude".to_string(),
+        "claude-desktop" => "Claude Desktop".to_string(),
         "codex" => "Codex".to_string(),
         "gemini" => "Gemini".to_string(),
         "" => "未知 CLI".to_string(),
@@ -3853,6 +4056,52 @@ mod tests {
     use crate::core::{paths::resolve_app_paths, usage_store};
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn desktop_provider_stats_require_exact_attribution_and_isolate_applications() {
+        let root = std::env::temp_dir().join(format!("ai-manager-desktop-provider-stats-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&root);
+        for (name, app_type, provider_id, tokens) in [
+            ("desktop", "claude-desktop", "shared-provider", 10),
+            ("other", "claude-desktop", "other-provider", 20),
+            ("cli", "claude", "shared-provider", 100),
+            ("unbound", "claude-desktop", "claude-desktop", 40),
+        ] {
+            usage_store::replace_sessions(&paths, &[usage_store::UsageSessionUpdate {
+                raw_path: name.to_string(), app_type: app_type.to_string(), updated_at: 1,
+                logs: vec![json!({"requestId": name, "rawPath": name, "appType": app_type,
+                    "providerId": provider_id, "model": "upstream-model", "inputTokens": tokens,
+                    "outputTokens": 2, "createdAt": super::now_millis()})], records: Vec::new(),
+            }]).unwrap();
+            usage_store::write_request_record(&paths, &json!({
+                "requestId": format!("desktop-response:{name}"), "appType": app_type,
+                "providerId": provider_id, "requestSource": "proxy-managed", "model": "upstream-model"
+            })).unwrap();
+        }
+        for _ in 0..2 {
+            for (app_type, request_count, input_tokens) in [("claude-desktop", 1, 10), ("claude", 1, 100), ("all", 2, 110)] {
+                let stats = super::get_stats_data(&paths, json!({"statsScope": "provider", "appType": app_type, "providerId": "shared-provider"})).unwrap();
+                assert_eq!(stats["summary"]["requestCount"], request_count);
+                assert_eq!(stats["summary"]["inputTokens"], input_tokens);
+                assert_eq!(stats["todaySummary"]["inputTokens"], input_tokens);
+            }
+        }
+        let mut logs = [
+            json!({"providerId": "claude-desktop", "desktopResponseIds": ["desktop"]}),
+            json!({"providerId": "claude-desktop", "desktopResponseIds": ["desktop", "missing"]}),
+            json!({"providerId": "claude-desktop", "desktopResponseIds": ["desktop", "other"]}),
+            json!({"providerId": "claude-desktop", "desktopResponseIds": ["desktop", ""]}),
+            json!({"providerId": "claude-desktop", "desktopResponseIds": ["cli"]}),
+        ];
+        super::bind_desktop_providers(&paths, &mut logs).unwrap();
+        assert_eq!(logs[0]["providerId"], "shared-provider");
+        assert!(logs[1..].iter().all(|log| log["providerId"] == "claude-desktop"));
+        assert!(logs.iter().all(|log| log.get("desktopResponseIds").is_none()));
+        let root = root.canonicalize().unwrap();
+        assert!(root.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        assert!(root.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-provider-stats-"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
     use std::time::Duration;
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::api::{proxy, runtime_provider};
-use crate::core::{error::ManagerError, paths::AppPaths, provider_store};
+use crate::core::{error::ManagerError, paths::AppPaths, provider_store, usage_store};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use http_body_util::{combinators::UnsyncBoxBody, BodyExt, Full, Limited, StreamBody};
@@ -22,6 +22,7 @@ const PROFILE_ID: &str = "a1796a13-0ec3-4dd0-b3a0-000000157230";
 const OFFICIAL_ID: &str = "claude-desktop-official";
 const GATEWAY_KEY: &str = "claude-desktop:gateway";
 const DEFAULT_PORT: u16 = 15723;
+static REQUEST_LOG_LOCK: Mutex<()> = Mutex::const_new(());
 const ROUTES: [(&str, &str, &str); 4] = [
     ("claude-sonnet-4-6", "Sonnet", "sonnetModel"),
     ("claude-opus-4-8", "Opus", "opusModel"),
@@ -1110,18 +1111,105 @@ async fn handle_gateway(
     request: Request<Incoming>,
     paths: AppPaths,
 ) -> Result<Response<GatewayBody>, Infallible> {
-    Ok(match process_gateway(request, &paths).await {
+    let started = std::time::Instant::now();
+    let mut log = json!({"method": request.method().as_str(), "endpoint": request.uri().path(),
+        "requestUrl": request.uri().path(), "requestSource": "proxy-managed", "targetType": "provider"});
+    let response = match process_gateway(request, &paths, &mut log).await {
         Ok(response) => response,
         Err(_) => gateway_error(
             StatusCode::BAD_GATEWAY,
             "Desktop 上游请求失败，请检查供应商地址、凭据和网络连接",
         ),
-    })
+    };
+    log["statusCode"] = json!(response.status().as_u16());
+    log["ok"] = json!(response.status().is_success());
+    log["latencyMs"] = json!(started.elapsed().as_millis() as u64);
+    if !response.status().is_success() {
+        log["errorMessage"] = json!(format!("Desktop 网关请求失败：HTTP {}", response.status().as_u16()));
+    }
+    let response = track_gateway_provider(response, paths.clone(), &log);
+    let _guard = REQUEST_LOG_LOCK.lock().await;
+    if proxy::append_log(&paths, "claude-desktop", log).await.is_err() {
+        eprintln!("Desktop 请求记录写入失败，请检查数据目录权限");
+    }
+    Ok(response)
+}
+
+fn track_gateway_provider(
+    response: Response<GatewayBody>,
+    paths: AppPaths,
+    log: &Value,
+) -> Response<GatewayBody> {
+    if !response.status().is_success()
+        || log["endpoint"] != "/claude-desktop/v1/messages"
+        || text(log, "providerId").is_empty()
+    {
+        return response;
+    }
+    let streaming = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/event-stream"));
+    let mut record = json!({
+        "appType": "claude-desktop", "providerId": log["providerId"],
+        "providerName": log["providerName"], "providerType": log["providerType"],
+        "model": log["model"], "requestModel": log["requestModel"],
+        "requestSource": "proxy-managed", "createdAt": chrono::Utc::now().timestamp_millis()
+    });
+    let (parts, body) = response.into_parts();
+    let mut buffer = Vec::new();
+    let mut captured = false;
+    let stream = body.into_data_stream().map(move |chunk| {
+        if let Ok(bytes) = &chunk {
+            if !captured {
+                if buffer.len() + bytes.len() > 32 * 1024 * 1024 {
+                    captured = true;
+                    buffer.clear();
+                } else {
+                    buffer.extend_from_slice(bytes);
+                    let mut message = None;
+                    if streaming {
+                        while let Some(boundary) = protocol::frame_boundary(&buffer) {
+                            let frame = buffer.drain(..boundary).collect::<Vec<_>>();
+                            let data = String::from_utf8_lossy(&frame)
+                                .lines()
+                                .filter_map(|line| line.strip_prefix("data:").map(str::trim_start))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            if let Ok(event) = serde_json::from_str::<Value>(&data) {
+                                if event["type"] == "message_start" {
+                                    message = Some(event["message"].clone());
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        message = serde_json::from_slice::<Value>(&buffer).ok();
+                    }
+                    if let Some(message) = message {
+                        let message_id = text(&message, "id");
+                        if message["type"] == "message" && !message_id.is_empty() {
+                            record["requestId"] = json!(format!("desktop-response:{message_id}"));
+                            if usage_store::write_request_record(&paths, &record).is_err() {
+                                eprintln!("Desktop 请求供应商归属写入失败，请检查数据目录");
+                            }
+                        }
+                        captured = true;
+                        buffer.clear();
+                    }
+                }
+            }
+        }
+        chunk.map(Frame::data)
+    });
+    Response::from_parts(parts, StreamBody::new(stream).boxed_unsync())
 }
 
 async fn process_gateway(
     request: Request<Incoming>,
     paths: &AppPaths,
+    log: &mut Value,
 ) -> Result<Response<GatewayBody>, ManagerError> {
     let data = DesktopData::load(paths)?;
     let token = data.gateway_token()?;
@@ -1154,6 +1242,9 @@ async fn process_gateway(
             "当前没有启用的 Desktop 本地路由供应商",
         ));
     };
+    log["providerId"] = provider["id"].clone();
+    log["providerName"] = provider["name"].clone();
+    log["providerType"] = provider["type"].clone();
     let routes = match model_routes(provider) {
         Ok(routes) => routes,
         Err(_) => {
@@ -1215,6 +1306,9 @@ async fn process_gateway(
         ));
     };
     let desktop_model = text(&payload, "model").to_string();
+    log["requestModel"] = json!(desktop_model);
+    log["model"] = mapping["model"].clone();
+    log["streaming"] = json!(payload["stream"] == true);
     payload["model"] = mapping["model"].clone();
     if ["openai_chat", "openai_responses"].contains(&text(provider, "apiFormat")) {
         if endpoint != "/messages" {
@@ -1227,7 +1321,6 @@ async fn process_gateway(
             provider,
             &data.key(data.current_id())?,
             payload,
-            &desktop_model,
         )
         .await;
     }
@@ -2089,6 +2182,44 @@ mod tests {
     }
 
     #[test]
+    fn desktop_response_attribution_preserves_json_sse_and_excludes_secrets() {
+        runtime().block_on(async {
+            for streaming in [false, true] {
+                let fixture = Fixture::new();
+                let message = json!({"type": "message", "id": "msg-attribution", "model": "upstream-model", "content": [{"type": "text", "text": "private-response-body"}]});
+                let body = if streaming {
+                    format!("event: ping\r\ndata: {{\"type\":\"ping\"}}\r\n\r\nevent: message_start\r\ndata: {}\r\n\r\nevent: message_stop\r\ndata: {{\"type\":\"message_stop\"}}\r\n\r\n", json!({"type": "message_start", "message": message}))
+                } else {
+                    message.to_string()
+                };
+                let chunks = body.as_bytes().chunks(3).map(Bytes::copy_from_slice).collect::<Vec<_>>();
+                let stream = futures_util::stream::iter(chunks.into_iter().map(|bytes| {
+                    Ok::<_, Box<dyn std::error::Error + Send + Sync>>(Frame::data(bytes))
+                }));
+                let response = Response::builder()
+                    .header("content-type", if streaming { "text/event-stream" } else { "application/json" })
+                    .body(StreamBody::new(stream).boxed_unsync()).unwrap();
+                let mut log = json!({"endpoint": "/claude-desktop/v1/messages", "providerId": "desktop-provider", "providerName": "测试供应商", "model": "upstream-model", "requestModel": "claude-sonnet-4-6", "apiKey": "private-key", "requestBody": "private-request-body"});
+                let response = track_gateway_provider(response, fixture.paths.clone(), &log);
+                log["providerId"] = json!("new-provider");
+                let output = response.into_body().collect().await.unwrap().to_bytes();
+                assert_eq!(output.as_ref(), body.as_bytes());
+                let records = usage_store::read_request_records(&fixture.paths, &["desktop-response:msg-attribution".to_string()]).unwrap();
+                let record = &records["desktop-response:msg-attribution"];
+                assert_eq!(record["providerId"], "desktop-provider");
+                assert_eq!(record["requestModel"], "claude-sonnet-4-6");
+                assert_eq!(record["model"], "upstream-model");
+                assert!(!record.to_string().contains("private-"));
+                assert!(usage_store::read_all_logs(&fixture.paths).unwrap().is_empty());
+                let error_response = json_response(StatusCode::BAD_GATEWAY, json!({"type": "message", "id": "error-message"}));
+                track_gateway_provider(error_response, fixture.paths.clone(), &log)
+                    .into_body().collect().await.unwrap();
+                assert!(usage_store::read_request_records(&fixture.paths, &["desktop-response:error-message".to_string()]).unwrap().is_empty());
+            }
+        });
+    }
+
+    #[test]
     fn gateway_authentication_routes_and_streaming_are_isolated() {
         runtime().block_on(async {
             let fixture = Fixture::new();
@@ -2229,6 +2360,23 @@ mod tests {
                 Bytes::from_static(b"data: 1\n\n")
             );
             drop(stream);
+            let logs = proxy::read_logs(&fixture.paths, "claude-desktop").unwrap();
+            assert_eq!(logs.as_array().unwrap().len(), 5);
+            assert_eq!(logs[0]["requestModel"], "claude-opus-4-8");
+            assert_eq!(logs[0]["model"], "upstream-model");
+            assert_eq!(logs[0]["statusCode"], 200);
+            assert_eq!(logs[0]["streaming"], true);
+            for secret in ["upstream-secret", "local-secret", "wrong-secret", "must-not-leak"] {
+                assert!(!logs.to_string().contains(secret));
+            }
+            assert_eq!(proxy::read_logs(&fixture.paths, "claude").unwrap(), json!([]));
+            assert_eq!(proxy::read_logs(&fixture.paths, "codex").unwrap(), json!([]));
+            std::fs::write(&fixture.paths.storage_files.claude_desktop_request_logs, "invalid-json").unwrap();
+            assert_eq!(
+                client.get(format!("{base}/v1/models"))
+                    .bearer_auth("local-secret").send().await.unwrap().status(),
+                StatusCode::OK
+            );
             manager.stop().await;
             assert!(!manager.running().await);
             upstream_task.abort();

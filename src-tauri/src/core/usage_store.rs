@@ -278,12 +278,12 @@ pub fn read_app_types(paths: &AppPaths) -> Result<Vec<String>, ManagerError> {
     Ok(items)
 }
 
-pub fn read_session_versions(paths: &AppPaths) -> Result<HashMap<String, u64>, ManagerError> {
+pub fn read_session_versions(paths: &AppPaths) -> Result<HashMap<String, (String, u64)>, ManagerError> {
     initialize(paths)?;
     let connection = open_connection(paths)?;
-    let mut statement = connection.prepare("SELECT raw_path, updated_at FROM usage_sessions")?;
+    let mut statement = connection.prepare("SELECT raw_path, app_type, updated_at FROM usage_sessions")?;
     let items = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+        Ok((row.get::<_, String>(0)?, (row.get::<_, String>(1)?, row.get::<_, i64>(2)? as u64)))
     })?;
 
     Ok(items.collect::<Result<HashMap<_, _>, _>>()?)
@@ -400,17 +400,24 @@ pub fn ensure_session_parser_version(
     }
 
     let transaction = connection.transaction()?;
-    transaction.execute(
-        "DELETE FROM usage_logs
-         WHERE raw_path IN (
-           SELECT raw_path FROM usage_sessions WHERE app_type = ?1
-         )",
-        params![app_type],
-    )?;
-    transaction.execute(
-        "DELETE FROM usage_sessions WHERE app_type = ?1",
-        params![app_type],
-    )?;
+    if app_type == "claude-desktop" {
+        transaction.execute(
+            "UPDATE usage_sessions SET updated_at = 0 WHERE app_type = ?1",
+            params![app_type],
+        )?;
+    } else {
+        transaction.execute(
+            "DELETE FROM usage_logs
+             WHERE raw_path IN (
+               SELECT raw_path FROM usage_sessions WHERE app_type = ?1
+             )",
+            params![app_type],
+        )?;
+        transaction.execute(
+            "DELETE FROM usage_sessions WHERE app_type = ?1",
+            params![app_type],
+        )?;
+    }
     transaction.execute(
         "INSERT INTO usage_metadata(key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -459,6 +466,15 @@ pub fn read_request_records(
     Ok(output)
 }
 
+pub fn write_request_record(paths: &AppPaths, record: &Value) -> Result<(), ManagerError> {
+    initialize(paths)?;
+    let mut connection = open_connection(paths)?;
+    let transaction = connection.transaction()?;
+    insert_request_record(&transaction, record)?;
+    transaction.commit()?;
+    Ok(())
+}
+
 pub fn replace_sessions(
     paths: &AppPaths,
     updates: &[UsageSessionUpdate],
@@ -499,6 +515,7 @@ pub fn replace_sessions(
             if let Some(existing) = existing_logs
                 .get(&request_id)
                 .filter(|item| number(item.get("costLockedAt")) > 0)
+                .filter(|item| update.app_type != "claude-desktop" || item["model"] == log["model"])
             {
                 for field in [
                     "pricingSnapshot",

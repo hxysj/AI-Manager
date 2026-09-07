@@ -14,6 +14,9 @@
       <div>
         <p class="usage-view__eyebrow">Token Usage</p>
         <h1>模型用量统计</h1>
+        <p v-if="appType === 'claude-desktop'" class="usage-desktop-note">
+          Cowork 按回合结算计数，Code 按已落盘请求计数；只统计日志中的真实 Token，缺失数据不估算。
+        </p>
       </div>
       <div class="usage-view__actions">
         <label class="usage-view__currency">
@@ -108,24 +111,42 @@
 
     <section class="usage-view__metrics">
       <article class="usage-view__metric">
-        <span>真实消耗 Tokens</span>
-        <span data-emphasis><TokenCount :value="summary.actualTokens" /></span>
-        <small>新增输入 <TokenCount :value="summary.inputTokens" /></small>
+        <span class="usage-metric-label">真实消耗 Tokens</span>
+        <span
+          class="usage-metric-value"
+          data-emphasis
+          :title="formatTokenCount(summary.actualTokens)"
+        >
+          <TokenCount :value="summary.actualTokens" />
+        </span>
+        <small class="usage-metric-note">新增输入 <TokenCount :value="summary.inputTokens" /></small>
       </article>
       <article class="usage-view__metric">
-        <span>输出 Tokens</span>
-        <span data-emphasis><TokenCount :value="summary.outputTokens" /></span>
-        <small>请求 {{ formatNumber(summary.requestCount) }} 次</small>
+        <span class="usage-metric-label">输出 Tokens</span>
+        <span
+          class="usage-metric-value"
+          data-emphasis
+          :title="formatTokenCount(summary.outputTokens)"
+        >
+          <TokenCount :value="summary.outputTokens" />
+        </span>
+        <small class="usage-metric-note">请求 {{ formatNumber(summary.requestCount) }} 次</small>
       </article>
       <article class="usage-view__metric">
-        <span>缓存读取</span>
-        <span data-emphasis><TokenCount :value="summary.cacheReadTokens" /></span>
-        <small>命中率 {{ formatPercent(summary.cacheHitRate) }}</small>
+        <span class="usage-metric-label">缓存读取</span>
+        <span
+          class="usage-metric-value"
+          data-emphasis
+          :title="formatTokenCount(summary.cacheReadTokens)"
+        >
+          <TokenCount :value="summary.cacheReadTokens" />
+        </span>
+        <small class="usage-metric-note">命中率 {{ formatPercent(summary.cacheHitRate) }}</small>
       </article>
       <article class="usage-view__metric">
-        <span>费用估算</span>
-        <span data-emphasis>{{ formatCost(summary.totalCostUsd) }}</span>
-        <small
+        <span class="usage-metric-label">费用估算</span>
+        <span class="usage-metric-value" data-emphasis>{{ formatCost(summary.totalCostUsd) }}</span>
+        <small class="usage-metric-note"
           >{{ displayCurrencyLabel }} · 汇率
           {{ formatExchangeRate(exchangeRate) }}</small
         >
@@ -319,7 +340,7 @@
             <span :title="item.sessionId || item.sessionTitle">
               {{ formatSessionLabel(item) }}
             </span>
-            <span :title="item.model">{{ item.model || "未识别模型" }}</span>
+            <span :title="item.requestModel && item.requestModel !== item.model ? `请求模型：${item.requestModel} → 上游模型：${item.model}` : item.model">{{ item.model || "未识别模型" }}</span>
             <span><TokenCount :value="normalizeInput(item)" /></span>
             <span><TokenCount :value="item.outputTokens" /></span>
             <span><TokenCount :value="item.cacheReadTokens" /></span>
@@ -2692,6 +2713,7 @@ function formatExportDateTime(value) {
 function formatAppName(value) {
   const names = {
     claude: "Claude",
+    "claude-desktop": "Claude Desktop",
     codex: "Codex",
     gemini: "Gemini"
   }
@@ -2703,6 +2725,8 @@ function formatDataSource(value) {
   const names = {
     proxy: "代理",
     session_log: "Claude 日志",
+    desktop_audit: "Desktop 回合结算",
+    desktop_code: "Desktop Code 日志",
     codex_session: "Codex 日志",
     gemini_session: "Gemini 日志"
   }
@@ -2714,6 +2738,7 @@ function formatRequestSourceOption(value) {
   const names = {
     "proxy-managed": "代理接管",
     "provider-instance": "独立实例",
+    "desktop-session": "Desktop 会话",
     session: "会话日志"
   }
 
@@ -2721,6 +2746,7 @@ function formatRequestSourceOption(value) {
 }
 
 function formatRequestSource(item) {
+  if (item.requestSource === "desktop-session") return "Desktop 会话"
   if (item.requestSource === "provider-instance" || item.instanceProviderId) {
     return `独立实例：${
       item.instanceProviderName ||
@@ -2797,6 +2823,13 @@ function formatSessionLabel(item) {
 }
 
 .usage-view {
+  .usage-desktop-note {
+    max-width: 45rem;
+    margin: 8px 0 0;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }
   position: relative;
   display: flex;
   height: 100%;
@@ -3019,23 +3052,24 @@ function formatSessionLabel(item) {
     flex-direction: column;
     gap: 7px;
     padding: 14px;
-  }
 
-  &__metric span:not([data-emphasis]),
-  &__metric small {
-    overflow: hidden;
-    color: var(--color-text-muted);
-    font-size: 0.76rem;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+    .usage-metric-label,
+    .usage-metric-note {
+      overflow: hidden;
+      color: var(--color-text-muted);
+      font-size: 0.76rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
 
-  &__metric [data-emphasis] {
-    overflow: hidden;
-    font-size: 1.32rem;
-    line-height: 1.1;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    .usage-metric-value {
+      overflow: hidden;
+      font-size: 1.32rem;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.1;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
   }
 
   &__trend {

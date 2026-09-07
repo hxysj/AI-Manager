@@ -266,10 +266,14 @@ fn read_cli_targets(paths: &AppPaths, app_settings: &AppSettings) -> Result<Valu
         targets.push(target);
     }
 
+    if let Some(target) = crate::api::claude_desktop_runtime::current_target(paths) {
+        targets.push(target);
+    }
+
     for target in stored_targets {
         let id = string_value(target.get("id"));
 
-        if id != "claude" && id != "codex" {
+        if id != "claude" && id != "codex" && id != "claude-desktop" {
             targets.push(target);
         }
     }
