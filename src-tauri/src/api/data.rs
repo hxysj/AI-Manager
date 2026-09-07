@@ -2391,7 +2391,10 @@ fn backup_secret() -> [u8; 32] {
 }
 
 fn export_provider_keys(paths: &AppPaths) -> Result<Value, ManagerError> {
-    let providers = provider_store::read_providers(paths)?;
+    let mut providers = provider_store::read_providers(paths)?;
+    providers.extend(provider_store::read_desktop_providers(paths)?.iter().map(|provider| {
+        json!({"id": format!("claude-desktop:{}", string_value(provider.get("id")))})
+    }));
     let keys = provider_store::read_keys(paths)?;
     let mut exported = Map::new();
 
@@ -2443,20 +2446,23 @@ async fn merge_provider_keys(
     choices: &Map<String, Value>,
 ) -> Result<(), ManagerError> {
     let mut next_keys = provider_store::read_keys(paths)?;
-    let provider_ids = provider_store::read_providers(paths)?
+    let mut provider_ids = provider_store::read_providers(paths)?
         .into_iter()
         .map(|provider| string_value(provider.get("id")))
         .filter(|provider_id| !provider_id.is_empty())
         .collect::<HashSet<_>>();
+    provider_ids.extend(provider_store::read_desktop_providers(paths)?.iter().map(|provider| {
+        format!("claude-desktop:{}", string_value(provider.get("id")))
+    }));
     let uses_database_choices = choices
         .keys()
         .any(|key| key.starts_with("database:storage/ai-manager.db:"));
-    let restore_provider_table = choice_text(
-        choices,
-        &create_restore_database_table_key("storage/ai-manager.db", "providers"),
-    ) == "backup";
-
     for (provider_id, api_key_data) in api_keys.as_object().cloned().unwrap_or_default() {
+        let table = if provider_id.starts_with("claude-desktop:") { "claude_desktop_providers" } else { "providers" };
+        let restore_provider_table = choice_text(
+            choices,
+            &create_restore_database_table_key("storage/ai-manager.db", table),
+        ) == "backup";
         let legacy_key = string_value(Some(&api_key_data));
         let requested_keys = api_key_data
             .get("apiKeys")
@@ -3100,6 +3106,7 @@ fn restore_database_table_name(table: &str) -> &'static str {
         "rule_profiles" => "Rule 配置",
         "providers" => "Provider",
         "provider_models" => "Provider 模型",
+        "claude_desktop_providers" => "Claude Desktop 供应商",
         "codex_accounts" => "Codex 官方账号",
         _ => "应用数据",
     }
@@ -3229,6 +3236,41 @@ mod tests {
     use reqwest::header::{HeaderMap, HeaderValue, CONTENT_LENGTH};
     use serde_json::{json, Map};
     use std::path::Path;
+
+    #[test]
+    fn claude_desktop_backup_keeps_providers_and_restores_keys_without_local_gateway_state() {
+        let root = std::env::temp_dir().join(format!("ai-manager-desktop-backup-test-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&root);
+        let mut keys = Map::new();
+        runtime_provider::set_provider_key(&mut keys, "same-id", "cli-secret".to_string()).unwrap();
+        runtime_provider::set_provider_key(&mut keys, "claude-desktop:same-id", "desktop-secret".to_string()).unwrap();
+        provider_store::write_provider_bundle(&paths, &[json!({"id": "same-id"})], &[], &[], &keys).unwrap();
+        provider_store::write_desktop_bundle(&paths, &[json!({"id": "same-id", "name": "Desktop"})], json!({"currentProviderId": "same-id", "claude-desktop:gateway": "local-only"}).as_object().unwrap(), &keys).unwrap();
+        let exported = super::export_provider_keys(&paths).unwrap();
+        assert_eq!(exported["same-id"]["apiKeys"][0]["apiKey"], "cli-secret");
+        assert_eq!(exported["claude-desktop:same-id"]["apiKeys"][0]["apiKey"], "desktop-secret");
+        assert!(!exported.to_string().contains("local-only"));
+        let snapshot = database::backup(&paths).unwrap();
+        let snapshot_path = root.join("snapshot.db");
+        std::fs::write(&snapshot_path, snapshot).unwrap();
+        let connection = rusqlite::Connection::open(&snapshot_path).unwrap();
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM claude_desktop_providers", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM claude_desktop_settings", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM provider_keys", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        drop(connection);
+        runtime_provider::set_provider_key(&mut keys, "same-id", "keep-cli-secret".to_string()).unwrap();
+        keys.remove("claude-desktop:same-id");
+        provider_store::write_keys(&paths, &keys).unwrap();
+        let choices = json!({"database:storage/ai-manager.db:claude_desktop_providers": "backup"});
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
+            merge_provider_keys(&paths, &exported, choices.as_object().unwrap())
+        ).unwrap();
+        assert_eq!(runtime_provider::get_provider_api_key(&paths, "same-id").unwrap(), "keep-cli-secret");
+        assert_eq!(runtime_provider::get_provider_api_key(&paths, "claude-desktop:same-id").unwrap(), "desktop-secret");
+        let resolved = root.canonicalize().unwrap();
+        assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        std::fs::remove_dir_all(resolved).unwrap();
+    }
 
     #[test]
     fn formats_binary_restore_content_as_summary() {

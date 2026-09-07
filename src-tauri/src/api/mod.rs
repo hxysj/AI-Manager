@@ -1,5 +1,6 @@
 pub mod app;
 pub mod app_logs;
+pub mod claude_desktop;
 pub mod codex_account;
 pub mod data;
 pub mod git_tool;

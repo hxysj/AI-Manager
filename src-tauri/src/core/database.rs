@@ -6,8 +6,9 @@ use std::path::Path;
 use std::time::Duration;
 
 // 仅跨设备恢复的业务数据进入备份，其他表只保留结构。
-const BACKUP_INCLUDED_TABLES: [&str; 7] = [
+const BACKUP_INCLUDED_TABLES: [&str; 8] = [
     "providers",
+    "claude_desktop_providers",
     "provider_models",
     "codex_accounts",
     "skills",
@@ -956,6 +957,13 @@ mod tests {
             &[json!({"id": "model-a", "providerId": "provider-a"})],
             &[json!({"id": "profile-a", "cli": "codex", "providerId": "provider-a"})],
             &Map::from_iter([("provider-a".to_string(), json!("encrypted-key"))]),
+        )
+        .unwrap();
+        provider_store::write_desktop_bundle(
+            &paths,
+            &[json!({"id": "desktop-a", "name": "Desktop"})],
+            &Map::from_iter([("currentProviderId".to_string(), json!("desktop-a"))]),
+            &provider_store::read_keys(&paths).unwrap(),
         )
         .unwrap();
         provider_store::write_codex_accounts(

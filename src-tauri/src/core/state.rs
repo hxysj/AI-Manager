@@ -1,5 +1,5 @@
 use crate::api::{
-    app, app_logs, codex_account, data, git_tool, lan_share, proxy, repos, rules, runtime_provider,
+    app, app_logs, claude_desktop, codex_account, data, git_tool, lan_share, proxy, repos, rules, runtime_provider,
     sessions, settings, skills, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
@@ -24,6 +24,7 @@ pub struct ManagerState {
     data_backup_cache: data::DataBackupCache,
     codex_login_cache: codex_account::CodexLoginCache,
     proxy_server_registry: proxy::ProxyServerRegistry,
+    desktop_manager: claude_desktop::DesktopManager,
     lan_share_registry: lan_share::LanShareServerRegistry,
     state: Value,
 }
@@ -100,12 +101,15 @@ impl AppState {
     pub async fn start_enabled_proxy_servers(&self) -> Result<(), ManagerError> {
         let manager = self.manager.lock().await;
 
+        let desktop_result = manager.desktop_manager.start_enabled(&manager.paths).await;
+
         proxy::start_enabled_servers(
             &manager.proxy_server_registry,
             &manager.paths,
             &manager.state["cliTargets"],
         )
-        .await
+        .await?;
+        desktop_result
     }
 
     pub async fn state_snapshot(&self) -> Value {
@@ -155,6 +159,7 @@ impl ManagerState {
             data_backup_cache: data::DataBackupCache::new(),
             codex_login_cache: codex_account::CodexLoginCache::new(),
             proxy_server_registry: proxy::ProxyServerRegistry::new(),
+            desktop_manager: claude_desktop::DesktopManager::new(),
             lan_share_registry: lan_share::LanShareServerRegistry::new(),
             state,
         })
@@ -174,6 +179,9 @@ impl ManagerState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        if let Some(action) = channel.strip_prefix("claude-desktop:") {
+            return self.desktop_manager.dispatch(&self.paths, action, payload.unwrap_or_else(|| json!({}))).await;
+        }
         if matches!(
             channel,
             "claude-proxy:activate-provider"
