@@ -137,6 +137,7 @@
 
           <div class="sessions-view-card-actions">
             <button
+              v-if="!session.readOnly"
               class="icon-button icon-button-danger"
               type="button"
               title="移动到回收站"
@@ -461,6 +462,7 @@ const emit = defineEmits(["delete-session", "open-path", "refresh"])
 
 const iconMap = {
   claude: "claude.svg",
+  "claude-desktop": "claude.svg",
   codex: "codex.svg"
   // 当前版本暂不启用 Gemini 和 OpenCode。
   // gemini: "geminicli.svg",

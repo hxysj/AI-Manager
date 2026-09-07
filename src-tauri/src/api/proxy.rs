@@ -1311,7 +1311,7 @@ async fn write_live_backup(paths: &AppPaths, cli: &str, payload: &Value) -> Resu
     runtime_provider::write_json(proxy_live_backup_path(paths, cli), payload).await
 }
 
-fn read_logs(paths: &AppPaths, cli: &str) -> Result<Value, ManagerError> {
+pub(crate) fn read_logs(paths: &AppPaths, cli: &str) -> Result<Value, ManagerError> {
     match std::fs::read_to_string(proxy_logs_path(paths, cli)) {
         Ok(content) => Ok(serde_json::from_str(&content)?),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(json!([])),
@@ -1319,7 +1319,7 @@ fn read_logs(paths: &AppPaths, cli: &str) -> Result<Value, ManagerError> {
     }
 }
 
-async fn append_log(paths: &AppPaths, cli: &str, input: Value) -> Result<(), ManagerError> {
+pub(crate) async fn append_log(paths: &AppPaths, cli: &str, input: Value) -> Result<(), ManagerError> {
     let mut logs = read_logs(paths, cli)?
         .as_array()
         .cloned()
@@ -1841,7 +1841,9 @@ fn proxy_live_backup_path<'a>(paths: &'a AppPaths, cli: &str) -> &'a str {
 }
 
 fn proxy_logs_path<'a>(paths: &'a AppPaths, cli: &str) -> &'a str {
-    if cli == "claude" {
+    if cli == "claude-desktop" {
+        &paths.storage_files.claude_desktop_request_logs
+    } else if cli == "claude" {
         &paths.storage_files.claude_proxy_request_logs
     } else {
         &paths.storage_files.codex_proxy_request_logs

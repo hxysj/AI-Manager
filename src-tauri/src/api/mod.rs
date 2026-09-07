@@ -1,6 +1,7 @@
 pub mod app;
 pub mod app_logs;
 pub mod claude_desktop;
+pub(crate) mod claude_desktop_runtime;
 pub mod codex_account;
 pub mod data;
 pub mod git_tool;

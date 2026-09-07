@@ -46,14 +46,12 @@ pub async fn refresh_sessions_state(
             continue;
         }
 
-        let source_updated_at = std::fs::metadata(&raw_path)
-            .ok()
-            .and_then(|metadata| metadata.modified().ok())
-            .and_then(system_time_millis)
-            .unwrap_or(0);
+        let source_updated_at = usage::session_file_modified_at(&string_value(item.get("cli")), &raw_path);
 
         if let Some(previous) = previous_session_map.get(&raw_path).filter(|session| {
             source_updated_at > 0
+                && session.get("cli") == item.get("cli")
+                && item.get("title").is_none_or(|title| session.get("title") == Some(title))
                 && session.get("updatedAt").and_then(Value::as_u64) == Some(source_updated_at)
         }) {
             sessions.push(previous.clone());
@@ -209,10 +207,17 @@ async fn reconcile_recycled_session(
 async fn scan_session_metadata(item: &Value) -> Result<Option<Value>, ManagerError> {
     let raw_path = string_value(item.get("filePath"));
     let cli = string_value(item.get("cli"));
-    let content = tokio::fs::read_to_string(&raw_path).await?;
-    let metadata = scan_session_metadata_content(&raw_path, &cli, &content)?;
+    let content = if cli == "claude-desktop" {
+        usage::read_session_content(&cli, &raw_path)?
+    } else {
+        tokio::fs::read_to_string(&raw_path).await?
+    };
+    let mut metadata = scan_session_metadata_content(&raw_path, &cli, &content)?;
+    if let Some(title) = item.get("title").and_then(Value::as_str).filter(|title| !title.is_empty()) {
+        metadata.title = title.to_string();
+    }
 
-    if metadata.message_count == 0
+    if (metadata.message_count == 0 && cli != "claude-desktop")
         || (["claude", "codex", "opencode"].contains(&cli.as_str())
             && !metadata.has_conversation)
     {
@@ -241,11 +246,7 @@ async fn scan_session_metadata(item: &Value) -> Result<Option<Value>, ManagerErr
         .ok()
         .and_then(system_time_millis)
         .unwrap_or(0);
-    let updated_at = file_metadata
-        .modified()
-        .ok()
-        .and_then(system_time_millis)
-        .unwrap_or(0);
+    let updated_at = usage::session_file_modified_at(&cli, &raw_path);
     let project_name = Path::new(&metadata.project_path)
         .file_name()
         .and_then(|value| value.to_str())
@@ -255,6 +256,7 @@ async fn scan_session_metadata(item: &Value) -> Result<Option<Value>, ManagerErr
     Ok(Some(json!({
       "id": create_session_id(&raw_path),
       "cli": cli,
+      "readOnly": cli == "claude-desktop",
       "cliName": first_string(item.get("cliName"), item.get("cli")),
       "title": title,
       "summary": summary,
@@ -295,7 +297,7 @@ fn scan_session_metadata_content(
         .unwrap_or("");
     let mut summary = SessionMetadataSummary::default();
 
-    if extension == "json" {
+    if extension == "json" && cli != "claude-desktop" {
         let payload: Value = serde_json::from_str(content)?;
 
         if payload.is_object() {
@@ -516,6 +518,9 @@ pub async fn delete_session(
         .ok_or_else(|| ManagerError::System("Session 不存在".to_string()))?;
     let recycled_path = get_recycle_session_path(paths, &session);
     let cli = string_value(session.get("cli"));
+    if cli == "claude-desktop" {
+        return Err(ManagerError::System("Desktop 会话包含关联文件，请在 Claude Desktop 中删除".to_string()));
+    }
     let cli_target = cli_targets
         .as_array()
         .and_then(|items| {
@@ -672,13 +677,18 @@ async fn load_messages_for_session(session: &Value) -> Result<Vec<Value>, Manage
 
 async fn parse_session_file(session: &Value) -> Result<(Vec<Value>, Vec<Value>), ManagerError> {
     let raw_path = string_value(session.get("rawPath"));
-    let content = tokio::fs::read_to_string(&raw_path).await?;
+    let cli = string_value(session.get("cli"));
+    let content = if cli == "claude-desktop" {
+        usage::read_session_content(&cli, &raw_path)?
+    } else {
+        tokio::fs::read_to_string(&raw_path).await?
+    };
     let extension = Path::new(&raw_path)
         .extension()
         .and_then(|value| value.to_str())
         .unwrap_or("");
 
-    if extension == "json" {
+    if extension == "json" && cli != "claude-desktop" {
         let payload: Value = serde_json::from_str(&content)?;
         let items = if let Some(items) = payload.as_array() {
             items.clone()
