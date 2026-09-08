@@ -15,7 +15,8 @@
         <p class="usage-view__eyebrow">Token Usage</p>
         <h1>模型用量统计</h1>
         <p v-if="appType === 'claude-desktop'" class="usage-desktop-note">
-          Cowork 按回合结算计数，Code 按已落盘请求计数；只统计日志中的真实 Token，缺失数据不估算。
+          Cowork 按回合结算计数，Code 按已落盘请求计数；只统计日志中的真实
+          Token，缺失数据不估算。
         </p>
       </div>
       <div class="usage-view__actions">
@@ -119,7 +120,9 @@
         >
           <TokenCount :value="summary.actualTokens" />
         </span>
-        <small class="usage-metric-note">新增输入 <TokenCount :value="summary.inputTokens" /></small>
+        <small class="usage-metric-note"
+          >新增输入 <TokenCount :value="summary.inputTokens"
+        /></small>
       </article>
       <article class="usage-view__metric">
         <span class="usage-metric-label">输出 Tokens</span>
@@ -130,7 +133,9 @@
         >
           <TokenCount :value="summary.outputTokens" />
         </span>
-        <small class="usage-metric-note">请求 {{ formatNumber(summary.requestCount) }} 次</small>
+        <small class="usage-metric-note"
+          >请求 {{ formatNumber(summary.requestCount) }} 次</small
+        >
       </article>
       <article class="usage-view__metric">
         <span class="usage-metric-label">缓存读取</span>
@@ -141,11 +146,15 @@
         >
           <TokenCount :value="summary.cacheReadTokens" />
         </span>
-        <small class="usage-metric-note">命中率 {{ formatPercent(summary.cacheHitRate) }}</small>
+        <small class="usage-metric-note"
+          >命中率 {{ formatPercent(summary.cacheHitRate) }}</small
+        >
       </article>
       <article class="usage-view__metric">
         <span class="usage-metric-label">费用估算</span>
-        <span class="usage-metric-value" data-emphasis>{{ formatCost(summary.totalCostUsd) }}</span>
+        <span class="usage-metric-value" data-emphasis>{{
+          formatCost(summary.totalCostUsd)
+        }}</span>
         <small class="usage-metric-note"
           >{{ displayCurrencyLabel }} · 汇率
           {{ formatExchangeRate(exchangeRate) }}</small
@@ -246,7 +255,9 @@
               <span>{{ item.providerType || "未识别类型" }}</span>
             </div>
             <div>
-              <span data-emphasis><TokenCount :value="item.actualTokens" /></span>
+              <span data-emphasis
+                ><TokenCount :value="item.actualTokens"
+              /></span>
               <span
                 >{{ formatNumber(item.requestCount) }} 次 ·
                 {{ formatCost(item.totalCostUsd) }}</span
@@ -279,7 +290,9 @@
               >
             </div>
             <div>
-              <span data-emphasis><TokenCount :value="item.actualTokens" /></span>
+              <span data-emphasis
+                ><TokenCount :value="item.actualTokens"
+              /></span>
               <span
                 >缓存 <TokenCount :value="item.cacheReadTokens" /> ·
                 {{ formatCost(item.totalCostUsd) }}</span
@@ -340,7 +353,14 @@
             <span :title="item.sessionId || item.sessionTitle">
               {{ formatSessionLabel(item) }}
             </span>
-            <span :title="item.requestModel && item.requestModel !== item.model ? `请求模型：${item.requestModel} → 上游模型：${item.model}` : item.model">{{ item.model || "未识别模型" }}</span>
+            <span
+              :title="
+                item.requestModel && item.requestModel !== item.model
+                  ? `请求模型：${item.requestModel} → 上游模型：${item.model}`
+                  : item.model
+              "
+              >{{ item.model || "未识别模型" }}</span
+            >
             <span><TokenCount :value="normalizeInput(item)" /></span>
             <span><TokenCount :value="item.outputTokens" /></span>
             <span><TokenCount :value="item.cacheReadTokens" /></span>
@@ -2524,7 +2544,15 @@ function renderTrendChart() {
       tooltip: {
         trigger: "axis",
         appendToBody: true,
-        valueFormatter: (value) => formatTokenCount(value)
+        formatter: (params) => {
+          const items = params.filter((item) => Number(item.value) > 0)
+          if (!items.length) return ""
+
+          const rows = items.map((item) => {
+            return `<div style="display:flex;align-items:center;justify-content:space-between;gap:20px"><span>${item.marker}${echarts.format.encodeHTML(item.seriesName)}</span><span>${formatTokenCount(item.value)}</span></div>`
+          })
+          return `${echarts.format.encodeHTML(items[0].axisValueLabel)}${rows.join("")}`
+        }
       },
       grid: {
         top: 28,
@@ -3666,5 +3694,4 @@ function formatSessionLabel(item) {
     transform: rotate(360deg);
   }
 }
-
 </style>

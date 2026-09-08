@@ -1,527 +1,289 @@
 <template>
-  <section class="lan-share-session-workspace">
-    <header class="lan-share-session-head">
-      <button
-        v-if="chatMode === 'direct'"
-        class="lan-share-session-back"
-        type="button"
-        title="返回设备管理"
-        @click="emit('back-devices')"
-      >
-        <ArrowLeft :size="15" />
-      </button>
-      <div v-if="chatMode === 'direct'" class="lan-share-session-device">
-        <span class="lan-share-session-device-icon">
-          <MonitorSmartphone :size="18" />
-          <span
-            :class="[
-              'lan-share-session-status',
-              { 'lan-share-session-status-online': currentDevice?.online }
-            ]"
-            :title="currentDevice?.online ? '在线' : '离线'"
-          >
-            <Wifi v-if="currentDevice?.online" :size="10" />
-            <WifiOff v-else :size="10" />
-          </span>
-        </span>
-        <span class="lan-share-session-device-main">
-          <span data-emphasis class="lan-share-session-device-name">
-            {{ deviceName }}
-          </span>
-          <small class="lan-share-session-device-meta">
-            {{ currentDevice?.online ? "在线" : "离线" }} ·
-            {{ currentDevice?.ip || "未知 IP" }} · {{ sessions.length }} 个会话
-          </small>
-        </span>
+  <section class="chat-workspace">
+    <header class="workspace-header">
+      <div class="workspace-identity">
+        <span class="workspace-avatar"
+          ><Users v-if="chatMode === 'group'" :size="20" /><MonitorSmartphone
+            v-else
+            :size="20"
+        /></span>
+        <div class="workspace-heading">
+          <span class="workspace-name">{{ title }}</span
+          ><span class="workspace-subtitle">{{ subtitle }}</span>
+        </div>
       </div>
-      <div v-else class="lan-share-session-device">
-        <span class="lan-share-session-device-icon">
-          <Users :size="18" />
-        </span>
-        <span class="lan-share-session-device-main">
-          <span data-emphasis class="lan-share-session-device-name">
-            {{ currentGroup?.name || "群聊模式" }}
-          </span>
-          <small class="lan-share-session-device-meta">
-            {{ groups.length }} 个群聊 · {{ currentGroupMemberCount }} 位成员
-          </small>
-        </span>
-      </div>
-
-      <div class="lan-share-session-actions">
-        <span class="lan-share-session-mode">
-          <button
-            :class="[
-              'lan-share-session-mode-button',
-              { 'lan-share-session-mode-button-active': chatMode === 'direct' }
-            ]"
-            type="button"
-            @click="emit('switch-mode', 'direct')"
-          >
-            <MonitorSmartphone :size="14" />
-            单聊
-          </button>
-          <button
-            :class="[
-              'lan-share-session-mode-button',
-              { 'lan-share-session-mode-button-active': chatMode === 'group' }
-            ]"
-            type="button"
-            @click="emit('switch-mode', 'group')"
-          >
-            <Users :size="14" />
-            群聊
-          </button>
-        </span>
+      <div class="workspace-actions">
         <button
-          v-if="chatMode === 'direct'"
-          class="lan-share-session-button"
+          class="workspace-icon"
           type="button"
-          :disabled="!currentDevice"
-          @click="emit('create-session')"
+          title="搜索聊天记录"
+          aria-label="搜索聊天记录"
+          :disabled="!currentSessionId"
+          @click="messagesRef?.openSearch()"
         >
-          <Plus :size="14" />
-          新会话
+          <Search :size="17" />
+        </button>
+        <button
+          class="workspace-icon"
+          type="button"
+          title="查看会话文件"
+          aria-label="查看会话文件"
+          :disabled="!currentSessionId"
+          @click="filesOpen = true"
+        >
+          <FolderOpen :size="17" />
         </button>
         <button
           v-if="chatMode === 'direct'"
-          class="lan-share-session-button"
+          class="workspace-icon"
           type="button"
+          title="历史会话"
+          aria-label="历史会话"
           :disabled="!currentDevice"
-          @click="emit('delete-history')"
+          @click="historyOpen = true"
         >
-          <Trash2 :size="14" />
-          删除历史
+          <History :size="17" />
         </button>
         <button
           v-if="chatMode === 'group'"
-          class="lan-share-session-button"
+          class="workspace-icon"
           type="button"
-          @click="submitCreateGroup"
+          title="群聊设置"
+          aria-label="群聊设置"
+          :disabled="!currentGroup"
+          @click="groupOpen = true"
         >
-          <Plus :size="14" />
-          创建群
+          <Settings2 :size="17" />
         </button>
+        <el-dropdown trigger="click" @command="handleCommand">
+          <button
+            class="workspace-icon"
+            type="button"
+            aria-label="更多会话操作"
+            :disabled="!currentSessionId"
+          >
+            <MoreHorizontal :size="19" />
+          </button>
+          <template #dropdown
+            ><el-dropdown-menu
+              ><el-dropdown-item v-if="chatMode === 'direct'" command="new"
+                >新建会话</el-dropdown-item
+              ><el-dropdown-item command="clear">清空本机会话</el-dropdown-item
+              ><el-dropdown-item v-if="chatMode === 'direct'" command="delete"
+                >删除设备历史</el-dropdown-item
+              ></el-dropdown-menu
+            ></template
+          >
+        </el-dropdown>
       </div>
     </header>
+    <LanShareMessagesPanel
+      ref="messagesRef"
+      :chat-mode="chatMode"
+      :current-device="currentDevice"
+      :current-session-id="currentSessionId"
+      :current-session="currentSession"
+      :service="service"
+      :state-version="stateVersion"
+      @refresh-state="$emit('refresh-state')"
+      @preview-file="$emit('preview-file', $event)"
+    />
 
-    <div
-      v-if="chatMode === 'direct' && currentDevice"
-      class="lan-share-session-body"
+    <el-drawer
+      v-model="historyOpen"
+      title="历史会话"
+      size="420px"
+      append-to-body
+      destroy-on-close
     >
-      <aside class="lan-share-session-sidebar">
-        <header class="lan-share-session-sidebar-head">
-          <span data-emphasis class="lan-share-session-sidebar-title">会话记录</span>
-          <span class="lan-share-session-sidebar-count">
-            {{ sortedSessions.length }} 条
-          </span>
-        </header>
-        <div class="lan-share-session-list">
-          <article
+      <div class="workspace-history">
+        <div class="workspace-history-head">
+          <span>保留旧记录，主界面只显示当前聊天。</span
+          ><el-button size="small" @click="createSession">新会话</el-button>
+        </div>
+        <div class="workspace-history-list">
+          <div
             v-for="session in sortedSessions"
             :key="session.id"
-            :class="[
-              'lan-share-session-item',
-              {
-                'lan-share-session-item-active':
-                  selectedSessionId === session.id
-              }
-            ]"
+            class="workspace-history-row"
+            :class="{
+              'workspace-history-selected': session.id === selectedSessionId
+            }"
           >
             <button
-              class="lan-share-session-item-select"
+              class="workspace-history-select"
               type="button"
-              @click="emit('select-session', session.id)"
+              @click="selectSession(session.id)"
             >
-              <span class="lan-share-session-item-icon">
-                <MessagesSquare :size="15" />
-              </span>
-              <span class="lan-share-session-item-main">
-                <span data-emphasis class="lan-share-session-item-title">
-                  {{ sessionTitle(session) }}
-                </span>
-                <small class="lan-share-session-item-meta">
-                  {{ formatDateTime(session.updatedAt) }}
-                </small>
-              </span>
-            </button>
-            <span class="lan-share-session-item-actions">
-              <button
-                class="lan-share-session-item-delete"
-                type="button"
-                title="删除会话"
-                @click="emit('delete-session', session.id)"
+              <MessagesSquare :size="16" /><span class="workspace-history-copy"
+                >会话 {{ session.id.slice(-6)
+                }}<span class="workspace-history-time">{{
+                  formatDateTime(session.updatedAt)
+                }}</span></span
               >
-                <Trash2 :size="13" />
-              </button>
-            </span>
-          </article>
-          <div
-            v-if="!sortedSessions.length"
-            class="lan-share-session-list-empty"
-          >
-            当前设备还没有会话记录。
+            </button>
+            <button
+              class="workspace-history-delete"
+              type="button"
+              title="删除会话"
+              aria-label="删除会话"
+              @click="deleteSession(session.id)"
+            >
+              <Trash2 :size="14" />
+            </button>
           </div>
         </div>
-      </aside>
+      </div>
+    </el-drawer>
 
-      <section class="lan-share-session-detail">
-        <nav class="lan-share-session-tabs">
-          <button
-            :class="[
-              'lan-share-session-tab',
-              { 'lan-share-session-tab-active': detailTab === 'messages' }
-            ]"
-            type="button"
-            @click="detailTab = 'messages'"
-          >
-            <MessagesSquare :size="15" />
-            消息
-          </button>
-          <button
-            :class="[
-              'lan-share-session-tab',
-              { 'lan-share-session-tab-active': detailTab === 'files' }
-            ]"
-            type="button"
-            @click="detailTab = 'files'"
-          >
-            <Database :size="15" />
-            共享文件
-          </button>
-        </nav>
+    <el-drawer
+      v-model="filesOpen"
+      title="会话文件"
+      size="560px"
+      append-to-body
+      destroy-on-close
+    >
+      <LanShareFilesPanel
+        class="workspace-files"
+        :current-session-id="currentSessionId"
+        :can-manage-files="Boolean(currentSessionId)"
+        :service-running="service.running"
+        :state-version="stateVersion"
+        @refresh-state="$emit('refresh-state')"
+        @preview-file="$emit('preview-file', $event)"
+      />
+    </el-drawer>
 
-        <LanShareMessagesPanel
-          v-if="detailTab === 'messages'"
-          class="lan-share-session-panel"
-          :chat-mode="chatMode"
-          :current-device="currentDevice"
-          :current-session-id="currentSessionId"
-          :current-session="currentSession"
-          :state-version="stateVersion"
-          @refresh-state="emit('refresh-state')"
-        />
-        <LanShareFilesPanel
-          v-else-if="detailTab === 'files'"
-          class="lan-share-session-panel"
-          :current-session-id="currentSessionId"
-          :can-manage-files="Boolean(currentSessionId)"
-          :service-running="serviceRunning"
-          :state-version="stateVersion"
-          @refresh-state="emit('refresh-state')"
-          @preview-file="emit('preview-file', $event)"
-        />
-      </section>
-    </div>
-
-    <div v-else-if="chatMode === 'group'" class="lan-share-session-body">
-      <aside class="lan-share-session-sidebar">
-        <header class="lan-share-session-sidebar-head">
-          <span data-emphasis class="lan-share-session-sidebar-title">群聊列表</span>
-          <span class="lan-share-session-sidebar-count">
-            {{ groups.length }} 个
-          </span>
-        </header>
-        <div class="lan-share-session-list">
-          <article
-            v-for="group in groups"
-            :key="group.id"
-            :class="[
-              'lan-share-session-item',
-              {
-                'lan-share-session-item-active': currentGroup?.id === group.id
-              }
-            ]"
-          >
-            <button
-              class="lan-share-session-item-select"
-              type="button"
-              @click="emit('select-group', group.id)"
-            >
-              <span class="lan-share-session-item-icon">
-                <Users :size="15" />
-              </span>
-              <span class="lan-share-session-item-main">
-                <span data-emphasis class="lan-share-session-item-title">
-                  {{ group.name }}
-                </span>
-                <small class="lan-share-session-item-meta">
-                  {{ group.members?.length || 0 }} 人 ·
-                  {{ visibilityLabel(group.messageVisibility) }}
-                </small>
-              </span>
-            </button>
-          </article>
-          <div v-if="!groups.length" class="lan-share-session-list-empty">
-            当前还没有群聊，可以先创建一个群。
-          </div>
-        </div>
-      </aside>
-
-      <section class="lan-share-session-detail">
-        <template v-if="currentGroup">
-          <nav class="lan-share-session-tabs">
-            <button
-              :class="[
-                'lan-share-session-tab',
-                { 'lan-share-session-tab-active': detailTab === 'messages' }
-              ]"
-              type="button"
-              @click="detailTab = 'messages'"
-            >
-              <MessagesSquare :size="15" />
-              群消息
-            </button>
-            <button
-              :class="[
-                'lan-share-session-tab',
-                { 'lan-share-session-tab-active': detailTab === 'files' }
-              ]"
-              type="button"
-              @click="detailTab = 'files'"
-            >
-              <Database :size="15" />
-              群文件
-            </button>
-            <span class="lan-share-session-tabs-spacer"></span>
-            <button
-              class="lan-share-session-manage-button"
-              type="button"
-              @click="toggleGroupManager"
-            >
-              <Settings2 :size="15" />
-              群管理
-            </button>
-          </nav>
-
-          <div v-if="groupManagerOpen" class="lan-share-session-group-manager">
-            <header class="lan-share-session-manager-head">
-              <span data-emphasis class="lan-share-session-manager-title">群管理</span>
-              <button
-                class="lan-share-session-manager-close"
-                type="button"
-                title="关闭"
-                @click="groupManagerOpen = false"
-              >
-                <X :size="14" />
-              </button>
-            </header>
-            <div class="lan-share-session-manager-grid">
-              <label class="lan-share-session-group-field">
-                <span class="lan-share-session-group-label">群名称</span>
-                <input
-                  v-model="groupDraft.name"
-                  class="lan-share-session-group-input"
-                  type="text"
-                />
-              </label>
-              <label class="lan-share-session-group-field">
-                <span class="lan-share-session-group-label">消息可见范围</span>
-                <select
-                  v-model="groupDraft.messageVisibility"
-                  class="lan-share-session-group-select"
-                >
-                  <option value="all">可见所有历史消息</option>
-                  <option value="afterJoin">仅可见加入后的消息</option>
-                  <option value="recent10">加入前最多 10 条</option>
-                </select>
-              </label>
-            </div>
-            <div class="lan-share-session-manager-actions">
-              <button
-                class="lan-share-session-button"
-                type="button"
-                @click="submitUpdateGroup"
-              >
-                <Settings2 :size="14" />
-                保存设置
-              </button>
-              <button
-                class="lan-share-session-button lan-share-session-button-ghost"
-                type="button"
-                @click="emit('clear-group-messages', currentGroup.id)"
-              >
-                <MessagesSquare :size="14" />
-                清空群消息
-              </button>
-              <button
-                class="lan-share-session-button lan-share-session-button-danger"
-                type="button"
-                @click="emit('delete-group', currentGroup.id)"
-              >
-                <Trash2 :size="14" />
-                解散群聊
-              </button>
-            </div>
-            <div class="lan-share-session-invite">
-              <div
-                v-if="currentGroup.qrSvg"
-                class="lan-share-session-invite-qr"
-                v-html="currentGroup.qrSvg"
-              ></div>
-              <div class="lan-share-session-invite-copy">
-                <span data-emphasis class="lan-share-session-invite-code">
-                  邀请码 {{ currentGroup.inviteCode }}
-                </span>
-                <span class="lan-share-session-invite-url">
-                  {{ currentGroup.inviteUrl || "启动服务后生成群二维码" }}
-                </span>
-              </div>
-              <button
-                class="lan-share-session-copy-button"
-                type="button"
-                @click="copyInviteText"
-              >
-                复制
-              </button>
-            </div>
-            <div class="lan-share-session-members">
-              <span
-                v-for="member in currentGroup.members || []"
-                :key="member.deviceId"
-                class="lan-share-session-member"
-              >
-                <span class="lan-share-session-member-main">
-                  <span data-emphasis class="lan-share-session-member-name">
-                    {{ member.deviceName || member.deviceId }}
-                  </span>
-                  <small class="lan-share-session-member-status">
-                    {{ member.online ? "在线" : "离线" }}
-                  </small>
-                </span>
-                <button
-                  class="lan-share-session-member-remove"
-                  type="button"
-                  title="移出群聊"
-                  @click="
-                    emit('remove-group-member', {
-                      groupId: currentGroup.id,
-                      deviceId: member.deviceId
-                    })
-                  "
-                >
-                  <X :size="12" />
-                </button>
-              </span>
-              <span
-                v-if="!(currentGroup.members || []).length"
-                class="lan-share-session-member-empty"
-              >
-                还没有设备加入群聊。
-              </span>
-            </div>
-          </div>
-
-          <LanShareMessagesPanel
-            v-if="detailTab === 'messages'"
-            class="lan-share-session-panel"
-            :chat-mode="chatMode"
-            :current-device="groupMessageDevice"
-            :current-session-id="currentSessionId"
-            :current-session="currentSession"
-            :state-version="stateVersion"
-            @refresh-state="emit('refresh-state')"
-          />
-          <LanShareFilesPanel
-            v-else-if="detailTab === 'files'"
-            class="lan-share-session-panel"
-            :current-session-id="currentSessionId"
-            :can-manage-files="Boolean(currentSessionId)"
-            :service-running="serviceRunning"
-            :state-version="stateVersion"
-            @refresh-state="emit('refresh-state')"
-            @preview-file="emit('preview-file', $event)"
-          />
-        </template>
-        <div
-          v-else
-          class="lan-share-session-empty lan-share-session-empty-inline"
+    <el-drawer
+      v-model="groupOpen"
+      title="群聊设置"
+      size="430px"
+      append-to-body
+      destroy-on-close
+    >
+      <div v-if="currentGroup" class="workspace-group">
+        <label class="workspace-group-field"
+          ><span>群名称</span><el-input v-model="groupDraft.name"
+        /></label>
+        <label class="workspace-group-field"
+          ><span>新成员消息可见范围</span
+          ><el-select v-model="groupDraft.messageVisibility"
+            ><el-option label="全部历史" value="all" /><el-option
+              label="加入后消息"
+              value="afterJoin" /><el-option
+              label="加入前最近 10 条"
+              value="recent10" /></el-select
+        ></label>
+        <el-button
+          type="primary"
+          @click="
+            $emit('update-group', { groupId: currentGroup.id, ...groupDraft })
+          "
+          >保存群设置</el-button
         >
-          请先创建或选择一个群聊后查看群消息和群文件。
+        <div class="workspace-group-invite">
+          <span>邀请访客加入</span>
+          <div
+            v-if="currentGroup.qrSvg"
+            class="workspace-group-qr"
+            v-html="currentGroup.qrSvg"
+          ></div>
+          <small>邀请码 {{ currentGroup.inviteCode }}</small
+          ><el-button
+            size="small"
+            @click="
+              $emit(
+                'copy-text',
+                currentGroup.inviteUrl || currentGroup.inviteCode
+              )
+            "
+            >复制邀请链接</el-button
+          >
         </div>
-      </section>
-    </div>
-
-    <div v-else class="lan-share-session-empty">
-      {{ emptyText }}
-    </div>
+        <div class="workspace-group-members">
+          <span>群成员 · {{ currentGroup.members?.length || 0 }}</span>
+          <div
+            v-for="member in currentGroup.members || []"
+            :key="member.deviceId"
+            class="workspace-group-member"
+          >
+            <span class="workspace-member-copy"
+              >{{ member.deviceName || member.deviceId
+              }}<span class="workspace-member-status">{{
+                member.online ? "在线" : "离线"
+              }}</span></span
+            ><el-button
+              size="small"
+              text
+              type="danger"
+              @click="
+                $emit('remove-group-member', {
+                  groupId: currentGroup.id,
+                  deviceId: member.deviceId
+                })
+              "
+              >移出</el-button
+            >
+          </div>
+        </div>
+        <el-button
+          type="danger"
+          plain
+          @click="$emit('clear-group-messages', currentGroup.id)"
+          >清空群消息</el-button
+        ><el-button type="danger" text @click="deleteGroup">解散群聊</el-button>
+      </div>
+    </el-drawer>
   </section>
 </template>
 
 <script setup>
 import { computed, reactive, ref, watch } from "vue"
 import {
-  ArrowLeft,
-  Database,
+  ElButton,
+  ElDrawer,
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu,
+  ElInput,
+  ElOption,
+  ElSelect
+} from "element-plus"
+import "element-plus/es/components/button/style/css"
+import "element-plus/es/components/drawer/style/css"
+import "element-plus/es/components/dropdown/style/css"
+import "element-plus/es/components/input/style/css"
+import "element-plus/es/components/select/style/css"
+import {
+  FolderOpen,
+  History,
   MessagesSquare,
   MonitorSmartphone,
-  Plus,
+  MoreHorizontal,
+  Search,
   Settings2,
   Trash2,
-  Users,
-  Wifi,
-  WifiOff,
-  X
+  Users
 } from "lucide-vue-next"
 import { formatDateTime } from "@/utils/formatters"
-import LanShareFilesPanel from "./LanShareFilesPanel.vue"
 import LanShareMessagesPanel from "./LanShareMessagesPanel.vue"
+import LanShareFilesPanel from "./LanShareFilesPanel.vue"
 
 const props = defineProps({
-  chatMode: {
-    type: String,
-    default: "direct"
-  },
-  groups: {
-    type: Array,
-    default: () => []
-  },
-  sessions: {
-    type: Array,
-    default: () => []
-  },
-  groupSessions: {
-    type: Array,
-    default: () => []
-  },
-  currentGroup: {
-    type: Object,
-    default: null
-  },
-  currentDevice: {
-    type: Object,
-    default: null
-  },
-  selectedSessionId: {
-    type: String,
-    default: ""
-  },
-  currentSession: {
-    type: Object,
-    default: null
-  },
-  currentSessionId: {
-    type: String,
-    default: ""
-  },
-  serviceRunning: {
-    type: Boolean,
-    default: false
-  },
-  stateVersion: {
-    type: Number,
-    default: 0
-  }
+  chatMode: { type: String, default: "direct" },
+  sessions: { type: Array, default: () => [] },
+  currentGroup: { type: Object, default: null },
+  currentDevice: { type: Object, default: null },
+  selectedSessionId: { type: String, default: "" },
+  currentSession: { type: Object, default: null },
+  currentSessionId: { type: String, default: "" },
+  service: { type: Object, default: () => ({}) },
+  stateVersion: { type: Number, default: 0 }
 })
-
 const emit = defineEmits([
-  "back-devices",
-  "switch-mode",
   "select-session",
-  "select-group",
   "delete-session",
   "create-session",
-  "create-group",
   "update-group",
   "remove-group-member",
   "clear-group-messages",
@@ -531,720 +293,258 @@ const emit = defineEmits([
   "preview-file",
   "copy-text"
 ])
-
-const detailTab = ref("messages")
-const groupManagerOpen = ref(false)
-const groupDraft = reactive({
-  name: "",
-  messageVisibility: "all"
-})
-
-const sortedSessions = computed(() => {
-  return [...props.sessions].sort((left, right) => {
-    return Number(right.updatedAt || 0) - Number(left.updatedAt || 0)
-  })
-})
-
-const deviceName = computed(() => {
-  return (
-    props.currentDevice?.name || props.currentDevice?.autoName || "未知设备"
-  )
-})
-
-const currentGroupMemberCount = computed(() => {
-  return props.currentGroup?.members?.length || 0
-})
-
-const groupMessageDevice = computed(() => {
-  return {
-    id: props.currentSession?.deviceId || "",
-    name: props.currentGroup?.name || "群聊"
-  }
-})
-
-const emptyText = computed(() => {
-  if (props.chatMode === "group") {
-    return "请先创建或选择一个群聊。"
-  }
-
-  return "请返回设备管理选择设备后查看详情。"
-})
-
+const messagesRef = ref(null)
+const filesOpen = ref(false)
+const historyOpen = ref(false)
+const groupOpen = ref(false)
+const groupDraft = reactive({ name: "", messageVisibility: "all" })
+const sortedSessions = computed(() =>
+  [...props.sessions].sort((left, right) => right.updatedAt - left.updatedAt)
+)
+const title = computed(() =>
+  props.chatMode === "group"
+    ? props.currentGroup?.name || "选择一个群聊"
+    : props.currentDevice?.name ||
+      props.currentDevice?.autoName ||
+      "选择设备，开始聊天"
+)
+const subtitle = computed(() =>
+  props.chatMode === "group"
+    ? `${props.currentGroup?.members?.length || 0} 位成员 · 文件与消息集中查看`
+    : props.currentDevice
+      ? `${props.currentDevice.online ? "在线" : props.currentDevice.native ? "已配对" : "离线"} · ${props.currentDevice.ip || ""}`
+      : "文字、文件和图片，都在一条对话里"
+)
 watch(
-  () => [
-    props.currentGroup?.id || "",
-    props.currentGroup?.name || "",
-    props.currentGroup?.messageVisibility || ""
-  ],
-  () => {
-    syncGroupDraft()
-    groupManagerOpen.value = false
+  () => props.currentGroup,
+  (group) => {
+    groupDraft.name = group?.name || ""
+    groupDraft.messageVisibility = group?.messageVisibility || "all"
   },
   { immediate: true }
 )
-
-function sessionTitle(session) {
-  return `会话 ${String(session.id || "").slice(-6) || "未知"}`
-}
-
-function visibilityLabel(value) {
-  const map = {
-    all: "全部历史",
-    afterJoin: "加入后",
-    recent10: "前 10 条"
+watch(
+  () => props.currentSessionId,
+  () => {
+    filesOpen.value = false
+    historyOpen.value = false
   }
-
-  return map[value] || map.all
+)
+function handleCommand(command) {
+  if (command === "new") emit("create-session")
+  if (command === "clear") messagesRef.value?.clearCurrentSession()
+  if (command === "delete") emit("delete-history")
 }
-
-function syncGroupDraft() {
-  groupDraft.name = props.currentGroup?.name || ""
-  groupDraft.messageVisibility = props.currentGroup?.messageVisibility || "all"
+function deleteSession(id) {
+  if (window.confirm("删除这个会话的本机历史记录？")) emit("delete-session", id)
 }
-
-function submitCreateGroup() {
-  emit("create-group", {
-    name: "新的群聊",
-    messageVisibility: "all"
-  })
+function createSession() {
+  emit("create-session")
+  historyOpen.value = false
 }
-
-function submitUpdateGroup() {
-  if (!props.currentGroup?.id) {
-    return
-  }
-
-  emit("update-group", {
-    groupId: props.currentGroup.id,
-    name: groupDraft.name,
-    messageVisibility: groupDraft.messageVisibility
-  })
+function selectSession(sessionId) {
+  emit("select-session", sessionId)
+  historyOpen.value = false
 }
-
-function toggleGroupManager() {
-  groupManagerOpen.value = !groupManagerOpen.value
-}
-
-function copyInviteText() {
-  emit(
-    "copy-text",
-    props.currentGroup?.inviteUrl || props.currentGroup?.inviteCode || ""
-  )
+function deleteGroup() {
+  emit("delete-group", props.currentGroup.id)
+  groupOpen.value = false
 }
 </script>
 
 <style scoped lang="less">
-.lan-share-session-workspace {
+.chat-workspace {
   display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: 12px;
   overflow: hidden;
-
-  .lan-share-session-head {
+  background: var(--color-panel);
+  .workspace-header {
     display: flex;
+    min-width: 0;
     flex: none;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    min-height: 58px;
-    padding: 10px 12px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: linear-gradient(180deg, var(--color-panel) 0%, var(--color-panel-soft) 100%);
-
-    .lan-share-session-back {
-      display: inline-flex;
-      width: 34px;
-      height: 34px;
-      flex: none;
-      align-items: center;
-      justify-content: center;
-      border: 1px solid var(--color-line);
-      border-radius: 7px;
-      background: var(--color-panel);
-      color: var(--color-primary);
-      cursor: pointer;
-    }
-
-    .lan-share-session-device {
+    gap: 14px;
+    padding: 13px 18px;
+    border-bottom: 1px solid var(--color-line);
+    .workspace-identity {
       display: flex;
       min-width: 0;
-      flex: 1;
       align-items: center;
       gap: 10px;
-
-      .lan-share-session-device-icon {
-        position: relative;
-        display: inline-flex;
-        width: 38px;
-        height: 38px;
-        flex: 0 0 38px;
-        align-items: center;
-        justify-content: center;
-        border-radius: 8px;
-        background: var(--color-primary-soft);
+      .workspace-avatar {
+        display: grid;
+        width: 36px;
+        height: 36px;
+        flex: none;
+        place-items: center;
+        border-radius: 10px;
         color: var(--color-primary);
-
-        .lan-share-session-status {
-          position: absolute;
-          right: -4px;
-          bottom: -4px;
-          display: inline-flex;
-          width: 18px;
-          height: 18px;
-          align-items: center;
-          justify-content: center;
-          border: 2px solid #ffffff;
-          border-radius: 999px;
-          background: #a8b3c1;
-          color: #ffffff;
-        }
-
-        .lan-share-session-status-online {
-          background: var(--color-success);
-        }
+        background: var(--color-primary-soft);
       }
-
-      .lan-share-session-device-main {
+      .workspace-heading {
         display: flex;
         min-width: 0;
         flex-direction: column;
-        gap: 3px;
-
-        .lan-share-session-device-name,
-        .lan-share-session-device-meta {
+        gap: 5px;
+        .workspace-name {
           overflow: hidden;
+          color: var(--color-text);
           text-overflow: ellipsis;
           white-space: nowrap;
+          font-size: 13px;
         }
-
-        .lan-share-session-device-name {
-          color: var(--color-text);
-          font-size: 0.94rem;
-        }
-
-        .lan-share-session-device-meta {
+        .workspace-subtitle {
+          overflow: hidden;
           color: var(--color-text-muted);
-          font-size: 0.76rem;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: 10px;
         }
       }
     }
-
-    .lan-share-session-actions {
+    .workspace-actions {
       display: flex;
-      min-width: 0;
       flex: none;
       align-items: center;
-      gap: 8px;
-
-      .lan-share-session-mode {
-        display: inline-flex;
+      gap: 3px;
+      .workspace-icon {
+        display: grid;
+        width: 30px;
         height: 32px;
-        padding: 3px;
-        border: 1px solid var(--color-line);
-        border-radius: 8px;
-        background: var(--color-panel-soft);
-        gap: 3px;
-
-        .lan-share-session-mode-button {
-          display: inline-flex;
-          height: 24px;
-          align-items: center;
-          justify-content: center;
-          gap: 5px;
-          padding: 0 8px;
-          border: 0;
-          border-radius: 6px;
-          background: transparent;
-          color: var(--color-text-muted);
-          cursor: pointer;
-          font-size: 0.74rem;
-        }
-
-        .lan-share-session-mode-button-active {
-          background: var(--color-panel);
+        place-items: center;
+        padding: 0;
+        border: 0;
+        border-radius: 6px;
+        color: var(--color-text-muted);
+        background: transparent;
+        &:hover {
           color: var(--color-primary);
-          box-shadow: 0 4px 12px rgba(42, 67, 101, 0.08);
-        }
-      }
-
-      .lan-share-session-button {
-        display: inline-flex;
-        height: 32px;
-        flex: none;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        padding: 0 10px;
-        border: 1px solid var(--color-primary);
-        border-radius: 7px;
-        background: var(--color-primary-solid);
-        color: #ffffff;
-        cursor: pointer;
-      }
-
-      .lan-share-session-button-ghost {
-        border-color: var(--color-line);
-        background: var(--color-panel);
-        color: var(--color-primary);
-      }
-
-      .lan-share-session-button:disabled {
-        cursor: not-allowed;
-        opacity: 0.5;
-      }
-    }
-  }
-
-  .lan-share-session-body {
-    display: flex;
-    min-width: 0;
-    min-height: 0;
-    flex: 1;
-    gap: 12px;
-    overflow: hidden;
-
-    .lan-share-session-sidebar {
-      display: flex;
-      width: 270px;
-      min-height: 0;
-      flex: 0 0 270px;
-      flex-direction: column;
-      overflow: hidden;
-      border: 1px solid var(--color-line);
-      border-radius: 8px;
-      background: var(--color-panel);
-
-      .lan-share-session-sidebar-head {
-        display: flex;
-        flex: none;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        min-height: 46px;
-        padding: 10px 12px;
-        border-bottom: 1px solid var(--color-line);
-        background: var(--color-panel-soft);
-
-        .lan-share-session-sidebar-title {
-          color: var(--color-text);
-          font-size: 0.88rem;
-        }
-
-        .lan-share-session-sidebar-count {
-          color: var(--color-text-muted);
-          font-size: 0.74rem;
-        }
-      }
-
-      .lan-share-session-list {
-        display: flex;
-        min-height: 0;
-        flex: 1;
-        flex-direction: column;
-        gap: 8px;
-        overflow: auto;
-        padding: 10px;
-
-        .lan-share-session-item {
-          display: flex;
-          width: 100%;
-          align-items: center;
-          gap: 6px;
-          min-height: 56px;
-          padding: 6px;
-          border: 1px solid var(--color-line);
-          border-radius: 8px;
-          background: var(--color-panel);
-          color: var(--color-text);
-          text-align: left;
-
-          .lan-share-session-item-select {
-            display: flex;
-            align-items: center;
-            gap: 9px;
-            min-width: 0;
-            flex: 1;
-            min-height: 42px;
-            padding: 3px;
-            border: 0;
-            background: transparent;
-            color: inherit;
-            cursor: pointer;
-            text-align: left;
-
-            .lan-share-session-item-icon {
-              display: inline-flex;
-              width: 32px;
-              height: 32px;
-              flex: 0 0 32px;
-              align-items: center;
-              justify-content: center;
-              border-radius: 7px;
-              background: var(--color-primary-soft);
-              color: var(--color-primary);
-            }
-
-            .lan-share-session-item-main {
-              display: flex;
-              min-width: 0;
-              flex: 1;
-              flex-direction: column;
-              gap: 3px;
-
-              .lan-share-session-item-title,
-              .lan-share-session-item-meta {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-              }
-
-              .lan-share-session-item-title {
-                color: var(--color-text);
-                font-size: 0.84rem;
-              }
-
-              .lan-share-session-item-meta {
-                color: var(--color-text-muted);
-                font-size: 0.72rem;
-              }
-            }
-          }
-
-          .lan-share-session-item-actions {
-            display: inline-flex;
-            flex: none;
-            align-items: center;
-            justify-content: center;
-
-            .lan-share-session-item-delete {
-              display: inline-flex;
-              width: 28px;
-              height: 28px;
-              align-items: center;
-              justify-content: center;
-              border: 1px solid var(--color-line);
-              border-radius: 7px;
-              background: var(--color-panel);
-              color: var(--color-text-muted);
-              cursor: pointer;
-            }
-          }
-        }
-
-        .lan-share-session-item-active {
-          border-color: var(--color-info-line);
           background: var(--color-primary-soft);
         }
-
-        .lan-share-session-list-empty {
-          display: flex;
-          min-height: 120px;
-          align-items: center;
-          justify-content: center;
-          border: 1px dashed var(--color-line);
-          border-radius: 8px;
-          color: var(--color-text-muted);
-          font-size: 0.82rem;
-          text-align: center;
-        }
-      }
-    }
-
-    .lan-share-session-detail {
-      display: flex;
-      min-width: 0;
-      min-height: 0;
-      flex: 1;
-      flex-direction: column;
-      gap: 10px;
-      overflow: hidden;
-
-      .lan-share-session-button {
-        display: inline-flex;
-        height: 32px;
-        flex: none;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        padding: 0 10px;
-        border: 1px solid var(--color-primary);
-        border-radius: 7px;
-        background: var(--color-primary-solid);
-        color: #ffffff;
-        cursor: pointer;
-      }
-
-      .lan-share-session-button-ghost {
-        border-color: var(--color-line);
-        background: var(--color-panel);
-        color: var(--color-primary);
-      }
-
-      .lan-share-session-button-danger {
-        border-color: var(--color-danger);
-        background: var(--color-danger);
-      }
-
-      .lan-share-session-group-field {
-        display: flex;
-        min-width: 0;
-        flex: 1;
-        flex-direction: column;
-        gap: 4px;
-        color: var(--color-text-muted);
-        font-size: 0.72rem;
-      }
-
-      .lan-share-session-group-input,
-      .lan-share-session-group-select {
-        height: 32px;
-        min-width: 0;
-        border: 1px solid var(--color-line);
-        border-radius: 7px;
-        background: var(--color-panel);
-        color: var(--color-text);
-        padding: 0 9px;
-      }
-
-      .lan-share-session-group-manager {
-        display: flex;
-        flex: none;
-        flex-direction: column;
-        gap: 10px;
-        overflow: hidden;
-        border: 1px solid var(--color-line);
-        border-radius: 8px;
-        background: var(--color-panel);
-        padding: 10px;
-
-        .lan-share-session-manager-head {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 8px;
-
-          .lan-share-session-manager-title {
-            color: var(--color-text);
-            font-size: 0.86rem;
-          }
-
-          .lan-share-session-manager-close {
-            display: inline-flex;
-            width: 26px;
-            height: 26px;
-            align-items: center;
-            justify-content: center;
-            border: 1px solid var(--color-line);
-            border-radius: 7px;
-            background: var(--color-panel);
-            color: var(--color-text-muted);
-            cursor: pointer;
-          }
-        }
-
-        .lan-share-session-manager-grid,
-        .lan-share-session-manager-actions {
-          display: flex;
-          align-items: flex-end;
-          gap: 8px;
-        }
-
-        .lan-share-session-invite {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          min-height: 70px;
-          border: 1px dashed var(--color-line-strong);
-          border-radius: 8px;
-          background: var(--color-panel-soft);
-          padding: 8px;
-
-          .lan-share-session-invite-qr {
-            display: flex;
-            width: 58px;
-            height: 58px;
-            flex: none;
-            align-items: center;
-            justify-content: center;
-            overflow: hidden;
-            border: 1px solid var(--color-line);
-            border-radius: 7px;
-            background: var(--color-panel);
-          }
-
-          .lan-share-session-invite-qr :deep(svg) {
-            width: 54px;
-            height: 54px;
-          }
-
-          .lan-share-session-invite-copy {
-            display: flex;
-            min-width: 0;
-            flex-direction: column;
-            gap: 4px;
-
-            .lan-share-session-invite-code {
-              color: var(--color-text);
-              font-size: 0.86rem;
-            }
-
-            .lan-share-session-invite-url {
-              overflow: hidden;
-              color: var(--color-text-muted);
-              font-size: 0.74rem;
-              text-overflow: ellipsis;
-              white-space: nowrap;
-            }
-          }
-
-          .lan-share-session-copy-button {
-            display: inline-flex;
-            height: 30px;
-            flex: none;
-            align-items: center;
-            justify-content: center;
-            padding: 0 10px;
-            border: 1px solid var(--color-line);
-            border-radius: 7px;
-            background: var(--color-panel);
-            color: var(--color-primary);
-            cursor: pointer;
-          }
-        }
-
-        .lan-share-session-members {
-          display: flex;
-          min-height: 34px;
-          align-items: center;
-          gap: 8px;
-          overflow: auto;
-
-          .lan-share-session-member {
-            display: inline-flex;
-            height: 34px;
-            flex: none;
-            align-items: center;
-            gap: 8px;
-            padding: 0 7px 0 9px;
-            border: 1px solid var(--color-line);
-            border-radius: 8px;
-            background: var(--color-panel);
-
-            .lan-share-session-member-main {
-              display: flex;
-              flex-direction: column;
-              gap: 1px;
-            }
-
-            .lan-share-session-member-name {
-              color: var(--color-text);
-              font-size: 0.74rem;
-            }
-
-            .lan-share-session-member-status {
-              color: var(--color-text-muted);
-              font-size: 0.66rem;
-            }
-
-            .lan-share-session-member-remove {
-              display: inline-flex;
-              width: 20px;
-              height: 20px;
-              align-items: center;
-              justify-content: center;
-              border: 0;
-              border-radius: 6px;
-              background: var(--color-panel-soft);
-              color: var(--color-text-muted);
-              cursor: pointer;
-            }
-          }
-
-          .lan-share-session-member-empty {
-            color: var(--color-text-muted);
-            font-size: 0.78rem;
-          }
-        }
-      }
-
-      .lan-share-session-tabs {
-        display: flex;
-        flex: none;
-        align-items: center;
-        gap: 8px;
-        padding: 8px;
-        border: 1px solid var(--color-line);
-        border-radius: 8px;
-        background: var(--color-panel-soft);
-
-        .lan-share-session-tab {
-          display: inline-flex;
-          height: 32px;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          padding: 0 12px;
-          border: 1px solid transparent;
-          border-radius: 7px;
-          background: transparent;
-          color: var(--color-text-muted);
-          cursor: pointer;
-        }
-
-        .lan-share-session-tab-active {
-          border-color: var(--color-info-line);
-          background: var(--color-panel);
-          color: var(--color-primary);
-          box-shadow: 0 6px 18px rgba(42, 67, 101, 0.08);
-        }
-
-        .lan-share-session-tabs-spacer {
-          min-width: 0;
-          flex: 1;
-        }
-
-        .lan-share-session-manage-button {
-          display: inline-flex;
-          height: 32px;
-          flex: none;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          padding: 0 11px;
-          border: 1px solid var(--color-line);
-          border-radius: 7px;
-          background: var(--color-panel);
-          color: var(--color-primary);
-          cursor: pointer;
-        }
-      }
-
-      .lan-share-session-panel {
-        min-height: 0;
-        flex: 1;
       }
     }
   }
-
-  .lan-share-session-empty {
+}
+.workspace-files {
+  height: 100%;
+  min-height: 0;
+}
+.workspace-history {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  .workspace-history-head {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--color-text-muted);
+    font-size: 11px;
+  }
+  .workspace-history-list {
     min-height: 0;
     flex: 1;
-    align-items: center;
-    justify-content: center;
-    border: 1px dashed var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
-    font-size: 0.86rem;
+    overflow-y: auto;
+    .workspace-history-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+      padding: 7px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      &.workspace-history-selected {
+        border-color: var(--color-info-line);
+        background: var(--color-primary-soft);
+      }
+      .workspace-history-select {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        align-items: center;
+        gap: 10px;
+        padding: 5px;
+        border: 0;
+        background: transparent;
+        color: var(--color-text);
+        text-align: left;
+        .workspace-history-copy {
+          min-width: 0;
+          .workspace-history-time {
+            display: block;
+            margin-top: 5px;
+            color: var(--color-text-muted);
+            font-size: 10px;
+          }
+        }
+      }
+      .workspace-history-delete {
+        padding: 5px;
+        border: 0;
+        background: transparent;
+        color: var(--color-danger);
+      }
+    }
   }
-
-  .lan-share-session-empty-inline {
-    min-height: 0;
+}
+.workspace-group {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  .workspace-group-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+  }
+  .workspace-group-invite {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 16px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    font-size: 12px;
+    .workspace-group-qr {
+      width: 160px;
+      padding: 8px;
+      background: #fff;
+      :deep(svg) {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+    }
+  }
+  .workspace-group-members {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 12px;
+    .workspace-group-member {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      .workspace-member-copy {
+        min-width: 0;
+        .workspace-member-status {
+          display: block;
+          margin-top: 5px;
+          color: var(--color-text-muted);
+        }
+      }
+    }
   }
 }
 </style>

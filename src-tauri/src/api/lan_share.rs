@@ -35,6 +35,11 @@ use zip::write::SimpleFileOptions;
 
 type BoxBody = http_body_util::combinators::BoxBody<Bytes, std::io::Error>;
 
+mod attachments;
+mod native;
+pub use attachments::{clipboard_files, discard_uploads};
+pub use native::{connect_peer, respond_pairing};
+
 pub const DEFAULT_PORT: u16 = 17631;
 pub const EVENT_STATE_CHANGED: &str = "lan-share:state-changed";
 pub const EVENT_MESSAGE_CREATED: &str = "lan-share:message-created";
@@ -47,6 +52,7 @@ pub struct LanShareServerRegistry {
 }
 
 pub struct LanShareRuntime {
+    native: native::NativeRuntime,
     handle: Option<tauri::async_runtime::JoinHandle<()>>,
     token: String,
     access_url: String,
@@ -143,6 +149,8 @@ pub struct LanShareMessage {
     pub device_name: String,
     pub direction: String,
     pub message_type: String,
+    #[serde(default)]
+    pub attachments: Vec<attachments::Attachment>,
     pub content: String,
     pub created_at: u64,
     pub delivered: bool,
@@ -166,6 +174,7 @@ impl LanShareServerRegistry {
         Self {
             storage: Arc::new(Mutex::new(())),
             inner: Arc::new(Mutex::new(LanShareRuntime {
+                native: native::NativeRuntime::default(),
                 handle: None,
                 token: String::new(),
                 access_url: String::new(),
@@ -405,85 +414,28 @@ pub async fn add_files(
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let session_id = string_value(payload.get("sessionId"));
-
-    if session_id.is_empty() {
-        return Err(ManagerError::System(
-            "请先选择会话后再共享文件。".to_string(),
-        ));
-    }
-
-    let selected_paths = payload
-        .get("paths")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|value| string_value(Some(&value)))
-        .filter(|value| !value.is_empty())
-        .collect::<Vec<_>>();
-    let mut selected_files = Vec::new();
-
-    for selected_path in selected_paths {
-        selected_files.push(file_payload(&selected_path, &session_id).await?);
-    }
-
-    {
-        let _storage = registry.storage.lock().await;
-        let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
-        let Some(session_index) = sessions.iter().position(|session| session.id == session_id)
-        else {
-            return Err(ManagerError::System("会话不存在。".to_string()));
-        };
-
-        let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
-        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
-        let session = sessions[session_index].clone();
-        let now = now_millis();
-
-        for next_file in selected_files {
-            let message_content = format!(
-                "共享文件：{}（{}）",
-                next_file.name,
-                format_file_size(next_file.size)
-            );
-            if let Some(current) = files.iter_mut().find(|file| file.id == next_file.id) {
-                *current = next_file.clone();
-            } else {
-                files.insert(0, next_file.clone());
-            }
-            messages.insert(
-                0,
-                LanShareMessage {
-                    id: create_id("message"),
-                    session_id: session.id.clone(),
-                    device_id: if session.device_id.is_empty() {
-                        "desktop".to_string()
-                    } else {
-                        session.device_id.clone()
-                    },
-                    device_name: if session.device_name.is_empty() {
-                        "电脑端".to_string()
-                    } else {
-                        session.device_name.clone()
-                    },
-                    direction: "desktop-to-mobile".to_string(),
-                    message_type: "file".to_string(),
-                    content: message_content,
-                    created_at: now,
-                    delivered: false,
-                    read: false,
-                },
-            );
+    let session = read_array::<LanShareSession>(&paths.lan_share_files.sessions)?.into_iter()
+        .find(|session| session.id == session_id)
+        .ok_or_else(|| ManagerError::System("请先选择有效会话。".into()))?;
+    let files = attachments::prepare(registry, paths, &session.id, &payload).await?;
+    if files.is_empty() { return get_state(registry, paths).await; }
+    let message_id = create_id("message");
+    let content = if files.len() == 1 {
+        format!("共享文件：{}（{}）", files[0].name, format_file_size(files[0].size))
+    } else {
+        format!("共享了 {} 个文件", files.len())
+    };
+    let native_delivery = native::deliver(registry, &session.device_id, &content, &files, &message_id).await?;
+    let sender = registry.inner.lock().await.clients.get(&session.device_id).cloned();
+    let stored = append_message_with_attachments(registry, paths, &session.device_id, &session.id,
+        "desktop-to-mobile", &content, native_delivery || sender.is_some(), &files, Some(&message_id)).await?;
+    attachments::publish(registry, paths, &files).await?;
+    if let Some(sender) = sender { let _ = send_stored_message_to_client(&sender, &stored); }
+    if session.mode == "group" {
+        for (_, sender) in group_online_targets(registry, paths, &session.group_id).await? {
+            let _ = send_stored_message_to_client(&sender, &stored);
         }
-
-        messages.truncate(1000);
-        sessions[session_index].updated_at = now;
-        sort_sessions(&mut sessions);
-        write_json(&paths.lan_share_files.files, &json!(files)).await?;
-        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
-        write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
     }
-
     get_state(registry, paths).await
 }
 
@@ -517,7 +469,8 @@ pub async fn get_state(
                 "ip": device.ip,
                 "firstSeenAt": device.first_seen_at,
                 "lastSeenAt": device.last_seen_at,
-                "online": online_device_ids.contains(&device.id)
+                "online": online_device_ids.contains(&device.id) || runtime.native.online(&device.id),
+                "native": device.user_agent == "MonkeyThief/Desktop"
             })
         })
         .collect::<Vec<_>>();
@@ -572,8 +525,9 @@ pub async fn get_state(
             "qrSvg": qr_svg,
             "lanIp": runtime.lan_ip,
             "port": runtime.port,
-            "onlineDevices": runtime.clients.len()
+            "onlineDevices": runtime.clients.len() + runtime.native.online_count()
         },
+        "native": runtime.native.snapshot(),
         "files": files,
         "devices": devices,
         "sessions": sessions,
@@ -815,6 +769,10 @@ pub async fn create_group(
     paths: &AppPaths,
     payload: Value,
 ) -> Result<Value, ManagerError> {
+    let device_ids = string_array_value(payload.get("deviceIds"));
+    if device_ids.is_empty() {
+        return Err(ManagerError::System("请至少邀请一台设备后再创建群聊。".into()));
+    }
     let name = normalize_group_name(&string_value(payload.get("name")));
     let message_visibility =
         normalize_message_visibility(&string_value(payload.get("messageVisibility")));
@@ -833,7 +791,7 @@ pub async fn create_group(
         created_at: now,
         updated_at: now,
     };
-    let group = LanShareGroup {
+    let mut group = LanShareGroup {
         id: group_id,
         name,
         invite_code: create_invite_code(),
@@ -845,16 +803,39 @@ pub async fn create_group(
 
     {
         let _storage = registry.storage.lock().await;
+        let devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices)?;
+        let mut invited = Vec::new();
+        for device_id in &device_ids {
+            let device = devices.iter().find(|device| &device.id == device_id)
+                .ok_or_else(|| ManagerError::System("邀请的设备已不存在，请重新选择。".into()))?;
+            if device.user_agent == "MonkeyThief/Desktop" {
+                return Err(ManagerError::System("客户端设备目前仅支持单聊，请选择已连接过的网页设备加入群聊。".into()));
+            }
+            if !invited.iter().any(|current: &&LanShareDevice| current.id == device.id) {
+                invited.push(device);
+            }
+        }
         let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
         let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
 
-        groups.insert(0, group.clone());
         sessions.insert(0, session.clone());
+        for device in invited {
+            upsert_group_session(&mut sessions, &mut group, device, &device.ip);
+        }
+        groups.insert(0, group.clone());
         sort_sessions(&mut sessions);
         write_json(&paths.lan_share_files.groups, &json!(groups)).await?;
         write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
     }
 
+    {
+        let runtime = registry.inner.lock().await;
+        for member in &group.members {
+            if let Some(sender) = runtime.clients.get(&member.device_id) {
+                let _ = sender.send(WsOutbound { payload: json!({ "type": "groupsChanged" }) });
+            }
+        }
+    }
     let mut state = get_state(registry, paths).await?;
     state["data"]["currentSession"] = json!(session);
     Ok(state)
@@ -1228,6 +1209,15 @@ fn mobile_page_html() -> String {
     .file-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
     .file-actions { display: flex; flex: none; gap: 6px; }
     .message-list { padding: 12px; gap: 10px; background: linear-gradient(180deg, #fbfdff 0%, #ffffff 44%, #f5f9fd 100%); }
+    .message-attachment { display: flex; width: min(300px, 100%); flex-direction: column; gap: 8px; margin-top: 8px; padding: 8px; border: 1px solid #dbe4ee; border-radius: 8px; background: #fff; }
+    .message-attachment img, .message-attachment video { display: block; width: 100%; max-height: 240px; object-fit: contain; border-radius: 5px; }
+    .message-attachment audio { width: 100%; }
+    .message-attachment-name { overflow-wrap: anywhere; font-size: 12px; }
+    .message-attachment-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .pending-attachments { display: flex; gap: 6px; padding: 0 10px; overflow-x: auto; }
+    .pending-attachment { display: inline-flex; max-width: 220px; flex: none; align-items: center; gap: 8px; margin: 8px 0; padding: 6px 8px; border: 1px solid #dbe4ee; border-radius: 6px; background: #f5f8fc; font-size: 11px; }
+    .pending-attachment span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .composer textarea { resize: vertical; min-height: 42px; max-height: 120px; }
     .message { display: flex; max-width: 82%; min-width: 96px; flex-direction: column; gap: 6px; padding: 10px 11px; border: 0; border-radius: 8px; background: #eef5fc; color: var(--text); font-size: 14px; line-height: 1.45; text-align: left; box-shadow: 0 8px 22px rgba(38, 62, 88, 0.08); }
     .message.me { align-self: flex-end; background: var(--success); box-shadow: 0 8px 22px rgba(34, 126, 82, 0.09); }
     .message small { color: #6f8095; font-size: 11px; }
@@ -1290,8 +1280,11 @@ fn mobile_page_html() -> String {
           <section id="messagesView" class="card view-panel active">
             <div class="card-head"><span data-emphasis id="messagesTitle">消息</span><button id="createSession" class="text-button" type="button">新会话</button></div>
             <div id="messages" class="message-list" aria-label="点击消息可复制"></div>
+            <div id="pendingAttachments" class="pending-attachments"></div>
             <div class="composer">
-              <input id="messageInput" class="field-input" placeholder="输入消息" />
+              <button id="chooseAttachments" class="text-button" type="button" aria-label="添加附件">附件</button>
+              <input id="attachmentInput" type="file" multiple hidden />
+              <textarea id="messageInput" class="field-input" rows="1" placeholder="输入消息或粘贴图片、文件"></textarea>
               <button id="sendMessage" class="text-button primary-button" type="button">发送</button>
             </div>
           </section>
@@ -1700,12 +1693,60 @@ fn mobile_page_html() -> String {
         messagesEl.innerHTML = "";
       }
       messageIds.add(message.id);
-      const item = document.createElement("button");
+      const item = document.createElement("article");
       item.className = "message" + (message.direction === "mobile-to-desktop" ? " me" : "");
-      item.type = "button";
       item.title = "点击消息可复制";
-      item.textContent = message.content || "";
-      item.onclick = () => copyMessageText(message.content || "");
+      const text = document.createElement("div");
+      text.textContent = message.content || "";
+      text.onclick = () => copyMessageText(message.content || "");
+      item.appendChild(text);
+      if (message.attachments?.length) {
+        const gallery = document.createElement("div");
+        gallery.className = "message-attachment";
+        let activeIndex = 0;
+        const renderAttachment = () => {
+          gallery.replaceChildren();
+          const file = message.attachments[activeIndex];
+          const mime = file.mimeType || "";
+          if (mime.startsWith("image/") || mime.startsWith("video/") || mime.startsWith("audio/")) {
+            const media = document.createElement(mime.startsWith("image/") ? "img" : mime.startsWith("video/") ? "video" : "audio");
+            media.src = fileUrl(file, "preview");
+            media.alt = file.name;
+            media.controls = true;
+            media.preload = "metadata";
+            if (mime.startsWith("image/")) media.onclick = () => previewFile(file);
+            gallery.appendChild(media);
+          }
+          const name = document.createElement("span");
+          name.className = "message-attachment-name";
+          name.textContent = file.name + " · " + formatSize(file.size);
+          gallery.appendChild(name);
+          const actions = document.createElement("div");
+          actions.className = "message-attachment-actions";
+          const previous = document.createElement("button");
+          previous.textContent = "上一项";
+          previous.className = "text-button";
+          previous.disabled = activeIndex === 0;
+          previous.onclick = () => { activeIndex--; renderAttachment(); };
+          const next = document.createElement("button");
+          next.textContent = "下一项";
+          next.className = "text-button";
+          next.disabled = activeIndex === message.attachments.length - 1;
+          next.onclick = () => { activeIndex++; renderAttachment(); };
+          const position = document.createElement("span");
+          position.textContent = (activeIndex + 1) + " / " + message.attachments.length;
+          const download = document.createElement("a");
+          download.className = "text-button";
+          download.href = fileUrl(file, "download");
+          download.download = file.name;
+          download.textContent = "下载";
+          if (message.attachments.length > 1) actions.append(previous, position, next);
+          actions.append(download);
+          gallery.appendChild(actions);
+        };
+        renderAttachment();
+        item.appendChild(gallery);
+      }
       const time = document.createElement("small");
       time.textContent = new Date(message.createdAt || Date.now()).toLocaleTimeString();
       item.appendChild(time);
@@ -1716,7 +1757,7 @@ fn mobile_page_html() -> String {
     function connectWs() {
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(protocol + "//" + location.host + "/ws?token=" + encodeURIComponent(token) + "&deviceId=" + encodeURIComponent(deviceId));
-      ws.onopen = () => setStatus("已连接电脑端服务");
+      ws.onopen = () => { setStatus("已连接电脑端服务"); loadGroups().catch(error => setStatus(error.message)); };
       ws.onclose = () => {
         setStatus("连接已断开，正在重连...");
         window.setTimeout(connectWs, 1600);
@@ -1728,6 +1769,7 @@ fn mobile_page_html() -> String {
           setActiveView("messages");
         }
         if (payload.type === "filesChanged") loadFiles().catch(error => setStatus(error.message));
+        if (payload.type === "groupsChanged") loadGroups().then(() => setStatus("收到群聊邀请，可在群聊列表中查看")).catch(error => setStatus(error.message));
       };
     }
 
@@ -1755,14 +1797,72 @@ fn mobile_page_html() -> String {
     leaveGroupEl.onclick = () => leaveCurrentGroup().catch(error => setStatus(error.message));
     document.getElementById("closePreview").onclick = closePreview;
     document.getElementById("previewOverlay").onclick = closePreview;
-    document.getElementById("sendMessage").onclick = () => {
+    const pendingAttachments = [];
+    const attachmentInput = document.getElementById("attachmentInput");
+    let sendingAttachments = false;
+    let pendingMessageId = "";
+    function renderPendingAttachments() {
+      const list = document.getElementById("pendingAttachments");
+      list.replaceChildren();
+      pendingAttachments.forEach((item, index) => {
+        const chip = document.createElement("div");
+        chip.className = "pending-attachment";
+        const name = document.createElement("span");
+        name.textContent = item.file.name;
+        const remove = document.createElement("button");
+        remove.className = "text-button";
+        remove.textContent = "×";
+        remove.disabled = sendingAttachments;
+        remove.onclick = () => { if (sendingAttachments) return; pendingAttachments.splice(index, 1); pendingMessageId = ""; renderPendingAttachments(); };
+        chip.append(name, remove);
+        list.appendChild(chip);
+      });
+    }
+    function addPendingAttachments(files) {
+      if (sendingAttachments) return;
+      if (pendingAttachments.length + files.length > 100) { setStatus("一条消息最多添加 100 个附件"); return; }
+      pendingAttachments.push(...files.map(file => ({ file })));
+      pendingMessageId = "";
+      renderPendingAttachments();
+    }
+    document.getElementById("chooseAttachments").onclick = () => attachmentInput.click();
+    attachmentInput.onchange = () => { addPendingAttachments([...attachmentInput.files]); attachmentInput.value = ""; };
+    inputEl.addEventListener("paste", event => {
+      if (event.clipboardData?.files.length) { event.preventDefault(); addPendingAttachments([...event.clipboardData.files]); }
+    });
+    inputEl.addEventListener("input", () => { pendingMessageId = ""; });
+    document.getElementById("messagesView").addEventListener("dragover", event => event.preventDefault());
+    document.getElementById("messagesView").addEventListener("drop", event => { event.preventDefault(); addPendingAttachments([...event.dataTransfer.files]); });
+    document.getElementById("sendMessage").onclick = async () => {
       const content = inputEl.value.trim();
-      if (!content || !ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({ type: "message", content, sessionId: currentSessionId }));
-      inputEl.value = "";
+      if ((!content && !pendingAttachments.length) || !currentSessionId || sendingAttachments) return;
+      sendingAttachments = true;
+      document.getElementById("sendMessage").disabled = true;
+      document.getElementById("chooseAttachments").disabled = true;
+      inputEl.disabled = true;
+      renderPendingAttachments();
+      pendingMessageId ||= "message-" + Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
+      try {
+        const sessionId = currentSessionId;
+        for (const [index, item] of pendingAttachments.entries()) {
+          setStatus("准备附件 " + (index + 1) + " / " + pendingAttachments.length);
+          if (!item.uploadedId || item.sessionId !== sessionId) {
+            const uploaded = await api("/api/files/upload?token=" + encodeURIComponent(token) + "&sessionId=" + encodeURIComponent(sessionId) + "&name=" + encodeURIComponent(item.file.name), { method: "PUT", body: item.file });
+            item.uploadedId = uploaded.id;
+            item.sessionId = sessionId;
+          }
+        }
+        const message = await api("/api/messages?token=" + encodeURIComponent(token), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ messageId: pendingMessageId, content, sessionId, attachmentIds: pendingAttachments.map(item => item.uploadedId) }) });
+        if (currentSessionId === sessionId) appendMessage(message);
+        inputEl.value = "";
+        pendingAttachments.splice(0);
+        pendingMessageId = "";
+        setStatus("已发送");
+      } catch (error) { setStatus("发送失败，草稿已保留：" + error.message); }
+      finally { sendingAttachments = false; document.getElementById("sendMessage").disabled = false; document.getElementById("chooseAttachments").disabled = false; inputEl.disabled = false; renderPendingAttachments(); }
     };
     inputEl.addEventListener("keydown", event => {
-      if (event.key === "Enter") document.getElementById("sendMessage").click();
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); document.getElementById("sendMessage").click(); }
     });
 
     renderMode();
@@ -1866,6 +1966,7 @@ pub async fn start_service(
     paths: &AppPaths,
     _payload: Value,
 ) -> Result<Value, ManagerError> {
+    attachments::cleanup_uploads(registry, paths).await?;
     let mut runtime = registry.inner.lock().await;
 
     if runtime.handle.is_some() {
@@ -1875,7 +1976,7 @@ pub async fn start_service(
             "qrSvg": qr_svg(&runtime.access_url)?,
             "lanIp": runtime.lan_ip,
             "port": runtime.port,
-            "onlineDevices": runtime.clients.len()
+            "onlineDevices": runtime.clients.len() + runtime.native.online_count()
         })));
     }
 
@@ -1935,6 +2036,9 @@ pub async fn start_service(
     runtime.lan_ip = lan_ip.clone();
     runtime.port = port;
     drop(runtime);
+    if let Err(error) = native::start(app.clone(), registry, paths).await {
+        registry.inner.lock().await.native.error = format!("自动发现启动失败：{error}");
+    }
     emit_state_changed(&app, registry, paths).await?;
 
     Ok(lan_share_response(json!({
@@ -1962,6 +2066,7 @@ pub async fn stop_service(
 }
 
 fn stop_runtime(runtime: &mut LanShareRuntime) {
+    runtime.native.stop();
     if let Some(handle) = runtime.handle.take() {
         handle.abort();
     }
@@ -2011,7 +2116,8 @@ pub async fn upsert_device(
     let now = now_millis();
     let normalized_name = normalize_device_name(device_name);
     let next_auto_name = auto_device_name(user_agent, ip);
-    let canonical_device_id = if ip.is_empty() {
+    let native_device = user_agent == "MonkeyThief/Desktop";
+    let canonical_device_id = if ip.is_empty() || native_device {
         device_id.to_string()
     } else {
         device_id_from_ip(ip)
@@ -2022,10 +2128,10 @@ pub async fn upsert_device(
         .position(|device| device.id == canonical_device_id)
         .or_else(|| devices.iter().position(|device| device.id == device_id))
         .or_else(|| {
-            if ip.is_empty() {
+            if ip.is_empty() || native_device {
                 None
             } else {
-                devices.iter().position(|device| device.ip == ip)
+                devices.iter().position(|device| device.ip == ip && device.user_agent != "MonkeyThief/Desktop")
             }
         });
 
@@ -2043,7 +2149,7 @@ pub async fn upsert_device(
         };
 
         devices.retain(|device| {
-            device.id == canonical_device_id || device.ip != ip || device.ip.is_empty()
+            native_device || device.user_agent == "MonkeyThief/Desktop" || device.id == canonical_device_id || device.ip != ip || device.ip.is_empty()
         });
         rewrite_device_references(paths, &old_device_id, &canonical_device_id, ip).await?;
         write_json(&paths.lan_share_files.devices, &json!(devices)).await?;
@@ -2359,6 +2465,18 @@ fn upsert_group_session_blocking(
     device: &LanShareDevice,
     ip: &str,
 ) -> Result<LanShareSession, ManagerError> {
+    let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+    let session = upsert_group_session(&mut sessions, group, device, ip);
+    write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
+    Ok(session)
+}
+
+fn upsert_group_session(
+    sessions: &mut Vec<LanShareSession>,
+    group: &mut LanShareGroup,
+    device: &LanShareDevice,
+    ip: &str,
+) -> LanShareSession {
     let now = now_millis();
     let device_name = device_display_name(device);
 
@@ -2389,7 +2507,6 @@ fn upsert_group_session_blocking(
         .find(|member| member.device_id == device.id)
         .map(|member| member.joined_at)
         .unwrap_or(now);
-    let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
 
     if let Some(session) = sessions.iter_mut().find(|session| {
         session.mode == "group" && session.group_id == group.id && session.device_id == device.id
@@ -2400,9 +2517,8 @@ fn upsert_group_session_blocking(
         session.message_visibility = group.message_visibility.clone();
         session.updated_at = now;
         let next_session = session.clone();
-        sort_sessions(&mut sessions);
-        write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
-        return Ok(next_session);
+        sort_sessions(sessions);
+        return next_session;
     }
 
     let session = LanShareSession {
@@ -2420,9 +2536,8 @@ fn upsert_group_session_blocking(
     };
 
     sessions.insert(0, session.clone());
-    sort_sessions(&mut sessions);
-    write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
-    Ok(session)
+    sort_sessions(sessions);
+    session
 }
 
 pub async fn create_session(
@@ -2530,9 +2645,23 @@ pub async fn append_message(
     content: &str,
     delivered: bool,
 ) -> Result<LanShareMessage, ManagerError> {
+    append_message_with_attachments(registry, paths, device_id, session_id, direction, content, delivered, &[], None).await
+}
+
+async fn append_message_with_attachments(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    device_id: &str,
+    session_id: &str,
+    direction: &str,
+    content: &str,
+    delivered: bool,
+    files: &[LanShareFile],
+    message_id: Option<&str>,
+) -> Result<LanShareMessage, ManagerError> {
     let content = content.trim().to_string();
 
-    if content.is_empty() {
+    if content.is_empty() && files.is_empty() {
         return Err(ManagerError::System("消息内容不能为空。".to_string()));
     }
 
@@ -2571,13 +2700,17 @@ pub async fn append_message(
         )?
     };
     let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+    if let Some(existing) = message_id.and_then(|id| messages.iter().find(|message| message.id == id)) {
+        return Ok(existing.clone());
+    }
     let message = LanShareMessage {
-        id: create_id("message"),
+        id: message_id.map(str::to_string).unwrap_or_else(|| create_id("message")),
         session_id: session.id,
         device_id: device_id.to_string(),
         device_name,
         direction: direction.to_string(),
-        message_type: "text".to_string(),
+        message_type: if files.is_empty() { "text" } else { "file" }.to_string(),
+        attachments: files.iter().map(attachments::Attachment::from).collect(),
         content,
         created_at: now_millis(),
         delivered,
@@ -2625,81 +2758,49 @@ pub async fn send_message(
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let content = string_value(payload.get("content"));
-
-    if content.is_empty() {
-        return Err(ManagerError::System("消息内容不能为空。".to_string()));
-    }
-
     let target_device_id = string_value(payload.get("deviceId"));
     let target_session_id = string_value(payload.get("sessionId"));
+    let files = attachments::prepare(registry, paths, &target_session_id, &payload).await?;
+    if content.is_empty() && files.is_empty() {
+        return Err(ManagerError::System("请填写消息或添加附件。".into()));
+    }
+    let requested_id = string_value(payload.get("messageId"));
+    let message_id = if requested_id.is_empty() { create_id("message") } else { requested_id };
     if let Some(group_session) = group_session_by_id(paths, &target_session_id)? {
         let targets = group_online_targets(registry, paths, &group_session.group_id).await?;
-        let stored = append_message(
-            registry,
-            paths,
-            if group_session.device_id.is_empty() {
-                "desktop"
-            } else {
-                &group_session.device_id
-            },
-            &group_session.id,
-            "desktop-to-mobile",
-            &content,
-            !targets.is_empty(),
-        )
-        .await?;
-
-        for (_, sender) in targets {
-            let _ = send_stored_message_to_client(&sender, &stored);
-        }
-
+        let stored = append_message_with_attachments(registry, paths,
+            if group_session.device_id.is_empty() { "desktop" } else { &group_session.device_id },
+            &group_session.id, "desktop-to-mobile", &content, !targets.is_empty(), &files, Some(&message_id)).await?;
+        attachments::publish(registry, paths, &files).await?;
+        for (_, sender) in targets { let _ = send_stored_message_to_client(&sender, &stored); }
         emit_message_created(&app, &stored);
+        emit_state_changed(&app, registry, paths).await?;
         return Ok(lan_share_response(json!([stored])));
     }
-
+    let native_delivery = native::deliver(registry, &target_device_id, &content, &files, &message_id).await?;
+    if target_device_id.starts_with("native-") && !native_delivery {
+        return Err(ManagerError::System("请先连接并配对这台设备。".into()));
+    }
     let targets = {
         let runtime = registry.inner.lock().await;
-
         if target_device_id.is_empty() {
-            runtime
-                .clients
-                .iter()
-                .map(|(device_id, sender)| (device_id.clone(), Some(sender.clone())))
-                .collect::<Vec<_>>()
+            runtime.clients.iter().map(|(device_id, sender)| (device_id.clone(), Some(sender.clone()))).collect::<Vec<_>>()
         } else {
-            vec![(
-                target_device_id.clone(),
-                runtime.clients.get(&target_device_id).cloned(),
-            )]
+            vec![(target_device_id.clone(), runtime.clients.get(&target_device_id).cloned())]
         }
     };
     let mut sent_messages = Vec::new();
-
     for (device_id, sender) in targets {
-        let delivered = sender.is_some();
-        let stored = append_message(
-            registry,
-            paths,
-            &device_id,
-            if device_id == target_device_id {
-                &target_session_id
-            } else {
-                ""
-            },
-            "desktop-to-mobile",
-            &content,
-            delivered,
-        )
-        .await?;
-
-        if let Some(sender) = sender {
-            let _ = send_stored_message_to_client(&sender, &stored);
-        }
-
+        let stored_id = if device_id == target_device_id { message_id.clone() } else { format!("{message_id}-{device_id}") };
+        let stored = append_message_with_attachments(registry, paths, &device_id,
+            if device_id == target_device_id { &target_session_id } else { "" },
+            "desktop-to-mobile", &content, native_delivery || sender.is_some(), &files, Some(&stored_id)).await?;
+        attachments::publish(registry, paths, &files).await?;
+        if let Some(sender) = sender { let _ = send_stored_message_to_client(&sender, &stored); }
         emit_message_created(&app, &stored);
         sent_messages.push(stored);
     }
-
+    emit_state_changed(&app, registry, paths).await?;
     Ok(lan_share_response(json!(sent_messages)))
 }
 
@@ -2708,10 +2809,22 @@ async fn handle_http_request(
     context: HttpContext,
     addr: SocketAddr,
 ) -> Result<Response<BoxBody>, Infallible> {
-    let response = match process_http_request(request, context, addr).await {
+    let origin = request.headers().get("origin").cloned();
+    let mut response = match process_http_request(request, context, addr).await {
         Ok(response) => response,
         Err(error) => api_error(StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
     };
+
+    if let Some(origin) = origin.filter(|value| {
+        value.to_str().ok().and_then(|value| Url::parse(value).ok()).map(|url| {
+            matches!(url.host_str(), Some("tauri.localhost" | "localhost" | "127.0.0.1"))
+        }).unwrap_or(false)
+    }) {
+        response.headers_mut().insert("access-control-allow-origin", origin);
+        response.headers_mut().insert("access-control-allow-methods", HeaderValue::from_static("GET, PUT, POST, OPTIONS"));
+        response.headers_mut().insert("access-control-allow-headers", HeaderValue::from_static("content-type"));
+        response.headers_mut().insert("vary", HeaderValue::from_static("Origin"));
+    }
 
     Ok(response)
 }
@@ -2722,6 +2835,12 @@ async fn process_http_request(
     addr: SocketAddr,
 ) -> Result<Response<BoxBody>, ManagerError> {
     let path = request.uri().path().to_string();
+    if request.method() == Method::OPTIONS {
+        return Ok(response(StatusCode::NO_CONTENT, "text/plain", ""));
+    }
+    if path.starts_with("/api/native/") {
+        return native::handle_request(request, &context, addr).await;
+    }
     let request_token = if request.method() == Method::POST
         && (path == "/api/devices"
             || path == "/api/sessions"
@@ -2759,7 +2878,20 @@ async fn process_http_request(
         )),
         (&Method::GET, "/api/files/download") => download_file(request.uri(), &context, addr).await,
         (&Method::GET, "/api/files/preview") => preview_file(request.uri(), &context, addr).await,
+        (&Method::PUT, "/api/files/upload") => {
+            let session_id = query_value(request.uri(), "sessionId");
+            let name = query_value(request.uri(), "name");
+            let file = attachments::upload(request.into_body(), &context.registry, &context.paths, &session_id, &name).await?;
+            Ok(api_success(json!(attachments::Attachment::from(&file))))
+        },
         (&Method::GET, "/api/messages") => mobile_messages(request.uri(), &context, addr).await,
+        (&Method::POST, "/api/messages") => {
+            let body = http_body_util::Limited::new(request.into_body(), 256 * 1024).collect().await
+                .map_err(|_| ManagerError::System("消息过大或接收中断。".into()))?.to_bytes();
+            let payload: Value = serde_json::from_slice(&body)?;
+            let stored = store_guest_message(&context, &device_id_from_ip(&client_ip(addr)), &payload).await?;
+            Ok(api_success(json!(stored)))
+        },
         (&Method::GET, "/api/groups") => mobile_groups(request.uri(), &context, addr).await,
         (&Method::POST, "/api/devices") => register_device_request(request, &context, addr).await,
         (&Method::POST, "/api/sessions") => create_mobile_session(request, &context, addr).await,
@@ -3472,37 +3604,9 @@ async fn handle_websocket_connection(
             .unwrap_or_else(|_| json!({}));
 
         if payload.get("type").and_then(Value::as_str) == Some("message") {
-            let content = string_value(payload.get("content"));
-            let session_id = string_value(payload.get("sessionId"));
-
-            if content.is_empty() {
-                continue;
+            if let Err(error) = store_guest_message(&context, &device_id, &payload).await {
+                let _ = client_sender.send(WsOutbound { payload: json!({ "type": "error", "message": error.to_string() }) });
             }
-
-            let message = append_message(
-                &context.registry,
-                &context.paths,
-                &device_id,
-                &session_id,
-                "mobile-to-desktop",
-                &content,
-                true,
-            )
-            .await?;
-
-            if let Some(group_session) = group_session_by_id(&context.paths, &message.session_id)? {
-                let targets =
-                    group_online_targets(&context.registry, &context.paths, &group_session.group_id)
-                        .await?;
-
-                for (_, sender) in targets {
-                    let _ = send_stored_message_to_client(&sender, &message);
-                }
-            } else {
-                let _ = send_stored_message_to_client(&client_sender, &message);
-            }
-            emit_message_created(&context.app, &message);
-            emit_state_changed(&context.app, &context.registry, &context.paths).await?;
         }
     }
 
@@ -3520,6 +3624,29 @@ async fn handle_websocket_connection(
     }
     emit_state_changed(&context.app, &context.registry, &context.paths).await?;
     Ok(())
+}
+
+async fn store_guest_message(context: &HttpContext, device_id: &str, payload: &Value) -> Result<LanShareMessage, ManagerError> {
+    let session_id = string_value(payload.get("sessionId"));
+    let session = read_array::<LanShareSession>(&context.paths.lan_share_files.sessions)?.into_iter()
+        .find(|session| session.id == session_id && session.device_id == device_id)
+        .ok_or_else(|| ManagerError::System("请先选择当前设备的有效会话。".into()))?;
+    let content = string_value(payload.get("content"));
+    let files = attachments::prepare(&context.registry, &context.paths, &session.id, &json!({ "attachmentIds": payload["attachmentIds"] })).await?;
+    let requested_id = string_value(payload.get("messageId"));
+    let message_id = if requested_id.is_empty() { create_id("message") } else { format!("{device_id}-{requested_id}") };
+    let message = append_message_with_attachments(&context.registry, &context.paths, device_id, &session.id, "mobile-to-desktop", &content, true, &files, Some(&message_id)).await?;
+    attachments::publish(&context.registry, &context.paths, &files).await?;
+    if let Some(group_session) = group_session_by_id(&context.paths, &message.session_id)? {
+        for (_, sender) in group_online_targets(&context.registry, &context.paths, &group_session.group_id).await? {
+            let _ = send_stored_message_to_client(&sender, &message);
+        }
+    } else if let Some(sender) = context.registry.inner.lock().await.clients.get(device_id) {
+        let _ = send_stored_message_to_client(sender, &message);
+    }
+    emit_message_created(&context.app, &message);
+    emit_state_changed(&context.app, &context.registry, &context.paths).await?;
+    Ok(message)
 }
 
 #[cfg(test)]
@@ -3551,7 +3678,7 @@ mod message_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        activate_session, add_files, append_message, create_file_id, create_id, create_session,
+        activate_session, add_files, append_message, create_file_id, create_group, create_id, create_session,
         delete_messages, delete_session, device_id_from_ip, export_files_zip, list_messages,
         mobile_files_payload, read_array, refresh_files, remove_files, string_value, upsert_device,
         LanShareDevice, LanShareFile, LanShareMessage, LanShareServerRegistry, LanShareSession,
@@ -3559,6 +3686,50 @@ mod tests {
     use crate::core::paths::resolve_app_paths;
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn group_creation_rejects_missing_or_invalid_invitees_without_creating_records() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("group-invite-validation"));
+            let paths = resolve_app_paths(&root);
+            tokio::fs::create_dir_all(&paths.lan_share_dir).await.unwrap();
+            let registry = LanShareServerRegistry::new();
+            let browser = upsert_device(&registry, &paths, "", "网页设备", "Chrome", "192.168.1.11").await.unwrap();
+            let native = upsert_device(&registry, &paths, "native-peer", "客户端", "MonkeyThief/Desktop", "192.168.1.12").await.unwrap();
+            for identifiers in [json!([]), json!([browser.id, "missing"]), json!([native.id])] {
+                assert!(create_group(&registry, &paths, json!({ "name": "不应创建", "deviceIds": identifiers })).await.is_err());
+                assert!(read_array::<super::LanShareGroup>(&paths.lan_share_files.groups).unwrap().is_empty());
+                assert!(read_array::<LanShareSession>(&paths.lan_share_files.sessions).unwrap().is_empty());
+            }
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
+
+    #[test]
+    fn group_creation_adds_unique_invitees_persists_sessions_and_notifies_online_devices() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("group-invite-members"));
+            let paths = resolve_app_paths(&root);
+            tokio::fs::create_dir_all(&paths.lan_share_dir).await.unwrap();
+            let registry = LanShareServerRegistry::new();
+            let online = upsert_device(&registry, &paths, "", "在线设备", "Chrome", "192.168.1.11").await.unwrap();
+            let offline = upsert_device(&registry, &paths, "", "离线设备", "Chrome", "192.168.1.12").await.unwrap();
+            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            registry.inner.lock().await.clients.insert(online.id.clone(), sender);
+            let result = create_group(&registry, &paths, json!({ "name": "测试群聊", "messageVisibility": "afterJoin", "deviceIds": [online.id, offline.id, online.id] })).await.unwrap();
+            let group_id = result["data"]["currentSession"]["groupId"].as_str().unwrap();
+            let groups: Vec<super::LanShareGroup> = read_array(&paths.lan_share_files.groups).unwrap();
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0].members.len(), 2);
+            let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
+            assert_eq!(sessions.iter().filter(|session| session.group_id == group_id).count(), 3);
+            assert!(sessions.iter().any(|session| session.device_id == offline.id && session.message_visibility == "afterJoin"));
+            assert_eq!(receiver.try_recv().unwrap().payload["type"], "groupsChanged");
+            assert!(receiver.try_recv().is_err());
+            assert!(super::mobile_page_html().contains("payload.type === \"groupsChanged\""));
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
 
     #[test]
     fn creates_stable_file_id_from_path() {
@@ -3648,6 +3819,7 @@ mod tests {
                         device_name: "needle device".to_string(),
                         direction: "inbound".to_string(),
                         message_type: "text".to_string(),
+                        attachments: Vec::new(),
                         content: "ordinary text".to_string(),
                         created_at: 20,
                         delivered: true,
@@ -3660,6 +3832,7 @@ mod tests {
                         device_name: "plain device".to_string(),
                         direction: "inbound".to_string(),
                         message_type: "text".to_string(),
+                        attachments: Vec::new(),
                         content: "needle content".to_string(),
                         created_at: 10,
                         delivered: true,
@@ -3701,6 +3874,7 @@ mod tests {
                         device_name: "设备一".to_string(),
                         direction: "mobile-to-desktop".to_string(),
                         message_type: "text".to_string(),
+                        attachments: Vec::new(),
                         content: "删除我".to_string(),
                         created_at: 10,
                         delivered: true,
@@ -3713,6 +3887,7 @@ mod tests {
                         device_name: "设备一".to_string(),
                         direction: "desktop-to-mobile".to_string(),
                         message_type: "text".to_string(),
+                        attachments: Vec::new(),
                         content: "保留我".to_string(),
                         created_at: 20,
                         delivered: true,
@@ -4911,6 +5086,7 @@ mod service_tests {
             device_name: "我的设备".to_string(),
             direction: "mobile-to-desktop".to_string(),
             message_type: "text".to_string(),
+            attachments: Vec::new(),
             content: "hello".to_string(),
             created_at: 123,
             delivered: true,

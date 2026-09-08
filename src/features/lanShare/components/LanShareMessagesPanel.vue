@@ -1,688 +1,926 @@
 <template>
-  <section class="lan-share-messages-panel">
-    <header class="lan-share-messages-head">
-      <div class="lan-share-messages-title">
-        <span data-emphasis class="lan-share-messages-name">消息通信</span>
-        <span class="lan-share-messages-subtitle">
-          {{ sessionSummary }}
-        </span>
+  <section
+    ref="panelRef"
+    class="lan-chat"
+    @dragover.prevent
+    @drop.prevent="dropFiles"
+  >
+    <div ref="messageListRef" class="chat-timeline" aria-label="聊天消息">
+      <div v-if="!messages.length" class="chat-empty">
+        <MessagesSquare :size="34" :stroke-width="1.3" />
+        <span>从一句话或一个文件开始</span>
+        <small>图片、文件和文字都在这里查看，无需切换页面。</small>
       </div>
-      <div class="lan-share-messages-actions">
-        <input
-          v-model="keyword"
-          class="lan-share-messages-search"
-          placeholder="搜索消息"
-          type="search"
-        />
-        <select v-model="timeFilter" class="lan-share-messages-select">
-          <option value="all">全部时间</option>
-          <option value="today">今天</option>
-          <option value="week">最近 7 天</option>
-        </select>
-        <button
-          class="lan-share-messages-mini-button"
-          type="button"
-          :disabled="!messages.length"
-          @click="toggleSelectAllMessages"
-        >
-          {{ allMessagesSelected ? "取消全选" : "全选" }}
-        </button>
-        <button
-          class="lan-share-messages-mini-button"
-          type="button"
-          :disabled="!selectedMessageIds.length || loading"
-          @click="deleteSelectedMessages"
-        >
-          <Trash2 :size="13" />
-          删除所选
-        </button>
-      </div>
-    </header>
-    <div ref="messageListRef" class="lan-share-messages-list">
       <article
-        v-for="message in sortedMessages"
+        v-for="message in messages"
         :key="message.id"
-        :class="[
-          'lan-share-messages-item',
-          {
-            'lan-share-messages-item-desktop':
-              message.direction === 'desktop-to-mobile',
-            'lan-share-messages-item-mobile':
-              message.direction !== 'desktop-to-mobile',
-            'lan-share-messages-item-file': message.messageType === 'file'
-          }
-        ]"
+        :data-message-id="message.id"
+        class="chat-message"
+        :class="{
+          'chat-message-self': message.direction === 'desktop-to-mobile'
+        }"
       >
-        <div class="lan-share-messages-item-head">
-          <label class="lan-share-messages-check">
-            <input
-              v-model="selectedMessageIds"
-              class="lan-share-messages-check-input"
-              type="checkbox"
-              :value="message.id"
-            />
-            <span class="lan-share-messages-check-mark"></span>
-          </label>
-          <span class="lan-share-messages-sender">
-            {{ messageSenderName(message) }}
-          </span>
+        <div class="chat-message-meta">
+          <span>{{
+            message.direction === "desktop-to-mobile"
+              ? "我"
+              : message.deviceName || currentDevice?.name || "对方"
+          }}</span>
+          <time>{{ formatDateTime(message.createdAt) }}</time>
+          <span
+            v-if="
+              message.direction === 'desktop-to-mobile' && !message.delivered
+            "
+            class="chat-delivery"
+            >待对方接收</span
+          >
+        </div>
+        <div class="chat-bubble">
+          <p v-if="message.content" class="chat-text">{{ message.content }}</p>
+          <LanShareAttachmentGallery
+            v-if="message.attachments?.length"
+            :files="message.attachments"
+            :service="service"
+            :session-id="currentSessionId"
+            @preview="$emit('preview-file', $event)"
+          />
+        </div>
+        <div class="chat-message-actions">
           <button
-            class="lan-share-messages-delete"
+            v-if="message.content"
+            class="chat-icon-button"
             type="button"
-            title="删除消息"
-            @click="deleteMessage(message)"
+            title="复制消息"
+            aria-label="复制消息"
+            @click="copyMessage(message)"
+          >
+            <Copy :size="12" />
+          </button>
+          <button
+            class="chat-icon-button"
+            type="button"
+            title="删除本机消息"
+            aria-label="删除本机消息"
+            @click="deleteMessages([message.id])"
           >
             <Trash2 :size="12" />
           </button>
         </div>
-        <span class="lan-share-messages-meta">
-          {{ messageRelationText(message) }} ·
-          {{ formatDateTime(message.createdAt) }}
-        </span>
-        <p
-          class="lan-share-messages-content"
-          title="点击复制消息"
-          @click="copyMessageContent(message)"
-        >
-          <FileText
-            v-if="message.messageType === 'file'"
-            class="lan-share-messages-content-icon"
-            :size="14"
-          />
-          {{ message.content }}
-        </p>
       </article>
-      <div v-if="!messages.length" class="lan-share-messages-empty">
-        暂无消息。
-      </div>
     </div>
-    <footer class="lan-share-messages-composer">
+
+    <footer class="chat-composer" :aria-busy="sending">
+      <div
+        v-if="currentDraft.files.length"
+        class="chat-draft-files"
+        aria-label="待发送附件"
+      >
+        <div
+          v-for="item in currentDraft.files"
+          :key="item.id"
+          class="chat-draft-file"
+        >
+          <img
+            v-if="item.previewUrl"
+            class="chat-draft-thumbnail"
+            :src="item.previewUrl"
+            :alt="item.name"
+          />
+          <File v-else class="chat-draft-icon" :size="22" />
+          <span class="chat-draft-caption"
+            ><span class="chat-draft-name" :title="item.name">{{
+              item.name
+            }}</span
+            ><small>{{ formatFileSize(item.size) }}</small></span
+          >
+          <button
+            class="chat-icon-button"
+            type="button"
+            :disabled="sending"
+            :aria-label="`移除 ${item.name}`"
+            @click="removeAttachment(item)"
+          >
+            <X :size="13" />
+          </button>
+        </div>
+      </div>
+      <textarea
+        ref="composerRef"
+        v-model="currentDraft.content"
+        class="chat-input"
+        :disabled="sending || !currentSessionId"
+        rows="2"
+        placeholder="输入消息，也可以直接粘贴图片、文件，或拖拽到这里…"
+        aria-label="聊天输入框"
+        @paste="pasteFiles"
+        @keydown="composerKeydown"
+      ></textarea>
+      <div class="chat-composer-footer">
+        <div class="chat-compose-tools">
+          <button
+            class="chat-attach-button"
+            type="button"
+            :disabled="sending || !currentSessionId"
+            title="添加文件或图片，可多选"
+            @click="pickFiles"
+          >
+            <Paperclip :size="17" /><span>添加附件</span>
+          </button>
+          <span class="chat-compose-hint">{{
+            sending
+              ? sendStatus
+              : currentDraft.files.length
+                ? `${currentDraft.files.length} 个附件 · 合并为一条消息`
+                : "Enter 发送 · Shift + Enter 换行"
+          }}</span>
+        </div>
+        <button
+          class="chat-send-button"
+          type="button"
+          :disabled="
+            sending ||
+            !service.running ||
+            !currentSessionId ||
+            (!currentDraft.content.trim() && !currentDraft.files.length)
+          "
+          @click="sendMessage"
+        >
+          <Send :size="15" />{{ sending ? "发送中" : "发送" }}
+        </button>
+      </div>
       <input
-        v-model="messageDraft"
-        class="lan-share-messages-composer-input"
-        type="text"
-        placeholder="输入要发送到设备的消息"
-        @keydown.enter="sendMessage"
+        ref="fileInputRef"
+        class="chat-file-input"
+        type="file"
+        multiple
+        aria-label="选择附件"
+        @change="chooseBrowserFiles"
       />
-      <button
-        class="lan-share-messages-button"
-        type="button"
-        :disabled="!currentSessionId || loading"
-        @click="clearCurrentSession"
-      >
-        <Eraser :size="14" />
-        清空会话
-      </button>
-      <button
-        class="lan-share-messages-button lan-share-messages-button-primary"
-        type="button"
-        :disabled="!messageDraft.trim() || !currentSession || loading"
-        @click="sendMessage"
-      >
-        <Send :size="14" />
-        发送
-      </button>
     </footer>
+
+    <el-drawer
+      v-model="searchOpen"
+      title="聊天记录"
+      size="420px"
+      append-to-body
+    >
+      <div class="chat-search-drawer">
+        <el-input
+          v-model="keyword"
+          placeholder="搜索文字或附件名称"
+          clearable
+        />
+        <el-select v-model="timeFilter" aria-label="消息时间范围"
+          ><el-option label="全部时间" value="all" /><el-option
+            label="今天"
+            value="today" /><el-option label="最近 7 天" value="week"
+        /></el-select>
+        <div class="chat-search-actions">
+          <span>{{ filteredMessages.length }} 条记录</span
+          ><el-button size="small" @click="selectAll">{{
+            allSelected ? "取消全选" : "全选"
+          }}</el-button
+          ><el-button
+            size="small"
+            type="danger"
+            plain
+            :disabled="!selectedIds.length"
+            @click="deleteMessages(selectedIds)"
+            >删除所选</el-button
+          >
+        </div>
+        <div class="chat-search-results">
+          <div
+            v-for="message in filteredMessages"
+            :key="message.id"
+            class="chat-search-result"
+          >
+            <el-checkbox
+              v-model="selectedIds"
+              :value="message.id"
+              :aria-label="`选择 ${message.content || '附件消息'}`"
+            />
+            <button
+              class="chat-search-jump"
+              type="button"
+              @click="jumpToMessage(message.id)"
+            >
+              <small>{{ formatDateTime(message.createdAt) }}</small
+              ><span>{{
+                message.content ||
+                message.attachments?.map((file) => file.name).join("、") ||
+                "文件消息"
+              }}</span>
+            </button>
+          </div>
+          <span v-if="!filteredMessages.length" class="chat-search-empty"
+            >没有匹配的聊天记录</span
+          >
+        </div>
+      </div>
+    </el-drawer>
   </section>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
-import { Eraser, FileText, Send, Trash2 } from "lucide-vue-next"
-import { lanShareApi } from "@/api"
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch
+} from "vue"
+import {
+  ElButton,
+  ElCheckbox,
+  ElDrawer,
+  ElInput,
+  ElOption,
+  ElSelect
+} from "element-plus"
+import "element-plus/es/components/button/style/css"
+import "element-plus/es/components/checkbox/style/css"
+import "element-plus/es/components/drawer/style/css"
+import "element-plus/es/components/input/style/css"
+import "element-plus/es/components/select/style/css"
+import { isTauri } from "@tauri-apps/api/core"
+import { getCurrentWebview } from "@tauri-apps/api/webview"
+import {
+  Copy,
+  File,
+  MessagesSquare,
+  Paperclip,
+  Send,
+  Trash2,
+  X
+} from "lucide-vue-next"
+import { lanShareApi, systemApi } from "@/api"
 import { formatDateTime } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
+import { formatFileSize } from "@/features/lanShare/utils"
+import LanShareAttachmentGallery from "./LanShareAttachmentGallery.vue"
 
 const props = defineProps({
-  currentDevice: {
-    type: Object,
-    default: null
-  },
-  currentSessionId: {
-    type: String,
-    default: ""
-  },
-  currentSession: {
-    type: Object,
-    default: null
-  },
-  chatMode: {
-    type: String,
-    default: "direct"
-  },
-  stateVersion: {
-    type: Number,
-    default: 0
-  }
+  currentDevice: { type: Object, default: null },
+  currentSessionId: { type: String, default: "" },
+  currentSession: { type: Object, default: null },
+  chatMode: { type: String, default: "direct" },
+  service: { type: Object, default: () => ({}) },
+  stateVersion: { type: Number, default: 0 }
 })
-
-const emit = defineEmits(["refresh-state"])
-
+const emit = defineEmits(["refresh-state", "preview-file"])
+const panelRef = ref(null)
 const messageListRef = ref(null)
+const composerRef = ref(null)
+const fileInputRef = ref(null)
 const messages = ref([])
+const drafts = reactive({})
+const sending = ref(false)
+const sendStatus = ref("")
+const searchOpen = ref(false)
 const keyword = ref("")
 const timeFilter = ref("all")
-const messageDraft = ref("")
-const selectedMessageIds = ref([])
-const loading = ref(false)
+const selectedIds = ref([])
 let stopMessageListener = null
+let stopDropListener = null
+let disposed = false
 let loadSeed = 0
 
-const sessionSummary = computed(() => {
-  if (!props.currentSession) {
-    return "请选择设备和会话"
-  }
-
-  return `${messages.value.length} 条消息 · ${formatDateTime(
-    props.currentSession.updatedAt
-  )}`
-})
-
-const sortedMessages = computed(() => {
-  return [...messages.value].sort((left, right) => {
-    return Number(left.createdAt || 0) - Number(right.createdAt || 0)
-  })
-})
-
-const allMessagesSelected = computed(() => {
-  return (
-    Boolean(messages.value.length) &&
-    messages.value.every((message) =>
-      selectedMessageIds.value.includes(message.id)
-    )
+watch(
+  () => props.currentSessionId,
+  (sessionId) => {
+    if (!drafts[sessionId])
+      drafts[sessionId] = { content: "", files: [], messageId: "" }
+    messages.value = []
+    selectedIds.value = []
+    loadMessages()
+  },
+  { immediate: true }
+)
+const currentDraft = computed(() => drafts[props.currentSessionId])
+const filteredMessages = computed(() => {
+  const since =
+    timeFilter.value === "today"
+      ? new Date().setHours(0, 0, 0, 0)
+      : timeFilter.value === "week"
+        ? Date.now() - 7 * 86400000
+        : 0
+  const query = keyword.value.trim().toLowerCase()
+  return messages.value.filter(
+    (message) =>
+      message.createdAt >= since &&
+      `${message.content || ""} ${(message.attachments || []).map((file) => file.name).join(" ")}`
+        .toLowerCase()
+        .includes(query)
   )
 })
+const allSelected = computed(
+  () =>
+    filteredMessages.value.length > 0 &&
+    filteredMessages.value.every((message) =>
+      selectedIds.value.includes(message.id)
+    )
+)
+watch(() => props.stateVersion, loadMessages)
 
-onMounted(() => {
-  loadMessages()
+onMounted(async () => {
   stopMessageListener = lanShareApi.onMessageCreated((message) => {
     if (
       message.sessionId === props.currentSessionId ||
       props.chatMode === "group"
-    ) {
+    )
       loadMessages()
-      emit("refresh-state")
-    }
   })
+  if (isTauri()) {
+    try {
+      const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
+        if (event.payload.type !== "drop") return
+        const bounds = panelRef.value?.getBoundingClientRect()
+        const position = event.payload.position
+        const scale = window.devicePixelRatio || 1
+        if (
+          bounds &&
+          position.x / scale >= bounds.left &&
+          position.x / scale <= bounds.right &&
+          position.y / scale >= bounds.top &&
+          position.y / scale <= bounds.bottom
+        )
+          addPaths(event.payload.paths)
+      })
+      if (disposed) unlisten()
+      else stopDropListener = unlisten
+    } catch (error) {
+      createMessage.error(`拖拽监听失败：${error?.message || error}`)
+    }
+  }
 })
 
 onBeforeUnmount(() => {
-  if (stopMessageListener) stopMessageListener()
+  disposed = true
+  loadSeed++
+  stopMessageListener?.()
+  stopDropListener?.()
+  for (const draft of Object.values(drafts)) {
+    for (const file of draft.files)
+      if (file.previewUrl) URL.revokeObjectURL(file.previewUrl)
+    if (!sending.value) discardUploads(draft.files)
+  }
 })
 
-watch(
-  () => [
-    props.currentDevice?.id || "",
-    props.currentSessionId,
-    props.chatMode,
-    props.stateVersion,
-    keyword.value,
-    timeFilter.value
-  ],
-  () => loadMessages()
-)
-
-watch(
-  () => sortedMessages.value,
-  () => scrollMessagesToBottom(),
-  { deep: true }
-)
-
-async function loadMessages() {
-  const seed = ++loadSeed
-
-  if (!props.currentSessionId) {
-    messages.value = []
-    selectedMessageIds.value = []
-    return
-  }
-
-  try {
-    const result = unwrapData(
-      await lanShareApi.listMessages({
-        deviceId:
-          props.chatMode === "direct" ? props.currentDevice?.id || "" : "",
-        sessionId: props.currentSessionId,
-        keyword: keyword.value,
-        from: filterStartAt(),
-        to: 0
-      })
-    )
-
-    if (seed === loadSeed) {
-      messages.value = Array.isArray(result) ? result : []
-      selectedMessageIds.value = selectedMessageIds.value.filter(
-        (messageId) => {
-          return messages.value.some((message) => message.id === messageId)
-        }
-      )
-    }
-  } catch (error) {
-    createMessage.error(error?.message || String(error))
-  }
-}
-
-function unwrapData(result) {
+function unwrap(result) {
   return result?.status && "data" in result ? result.data : result
 }
 
-function scrollMessagesToBottom() {
-  nextTick(() => {
-    const messageList = messageListRef.value
-
-    if (messageList) {
-      messageList.scrollTop = messageList.scrollHeight
+async function loadMessages() {
+  const seed = ++loadSeed
+  if (!props.currentSessionId) return
+  const list = messageListRef.value
+  const shouldFollow =
+    !messages.value.length ||
+    !list ||
+    list.scrollHeight - list.scrollTop - list.clientHeight < 80
+  try {
+    const result = unwrap(
+      await lanShareApi.listMessages({
+        sessionId: props.currentSessionId,
+        deviceId:
+          props.chatMode === "direct" ? props.currentDevice?.id || "" : ""
+      })
+    )
+    if (disposed || seed !== loadSeed) return
+    const nextMessages = (Array.isArray(result) ? result : []).sort(
+      (left, right) => left.createdAt - right.createdAt
+    )
+    const changed = nextMessages.at(-1)?.id !== messages.value.at(-1)?.id
+    messages.value = nextMessages
+    selectedIds.value = selectedIds.value.filter((id) =>
+      nextMessages.some((message) => message.id === id)
+    )
+    if (changed && shouldFollow) {
+      await nextTick()
+      if (messageListRef.value)
+        messageListRef.value.scrollTop = messageListRef.value.scrollHeight
     }
-  })
+  } catch (error) {
+    if (seed === loadSeed && !disposed)
+      createMessage.error(error?.message || String(error))
+  }
 }
 
-async function runMessageAction(action, successMessage) {
-  loading.value = true
-
-  try {
-    const result = unwrapData(await action())
-
-    if (successMessage) {
-      createMessage.success(successMessage)
+function appendFiles(files) {
+  if (sending.value || !props.currentSessionId) return
+  const remaining = 100 - currentDraft.value.files.length
+  if (files.length > remaining)
+    createMessage.warning("一条消息最多添加 100 个附件。")
+  for (const file of files.slice(0, remaining)) {
+    if (file.size > 10 * 1024 ** 3) {
+      createMessage.warning(`${file.name} 超过单文件 10 GiB 限制。`)
+      continue
     }
+    currentDraft.value.files.push({
+      id: crypto.randomUUID(),
+      name: file.name || `剪贴板-${Date.now()}.png`,
+      size: file.size,
+      file,
+      previewUrl: file.type.startsWith("image/")
+        ? URL.createObjectURL(file)
+        : ""
+    })
+  }
+}
 
-    await loadMessages()
-    emit("refresh-state")
-    return result
+function addPaths(paths) {
+  if (sending.value || !props.currentSessionId) return
+  for (const path of paths) {
+    if (currentDraft.value.files.some((item) => item.path === path)) continue
+    if (currentDraft.value.files.length >= 100) {
+      createMessage.warning("一条消息最多添加 100 个附件。")
+      break
+    }
+    currentDraft.value.files.push({
+      id: crypto.randomUUID(),
+      path,
+      name: path.split(/[\\/]/).at(-1),
+      size: null
+    })
+  }
+}
+
+async function pickFiles() {
+  if (!isTauri()) {
+    fileInputRef.value?.click()
+    return
+  }
+  try {
+    addPaths(
+      (await systemApi.selectFiles({ title: "选择要发送的文件和图片" })) || []
+    )
   } catch (error) {
     createMessage.error(error?.message || String(error))
-    return null
-  } finally {
-    loading.value = false
   }
+}
+
+function chooseBrowserFiles(event) {
+  appendFiles([...event.target.files])
+  event.target.value = ""
+}
+async function pasteFiles(event) {
+  const files = [...(event.clipboardData?.files || [])]
+  if (files.length) {
+    event.preventDefault()
+    appendFiles(files)
+    return
+  }
+  if (!isTauri() || event.clipboardData?.getData("text/plain") || sending.value)
+    return
+  const sessionId = props.currentSessionId
+  try {
+    const paths = unwrap(await lanShareApi.getClipboardFiles())
+    if (sessionId === props.currentSessionId && !disposed) addPaths(paths || [])
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
+  }
+}
+function dropFiles(event) {
+  appendFiles([...event.dataTransfer.files])
+}
+function composerKeydown(event) {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault()
+    sendMessage()
+  }
+}
+
+async function discardUploads(files) {
+  const identifiers = files.map((file) => file.uploadedId).filter(Boolean)
+  if (identifiers.length) {
+    try {
+      await lanShareApi.discardUploads({ attachmentIds: identifiers })
+    } catch (error) {
+      if (!disposed)
+        createMessage.error(`临时附件清理失败：${error?.message || error}`)
+    }
+  }
+}
+
+function removeAttachment(item) {
+  if (sending.value) return
+  currentDraft.value.files = currentDraft.value.files.filter(
+    (file) => file.id !== item.id
+  )
+  if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+  discardUploads([item])
 }
 
 async function sendMessage() {
-  const content = messageDraft.value.trim()
-
-  if (!content || !props.currentSessionId) {
-    if (content) {
-      createMessage.warning("请先选择会话后再发送消息。")
+  if (sending.value || !props.service.running || !props.currentSessionId) return
+  const draft = currentDraft.value
+  if (!draft.content.trim() && !draft.files.length) return
+  const sessionId = props.currentSessionId
+  const deviceId =
+    props.chatMode === "direct" ? props.currentDevice?.id || "" : ""
+  const selected = [...draft.files]
+  const fingerprint = JSON.stringify([
+    draft.content,
+    selected.map((item) => item.id)
+  ])
+  if (draft.fingerprint !== fingerprint || !draft.messageId)
+    draft.messageId = crypto.randomUUID()
+  draft.fingerprint = fingerprint
+  sending.value = true
+  try {
+    const access = new URL(props.service.accessUrl)
+    for (const [index, item] of selected.entries()) {
+      sendStatus.value = `准备附件 ${index + 1} / ${selected.length}`
+      if (item.path || item.uploadedId) continue
+      const url = new URL("/api/files/upload", access.origin)
+      url.search = new URLSearchParams({
+        token: access.searchParams.get("token") || "",
+        sessionId,
+        name: item.name
+      }).toString()
+      const response = await fetch(url, { method: "PUT", body: item.file })
+      const payload = await response.json()
+      if (!response.ok || payload.status !== "success")
+        throw new Error(payload.message || "附件上传失败")
+      item.uploadedId = payload.data.id
     }
-    return
-  }
-
-  const result = await runMessageAction(async () =>
-    lanShareApi.sendMessage({
-      deviceId:
-        props.chatMode === "direct" ? props.currentDevice?.id || "" : "",
-      sessionId: props.currentSessionId,
-      content
+    sendStatus.value = selected.length
+      ? `正在发送 ${selected.length} 个附件…`
+      : "正在发送…"
+    await lanShareApi.sendMessage({
+      sessionId,
+      deviceId,
+      messageId: draft.messageId,
+      content: draft.content.trim(),
+      paths: selected.map((item) => item.path).filter(Boolean),
+      attachmentIds: selected.map((item) => item.uploadedId).filter(Boolean),
+      attachmentOrder: selected.map((item) =>
+        item.path ? { path: item.path } : { id: item.uploadedId }
+      )
     })
-  )
-
-  if (result) {
-    messageDraft.value = ""
+    for (const item of selected)
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+    draft.files = []
+    draft.content = ""
+    draft.messageId = ""
+    if (!disposed) {
+      emit("refresh-state")
+      await loadMessages()
+      await nextTick()
+      composerRef.value?.focus()
+    }
+  } catch (error) {
+    if (!disposed)
+      createMessage.error(`发送失败，草稿已保留：${error?.message || error}`)
+  } finally {
+    sending.value = false
+    sendStatus.value = ""
   }
 }
 
-async function deleteMessage(message) {
-  await runMessageAction(async () =>
-    lanShareApi.deleteMessage({ messageId: message.id })
-  )
+async function copyMessage(message) {
+  try {
+    await navigator.clipboard.writeText(message.content || "")
+    createMessage.success("已复制消息。")
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
+  }
 }
 
-async function deleteSelectedMessages() {
-  if (!selectedMessageIds.value.length) {
+async function deleteMessages(ids) {
+  if (
+    !ids.length ||
+    !window.confirm(`仅删除本机的 ${ids.length} 条消息，是否继续？`)
+  )
     return
+  try {
+    await lanShareApi.deleteMessages({ messageIds: [...ids] })
+    selectedIds.value = []
+    await loadMessages()
+    emit("refresh-state")
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
   }
-
-  const messageIds = [...selectedMessageIds.value]
-  const result = await runMessageAction(
-    async () =>
-      lanShareApi.deleteMessages({
-        messageIds,
-        sessionId: props.currentSessionId
-      }),
-    "已删除所选消息。"
-  )
-
-  if (result) {
-    selectedMessageIds.value = []
-  }
-}
-
-function toggleSelectAllMessages() {
-  if (allMessagesSelected.value) {
-    selectedMessageIds.value = []
-    return
-  }
-
-  selectedMessageIds.value = messages.value.map((message) => message.id)
 }
 
 async function clearCurrentSession() {
-  if (!props.currentSessionId) {
-    return
-  }
-
-  await runMessageAction(
-    async () => lanShareApi.clearSession({ sessionId: props.currentSessionId }),
-    "当前会话已清空。"
+  if (
+    !props.currentSessionId ||
+    !window.confirm("清空当前会话的本机聊天记录？")
   )
-}
-
-async function copyMessageContent(message) {
+    return
   try {
-    await navigator.clipboard.writeText(message.content || "")
-    createMessage.success("消息已复制。")
+    await lanShareApi.clearSession({ sessionId: props.currentSessionId })
+    await loadMessages()
+    emit("refresh-state")
   } catch (error) {
-    createMessage.error(error?.message || "复制失败。")
+    createMessage.error(error?.message || String(error))
   }
 }
 
-function messageSenderName(message) {
-  if (message.direction === "desktop-to-mobile") {
-    return "电脑端"
-  }
-
-  return message.deviceName || "未知设备"
+function selectAll() {
+  selectedIds.value = allSelected.value
+    ? []
+    : filteredMessages.value.map((message) => message.id)
 }
-
-function messageRelationText(message) {
-  if (message.direction === "desktop-to-mobile") {
-    return `发给 ${message.deviceName || "未知设备"}`
-  }
-
-  return "设备发送"
+async function jumpToMessage(id) {
+  searchOpen.value = false
+  await nextTick()
+  const target = [
+    ...(messageListRef.value?.querySelectorAll("[data-message-id]") || [])
+  ].find((element) => element.dataset.messageId === id)
+  target?.scrollIntoView({ block: "center" })
 }
-
-function filterStartAt() {
-  const now = Date.now()
-
-  if (timeFilter.value === "today") {
-    return new Date().setHours(0, 0, 0, 0)
-  }
-  if (timeFilter.value === "week") {
-    return now - 7 * 24 * 60 * 60 * 1000
-  }
-
-  return 0
-}
+defineExpose({
+  openSearch: () => {
+    searchOpen.value = true
+  },
+  clearCurrentSession
+})
 </script>
 
 <style scoped lang="less">
-.lan-share-messages-panel {
+.lan-chat {
   display: flex;
-  height: 100%;
+  min-width: 0;
   min-height: 0;
+  flex: 1;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel);
 
-  .lan-share-messages-head {
+  .chat-timeline {
     display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    min-height: 48px;
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--color-line);
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 18px;
+    padding: 22px 24px;
+    overflow-y: auto;
     background: var(--color-panel-soft);
+    scrollbar-width: thin;
 
-    .lan-share-messages-title {
+    .chat-empty {
       display: flex;
-      min-width: 0;
+      min-height: 160px;
+      flex: 1;
       flex-direction: column;
-      gap: 2px;
-
-      .lan-share-messages-name {
-        color: var(--color-text);
-        font-size: 0.9rem;
-      }
-
-      .lan-share-messages-subtitle {
-        color: var(--color-text-muted);
-        font-size: 0.76rem;
-      }
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: var(--color-text-muted);
+      font-size: 13px;
+      text-align: center;
     }
-
-    .lan-share-messages-actions {
+    .chat-message {
+      position: relative;
       display: flex;
+      max-width: min(86%, 560px);
       min-width: 0;
       flex: none;
-      align-items: center;
-      gap: 8px;
+      flex-direction: column;
+      align-self: flex-start;
+      gap: 6px;
 
-      .lan-share-messages-search,
-      .lan-share-messages-select {
-        height: 32px;
+      .chat-message-meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        color: var(--color-text-muted);
+        font-size: 10px;
+        .chat-delivery {
+          color: var(--color-warning);
+        }
+      }
+      .chat-bubble {
+        display: flex;
         min-width: 0;
+        flex-direction: column;
+        gap: 10px;
+        padding: 10px;
+        border: 1px solid var(--color-line);
+        border-radius: 0 12px 12px;
+        background: var(--color-panel);
+
+        .chat-text {
+          margin: 0;
+          padding: 1px 3px;
+          color: var(--color-text);
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
+          line-height: 1.7;
+          font-size: 13px;
+        }
+      }
+      .chat-message-actions {
+        display: flex;
+        gap: 4px;
+        opacity: 0;
+        .chat-icon-button {
+          display: grid;
+          width: 24px;
+          height: 22px;
+          place-items: center;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          color: var(--color-text-muted);
+        }
+      }
+      &:hover .chat-message-actions,
+      &:focus-within .chat-message-actions {
+        opacity: 1;
+      }
+      &.chat-message-self {
+        align-self: flex-end;
+        .chat-message-meta,
+        .chat-message-actions {
+          justify-content: flex-end;
+        }
+        .chat-bubble {
+          border-radius: 12px 0 12px 12px;
+          background: var(--color-primary-soft);
+          border-color: var(--color-info-line);
+        }
+      }
+    }
+  }
+
+  .chat-composer {
+    flex: none;
+    min-width: 0;
+    padding: 12px 16px 10px;
+    border-top: 1px solid var(--color-line);
+    background: var(--color-panel);
+
+    .chat-draft-files {
+      display: flex;
+      max-height: 140px;
+      gap: 8px;
+      padding-bottom: 10px;
+      overflow: auto;
+
+      .chat-draft-file {
+        display: flex;
+        width: 196px;
+        flex: none;
+        align-items: center;
+        gap: 8px;
+        padding: 7px;
         border: 1px solid var(--color-line);
         border-radius: 7px;
-        background: var(--color-panel);
-        color: var(--color-text);
+        background: var(--color-panel-soft);
+        .chat-draft-thumbnail {
+          width: 36px;
+          height: 36px;
+          flex: none;
+          object-fit: cover;
+          border-radius: 4px;
+        }
+        .chat-draft-icon {
+          flex: none;
+          color: var(--color-primary);
+        }
+        .chat-draft-caption {
+          display: flex;
+          min-width: 0;
+          flex: 1;
+          flex-direction: column;
+          gap: 4px;
+          color: var(--color-text-muted);
+          font-size: 10px;
+          .chat-draft-name {
+            overflow: hidden;
+            color: var(--color-text);
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-size: 11px;
+          }
+        }
+        .chat-icon-button {
+          display: grid;
+          width: 22px;
+          height: 24px;
+          flex: none;
+          place-items: center;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          color: var(--color-text-muted);
+        }
       }
-
-      .lan-share-messages-search {
-        width: 180px;
-        padding: 0 10px;
+    }
+    .chat-input {
+      display: block;
+      width: 100%;
+      min-height: 58px;
+      max-height: 170px;
+      resize: vertical;
+      padding: 3px 0;
+      border: 0;
+      outline: none;
+      background: transparent;
+      color: var(--color-text);
+      font: inherit;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .chat-composer-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      .chat-compose-tools {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        gap: 10px;
+        .chat-attach-button {
+          display: inline-flex;
+          flex: none;
+          align-items: center;
+          gap: 5px;
+          padding: 5px 0;
+          border: 0;
+          background: transparent;
+          color: var(--color-text-muted);
+          font-size: 12px;
+        }
+        .chat-compose-hint {
+          overflow: hidden;
+          color: var(--color-text-soft);
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font-size: 10px;
+        }
       }
-
-      .lan-share-messages-select {
-        width: 138px;
-        padding: 0 8px;
-      }
-
-      .lan-share-messages-mini-button {
+      .chat-send-button {
         display: inline-flex;
         height: 32px;
         flex: none;
         align-items: center;
-        justify-content: center;
         gap: 6px;
-        padding: 0 10px;
-        border: 1px solid var(--color-line);
-        border-radius: 7px;
-        background: var(--color-panel);
-        color: var(--color-primary);
-        cursor: pointer;
-        font-size: 0.76rem;
-      }
-
-      .lan-share-messages-mini-button:disabled {
-        cursor: not-allowed;
-        opacity: 0.45;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 6px;
+        background: var(--color-primary);
+        color: var(--color-primary-contrast, #fff);
+        font-size: 12px;
       }
     }
+    .chat-file-input {
+      display: none;
+    }
   }
-
-  .lan-share-messages-list {
+}
+.chat-search-drawer {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  .chat-search-actions {
     display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+  }
+  .chat-search-results {
     min-height: 0;
-    height: 0;
     flex: 1;
-    flex-direction: column;
-    gap: 8px;
-    overflow: auto;
-    padding: 12px;
-    background: linear-gradient(180deg, var(--color-panel) 0%, var(--color-panel-soft) 100%);
-
-    .lan-share-messages-item {
+    overflow-y: auto;
+    .chat-search-result {
       display: flex;
-      width: fit-content;
-      max-width: 72%;
-      min-width: 180px;
-      flex-direction: column;
-      gap: 5px;
-      padding: 9px 10px;
-      border: 1px solid var(--color-line);
-      border-radius: 8px;
-      background: var(--color-panel);
-      box-shadow: 0 6px 18px rgba(42, 67, 101, 0.08);
-
-      .lan-share-messages-item-head {
+      align-items: center;
+      gap: 8px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--color-line);
+      .chat-search-jump {
         display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        color: var(--color-text-muted);
-        font-size: 0.74rem;
-
-        .lan-share-messages-check {
-          position: relative;
-          display: inline-flex;
-          width: 18px;
-          height: 18px;
-          flex: none;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-
-          .lan-share-messages-check-input {
-            position: absolute;
-            inset: 0;
-            margin: 0;
-            cursor: pointer;
-            opacity: 0;
-          }
-
-          .lan-share-messages-check-mark {
-            display: inline-flex;
-            width: 16px;
-            height: 16px;
-            border: 1px solid var(--color-line);
-            border-radius: 4px;
-            background: var(--color-panel);
-          }
-
-          .lan-share-messages-check-input:checked
-            + .lan-share-messages-check-mark {
-            border-color: var(--color-primary);
-            background: var(--color-primary-solid);
-          }
-        }
-
-        .lan-share-messages-sender {
-          min-width: 0;
-          flex: 1;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .lan-share-messages-delete {
-          display: inline-flex;
-          width: 24px;
-          height: 24px;
-          flex: none;
-          align-items: center;
-          justify-content: center;
-          border: 1px solid transparent;
-          border-radius: 7px;
-          background: transparent;
-          color: var(--color-text-muted);
-          cursor: pointer;
-        }
-      }
-
-      .lan-share-messages-meta {
-        color: var(--color-text-soft);
-        font-size: 0.7rem;
-      }
-
-      .lan-share-messages-content {
-        margin: 0;
-        color: var(--color-text);
-        cursor: pointer;
-        font-size: 0.84rem;
-        line-height: 1.55;
-        word-break: break-word;
-      }
-
-      .lan-share-messages-content:hover {
-        color: var(--color-primary);
-      }
-    }
-
-    .lan-share-messages-item-desktop {
-      align-self: flex-end;
-      border-color: var(--color-success-line);
-      background: var(--color-success-soft);
-    }
-
-    .lan-share-messages-item-mobile {
-      align-self: flex-start;
-    }
-
-    .lan-share-messages-item-file {
-      border-color: var(--color-line-strong);
-      background: var(--color-primary-soft);
-
-      .lan-share-messages-content {
-        display: inline-flex;
-        align-items: center;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
         gap: 6px;
-
-        .lan-share-messages-content-icon {
-          flex: none;
-          color: var(--color-primary);
-        }
+        padding: 5px 0;
+        border: 0;
+        background: transparent;
+        color: var(--color-text);
+        text-align: left;
+        overflow-wrap: anywhere;
+        font-size: 12px;
       }
     }
-
-    .lan-share-messages-empty {
-      display: flex;
-      min-height: 120px;
-      align-items: center;
-      justify-content: center;
-      border: 1px dashed var(--color-line);
-      border-radius: 8px;
+    .chat-search-empty {
+      display: block;
+      padding: 24px;
       color: var(--color-text-muted);
-      font-size: 0.82rem;
-    }
-  }
-
-  .lan-share-messages-composer {
-    display: flex;
-    flex: none;
-    gap: 8px;
-    padding: 10px;
-    border-top: 1px solid var(--color-line);
-    background: var(--color-panel-soft);
-
-    .lan-share-messages-composer-input {
-      height: 32px;
-      min-width: 0;
-      flex: 1;
-      padding: 0 10px;
-      border: 1px solid var(--color-line);
-      border-radius: 7px;
-      background: var(--color-panel);
-      color: var(--color-text);
-    }
-
-    .lan-share-messages-button {
-      display: inline-flex;
-      height: 34px;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      padding: 0 12px;
-      border: 1px solid var(--color-line);
-      border-radius: 7px;
-      background: var(--color-panel);
-      color: var(--color-primary);
-      cursor: pointer;
-    }
-
-    .lan-share-messages-button-primary {
-      border-color: var(--color-primary);
-      background: var(--color-primary-solid);
-      color: #ffffff;
-    }
-
-    .lan-share-messages-button:disabled {
-      cursor: not-allowed;
-      opacity: 0.5;
+      text-align: center;
+      font-size: 12px;
     }
   }
 }
