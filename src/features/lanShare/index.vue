@@ -1,79 +1,196 @@
 <template>
   <section class="lan-share-view">
-    <LanShareToolbar
-      :service="state.service"
-      :loading="loading"
-      :service-summary="serviceSummary"
-      @start="startService"
-      @show-access="showAccessDialog"
-      @stop="stopService"
-    />
+    <header class="drop-header">
+      <div class="drop-brand">
+        <span class="drop-title">设备快传</span
+        ><span class="drop-local-name">{{
+          state.native.deviceName || "本机"
+        }}</span>
+      </div>
+      <div class="drop-header-actions">
+        <span
+          class="drop-status"
+          :class="{ 'drop-status-online': state.service.running }"
+          ><span class="drop-status-dot"></span
+          >{{
+            state.service.running ? "已上线 · 自动发现设备" : "已离线"
+          }}</span
+        >
+        <button
+          class="drop-header-button"
+          type="button"
+          :disabled="loading"
+          @click="
+            state.service.running ? (connectDialogOpen = true) : startService()
+          "
+        >
+          <Link :size="14" />{{ state.service.running ? "连接设备" : "上线" }}
+        </button>
+        <button
+          class="drop-header-button"
+          type="button"
+          :disabled="!state.service.running"
+          @click="showAccessDialog"
+        >
+          <QrCode :size="14" />访客访问
+        </button>
+        <el-dropdown trigger="click"
+          ><button
+            class="drop-menu-button"
+            type="button"
+            aria-label="快传网络设置"
+          >
+            <Settings2 :size="16" /></button
+          ><template #dropdown
+            ><el-dropdown-menu
+              ><el-dropdown-item disabled>{{ serviceSummary }}</el-dropdown-item
+              ><el-dropdown-item
+                v-if="state.service.running"
+                @click="stopService"
+                >暂停接收并离线</el-dropdown-item
+              ><el-dropdown-item v-else @click="startService"
+                >重新上线</el-dropdown-item
+              ></el-dropdown-menu
+            ></template
+          ></el-dropdown
+        >
+      </div>
+    </header>
 
-    <div class="lan-share-mode-switch">
-      <button
-        :class="[
-          'lan-share-mode-switch__button',
-          { 'lan-share-mode-switch__button--active': chatMode === 'direct' }
-        ]"
-        type="button"
-        @click="switchChatMode('direct')"
-      >
-        单聊模式
-      </button>
-      <button
-        :class="[
-          'lan-share-mode-switch__button',
-          { 'lan-share-mode-switch__button--active': chatMode === 'group' }
-        ]"
-        type="button"
-        @click="switchChatMode('group')"
-      >
-        群聊模式
-      </button>
+    <div class="drop-body">
+      <aside class="drop-sidebar">
+        <div class="drop-sidebar-tools">
+          <div class="drop-tabs">
+            <button
+              class="drop-tab"
+              :class="{ 'drop-tab-active': chatMode === 'direct' }"
+              type="button"
+              @click="switchChatMode('direct')"
+            >
+              设备</button
+            ><button
+              class="drop-tab"
+              :class="{ 'drop-tab-active': chatMode === 'group' }"
+              type="button"
+              @click="switchChatMode('group')"
+            >
+              群聊
+            </button>
+          </div>
+          <button
+            v-if="chatMode === 'group'"
+            class="drop-create"
+            type="button"
+            title="创建群聊"
+            aria-label="创建群聊"
+            @click="openCreateGroup"
+          >
+            <Plus :size="16" />
+          </button>
+        </div>
+        <div class="drop-search">
+          <Search :size="14" /><input
+            v-model="deviceKeyword"
+            class="drop-search-input"
+            :placeholder="chatMode === 'group' ? '搜索群聊' : '搜索设备或 IP'"
+            aria-label="搜索设备或群聊"
+          />
+        </div>
+        <nav class="drop-conversations" aria-label="快传会话">
+          <template v-if="chatMode === 'direct'">
+            <button
+              v-for="device in visibleDevices"
+              :key="device.id"
+              class="drop-device"
+              :class="{ 'drop-device-active': selectedDeviceId === device.id }"
+              type="button"
+              @click="chooseDevice(device)"
+            >
+              <span class="drop-device-icon"
+                ><MonitorSmartphone v-if="device.native" :size="20" /><Globe
+                  v-else
+                  :size="20" /><span
+                  v-if="device.online"
+                  class="drop-device-online"
+                ></span
+              ></span>
+              <span class="drop-device-copy"
+                ><span class="drop-device-name">{{
+                  device.name || device.autoName || "未命名设备"
+                }}</span
+                ><span class="drop-device-preview">{{
+                  device.pairingCode
+                    ? `等待确认 · ${device.pairingCode}`
+                    : device.requiresPairing
+                      ? "发现客户端 · 点击连接"
+                      : deviceLastMessage(device.id)
+                }}</span
+                ><span class="drop-device-address"
+                  >{{ device.ip || "历史设备" }} ·
+                  {{ device.native ? "客户端" : "网页访客" }}</span
+                ></span
+              >
+            </button>
+            <div v-if="!visibleDevices.length" class="drop-sidebar-empty">
+              <MonitorSmartphone :size="26" :stroke-width="1.4" /><span
+                >等待附近设备</span
+              ><small>两台电脑打开设备快传即可发现彼此，无需打开网页。</small>
+            </div>
+          </template>
+          <template v-else>
+            <button
+              v-for="group in visibleGroups"
+              :key="group.id"
+              class="drop-device"
+              :class="{ 'drop-device-active': selectedGroupId === group.id }"
+              type="button"
+              @click="selectGroup(group.id)"
+            >
+              <span class="drop-device-icon"><Users :size="20" /></span
+              ><span class="drop-device-copy"
+                ><span class="drop-device-name">{{ group.name }}</span
+                ><span class="drop-device-preview"
+                  >{{ group.members?.length || 0 }} 位成员</span
+                ></span
+              >
+            </button>
+            <div v-if="!visibleGroups.length" class="drop-sidebar-empty">
+              <Users :size="26" :stroke-width="1.4" /><span>还没有群聊</span
+              ><small>点击右上角加号创建群聊。</small>
+            </div>
+          </template>
+        </nav>
+        <div class="drop-sidebar-note">
+          {{
+            state.native.error ||
+            "已安装软件：直接连接设备。未安装软件：使用访客链接或扫码。"
+          }}
+        </div>
+      </aside>
+
+      <LanShareSessionWorkspace
+        :chat-mode="chatMode"
+        :sessions="deviceSessions"
+        :current-group="currentGroup"
+        :current-device="currentDevice"
+        :selected-session-id="selectedSessionId"
+        :current-session="currentSession"
+        :current-session-id="currentSessionId"
+        :service="state.service"
+        :state-version="stateVersion"
+        @select-session="selectSession"
+        @delete-session="deleteSession"
+        @create-session="createNewSession"
+        @update-group="updateGroup"
+        @remove-group-member="removeGroupMember"
+        @clear-group-messages="clearGroupMessages"
+        @delete-group="deleteGroup"
+        @delete-history="deleteSelectedDeviceHistory"
+        @refresh-state="loadState"
+        @preview-file="openPreviewDialog"
+        @copy-text="copyText"
+      />
     </div>
-
-    <LanShareDevicesPanel
-      v-if="navigationMode === 'devices' && chatMode === 'direct'"
-      class="lan-share-devices-area"
-      :devices="state.devices"
-      :sessions="directSessions"
-      :selected-device-id="selectedDeviceId"
-      :online-devices="state.service.onlineDevices || 0"
-      @open-device="openDeviceSessions"
-      @create-session="createDeviceSession"
-      @delete-history="deleteDeviceHistory"
-    />
-
-    <LanShareSessionWorkspace
-      v-else
-      class="lan-share-detail-area"
-      :chat-mode="chatMode"
-      :groups="state.groups"
-      :sessions="deviceSessions"
-      :group-sessions="groupSessions"
-      :current-group="currentGroup"
-      :current-device="currentDevice"
-      :selected-session-id="selectedSessionId"
-      :current-session="currentSession"
-      :current-session-id="currentSessionId"
-      :service-running="state.service.running"
-      :state-version="stateVersion"
-      @back-devices="backToDevices"
-      @switch-mode="switchChatMode"
-      @select-session="selectSession"
-      @select-group="selectGroup"
-      @delete-session="deleteSession"
-      @create-session="createNewSession"
-      @create-group="createGroup"
-      @update-group="updateGroup"
-      @remove-group-member="removeGroupMember"
-      @clear-group-messages="clearGroupMessages"
-      @delete-group="deleteGroup"
-      @delete-history="deleteSelectedDeviceHistory"
-      @refresh-state="loadState"
-      @preview-file="openPreviewDialog"
-      @copy-text="copyText"
-    />
 
     <LanShareAccessDialog
       v-if="accessDialogOpen"
@@ -81,9 +198,7 @@
       :access-url="state.service.accessUrl"
       @close="accessDialogOpen = false"
       @copy-url="copyAccessUrl"
-      @stop-service="stopService"
     />
-
     <LanSharePreviewDialog
       v-if="previewDialog.open"
       :file="previewDialog.file"
@@ -93,18 +208,151 @@
       @close="closePreviewDialog"
       @download="downloadPreviewFile"
     />
+
+    <BaseModal
+      v-if="connectDialogOpen"
+      class="drop-connect-modal"
+      title="连接客户端"
+      @close="connectDialogOpen = false"
+    >
+      <div class="drop-connect-content">
+        <p class="drop-connect-description">
+          优先点击左侧自动发现的客户端。未发现时，也可以输入对方的局域网地址或设备快传链接，直接在软件内连接。
+        </p>
+        <el-input
+          v-model="connectAddress"
+          placeholder="例如：192.168.1.8:17631"
+          @keyup.enter="connectByAddress"
+        /><span class="drop-connect-hint"
+          >首次连接需要对方在软件内确认，不需要打开网页。</span
+        ><el-button
+          type="primary"
+          :loading="loading"
+          :disabled="!connectAddress.trim()"
+          @click="connectByAddress"
+          >请求连接</el-button
+        >
+      </div>
+    </BaseModal>
+    <BaseModal
+      v-if="pendingPair"
+      class="drop-connect-modal"
+      title="确认设备连接"
+      @close="respondPairing(false)"
+    >
+      <div class="drop-connect-content">
+        <span
+          >{{ pendingPair.name }}（{{ pendingPair.ip }}）希望连接此设备。</span
+        ><span class="drop-pair-code">{{ pendingPair.code }}</span>
+        <p class="drop-connect-description">
+          请核对两台电脑显示的确认码。允许后，该设备可以直接发送消息与文件；仅在可信局域网中使用。
+        </p>
+        <div class="drop-pair-actions">
+          <el-button :disabled="loading" @click="respondPairing(false)"
+            >拒绝</el-button
+          ><el-button
+            type="primary"
+            :loading="loading"
+            @click="respondPairing(true)"
+            >允许连接</el-button
+          >
+        </div>
+      </div>
+    </BaseModal>
+    <BaseModal
+      v-if="createGroupOpen"
+      class="drop-group-modal"
+      title="创建群聊"
+      @close="createGroupOpen = false"
+    >
+      <form class="drop-group-form" @submit.prevent="createGroup">
+        <label class="drop-group-field"
+          ><span>群名称</span
+          ><el-input
+            v-model="newGroup.name"
+            placeholder="输入群名称"
+            :disabled="loading"
+        /></label>
+        <div class="drop-group-selection">
+          <span>邀请设备 · 已选 {{ selectedGroupDeviceIds.length }} 台</span
+          ><span class="drop-group-hint"
+            >至少选择一台设备，才会创建群聊。离线的网页设备重新连接后可查看邀请。</span
+          >
+        </div>
+        <div class="drop-group-devices">
+          <el-checkbox
+            v-for="device in state.devices"
+            :key="device.id"
+            v-model="newGroup.deviceIds"
+            :value="device.id"
+            :disabled="loading || device.native"
+            class="drop-group-device"
+          >
+            <span class="drop-group-device-copy"
+              ><span>{{ device.name || device.autoName }}</span
+              ><span class="drop-group-device-meta"
+                >{{ device.ip }} ·
+                {{
+                  device.native
+                    ? "客户端暂仅支持单聊"
+                    : device.online
+                      ? "在线"
+                      : "离线"
+                }}</span
+              ></span
+            >
+          </el-checkbox>
+          <span v-if="!state.devices.length" class="drop-group-empty"
+            >暂无可邀请设备，请先让至少一台网页设备通过访客访问连接。</span
+          >
+        </div>
+        <div class="drop-group-actions">
+          <el-button :disabled="loading" @click="createGroupOpen = false"
+            >取消</el-button
+          ><el-button
+            native-type="submit"
+            type="primary"
+            :loading="loading"
+            :disabled="!selectedGroupDeviceIds.length || !newGroup.name.trim()"
+            >创建并邀请</el-button
+          >
+        </div>
+      </form>
+    </BaseModal>
   </section>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
+import {
+  ElButton,
+  ElCheckbox,
+  ElDropdown,
+  ElDropdownItem,
+  ElDropdownMenu,
+  ElInput
+} from "element-plus"
+import "element-plus/es/components/button/style/css"
+import "element-plus/es/components/checkbox/style/css"
+import "element-plus/es/components/dropdown/style/css"
+import "element-plus/es/components/input/style/css"
+import {
+  Globe,
+  Link,
+  MonitorSmartphone,
+  Plus,
+  QrCode,
+  Search,
+  Settings2,
+  Users
+} from "lucide-vue-next"
 import { lanShareApi } from "@/api"
 import { createMessage } from "@/utils/message"
+import BaseModal from "@/components/BaseModal.vue"
+import { fileUrl } from "./utils"
 import LanShareAccessDialog from "./components/LanShareAccessDialog.vue"
-import LanShareDevicesPanel from "./components/LanShareDevicesPanel.vue"
 import LanSharePreviewDialog from "./components/LanSharePreviewDialog.vue"
 import LanShareSessionWorkspace from "./components/LanShareSessionWorkspace.vue"
-import LanShareToolbar from "./components/LanShareToolbar.vue"
 
 const state = reactive({
   service: {
@@ -117,16 +365,29 @@ const state = reactive({
   },
   devices: [],
   sessions: [],
-  groups: []
+  groups: [],
+  native: { deviceName: "", peers: [], pairingRequests: [], error: "" },
+  messages: []
 })
 const loading = ref(false)
+const createGroupOpen = ref(false)
+const newGroup = reactive({ name: "新的群聊", deviceIds: [] })
+const selectedGroupDeviceIds = computed(() =>
+  state.devices
+    .filter(
+      (device) => !device.native && newGroup.deviceIds.includes(device.id)
+    )
+    .map((device) => device.id)
+)
+const deviceKeyword = ref("")
+const connectDialogOpen = ref(false)
+const connectAddress = ref("")
 const accessDialogOpen = ref(false)
 const accessQrSvg = ref("")
 const selectedDeviceId = ref("")
 const selectedSessionId = ref("")
 const selectedGroupId = ref("")
 const chatMode = ref("direct")
-const navigationMode = ref("devices")
 const stateVersion = ref(0)
 const previewDialog = reactive({
   open: false,
@@ -174,7 +435,9 @@ const currentDevice = computed(() => {
 })
 
 const currentGroup = computed(() => {
-  return state.groups.find((group) => group.id === selectedGroupId.value) || null
+  return (
+    state.groups.find((group) => group.id === selectedGroupId.value) || null
+  )
 })
 
 const deviceSessions = computed(() => {
@@ -191,12 +454,90 @@ const groupSessions = computed(() => {
   return state.sessions.filter((session) => session.mode === "group")
 })
 
-onMounted(() => {
-  loadState()
+const pendingPair = computed(() => state.native.pairingRequests?.[0] || null)
+const visibleGroups = computed(() =>
+  state.groups.filter((group) =>
+    group.name.toLowerCase().includes(deviceKeyword.value.trim().toLowerCase())
+  )
+)
+const visibleDevices = computed(() => {
+  const devices = new Map(
+    state.devices.map((device) => [
+      device.id,
+      { ...device, requiresPairing: false }
+    ])
+  )
+  for (const peer of state.native.peers || []) {
+    devices.set(peer.id, {
+      ...devices.get(peer.id),
+      ...peer,
+      native: true,
+      requiresPairing: !peer.paired
+    })
+  }
+  const query = deviceKeyword.value.trim().toLowerCase()
+  return [...devices.values()]
+    .filter((device) =>
+      `${device.name || device.autoName || ""} ${device.ip || ""}`
+        .toLowerCase()
+        .includes(query)
+    )
+    .sort((left, right) => Number(right.online) - Number(left.online))
+})
+
+function deviceLastMessage(deviceId) {
+  const sessionIds = new Set(
+    state.sessions
+      .filter(
+        (session) => session.deviceId === deviceId && session.mode !== "group"
+      )
+      .map((session) => session.id)
+  )
+  const message = state.messages.find((message) =>
+    sessionIds.has(message.sessionId)
+  )
+  if (!message) return "发送文件或消息"
+  return (
+    message.content ||
+    (message.attachments?.length
+      ? `[${message.attachments.length} 个附件] ${message.attachments[0].name}`
+      : "文件消息")
+  )
+}
+
+async function chooseDevice(device) {
+  if (device.requiresPairing) {
+    if (device.pairingCode || loading.value) return
+    await runAction(() => lanShareApi.connectPeer({ peerId: device.id }))
+    return
+  }
+  await openDeviceSessions(device.id)
+}
+
+async function connectByAddress() {
+  if (!connectAddress.value.trim() || loading.value) return
+  const result = await runAction(() =>
+    lanShareApi.connectPeer({ address: connectAddress.value.trim() })
+  )
+  if (result) {
+    connectDialogOpen.value = false
+    connectAddress.value = ""
+  }
+}
+
+async function respondPairing(accept) {
+  if (!pendingPair.value || loading.value) return
+  const requestId = pendingPair.value.id
+  await runAction(() => lanShareApi.respondPairing({ requestId, accept }))
+}
+
+onMounted(async () => {
   stopStateListener = lanShareApi.onStateChanged(applyState)
   stopDevicesListener = lanShareApi.onDevicesChanged((devices) => {
     state.devices = devices || []
   })
+  await loadState()
+  if (!state.service.running) await startService()
 })
 
 watch(selectedDeviceId, (deviceId) => {
@@ -248,6 +589,8 @@ function applyState(payload) {
   state.devices = nextState.devices || []
   state.sessions = nextState.sessions || []
   state.groups = nextState.groups || []
+  state.messages = nextState.messages || []
+  state.native = nextState.native || state.native
   stateVersion.value += 1
 
   if (nextState.currentSession?.id) {
@@ -256,7 +599,6 @@ function applyState(payload) {
       if (chatMode.value === "group") {
         selectedSessionId.value = nextState.currentSession.id
         selectedDeviceId.value = ""
-        navigationMode.value = "detail"
       }
     } else if (chatMode.value === "direct") {
       selectedSessionId.value = nextState.currentSession.id
@@ -266,6 +608,14 @@ function applyState(payload) {
     initialSessionResolved = true
   } else if (!initialSessionResolved) {
     initialSessionResolved = true
+  }
+  if (
+    chatMode.value === "direct" &&
+    !selectedDeviceId.value &&
+    state.devices.length
+  ) {
+    selectedDeviceId.value = state.devices[0].id
+    selectedSessionId.value = findDirectSessionId(selectedDeviceId.value)
   }
 }
 
@@ -320,17 +670,13 @@ async function loadState() {
 }
 
 async function startService() {
-  const result = await runAction(
-    async () => lanShareApi.startService({}),
-    "设备快传服务已启动。"
-  )
+  const result = await runAction(async () => lanShareApi.startService({}))
 
   if (result) {
     state.service = {
       ...state.service,
       ...result
     }
-    showAccessDialog()
     await loadState()
   }
 }
@@ -371,10 +717,26 @@ async function createNewSession() {
     async () => lanShareApi.createSession({ deviceId: selectedDeviceId.value }),
     "新会话已创建。"
   )
-  navigationMode.value = "detail"
 }
 
-async function createGroup(payload) {
+function openCreateGroup() {
+  newGroup.name = "新的群聊"
+  newGroup.deviceIds = []
+  createGroupOpen.value = true
+}
+
+async function createGroup() {
+  if (
+    loading.value ||
+    !selectedGroupDeviceIds.value.length ||
+    !newGroup.name.trim()
+  )
+    return
+  const payload = {
+    name: newGroup.name.trim(),
+    messageVisibility: "all",
+    deviceIds: [...selectedGroupDeviceIds.value]
+  }
   const result = await runAction(
     async () => lanShareApi.createGroup(payload),
     "群聊已创建。"
@@ -383,9 +745,9 @@ async function createGroup(payload) {
   if (result?.currentSession) {
     selectedSessionId.value = result.currentSession.id
     selectedGroupId.value = result.currentSession.groupId || ""
+    createGroupOpen.value = false
+    chatMode.value = "group"
   }
-  chatMode.value = "group"
-  navigationMode.value = "detail"
 }
 
 async function updateGroup(payload) {
@@ -505,24 +867,20 @@ async function deleteSession(sessionId) {
   await loadState()
 }
 
-function openDeviceSessions(deviceId) {
+async function openDeviceSessions(deviceId) {
   selectedDeviceId.value = deviceId
-  navigationMode.value = "detail"
 
   if (isDirectDeviceSession(currentSession.value, deviceId)) {
     return
   }
 
   selectedSessionId.value = findDirectSessionId(deviceId)
-}
-
-function backToDevices() {
-  navigationMode.value = chatMode.value === "group" ? "detail" : "devices"
+  if (!selectedSessionId.value) await createNewSession()
+  else await selectSession(selectedSessionId.value)
 }
 
 function switchChatMode(mode) {
   chatMode.value = mode
-  navigationMode.value = mode === "group" ? "detail" : "devices"
 
   if (mode === "group") {
     selectedDeviceId.value = ""
@@ -541,13 +899,11 @@ function switchChatMode(mode) {
 async function selectGroup(groupId) {
   selectedGroupId.value = groupId
   chatMode.value = "group"
-  navigationMode.value = "detail"
 
   const groupSession =
     groupSessions.value.find((session) => {
       return session.groupId === groupId && !session.deviceId
-    }) ||
-    groupSessions.value.find((session) => session.groupId === groupId)
+    }) || groupSessions.value.find((session) => session.groupId === groupId)
 
   selectedSessionId.value = groupSession?.id || ""
 
@@ -558,14 +914,8 @@ async function selectGroup(groupId) {
   }
 }
 
-async function createDeviceSession(deviceId) {
-  selectedDeviceId.value = deviceId
-  navigationMode.value = "detail"
-  await createNewSession()
-}
-
 async function deleteDeviceHistory(deviceId) {
-  if (!deviceId) {
+  if (!deviceId || !window.confirm("删除这个设备的本机会话历史？")) {
     return
   }
 
@@ -577,7 +927,6 @@ async function deleteDeviceHistory(deviceId) {
   if (selectedDeviceId.value === deviceId) {
     selectedDeviceId.value = ""
     selectedSessionId.value = ""
-    navigationMode.value = "devices"
   }
 
   await loadState()
@@ -589,7 +938,10 @@ function openPreviewDialog(file) {
     return
   }
 
-  previewDialog.file = file
+  previewDialog.file = {
+    ...file,
+    sessionId: file.sessionId || currentSessionId.value
+  }
   previewDialog.previewKind = previewKind(file)
   previewDialog.previewUrl = fileServiceUrl(file, "preview")
   previewDialog.textContent = ""
@@ -619,33 +971,12 @@ function downloadPreviewFile(file) {
 }
 
 function fileServiceUrl(file, action) {
-  const service = accessServiceInfo()
-
-  if (!service || !file?.id) {
-    return ""
-  }
-
-  const params = new URLSearchParams({
-    id: file.id,
-    token: service.token,
-    deviceId: "desktop",
-    sessionId: currentSessionId.value
-  })
-
-  return `${service.origin}/api/files/${action}?${params.toString()}`
-}
-
-function accessServiceInfo() {
-  try {
-    const url = new URL(state.service.accessUrl)
-
-    return {
-      origin: url.origin,
-      token: url.searchParams.get("token") || ""
-    }
-  } catch (error) {
-    return null
-  }
+  return fileUrl(
+    state.service,
+    file,
+    file.sessionId || currentSessionId.value,
+    action
+  )
 }
 
 function previewKind(file) {
@@ -718,51 +1049,341 @@ function isTextPreviewFile(name, mimeType) {
 
 <style scoped lang="less">
 .lan-share-view {
-  position: relative;
   display: flex;
   height: 100%;
   min-height: 0;
+  min-width: 0;
   flex-direction: column;
-  gap: 12px;
   overflow: hidden;
-
-  .lan-share-devices-area,
-  .lan-share-detail-area {
+  .drop-header {
     display: flex;
     min-width: 0;
-    min-height: 0;
-    flex: 1;
-    overflow: hidden;
-  }
-
-  .lan-share-mode-switch {
-    display: flex;
     flex: none;
     align-items: center;
-    gap: 6px;
-    padding: 6px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel-soft);
-
-    &__button {
-      display: inline-flex;
-      height: 30px;
-      align-items: center;
-      justify-content: center;
-      padding: 0 12px;
-      border: 1px solid transparent;
-      border-radius: 7px;
-      background: transparent;
-      color: var(--color-text-muted);
-      cursor: pointer;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0 0 10px;
+    .drop-brand {
+      display: flex;
+      min-width: 0;
+      align-items: baseline;
+      gap: 10px;
+      .drop-title {
+        flex: none;
+        color: var(--color-text);
+        font-size: 14px;
+      }
+      .drop-local-name {
+        overflow: hidden;
+        color: var(--color-text-muted);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11px;
+      }
     }
-
-    &__button--active {
-      border-color: var(--color-info-line);
+    .drop-header-actions {
+      display: flex;
+      flex: none;
+      align-items: center;
+      gap: 8px;
+      .drop-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: var(--color-text-muted);
+        font-size: 10px;
+        .drop-status-dot {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background: currentColor;
+        }
+        &.drop-status-online {
+          color: var(--color-success);
+        }
+      }
+      .drop-header-button {
+        display: inline-flex;
+        height: 29px;
+        align-items: center;
+        gap: 5px;
+        padding: 0 9px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        background: var(--color-panel);
+        color: var(--color-text);
+        font-size: 11px;
+      }
+      .drop-menu-button {
+        display: grid;
+        width: 28px;
+        height: 29px;
+        place-items: center;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--color-text-muted);
+      }
+    }
+  }
+  .drop-body {
+    display: flex;
+    min-height: 0;
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    border: 1px solid var(--color-line);
+    border-radius: 10px;
+    .drop-sidebar {
+      display: flex;
+      width: clamp(170px, 23%, 230px);
+      min-width: 0;
+      flex: none;
+      flex-direction: column;
+      border-right: 1px solid var(--color-line);
       background: var(--color-panel);
+      .drop-sidebar-tools {
+        display: flex;
+        flex: none;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 12px 8px;
+        .drop-tabs {
+          display: flex;
+          gap: 14px;
+          .drop-tab {
+            padding: 4px 1px 8px;
+            border: 0;
+            border-bottom: 2px solid transparent;
+            background: transparent;
+            color: var(--color-text-muted);
+            font-size: 12px;
+            &.drop-tab-active {
+              border-bottom-color: var(--color-primary);
+              color: var(--color-primary);
+            }
+          }
+        }
+        .drop-create {
+          display: grid;
+          width: 26px;
+          height: 26px;
+          place-items: center;
+          padding: 0;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          background: transparent;
+          color: var(--color-primary);
+        }
+      }
+      .drop-search {
+        display: flex;
+        flex: none;
+        align-items: center;
+        gap: 6px;
+        margin: 0 10px 10px;
+        padding: 7px 8px;
+        border-radius: 6px;
+        background: var(--color-panel-soft);
+        color: var(--color-text-soft);
+        .drop-search-input {
+          width: 100%;
+          min-width: 0;
+          padding: 0;
+          border: 0;
+          outline: none;
+          background: transparent;
+          color: var(--color-text);
+          font-size: 11px;
+        }
+      }
+      .drop-conversations {
+        min-height: 0;
+        flex: 1;
+        padding: 0 7px;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        .drop-device {
+          display: flex;
+          width: 100%;
+          align-items: center;
+          gap: 9px;
+          margin-bottom: 4px;
+          padding: 11px 8px;
+          border: 1px solid transparent;
+          border-radius: 8px;
+          background: transparent;
+          color: var(--color-text);
+          text-align: left;
+          &:hover {
+            background: var(--color-panel-soft);
+          }
+          &.drop-device-active {
+            border-color: var(--color-info-line);
+            background: var(--color-primary-soft);
+          }
+          .drop-device-icon {
+            position: relative;
+            display: grid;
+            width: 32px;
+            height: 36px;
+            flex: none;
+            place-items: center;
+            color: var(--color-primary);
+            .drop-device-online {
+              position: absolute;
+              right: 0;
+              bottom: 2px;
+              width: 7px;
+              height: 7px;
+              border: 2px solid var(--color-panel);
+              border-radius: 50%;
+              background: var(--color-success);
+            }
+          }
+          .drop-device-copy {
+            display: flex;
+            min-width: 0;
+            flex: 1;
+            flex-direction: column;
+            gap: 5px;
+            .drop-device-name {
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+              font-size: 12px;
+            }
+            .drop-device-preview {
+              overflow: hidden;
+              color: var(--color-text-muted);
+              text-overflow: ellipsis;
+              white-space: nowrap;
+              font-size: 10px;
+            }
+            .drop-device-address {
+              color: var(--color-text-soft);
+              font-size: 9px;
+            }
+          }
+        }
+        .drop-sidebar-empty {
+          display: flex;
+          align-items: center;
+          flex-direction: column;
+          gap: 12px;
+          padding: 36px 12px;
+          color: var(--color-text-muted);
+          font-size: 12px;
+          text-align: center;
+          line-height: 1.7;
+        }
+      }
+      .drop-sidebar-note {
+        flex: none;
+        padding: 12px;
+        border-top: 1px solid var(--color-line);
+        color: var(--color-text-soft);
+        font-size: 10px;
+        line-height: 1.7;
+      }
+    }
+  }
+}
+.drop-connect-modal.base-modal {
+  :deep(.base-modal__panel) {
+    width: min(460px, calc(100vw - 48px));
+  }
+  .drop-connect-content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 10px;
+    font-size: 13px;
+    .drop-connect-description {
+      margin: 0;
+      color: var(--color-text-muted);
+      line-height: 1.8;
+      font-size: 12px;
+    }
+    .drop-connect-hint {
+      color: var(--color-text-soft);
+      font-size: 11px;
+    }
+    .drop-pair-code {
+      padding: 16px;
+      border-radius: 8px;
+      background: var(--color-primary-soft);
       color: var(--color-primary);
-      box-shadow: 0 6px 18px rgba(42, 67, 101, 0.08);
+      font-size: 28px;
+      letter-spacing: 6px;
+      text-align: center;
+    }
+    .drop-pair-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+  }
+}
+.drop-group-modal.base-modal {
+  :deep(.base-modal__panel) {
+    width: min(480px, calc(100vw - 48px));
+  }
+  .drop-group-form {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 18px;
+    padding-top: 10px;
+    font-size: 13px;
+    .drop-group-field {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .drop-group-selection {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      .drop-group-hint {
+        color: var(--color-text-muted);
+        line-height: 1.6;
+        font-size: 12px;
+      }
+    }
+    .drop-group-devices {
+      display: flex;
+      min-height: 0;
+      max-height: 220px;
+      flex-direction: column;
+      gap: 8px;
+      overflow-y: auto;
+      .drop-group-device {
+        height: auto;
+        margin-right: 0;
+        padding: 10px;
+        border: 1px solid var(--color-line);
+        border-radius: 7px;
+        .drop-group-device-copy {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          .drop-group-device-meta {
+            color: var(--color-text-muted);
+            font-size: 11px;
+          }
+        }
+      }
+      .drop-group-empty {
+        padding: 18px 0;
+        color: var(--color-text-muted);
+        line-height: 1.7;
+      }
+    }
+    .drop-group-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
     }
   }
 }

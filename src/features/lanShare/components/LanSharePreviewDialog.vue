@@ -1,88 +1,99 @@
 <template>
-  <section class="lan-share-preview-dialog">
-    <div class="lan-share-preview-overlay" @click="emit('close')"></div>
-    <div class="lan-share-preview-panel">
-      <header class="lan-share-preview-head">
-        <div class="lan-share-preview-title">
-          <span class="lan-share-preview-mark">文件预览</span>
-          <span data-emphasis class="lan-share-preview-heading" :title="file?.name || ''">
-            {{ file?.name || "文件预览" }}
-          </span>
-          <small class="lan-share-preview-meta">
-            {{ formatSize(file?.size) }} · {{ file?.mimeType || "文件" }}
-          </small>
+  <Teleport to="body">
+    <section class="lan-share-preview-dialog" :style="{ zIndex }">
+      <div class="lan-share-preview-overlay" @click="emit('close')"></div>
+      <div class="lan-share-preview-panel">
+        <header class="lan-share-preview-head">
+          <div class="lan-share-preview-title">
+            <span class="lan-share-preview-mark">文件预览</span>
+            <span
+              data-emphasis
+              class="lan-share-preview-heading"
+              :title="file?.name || ''"
+            >
+              {{ file?.name || "文件预览" }}
+            </span>
+            <small class="lan-share-preview-meta">
+              {{ formatSize(file?.size) }} · {{ file?.mimeType || "文件" }}
+            </small>
+          </div>
+          <button
+            class="lan-share-preview-close"
+            type="button"
+            @click="emit('close')"
+          >
+            <X :size="15" />
+          </button>
+        </header>
+        <div class="lan-share-preview-body">
+          <img
+            v-if="previewKind === 'image'"
+            class="lan-share-preview-media"
+            :src="previewUrl"
+            :alt="file?.name || '图片预览'"
+          />
+          <video
+            v-else-if="previewKind === 'video'"
+            class="lan-share-preview-media"
+            :src="previewUrl"
+            controls
+          ></video>
+          <audio
+            v-else-if="previewKind === 'audio'"
+            class="lan-share-preview-audio"
+            :src="previewUrl"
+            controls
+          ></audio>
+          <iframe
+            v-else-if="previewKind === 'pdf'"
+            class="lan-share-preview-frame"
+            :src="previewUrl"
+            :title="file?.name || 'PDF 预览'"
+          ></iframe>
+          <pre
+            v-else-if="previewKind === 'text' && textContent"
+            class="lan-share-preview-text"
+            >{{ textContent }}</pre
+          >
+          <iframe
+            v-else-if="previewKind === 'text'"
+            class="lan-share-preview-frame"
+            sandbox
+            :src="previewUrl"
+            :title="file?.name || '文本预览'"
+          ></iframe>
+          <div v-else class="lan-share-preview-empty">
+            当前文件类型暂不支持在应用内预览，可下载后使用本地程序打开。
+          </div>
         </div>
-        <button
-          class="lan-share-preview-close"
-          type="button"
-          @click="emit('close')"
-        >
-          <X :size="15" />
-        </button>
-      </header>
-      <div class="lan-share-preview-body">
-        <img
-          v-if="previewKind === 'image'"
-          class="lan-share-preview-media"
-          :src="previewUrl"
-          :alt="file?.name || '图片预览'"
-        />
-        <video
-          v-else-if="previewKind === 'video'"
-          class="lan-share-preview-media"
-          :src="previewUrl"
-          controls
-        ></video>
-        <audio
-          v-else-if="previewKind === 'audio'"
-          class="lan-share-preview-audio"
-          :src="previewUrl"
-          controls
-        ></audio>
-        <iframe
-          v-else-if="previewKind === 'pdf'"
-          class="lan-share-preview-frame"
-          :src="previewUrl"
-          :title="file?.name || 'PDF 预览'"
-        ></iframe>
-        <pre
-          v-else-if="previewKind === 'text' && textContent"
-          class="lan-share-preview-text"
-          >{{ textContent }}</pre
-        >
-        <iframe
-          v-else-if="previewKind === 'text'"
-          class="lan-share-preview-frame"
-          :src="previewUrl"
-          :title="file?.name || '文本预览'"
-        ></iframe>
-        <div v-else class="lan-share-preview-empty">
-          当前文件类型暂不支持在应用内预览，可下载后使用本地程序打开。
-        </div>
+        <footer class="lan-share-preview-actions">
+          <button
+            class="lan-share-preview-button"
+            type="button"
+            @click="emit('close')"
+          >
+            关闭
+          </button>
+          <button
+            class="lan-share-preview-button lan-share-preview-button-primary"
+            type="button"
+            @click="emit('download', file)"
+          >
+            <Download :size="14" />
+            下载文件
+          </button>
+        </footer>
       </div>
-      <footer class="lan-share-preview-actions">
-        <button
-          class="lan-share-preview-button"
-          type="button"
-          @click="emit('close')"
-        >
-          关闭
-        </button>
-        <button
-          class="lan-share-preview-button lan-share-preview-button-primary"
-          type="button"
-          @click="emit('download', file)"
-        >
-          <Download :size="14" />
-          下载文件
-        </button>
-      </footer>
-    </div>
-  </section>
+    </section>
+  </Teleport>
 </template>
 
 <script setup>
 import { Download, X } from "lucide-vue-next"
+import { useZIndex } from "element-plus"
+
+const { nextZIndex } = useZIndex()
+const zIndex = nextZIndex()
 
 defineProps({
   file: {
@@ -126,7 +137,6 @@ function formatSize(value) {
 .lan-share-preview-dialog {
   position: fixed;
   inset: 0;
-  z-index: 82;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -142,6 +152,7 @@ function formatSize(value) {
     position: relative;
     display: flex;
     width: 860px;
+    max-width: 100%;
     max-height: calc(100vh - 48px);
     flex-direction: column;
     overflow: hidden;
@@ -202,7 +213,7 @@ function formatSize(value) {
 
     .lan-share-preview-body {
       display: flex;
-      min-height: 420px;
+      min-height: 0;
       flex: 1;
       align-items: center;
       justify-content: center;

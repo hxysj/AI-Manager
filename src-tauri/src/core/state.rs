@@ -402,6 +402,10 @@ impl ManagerState {
                 Ok(self.state.clone())
             }
             "lan-share:state" => lan_share::get_state(&self.lan_share_registry, &self.paths).await,
+            "lan-share:clipboard-files" => lan_share::clipboard_files().await,
+            "lan-share:connect-peer" => lan_share::connect_peer(app.clone(), &self.lan_share_registry, &self.paths, payload.unwrap_or_else(|| json!({}))).await,
+            "lan-share:respond-pairing" => lan_share::respond_pairing(app.clone(), &self.lan_share_registry, &self.paths, payload.unwrap_or_else(|| json!({}))).await,
+            "lan-share:discard-uploads" => lan_share::discard_uploads(&self.lan_share_registry, &self.paths, payload.unwrap_or_else(|| json!({}))).await,
             "lan-share:start" => {
                 lan_share::start_service(
                     app.clone(),

@@ -202,8 +202,8 @@ const toolItems = computed(() => {
     {
       id: "lan-share",
       label: "设备快传",
-      summary: "启动局域网服务，通过二维码向同网段设备共享文件并实时通信。",
-      meta: "手动启动",
+      summary: "客户端直接连接，聊天中发送文件与图片；网页仅作为访客入口。",
+      meta: "自动发现",
       icon: Share2
     }
   ]

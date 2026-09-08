@@ -3,7 +3,7 @@
     <div class="lan-share-access-overlay" @click="emit('close')"></div>
     <div class="lan-share-access-panel">
       <header class="lan-share-access-head">
-        <span data-emphasis class="lan-share-access-heading">设备快传</span>
+        <span data-emphasis class="lan-share-access-heading">访客访问</span>
         <button
           class="lan-share-access-close"
           type="button"
@@ -14,7 +14,7 @@
       </header>
       <div class="lan-share-access-body">
         <div class="lan-share-access-qr" v-html="qrSvg"></div>
-        <p class="lan-share-access-hint">使用移动设备扫描二维码访问</p>
+        <p class="lan-share-access-hint">未安装软件的设备可扫码或打开链接，在网页中聊天和传文件。</p>
         <div class="lan-share-access-url-wrapper">
           <span class="lan-share-access-label">访问地址</span>
           <p class="lan-share-access-url">{{ accessUrl }}</p>
@@ -30,12 +30,11 @@
           复制地址
         </button>
         <button
-          class="lan-share-access-button lan-share-access-button-danger"
+          class="lan-share-access-button"
           type="button"
-          @click="emit('stop-service')"
+          @click="emit('close')"
         >
-          <Square :size="15" />
-          关闭服务
+          关闭
         </button>
       </footer>
     </div>
@@ -43,7 +42,7 @@
 </template>
 
 <script setup>
-import { Copy, Square, X } from "lucide-vue-next"
+import { Copy, X } from "lucide-vue-next"
 
 defineProps({
   qrSvg: {
@@ -56,7 +55,7 @@ defineProps({
   }
 })
 
-const emit = defineEmits(["close", "copy-url", "stop-service"])
+const emit = defineEmits(["close", "copy-url"])
 </script>
 
 <style scoped lang="less">

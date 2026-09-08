@@ -202,7 +202,7 @@ async function loadFiles() {
     const stateFiles = Array.isArray(result?.files) ? result.files : []
 
     files.value = stateFiles.filter((file) => {
-      return file.sessionId === props.currentSessionId
+      return file.sessionId === props.currentSessionId && file.enabled !== false
     })
     selectedFileIds.value = selectedFileIds.value.filter((fileId) => {
       return files.value.some((file) => file.id === fileId)
@@ -339,7 +339,8 @@ function toggleSelectAllFiles() {
   .lan-share-files-head {
     display: flex;
     flex: none;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
     justify-content: space-between;
     gap: 10px;
     min-height: 48px;
@@ -350,7 +351,8 @@ function toggleSelectAllFiles() {
     .lan-share-files-title {
       display: flex;
       min-width: 0;
-      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
       gap: 2px;
 
       .lan-share-files-name {
