@@ -732,6 +732,7 @@ import { systemApi, usageApi } from "@/api"
 import TokenCount from "@/components/TokenCount.vue"
 import { formatTokenCount, formatTokenCountParts } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
+import { getFontSize } from "@/utils/typography"
 
 echarts.use([
   BarChart,
@@ -2085,11 +2086,11 @@ async function renderUsageReportCanvas() {
 function drawReportHeader(context, x, y, width) {
   drawReportText(context, "TOKEN USAGE", x, y + 14, {
     color: "#7a8da8",
-    font: "700 12px Arial"
+    font: `700 ${getFontSize('xs')}px Arial`
   })
   drawReportText(context, "模型用量统计", x, y + 48, {
     color: "#17233a",
-    font: "700 30px Arial"
+    font: `700 ${getFontSize('xl')}px Arial`
   })
   drawReportText(
     context,
@@ -2099,7 +2100,7 @@ function drawReportHeader(context, x, y, width) {
     {
       align: "right",
       color: "#6c7d94",
-      font: "600 13px Arial"
+      font: `600 ${getFontSize('sm')}px Arial`
     }
   )
 }
@@ -2115,7 +2116,7 @@ function drawReportFilters(context, x, y, width) {
   let currentX = x
 
   for (const filter of filters) {
-    const text = fitReportText(context, filter, 190, "600 13px Arial")
+    const text = fitReportText(context, filter, 190, `600 ${getFontSize('sm')}px Arial`)
     const itemWidth = Math.min(210, context.measureText(text).width + 26)
 
     if (currentX + itemWidth > x + width) {
@@ -2134,7 +2135,7 @@ function drawReportFilters(context, x, y, width) {
     )
     drawReportText(context, text, currentX + 13, y + 20, {
       color: "#476179",
-      font: "600 13px Arial"
+      font: `600 ${getFontSize('sm')}px Arial`
     })
     currentX += itemWidth + 10
   }
@@ -2180,26 +2181,26 @@ function drawReportMetrics(context, x, y, width, gap) {
     )
     drawReportText(context, item.label, cardX + 18, y + 28, {
       color: "#718197",
-      font: "700 13px Arial"
+      font: `700 ${getFontSize('sm')}px Arial`
     })
     drawReportText(
       context,
-      fitReportText(context, item.value, cardWidth - 36, "700 26px Arial"),
+      fitReportText(context, item.value, cardWidth - 36, `700 ${getFontSize('xl')}px Arial`),
       cardX + 18,
       y + 62,
       {
         color: "#19314d",
-        font: "700 26px Arial"
+        font: `700 ${getFontSize('xl')}px Arial`
       }
     )
     drawReportText(
       context,
-      fitReportText(context, item.note, cardWidth - 36, "600 12px Arial"),
+      fitReportText(context, item.note, cardWidth - 36, `600 ${getFontSize('xs')}px Arial`),
       cardX + 18,
       y + 84,
       {
         color: "#8290a4",
-        font: "600 12px Arial"
+        font: `600 ${getFontSize('xs')}px Arial`
       }
     )
   })
@@ -2225,7 +2226,7 @@ function drawReportChart(
     drawReportText(context, emptyText, x + width / 2, y + height / 2 + 12, {
       align: "center",
       color: "#8b98aa",
-      font: "600 14px Arial"
+      font: `600 ${getFontSize('sm')}px Arial`
     })
   }
 }
@@ -2248,7 +2249,7 @@ function drawReportList(
     drawReportText(context, emptyText, x + width / 2, y + 86, {
       align: "center",
       color: "#8b98aa",
-      font: "600 14px Arial"
+      font: `600 ${getFontSize('sm')}px Arial`
     })
     return
   }
@@ -2268,33 +2269,33 @@ function drawReportList(
     )
     drawReportText(
       context,
-      fitReportText(context, item.title, width - 210, "700 14px Arial"),
+      fitReportText(context, item.title, width - 210, `700 ${getFontSize('sm')}px Arial`),
       x + 30,
       currentY + 23,
       {
         color: "#253852",
-        font: "700 14px Arial"
+        font: `700 ${getFontSize('sm')}px Arial`
       }
     )
     drawReportText(
       context,
-      fitReportText(context, item.description, width - 210, "600 12px Arial"),
+      fitReportText(context, item.description, width - 210, `600 ${getFontSize('xs')}px Arial`),
       x + 30,
       currentY + 43,
       {
         color: "#7a8799",
-        font: "600 12px Arial"
+        font: `600 ${getFontSize('xs')}px Arial`
       }
     )
     drawReportText(context, item.value, x + width - 30, currentY + 24, {
       align: "right",
       color: "#1c3450",
-      font: "700 15px Arial"
+      font: `700 ${getFontSize('base')}px Arial`
     })
     drawReportText(context, item.note, x + width - 30, currentY + 43, {
       align: "right",
       color: "#7a8799",
-      font: "600 12px Arial"
+      font: `600 ${getFontSize('xs')}px Arial`
     })
     currentY += 66
   })
@@ -2303,16 +2304,16 @@ function drawReportList(
 function drawReportSectionHeader(context, x, y, width, title, subtitle) {
   drawReportText(context, title, x, y, {
     color: "#1e334d",
-    font: "700 18px Arial"
+    font: `700 ${getFontSize('lg')}px Arial`
   })
   drawReportText(
     context,
-    fitReportText(context, subtitle, width, "600 12px Arial"),
+    fitReportText(context, subtitle, width, `600 ${getFontSize('xs')}px Arial`),
     x,
     y + 21,
     {
       color: "#7a8799",
-      font: "600 12px Arial"
+      font: `600 ${getFontSize('xs')}px Arial`
     }
   )
 }
@@ -2333,7 +2334,7 @@ function drawReportImage(context, image, x, y, width, height) {
 
 function drawReportText(context, text, x, y, options = {}) {
   context.fillStyle = options.color || "#1f2937"
-  context.font = options.font || "14px Arial"
+  context.font = options.font || `${getFontSize('sm')}px Arial`
   context.textAlign = options.align || "left"
   context.textBaseline = "alphabetic"
   context.fillText(String(text || ""), x, y)
@@ -2531,6 +2532,7 @@ function renderTrendChart() {
   trendChart = trendChart || echarts.init(trendChartRef.value)
   trendChart.setOption(
     {
+      textStyle: { fontSize: getFontSize() },
       color: [
         "#2f5f91",
         "#4f8f7b",
@@ -2544,6 +2546,7 @@ function renderTrendChart() {
       tooltip: {
         trigger: "axis",
         appendToBody: true,
+        textStyle: { fontSize: getFontSize() },
         formatter: (params) => {
           const items = params.filter((item) => Number(item.value) > 0)
           if (!items.length) return ""
@@ -2555,6 +2558,7 @@ function renderTrendChart() {
         }
       },
       grid: {
+        containLabel: true,
         top: 28,
         right: 18,
         bottom: 28,
@@ -2562,13 +2566,14 @@ function renderTrendChart() {
       },
       legend: {
         type: "scroll",
+        pageTextStyle: { fontSize: getFontSize("xs") },
         top: 0,
         right: 0,
         itemWidth: 10,
         itemHeight: 10,
         textStyle: {
           color: "#5f7087",
-          fontSize: 11
+          fontSize: getFontSize("sm")
         }
       },
       xAxis: {
@@ -2576,13 +2581,14 @@ function renderTrendChart() {
         data: trendStats.value.map((item) => item.date),
         axisTick: { show: false },
         axisLine: { lineStyle: { color: "#dbe5ed" } },
-        axisLabel: { color: "#5f7087" }
+        axisLabel: { color: "#5f7087", fontSize: getFontSize("sm") }
       },
       yAxis: {
         type: "value",
         splitLine: { lineStyle: { color: "#edf2f8" } },
         axisLabel: {
           color: "#5f7087",
+          fontSize: getFontSize("sm"),
           formatter: (value) => formatTokenCountParts(value).compact
         }
       },
@@ -2606,10 +2612,12 @@ function renderProviderPie() {
   providerPie = providerPie || echarts.init(providerPieRef.value)
   providerPie.setOption(
     {
+      textStyle: { fontSize: getFontSize() },
       color: ["#2f5f91", "#5d7fa4", "#8aa7c4", "#b9c9d8", "#d8e2ec"],
       tooltip: {
         trigger: "item",
         appendToBody: true,
+        textStyle: { fontSize: getFontSize() },
         formatter: (item) => {
           return `${item.name}<br />${formatTokenCount(item.value)} Tokens · ${item.percent}%`
         }
@@ -2617,6 +2625,7 @@ function renderProviderPie() {
       legend: {
         type: "scroll",
         orient: "vertical",
+        pageTextStyle: { fontSize: getFontSize("xs") },
         right: 0,
         top: 0,
         itemWidth: 10,
@@ -2626,7 +2635,7 @@ function renderProviderPie() {
         },
         textStyle: {
           color: "#5f7087",
-          fontSize: 11,
+          fontSize: getFontSize("sm"),
           width: 150,
           overflow: "truncate"
         }
@@ -2640,6 +2649,7 @@ function renderProviderPie() {
           avoidLabelOverlap: true,
           label: {
             color: "#14213a",
+            fontSize: getFontSize("sm"),
             formatter: "{d}%"
           },
           labelLine: {
@@ -2855,7 +2865,7 @@ function formatSessionLabel(item) {
     max-width: 45rem;
     margin: 8px 0 0;
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     line-height: 1.5;
   }
   position: relative;
@@ -2874,7 +2884,7 @@ function formatSessionLabel(item) {
   }
 
   :deep(.token-count-exact) {
-    font-size: 0.72em;
+    font-size: var(--font-size-xs);
   }
 
   &.usage-view-loading-active {
@@ -2903,7 +2913,7 @@ function formatSessionLabel(item) {
       background: color-mix(in srgb, var(--color-panel) 96%, transparent);
       box-shadow: var(--shadow-panel);
       color: var(--color-text);
-      font-size: 0.9rem;
+      font-size: var(--font-size-base);
     }
 
     .usage-view-loading-icon {
@@ -2936,14 +2946,14 @@ function formatSessionLabel(item) {
   &__eyebrow {
     margin: 0 0 5px;
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
   &__toolbar h1 {
     margin: 0;
-    font-size: 1.38rem;
+    font-size: var(--font-size-xl);
     line-height: 1.2;
   }
 
@@ -2968,7 +2978,7 @@ function formatSessionLabel(item) {
     background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
   }
 
   &__actions button {
@@ -2983,7 +2993,7 @@ function formatSessionLabel(item) {
     align-items: center;
     gap: 6px;
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__currency select {
@@ -3019,7 +3029,7 @@ function formatSessionLabel(item) {
 
   &__field span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   &__field select {
@@ -3050,13 +3060,13 @@ function formatSessionLabel(item) {
 
   &__field :deep(.el-range-input) {
     color: var(--color-text);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &__field :deep(.el-range-separator) {
     flex: none;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__metrics {
@@ -3085,14 +3095,14 @@ function formatSessionLabel(item) {
     .usage-metric-note {
       overflow: hidden;
       color: var(--color-text-muted);
-      font-size: 0.76rem;
+      font-size: var(--font-size-sm);
       text-overflow: ellipsis;
       white-space: nowrap;
     }
 
     .usage-metric-value {
       overflow: hidden;
-      font-size: 1.32rem;
+      font-size: var(--font-size-xl);
       font-variant-numeric: tabular-nums;
       line-height: 1.1;
       text-overflow: ellipsis;
@@ -3141,13 +3151,13 @@ function formatSessionLabel(item) {
 
   &__section-header h2 {
     margin: 0 0 4px;
-    font-size: 0.98rem;
+    font-size: var(--font-size-lg);
     line-height: 1.25;
   }
 
   &__section-header span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__section-actions {
@@ -3168,7 +3178,7 @@ function formatSessionLabel(item) {
     background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__section-actions button:disabled {
@@ -3197,7 +3207,7 @@ function formatSessionLabel(item) {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   &__chart-tab--active {
@@ -3262,12 +3272,12 @@ function formatSessionLabel(item) {
   }
 
   &__stat-card [data-emphasis] {
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
   }
 
   &__stat-card span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   &__logs {
@@ -3303,7 +3313,7 @@ function formatSessionLabel(item) {
     min-height: 34px;
     padding: 0 10px;
     border-bottom: 1px solid var(--color-line);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__table-head {
@@ -3335,7 +3345,7 @@ function formatSessionLabel(item) {
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__pager div {
@@ -3351,7 +3361,7 @@ function formatSessionLabel(item) {
     background: var(--color-panel-soft);
     color: var(--color-text);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     padding: 0 8px;
   }
 
@@ -3375,7 +3385,7 @@ function formatSessionLabel(item) {
 
   &__pager [data-emphasis] {
     color: var(--color-text);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
     white-space: nowrap;
   }
 
@@ -3387,7 +3397,7 @@ function formatSessionLabel(item) {
     border: 1px dashed var(--color-line);
     border-radius: 8px;
     color: var(--color-text-muted);
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
   }
 
   &__modal {
@@ -3441,7 +3451,7 @@ function formatSessionLabel(item) {
 
   &__dialog-header h2 {
     margin: 0;
-    font-size: 1.18rem;
+    font-size: var(--font-size-xl);
   }
 
   &__dialog-header button,
@@ -3459,7 +3469,7 @@ function formatSessionLabel(item) {
     background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &__dialog-header button,
@@ -3491,7 +3501,7 @@ function formatSessionLabel(item) {
     align-items: center;
     gap: 6px;
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__pricing-export select {
@@ -3527,18 +3537,18 @@ function formatSessionLabel(item) {
     background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &__import-file span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__import-tip {
     margin: 0;
     color: var(--color-text-muted);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &__import-textarea {
@@ -3550,7 +3560,7 @@ function formatSessionLabel(item) {
     background: var(--color-panel);
     color: var(--color-text);
     font-family: Consolas, "Courier New", monospace;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
     padding: 10px;
   }
@@ -3558,7 +3568,7 @@ function formatSessionLabel(item) {
   &__import-success {
     margin: 0;
     color: var(--color-success);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &__pricing-list {
@@ -3588,7 +3598,7 @@ function formatSessionLabel(item) {
     border-bottom: 1px solid var(--color-line);
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   &__pricing-row {
@@ -3614,7 +3624,7 @@ function formatSessionLabel(item) {
     min-width: 0;
     padding: 0 2px;
     color: var(--color-text);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -3630,7 +3640,7 @@ function formatSessionLabel(item) {
     border-radius: 7px;
     background: var(--color-primary-soft);
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -3652,7 +3662,7 @@ function formatSessionLabel(item) {
     justify-content: flex-end;
     gap: 8px;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__pricing-pagination label {
@@ -3685,7 +3695,7 @@ function formatSessionLabel(item) {
   &__error {
     margin: 0;
     color: var(--color-danger);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 }
 

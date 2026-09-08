@@ -512,7 +512,7 @@ function formatSkillFileType(file) {
     border: 1px solid var(--color-line);
     border-radius: 8px;
     color: var(--color-text-muted);
-    font-size: 1.1rem;
+    font-size: var(--font-size-lg);
     letter-spacing: 0.08em;
     overflow: hidden;
   }
@@ -531,7 +531,7 @@ function formatSkillFileType(file) {
     overflow: hidden;
     margin: 0 0 5px;
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.14em;
     text-overflow: ellipsis;
     text-transform: uppercase;
@@ -542,7 +542,7 @@ function formatSkillFileType(file) {
     overflow: hidden;
     margin: 0 0 8px;
     color: var(--color-text);
-    font-size: 1.42rem;
+    font-size: var(--font-size-xl);
     line-height: 1.18;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -556,7 +556,7 @@ function formatSkillFileType(file) {
     min-height: 24px;
     padding: 4px 9px;
     border-radius: 999px;
-    font-size: 0.7rem;
+    font-size: var(--font-size-xs);
     line-height: 1.2;
   }
 
@@ -609,7 +609,7 @@ function formatSkillFileType(file) {
     background: var(--color-danger-soft);
     color: var(--color-danger);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     white-space: nowrap;
   }
 
@@ -645,7 +645,7 @@ function formatSkillFileType(file) {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
   }
 
   &__tab--active {
@@ -690,13 +690,13 @@ function formatSkillFileType(file) {
 
   &__block span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   &__block p {
     margin: 0;
     color: var(--color-text-muted);
-    font-size: 0.88rem;
+    font-size: var(--font-size-base);
     line-height: 1.55;
   }
 
@@ -706,7 +706,7 @@ function formatSkillFileType(file) {
     overflow: auto;
     color: var(--color-text-muted);
     font-family: inherit;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
@@ -727,7 +727,7 @@ function formatSkillFileType(file) {
     border-radius: 999px;
     background: var(--color-primary-soft);
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__muted-tag {
@@ -753,12 +753,12 @@ function formatSkillFileType(file) {
     display: block;
     margin-bottom: 6px;
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   &__grid article [data-emphasis] {
     color: var(--color-text);
-    font-size: 0.88rem;
+    font-size: var(--font-size-base);
     line-height: 1.45;
     word-break: break-word;
   }
@@ -779,7 +779,7 @@ function formatSkillFileType(file) {
   &__target-head h3 {
     margin: 0 0 6px;
     color: var(--color-text);
-    font-size: 0.96rem;
+    font-size: var(--font-size-lg);
     line-height: 1.2;
   }
 
@@ -787,7 +787,7 @@ function formatSkillFileType(file) {
     overflow: hidden;
     margin: 0;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -806,7 +806,7 @@ function formatSkillFileType(file) {
 
   &__target-note {
     color: var(--color-text-soft);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__path-button {
@@ -817,7 +817,7 @@ function formatSkillFileType(file) {
     background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
     text-align: left;
     text-overflow: ellipsis;
@@ -866,7 +866,7 @@ function formatSkillFileType(file) {
     min-width: 0;
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -875,7 +875,7 @@ function formatSkillFileType(file) {
   &__file-preview-head [data-emphasis] {
     flex: none;
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   &__file-list {
@@ -896,7 +896,7 @@ function formatSkillFileType(file) {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     text-align: left;
   }
 
@@ -921,7 +921,7 @@ function formatSkillFileType(file) {
   &__file-row small {
     flex: none;
     color: var(--color-text-soft);
-    font-size: 0.68rem;
+    font-size: var(--font-size-xs);
   }
 
   &__file-row--dir {
@@ -937,7 +937,7 @@ function formatSkillFileType(file) {
     background: var(--color-panel);
     color: var(--color-text);
     font-family: "JetBrains Mono", "Consolas", monospace;
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
@@ -950,7 +950,7 @@ function formatSkillFileType(file) {
     place-items: center;
     padding: 14px;
     color: var(--color-text-muted);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     line-height: 1.55;
     text-align: center;
     word-break: break-word;
@@ -969,7 +969,7 @@ function formatSkillFileType(file) {
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.84rem;
+  font-size: var(--font-size-base);
 
   &:hover {
     border-color: var(--color-line-strong);

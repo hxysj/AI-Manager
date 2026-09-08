@@ -247,12 +247,12 @@ function deviceSessionCount(deviceId) {
 
       .lan-share-devices-name {
         color: var(--color-text);
-        font-size: 0.94rem;
+        font-size: var(--font-size-base);
       }
 
       .lan-share-devices-subtitle {
         color: var(--color-text-muted);
-        font-size: 0.76rem;
+        font-size: var(--font-size-sm);
       }
     }
 
@@ -355,12 +355,12 @@ function deviceSessionCount(deviceId) {
 
         .lan-share-devices-device-name {
           color: var(--color-text);
-          font-size: 0.88rem;
+          font-size: var(--font-size-base);
         }
 
         .lan-share-devices-meta {
           color: var(--color-text-muted);
-          font-size: 0.72rem;
+          font-size: var(--font-size-xs);
         }
       }
 
@@ -404,7 +404,7 @@ function deviceSessionCount(deviceId) {
       border: 1px dashed var(--color-line);
       border-radius: 8px;
       color: var(--color-text-muted);
-      font-size: 0.84rem;
+      font-size: var(--font-size-base);
     }
   }
 
@@ -421,7 +421,7 @@ function deviceSessionCount(deviceId) {
     .lan-share-devices-page-info,
     .lan-share-devices-current-page {
       color: var(--color-text-muted);
-      font-size: 0.76rem;
+      font-size: var(--font-size-sm);
     }
 
     .lan-share-devices-page-actions {
@@ -441,7 +441,7 @@ function deviceSessionCount(deviceId) {
         background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
-        font-size: 0.76rem;
+        font-size: var(--font-size-sm);
       }
 
       .lan-share-devices-page-button:disabled {

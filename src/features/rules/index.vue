@@ -454,6 +454,7 @@ import BaseModal from "@/components/BaseModal.vue"
 import { ruleApi } from "@/api"
 import { useGlobalLoading } from "@/utils/global-loading"
 import { createMessage } from "@/utils/message"
+import { getFontSize } from "@/utils/typography"
 
 const props = defineProps({
   cliTargets: {
@@ -999,6 +1000,7 @@ function renderDiff(managerContent, runtimeContent) {
   }
 
   diffEditor = monaco.editor.createDiffEditor(diffEditorRef.value, {
+    fontSize: getFontSize(),
     automaticLayout: true,
     minimap: { enabled: false },
     readOnly: true,
@@ -1206,7 +1208,7 @@ onBeforeUnmount(() => {
   &__prompt-main small {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1233,7 +1235,7 @@ onBeforeUnmount(() => {
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   &__target-button--active {
@@ -1275,7 +1277,7 @@ onBeforeUnmount(() => {
     border: 1px solid var(--color-line);
     border-radius: 999px;
     background: var(--color-panel);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__compare-button {
@@ -1285,7 +1287,7 @@ onBeforeUnmount(() => {
     border-radius: 999px;
     background: var(--color-panel);
     color: var(--color-danger);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__active-tag {
@@ -1293,7 +1295,7 @@ onBeforeUnmount(() => {
     border-radius: 999px;
     background: var(--color-primary-solid);
     color: #ffffff;
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   &__runtime {
@@ -1318,7 +1320,7 @@ onBeforeUnmount(() => {
   &__runtime span:not([data-emphasis]) {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1329,7 +1331,7 @@ onBeforeUnmount(() => {
     border-radius: 999px;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__status--SYNCED {
@@ -1388,7 +1390,7 @@ onBeforeUnmount(() => {
 
   &__field span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.88rem;
+    font-size: var(--font-size-base);
   }
 
   &__field input,
@@ -1453,12 +1455,12 @@ onBeforeUnmount(() => {
 
     :deep(.base-modal__header h2) {
       color: var(--color-text);
-      font-size: 1.05rem;
+      font-size: var(--font-size-lg);
       line-height: 1.35;
     }
 
     :deep(.base-modal__header p) {
-      font-size: 0.86rem;
+      font-size: var(--font-size-base);
       line-height: 1.5;
     }
   }
@@ -1487,7 +1489,7 @@ onBeforeUnmount(() => {
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
   }
 
   &__diff-button:hover:not(:disabled) {
@@ -1562,7 +1564,7 @@ onBeforeUnmount(() => {
     overflow: hidden;
     margin: 0 0 5px;
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.14em;
     text-overflow: ellipsis;
     text-transform: uppercase;
@@ -1573,7 +1575,7 @@ onBeforeUnmount(() => {
     overflow: hidden;
     margin: 0 0 8px;
     color: var(--color-text);
-    font-size: 1.42rem;
+    font-size: var(--font-size-xl);
     line-height: 1.18;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1611,7 +1613,7 @@ onBeforeUnmount(() => {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
   }
 
   &__tab--active {
@@ -1656,7 +1658,7 @@ onBeforeUnmount(() => {
 
   &__block span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
@@ -1664,7 +1666,7 @@ onBeforeUnmount(() => {
   &__block p {
     margin: 0;
     color: var(--color-text-muted);
-    font-size: 0.88rem;
+    font-size: var(--font-size-base);
     line-height: 1.55;
   }
 
@@ -1674,7 +1676,7 @@ onBeforeUnmount(() => {
     overflow: auto;
     color: var(--color-text-muted);
     font-family: inherit;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
@@ -1697,14 +1699,14 @@ onBeforeUnmount(() => {
     display: block;
     margin-bottom: 6px;
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
 
   &__grid [data-emphasis] {
     color: var(--color-text);
-    font-size: 0.88rem;
+    font-size: var(--font-size-base);
     line-height: 1.45;
     word-break: break-word;
   }

@@ -97,7 +97,7 @@ const emit = defineEmits(["close", "copy-url"])
 
       .lan-share-access-heading {
         color: var(--color-text);
-        font-size: clamp(1rem, 2.5vw, 1.1rem);
+        font-size: var(--font-size-lg);
       }
 
       .lan-share-access-close {
@@ -145,7 +145,7 @@ const emit = defineEmits(["close", "copy-url"])
       .lan-share-access-hint {
         margin: 0;
         color: var(--color-text-muted);
-        font-size: clamp(0.8rem, 2vw, 0.88rem);
+        font-size: var(--font-size-base);
         text-align: center;
       }
 
@@ -156,7 +156,7 @@ const emit = defineEmits(["close", "copy-url"])
 
         .lan-share-access-label {
           color: var(--color-text-soft);
-          font-size: clamp(0.75rem, 1.8vw, 0.8rem);
+          font-size: var(--font-size-sm);
         }
 
         .lan-share-access-url {
@@ -167,7 +167,7 @@ const emit = defineEmits(["close", "copy-url"])
           background: var(--color-panel-soft);
           color: var(--color-primary);
           font-family: "JetBrains Mono", "Consolas", monospace;
-          font-size: clamp(0.75rem, 1.8vw, 0.82rem);
+          font-size: var(--font-size-sm);
           line-height: 1.5;
           word-break: break-all;
         }
@@ -194,7 +194,7 @@ const emit = defineEmits(["close", "copy-url"])
         background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
-        font-size: clamp(0.82rem, 2vw, 0.9rem);
+        font-size: var(--font-size-base);
         transition: all 0.2s;
 
         &:hover {

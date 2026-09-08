@@ -2517,6 +2517,7 @@ import { accountApi, runtimeApi, systemApi, usageApi } from "@/api"
 import { claudeDesktopApi, providerApi } from "@/api/modules/providers"
 import { formatTokenCount } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
+import { getFontSize } from "@/utils/typography"
 
 const props = defineProps({
   codexAccounts: {
@@ -4326,6 +4327,7 @@ function renderRuntimeDiff(managerContent, runtimeContent) {
   runtimeDiffEditor = monaco.editor.createDiffEditor(
     runtimeDiffEditorRef.value,
     {
+      fontSize: getFontSize(),
       automaticLayout: true,
       minimap: { enabled: false },
       readOnly: true,
@@ -4542,7 +4544,7 @@ watch(
   }
 
   :deep(.token-count-exact) {
-    font-size: 0.74em;
+    font-size: var(--font-size-xs);
   }
 
   &__toolbar {
@@ -4571,7 +4573,7 @@ watch(
       background: var(--color-primary-solid);
       color: #ffffff;
       box-shadow: 0 2px 4px rgba(15, 23, 42, 0.14);
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       font-weight: 700;
       font-variant-numeric: tabular-nums;
       line-height: 1;
@@ -4699,7 +4701,7 @@ watch(
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &-proxy-switch input {
@@ -4752,7 +4754,7 @@ watch(
     background: var(--color-warning-soft);
     color: var(--color-warning);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &-proxy-manage {
@@ -4796,7 +4798,7 @@ watch(
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &-proxy-tab-active {
@@ -4877,7 +4879,7 @@ watch(
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
     transition:
       border-color 0.18s ease,
       background 0.18s ease,
@@ -4949,7 +4951,7 @@ watch(
   &__runtime [data-emphasis] {
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -5092,7 +5094,7 @@ watch(
     overflow: hidden;
     min-width: 0;
     color: var(--color-text);
-    font-size: 0.98rem;
+    font-size: var(--font-size-lg);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -5104,7 +5106,7 @@ watch(
     border-radius: 999px;
     background: var(--color-success-soft);
     color: var(--color-success);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     line-height: 1.4;
   }
 
@@ -5133,7 +5135,7 @@ watch(
       0 14px 34px rgba(52, 64, 84, 0.18),
       0 0 0 1px rgba(253, 162, 155, 0.28);
     color: var(--color-text);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
     opacity: 0;
     pointer-events: none;
@@ -5167,7 +5169,7 @@ watch(
 
   &__account-error-title {
     color: var(--color-danger);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   &__account-error-message {
@@ -5281,7 +5283,7 @@ watch(
   &__quota-title {
     gap: 7px;
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__quota-name {
@@ -5343,12 +5345,12 @@ watch(
     gap: 8px;
     justify-content: flex-end;
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   &__quota-value {
     color: var(--quota-color);
-    font-size: 1rem;
+    font-size: var(--font-size-lg);
     line-height: 1;
   }
 
@@ -5441,25 +5443,25 @@ watch(
 
   &__provider-main [data-emphasis] {
     color: var(--color-text);
-    font-size: 1rem;
+    font-size: var(--font-size-lg);
   }
 
   &__provider-main span:not([data-emphasis]) {
     overflow: hidden;
     color: var(--color-primary);
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   &__provider-title &__account-tag {
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   &__provider-main &__provider-note {
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &__action-main,
@@ -5490,7 +5492,7 @@ watch(
     border-radius: 999px;
     background: var(--color-success-soft);
     color: var(--color-success);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__state-dot {
@@ -5534,7 +5536,7 @@ watch(
     align-self: center;
     min-width: 134px;
     border-radius: 6px;
-    font-size: 14px;
+    font-size: var(--font-size-sm);
     line-height: 36px;
   }
 
@@ -5548,7 +5550,7 @@ watch(
     border: 1px solid var(--color-danger);
     background: var(--color-panel);
     color: var(--color-danger);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     height: 25px;
   }
 
@@ -5559,7 +5561,7 @@ watch(
     border: 1px solid var(--color-danger-line);
     background: var(--color-panel);
     color: var(--color-danger);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
   }
 
   &__empty {
@@ -5590,7 +5592,7 @@ watch(
 
   &__edit-header h1 {
     margin: 0;
-    font-size: 1.18rem;
+    font-size: var(--font-size-xl);
   }
 
   &__edit-panel {
@@ -5612,7 +5614,7 @@ watch(
     align-self: center;
     padding: 0;
     cursor: pointer;
-    font-size: 1.4rem;
+    font-size: var(--font-size-xl);
   }
 
   &__avatar-picker {
@@ -5629,7 +5631,7 @@ watch(
 
   &__avatar-name {
     color: var(--color-text-muted);
-    font-size: 0.85rem;
+    font-size: var(--font-size-base);
   }
 
   &__icon-panel {
@@ -5654,7 +5656,7 @@ watch(
     background: var(--color-primary-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &-icon-upload input {
@@ -5702,7 +5704,7 @@ watch(
   &__icon-option span:not([data-emphasis]) {
     overflow: hidden;
     width: 100%;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     text-align: center;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -5768,7 +5770,7 @@ watch(
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__api-keys-header button:hover,
@@ -5826,7 +5828,7 @@ watch(
     background: var(--color-primary-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &__api-key-meta button.providers-view__api-key-active {
@@ -5837,7 +5839,7 @@ watch(
 
   &__api-keys small {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__warning {
@@ -5846,7 +5848,7 @@ watch(
     border-radius: 12px;
     background: var(--color-warning-soft);
     color: var(--color-warning);
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
   }
 
   &__advanced {
@@ -5874,12 +5876,12 @@ watch(
 
   &__section-title h2 {
     margin: 0 0 8px;
-    font-size: 1rem;
+    font-size: var(--font-size-lg);
   }
 
   &__section-title p {
     margin: 0 0 16px;
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
   }
 
   &__section-actions {
@@ -5951,7 +5953,7 @@ watch(
   }
 
   &__config-preview summary span:not([data-emphasis]) {
-    font-size: 0.95rem;
+    font-size: var(--font-size-lg);
   }
 
   &__json pre {
@@ -5962,7 +5964,7 @@ watch(
     border-top: 1px solid var(--color-line);
     background: var(--color-panel-soft);
     color: var(--color-text);
-    font-size: 0.85rem;
+    font-size: var(--font-size-base);
     line-height: 1.55;
   }
 
@@ -5971,7 +5973,7 @@ watch(
     padding: 10px 14px;
     border-top: 1px solid var(--color-line);
     color: var(--color-text-muted);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &__edit-footer {
@@ -6026,12 +6028,12 @@ watch(
   }
 
   &__create-option [data-emphasis] {
-    font-size: 1.05rem;
+    font-size: var(--font-size-lg);
   }
 
   &__create-option span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
     line-height: 1.6;
   }
 
@@ -6051,7 +6053,7 @@ watch(
 
     :deep(.base-modal__header h2) {
       color: var(--color-text);
-      font-size: 1.18rem;
+      font-size: var(--font-size-xl);
     }
 
     :deep(.base-modal__close) {
@@ -6060,7 +6062,7 @@ watch(
       border: 0;
       background: transparent;
       color: var(--color-text-muted);
-      font-size: 1.3rem;
+      font-size: var(--font-size-xl);
     }
 
     :deep(.base-modal__content) {
@@ -6137,7 +6139,7 @@ watch(
 
     :deep(.base-modal__header h2) {
       color: var(--color-text);
-      font-size: 1.18rem;
+      font-size: var(--font-size-xl);
     }
 
     :deep(.base-modal__close) {
@@ -6146,7 +6148,7 @@ watch(
       border: 0;
       background: transparent;
       color: var(--color-text-muted);
-      font-size: 1.3rem;
+      font-size: var(--font-size-xl);
     }
 
     :deep(.base-modal__content) {
@@ -6170,7 +6172,7 @@ watch(
 
     :deep(.base-modal__header h2) {
       color: var(--color-text);
-      font-size: 1.18rem;
+      font-size: var(--font-size-xl);
     }
 
     :deep(.base-modal__close) {
@@ -6179,7 +6181,7 @@ watch(
       border: 0;
       background: transparent;
       color: var(--color-text-muted);
-      font-size: 1.3rem;
+      font-size: var(--font-size-xl);
     }
 
     :deep(.base-modal__content) {
@@ -6198,12 +6200,12 @@ watch(
 
     :deep(.base-modal__header h2) {
       color: var(--color-text);
-      font-size: 1.05rem;
+      font-size: var(--font-size-lg);
       line-height: 1.35;
     }
 
     :deep(.base-modal__header p) {
-      font-size: 0.86rem;
+      font-size: var(--font-size-base);
       line-height: 1.5;
       white-space: pre-line;
     }
@@ -6220,12 +6222,12 @@ watch(
 
     :deep(.base-modal__header h2) {
       color: var(--color-text);
-      font-size: 1.05rem;
+      font-size: var(--font-size-lg);
       line-height: 1.35;
     }
 
     :deep(.base-modal__header p) {
-      font-size: 0.86rem;
+      font-size: var(--font-size-base);
       line-height: 1.5;
       white-space: pre-line;
     }
@@ -6237,7 +6239,7 @@ watch(
     flex-direction: column;
     .providers-view-desktop-config-hint {
       color: var(--color-text-muted);
-      font-size: 0.8rem;
+      font-size: var(--font-size-sm);
     }
     .providers-view-desktop-gateway {
       display: flex;
@@ -6276,7 +6278,7 @@ watch(
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
   }
 
   &__diff-button--primary {
@@ -6325,13 +6327,13 @@ watch(
     h2 {
       margin: 0;
       color: var(--color-text);
-      font-size: 1.18rem;
+      font-size: var(--font-size-xl);
     }
 
     p {
       margin: 6px 0 0;
       color: var(--color-text-muted);
-      font-size: 0.86rem;
+      font-size: var(--font-size-base);
     }
   }
 
@@ -6351,7 +6353,7 @@ watch(
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   .providers-view-drawer-tab-active {
@@ -6367,7 +6369,7 @@ watch(
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 1.4rem;
+    font-size: var(--font-size-xl);
     line-height: 1;
   }
 
@@ -6390,7 +6392,7 @@ watch(
   &__drawer-section h3 {
     margin: 0;
     color: var(--color-text);
-    font-size: 0.92rem;
+    font-size: var(--font-size-base);
   }
 
   &__drawer-json {
@@ -6401,7 +6403,7 @@ watch(
     border-radius: 10px;
     background: var(--color-panel-soft);
     color: var(--color-text);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
@@ -6409,7 +6411,7 @@ watch(
 
   &__drawer-empty {
     color: var(--color-text-muted);
-    font-size: 0.88rem;
+    font-size: var(--font-size-base);
   }
 
   .providers-view-usage-panel {
@@ -6442,7 +6444,7 @@ watch(
         border-radius: 999px;
         background: var(--color-panel);
         color: var(--color-primary);
-        font-size: 0.84rem;
+        font-size: var(--font-size-base);
         box-shadow: 0 10px 24px rgba(31, 52, 78, 0.1);
       }
     }
@@ -6476,7 +6478,7 @@ watch(
             .providers-view-quota-stage-name {
               overflow: hidden;
               color: var(--color-text);
-              font-size: 0.9rem;
+              font-size: var(--font-size-base);
               text-overflow: ellipsis;
               white-space: nowrap;
             }
@@ -6484,14 +6486,14 @@ watch(
             .providers-view-quota-stage-status {
               flex: none;
               color: var(--color-primary);
-              font-size: 0.72rem;
+              font-size: var(--font-size-xs);
             }
           }
 
           .providers-view-quota-stage-percent {
             flex: none;
             color: var(--color-success);
-            font-size: 0.86rem;
+            font-size: var(--font-size-base);
           }
         }
 
@@ -6522,12 +6524,12 @@ watch(
             align-items: baseline;
             gap: 4px;
             color: var(--color-text-muted);
-            font-size: 0.74rem;
+            font-size: var(--font-size-sm);
 
             .providers-view-quota-stage-metric-value {
               overflow: hidden;
               color: var(--color-text);
-              font-size: 0.82rem;
+              font-size: var(--font-size-sm);
               text-overflow: ellipsis;
               white-space: nowrap;
             }
@@ -6536,7 +6538,7 @@ watch(
 
         .providers-view-quota-stage-range {
           color: var(--color-text-muted);
-          font-size: 0.72rem;
+          font-size: var(--font-size-xs);
         }
       }
     }
@@ -6552,11 +6554,11 @@ watch(
         align-items: center;
         justify-content: space-between;
         color: var(--color-text-muted);
-        font-size: 0.76rem;
+        font-size: var(--font-size-sm);
 
         .providers-view-quota-history-title {
           color: var(--color-text-muted);
-          font-size: 0.78rem;
+          font-size: var(--font-size-sm);
         }
 
         .providers-view-quota-history-count {
@@ -6586,13 +6588,13 @@ watch(
         .providers-view-quota-history-main {
           .providers-view-quota-history-name {
             color: var(--color-text);
-            font-size: 0.8rem;
+            font-size: var(--font-size-sm);
           }
 
           .providers-view-quota-history-range {
             overflow: hidden;
             color: var(--color-text-muted);
-            font-size: 0.7rem;
+            font-size: var(--font-size-xs);
             text-overflow: ellipsis;
             white-space: nowrap;
           }
@@ -6604,13 +6606,13 @@ watch(
 
           .providers-view-quota-history-token {
             color: var(--color-text);
-            font-size: 0.82rem;
+            font-size: var(--font-size-sm);
           }
 
           .providers-view-quota-history-usage,
           .providers-view-quota-history-cost {
             color: var(--color-text-muted);
-            font-size: 0.7rem;
+            font-size: var(--font-size-xs);
           }
         }
       }
@@ -6656,14 +6658,14 @@ watch(
 
   .providers-view-usage-label {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   .providers-view-usage-value {
     min-width: 0;
     overflow: hidden;
     color: var(--color-text);
-    font-size: 1rem;
+    font-size: var(--font-size-lg);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -6672,7 +6674,7 @@ watch(
     min-width: 0;
     overflow: hidden;
     color: var(--color-text);
-    font-size: 1.46rem;
+    font-size: var(--font-size-xl);
     line-height: 1.12;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -6680,13 +6682,13 @@ watch(
 
   .providers-view-usage-cost {
     color: var(--color-primary);
-    font-size: 1.22rem;
+    font-size: var(--font-size-xl);
     line-height: 1.1;
   }
 
   .providers-view-usage-subtext {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   .providers-view-usage-token-grid {
@@ -6708,7 +6710,7 @@ watch(
 
     small {
       color: var(--color-text-muted);
-      font-size: 0.72rem;
+      font-size: var(--font-size-xs);
     }
   }
 
@@ -6771,7 +6773,7 @@ watch(
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     line-height: 0.72rem;
     white-space: nowrap;
   }
@@ -6784,7 +6786,7 @@ watch(
   &__login-intro {
     margin: 10px 0 0;
     color: var(--color-text-muted);
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
     line-height: 1.6;
   }
 
@@ -6795,7 +6797,7 @@ watch(
 
     span:not([data-emphasis]) {
       color: var(--color-text-muted);
-      font-size: 0.76rem;
+      font-size: var(--font-size-sm);
     }
   }
 
@@ -6816,7 +6818,7 @@ watch(
     border-radius: 10px;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__login-copy-row input,
@@ -6915,7 +6917,7 @@ watch(
   &__login-status {
     padding: 9px 11px;
     border-radius: 8px;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
 
     &--success {
       border: 1px solid var(--color-success-line);

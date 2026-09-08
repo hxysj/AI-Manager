@@ -214,7 +214,7 @@ function handleClose() {
         border-radius: 4px;
         background: var(--color-primary-soft);
         color: var(--color-accent);
-        font-size: 0.7rem;
+        font-size: var(--font-size-xs);
         font-weight: 500;
 
         &.import-skill-conflict-badge-current {
@@ -232,7 +232,7 @@ function handleClose() {
 
     .import-skill-conflict-path {
       color: var(--color-text-muted);
-      font-size: 0.72rem;
+      font-size: var(--font-size-xs);
       overflow-wrap: anywhere;
       white-space: normal;
       line-height: 1.5;
@@ -249,7 +249,7 @@ function handleClose() {
     display: flex;
     gap: 8px;
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &__summary span:not([data-emphasis]) {
@@ -264,7 +264,7 @@ function handleClose() {
     border-radius: 8px;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &__body {
@@ -286,7 +286,7 @@ function handleClose() {
   &__section h3 {
     margin: 0;
     color: var(--color-text);
-    font-size: 0.94rem;
+    font-size: var(--font-size-base);
   }
 
   &__list,
@@ -311,12 +311,12 @@ function handleClose() {
 
   &__conflict-head [data-emphasis] {
     color: var(--color-text);
-    font-size: 0.92rem;
+    font-size: var(--font-size-base);
   }
 
   &__conflict-head span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__item {
@@ -354,7 +354,7 @@ function handleClose() {
   &__content [data-emphasis] {
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -362,7 +362,7 @@ function handleClose() {
   &__content span:not([data-emphasis]) {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -370,7 +370,7 @@ function handleClose() {
   &__content small {
     overflow: hidden;
     color: var(--color-accent);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -401,7 +401,7 @@ function handleClose() {
   background: var(--color-panel-soft);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.88rem;
+  font-size: var(--font-size-base);
 
   &:hover {
     border-color: var(--color-line-strong);

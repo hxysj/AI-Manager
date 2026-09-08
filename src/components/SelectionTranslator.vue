@@ -143,7 +143,7 @@ function closeTranslator() {
 
   &__header [data-emphasis] {
     color: var(--color-text);
-    font-size: 0.92rem;
+    font-size: var(--font-size-base);
   }
 
   &__header button {
@@ -171,7 +171,7 @@ function closeTranslator() {
   &__source {
     margin: 0;
     color: var(--color-text-muted);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     line-height: 1.55;
   }
 

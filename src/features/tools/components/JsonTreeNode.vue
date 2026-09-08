@@ -394,7 +394,7 @@ function emitCopy() {
     border-left: 2px solid transparent;
     color: var(--color-text);
     font-family: Consolas, "Courier New", monospace;
-    font-size: 0.78rem;
+    font-size: var(--font-size-base);
     line-height: 1.45;
     white-space: nowrap;
   }
@@ -521,7 +521,7 @@ function emitCopy() {
     padding-top: 2px;
     color: var(--color-text-muted);
     font-family: Consolas, "Courier New", monospace;
-    font-size: 0.78rem;
+    font-size: var(--font-size-base);
   }
 
   .json-tree-children {

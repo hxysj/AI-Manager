@@ -265,6 +265,22 @@ D:\ai-manager-data\
 
 在 `Settings > 系统设置` 中可以配置开机启动、关闭按钮行为和 Provider 快速切换悬浮窗。
 
+### 全局字号
+
+所有界面字号统一维护在 `src/styles/typography.css`，使用像素值定义五个档位：
+
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `--font-size-base` | `16px` | 正文、输入内容和主要操作 |
+| `--font-size-lg` | `18px` | 分区标题、弹框标题 |
+| `--font-size-sm` | `14px` | 说明、元信息和辅助操作 |
+| `--font-size-xs` | `12px` | 紧凑标记、计数和次要注释 |
+| `--font-size-xl` | `24px` | 页面标题、重点统计数字 |
+
+修改对应变量即可统一调整使用该档位的界面，无需逐页修改；新增样式也应直接引用这些变量，不再单独设置固定字号。布局所需的 `font-size: 0` 和继承父级字号的 `inherit` 保留原义。
+
+Element Plus 控件通过全局样式映射同一组变量；ECharts 图表、Monaco 差异编辑器与 PNG 导出通过 `src/utils/typography.js` 读取像素值。设备快传的访客网页在后端编译时嵌入同一份 CSS，不维护第二套字号；修改后需要重新编译后端才能更新访客网页。
+
 ## 常见问题
 
 ### 为什么启动后没有检测到 Claude Code 或 Codex？

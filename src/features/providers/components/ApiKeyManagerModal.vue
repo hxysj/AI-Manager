@@ -457,7 +457,7 @@ async function switchTab(event) {
     min-height: 0;
     flex: 1;
     flex-direction: column;
-    font-size: 13px;
+    font-size: var(--font-size-sm);
 
     .key-manager-overview {
       display: flex;
@@ -499,7 +499,7 @@ async function switchTab(event) {
 
           .key-manager-description {
             color: var(--color-text-muted);
-            font-size: 12px;
+            font-size: var(--font-size-xs);
           }
         }
       }
@@ -510,7 +510,7 @@ async function switchTab(event) {
         border: 1px solid var(--color-line);
         border-radius: 6px;
         color: var(--color-text-muted);
-        font-size: 12px;
+        font-size: var(--font-size-xs);
         font-variant-numeric: tabular-nums;
       }
     }
@@ -538,7 +538,7 @@ async function switchTab(event) {
           justify-content: space-between;
           padding: 14px 14px 8px;
           color: var(--color-text-muted);
-          font-size: 12px;
+          font-size: var(--font-size-xs);
 
           .key-manager-add {
             display: inline-flex;
@@ -603,7 +603,7 @@ async function switchTab(event) {
                 border-radius: 4px;
                 background: var(--color-primary-soft);
                 color: var(--color-primary);
-                font-size: 10px;
+                font-size: var(--font-size-xs);
               }
             }
 
@@ -611,7 +611,7 @@ async function switchTab(event) {
               overflow: hidden;
               color: var(--color-text-muted);
               font-family: ui-monospace, Consolas, monospace;
-              font-size: 11px;
+              font-size: var(--font-size-xs);
               text-overflow: ellipsis;
               white-space: nowrap;
             }
@@ -621,7 +621,7 @@ async function switchTab(event) {
               flex-wrap: wrap;
               gap: 4px 10px;
               color: var(--color-text-muted);
-              font-size: 11px;
+              font-size: var(--font-size-xs);
               font-variant-numeric: tabular-nums;
 
               .key-manager-has-failures {
@@ -633,7 +633,7 @@ async function switchTab(event) {
           .key-manager-list-empty {
             padding: 12px 4px;
             color: var(--color-text-soft);
-            font-size: 12px;
+            font-size: var(--font-size-xs);
           }
         }
       }
@@ -660,14 +660,14 @@ async function switchTab(event) {
 
             .key-manager-selected-name {
               overflow: hidden;
-              font-size: 15px;
+              font-size: var(--font-size-base);
               text-overflow: ellipsis;
               white-space: nowrap;
             }
 
             .key-manager-selected-state {
               color: var(--color-text-muted);
-              font-size: 11px;
+              font-size: var(--font-size-xs);
             }
           }
 
@@ -689,7 +689,7 @@ async function switchTab(event) {
               border-radius: 6px;
               background: var(--color-panel);
               color: var(--color-primary);
-              font-size: 12px;
+              font-size: var(--font-size-xs);
             }
 
             .key-manager-delete {
@@ -756,7 +756,7 @@ async function switchTab(event) {
 
                 .key-manager-optional {
                   color: var(--color-text-soft);
-                  font-size: 11px;
+                  font-size: var(--font-size-xs);
                 }
               }
 
@@ -767,12 +767,12 @@ async function switchTab(event) {
               }
 
               :deep(.el-input__inner) {
-                font-size: 13px;
+                font-size: var(--font-size-sm);
               }
 
               .key-manager-field-hint {
                 color: var(--color-text-muted);
-                font-size: 11px;
+                font-size: var(--font-size-xs);
                 line-height: 1.6;
               }
             }
@@ -785,7 +785,7 @@ async function switchTab(event) {
               border-radius: 7px;
               background: var(--color-panel-soft);
               color: var(--color-text-muted);
-              font-size: 11px;
+              font-size: var(--font-size-xs);
               line-height: 1.7;
             }
           }
@@ -806,7 +806,7 @@ async function switchTab(event) {
                 align-items: center;
                 gap: 6px;
                 color: var(--color-text-muted);
-                font-size: 12px;
+                font-size: var(--font-size-xs);
 
                 .key-manager-info {
                   display: grid;
@@ -827,7 +827,7 @@ async function switchTab(event) {
                 border-radius: 6px;
                 background: var(--color-panel);
                 color: var(--color-text);
-                font-size: 12px;
+                font-size: var(--font-size-xs);
 
                 .key-manager-refreshing {
                   animation: key-manager-spin 1s linear infinite;
@@ -838,7 +838,7 @@ async function switchTab(event) {
             .key-manager-error {
               margin: 0;
               color: var(--color-danger);
-              font-size: 12px;
+              font-size: var(--font-size-xs);
               overflow-wrap: anywhere;
             }
           }
@@ -857,7 +857,7 @@ async function switchTab(event) {
         text-align: center;
 
         .key-manager-empty-description {
-          font-size: 12px;
+          font-size: var(--font-size-xs);
         }
 
         .key-manager-empty-add {
@@ -885,7 +885,7 @@ async function switchTab(event) {
 
       .key-manager-save-hint {
         color: var(--color-text-muted);
-        font-size: 12px;
+        font-size: var(--font-size-xs);
 
         &.key-manager-unsaved {
           color: var(--color-warning);
@@ -909,7 +909,7 @@ async function switchTab(event) {
           border-radius: 7px;
           background: var(--color-panel);
           color: var(--color-text-muted);
-          font-size: 13px;
+          font-size: var(--font-size-sm);
         }
 
         .key-manager-save {
@@ -1014,7 +1014,7 @@ async function switchTab(event) {
   @media (max-width: 380px) {
     .key-manager .key-manager-footer .key-manager-save-hint {
       max-width: 70px;
-      font-size: 11px;
+      font-size: var(--font-size-xs);
     }
   }
 

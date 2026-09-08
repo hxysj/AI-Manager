@@ -579,14 +579,14 @@ async function copyText(value) {
   &__header p {
     margin: 0 0 8px;
     color: var(--color-text-soft);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     letter-spacing: 0.16em;
     text-transform: uppercase;
   }
 
   &__header h2 {
     margin: 0 0 10px;
-    font-size: 1.6rem;
+    font-size: var(--font-size-xl);
     line-height: 1.15;
   }
 
@@ -604,7 +604,7 @@ async function copyText(value) {
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 1.4rem;
+    font-size: var(--font-size-xl);
     line-height: 1;
   }
 
@@ -685,7 +685,7 @@ async function copyText(value) {
   &__tool span:not([data-emphasis]),
   &__grid span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
@@ -865,7 +865,7 @@ async function copyText(value) {
     align-items: center;
     gap: 8px;
     color: var(--color-text-soft);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__chat-meta [data-emphasis] {
@@ -916,7 +916,7 @@ async function copyText(value) {
     margin: 0;
     color: var(--color-text);
     font-family: "Cascadia Code", Consolas, monospace;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     line-height: 1.65;
     white-space: pre-wrap;
     word-break: break-word;
@@ -927,7 +927,7 @@ async function copyText(value) {
     margin: 0;
     color: var(--color-text);
     font-family: "Cascadia Code", Consolas, monospace;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     line-height: 1.65;
     white-space: pre-wrap;
     word-break: break-word;
@@ -969,7 +969,7 @@ async function copyText(value) {
 
   &__grid [data-emphasis],
   &__grid button {
-    font-size: 0.92rem;
+    font-size: var(--font-size-base);
     line-height: 1.5;
     word-break: break-all;
   }

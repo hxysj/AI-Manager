@@ -370,7 +370,7 @@ onMounted(loadPets)
   .codex-pet-manager-mark {
     margin: 0;
     color: var(--color-text-soft);
-    font-size: 0.7rem;
+    font-size: var(--font-size-sm);
     letter-spacing: 0;
     text-transform: uppercase;
   }
@@ -378,13 +378,13 @@ onMounted(loadPets)
   .codex-pet-manager-title-text {
     margin: 0;
     color: var(--color-text);
-    font-size: 1.14rem;
+    font-size: var(--font-size-lg);
     line-height: 1.2;
   }
 
   .codex-pet-manager-title-desc {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-base);
   }
 
   .codex-pet-manager-head-actions,
@@ -415,7 +415,7 @@ onMounted(loadPets)
   .codex-pet-manager-button {
     padding: 0 12px;
     color: var(--color-primary);
-    font-size: 0.82rem;
+    font-size: var(--font-size-base);
   }
 
   .codex-pet-manager-icon-button:hover,
@@ -478,14 +478,14 @@ onMounted(loadPets)
   .codex-pet-manager-path-label {
     flex: none;
     color: var(--color-primary);
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
   }
 
   .codex-pet-manager-path-value {
     min-width: 0;
     overflow: hidden;
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -565,7 +565,7 @@ onMounted(loadPets)
     min-width: 0;
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.94rem;
+    font-size: var(--font-size-lg);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -579,7 +579,7 @@ onMounted(loadPets)
     min-height: 22px;
     padding: 0 8px;
     border-radius: 999px;
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
   }
 
   .codex-pet-manager-status {
@@ -595,7 +595,7 @@ onMounted(loadPets)
   .codex-pet-manager-item-id {
     overflow: hidden;
     color: var(--color-text-soft);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -605,7 +605,7 @@ onMounted(loadPets)
     margin: 0;
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-base);
     line-height: 1.45;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
@@ -677,14 +677,14 @@ onMounted(loadPets)
   .codex-pet-manager-animation-row-name {
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .codex-pet-manager-animation-row-meta {
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
   }
 
   .codex-pet-manager-state,
@@ -700,18 +700,18 @@ onMounted(loadPets)
     border-radius: 8px;
     background: var(--color-panel);
     color: var(--color-text-muted);
-    font-size: 0.82rem;
+    font-size: var(--font-size-base);
     text-align: center;
   }
 
   .codex-pet-manager-empty-title {
     color: var(--color-text);
-    font-size: 0.94rem;
+    font-size: var(--font-size-lg);
   }
 
   .codex-pet-manager-empty-desc {
     max-width: 440px;
-    font-size: 0.8rem;
+    font-size: var(--font-size-base);
     line-height: 1.5;
   }
 
@@ -729,7 +729,7 @@ onMounted(loadPets)
 
   .codex-pet-manager-name-label {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-base);
   }
 
   .codex-pet-manager-name-input {
@@ -740,7 +740,7 @@ onMounted(loadPets)
     background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
     outline: none;
   }
 

@@ -87,21 +87,21 @@ const emit = defineEmits(["start", "show-access", "stop"])
 
     .lan-share-toolbar-mark {
       color: var(--color-text-soft);
-      font-size: 0.68rem;
+      font-size: var(--font-size-xs);
       letter-spacing: 0.12em;
       text-transform: uppercase;
     }
 
     .lan-share-toolbar-name {
       color: var(--color-primary);
-      font-size: 1rem;
+      font-size: var(--font-size-lg);
       line-height: 1.2;
     }
 
     .lan-share-toolbar-summary {
       overflow: hidden;
       color: var(--color-text-muted);
-      font-size: 0.76rem;
+      font-size: var(--font-size-sm);
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -118,7 +118,7 @@ const emit = defineEmits(["start", "show-access", "stop"])
     border-radius: 999px;
     background: var(--color-panel);
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
 
     .lan-share-toolbar-dot {
       width: 7px;

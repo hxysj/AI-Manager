@@ -1660,11 +1660,11 @@ onBeforeUnmount(() => {
       .json-agent-history-title {
         gap: 6px;
         color: var(--color-text);
-        font-size: 0.73rem;
+        font-size: var(--font-size-base);
 
         span:not([data-emphasis]) {
           color: var(--color-text-soft);
-          font-size: 0.65rem;
+          font-size: var(--font-size-sm);
         }
       }
 
@@ -1714,7 +1714,7 @@ onBeforeUnmount(() => {
       border-bottom: 1px solid var(--color-line);
       background: var(--color-primary-soft);
       color: var(--color-text-muted);
-      font-size: 0.65rem;
+      font-size: var(--font-size-sm);
       line-height: 1.45;
 
       .lucide {
@@ -1759,14 +1759,14 @@ onBeforeUnmount(() => {
           [data-emphasis] {
             overflow: hidden;
             color: var(--color-text);
-            font-size: 0.72rem;
+            font-size: var(--font-size-base);
             text-overflow: ellipsis;
             white-space: nowrap;
           }
 
           small {
             color: var(--color-text-soft);
-            font-size: 0.61rem;
+            font-size: var(--font-size-sm);
           }
         }
       }
@@ -1796,7 +1796,7 @@ onBeforeUnmount(() => {
       flex-direction: column;
       gap: 8px;
       color: var(--color-text-soft);
-      font-size: 0.7rem;
+      font-size: var(--font-size-base);
     }
 
     .json-agent-history-foot {
@@ -1809,7 +1809,7 @@ onBeforeUnmount(() => {
       border-top: 1px solid var(--color-line);
       background: var(--color-panel-soft);
       color: var(--color-text-muted);
-      font-size: 0.64rem;
+      font-size: var(--font-size-sm);
 
       .json-agent-history-page-button {
         width: 27px;
@@ -1828,7 +1828,7 @@ onBeforeUnmount(() => {
         padding: 0 4px;
         background: var(--color-panel);
         color: var(--color-text);
-        font-size: 0.65rem;
+        font-size: var(--font-size-base);
       }
     }
   }
@@ -1870,12 +1870,12 @@ onBeforeUnmount(() => {
           .json-agent-pane-kicker {
             color: var(--color-text-soft);
             font-family: Consolas, "Courier New", monospace;
-            font-size: 0.66rem;
+            font-size: var(--font-size-sm);
           }
 
           .json-agent-pane-name {
             color: var(--color-text);
-            font-size: 0.85rem;
+            font-size: var(--font-size-lg);
           }
         }
 
@@ -1896,7 +1896,7 @@ onBeforeUnmount(() => {
           background: var(--color-panel);
           color: var(--color-primary);
           cursor: pointer;
-          font-size: 0.74rem;
+          font-size: var(--font-size-sm);
           line-height: 1;
 
           :deep(svg) {
@@ -1947,7 +1947,7 @@ onBeforeUnmount(() => {
         background: var(--color-panel);
         color: var(--color-text);
         font-family: Consolas, "Courier New", monospace;
-        font-size: 0.8rem;
+        font-size: var(--font-size-base);
         line-height: 1.65;
         tab-size: 2;
       }
@@ -1979,7 +1979,7 @@ onBeforeUnmount(() => {
           flex-direction: column;
           gap: 9px;
           color: var(--color-text-soft);
-          font-size: 0.78rem;
+          font-size: var(--font-size-base);
         }
       }
 
@@ -2012,13 +2012,13 @@ onBeforeUnmount(() => {
           border: 0;
           outline: 0;
           color: var(--color-text);
-          font-size: 0.72rem;
+          font-size: var(--font-size-base);
         }
 
         span:not([data-emphasis]) {
           flex: none;
           color: var(--color-text-soft);
-          font-size: 0.62rem;
+          font-size: var(--font-size-sm);
         }
 
         button {
@@ -2051,7 +2051,7 @@ onBeforeUnmount(() => {
         border-top: 1px solid var(--color-line);
         background: var(--color-panel-soft);
         color: var(--color-text-muted);
-        font-size: 0.69rem;
+        font-size: var(--font-size-sm);
 
         .json-agent-parse-state {
           min-width: 0;
@@ -2140,14 +2140,14 @@ onBeforeUnmount(() => {
           gap: 1px;
 
           .json-agent-window-name {
-            font-size: 0.82rem;
+            font-size: var(--font-size-lg);
           }
 
           .json-agent-window-provider {
             max-width: 350px;
             overflow: hidden;
             color: var(--color-text-muted);
-            font-size: 0.66rem;
+            font-size: var(--font-size-sm);
             text-overflow: ellipsis;
             white-space: nowrap;
           }
@@ -2175,7 +2175,7 @@ onBeforeUnmount(() => {
         .json-agent-running-text {
           margin-right: 3px;
           color: var(--color-text-muted);
-          font-size: 0.66rem;
+          font-size: var(--font-size-sm);
         }
 
         .json-agent-window-control {
@@ -2221,7 +2221,7 @@ onBeforeUnmount(() => {
         background: transparent;
         color: var(--color-text-muted);
         cursor: pointer;
-        font-size: 0.72rem;
+        font-size: var(--font-size-base);
 
         .json-agent-tab-count {
           display: inline-flex;
@@ -2232,7 +2232,7 @@ onBeforeUnmount(() => {
           border-radius: 9px;
           background: var(--color-primary-soft);
           color: var(--color-primary);
-          font-size: 0.62rem;
+          font-size: var(--font-size-sm);
         }
       }
 
@@ -2272,7 +2272,7 @@ onBeforeUnmount(() => {
         flex-direction: column;
         gap: 8px;
         color: var(--color-text-soft);
-        font-size: 0.74rem;
+        font-size: var(--font-size-base);
       }
 
       .json-agent-message {
@@ -2288,7 +2288,7 @@ onBeforeUnmount(() => {
 
           .json-agent-message-role {
             color: var(--color-text-soft);
-            font-size: 0.65rem;
+            font-size: var(--font-size-sm);
           }
 
           .json-agent-message-streaming {
@@ -2306,13 +2306,13 @@ onBeforeUnmount(() => {
             display: block;
             margin-bottom: 3px;
             color: var(--color-primary);
-            font-size: 0.63rem;
+            font-size: var(--font-size-sm);
           }
 
           .json-agent-message-reasoning-content {
             margin: 0;
             color: var(--color-text-muted);
-            font-size: 0.7rem;
+            font-size: var(--font-size-base);
             line-height: 1.5;
             overflow-wrap: anywhere;
             white-space: pre-wrap;
@@ -2326,7 +2326,7 @@ onBeforeUnmount(() => {
           border-radius: 7px;
           background: var(--color-panel-soft);
           color: var(--color-text);
-          font-size: 0.76rem;
+          font-size: var(--font-size-base);
           line-height: 1.55;
           overflow-wrap: anywhere;
           white-space: pre-wrap;
@@ -2335,7 +2335,7 @@ onBeforeUnmount(() => {
         .json-agent-message-placeholder {
           margin: 0;
           color: var(--color-text-muted);
-          font-size: 0.7rem;
+          font-size: var(--font-size-base);
         }
       }
 
@@ -2363,7 +2363,7 @@ onBeforeUnmount(() => {
         align-items: center;
         gap: 7px;
         color: var(--color-primary);
-        font-size: 0.7rem;
+        font-size: var(--font-size-base);
 
         .lucide {
           animation: json-agent-spin 0.9s linear infinite;
@@ -2398,14 +2398,14 @@ onBeforeUnmount(() => {
             width: 72px;
             flex: 0 0 72px;
             color: var(--color-text-muted);
-            font-size: 0.68rem;
+            font-size: var(--font-size-sm);
           }
 
           .json-agent-context-value {
             min-width: 0;
             overflow: hidden;
             color: var(--color-text);
-            font-size: 0.72rem;
+            font-size: var(--font-size-base);
             text-overflow: ellipsis;
             white-space: nowrap;
           }
@@ -2439,12 +2439,12 @@ onBeforeUnmount(() => {
 
           .json-agent-context-name {
             color: var(--color-text);
-            font-size: 0.7rem;
+            font-size: var(--font-size-base);
           }
 
           .json-agent-context-size {
             color: var(--color-text-soft);
-            font-size: 0.64rem;
+            font-size: var(--font-size-sm);
           }
         }
 
@@ -2456,7 +2456,7 @@ onBeforeUnmount(() => {
           padding: 10px;
           color: var(--color-text-muted);
           font-family: Consolas, "Courier New", monospace;
-          font-size: 0.7rem;
+          font-size: var(--font-size-base);
           line-height: 1.5;
           white-space: pre-wrap;
           word-break: break-word;
@@ -2504,13 +2504,13 @@ onBeforeUnmount(() => {
           .json-agent-tool-definition-name {
             color: var(--color-primary);
             font-family: Consolas, "Courier New", monospace;
-            font-size: 0.72rem;
+            font-size: var(--font-size-base);
           }
 
           .json-agent-tool-definition-desc {
             overflow: hidden;
             color: var(--color-text-muted);
-            font-size: 0.66rem;
+            font-size: var(--font-size-sm);
             text-overflow: ellipsis;
             white-space: nowrap;
           }
@@ -2518,7 +2518,7 @@ onBeforeUnmount(() => {
 
         .json-agent-tool-definition-state {
           color: var(--color-primary);
-          font-size: 0.64rem;
+          font-size: var(--font-size-sm);
         }
       }
 
@@ -2531,7 +2531,7 @@ onBeforeUnmount(() => {
         flex-direction: column;
         gap: 8px;
         color: var(--color-text-soft);
-        font-size: 0.72rem;
+        font-size: var(--font-size-base);
       }
 
       .json-agent-tool-call {
@@ -2556,12 +2556,12 @@ onBeforeUnmount(() => {
             align-items: center;
             gap: 6px;
             color: var(--color-text);
-            font-size: 0.72rem;
+            font-size: var(--font-size-base);
           }
 
           .json-agent-tool-call-state {
             flex: none;
-            font-size: 0.64rem;
+            font-size: var(--font-size-sm);
           }
 
           .json-agent-tool-call-state-running {
@@ -2584,7 +2584,7 @@ onBeforeUnmount(() => {
 
           .json-agent-tool-call-label {
             color: var(--color-text-soft);
-            font-size: 0.63rem;
+            font-size: var(--font-size-sm);
           }
 
           .json-agent-tool-call-content {
@@ -2597,7 +2597,7 @@ onBeforeUnmount(() => {
             background: var(--color-panel-soft);
             color: var(--color-text-muted);
             font-family: Consolas, "Courier New", monospace;
-            font-size: 0.66rem;
+            font-size: var(--font-size-base);
             line-height: 1.45;
             white-space: pre-wrap;
             word-break: break-word;
@@ -2626,7 +2626,7 @@ onBeforeUnmount(() => {
         padding: 0 8px;
         background: var(--color-panel);
         color: var(--color-text);
-        font-size: 0.68rem;
+        font-size: var(--font-size-base);
       }
 
       .json-agent-instruction {
@@ -2640,7 +2640,7 @@ onBeforeUnmount(() => {
         padding: 8px 9px;
         background: var(--color-panel);
         color: var(--color-text);
-        font-size: 0.73rem;
+        font-size: var(--font-size-base);
         line-height: 1.4;
       }
 

@@ -352,7 +352,7 @@ onBeforeUnmount(() => {
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-xs);
   }
   .desktop-tool-button {
     &:hover:not(:disabled) {
@@ -456,7 +456,7 @@ onBeforeUnmount(() => {
     background: var(--color-warning-soft);
     .desktop-warning-item {
       margin: 3px 0;
-      font-size: 12px;
+      font-size: var(--font-size-xs);
       line-height: 1.5;
       color: var(--color-text-muted);
       overflow-wrap: anywhere;
@@ -469,7 +469,7 @@ onBeforeUnmount(() => {
     gap: 16px;
     .desktop-confirm-text {
       margin: 0;
-      font-size: 14px;
+      font-size: var(--font-size-sm);
       line-height: 1.7;
     }
   }

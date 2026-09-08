@@ -498,13 +498,13 @@ function formatRepositorySkillAction(skill) {
   .skill-repository-list-title-text {
     margin: 0;
     color: var(--color-text);
-    font-size: 1.26rem;
+    font-size: var(--font-size-xl);
     line-height: 1.2;
   }
 
   .skill-repository-list-title-desc {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   .skill-repository-list-actions {
@@ -526,7 +526,7 @@ function formatRepositorySkillAction(skill) {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     white-space: nowrap;
   }
 
@@ -595,7 +595,7 @@ function formatRepositorySkillAction(skill) {
 
   .skill-repository-list-field-label {
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   .skill-repository-list-field-control {
@@ -607,7 +607,7 @@ function formatRepositorySkillAction(skill) {
     background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     outline: none;
   }
 
@@ -642,7 +642,7 @@ function formatRepositorySkillAction(skill) {
     background: transparent;
     color: var(--color-text);
     font: inherit;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     outline: none;
   }
 
@@ -653,7 +653,7 @@ function formatRepositorySkillAction(skill) {
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   .skill-repository-list-grid {
@@ -689,7 +689,7 @@ function formatRepositorySkillAction(skill) {
     min-width: 0;
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.94rem;
+    font-size: var(--font-size-base);
     line-height: 1.25;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -705,7 +705,7 @@ function formatRepositorySkillAction(skill) {
     border-radius: 999px;
     background: var(--color-primary-soft);
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   .skill-repository-list-card-status.installed {
@@ -724,7 +724,7 @@ function formatRepositorySkillAction(skill) {
     overflow: hidden;
     margin: 0;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
@@ -734,7 +734,7 @@ function formatRepositorySkillAction(skill) {
     min-height: 18px;
     overflow: hidden;
     color: var(--color-text-soft);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     line-height: 18px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -770,7 +770,7 @@ function formatRepositorySkillAction(skill) {
     border-radius: 999px;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -795,7 +795,7 @@ function formatRepositorySkillAction(skill) {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   .skill-repository-list-card-action:hover {
@@ -836,11 +836,11 @@ function formatRepositorySkillAction(skill) {
 
   .skill-repository-list-empty-title {
     color: var(--color-text);
-    font-size: 0.98rem;
+    font-size: var(--font-size-lg);
   }
 
   .skill-repository-list-empty-desc {
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
   }
 
@@ -889,7 +889,7 @@ function formatRepositorySkillAction(skill) {
   .skill-repository-list-detail-name {
     overflow: hidden;
     color: var(--color-text);
-    font-size: 1rem;
+    font-size: var(--font-size-lg);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -897,7 +897,7 @@ function formatRepositorySkillAction(skill) {
   .skill-repository-list-detail-repo {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -928,13 +928,13 @@ function formatRepositorySkillAction(skill) {
 
   .skill-repository-list-detail-label {
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   .skill-repository-list-detail-text {
     margin: 0;
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     line-height: 1.55;
     word-break: break-word;
   }
@@ -945,7 +945,7 @@ function formatRepositorySkillAction(skill) {
     overflow: auto;
     color: var(--color-text-muted);
     font-family: Consolas, "Liberation Mono", monospace;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
@@ -973,7 +973,7 @@ function formatRepositorySkillAction(skill) {
     border-radius: 999px;
     background: var(--color-panel);
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   .skill-repository-list-detail-tag {
@@ -985,7 +985,7 @@ function formatRepositorySkillAction(skill) {
     border-radius: 999px;
     background: var(--color-panel);
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 }
 </style>

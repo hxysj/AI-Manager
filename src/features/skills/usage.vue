@@ -222,6 +222,7 @@ import { usageApi } from "@/api"
 import TokenCount from "@/components/TokenCount.vue"
 import { formatTokenCount } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
+import { getFontSize } from "@/utils/typography"
 
 echarts.use([
   LineChart,
@@ -487,24 +488,28 @@ function renderTrendChart() {
   trendChart = trendChart || echarts.init(trendChartRef.value)
   trendChart.setOption(
     {
+      textStyle: { fontSize: getFontSize() },
       color: ["#2f5f91", "#4f8f7b", "#9f6b3d", "#7b6ea8", "#b05c5c"],
       tooltip: {
         trigger: "axis",
         appendToBody: true,
+        textStyle: { fontSize: getFontSize() },
         valueFormatter: (value) => `${formatNumber(value)} 次`
       },
       legend: {
         type: "scroll",
+        pageTextStyle: { fontSize: getFontSize("xs") },
         top: 0,
         right: 8,
         itemWidth: 10,
         itemHeight: 10,
         textStyle: {
           color: "#5f7087",
-          fontSize: 11
+          fontSize: getFontSize("sm")
         }
       },
       grid: {
+        containLabel: true,
         top: 32,
         right: 18,
         bottom: 28,
@@ -515,13 +520,14 @@ function renderTrendChart() {
         data: trendStats.value.map((item) => item.date),
         axisTick: { show: false },
         axisLine: { lineStyle: { color: "#dbe5ed" } },
-        axisLabel: { color: "#5f7087" }
+        axisLabel: { color: "#5f7087", fontSize: getFontSize("sm") }
       },
       yAxis: {
         type: "value",
         splitLine: { lineStyle: { color: "#edf2f8" } },
         axisLabel: {
           color: "#5f7087",
+          fontSize: getFontSize("sm"),
           formatter: (value) => formatCompactNumber(value)
         }
       },
@@ -539,10 +545,12 @@ function renderSkillPie() {
   skillPie = skillPie || echarts.init(skillPieRef.value)
   skillPie.setOption(
     {
+      textStyle: { fontSize: getFontSize() },
       color: ["#2f5f91", "#4f8f7b", "#9f6b3d", "#7b6ea8", "#b05c5c"],
       tooltip: {
         trigger: "item",
         appendToBody: true,
+        textStyle: { fontSize: getFontSize() },
         formatter: (item) => {
           return `${item.name}<br />${formatNumber(item.value)} 次 · ${item.percent}%`
         }
@@ -550,6 +558,7 @@ function renderSkillPie() {
       legend: {
         type: "scroll",
         orient: "vertical",
+        pageTextStyle: { fontSize: getFontSize("xs") },
         right: 0,
         top: 0,
         itemWidth: 10,
@@ -559,7 +568,7 @@ function renderSkillPie() {
         },
         textStyle: {
           color: "#5f7087",
-          fontSize: 11,
+          fontSize: getFontSize("sm"),
           width: 150,
           overflow: "truncate"
         }
@@ -573,6 +582,7 @@ function renderSkillPie() {
           avoidLabelOverlap: true,
           label: {
             color: "#14213a",
+            fontSize: getFontSize("sm"),
             formatter: "{d}%"
           },
           labelLine: {
@@ -690,7 +700,7 @@ function formatUsageItems(items, type) {
   }
 
   :deep(.token-count-exact) {
-    font-size: 0.76em;
+    font-size: var(--font-size-xs);
   }
 
   &__toolbar {
@@ -704,14 +714,14 @@ function formatUsageItems(items, type) {
   &__eyebrow {
     margin: 0 0 5px;
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
   &__toolbar h1 {
     margin: 0;
-    font-size: 1.38rem;
+    font-size: var(--font-size-xl);
     line-height: 1.2;
   }
 
@@ -742,7 +752,7 @@ function formatUsageItems(items, type) {
 
   &__field span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   &__field input,
@@ -755,7 +765,7 @@ function formatUsageItems(items, type) {
     padding: 0 10px;
     color: var(--color-text);
     font: inherit;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &__field :deep(.el-date-editor.el-input__wrapper) {
@@ -773,13 +783,13 @@ function formatUsageItems(items, type) {
 
   &__field :deep(.el-range-input) {
     color: var(--color-text);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &__field :deep(.el-range-separator) {
     flex: none;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__body-shell {
@@ -812,7 +822,7 @@ function formatUsageItems(items, type) {
     border-radius: 8px;
     background: rgba(248, 251, 255, 0.78);
     color: var(--color-primary);
-    font-size: 0.92rem;
+    font-size: var(--font-size-base);
   }
 
   &__loading-icon {
@@ -841,14 +851,14 @@ function formatUsageItems(items, type) {
   &__metric small {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   &__metric [data-emphasis] {
     overflow: hidden;
-    font-size: 1.18rem;
+    font-size: var(--font-size-xl);
     line-height: 1.2;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -881,13 +891,13 @@ function formatUsageItems(items, type) {
 
   &__section-header h2 {
     margin: 0 0 4px;
-    font-size: 0.95rem;
+    font-size: var(--font-size-lg);
     line-height: 1.25;
   }
 
   &__section-header span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   &__chart {
@@ -902,7 +912,7 @@ function formatUsageItems(items, type) {
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &__table {
@@ -928,7 +938,7 @@ function formatUsageItems(items, type) {
     min-height: 42px;
     padding: 0 12px;
     border-bottom: 1px solid var(--color-line);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__table-head {
@@ -967,7 +977,7 @@ function formatUsageItems(items, type) {
 
   &__table-row small {
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     line-height: 1.35;
   }
 
@@ -1010,7 +1020,7 @@ function formatUsageItems(items, type) {
   background: var(--color-panel-soft);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.88rem;
+  font-size: var(--font-size-base);
 
   &:hover {
     border-color: var(--color-line-strong);

@@ -9,7 +9,9 @@
       <div v-if="!messages.length" class="chat-empty">
         <MessagesSquare :size="34" :stroke-width="1.3" />
         <span>从一句话或一个文件开始</span>
-        <small>图片、文件和文字都在这里查看，无需切换页面。</small>
+        <small class="chat-empty-hint"
+          >图片、文件和文字都在这里查看，无需切换页面。</small
+        >
       </div>
       <article
         v-for="message in messages"
@@ -91,7 +93,9 @@
             ><span class="chat-draft-name" :title="item.name">{{
               item.name
             }}</span
-            ><small>{{ formatFileSize(item.size) }}</small></span
+            ><small class="chat-draft-size">{{
+              formatFileSize(item.size)
+            }}</small></span
           >
           <button
             class="chat-icon-button"
@@ -205,7 +209,9 @@
               type="button"
               @click="jumpToMessage(message.id)"
             >
-              <small>{{ formatDateTime(message.createdAt) }}</small
+              <small class="chat-search-time">{{
+                formatDateTime(message.createdAt)
+              }}</small
               ><span>{{
                 message.content ||
                 message.attachments?.map((file) => file.name).join("、") ||
@@ -671,8 +677,12 @@ defineExpose({
       justify-content: center;
       gap: 14px;
       color: var(--color-text-muted);
-      font-size: 13px;
+      font-size: var(--font-size-base);
       text-align: center;
+
+      .chat-empty-hint {
+        font-size: var(--font-size-sm);
+      }
     }
     .chat-message {
       position: relative;
@@ -690,7 +700,7 @@ defineExpose({
         align-items: center;
         gap: 8px;
         color: var(--color-text-muted);
-        font-size: 10px;
+        font-size: var(--font-size-sm);
         .chat-delivery {
           color: var(--color-warning);
         }
@@ -712,7 +722,7 @@ defineExpose({
           white-space: pre-wrap;
           overflow-wrap: anywhere;
           line-height: 1.7;
-          font-size: 13px;
+          font-size: var(--font-size-base);
         }
       }
       .chat-message-actions {
@@ -791,13 +801,16 @@ defineExpose({
           flex-direction: column;
           gap: 4px;
           color: var(--color-text-muted);
-          font-size: 10px;
+          font-size: var(--font-size-sm);
+          .chat-draft-size {
+            font-size: inherit;
+          }
           .chat-draft-name {
             overflow: hidden;
             color: var(--color-text);
             text-overflow: ellipsis;
             white-space: nowrap;
-            font-size: 11px;
+            font-size: var(--font-size-base);
           }
         }
         .chat-icon-button {
@@ -825,7 +838,7 @@ defineExpose({
       background: transparent;
       color: var(--color-text);
       font: inherit;
-      font-size: 13px;
+      font-size: var(--font-size-base);
       line-height: 1.7;
     }
     .chat-composer-footer {
@@ -847,14 +860,14 @@ defineExpose({
           border: 0;
           background: transparent;
           color: var(--color-text-muted);
-          font-size: 12px;
+          font-size: var(--font-size-base);
         }
         .chat-compose-hint {
           overflow: hidden;
           color: var(--color-text-soft);
           text-overflow: ellipsis;
           white-space: nowrap;
-          font-size: 10px;
+          font-size: var(--font-size-sm);
         }
       }
       .chat-send-button {
@@ -868,7 +881,7 @@ defineExpose({
         border-radius: 6px;
         background: var(--color-primary);
         color: var(--color-primary-contrast, #fff);
-        font-size: 12px;
+        font-size: var(--font-size-base);
       }
     }
     .chat-file-input {
@@ -888,7 +901,7 @@ defineExpose({
     justify-content: space-between;
     gap: 6px;
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--font-size-base);
   }
   .chat-search-results {
     min-height: 0;
@@ -912,7 +925,11 @@ defineExpose({
         color: var(--color-text);
         text-align: left;
         overflow-wrap: anywhere;
-        font-size: 12px;
+        font-size: var(--font-size-base);
+
+        .chat-search-time {
+          font-size: var(--font-size-sm);
+        }
       }
     }
     .chat-search-empty {
@@ -920,7 +937,7 @@ defineExpose({
       padding: 24px;
       color: var(--color-text-muted);
       text-align: center;
-      font-size: 12px;
+      font-size: var(--font-size-base);
     }
   }
 }

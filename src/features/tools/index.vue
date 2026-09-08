@@ -271,19 +271,19 @@ onBeforeUnmount(() => emit("detail-change", false))
 .tools-view-list-head h1 {
   margin: 0;
   color: var(--color-text);
-  font-size: 1.34rem;
+  font-size: var(--font-size-xl);
   line-height: 1.2;
 }
 
 .tools-view-list-head span:not([data-emphasis]) {
   color: var(--color-text-muted);
-  font-size: 0.82rem;
+  font-size: var(--font-size-base);
 }
 
 .tools-view-mark {
   margin: 0 0 5px;
   color: var(--color-text-soft);
-  font-size: 0.7rem;
+  font-size: var(--font-size-sm);
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -345,12 +345,12 @@ onBeforeUnmount(() => emit("detail-change", false))
 
 .tools-view-tool-name {
   color: var(--color-text);
-  font-size: 0.92rem;
+  font-size: var(--font-size-lg);
 }
 
 .tools-view-tool-desc {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: var(--font-size-base);
 }
 
 .tools-view-tool-meta {
@@ -360,7 +360,7 @@ onBeforeUnmount(() => emit("detail-change", false))
   border-radius: 999px;
   background: var(--color-panel-soft);
   color: var(--color-text-soft);
-  font-size: 0.78rem;
+  font-size: var(--font-size-base);
 }
 
 .tools-view-detail-page {
@@ -388,7 +388,7 @@ onBeforeUnmount(() => emit("detail-change", false))
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--font-size-base);
   }
 
   .tools-view-back:hover {
@@ -406,13 +406,13 @@ onBeforeUnmount(() => emit("detail-change", false))
 
   .tools-view-detail-name {
     color: var(--color-text);
-    font-size: 0.94rem;
+    font-size: var(--font-size-lg);
   }
 
   .tools-view-detail-summary {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -465,7 +465,7 @@ onBeforeUnmount(() => emit("detail-change", false))
       .tools-view-git-status-label {
         overflow: hidden;
         color: var(--color-text-soft);
-        font-size: 0.72rem;
+        font-size: var(--font-size-sm);
         text-overflow: ellipsis;
         white-space: nowrap;
       }
@@ -474,7 +474,7 @@ onBeforeUnmount(() => emit("detail-change", false))
         min-width: 0;
         overflow: hidden;
         color: var(--color-primary);
-        font-size: 0.84rem;
+        font-size: var(--font-size-base);
         text-align: right;
         text-overflow: ellipsis;
         white-space: nowrap;

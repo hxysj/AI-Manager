@@ -818,7 +818,7 @@ defineExpose({
     border-radius: 999px;
     background: var(--color-success-soft);
     color: var(--color-success);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
   }
 
   &-main [data-emphasis],
@@ -826,7 +826,7 @@ defineExpose({
   &-picker-main [data-emphasis] {
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.95rem;
+    font-size: var(--font-size-lg);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -838,7 +838,7 @@ defineExpose({
   &-picker-main small {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -862,7 +862,7 @@ defineExpose({
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &-pool-button:hover {
@@ -890,7 +890,7 @@ defineExpose({
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &-pool-actions {
@@ -903,7 +903,7 @@ defineExpose({
   &-pool-head [data-emphasis] {
     overflow: hidden;
     color: var(--color-primary);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -989,7 +989,7 @@ defineExpose({
   &-account-model span:not([data-emphasis]) {
     flex: none;
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
   }
 
   &-account-model input {
@@ -1001,7 +1001,7 @@ defineExpose({
     border-radius: 8px;
     background: var(--color-panel);
     color: var(--color-text);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
   }
 
   &-account-model button {
@@ -1013,7 +1013,7 @@ defineExpose({
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-xs);
   }
 
   &-account-model button:disabled {
@@ -1028,7 +1028,7 @@ defineExpose({
     border-radius: 999px;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     text-align: center;
   }
 
@@ -1063,7 +1063,7 @@ defineExpose({
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-xs);
   }
 
   &-remove {
@@ -1078,7 +1078,7 @@ defineExpose({
     border: 1px dashed var(--color-line-strong);
     border-radius: 8px;
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &-picker {
@@ -1110,7 +1110,7 @@ defineExpose({
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &-logs-head div:first-child {
@@ -1126,7 +1126,7 @@ defineExpose({
 
   &-logs-head small {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &-logs-filter {
@@ -1149,7 +1149,7 @@ defineExpose({
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &-logs-filter button:last-child {
@@ -1187,7 +1187,7 @@ defineExpose({
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &-logs-pager div {
@@ -1204,7 +1204,7 @@ defineExpose({
     background: var(--color-panel);
     color: var(--color-text);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &-logs-pager button {
@@ -1218,7 +1218,7 @@ defineExpose({
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &-logs-pager button:disabled {
@@ -1228,7 +1228,7 @@ defineExpose({
 
   &-logs-pager [data-emphasis] {
     color: var(--color-text);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     white-space: nowrap;
   }
 
@@ -1277,12 +1277,12 @@ defineExpose({
   }
 
   &-log-code span:not([data-emphasis]) {
-    font-size: 10px;
+    font-size: var(--font-size-xs);
     line-height: 1;
   }
 
   &-log-code [data-emphasis] {
-    font-size: 15px;
+    font-size: var(--font-size-base);
     line-height: 1.1;
   }
 
@@ -1320,7 +1320,7 @@ defineExpose({
   &-log-title [data-emphasis] {
     min-width: 0;
     color: var(--color-text);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &-log-title span:not([data-emphasis]) {
@@ -1329,12 +1329,12 @@ defineExpose({
     border-radius: 999px;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
   }
 
   &-log-meta span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &-log-meta span:not([data-emphasis]):first-child {
@@ -1350,7 +1350,7 @@ defineExpose({
   &-log-main small {
     padding-top: 1px;
     color: var(--color-danger);
-    font-size: 0.75rem;
+    font-size: var(--font-size-sm);
   }
 
   &-log-status {
@@ -1360,7 +1360,7 @@ defineExpose({
     border-radius: 999px;
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     text-align: center;
   }
 
@@ -1404,12 +1404,12 @@ defineExpose({
 
   &-log-drawer-head [data-emphasis] {
     color: var(--color-text);
-    font-size: 1rem;
+    font-size: var(--font-size-lg);
   }
 
   &-log-drawer-head span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &-log-drawer-close {
@@ -1450,13 +1450,13 @@ defineExpose({
   &-log-detail-row span:not([data-emphasis]),
   &-log-detail-block span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &-log-detail-row [data-emphasis] {
     overflow-wrap: anywhere;
     color: var(--color-text);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &-log-detail-block pre {
@@ -1464,7 +1464,7 @@ defineExpose({
     margin: 0;
     color: var(--color-text);
     font-family: Consolas, "SFMono-Regular", monospace;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-word;

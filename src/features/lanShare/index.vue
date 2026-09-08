@@ -134,7 +134,9 @@
             <div v-if="!visibleDevices.length" class="drop-sidebar-empty">
               <MonitorSmartphone :size="26" :stroke-width="1.4" /><span
                 >等待附近设备</span
-              ><small>两台电脑打开设备快传即可发现彼此，无需打开网页。</small>
+              ><small class="drop-sidebar-empty-hint"
+                >两台电脑打开设备快传即可发现彼此，无需打开网页。</small
+              >
             </div>
           </template>
           <template v-else>
@@ -156,7 +158,9 @@
             </button>
             <div v-if="!visibleGroups.length" class="drop-sidebar-empty">
               <Users :size="26" :stroke-width="1.4" /><span>还没有群聊</span
-              ><small>点击右上角加号创建群聊。</small>
+              ><small class="drop-sidebar-empty-hint"
+                >点击右上角加号创建群聊。</small
+              >
             </div>
           </template>
         </nav>
@@ -1071,14 +1075,14 @@ function isTextPreviewFile(name, mimeType) {
       .drop-title {
         flex: none;
         color: var(--color-text);
-        font-size: 14px;
+        font-size: var(--font-size-lg);
       }
       .drop-local-name {
         overflow: hidden;
         color: var(--color-text-muted);
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: 11px;
+        font-size: var(--font-size-sm);
       }
     }
     .drop-header-actions {
@@ -1091,7 +1095,7 @@ function isTextPreviewFile(name, mimeType) {
         align-items: center;
         gap: 5px;
         color: var(--color-text-muted);
-        font-size: 10px;
+        font-size: var(--font-size-sm);
         .drop-status-dot {
           width: 5px;
           height: 5px;
@@ -1112,7 +1116,7 @@ function isTextPreviewFile(name, mimeType) {
         border-radius: 6px;
         background: var(--color-panel);
         color: var(--color-text);
-        font-size: 11px;
+        font-size: var(--font-size-base);
       }
       .drop-menu-button {
         display: grid;
@@ -1157,7 +1161,7 @@ function isTextPreviewFile(name, mimeType) {
             border-bottom: 2px solid transparent;
             background: transparent;
             color: var(--color-text-muted);
-            font-size: 12px;
+            font-size: var(--font-size-base);
             &.drop-tab-active {
               border-bottom-color: var(--color-primary);
               color: var(--color-primary);
@@ -1194,7 +1198,7 @@ function isTextPreviewFile(name, mimeType) {
           outline: none;
           background: transparent;
           color: var(--color-text);
-          font-size: 11px;
+          font-size: var(--font-size-base);
         }
       }
       .drop-conversations {
@@ -1251,18 +1255,18 @@ function isTextPreviewFile(name, mimeType) {
               overflow: hidden;
               text-overflow: ellipsis;
               white-space: nowrap;
-              font-size: 12px;
+              font-size: var(--font-size-base);
             }
             .drop-device-preview {
               overflow: hidden;
               color: var(--color-text-muted);
               text-overflow: ellipsis;
               white-space: nowrap;
-              font-size: 10px;
+              font-size: var(--font-size-sm);
             }
             .drop-device-address {
               color: var(--color-text-soft);
-              font-size: 9px;
+              font-size: var(--font-size-sm);
             }
           }
         }
@@ -1273,9 +1277,13 @@ function isTextPreviewFile(name, mimeType) {
           gap: 12px;
           padding: 36px 12px;
           color: var(--color-text-muted);
-          font-size: 12px;
+          font-size: var(--font-size-base);
           text-align: center;
           line-height: 1.7;
+
+          .drop-sidebar-empty-hint {
+            font-size: var(--font-size-sm);
+          }
         }
       }
       .drop-sidebar-note {
@@ -1283,7 +1291,7 @@ function isTextPreviewFile(name, mimeType) {
         padding: 12px;
         border-top: 1px solid var(--color-line);
         color: var(--color-text-soft);
-        font-size: 10px;
+        font-size: var(--font-size-sm);
         line-height: 1.7;
       }
     }
@@ -1298,23 +1306,23 @@ function isTextPreviewFile(name, mimeType) {
     flex-direction: column;
     gap: 16px;
     padding-top: 10px;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     .drop-connect-description {
       margin: 0;
       color: var(--color-text-muted);
       line-height: 1.8;
-      font-size: 12px;
+      font-size: var(--font-size-base);
     }
     .drop-connect-hint {
       color: var(--color-text-soft);
-      font-size: 11px;
+      font-size: var(--font-size-sm);
     }
     .drop-pair-code {
       padding: 16px;
       border-radius: 8px;
       background: var(--color-primary-soft);
       color: var(--color-primary);
-      font-size: 28px;
+      font-size: var(--font-size-xl);
       letter-spacing: 6px;
       text-align: center;
     }
@@ -1335,7 +1343,7 @@ function isTextPreviewFile(name, mimeType) {
     flex-direction: column;
     gap: 18px;
     padding-top: 10px;
-    font-size: 13px;
+    font-size: var(--font-size-base);
     .drop-group-field {
       display: flex;
       flex-direction: column;
@@ -1348,7 +1356,7 @@ function isTextPreviewFile(name, mimeType) {
       .drop-group-hint {
         color: var(--color-text-muted);
         line-height: 1.6;
-        font-size: 12px;
+        font-size: var(--font-size-base);
       }
     }
     .drop-group-devices {
@@ -1370,7 +1378,7 @@ function isTextPreviewFile(name, mimeType) {
           gap: 5px;
           .drop-group-device-meta {
             color: var(--color-text-muted);
-            font-size: 11px;
+            font-size: var(--font-size-sm);
           }
         }
       }

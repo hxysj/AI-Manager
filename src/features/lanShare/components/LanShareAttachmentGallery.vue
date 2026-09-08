@@ -201,11 +201,11 @@ watch(currentFile, () => {
         .attachment-document-name {
           color: var(--color-text);
           overflow-wrap: anywhere;
-          font-size: 12px;
+          font-size: var(--font-size-base);
         }
         .attachment-document-hint {
           color: var(--color-text-muted);
-          font-size: 10px;
+          font-size: var(--font-size-sm);
         }
       }
     }
@@ -232,7 +232,7 @@ watch(currentFile, () => {
       }
       .attachment-position {
         color: var(--color-text-muted);
-        font-size: 11px;
+        font-size: var(--font-size-sm);
         font-variant-numeric: tabular-nums;
       }
     }
@@ -256,11 +256,11 @@ watch(currentFile, () => {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: 12px;
+        font-size: var(--font-size-base);
       }
       .attachment-size {
         color: var(--color-text-muted);
-        font-size: 10px;
+        font-size: var(--font-size-sm);
       }
     }
     .attachment-action {

@@ -932,7 +932,7 @@ onBeforeUnmount(() => {
   }
 
   :deep(.token-count-exact) {
-    font-size: 0.7em;
+    font-size: var(--font-size-xs);
   }
 
   .quick-switch-panel-header {
@@ -957,7 +957,7 @@ onBeforeUnmount(() => {
 
     .quick-switch-panel-title-name {
       flex: none;
-      font-size: 13px;
+      font-size: var(--font-size-sm);
       line-height: 1;
     }
 
@@ -965,7 +965,7 @@ onBeforeUnmount(() => {
       overflow: hidden;
       min-width: 0;
       color: var(--color-text-muted);
-      font-size: 12px;
+      font-size: var(--font-size-xs);
       line-height: 1;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -1091,7 +1091,7 @@ onBeforeUnmount(() => {
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--font-size-xs);
   }
 
   .quick-switch-panel-cli-tab-active {
@@ -1136,7 +1136,7 @@ onBeforeUnmount(() => {
       border-radius: 5px;
       background: var(--color-primary-soft);
       color: var(--color-primary);
-      font-size: 10px;
+      font-size: var(--font-size-xs);
     }
 
     .quick-switch-panel-hero-name,
@@ -1147,13 +1147,13 @@ onBeforeUnmount(() => {
     }
 
     .quick-switch-panel-hero-name {
-      font-size: 12px;
+      font-size: var(--font-size-xs);
       line-height: 1.15;
     }
 
     .quick-switch-panel-hero-desc {
       color: var(--color-text-muted);
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       line-height: 1.15;
     }
   }
@@ -1170,7 +1170,7 @@ onBeforeUnmount(() => {
     background: var(--color-primary-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 11px;
+    font-size: var(--font-size-xs);
   }
 
   .quick-switch-panel-manage-button:hover {
@@ -1198,13 +1198,13 @@ onBeforeUnmount(() => {
 
     .quick-switch-panel-metric-label {
       color: var(--color-text-muted);
-      font-size: 10px;
+      font-size: var(--font-size-xs);
     }
 
     .quick-switch-panel-metric-value {
       overflow: hidden;
       color: var(--color-text);
-      font-size: 12px;
+      font-size: var(--font-size-xs);
       line-height: 1.2;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -1239,12 +1239,12 @@ onBeforeUnmount(() => {
 
     .quick-switch-panel-usage-title {
       color: var(--color-text);
-      font-size: 11px;
+      font-size: var(--font-size-xs);
     }
 
     .quick-switch-panel-usage-count {
       color: var(--color-text-muted);
-      font-size: 10px;
+      font-size: var(--font-size-xs);
     }
   }
 
@@ -1278,7 +1278,7 @@ onBeforeUnmount(() => {
     .quick-switch-panel-bar-label {
       overflow: hidden;
       color: var(--color-text-muted);
-      font-size: 9px;
+      font-size: var(--font-size-xs);
       line-height: 1;
       text-align: center;
       text-overflow: ellipsis;
@@ -1309,7 +1309,7 @@ onBeforeUnmount(() => {
     .quick-switch-panel-provider-name,
     .quick-switch-panel-provider-cost {
       overflow: hidden;
-      font-size: 10px;
+      font-size: var(--font-size-xs);
       line-height: 1.2;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -1377,13 +1377,13 @@ onBeforeUnmount(() => {
 
     .quick-switch-panel-manager-title {
       color: var(--color-text);
-      font-size: 12px;
+      font-size: var(--font-size-xs);
       line-height: 1.2;
     }
 
     .quick-switch-panel-manager-desc {
       color: var(--color-text-muted);
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       line-height: 1.2;
     }
   }
@@ -1440,13 +1440,13 @@ onBeforeUnmount(() => {
     }
 
     .quick-switch-panel-item-title {
-      font-size: 13px;
+      font-size: var(--font-size-sm);
       line-height: 1.25;
     }
 
     .quick-switch-panel-item-desc {
       color: var(--color-text-muted);
-      font-size: 12px;
+      font-size: var(--font-size-xs);
     }
   }
 
@@ -1488,7 +1488,7 @@ onBeforeUnmount(() => {
     background: var(--color-primary-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 12px;
+    font-size: var(--font-size-xs);
   }
 
   .quick-switch-panel-item-action:hover {
@@ -1531,13 +1531,13 @@ onBeforeUnmount(() => {
     border-radius: 5px;
     background: var(--color-primary-soft);
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--font-size-xs);
     line-height: 18px;
     white-space: nowrap;
 
     .quick-switch-panel-quota-value {
       color: var(--color-primary);
-      font-size: 11px;
+      font-size: var(--font-size-xs);
       line-height: 18px;
     }
   }

@@ -357,12 +357,12 @@ function toggleSelectAllFiles() {
 
       .lan-share-files-name {
         color: var(--color-text);
-        font-size: 0.9rem;
+        font-size: var(--font-size-lg);
       }
 
       .lan-share-files-subtitle {
         color: var(--color-text-muted);
-        font-size: 0.76rem;
+        font-size: var(--font-size-base);
       }
     }
 
@@ -384,7 +384,7 @@ function toggleSelectAllFiles() {
         background: var(--color-panel);
         color: var(--color-primary);
         cursor: pointer;
-        font-size: 0.76rem;
+        font-size: var(--font-size-base);
       }
 
       .lan-share-files-mini-button:disabled {
@@ -475,12 +475,12 @@ function toggleSelectAllFiles() {
 
         .lan-share-files-file-name {
           color: var(--color-text);
-          font-size: 0.84rem;
+          font-size: var(--font-size-base);
         }
 
         .lan-share-files-meta {
           color: var(--color-text-muted);
-          font-size: 0.72rem;
+          font-size: var(--font-size-sm);
         }
       }
 
@@ -524,7 +524,7 @@ function toggleSelectAllFiles() {
       border: 1px dashed var(--color-line);
       border-radius: 8px;
       color: var(--color-text-muted);
-      font-size: 0.82rem;
+      font-size: var(--font-size-base);
     }
   }
 }

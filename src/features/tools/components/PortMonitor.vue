@@ -389,7 +389,7 @@ onUnmounted(() => {
       .port-monitor-mark {
         margin: 0;
         color: var(--color-text-soft);
-        font-size: 0.7rem;
+        font-size: var(--font-size-sm);
         letter-spacing: 0;
         text-transform: uppercase;
       }
@@ -402,13 +402,13 @@ onUnmounted(() => {
         .port-monitor-title-text {
           margin: 0;
           color: var(--color-text);
-          font-size: 1.08rem;
+          font-size: var(--font-size-lg);
           line-height: 1.25;
         }
 
         .port-monitor-summary {
           color: var(--color-text-muted);
-          font-size: 0.77rem;
+          font-size: var(--font-size-base);
         }
       }
     }
@@ -425,7 +425,7 @@ onUnmounted(() => {
         gap: 7px;
         color: var(--color-text-muted);
         cursor: pointer;
-        font-size: 0.76rem;
+        font-size: var(--font-size-base);
 
         .port-monitor-auto-refresh-input {
           position: absolute;
@@ -532,7 +532,7 @@ onUnmounted(() => {
         border-radius: 6px;
         background: var(--color-panel);
         color: var(--color-text);
-        font-size: 0.78rem;
+        font-size: var(--font-size-base);
       }
 
       .port-monitor-search-input::placeholder {
@@ -580,11 +580,11 @@ onUnmounted(() => {
         background: transparent;
         color: var(--color-text-muted);
         cursor: pointer;
-        font-size: 0.72rem;
+        font-size: var(--font-size-base);
 
         .port-monitor-protocol-count {
           color: var(--color-text-soft);
-          font-size: 0.68rem;
+          font-size: var(--font-size-sm);
         }
       }
 
@@ -605,7 +605,7 @@ onUnmounted(() => {
       gap: 5px;
       padding-right: 7px;
       color: var(--color-text-soft);
-      font-size: 0.71rem;
+      font-size: var(--font-size-sm);
       white-space: nowrap;
     }
   }
@@ -632,13 +632,13 @@ onUnmounted(() => {
 
       .port-monitor-state-title {
         color: var(--color-text);
-        font-size: 0.88rem;
+        font-size: var(--font-size-lg);
       }
 
       .port-monitor-state-text {
         max-width: 560px;
         color: var(--color-text-muted);
-        font-size: 0.78rem;
+        font-size: var(--font-size-base);
         line-height: 1.55;
         text-align: center;
       }
@@ -652,7 +652,7 @@ onUnmounted(() => {
         background: var(--color-primary-solid);
         color: #ffffff;
         cursor: pointer;
-        font-size: 0.76rem;
+        font-size: var(--font-size-base);
       }
     }
 
@@ -706,7 +706,7 @@ onUnmounted(() => {
             padding: 0 12px;
             border-bottom: 1px solid var(--color-line);
             color: var(--color-text-soft);
-            font-size: 0.69rem;
+            font-size: var(--font-size-base);
             text-align: left;
             white-space: nowrap;
           }
@@ -725,7 +725,7 @@ onUnmounted(() => {
               padding: 8px 12px;
               border-bottom: 1px solid var(--color-line);
               color: var(--color-text-muted);
-              font-size: 0.76rem;
+              font-size: var(--font-size-base);
               vertical-align: middle;
 
               .port-monitor-process {
@@ -760,7 +760,7 @@ onUnmounted(() => {
                   .port-monitor-process-name {
                     overflow: hidden;
                     color: var(--color-text);
-                    font-size: 0.79rem;
+                    font-size: var(--font-size-base);
                     text-overflow: ellipsis;
                     white-space: nowrap;
                   }
@@ -769,7 +769,7 @@ onUnmounted(() => {
                   .port-monitor-protected-reason {
                     overflow: hidden;
                     color: var(--color-text-soft);
-                    font-size: 0.68rem;
+                    font-size: var(--font-size-sm);
                     text-overflow: ellipsis;
                     white-space: nowrap;
                   }
@@ -785,13 +785,13 @@ onUnmounted(() => {
                 .port-monitor-port {
                   color: var(--color-text);
                   font-family: Consolas, "SFMono-Regular", monospace;
-                  font-size: 0.83rem;
+                  font-size: var(--font-size-base);
                 }
 
                 .port-monitor-address {
                   overflow: hidden;
                   color: var(--color-text-soft);
-                  font-size: 0.68rem;
+                  font-size: var(--font-size-sm);
                   text-overflow: ellipsis;
                   white-space: nowrap;
                 }
@@ -807,7 +807,7 @@ onUnmounted(() => {
                 border-radius: 5px;
                 background: var(--color-primary-soft);
                 color: var(--color-primary);
-                font-size: 0.67rem;
+                font-size: var(--font-size-sm);
               }
 
               .port-monitor-protocol.udp {
@@ -819,7 +819,7 @@ onUnmounted(() => {
               .port-monitor-pid {
                 font-family: Consolas, "SFMono-Regular", monospace;
                 color: var(--color-text);
-                font-size: 0.75rem;
+                font-size: var(--font-size-base);
               }
 
               .port-monitor-path {
@@ -829,7 +829,7 @@ onUnmounted(() => {
                 overflow: hidden;
                 color: var(--color-text-muted);
                 font-family: Consolas, "SFMono-Regular", monospace;
-                font-size: 0.69rem;
+                font-size: var(--font-size-sm);
                 text-overflow: ellipsis;
                 white-space: nowrap;
               }

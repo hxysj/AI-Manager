@@ -178,20 +178,20 @@ function formatSize(value) {
 
         .lan-share-preview-mark {
           color: var(--color-text-soft);
-          font-size: 0.72rem;
+          font-size: var(--font-size-sm);
         }
 
         .lan-share-preview-heading {
           overflow: hidden;
           color: var(--color-primary);
-          font-size: 1rem;
+          font-size: var(--font-size-lg);
           text-overflow: ellipsis;
           white-space: nowrap;
         }
 
         .lan-share-preview-meta {
           color: var(--color-text-muted);
-          font-size: 0.76rem;
+          font-size: var(--font-size-base);
         }
       }
 
@@ -244,7 +244,7 @@ function formatSize(value) {
         padding: 16px 18px;
         color: var(--color-text);
         font-family: "JetBrains Mono", "Consolas", monospace;
-        font-size: 0.78rem;
+        font-size: var(--font-size-base);
         line-height: 1.6;
         white-space: pre-wrap;
         word-break: break-word;
@@ -257,7 +257,7 @@ function formatSize(value) {
         justify-content: center;
         padding: 24px;
         color: var(--color-text-muted);
-        font-size: 0.86rem;
+        font-size: var(--font-size-base);
       }
     }
 

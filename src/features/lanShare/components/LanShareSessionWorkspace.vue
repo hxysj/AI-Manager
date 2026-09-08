@@ -395,14 +395,14 @@ function deleteGroup() {
           color: var(--color-text);
           text-overflow: ellipsis;
           white-space: nowrap;
-          font-size: 13px;
+          font-size: var(--font-size-lg);
         }
         .workspace-subtitle {
           overflow: hidden;
           color: var(--color-text-muted);
           text-overflow: ellipsis;
           white-space: nowrap;
-          font-size: 10px;
+          font-size: var(--font-size-sm);
         }
       }
     }
@@ -445,7 +445,7 @@ function deleteGroup() {
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
-    font-size: 11px;
+    font-size: var(--font-size-sm);
   }
   .workspace-history-list {
     min-height: 0;
@@ -480,7 +480,7 @@ function deleteGroup() {
             display: block;
             margin-top: 5px;
             color: var(--color-text-muted);
-            font-size: 10px;
+            font-size: var(--font-size-sm);
           }
         }
       }
@@ -502,7 +502,7 @@ function deleteGroup() {
     flex-direction: column;
     gap: 8px;
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--font-size-base);
   }
   .workspace-group-invite {
     display: flex;
@@ -512,7 +512,7 @@ function deleteGroup() {
     padding: 16px;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    font-size: 12px;
+    font-size: var(--font-size-base);
     .workspace-group-qr {
       width: 160px;
       padding: 8px;
@@ -528,7 +528,7 @@ function deleteGroup() {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    font-size: 12px;
+    font-size: var(--font-size-base);
     .workspace-group-member {
       display: flex;
       align-items: center;
