@@ -1782,19 +1782,52 @@ fn toml_literal(value: &Value) -> String {
 }
 
 pub(crate) fn get_provider_api_key(paths: &AppPaths, provider_id: &str) -> Result<String, ManagerError> {
+    get_provider_api_key_with_id(paths, provider_id).map(|(_, key)| key)
+}
+
+pub(crate) fn get_provider_api_key_with_id(
+    paths: &AppPaths,
+    provider_id: &str,
+) -> Result<(String, String), ManagerError> {
     let keys = provider_store::read_keys(paths)?;
     let value = keys.get(provider_id);
     let records = provider_key_records(value);
     let active_key_id = active_provider_key_id(value, &records);
 
-    Ok(records
+    let key = records
         .iter()
         .find(|item| string_value(item.get("id")) == active_key_id)
         .and_then(|item| item.get("value"))
         .and_then(Value::as_str)
         .map(decrypt_provider_key)
         .transpose()?
-        .unwrap_or_default())
+        .unwrap_or_default();
+    Ok((active_key_id, key))
+}
+
+pub fn read_provider_key_usage(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
+    let provider_id = string_value(payload.get("providerId"));
+    if provider_id.is_empty() {
+        return Err(ManagerError::System("缺少供应商 ID".to_string()));
+    }
+    let storage_id = if payload["cli"] == "claude-desktop" {
+        format!("claude-desktop:{provider_id}")
+    } else {
+        provider_id
+    };
+    let keys = provider_store::read_keys(paths)?;
+    let records = provider_key_records(keys.get(&storage_id));
+    let active_key_id = active_provider_key_id(keys.get(&storage_id), &records);
+    let mut usage = Map::new();
+    for record in records {
+        let key_id = string_value(record.get("id"));
+        let key = decrypt_provider_key(&string_value(record.get("value")))?;
+        usage.insert(
+            key_id.clone(),
+            crate::core::provider_key_usage::read(paths, &storage_id, &key_id, &key)?,
+        );
+    }
+    Ok(json!({"keys": usage, "activeApiKeyId": active_key_id}))
 }
 
 fn create_template_values(provider: &Value, profile: &Value, api_key: &str) -> Map<String, Value> {

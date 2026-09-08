@@ -1,6 +1,7 @@
 pub mod database;
 pub mod error;
 pub mod paths;
+pub mod provider_key_usage;
 pub mod provider_store;
 pub mod rule_store;
 pub mod settings;

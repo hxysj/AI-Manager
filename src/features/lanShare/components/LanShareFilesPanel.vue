@@ -74,7 +74,11 @@
           <FileText :size="16" />
         </span>
         <div class="lan-share-files-main">
-          <span data-emphasis class="lan-share-files-file-name" :title="file.name">
+          <span
+            data-emphasis
+            class="lan-share-files-file-name"
+            :title="file.name"
+          >
             {{ file.name }}
           </span>
           <span class="lan-share-files-meta" :title="file.path">
@@ -112,7 +116,14 @@
 
 <script setup>
 import { computed, ref, watch } from "vue"
-import { Archive, Eye, FileText, Plus, RefreshCw, Trash2 } from "lucide-vue-next"
+import {
+  Archive,
+  Eye,
+  FileText,
+  Plus,
+  RefreshCw,
+  Trash2
+} from "lucide-vue-next"
 import { lanShareApi, systemApi } from "@/api"
 import { formatDateTime } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"

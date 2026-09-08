@@ -1507,93 +1507,22 @@
       </footer>
     </BaseModal>
 
-    <BaseModal
+    <ApiKeyManagerModal
       v-if="showApiKeyManager"
-      class="providers-view__api-key-modal"
-      title="API Key 管理"
+      :provider="apiKeyManagerProvider"
+      :draft="apiKeyManagerDraft"
+      :usage="apiKeyUsage"
+      :usage-loading="apiKeyUsageLoading"
+      :usage-error="apiKeyUsageError"
+      :busy="pending || desktopBusy"
       @close="closeApiKeyManager"
-    >
-      <section class="providers-view__api-key-manager">
-        <header class="providers-view__api-key-manager-header">
-          <span data-emphasis>{{
-            apiKeyManagerProvider?.name || "Provider"
-          }}</span>
-          <span>仅当前生效的 Key 会被运行时使用。</span>
-        </header>
-        <div class="providers-view__api-key-list">
-          <div
-            v-for="(item, index) in apiKeyManagerDraft.apiKeys"
-            :key="item.id"
-            class="providers-view__api-key-item"
-          >
-            <div class="providers-view__api-key-meta">
-              <input
-                v-model.trim="item.name"
-                class="providers-view__api-key-name"
-                type="text"
-                placeholder="Key 名称"
-              />
-              <button
-                type="button"
-                :class="{
-                  'providers-view__api-key-active':
-                    apiKeyManagerDraft.activeApiKeyId === item.id
-                }"
-                @click="activateApiKey(item.id, apiKeyManagerDraft)"
-              >
-                {{
-                  apiKeyManagerDraft.activeApiKeyId === item.id
-                    ? "当前生效"
-                    : "设为生效"
-                }}
-              </button>
-              <button
-                type="button"
-                title="删除 API Key"
-                aria-label="删除 API Key"
-                @click="removeApiKey(index, apiKeyManagerDraft)"
-              >
-                <Trash2 :size="14" />
-              </button>
-            </div>
-            <input
-              v-model.trim="item.note"
-              class="providers-view__api-key-note"
-              type="text"
-              placeholder="备注信息，例如：生产环境 / 备用额度"
-            />
-            <el-input
-              v-model="item.apiKey"
-              type="password"
-              show-password
-              :placeholder="
-                item.masked ? `${item.masked}，留空则保持不变` : '输入 API Key'
-              "
-            />
-          </div>
-        </div>
-        <button
-          class="providers-view__api-key-add"
-          type="button"
-          @click="addApiKey(apiKeyManagerDraft)"
-        >
-          <Plus :size="15" />
-          添加 API Key
-        </button>
-        <footer class="providers-view__api-key-manager-footer">
-          <button type="button" @click="closeApiKeyManager">取消</button>
-          <button
-            class="providers-view__primary"
-            type="button"
-            :disabled="pending || desktopBusy"
-            @click="saveApiKeyManager"
-          >
-            <Save :size="16" />
-            保存并应用
-          </button>
-        </footer>
-      </section>
-    </BaseModal>
+      @save="saveApiKeyManager"
+      @add="addApiKey(apiKeyManagerDraft)"
+      @remove="index => removeApiKey(index, apiKeyManagerDraft)"
+      @activate="id => activateApiKey(id, apiKeyManagerDraft)"
+      @update-key="updateApiKeyManagerItem"
+      @refresh="refreshApiKeyUsage"
+    />
 
     <BaseModal
       v-if="showCodexCreateOptions"
@@ -2581,10 +2510,11 @@ import {
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
 import ClaudeDesktopPanel from "./components/ClaudeDesktopPanel.vue"
+import ApiKeyManagerModal from "./components/ApiKeyManagerModal.vue"
 import TokenCount from "@/components/TokenCount.vue"
 import CodexProxyPanel from "@/features/providers/components/CodexProxyPanel.vue"
 import { accountApi, runtimeApi, systemApi, usageApi } from "@/api"
-import { claudeDesktopApi } from "@/api/modules/providers"
+import { claudeDesktopApi, providerApi } from "@/api/modules/providers"
 import { formatTokenCount } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
@@ -2784,6 +2714,11 @@ const showDisabledItems = ref(false)
 const providerDetail = ref(null)
 const providerDetailTab = ref("config")
 const apiKeyManagerProvider = ref(null)
+const apiKeyUsage = ref({})
+const apiKeyUsageLoading = ref(false)
+const apiKeyUsageError = ref("")
+let apiKeyUsageTimer = null
+let apiKeyUsageRequest = 0
 const apiKeyManagerDraft = reactive({
   providerId: "",
   apiKey: "",
@@ -3180,6 +3115,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.clearInterval(countdownTimer)
+  window.clearInterval(apiKeyUsageTimer)
+  apiKeyUsageRequest += 1
 
   if (runtimeDiffEditor) {
     runtimeDiffEditor.dispose()
@@ -3471,6 +3408,41 @@ function closeProviderDetail() {
   showProviderDrawer.value = false
   providerDetail.value = null
   providerDetailTab.value = "config"
+}
+
+watch(showApiKeyManager, visible => {
+  window.clearInterval(apiKeyUsageTimer)
+  apiKeyUsageRequest += 1
+  apiKeyUsage.value = {}
+  apiKeyUsageError.value = ""
+  apiKeyUsageLoading.value = false
+  if (visible) {
+    refreshApiKeyUsage()
+    apiKeyUsageTimer = window.setInterval(() => {
+      if (!apiKeyUsageLoading.value) refreshApiKeyUsage()
+    }, 5000)
+  }
+})
+
+async function refreshApiKeyUsage() {
+  const provider = apiKeyManagerProvider.value
+  if (!showApiKeyManager.value || !provider) return
+  const requestId = ++apiKeyUsageRequest
+  apiKeyUsageLoading.value = true
+  apiKeyUsageError.value = ""
+  try {
+    const result = await providerApi.getKeyUsage({ providerId: provider.id, cli: provider.cli })
+    if (requestId === apiKeyUsageRequest) apiKeyUsage.value = result.keys || {}
+  } catch (error) {
+    if (requestId === apiKeyUsageRequest) apiKeyUsageError.value = `统计刷新失败：${error?.message || error}`
+  } finally {
+    if (requestId === apiKeyUsageRequest) apiKeyUsageLoading.value = false
+  }
+}
+
+function updateApiKeyManagerItem(id, patch) {
+  const item = apiKeyManagerDraft.apiKeys.find(key => key.id === id)
+  if (item) Object.assign(item, patch)
 }
 
 function openApiKeyManager(provider) {
@@ -5842,47 +5814,6 @@ watch(
     color: var(--color-text);
   }
 
-  &__api-key-manager {
-    display: flex;
-    width: 100%;
-    min-width: 0;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 14px;
-  }
-
-  &__api-key-modal {
-    :deep(.base-modal__panel) {
-      width: min(680px, calc(100vw - 48px));
-    }
-
-    :deep(.base-modal__content) {
-      overflow: hidden;
-    }
-
-    .providers-view__api-key-list {
-      min-height: 0;
-      flex: 1;
-      overflow-y: auto;
-      padding-right: 4px;
-    }
-  }
-
-  &__api-key-manager-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-    color: var(--color-text-muted);
-    font-size: 0.82rem;
-  }
-
-  &__api-key-manager-header [data-emphasis] {
-    color: var(--color-text);
-    font-size: 1rem;
-  }
-
   &__api-key-add {
     display: inline-flex;
     width: fit-content;
@@ -5896,23 +5827,6 @@ watch(
     color: var(--color-primary);
     cursor: pointer;
     font-size: 0.82rem;
-  }
-
-  &__api-key-manager-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    padding-top: 4px;
-  }
-
-  &__api-key-manager-footer > button {
-    min-height: 36px;
-    padding: 0 14px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
-    cursor: pointer;
   }
 
   &__api-key-meta button.providers-view__api-key-active {

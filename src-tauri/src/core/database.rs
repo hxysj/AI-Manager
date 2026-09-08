@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 
 // 仅跨设备恢复的业务数据进入备份，其他表只保留结构。
-const BACKUP_INCLUDED_TABLES: [&str; 8] = [
+const BACKUP_INCLUDED_TABLES: [&str; 10] = [
     "providers",
     "claude_desktop_providers",
     "provider_models",
@@ -15,6 +15,8 @@ const BACKUP_INCLUDED_TABLES: [&str; 8] = [
     "skill_groups",
     "skill_repositories",
     "rule_prompts",
+    "usage_pricing_config",
+    "usage_pricing_items",
 ];
 
 #[derive(Debug, PartialEq, Eq)]

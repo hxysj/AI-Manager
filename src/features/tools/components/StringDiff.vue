@@ -151,7 +151,9 @@
           :key="metric.label"
           class="string-diff-metric"
         >
-          <span data-emphasis class="string-diff-metric-value">{{ metric.value }}</span>
+          <span data-emphasis class="string-diff-metric-value">{{
+            metric.value
+          }}</span>
           <span class="string-diff-metric-label">{{ metric.label }}</span>
         </article>
       </div>
@@ -1055,11 +1057,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
       margin: 7px 0;
       border: 1px solid var(--color-line-strong);
       border-radius: 7px;
-      background: color-mix(
-        in srgb,
-        var(--color-panel-soft) 88%,
-        transparent
-      );
+      background: color-mix(in srgb, var(--color-panel-soft) 88%, transparent);
 
       .string-diff-navigation-dot {
         position: absolute;

@@ -1,5 +1,6 @@
 use crate::api::{proxy, runtime_provider};
 use crate::core::{error::ManagerError, paths::AppPaths, provider_store, usage_store};
+use crate::core::provider_key_usage::KeyRequest;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use http_body_util::{combinators::UnsyncBoxBody, BodyExt, Full, Limited, StreamBody};
@@ -1121,12 +1122,18 @@ async fn handle_gateway(
     let started = std::time::Instant::now();
     let mut log = json!({"method": request.method().as_str(), "endpoint": request.uri().path(),
         "requestUrl": request.uri().path(), "requestSource": "proxy-managed", "targetType": "provider"});
-    let response = match process_gateway(request, &paths, &mut log).await {
+    let mut key_request = None;
+    let response = match process_gateway(request, &paths, &mut log, &mut key_request).await {
         Ok(response) => response,
-        Err(_) => gateway_error(
-            StatusCode::BAD_GATEWAY,
-            "Desktop 上游请求失败，请检查供应商地址、凭据和网络连接",
-        ),
+        Err(_) => {
+            if let Some(tracking) = &mut key_request {
+                tracking.fail("network");
+            }
+            gateway_error(
+                StatusCode::BAD_GATEWAY,
+                "Desktop 上游请求失败，请检查供应商地址、凭据和网络连接",
+            )
+        }
     };
     log["statusCode"] = json!(response.status().as_u16());
     log["ok"] = json!(response.status().is_success());
@@ -1134,12 +1141,49 @@ async fn handle_gateway(
     if !response.status().is_success() {
         log["errorMessage"] = json!(format!("Desktop 网关请求失败：HTTP {}", response.status().as_u16()));
     }
+    let response = track_gateway_key(response, key_request);
     let response = track_gateway_provider(response, paths.clone(), &log);
     let _guard = REQUEST_LOG_LOCK.lock().await;
     if proxy::append_log(&paths, "claude-desktop", log).await.is_err() {
         eprintln!("Desktop 请求记录写入失败，请检查数据目录权限");
     }
     Ok(response)
+}
+
+fn track_gateway_key(
+    response: Response<GatewayBody>,
+    key_request: Option<KeyRequest>,
+) -> Response<GatewayBody> {
+    let Some(mut tracking) = key_request else {
+        return response;
+    };
+    let streaming = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/event-stream"));
+    tracking.response(response.status().as_u16(), streaming);
+    let (parts, body) = response.into_parts();
+    let stream = futures_util::stream::unfold(
+        (body.into_data_stream(), tracking),
+        |(mut body, mut tracking)| async move {
+            match body.next().await {
+                Some(Ok(bytes)) => {
+                    tracking.observe(&bytes);
+                    Some((Ok(Frame::data(bytes)), (body, tracking)))
+                }
+                Some(Err(cause)) => {
+                    tracking.fail("stream");
+                    Some((Err(cause), (body, tracking)))
+                }
+                None => {
+                    tracking.finish();
+                    None
+                }
+            }
+        },
+    );
+    Response::from_parts(parts, StreamBody::new(Box::pin(stream)).boxed_unsync())
 }
 
 fn track_gateway_provider(
@@ -1160,6 +1204,7 @@ fn track_gateway_provider(
         .is_some_and(|value| value.contains("text/event-stream"));
     let mut record = json!({
         "appType": "claude-desktop", "providerId": log["providerId"],
+        "apiKeyId": log["apiKeyId"],
         "providerName": log["providerName"], "providerType": log["providerType"],
         "model": log["model"], "requestModel": log["requestModel"],
         "requestSource": "proxy-managed", "createdAt": chrono::Utc::now().timestamp_millis()
@@ -1217,6 +1262,7 @@ async fn process_gateway(
     request: Request<Incoming>,
     paths: &AppPaths,
     log: &mut Value,
+    key_request: &mut Option<KeyRequest>,
 ) -> Result<Response<GatewayBody>, ManagerError> {
     let data = DesktopData::load(paths)?;
     let token = data.gateway_token()?;
@@ -1317,6 +1363,12 @@ async fn process_gateway(
     log["model"] = mapping["model"].clone();
     log["streaming"] = json!(payload["stream"] == true);
     payload["model"] = mapping["model"].clone();
+    let storage_id = format!("claude-desktop:{}", data.current_id());
+    let stored = data.keys.get(&storage_id);
+    let key_id = runtime_provider::active_provider_key_id(stored, &runtime_provider::provider_key_records(stored));
+    let key = data.key(data.current_id())?;
+    log["apiKeyId"] = json!(key_id);
+    *key_request = Some(KeyRequest::new(paths, &storage_id, &key_id, &key));
     if ["openai_chat", "openai_responses"].contains(&text(provider, "apiFormat")) {
         if endpoint != "/messages" {
             return Ok(gateway_error(
@@ -1326,8 +1378,9 @@ async fn process_gateway(
         }
         return protocol::forward(
             provider,
-            &data.key(data.current_id())?,
+            &key,
             payload,
+            key_request,
         )
         .await;
     }
@@ -1382,7 +1435,6 @@ async fn process_gateway(
             headers.insert(name, value);
         }
     }
-    let key = data.key(data.current_id())?;
     if key.is_empty() {
         return Ok(gateway_error(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -1406,10 +1458,14 @@ async fn process_gateway(
         "accept-encoding",
         reqwest::header::HeaderValue::from_static("identity"),
     );
-    let upstream = proxy::http_client(text(provider, "proxy"))?
+    let outgoing = proxy::http_client(text(provider, "proxy"))?
         .post(upstream)
         .headers(headers)
-        .json(&payload)
+        .json(&payload);
+    if let Some(tracking) = key_request {
+        tracking.start();
+    }
+    let upstream = outgoing
         .send()
         .await
         .map_err(|cause| error(&cause.to_string()))?;
@@ -2366,7 +2422,13 @@ mod tests {
                 stream.next().await.unwrap().unwrap(),
                 Bytes::from_static(b"data: 1\n\n")
             );
+            assert!(stream.next().await.is_none());
             drop(stream);
+            let key_usage = runtime_provider::read_provider_key_usage(&fixture.paths, &json!({"providerId": "example", "cli": "claude-desktop"})).unwrap();
+            let key_id = key_usage["activeApiKeyId"].as_str().unwrap();
+            assert_eq!(key_usage["keys"][key_id]["requestCount"], 1);
+            assert_eq!(key_usage["keys"][key_id]["successCount"], 1);
+            assert_eq!(key_usage["keys"][key_id]["inFlightCount"], 0);
             let logs = proxy::read_logs(&fixture.paths, "claude-desktop").unwrap();
             assert_eq!(logs.as_array().unwrap().len(), 5);
             assert_eq!(logs[0]["requestModel"], "claude-opus-4-8");

@@ -229,6 +229,10 @@ D:\ai-manager-data\
 
 在列表中点击钥匙图标可以随时打开 `API Key 管理`。删除当前生效 Key 后，应用会自动选择剩余的第一个 Key；修改已启用 Provider 的生效 Key 时会同步 CLI 配置。
 
+`API Key 管理` 按每个已保存的 Key 显示请求次数、成功数、失败数、失败率、连续失败、进行中请求和最近请求/失败时间，每 5 秒刷新，也可手动刷新。失败率按已完成请求计算；鉴权失败、限流、上游错误、网络失败、流中断、HTTP 200 中的错误事件和请求取消均会记录。改名或切换生效 Key 不串统计，替换实际密钥后独立统计；故障转移按每次尝试实际使用的 Key 归属。
+
+统计覆盖 Claude Code/Codex 本地代理、供应商实例代理、Claude Desktop 本地网关（包括 OpenAI 协议转换）和本项目内置 JSON Agent 请求。直连 CLI、Desktop 直连和官方账号不计入，历史请求不按当前 Key 推测归属。统计仅保存在本机主数据库，不新增密钥明文或请求/响应正文存储，也不进入云备份或本地导出。
+
 ### Codex 官方账号
 
 进入 `Providers > Codex`，选择官方账号登录或导入现有 `auth.json`。官方账号使用 OAuth / `auth.json` 认证，不显示 API Key 管理入口。启用官方账号前请确认是否需要关闭当前 Codex Proxy 接管。
@@ -275,7 +279,11 @@ Data 目录属于启动配置，保存后需要重启 Monkey Thief。重启前�
 
 ### 备份会包含 Usage、Session 和请求日志吗？
 
-不会。备份包含 Provider、模型、加密 Key、Codex 官方账号、Skills、Rules 和云同步设置；Usage、Sessions、代理请求日志、Git 归档、缓存和设备运行状态不会进入备份。
+不会。云备份只包含 Skills、Provider（含 Desktop 供应商、模型和加密 Key）、Codex 官方账号、Rules、模型费用表及 Codex 宠物。模型费用表包含单价和汇率，不包含用量记录；Sessions、代理请求日志、Git 归档、设备运行状态和云服务连接设置不上传。
+
+云端打包 Skills 时保留定义、脚本、静态数据和资源，排除 Git 元数据、依赖目录、缓存、临时文件，以及 `data/work-history`、运行日志和历史备份等已知运行产物；不会整体排除 `data/` 或 `memory/`，避免丢失静态资源和 Skill 规则。宠物只上传运行必需的 `pet.json`、`spritesheet.webp`，不上传旧图、预览视频或制作中间文件，也不上传本机挂载链接。
+
+新云备份先 Gzip 压缩再加密，恢复兼容旧的未压缩备份；压缩前的数据上限为 1 GiB。手动导出和本地自动备份仍保留 Skill 文件、宠物目录及云同步设置，并补齐模型费用表。这些过滤只影响上传内容，不删除本机文件；更新后需重新上传，已有云备份不会自动变小。
 
 ### 为什么只运行 `npm run dev:renderer` 时部分功能不可用？
 
@@ -298,7 +306,7 @@ Data 目录属于启动配置，保存后需要重启 Monkey Thief。重启前�
 规划方向：
 
 - [ ] Provider 连通性、延迟和模型可用性检测
-- [ ] API Key 使用状态与失败统计
+- [x] API Key 使用状态与失败统计（逐 Key 归属）
 - [ ] 更细粒度的备份选择和恢复策略
 - [ ] Gemini CLI 集成
 - [ ] macOS 与 Linux 的构建和兼容性验证
