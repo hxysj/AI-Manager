@@ -113,18 +113,18 @@ async function selectLocalDirectory() {
   }
 
   :deep(.base-modal__header h2) {
-    font-size: 1.12rem;
+    font-size: var(--font-size-lg);
   }
 
   :deep(.base-modal__header p) {
     margin-top: 5px;
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   :deep(.base-modal__close) {
     width: 32px;
     height: 32px;
-    font-size: 1.1rem;
+    font-size: var(--font-size-lg);
   }
 }
 
@@ -141,7 +141,7 @@ async function selectLocalDirectory() {
 
   & span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   & input,
@@ -153,7 +153,7 @@ async function selectLocalDirectory() {
     border-radius: 7px;
     background: var(--color-panel);
     color: var(--color-text);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &__grid {
@@ -182,7 +182,7 @@ async function selectLocalDirectory() {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     white-space: nowrap;
   }
 
@@ -210,7 +210,7 @@ async function selectLocalDirectory() {
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.84rem;
+  font-size: var(--font-size-base);
 
   &--primary {
     border-color: var(--color-primary);

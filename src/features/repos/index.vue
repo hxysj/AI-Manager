@@ -126,14 +126,14 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
   &__eyebrow {
     margin: 0 0 5px;
     color: var(--color-text-soft);
-    font-size: 0.7rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
   &__toolbar h1 {
     margin: 0;
-    font-size: 1.38rem;
+    font-size: var(--font-size-xl);
     line-height: 1.2;
   }
 
@@ -169,7 +169,7 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
 
   &__card-head h2 {
     margin: 0 0 8px;
-    font-size: 1.14rem;
+    font-size: var(--font-size-lg);
   }
 
   &__card-head p {
@@ -187,7 +187,7 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
     border-radius: 999px;
     background: var(--color-primary-soft);
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
@@ -209,7 +209,7 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
     display: block;
     margin-bottom: 8px;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
@@ -240,13 +240,13 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
 
   &__empty h2 {
     margin: 0;
-    font-size: 1rem;
+    font-size: var(--font-size-lg);
   }
 
   &__empty p {
     margin: 0;
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 }
 
@@ -258,7 +258,7 @@ defineEmits(["add-repo", "sync-all", "open-path", "sync-repo", "remove-repo"])
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.84rem;
+  font-size: var(--font-size-base);
 
   &--primary {
     border-color: var(--color-primary);

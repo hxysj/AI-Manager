@@ -1,6 +1,8 @@
+@import (inline) './typography.css';
+
 :root {
   color-scheme: light;
-  font-size: 18px;
+  font-size: var(--font-size-lg);
   font-family:
     "Bahnschrift", "Segoe UI Variable", "Microsoft YaHei UI", sans-serif;
   line-height: 1.5;
@@ -103,6 +105,164 @@ body,
 body {
   overflow: hidden;
   background: var(--color-page);
+  font-size: var(--font-size-base);
+}
+
+h1 {
+  font-size: var(--font-size-xl);
+}
+
+h2 {
+  font-size: var(--font-size-lg);
+}
+
+h3,
+h4 {
+  font-size: var(--font-size-base);
+}
+
+h5,
+small {
+  font-size: var(--font-size-sm);
+}
+
+h6 {
+  font-size: var(--font-size-xs);
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-size: inherit;
+}
+
+html:root {
+  --el-font-size-extra-large: var(--font-size-xl);
+  --el-font-size-large: var(--font-size-lg);
+  --el-font-size-medium: var(--font-size-lg);
+  --el-font-size-base: var(--font-size-base);
+  --el-font-size-small: var(--font-size-sm);
+  --el-font-size-extra-small: var(--font-size-xs);
+
+  .el-input--large,
+  .el-picker-panel__shortcut {
+    font-size: var(--font-size-base);
+  }
+
+  .el-button--small,
+  .el-input--small,
+  .el-date-table,
+  .el-month-table,
+  .el-year-table,
+  .el-time-spinner__item,
+  .el-time-spinner__arrow,
+  .el-picker-panel__btn,
+  .el-picker-panel__icon-btn,
+  .el-date-picker__time-header,
+  .el-date-range-picker__time-header,
+  .el-time-range-picker__header,
+  .el-time-panel__btn {
+    font-size: var(--font-size-sm);
+  }
+
+  .el-input,
+  .el-textarea {
+    .el-input__count {
+      font-size: var(--font-size-xs);
+    }
+
+    .el-input__clear,
+    .el-input__password,
+    .el-textarea__clear {
+      font-size: var(--font-size-sm);
+    }
+  }
+
+  .el-select-group__title {
+    font-size: var(--font-size-xs);
+  }
+
+  .el-checkbox {
+    --el-checkbox-font-size: var(--font-size-base);
+
+    &.el-checkbox--large {
+      .el-checkbox__label {
+        font-size: var(--font-size-base);
+      }
+    }
+
+    &.el-checkbox--small,
+    &.is-bordered.el-checkbox--small {
+      .el-checkbox__label {
+        font-size: var(--font-size-sm);
+      }
+    }
+  }
+
+  .el-select {
+    --el-select-input-font-size: var(--font-size-base);
+
+    .el-select__wrapper {
+      font-size: var(--font-size-base);
+    }
+
+    &.el-select--small {
+      .el-select__wrapper {
+        font-size: var(--font-size-sm);
+      }
+    }
+  }
+
+  .el-dropdown-menu--large {
+    .el-dropdown-menu__item {
+      font-size: var(--font-size-base);
+    }
+  }
+
+  .el-dropdown-menu--small {
+    .el-dropdown-menu__item {
+      font-size: var(--font-size-sm);
+    }
+  }
+
+  .el-date-editor {
+    .el-range-separator,
+    .el-range__icon,
+    .el-range__close-icon {
+      font-size: var(--font-size-sm);
+    }
+
+    &.el-range-editor--large {
+      .el-range-input {
+        font-size: var(--font-size-base);
+      }
+    }
+
+    &.el-range-editor--small {
+      .el-range-input {
+        font-size: var(--font-size-sm);
+      }
+    }
+  }
+
+  .el-date-table {
+    .week {
+      font-size: var(--font-size-xs);
+    }
+  }
+
+  .el-drawer__title,
+  .el-date-picker__header-label,
+  .el-date-range-picker__header-label {
+    font-size: var(--font-size-lg);
+  }
+
+  .el-date-range-picker__header {
+    div {
+      font-size: var(--font-size-lg);
+    }
+  }
 }
 
 button,
@@ -152,7 +312,7 @@ select:focus-visible {
   background: var(--color-panel);
   box-shadow: var(--shadow-panel);
   color: var(--color-text);
-  font-size: 0.86rem;
+  font-size: var(--font-size-base);
   line-height: 1.5;
   opacity: 1;
   transform: translateY(0);

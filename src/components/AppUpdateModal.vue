@@ -236,7 +236,7 @@ function formatUpdateBytes(value) {
 
       .app-update-eyebrow {
         color: var(--color-text-soft);
-        font-size: 0.68rem;
+        font-size: var(--font-size-xs);
         letter-spacing: 0.12em;
         line-height: 1;
         text-transform: uppercase;
@@ -245,7 +245,7 @@ function formatUpdateBytes(value) {
       .app-update-heading {
         margin: 0;
         color: var(--color-text);
-        font-size: 1.05rem;
+        font-size: var(--font-size-lg);
         line-height: 1.25;
       }
     }
@@ -302,7 +302,7 @@ function formatUpdateBytes(value) {
 
       .app-update-message {
         color: var(--color-text-muted);
-        font-size: 0.86rem;
+        font-size: var(--font-size-base);
         line-height: 1.6;
       }
     }
@@ -324,7 +324,7 @@ function formatUpdateBytes(value) {
       justify-content: space-between;
       gap: 12px;
       color: var(--color-text-muted);
-      font-size: 0.8rem;
+      font-size: var(--font-size-sm);
 
       .app-update-percent {
         color: var(--color-primary);
@@ -354,7 +354,7 @@ function formatUpdateBytes(value) {
     background: var(--color-panel-soft);
     color: var(--color-text);
     font-family: "JetBrains Mono", "Consolas", monospace;
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     line-height: 1.55;
     padding: 12px;
     white-space: pre-wrap;
@@ -377,7 +377,7 @@ function formatUpdateBytes(value) {
       border-radius: 7px;
       background: var(--color-panel);
       color: var(--color-primary);
-      font-size: 0.86rem;
+      font-size: var(--font-size-base);
       cursor: pointer;
 
       &:hover {

@@ -2115,7 +2115,7 @@ onBeforeUnmount(() => {
   padding: 6px 8px;
   border-radius: 6px;
   box-shadow: 0 6px 14px rgba(34, 56, 83, 0.12);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
   line-height: 1.25;
 }
 
@@ -2162,7 +2162,7 @@ onBeforeUnmount(() => {
 
   &__placeholder h1 {
     margin: 0 0 12px;
-    font-size: 2rem;
+    font-size: var(--font-size-xl);
   }
 
   &__placeholder p {
@@ -2212,7 +2212,7 @@ onBeforeUnmount(() => {
     display: flex;
     gap: 8px;
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   &__summary span:not([data-emphasis]) {
@@ -2260,14 +2260,14 @@ onBeforeUnmount(() => {
   }
 
   &__entry [data-emphasis] {
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &__entry span:not([data-emphasis]) {
     width: 100%;
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--font-size-sm);
     line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2303,12 +2303,12 @@ onBeforeUnmount(() => {
 
   &__head [data-emphasis] {
     color: var(--color-text);
-    font-size: 0.88rem;
+    font-size: var(--font-size-base);
   }
 
   &__head span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.35;
     word-break: break-all;
   }
@@ -2316,7 +2316,7 @@ onBeforeUnmount(() => {
   &__head small {
     flex: none;
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__content pre {
@@ -2327,7 +2327,7 @@ onBeforeUnmount(() => {
     padding: 12px;
     color: var(--color-text);
     font-family: "JetBrains Mono", "Consolas", monospace;
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     line-height: 1.55;
     white-space: pre-wrap;
     word-break: break-word;
@@ -2372,7 +2372,7 @@ onBeforeUnmount(() => {
     display: block;
     margin-bottom: 5px;
     color: var(--color-text-soft);
-    font-size: 0.68rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.12em;
     line-height: 1;
     text-transform: uppercase;
@@ -2381,7 +2381,7 @@ onBeforeUnmount(() => {
   &__header h2 {
     margin: 0;
     color: var(--color-text);
-    font-size: 1.05rem;
+    font-size: var(--font-size-lg);
     line-height: 1.25;
   }
 
@@ -2431,13 +2431,13 @@ onBeforeUnmount(() => {
 
   &__copy [data-emphasis] {
     color: var(--color-primary);
-    font-size: 1rem;
+    font-size: var(--font-size-lg);
     line-height: 1.35;
   }
 
   &__copy span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     line-height: 1.6;
   }
 
@@ -2457,7 +2457,7 @@ onBeforeUnmount(() => {
     gap: 8px;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &__remember input {
@@ -2484,7 +2484,7 @@ onBeforeUnmount(() => {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &__button:hover {

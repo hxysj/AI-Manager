@@ -1350,7 +1350,7 @@ function installRepositorySkill(skill) {
   .skills-view-mark {
     margin: 0;
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
@@ -1358,7 +1358,7 @@ function installRepositorySkill(skill) {
   .skills-view-title-text {
     margin: 0;
     color: var(--color-text);
-    font-size: 1.26rem;
+    font-size: var(--font-size-xl);
     line-height: 1.2;
     white-space: nowrap;
   }
@@ -1386,7 +1386,7 @@ function installRepositorySkill(skill) {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     white-space: nowrap;
   }
 
@@ -1434,7 +1434,7 @@ function installRepositorySkill(skill) {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-filter-card {
@@ -1471,7 +1471,7 @@ function installRepositorySkill(skill) {
 
   .skills-view-field-label {
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-field-control {
@@ -1483,7 +1483,7 @@ function installRepositorySkill(skill) {
     background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     outline: none;
   }
 
@@ -1515,7 +1515,7 @@ function installRepositorySkill(skill) {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-batch-card {
@@ -1536,7 +1536,7 @@ function installRepositorySkill(skill) {
     align-items: center;
     gap: 8px;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-check-input {
@@ -1561,7 +1561,7 @@ function installRepositorySkill(skill) {
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-list {
@@ -1601,7 +1601,7 @@ function installRepositorySkill(skill) {
   .skills-view-trash-name {
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1609,7 +1609,7 @@ function installRepositorySkill(skill) {
   .skills-view-trash-path {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1620,7 +1620,7 @@ function installRepositorySkill(skill) {
     flex-direction: column;
     gap: 4px;
     color: var(--color-text-soft);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
     text-align: right;
   }
 
@@ -1641,11 +1641,11 @@ function installRepositorySkill(skill) {
 
   .skills-view-empty-title {
     color: var(--color-text);
-    font-size: 0.98rem;
+    font-size: var(--font-size-lg);
   }
 
   .skills-view-empty-desc {
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
   }
 
@@ -1660,7 +1660,7 @@ function installRepositorySkill(skill) {
     flex-direction: column;
     gap: 7px;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-dialog-control {
@@ -1697,7 +1697,7 @@ function installRepositorySkill(skill) {
     border-radius: 7px;
     background: var(--color-panel-soft);
     color: var(--color-text);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   .skills-view-group-modal,
@@ -1709,12 +1709,12 @@ function installRepositorySkill(skill) {
     }
 
     :deep(.base-modal__header h2) {
-      font-size: 1.12rem;
+      font-size: var(--font-size-lg);
     }
 
     :deep(.base-modal__header p) {
       margin-top: 3px;
-      font-size: 0.78rem;
+      font-size: var(--font-size-sm);
     }
 
     :deep(.base-modal__close) {
@@ -1722,7 +1722,7 @@ function installRepositorySkill(skill) {
       height: 32px;
       border: 0;
       background: transparent;
-      font-size: 1.2rem;
+      font-size: var(--font-size-xl);
     }
 
     :deep(.base-modal__content) {
@@ -1780,13 +1780,13 @@ function installRepositorySkill(skill) {
 
   .skills-view-move-selection-title {
     color: var(--color-text);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-move-selection-names {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1799,7 +1799,7 @@ function installRepositorySkill(skill) {
   .skills-view-move-target-title {
     margin: 0 0 8px;
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     letter-spacing: 0;
   }
 
@@ -1884,7 +1884,7 @@ function installRepositorySkill(skill) {
     gap: 7px;
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1897,7 +1897,7 @@ function installRepositorySkill(skill) {
   .skills-view-move-target-meta {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1908,7 +1908,7 @@ function installRepositorySkill(skill) {
     border-radius: 6px;
     background: var(--color-success-soft);
     color: var(--color-success);
-    font-size: 0.7rem;
+    font-size: var(--font-size-xs);
     text-align: center;
   }
 
@@ -1924,7 +1924,7 @@ function installRepositorySkill(skill) {
     flex: 1;
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -1954,7 +1954,7 @@ function installRepositorySkill(skill) {
 
   .skills-view-group-section-title {
     color: var(--color-text);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-group-create-field {
@@ -1980,7 +1980,7 @@ function installRepositorySkill(skill) {
     padding: 10px 20px 8px;
     border-bottom: 1px solid var(--color-line);
     color: var(--color-text-soft);
-    font-size: 0.7rem;
+    font-size: var(--font-size-xs);
   }
 
   .skills-view-group-list-head span:not([data-emphasis]):last-child {
@@ -2037,7 +2037,7 @@ function installRepositorySkill(skill) {
 
   .skills-view-group-name-row [data-emphasis] {
     overflow: hidden;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -2049,7 +2049,7 @@ function installRepositorySkill(skill) {
     gap: 8px;
     padding-left: 24px;
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   .skills-view-group-manage-meta > * + * {
@@ -2157,7 +2157,7 @@ function installRepositorySkill(skill) {
   .skills-view-group-delete-confirm > span:not([data-emphasis]) {
     margin-right: 2px;
     color: var(--color-danger);
-    font-size: 0.75rem;
+    font-size: var(--font-size-sm);
     white-space: nowrap;
   }
 
@@ -2169,7 +2169,7 @@ function installRepositorySkill(skill) {
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.75rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-group-confirm-button.danger {
@@ -2184,7 +2184,7 @@ function installRepositorySkill(skill) {
     justify-content: center;
     min-height: 42px;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
     text-align: center;
   }
 
@@ -2212,7 +2212,7 @@ function installRepositorySkill(skill) {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   .skills-view-dialog-button.primary {

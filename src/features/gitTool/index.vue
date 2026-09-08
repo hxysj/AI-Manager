@@ -2875,20 +2875,20 @@ function showErrorMessage(error) {
 
 .git-tool :deep(.base-modal__header h2) {
   color: var(--color-text);
-  font-size: 0.98rem;
+  font-size: var(--font-size-lg);
 }
 
 .git-tool :deep(.base-modal__header p) {
   margin-top: 4px;
   color: var(--color-text-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool :deep(.base-modal__close) {
   width: 30px;
   height: 30px;
   border-radius: 7px;
-  font-size: 1.1rem;
+  font-size: var(--font-size-lg);
 }
 
 .git-tool :deep(.base-modal__content) {
@@ -2926,14 +2926,14 @@ function showErrorMessage(error) {
 
 .git-tool-confirm-content [data-emphasis] {
   color: var(--color-text);
-  font-size: 0.86rem;
+  font-size: var(--font-size-base);
   line-height: 1.5;
 }
 
 .git-tool-confirm-content span:not([data-emphasis]) {
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 0.76rem;
+  font-size: var(--font-size-base);
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2948,7 +2948,7 @@ function showErrorMessage(error) {
 
 .git-tool-confirm-field span:not([data-emphasis]) {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-tool-confirm-field input {
@@ -2958,7 +2958,7 @@ function showErrorMessage(error) {
   border-radius: 7px;
   background: var(--color-panel);
   color: var(--color-text);
-  font-size: 0.8rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-confirm-actions {
@@ -2979,7 +2979,7 @@ function showErrorMessage(error) {
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-confirm-button:hover {
@@ -3011,7 +3011,7 @@ function showErrorMessage(error) {
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.82rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-action:hover,
@@ -3065,13 +3065,13 @@ function showErrorMessage(error) {
 
     .git-tool-loading-title {
       color: var(--color-text);
-      font-size: 0.94rem;
+      font-size: var(--font-size-lg);
     }
 
     .git-tool-loading-desc {
       max-width: 420px;
       overflow: hidden;
-      font-size: 0.76rem;
+      font-size: var(--font-size-base);
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -3114,7 +3114,7 @@ function showErrorMessage(error) {
 
 .git-tool-label {
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-tool-repo-path {
@@ -3123,7 +3123,7 @@ function showErrorMessage(error) {
   overflow: hidden;
   padding: 0 7px 7px;
   color: var(--color-text-muted);
-  font-size: 0.76rem;
+  font-size: var(--font-size-base);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3137,7 +3137,7 @@ function showErrorMessage(error) {
   border-radius: 7px;
   background: var(--color-panel);
   color: var(--color-text);
-  font-size: 0.82rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-tabs {
@@ -3163,7 +3163,7 @@ function showErrorMessage(error) {
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--font-size-base);
   }
 
   .git-tool-tab-active {
@@ -3188,7 +3188,7 @@ function showErrorMessage(error) {
 
 .git-tool-empty-title {
   color: var(--color-text);
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
 }
 
 .git-tool-workbench {
@@ -3235,7 +3235,7 @@ function showErrorMessage(error) {
 .git-tool-panel-title {
   display: block;
   color: var(--color-text);
-  font-size: 0.9rem;
+  font-size: var(--font-size-lg);
 }
 
 .git-tool-panel-subtitle {
@@ -3243,7 +3243,7 @@ function showErrorMessage(error) {
   max-width: 260px;
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3299,13 +3299,13 @@ function showErrorMessage(error) {
 
 .git-tool-branch-title-row [data-emphasis] {
   color: var(--color-text);
-  font-size: 0.84rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-branch-title-row span:not([data-emphasis]) {
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3314,14 +3314,14 @@ function showErrorMessage(error) {
   display: block;
   overflow: hidden;
   color: var(--color-primary);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .git-tool-branch-summary-row {
   color: var(--color-primary);
-  font-size: 0.76rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-branch-toolbar {
@@ -3338,7 +3338,7 @@ function showErrorMessage(error) {
   background: var(--color-primary-soft);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.76rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-branch-toolbar-button:disabled {
@@ -3386,7 +3386,7 @@ function showErrorMessage(error) {
   flex: 1;
   overflow: hidden;
   color: var(--color-text);
-  font-size: 0.78rem;
+  font-size: var(--font-size-base);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3394,7 +3394,7 @@ function showErrorMessage(error) {
 .git-tool-branch-group-head span:not([data-emphasis]) {
   flex: none;
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-tool-branch-group-body {
@@ -3471,7 +3471,7 @@ function showErrorMessage(error) {
   min-width: 0;
   flex: 1;
   color: var(--color-primary);
-  font-size: 0.78rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-branch-current .git-tool-branch-name {
@@ -3484,7 +3484,7 @@ function showErrorMessage(error) {
   border-radius: 999px;
   background: var(--color-warning-soft);
   color: var(--color-warning);
-  font-size: 0.68rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-tool-commit-layout {
@@ -3516,7 +3516,7 @@ function showErrorMessage(error) {
     border-bottom: 1px solid var(--color-line);
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
 
     .git-tool-commit-table-head-cell {
       min-width: 0;
@@ -3586,7 +3586,7 @@ function showErrorMessage(error) {
       overflow: hidden;
       padding: 0 10px;
       color: var(--color-primary);
-      font-size: 0.78rem;
+      font-size: var(--font-size-base);
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -3608,7 +3608,7 @@ function showErrorMessage(error) {
         border-radius: 4px;
         background: var(--color-primary-soft);
         color: var(--color-primary);
-        font-size: 0.68rem;
+        font-size: var(--font-size-sm);
         line-height: 18px;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -3660,7 +3660,7 @@ function showErrorMessage(error) {
     .git-tool-commit-hash {
       color: var(--color-primary);
       font-family: "JetBrains Mono", "Consolas", monospace;
-      font-size: 0.74rem;
+      font-size: var(--font-size-sm);
     }
 
     &.git-tool-commit-active {
@@ -3720,7 +3720,7 @@ function showErrorMessage(error) {
   min-width: 0;
   overflow: hidden;
   color: var(--color-text);
-  font-size: 0.82rem;
+  font-size: var(--font-size-base);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3731,7 +3731,7 @@ function showErrorMessage(error) {
 .git-change-view-meta {
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3740,7 +3740,7 @@ function showErrorMessage(error) {
   flex: none;
   padding: 2px 6px;
   border-radius: 999px;
-  font-size: 0.68rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-tool-check-exists-hash {
@@ -3783,7 +3783,7 @@ function showErrorMessage(error) {
   background: transparent;
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--font-size-base);
   text-align: left;
 }
 
@@ -3807,7 +3807,7 @@ function showErrorMessage(error) {
   border: 1px dashed var(--color-line);
   border-radius: 8px;
   color: var(--color-text-muted);
-  font-size: 0.84rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-archive,
@@ -3841,7 +3841,7 @@ function showErrorMessage(error) {
   width: 100%;
   overflow: hidden;
   color: var(--color-text-soft);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3876,7 +3876,7 @@ function showErrorMessage(error) {
     border-bottom: 1px solid var(--color-line);
     background: var(--color-panel-soft);
     color: var(--color-primary);
-    font-size: 0.76rem;
+    font-size: var(--font-size-base);
   }
 
   .git-tool-stash-toolbar {
@@ -3930,7 +3930,7 @@ function showErrorMessage(error) {
   display: block;
   margin-top: 3px;
   color: var(--color-text);
-  font-size: 0.96rem;
+  font-size: var(--font-size-lg);
 }
 
 .git-tool-drawer-back {
@@ -3943,7 +3943,7 @@ function showErrorMessage(error) {
   background: transparent;
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.76rem;
+  font-size: var(--font-size-base);
   line-height: 1;
 
   .git-tool-drawer-back-icon {
@@ -3978,7 +3978,7 @@ function showErrorMessage(error) {
   background: var(--color-primary-soft);
   color: var(--color-primary);
   font-family: "JetBrains Mono", "Consolas", monospace;
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
   line-height: 28px;
 }
 
@@ -4021,7 +4021,7 @@ function showErrorMessage(error) {
     gap: 10px;
     padding: 0 2px 2px;
     color: var(--color-primary);
-    font-size: 0.76rem;
+    font-size: var(--font-size-base);
   }
 
   .git-tool-archive-toolbar {
@@ -4076,7 +4076,7 @@ function showErrorMessage(error) {
     flex: 1;
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.78rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -4084,7 +4084,7 @@ function showErrorMessage(error) {
   .git-tool-archive-group-toggle span:not([data-emphasis]) {
     flex: none;
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
   }
 
   .git-tool-archive-group-body {
@@ -4113,7 +4113,7 @@ function showErrorMessage(error) {
   }
 
   .git-tool-archive-name {
-    font-size: 0.9rem;
+    font-size: var(--font-size-lg);
   }
 
   .git-tool-archive-meta {
@@ -4127,7 +4127,7 @@ function showErrorMessage(error) {
       background: var(--color-primary-soft);
       color: var(--color-primary);
       font-family: "JetBrains Mono", "Consolas", monospace;
-      font-size: 0.72rem;
+      font-size: var(--font-size-sm);
     }
   }
 }
@@ -4143,7 +4143,7 @@ function showErrorMessage(error) {
   border-bottom: 1px solid var(--color-line);
   background: var(--color-primary-soft);
   color: var(--color-primary);
-  font-size: 0.76rem;
+  font-size: var(--font-size-base);
 }
 
 .git-tool-archive-detail-meta span:not([data-emphasis]),
@@ -4181,7 +4181,7 @@ function showErrorMessage(error) {
   border-bottom: 1px solid var(--color-line);
   background: var(--color-primary-soft);
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-tool-archive-commit-head span:not([data-emphasis]),
@@ -4210,7 +4210,7 @@ function showErrorMessage(error) {
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.78rem;
+  font-size: var(--font-size-base);
   text-align: left;
 }
 
@@ -4229,7 +4229,7 @@ function showErrorMessage(error) {
 .git-tool-archive-commit-hash {
   color: var(--color-primary);
   font-family: "JetBrains Mono", "Consolas", monospace;
-  font-size: 0.74rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-tool-archive-detail-content {
@@ -4270,7 +4270,7 @@ function showErrorMessage(error) {
 .git-change-view-title {
   display: block;
   color: var(--color-text);
-  font-size: 0.86rem;
+  font-size: var(--font-size-base);
 }
 
 .git-change-view-meta-row {
@@ -4280,7 +4280,7 @@ function showErrorMessage(error) {
   gap: 8px;
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-change-view-meta-row span:not([data-emphasis]) {
@@ -4296,7 +4296,7 @@ function showErrorMessage(error) {
 .git-change-view-meta-row small {
   flex: none;
   color: var(--color-text-soft);
-  font-size: 0.68rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-change-view-meta-row code,
@@ -4305,7 +4305,7 @@ function showErrorMessage(error) {
   overflow: hidden;
   color: var(--color-text-muted);
   font-family: "JetBrains Mono", "Consolas", monospace;
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4335,12 +4335,12 @@ function showErrorMessage(error) {
   padding: 0 9px;
   border-bottom: 1px solid var(--color-line);
   color: var(--color-text-muted);
-  font-size: 0.74rem;
+  font-size: var(--font-size-base);
 }
 
 .git-change-view-tree-head [data-emphasis] {
   color: var(--color-primary);
-  font-size: 0.72rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-change-view-tree-body {
@@ -4373,7 +4373,7 @@ function showErrorMessage(error) {
   width: 100%;
   cursor: pointer;
   color: var(--color-primary);
-  font-size: 0.76rem;
+  font-size: var(--font-size-base);
 }
 
 .git-change-view-tree-directory:hover {
@@ -4416,7 +4416,7 @@ function showErrorMessage(error) {
   border-radius: 999px;
   background: var(--color-panel-soft);
   color: var(--color-primary);
-  font-size: 0.68rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-change-view-file-status {
@@ -4427,7 +4427,7 @@ function showErrorMessage(error) {
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  font-size: 0.64rem;
+  font-size: var(--font-size-sm);
 }
 
 .git-change-view-file-status-add {
@@ -4456,7 +4456,7 @@ function showErrorMessage(error) {
   min-width: 0;
   overflow: hidden;
   color: var(--color-text);
-  font-size: 0.72rem;
+  font-size: var(--font-size-base);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -4481,7 +4481,7 @@ function showErrorMessage(error) {
   display: block;
   overflow: hidden;
   color: var(--color-primary);
-  font-size: 0.76rem;
+  font-size: var(--font-size-base);
   line-height: 32px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4497,7 +4497,7 @@ function showErrorMessage(error) {
   background: var(--color-panel);
   color: var(--color-text);
   font-family: "JetBrains Mono", "Consolas", monospace;
-  font-size: 0.7rem;
+  font-size: var(--font-size-base);
   line-height: 1.45;
 }
 
@@ -4553,7 +4553,7 @@ function showErrorMessage(error) {
 
   :deep(.git-change-view .git-tool-label) {
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
   }
 
   :deep(.git-change-view-title) {
@@ -4561,7 +4561,7 @@ function showErrorMessage(error) {
     max-width: 100%;
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -4573,7 +4573,7 @@ function showErrorMessage(error) {
     gap: 8px;
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
   }
 
   :deep(.git-change-view-meta-row span:not([data-emphasis])) {
@@ -4589,7 +4589,7 @@ function showErrorMessage(error) {
   :deep(.git-change-view-meta-row small) {
     flex: none;
     color: var(--color-text-soft);
-    font-size: 0.68rem;
+    font-size: var(--font-size-sm);
   }
 
   :deep(.git-change-view-meta-row code),
@@ -4598,7 +4598,7 @@ function showErrorMessage(error) {
     overflow: hidden;
     color: var(--color-text-muted);
     font-family: "JetBrains Mono", "Consolas", monospace;
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -4628,12 +4628,12 @@ function showErrorMessage(error) {
     padding: 0 9px;
     border-bottom: 1px solid var(--color-line);
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-base);
   }
 
   :deep(.git-change-view-tree-head [data-emphasis]) {
     color: var(--color-primary);
-    font-size: 0.72rem;
+    font-size: var(--font-size-sm);
   }
 
   :deep(.git-change-view-tree-body) {
@@ -4666,7 +4666,7 @@ function showErrorMessage(error) {
     width: 100%;
     cursor: pointer;
     color: var(--color-primary);
-    font-size: 0.76rem;
+    font-size: var(--font-size-base);
   }
 
   :deep(.git-change-view-tree-directory:hover) {
@@ -4709,7 +4709,7 @@ function showErrorMessage(error) {
     border-radius: 999px;
     background: var(--color-panel-soft);
     color: var(--color-primary);
-    font-size: 0.68rem;
+    font-size: var(--font-size-sm);
   }
 
   :deep(.git-change-view-file-status) {
@@ -4720,7 +4720,7 @@ function showErrorMessage(error) {
     align-items: center;
     justify-content: center;
     border-radius: 4px;
-    font-size: 0.64rem;
+    font-size: var(--font-size-sm);
   }
 
   :deep(.git-change-view-file-status-add) {
@@ -4749,7 +4749,7 @@ function showErrorMessage(error) {
     min-width: 0;
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.72rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -4774,7 +4774,7 @@ function showErrorMessage(error) {
     display: block;
     overflow: hidden;
     color: var(--color-primary);
-    font-size: 0.76rem;
+    font-size: var(--font-size-base);
     line-height: 32px;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -4790,7 +4790,7 @@ function showErrorMessage(error) {
     background: var(--color-panel);
     color: var(--color-text);
     font-family: "JetBrains Mono", "Consolas", monospace;
-    font-size: 0.7rem;
+    font-size: var(--font-size-base);
     line-height: 1.45;
   }
 
@@ -4831,7 +4831,7 @@ function showErrorMessage(error) {
     border: 1px dashed var(--color-line);
     border-radius: 8px;
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 }
 </style>

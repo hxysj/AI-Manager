@@ -234,7 +234,7 @@ async function openRepository(repository) {
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     white-space: nowrap;
   }
 
@@ -274,13 +274,13 @@ async function openRepository(repository) {
   .skill-repository-manager-title-text {
     margin: 0;
     color: var(--color-text);
-    font-size: 1.26rem;
+    font-size: var(--font-size-xl);
     line-height: 1.2;
   }
 
   .skill-repository-manager-title-desc {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   .skill-repository-manager-form-card,
@@ -305,12 +305,12 @@ async function openRepository(repository) {
 
   .skill-repository-manager-form-title {
     color: var(--color-text);
-    font-size: 0.96rem;
+    font-size: var(--font-size-lg);
   }
 
   .skill-repository-manager-form-desc {
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
   }
 
@@ -338,7 +338,7 @@ async function openRepository(repository) {
 
   .skill-repository-manager-field-label {
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
   }
 
   .skill-repository-manager-field-control {
@@ -350,7 +350,7 @@ async function openRepository(repository) {
     background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
     outline: none;
   }
 
@@ -379,12 +379,12 @@ async function openRepository(repository) {
 
   .skill-repository-manager-list-title {
     color: var(--color-text);
-    font-size: 0.94rem;
+    font-size: var(--font-size-base);
   }
 
   .skill-repository-manager-list-count {
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   .skill-repository-manager-list {
@@ -431,7 +431,7 @@ async function openRepository(repository) {
     min-width: 0;
     overflow: hidden;
     color: var(--color-text);
-    font-size: 0.92rem;
+    font-size: var(--font-size-base);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -445,7 +445,7 @@ async function openRepository(repository) {
     border-radius: 999px;
     background: var(--color-success-soft);
     color: var(--color-success);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   .skill-repository-manager-status.error {
@@ -456,7 +456,7 @@ async function openRepository(repository) {
   .skill-repository-manager-source {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     text-overflow: ellipsis;
     white-space: nowrap;
   }
@@ -475,7 +475,7 @@ async function openRepository(repository) {
     border-radius: 999px;
     background: var(--color-panel);
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   .skill-repository-manager-error {
@@ -484,7 +484,7 @@ async function openRepository(repository) {
     gap: 6px;
     margin: 0;
     color: var(--color-danger);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
   }
 
@@ -536,11 +536,11 @@ async function openRepository(repository) {
 
   .skill-repository-manager-empty-title {
     color: var(--color-text);
-    font-size: 0.98rem;
+    font-size: var(--font-size-lg);
   }
 
   .skill-repository-manager-empty-desc {
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
   }
 }

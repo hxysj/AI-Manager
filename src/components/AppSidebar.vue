@@ -232,7 +232,7 @@ const colorMap = {
   &__title {
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 1.02rem;
+    font-size: var(--font-size-lg);
   }
 
   &__theme-toggle {
@@ -319,7 +319,7 @@ const colorMap = {
   }
 
   &__nav-label {
-    font-size: 0.92rem;
+    font-size: var(--font-size-base);
   }
 
   &__section {
@@ -330,7 +330,7 @@ const colorMap = {
   &__section-header {
     padding: 14px 8px 10px;
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
@@ -385,12 +385,12 @@ const colorMap = {
   }
 
   &__cli-info [data-emphasis] {
-    font-size: 0.88rem;
+    font-size: var(--font-size-base);
   }
 
   &__cli-info small {
     color: var(--color-text-soft);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__cli-dot {

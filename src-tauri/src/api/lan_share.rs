@@ -1153,25 +1153,29 @@ fn is_previewable_file(file: &LanShareFile) -> bool {
 }
 
 fn mobile_page_html() -> String {
-    r#"<!doctype html>
+    concat!(
+        r#"<!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>设备快传</title>
   <style>
+"#,
+        include_str!("../../../src/styles/typography.css"),
+        r#"
     :root { --bg: #edf3f8; --panel: #ffffff; --panel-soft: #f7fafc; --line: #d8e3ee; --line-strong: #bed0e2; --text: #142033; --muted: #738195; --primary: #256aa8; --primary-soft: #eaf4ff; --success: #dff5e9; --shadow: 0 12px 34px rgba(38, 62, 88, 0.08); }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
-    body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 20% 0%, #f8fbff 0, var(--bg) 42%, #e8eff6 100%); color: var(--text); font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
+    body { min-height: 100vh; margin: 0; background: radial-gradient(circle at 20% 0%, #f8fbff 0, var(--bg) 42%, #e8eff6 100%); color: var(--text); font-family: "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: var(--font-size-base); overflow: hidden; }
     button, input { font: inherit; }
     button { cursor: pointer; }
     .page-shell { display: flex; height: 100vh; min-height: 0; flex-direction: column; }
     .page-head { position: sticky; top: 0; z-index: 4; display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px 12px; border-bottom: 1px solid rgba(216, 227, 238, 0.72); background: rgba(247, 251, 255, 0.94); backdrop-filter: blur(14px); box-shadow: 0 8px 28px rgba(35, 55, 80, 0.06); }
     .page-title { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-    .page-title [data-emphasis] { color: var(--text); font-size: 20px; line-height: 1.15; letter-spacing: 0; }
-    .page-title span:not([data-emphasis]) { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-    .page-badge { display: inline-flex; height: 30px; flex: none; align-items: center; justify-content: center; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 999px; background: #ffffff; color: var(--primary); font-size: 12px; box-shadow: 0 6px 16px rgba(37, 106, 168, 0.08); }
+    .page-title [data-emphasis] { color: var(--text); font-size: var(--font-size-lg); line-height: 1.15; letter-spacing: 0; }
+    .page-title span:not([data-emphasis]) { overflow: hidden; color: var(--muted); font-size: var(--font-size-xs); text-overflow: ellipsis; white-space: nowrap; }
+    .page-badge { display: inline-flex; height: 30px; flex: none; align-items: center; justify-content: center; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: 999px; background: #ffffff; color: var(--primary); font-size: var(--font-size-xs); box-shadow: 0 6px 16px rgba(37, 106, 168, 0.08); }
     .page-main { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: hidden; padding: 12px; }
     .card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid rgba(216, 227, 238, 0.92); border-radius: 8px; background: rgba(255, 255, 255, 0.96); box-shadow: var(--shadow); }
     .device-card { flex: none; }
@@ -1179,13 +1183,13 @@ fn mobile_page_html() -> String {
     .content-detail { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow: hidden; }
     .content-detail.hidden { display: none; }
     .view-tabs { display: flex; flex: none; gap: 6px; padding: 4px; border: 1px solid rgba(198, 213, 228, 0.9); border-radius: 8px; background: rgba(247, 250, 253, 0.9); box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8); }
-    .view-tab, .mode-tab { display: inline-flex; height: 34px; flex: 1; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #5f6f83; font-size: 14px; }
+    .view-tab, .mode-tab { display: inline-flex; height: 34px; flex: 1; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #5f6f83; font-size: var(--font-size-sm); }
     .view-tab.active, .mode-tab.active { border-color: var(--line-strong); background: #ffffff; color: var(--primary); box-shadow: 0 8px 18px rgba(37, 106, 168, 0.12); }
     .view-panel { display: none; min-height: 0; flex: 1; }
     .view-panel.active { display: flex; }
     .card-head { display: flex; min-height: 44px; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-bottom: 1px solid rgba(237, 242, 247, 0.95); background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%); }
-    .card-head [data-emphasis] { color: var(--text); font-size: 15px; }
-    .card-head span:not([data-emphasis]) { color: var(--muted); font-size: 12px; }
+    .card-head [data-emphasis] { color: var(--text); font-size: var(--font-size-base); }
+    .card-head span:not([data-emphasis]) { color: var(--muted); font-size: var(--font-size-xs); }
     .device-row { display: flex; gap: 8px; padding: 10px 12px; }
     .group-list-view { display: none; min-height: 0; flex: 1; }
     .group-list-view.active { display: flex; }
@@ -1193,11 +1197,11 @@ fn mobile_page_html() -> String {
     .group-session-list { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 10px; overflow: auto; padding: 12px; background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%); }
     .group-session-item { display: flex; width: 100%; min-height: 64px; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border: 1px solid #d7e4f0; border-radius: 8px; background: #ffffff; color: var(--text); text-align: left; box-shadow: 0 8px 18px rgba(38, 62, 88, 0.05); }
     .group-session-main { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-    .group-session-name { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-    .group-session-meta { color: var(--muted); font-size: 12px; }
-    .field-input { min-width: 0; height: 36px; flex: 1; padding: 0 10px; border: 1px solid #cbd8e6; border-radius: 7px; background: #ffffff; color: var(--text); font-size: 14px; outline: none; box-shadow: inset 0 1px 2px rgba(38, 62, 88, 0.03); }
+    .group-session-name { overflow: hidden; font-size: var(--font-size-sm); text-overflow: ellipsis; white-space: nowrap; }
+    .group-session-meta { color: var(--muted); font-size: var(--font-size-xs); }
+    .field-input { min-width: 0; height: 36px; flex: 1; padding: 0 10px; border: 1px solid #cbd8e6; border-radius: 7px; background: #ffffff; color: var(--text); font-size: var(--font-size-sm); outline: none; box-shadow: inset 0 1px 2px rgba(38, 62, 88, 0.03); }
     .field-input:focus { border-color: #8ab5dc; box-shadow: 0 0 0 3px rgba(37, 106, 168, 0.1); }
-    .text-button, .icon-button { display: inline-flex; height: 36px; flex: none; align-items: center; justify-content: center; gap: 5px; border: 1px solid #c7d5e4; border-radius: 7px; background: #ffffff; color: var(--primary); font-size: 13px; text-decoration: none; box-shadow: 0 4px 12px rgba(38, 62, 88, 0.05); }
+    .text-button, .icon-button { display: inline-flex; height: 36px; flex: none; align-items: center; justify-content: center; gap: 5px; border: 1px solid #c7d5e4; border-radius: 7px; background: #ffffff; color: var(--primary); font-size: var(--font-size-sm); text-decoration: none; box-shadow: 0 4px 12px rgba(38, 62, 88, 0.05); }
     .text-button.group-back { display: none; flex: none; min-width: 52px; padding: 0 8px; }
     .text-button.group-back.active { display: inline-flex; }
     .primary-button { border-color: var(--primary); background: var(--primary); color: #ffffff; box-shadow: 0 8px 18px rgba(37, 106, 168, 0.2); }
@@ -1205,22 +1209,22 @@ fn mobile_page_html() -> String {
     .file-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid #edf2f7; background: #ffffff; }
     .file-item:last-child { border-bottom: 0; }
     .file-main { min-width: 0; flex: 1; }
-    .file-name { display: block; overflow: hidden; color: var(--text); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
-    .file-meta { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+    .file-name { display: block; overflow: hidden; color: var(--text); font-size: var(--font-size-sm); text-overflow: ellipsis; white-space: nowrap; }
+    .file-meta { display: block; margin-top: 4px; color: var(--muted); font-size: var(--font-size-xs); }
     .file-actions { display: flex; flex: none; gap: 6px; }
     .message-list { padding: 12px; gap: 10px; background: linear-gradient(180deg, #fbfdff 0%, #ffffff 44%, #f5f9fd 100%); }
     .message-attachment { display: flex; width: min(300px, 100%); flex-direction: column; gap: 8px; margin-top: 8px; padding: 8px; border: 1px solid #dbe4ee; border-radius: 8px; background: #fff; }
     .message-attachment img, .message-attachment video { display: block; width: 100%; max-height: 240px; object-fit: contain; border-radius: 5px; }
     .message-attachment audio { width: 100%; }
-    .message-attachment-name { overflow-wrap: anywhere; font-size: 12px; }
+    .message-attachment-name { overflow-wrap: anywhere; font-size: var(--font-size-xs); }
     .message-attachment-actions { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
     .pending-attachments { display: flex; gap: 6px; padding: 0 10px; overflow-x: auto; }
-    .pending-attachment { display: inline-flex; max-width: 220px; flex: none; align-items: center; gap: 8px; margin: 8px 0; padding: 6px 8px; border: 1px solid #dbe4ee; border-radius: 6px; background: #f5f8fc; font-size: 11px; }
+    .pending-attachment { display: inline-flex; max-width: 220px; flex: none; align-items: center; gap: 8px; margin: 8px 0; padding: 6px 8px; border: 1px solid #dbe4ee; border-radius: 6px; background: #f5f8fc; font-size: var(--font-size-xs); }
     .pending-attachment span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .composer textarea { resize: vertical; min-height: 42px; max-height: 120px; }
-    .message { display: flex; max-width: 82%; min-width: 96px; flex-direction: column; gap: 6px; padding: 10px 11px; border: 0; border-radius: 8px; background: #eef5fc; color: var(--text); font-size: 14px; line-height: 1.45; text-align: left; box-shadow: 0 8px 22px rgba(38, 62, 88, 0.08); }
+    .message { display: flex; max-width: 82%; min-width: 96px; flex-direction: column; gap: 6px; padding: 10px 11px; border: 0; border-radius: 8px; background: #eef5fc; color: var(--text); font-size: var(--font-size-sm); line-height: 1.45; text-align: left; box-shadow: 0 8px 22px rgba(38, 62, 88, 0.08); }
     .message.me { align-self: flex-end; background: var(--success); box-shadow: 0 8px 22px rgba(34, 126, 82, 0.09); }
-    .message small { color: #6f8095; font-size: 11px; }
+    .message small { color: #6f8095; font-size: var(--font-size-xs); }
     .composer { display: flex; flex: none; gap: 8px; padding: 10px; border-top: 1px solid rgba(237, 242, 247, 0.95); background: #ffffff; }
     .empty { display: flex; min-height: 120px; align-items: center; justify-content: center; padding: 22px 12px; color: var(--muted); line-height: 1.6; text-align: center; }
     .preview-dialog { position: fixed; inset: 0; z-index: 10; display: none; align-items: center; justify-content: center; padding: 14px; }
@@ -1229,13 +1233,13 @@ fn mobile_page_html() -> String {
     .preview-panel { position: relative; display: flex; width: min(720px, 100%); max-height: calc(100vh - 28px); flex-direction: column; overflow: hidden; border: 1px solid #dbe4ee; border-radius: 8px; background: #ffffff; box-shadow: 0 20px 54px rgba(15, 23, 42, 0.26); }
     .preview-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 12px; border-bottom: 1px solid #edf2f7; }
     .preview-title { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
-    .preview-title [data-emphasis] { overflow: hidden; color: #172033; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
-    .preview-title span:not([data-emphasis]) { color: #748195; font-size: 12px; }
+    .preview-title [data-emphasis] { overflow: hidden; color: #172033; font-size: var(--font-size-base); text-overflow: ellipsis; white-space: nowrap; }
+    .preview-title span:not([data-emphasis]) { color: #748195; font-size: var(--font-size-xs); }
     .preview-body { display: flex; min-height: 260px; flex: 1; align-items: center; justify-content: center; overflow: auto; background: #f7fafd; }
     .preview-body img, .preview-body video { display: block; max-width: 100%; max-height: 68vh; }
     .preview-body audio { width: calc(100% - 28px); }
     .preview-body iframe { width: 100%; height: 68vh; border: 0; background: #ffffff; }
-    .preview-body pre { width: 100%; min-height: 260px; max-height: 68vh; margin: 0; overflow: auto; padding: 14px; color: #172033; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+    .preview-body pre { width: 100%; min-height: 260px; max-height: 68vh; margin: 0; overflow: auto; padding: 14px; color: #172033; font-family: "SFMono-Regular", Consolas, monospace; font-size: var(--font-size-xs); line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
     .preview-empty { padding: 28px 18px; color: #697789; line-height: 1.7; text-align: center; }
     .preview-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 12px; border-top: 1px solid #edf2f7; background: #ffffff; }
   </style>
@@ -1874,7 +1878,8 @@ fn mobile_page_html() -> String {
   </script>
 </body>
 </html>"#
-        .to_string()
+    )
+    .to_string()
 }
 
 fn boxed_full(body: impl Into<Bytes>) -> BoxBody {
@@ -4964,6 +4969,19 @@ mod service_tests {
         assert!(html.contains("class=\"content-detail\""));
         assert!(!html.contains("@media"));
         assert!(!html.contains("@container"));
+    }
+
+    #[test]
+    fn mobile_page_reuses_shared_font_sizes() {
+        let html = mobile_page_html();
+        let typography = include_str!("../../../src/styles/typography.css");
+
+        assert!(html.contains(typography));
+        for size in ["base", "lg", "sm", "xs", "xl"] {
+            assert_eq!(html.matches(&format!("--font-size-{size}:")).count(), 1);
+        }
+        assert!(html.contains("font-size: var(--font-size-base)"));
+        assert!(html.contains("font-size: var(--font-size-sm)"));
     }
 
     #[test]

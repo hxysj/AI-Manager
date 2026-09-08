@@ -126,7 +126,7 @@ const metrics = computed(() => {
   border: 1px solid var(--color-line);
   border-radius: 10px;
   background: var(--color-panel);
-  font-size: 12px;
+  font-size: var(--font-size-xs);
 
   .key-usage-header {
     display: flex;
@@ -137,7 +137,7 @@ const metrics = computed(() => {
 
     .key-usage-title {
       color: var(--color-text);
-      font-size: 13px;
+      font-size: var(--font-size-sm);
     }
 
     .key-usage-status {
@@ -148,7 +148,7 @@ const metrics = computed(() => {
       border-radius: 5px;
       background: var(--color-panel-soft);
       color: var(--color-text-muted);
-      font-size: 11px;
+      font-size: var(--font-size-xs);
 
       .key-usage-status-dot {
         width: 5px;
@@ -195,7 +195,7 @@ const metrics = computed(() => {
 
       .key-usage-value {
         color: var(--color-text);
-        font-size: 18px;
+        font-size: var(--font-size-lg);
         line-height: 1.25;
         font-variant-numeric: tabular-nums;
         overflow-wrap: anywhere;
@@ -211,7 +211,7 @@ const metrics = computed(() => {
     border-top: 1px solid var(--color-line);
     color: var(--color-text-muted);
     overflow-wrap: anywhere;
-    font-size: 11px;
+    font-size: var(--font-size-xs);
 
     .key-usage-http {
       display: flex;
@@ -236,7 +236,7 @@ const metrics = computed(() => {
     gap: 9px;
     padding: 24px 10px;
     color: var(--color-text-muted);
-    font-size: 12px;
+    font-size: var(--font-size-xs);
     line-height: 1.7;
     text-align: center;
 
@@ -250,7 +250,7 @@ const metrics = computed(() => {
 
     .key-usage-empty-title {
       color: var(--color-text);
-      font-size: 13px;
+      font-size: var(--font-size-sm);
     }
   }
 

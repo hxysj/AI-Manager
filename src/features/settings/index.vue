@@ -921,7 +921,7 @@ watch(
   gap: 12px;
   overflow: hidden;
   color: var(--color-text);
-  font-size: 0.86rem;
+  font-size: var(--font-size-base);
 
   &__header,
   &__panel {
@@ -942,14 +942,14 @@ watch(
   &__header p {
     margin: 0 0 5px;
     color: var(--color-text-soft);
-    font-size: 0.68rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.12em;
     text-transform: uppercase;
   }
 
   &__header h1 {
     margin: 0;
-    font-size: 1.35rem;
+    font-size: var(--font-size-xl);
     line-height: 1.2;
   }
 
@@ -970,7 +970,7 @@ watch(
     border-radius: 8px;
     background: var(--color-panel);
     .tab-label {
-      font-size: 12px;
+      font-size: var(--font-size-xs);
       line-height: 12px;
     }
   }
@@ -986,7 +986,7 @@ watch(
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__tab--active {
@@ -1012,7 +1012,7 @@ watch(
     background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &__save {
@@ -1025,7 +1025,7 @@ watch(
   &__check-update {
     padding: 0 12px;
     .text {
-      font-size: 14px;
+      font-size: var(--font-size-sm);
       line-height: 14px;
     }
   }
@@ -1075,14 +1075,14 @@ watch(
 
   &__panel-header h2 {
     margin: 0 0 5px;
-    font-size: 0.98rem;
+    font-size: var(--font-size-lg);
     line-height: 1.35;
   }
 
   &__panel-header span:not([data-emphasis]),
   &__hint {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
     word-break: break-all;
   }
@@ -1095,7 +1095,7 @@ watch(
 
   &__field > span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.7rem;
+    font-size: var(--font-size-xs);
     letter-spacing: 0.08em;
     text-transform: uppercase;
   }
@@ -1114,7 +1114,7 @@ watch(
     border-radius: 7px;
     background: var(--color-panel);
     color: var(--color-text);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &__field input {
@@ -1125,7 +1125,7 @@ watch(
     border-radius: 7px;
     background: var(--color-panel);
     color: var(--color-text);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &__input-row button {
@@ -1140,7 +1140,7 @@ watch(
     border-radius: 8px;
     background: var(--color-warning-soft);
     color: var(--color-warning);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__hint {
@@ -1189,13 +1189,13 @@ watch(
   }
 
   &__cli-title [data-emphasis] {
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
     line-height: 1.35;
   }
 
   &__cli-title small {
     color: var(--color-text-soft);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
     text-align: right;
     word-break: break-all;
@@ -1211,7 +1211,7 @@ watch(
     border-radius: 999px;
     background: var(--color-success-soft);
     color: var(--color-success);
-    font-size: 0.7rem;
+    font-size: var(--font-size-xs);
   }
 
   &__cli-status--offline {
@@ -1224,7 +1224,7 @@ watch(
     flex-direction: column;
     gap: 5px;
     color: var(--color-text-soft);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
     word-break: break-all;
   }
@@ -1270,7 +1270,7 @@ watch(
     border-radius: 6px;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 
   &__choice input {
@@ -1297,7 +1297,7 @@ watch(
     background: var(--color-danger-soft);
     color: var(--color-danger);
     cursor: pointer;
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   &__cloud {
@@ -1324,13 +1324,13 @@ watch(
   }
 
   &__cloud-header [data-emphasis] {
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
     line-height: 1.35;
   }
 
   &__cloud-header span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
   }
 
@@ -1338,7 +1338,7 @@ watch(
     flex: none;
     padding-top: 1px;
     color: var(--color-text-soft);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   &__cloud-grid {
@@ -1372,7 +1372,7 @@ watch(
   &__backup-directory span:not([data-emphasis]) {
     min-width: 0;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
     word-break: break-all;
   }
@@ -1397,7 +1397,7 @@ watch(
     border: 1px dashed var(--color-line);
     border-radius: 8px;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     text-align: center;
   }
 
@@ -1421,7 +1421,7 @@ watch(
 
   &__backup-item [data-emphasis] {
     overflow: hidden;
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1429,7 +1429,7 @@ watch(
 
   &__backup-item span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
   }
 
@@ -1440,13 +1440,13 @@ watch(
   }
 
   &__data-copy [data-emphasis] {
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
     line-height: 1.35;
   }
 
   &__data-copy span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
   }
 }

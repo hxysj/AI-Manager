@@ -661,13 +661,13 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
 
         .image-extractor-title {
           color: var(--color-text);
-          font-size: 0.8rem;
+          font-size: var(--font-size-lg);
         }
 
         .image-extractor-subtitle {
           overflow: hidden;
           color: var(--color-text-muted);
-          font-size: 0.68rem;
+          font-size: var(--font-size-sm);
           text-overflow: ellipsis;
           white-space: nowrap;
         }
@@ -694,7 +694,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       background: var(--color-panel);
       color: var(--color-primary);
       cursor: pointer;
-      font-size: 0.72rem;
+      font-size: var(--font-size-base);
 
       &:hover:not(:disabled) {
         border-color: var(--color-line-strong);
@@ -727,7 +727,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       background: var(--color-panel);
       color: var(--color-text);
       cursor: pointer;
-      font-size: 0.72rem;
+      font-size: var(--font-size-base);
 
       &:focus-visible {
         outline: 2px solid rgba(47, 70, 104, 0.22);
@@ -754,7 +754,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       background: var(--color-panel);
       color: var(--color-text);
       font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-      font-size: 0.76rem;
+      font-size: var(--font-size-base);
       line-height: 1.58;
 
       &:focus {
@@ -770,7 +770,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       border-bottom: 1px solid var(--color-line);
       background: var(--color-panel-soft);
       color: var(--color-primary);
-      font-size: 0.7rem;
+      font-size: var(--font-size-base);
       line-height: 1.4;
     }
 
@@ -805,7 +805,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
         border-radius: 8px;
         background: var(--color-panel-soft);
         color: var(--color-text-muted);
-        font-size: 0.78rem;
+        font-size: var(--font-size-base);
       }
 
       .image-extractor-card {
@@ -910,7 +910,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
             flex-direction: column;
             gap: 7px;
             color: var(--color-text-soft);
-            font-size: 0.72rem;
+            font-size: var(--font-size-base);
           }
         }
 
@@ -924,7 +924,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           .image-extractor-index {
             flex: none;
             color: var(--color-primary);
-            font-size: 0.7rem;
+            font-size: var(--font-size-sm);
           }
 
           .image-extractor-link {
@@ -949,7 +949,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
               min-width: 0;
               flex: 1;
               overflow: hidden;
-              font-size: 0.68rem;
+              font-size: var(--font-size-sm);
               text-overflow: ellipsis;
               white-space: nowrap;
             }
@@ -1016,14 +1016,14 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
 
           .image-extractor-dialog-title {
             color: var(--color-text);
-            font-size: 0.8rem;
+            font-size: var(--font-size-lg);
           }
 
           .image-extractor-dialog-count {
             min-width: 44px;
             color: var(--color-text-soft);
             font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-            font-size: 0.68rem;
+            font-size: var(--font-size-sm);
           }
         }
 
@@ -1162,7 +1162,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
             width: 52px;
             color: #ffffff;
             font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-            font-size: 0.72rem;
+            font-size: var(--font-size-sm);
             text-align: center;
           }
 
@@ -1194,7 +1194,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           min-width: 0;
           flex: 1;
           overflow: hidden;
-          font-size: 0.7rem;
+          font-size: var(--font-size-sm);
           text-overflow: ellipsis;
           white-space: nowrap;
         }

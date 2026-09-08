@@ -96,7 +96,7 @@ function submit() {
 
   & span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   & input,

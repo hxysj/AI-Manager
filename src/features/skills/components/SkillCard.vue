@@ -195,7 +195,7 @@ function toFileUrl(value) {
   .skill-card-title {
     margin: 0;
     color: var(--color-text);
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
     line-height: 1.2;
   }
 
@@ -205,7 +205,7 @@ function toFileUrl(value) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     line-height: 1.2;
   }
 
@@ -248,7 +248,7 @@ function toFileUrl(value) {
     overflow: hidden;
     margin: 0;
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     line-height: 1.35;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -259,7 +259,7 @@ function toFileUrl(value) {
     gap: 8px;
     overflow: hidden;
     color: var(--color-text-soft);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
     white-space: nowrap;
   }
 
@@ -280,7 +280,7 @@ function toFileUrl(value) {
     border: 1px solid var(--color-line);
     border-radius: 50%;
     color: var(--color-text-muted);
-    font-size: 0.74rem;
+    font-size: var(--font-size-sm);
     overflow: hidden;
   }
 

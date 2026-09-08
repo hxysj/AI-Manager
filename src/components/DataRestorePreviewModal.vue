@@ -873,13 +873,13 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
       .restore-stat-value {
         color: var(--color-text);
-        font-size: 1.04rem;
+        font-size: var(--font-size-lg);
         line-height: 1.1;
       }
 
       .restore-stat-label {
         color: var(--color-text-muted);
-        font-size: 0.72rem;
+        font-size: var(--font-size-xs);
         line-height: 1.2;
       }
     }
@@ -921,7 +921,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
   border-radius: 8px;
   background: var(--color-panel);
   color: var(--color-text-muted);
-  font-size: 0.84rem;
+  font-size: var(--font-size-base);
   line-height: 1.6;
 }
 
@@ -964,7 +964,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
         .restore-nav-name {
           min-width: 0;
           overflow: hidden;
-          font-size: 0.84rem;
+          font-size: var(--font-size-base);
           text-overflow: ellipsis;
           white-space: nowrap;
         }
@@ -972,7 +972,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
         .restore-nav-total {
           flex: none;
           color: var(--color-text-muted);
-          font-size: 0.72rem;
+          font-size: var(--font-size-xs);
         }
       }
 
@@ -986,7 +986,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
           border-radius: 999px;
           background: var(--color-panel);
           color: var(--color-text-muted);
-          font-size: 0.68rem;
+          font-size: var(--font-size-xs);
           line-height: 1.4;
         }
       }
@@ -995,7 +995,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
         overflow: hidden;
         color: var(--color-text-soft);
         font-family: Consolas, "Courier New", monospace;
-        font-size: 0.68rem;
+        font-size: var(--font-size-xs);
         line-height: 1.35;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1047,12 +1047,12 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
           .restore-section-title {
             color: var(--color-text);
-            font-size: 0.9rem;
+            font-size: var(--font-size-base);
           }
 
           .restore-section-count {
             color: var(--color-text-muted);
-            font-size: 0.74rem;
+            font-size: var(--font-size-sm);
           }
         }
       }
@@ -1080,7 +1080,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
       min-width: 0;
       overflow: hidden;
       color: var(--color-text);
-      font-size: 0.82rem;
+      font-size: var(--font-size-sm);
       text-overflow: ellipsis;
       white-space: nowrap;
     }
@@ -1088,7 +1088,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
     .restore-group-count {
       flex: none;
       color: var(--color-text-muted);
-      font-size: 0.74rem;
+      font-size: var(--font-size-sm);
     }
 
     .restore-group-actions {
@@ -1113,7 +1113,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
     gap: 10px;
     border-left: 2px solid var(--color-line-strong);
     color: var(--color-text);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
 
     .restore-tree-folder-name {
       min-width: 0;
@@ -1125,7 +1125,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
     .restore-tree-folder-count {
       flex: none;
       color: var(--color-text-muted);
-      font-size: 0.72rem;
+      font-size: var(--font-size-xs);
     }
 
     .restore-directory-actions {
@@ -1164,13 +1164,13 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
   .restore-item-name {
     color: var(--color-text);
-    font-size: 0.86rem;
+    font-size: var(--font-size-base);
     line-height: 1.35;
   }
 
   .restore-item-path {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
     line-height: 1.45;
     word-break: break-all;
   }
@@ -1223,13 +1223,13 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
       .restore-choice-title {
         color: var(--color-text);
-        font-size: 0.78rem;
+        font-size: var(--font-size-sm);
         line-height: 1.25;
       }
 
       .restore-choice-desc {
         overflow: hidden;
-        font-size: 0.7rem;
+        font-size: var(--font-size-xs);
         line-height: 1.25;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1259,7 +1259,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
   background: var(--color-panel);
   color: var(--color-primary);
   cursor: pointer;
-  font-size: 0.74rem;
+  font-size: var(--font-size-sm);
 }
 
 .restore-mini-button:disabled,
@@ -1285,7 +1285,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
   border: 1px dashed var(--color-line);
   border-radius: 8px;
   color: var(--color-text-muted);
-  font-size: 0.9rem;
+  font-size: var(--font-size-base);
 }
 
 .restore-actions {
@@ -1349,14 +1349,14 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
   .restore-compare-title {
     color: var(--color-text);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
   }
 }
 
 .restore-compare-summary {
   grid-column: 1 / -1;
   color: var(--color-text-muted);
-  font-size: 0.78rem;
+  font-size: var(--font-size-sm);
 }
 
 .restore-compare-code {
@@ -1369,7 +1369,7 @@ function createRestoreCompareRows(currentContent, backupContent) {
   background: var(--color-panel);
   color: var(--color-text);
   font-family: "JetBrains Mono", "Consolas", monospace;
-  font-size: 0.74rem;
+  font-size: var(--font-size-sm);
   line-height: 1.55;
 }
 

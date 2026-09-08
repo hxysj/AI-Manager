@@ -163,12 +163,12 @@ function sessionTitle(session) {
 
   .lan-share-sessions-name {
     color: var(--color-text);
-    font-size: 0.9rem;
+    font-size: var(--font-size-base);
   }
 
   .lan-share-sessions-subtitle {
     color: var(--color-text-muted);
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   .lan-share-sessions-actions {
@@ -181,7 +181,7 @@ function sessionTitle(session) {
   .lan-share-sessions-mini-button {
     height: 30px;
     padding: 0 9px;
-    font-size: 0.76rem;
+    font-size: var(--font-size-sm);
   }
 
   .lan-share-sessions-mini-button:disabled {
@@ -248,12 +248,12 @@ function sessionTitle(session) {
 
   .lan-share-sessions-session-name {
     color: var(--color-text);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
   }
 
   .lan-share-sessions-meta {
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--font-size-xs);
   }
 
   .lan-share-sessions-empty {
@@ -264,7 +264,7 @@ function sessionTitle(session) {
     border: 1px dashed var(--color-line);
     border-radius: 8px;
     color: var(--color-text-muted);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
     line-height: 1.5;
     text-align: center;
   }

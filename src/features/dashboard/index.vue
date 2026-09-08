@@ -214,14 +214,14 @@ const metrics = computed(() => {
   &__eyebrow {
     margin: 0 0 10px;
     color: var(--color-text-soft);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     letter-spacing: 0.18em;
     text-transform: uppercase;
   }
 
   &__hero h1 {
     margin: 0;
-    font-size: 2rem;
+    font-size: var(--font-size-xl);
     line-height: 1.15;
   }
 
@@ -256,13 +256,13 @@ const metrics = computed(() => {
 
   &__metric-card span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
   &__metric-card [data-emphasis] {
-    font-size: 2.2rem;
+    font-size: var(--font-size-xl);
     line-height: 1;
   }
 
@@ -296,12 +296,12 @@ const metrics = computed(() => {
 
   &__panel-header h2 {
     margin: 0;
-    font-size: 1.2rem;
+    font-size: var(--font-size-xl);
   }
 
   &__panel-header span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.82rem;
+    font-size: var(--font-size-sm);
   }
 
   &__path-list {
@@ -325,7 +325,7 @@ const metrics = computed(() => {
 
   &__path-list span:not([data-emphasis]) {
     color: var(--color-text-muted);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     letter-spacing: 0.1em;
     text-transform: uppercase;
   }
@@ -336,7 +336,7 @@ const metrics = computed(() => {
     background: transparent;
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.95rem;
+    font-size: var(--font-size-lg);
     line-height: 1.5;
     text-align: left;
     word-break: break-all;
@@ -365,7 +365,7 @@ const metrics = computed(() => {
   &__diagnostic [data-emphasis] {
     display: block;
     margin-bottom: 4px;
-    font-size: 0.98rem;
+    font-size: var(--font-size-lg);
   }
 
   &__cli-card p,
@@ -386,7 +386,7 @@ const metrics = computed(() => {
   &__cli-meta small,
   &__diagnostic small {
     color: var(--color-text-soft);
-    font-size: 0.78rem;
+    font-size: var(--font-size-sm);
     text-align: right;
     word-break: break-all;
   }
@@ -409,7 +409,7 @@ const metrics = computed(() => {
   border-radius: 999px;
   background: var(--color-success-soft);
   color: var(--color-success);
-  font-size: 0.76rem;
+  font-size: var(--font-size-sm);
   letter-spacing: 0.06em;
   text-transform: uppercase;
 

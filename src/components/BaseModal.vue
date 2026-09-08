@@ -71,13 +71,13 @@ defineEmits(["close"])
 
   &__header h2 {
     margin: 0;
-    font-size: 1.4rem;
+    font-size: var(--font-size-xl);
   }
 
   &__header p {
     margin: 6px 0 0;
     color: var(--color-text-muted);
-    font-size: 0.92rem;
+    font-size: var(--font-size-base);
   }
 
   &__close {
@@ -90,7 +90,7 @@ defineEmits(["close"])
     background: var(--color-panel);
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: 1.4rem;
+    font-size: var(--font-size-xl);
     line-height: 1;
   }
 

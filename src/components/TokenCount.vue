@@ -33,7 +33,7 @@ const tokenCountParts = computed(() => formatTokenCountParts(props.value))
 
   .token-count-exact {
     color: var(--color-text-muted);
-    font-size: 0.72em;
+    font-size: var(--font-size-xs);
     line-height: 1.1;
     white-space: nowrap;
   }

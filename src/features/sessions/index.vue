@@ -906,14 +906,14 @@ onBeforeUnmount(() => {
       .sessions-view-eyebrow {
         margin: 0 0 5px;
         color: var(--color-text-soft);
-        font-size: 0.72rem;
+        font-size: var(--font-size-xs);
         letter-spacing: 0.14em;
         text-transform: uppercase;
       }
 
       .sessions-view-title {
         margin: 0;
-        font-size: 1.38rem;
+        font-size: var(--font-size-xl);
         line-height: 1.2;
       }
     }
@@ -947,7 +947,7 @@ onBeforeUnmount(() => {
 
     .sessions-view-filter-label {
       color: var(--color-text-muted);
-      font-size: 0.74rem;
+      font-size: var(--font-size-sm);
     }
 
     .sessions-view-search-input,
@@ -960,7 +960,7 @@ onBeforeUnmount(() => {
       padding: 0 11px;
       color: var(--color-text);
       font: inherit;
-      font-size: 0.88rem;
+      font-size: var(--font-size-base);
     }
 
     .sessions-view-project-filter {
@@ -1000,14 +1000,14 @@ onBeforeUnmount(() => {
           text-align: left;
 
           .sessions-view-project-name {
-            font-size: 0.86rem;
+            font-size: var(--font-size-base);
             line-height: 1.3;
           }
 
           .sessions-view-project-path {
             color: var(--color-text-muted);
             font-family: "Cascadia Code", Consolas, monospace;
-            font-size: 0.76rem;
+            font-size: var(--font-size-sm);
             line-height: 1.45;
             white-space: normal;
             word-break: break-all;
@@ -1031,7 +1031,7 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     gap: 12px;
     color: var(--color-text-muted);
-    font-size: 0.8rem;
+    font-size: var(--font-size-sm);
   }
 
   .sessions-view-layout {
@@ -1080,7 +1080,7 @@ onBeforeUnmount(() => {
               overflow: hidden;
               margin: 0;
               color: var(--color-text);
-              font-size: 0.92rem;
+              font-size: var(--font-size-base);
               line-height: 1.2;
               text-overflow: ellipsis;
               white-space: nowrap;
@@ -1089,7 +1089,7 @@ onBeforeUnmount(() => {
             .sessions-view-card-cli {
               flex: 0 0 auto;
               color: var(--color-text-soft);
-              font-size: 0.76rem;
+              font-size: var(--font-size-sm);
             }
           }
 
@@ -1097,7 +1097,7 @@ onBeforeUnmount(() => {
             overflow: hidden;
             margin: 0;
             color: var(--color-text-muted);
-            font-size: 0.78rem;
+            font-size: var(--font-size-sm);
             line-height: 1.35;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -1108,7 +1108,7 @@ onBeforeUnmount(() => {
             gap: 10px;
             overflow: hidden;
             color: var(--color-text-soft);
-            font-size: 0.76rem;
+            font-size: var(--font-size-sm);
             white-space: nowrap;
           }
         }
@@ -1141,7 +1141,7 @@ onBeforeUnmount(() => {
       align-items: center;
       gap: 8px;
       color: var(--color-text-muted);
-      font-size: 0.8rem;
+      font-size: var(--font-size-sm);
     }
 
     .sessions-view-page-label {
@@ -1204,7 +1204,7 @@ onBeforeUnmount(() => {
 
           .sessions-view-modal-eyebrow {
             color: var(--color-text-soft);
-            font-size: 0.68rem;
+            font-size: var(--font-size-xs);
             letter-spacing: 0.12em;
             line-height: 1;
             text-transform: uppercase;
@@ -1213,14 +1213,14 @@ onBeforeUnmount(() => {
           .sessions-view-modal-heading {
             margin: 0;
             color: var(--color-text);
-            font-size: 1.16rem;
+            font-size: var(--font-size-lg);
             line-height: 1.2;
           }
 
           .sessions-view-modal-count {
             margin: 0;
             color: var(--color-text-muted);
-            font-size: 0.82rem;
+            font-size: var(--font-size-sm);
 
             .sessions-view-modal-count-value {
               color: var(--color-primary);
@@ -1254,7 +1254,7 @@ onBeforeUnmount(() => {
 
         .sessions-view-recycle-filter-label {
           color: var(--color-text-muted);
-          font-size: 0.72rem;
+          font-size: var(--font-size-xs);
         }
 
         .sessions-view-recycle-search-input,
@@ -1267,7 +1267,7 @@ onBeforeUnmount(() => {
           padding: 0 10px;
           color: var(--color-text);
           font: inherit;
-          font-size: 0.82rem;
+          font-size: var(--font-size-sm);
         }
       }
 
@@ -1313,7 +1313,7 @@ onBeforeUnmount(() => {
                 overflow: hidden;
                 margin: 0;
                 color: var(--color-text);
-                font-size: 0.9rem;
+                font-size: var(--font-size-base);
                 line-height: 1.2;
                 text-overflow: ellipsis;
                 white-space: nowrap;
@@ -1328,7 +1328,7 @@ onBeforeUnmount(() => {
                 border-radius: 6px;
                 background: var(--color-primary-soft);
                 color: var(--color-primary);
-                font-size: 0.7rem;
+                font-size: var(--font-size-xs);
               }
             }
 
@@ -1336,7 +1336,7 @@ onBeforeUnmount(() => {
               overflow: hidden;
               margin: 0;
               color: var(--color-text-muted);
-              font-size: 0.8rem;
+              font-size: var(--font-size-sm);
               text-overflow: ellipsis;
               white-space: nowrap;
             }
@@ -1347,7 +1347,7 @@ onBeforeUnmount(() => {
               gap: 12px;
               overflow: hidden;
               color: var(--color-text-soft);
-              font-size: 0.74rem;
+              font-size: var(--font-size-sm);
               white-space: nowrap;
 
               .sessions-view-recycle-meta-text {
@@ -1382,7 +1382,7 @@ onBeforeUnmount(() => {
 
         .sessions-view-recycle-page-info {
           color: var(--color-text-muted);
-          font-size: 0.78rem;
+          font-size: var(--font-size-sm);
           white-space: nowrap;
         }
 
@@ -1397,7 +1397,7 @@ onBeforeUnmount(() => {
             align-items: center;
             gap: 8px;
             color: var(--color-text-muted);
-            font-size: 0.78rem;
+            font-size: var(--font-size-sm);
           }
 
           .sessions-view-recycle-page-label {
@@ -1425,7 +1425,7 @@ onBeforeUnmount(() => {
         flex-direction: column;
         gap: 10px;
         color: var(--color-text-muted);
-        font-size: 0.86rem;
+        font-size: var(--font-size-base);
 
         .sessions-view-recycle-empty-icon {
           color: var(--color-text-muted);
@@ -1446,13 +1446,13 @@ onBeforeUnmount(() => {
 
     .sessions-view-empty-title {
       margin: 0 0 10px;
-      font-size: 1.28rem;
+      font-size: var(--font-size-xl);
     }
 
     .sessions-view-empty-desc {
       margin: 0;
       color: var(--color-text-muted);
-      font-size: 0.88rem;
+      font-size: var(--font-size-base);
     }
   }
 
@@ -1467,7 +1467,7 @@ onBeforeUnmount(() => {
     background: var(--color-panel-soft);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.88rem;
+    font-size: var(--font-size-base);
 
     .action-button-icon {
       flex: 0 0 auto;

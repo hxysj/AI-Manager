@@ -280,20 +280,20 @@ function goPage(nextPage) {
 
       .logs-view-mark {
         color: var(--color-text-soft);
-        font-size: 0.72rem;
+        font-size: var(--font-size-xs);
         letter-spacing: 0.14em;
       }
 
       .logs-view-heading {
         margin: 0;
         color: var(--color-primary);
-        font-size: 1.35rem;
+        font-size: var(--font-size-xl);
       }
 
       .logs-view-path {
         margin: 0;
         color: var(--color-text-muted);
-        font-size: 0.86rem;
+        font-size: var(--font-size-base);
       }
     }
 
@@ -333,7 +333,7 @@ function goPage(nextPage) {
 
       .logs-view-filter-label {
         color: var(--color-text-muted);
-        font-size: 0.78rem;
+        font-size: var(--font-size-sm);
       }
 
       .logs-view-select {
@@ -350,7 +350,7 @@ function goPage(nextPage) {
     .logs-view-count {
       margin-left: auto;
       color: var(--color-text-muted);
-      font-size: 0.84rem;
+      font-size: var(--font-size-base);
     }
   }
 
@@ -379,18 +379,18 @@ function goPage(nextPage) {
 
       .logs-view-item-title {
         color: var(--color-primary);
-        font-size: 0.95rem;
+        font-size: var(--font-size-lg);
       }
 
       .logs-view-item-status {
         color: var(--color-text-muted);
-        font-size: 0.82rem;
+        font-size: var(--font-size-sm);
       }
 
       .logs-view-item-message {
         margin: 8px 0 0;
         color: var(--color-danger);
-        font-size: 0.86rem;
+        font-size: var(--font-size-base);
       }
 
       .logs-view-meta {
@@ -400,7 +400,7 @@ function goPage(nextPage) {
 
         .logs-view-meta-item {
           color: var(--color-text-soft);
-          font-size: 0.78rem;
+          font-size: var(--font-size-sm);
         }
       }
 
@@ -412,7 +412,7 @@ function goPage(nextPage) {
         border-radius: 8px;
         background: var(--color-panel-soft);
         color: var(--color-text-muted);
-        font-size: 0.78rem;
+        font-size: var(--font-size-sm);
         line-height: 1.55;
       }
     }
@@ -434,7 +434,7 @@ function goPage(nextPage) {
     border-radius: 8px;
     background: var(--color-panel);
     color: var(--color-text-muted);
-    font-size: 0.84rem;
+    font-size: var(--font-size-base);
 
     .logs-view-page-select,
     .logs-view-page-button {

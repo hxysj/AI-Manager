@@ -851,7 +851,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
       gap: 8px;
       color: var(--color-text-muted);
       cursor: pointer;
-      font-size: 0.78rem;
+      font-size: var(--font-size-base);
 
       .string-diff-toggle-label {
         line-height: 1;
@@ -877,7 +877,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
     background: var(--color-panel);
     color: var(--color-primary);
     cursor: pointer;
-    font-size: 0.76rem;
+    font-size: var(--font-size-base);
 
     &:hover:not(:disabled) {
       border-color: var(--color-line-strong);
@@ -920,7 +920,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
     border-radius: 9px;
     background: var(--color-warning-soft);
     color: var(--color-warning);
-    font-size: 0.62rem;
+    font-size: var(--font-size-sm);
     line-height: 1;
   }
 
@@ -952,7 +952,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
 
         .string-diff-panel-title {
           color: var(--color-text);
-          font-size: 0.8rem;
+          font-size: var(--font-size-lg);
         }
 
         .string-diff-panel-meta {
@@ -963,14 +963,14 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
 
         .string-diff-parse-state {
           color: var(--color-success);
-          font-size: 0.66rem;
+          font-size: var(--font-size-sm);
         }
 
         .string-diff-counter {
           flex: none;
           color: var(--color-text-soft);
           font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-          font-size: 0.72rem;
+          font-size: var(--font-size-sm);
         }
       }
 
@@ -991,7 +991,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
           padding: 11px;
           border: 0;
           font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-          font-size: 0.76rem;
+          font-size: var(--font-size-base);
           line-height: 1.55;
           tab-size: 2;
           white-space: pre;
@@ -1128,7 +1128,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
           border-radius: 999px;
           background: var(--color-panel);
           color: var(--color-primary);
-          font-size: 0.7rem;
+          font-size: var(--font-size-sm);
         }
 
         .string-diff-badge-warning {
@@ -1140,7 +1140,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
         .string-diff-parse-info {
           overflow: hidden;
           color: var(--color-text-muted);
-          font-size: 0.74rem;
+          font-size: var(--font-size-sm);
           text-overflow: ellipsis;
           white-space: nowrap;
         }
@@ -1196,7 +1196,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
         overflow: hidden;
         margin-bottom: 4px;
         color: var(--color-primary);
-        font-size: 1rem;
+        font-size: var(--font-size-lg);
         line-height: 1;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -1204,7 +1204,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
 
       .string-diff-metric-label {
         color: var(--color-text-muted);
-        font-size: 0.68rem;
+        font-size: var(--font-size-sm);
       }
     }
 
@@ -1218,7 +1218,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
         min-height: 176px;
         place-items: center;
         color: var(--color-text-muted);
-        font-size: 0.8rem;
+        font-size: var(--font-size-base);
       }
 
       .string-diff-table {
@@ -1239,7 +1239,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
               border-bottom: 1px solid var(--color-line);
               background: var(--color-panel-soft);
               color: var(--color-text-muted);
-              font-size: 0.7rem;
+              font-size: var(--font-size-base);
               text-align: left;
             }
           }
@@ -1255,7 +1255,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
               vertical-align: top;
               color: var(--color-text);
               font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-              font-size: 0.74rem;
+              font-size: var(--font-size-base);
               line-height: 1.5;
               text-align: left;
               white-space: pre-wrap;
@@ -1275,7 +1275,7 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
               background: var(--color-warning-soft);
               color: var(--color-warning);
               font-family: inherit;
-              font-size: 0.68rem;
+              font-size: var(--font-size-sm);
               white-space: nowrap;
             }
 
