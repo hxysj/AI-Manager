@@ -174,7 +174,9 @@
         <div class="quick-switch-panel-summary-row">
           <section class="quick-switch-panel-usage-panel">
             <div class="quick-switch-panel-usage-head">
-              <span data-emphasis class="quick-switch-panel-usage-title">最近用量</span>
+              <span data-emphasis class="quick-switch-panel-usage-title"
+                >最近用量</span
+              >
               <span class="quick-switch-panel-usage-count">
                 {{ usageTrend.length }} 天
               </span>
@@ -202,7 +204,9 @@
             class="quick-switch-panel-usage-panel quick-switch-panel-provider-panel"
           >
             <div class="quick-switch-panel-usage-head">
-              <span data-emphasis class="quick-switch-panel-usage-title">Provider</span>
+              <span data-emphasis class="quick-switch-panel-usage-title"
+                >Provider</span
+              >
               <span class="quick-switch-panel-usage-count">
                 {{ usageProviders.length }} 个
               </span>
@@ -364,14 +368,14 @@ const logoDrag = {
 const { withGlobalLoading } = useGlobalLoading()
 
 const cliTargets = computed(() => {
-  return (props.state.cliTargets || []).filter(item => {
+  return (props.state.cliTargets || []).filter((item) => {
     return props.state.runtimeConfigSchemas?.[item.id]?.enabled
   })
 })
 
 const activeCli = computed(() => {
   return (
-    cliTargets.value.find(item => item.id === selectedCli.value) ||
+    cliTargets.value.find((item) => item.id === selectedCli.value) ||
     cliTargets.value[0] ||
     null
   )
@@ -380,7 +384,7 @@ const activeCli = computed(() => {
 const activeProfile = computed(() => {
   return (
     (props.state.runtimeProfiles || []).find(
-      item => item.cli === activeCli.value?.id
+      (item) => item.cli === activeCli.value?.id
     ) || null
   )
 })
@@ -409,7 +413,7 @@ const proxyActiveProvider = computed(() => {
   if (!proxyActiveTargetId.value.startsWith("account:")) {
     return (
       (props.state.providers || []).find(
-        item => item.id === proxyActiveTargetId.value
+        (item) => item.id === proxyActiveTargetId.value
       ) || null
     )
   }
@@ -425,7 +429,7 @@ const proxyActiveAccount = computed(() => {
   const accountId = proxyActiveTargetId.value.slice("account:".length)
 
   return (
-    (props.state.codexAccounts || []).find(item => item.id === accountId) ||
+    (props.state.codexAccounts || []).find((item) => item.id === accountId) ||
     null
   )
 })
@@ -437,7 +441,7 @@ const activeProvider = computed(() => {
 
   return (
     (props.state.providers || []).find(
-      item => item.id === activeProfile.value?.providerId
+      (item) => item.id === activeProfile.value?.providerId
     ) || null
   )
 })
@@ -451,9 +455,7 @@ const activeAccount = computed(() => {
     return proxyActiveAccount.value
   }
 
-  return (
-    (props.state.codexAccounts || []).find(item => item.active) || null
-  )
+  return (props.state.codexAccounts || []).find((item) => item.active) || null
 })
 
 const activeName = computed(() => {
@@ -483,10 +485,10 @@ const items = computed(() => {
   }
 
   const providerItems = (props.state.providers || [])
-    .filter(item => {
+    .filter((item) => {
       return item.cli === activeCli.value.id && item.enabled !== false
     })
-    .map(provider => {
+    .map((provider) => {
       const model = firstModelName(provider)
       const active = proxyActiveTargetId.value
         ? proxyActiveTargetId.value === provider.id
@@ -510,7 +512,7 @@ const items = computed(() => {
 
   return [
     ...providerItems,
-    ...(props.state.codexAccounts || []).map(account => ({
+    ...(props.state.codexAccounts || []).map((account) => ({
       key: `account:${account.id}`,
       type: "account",
       account,
@@ -526,7 +528,7 @@ const items = computed(() => {
 })
 
 const activeUsageLogs = computed(() => {
-  return (props.state.usage?.logs || []).filter(item => {
+  return (props.state.usage?.logs || []).filter((item) => {
     return item.appType === activeCli.value?.id
   })
 })
@@ -570,9 +572,9 @@ const usageTrend = computed(() => {
   const rows = Array.from(groups.values())
     .sort((left, right) => left.timestamp - right.timestamp)
     .slice(-7)
-  const maxTokens = Math.max(...rows.map(item => item.actualTokens), 1)
+  const maxTokens = Math.max(...rows.map((item) => item.actualTokens), 1)
 
-  return rows.map(item => ({
+  return rows.map((item) => ({
     ...item,
     percent: Math.max(8, Math.round((item.actualTokens / maxTokens) * 100))
   }))
@@ -598,9 +600,9 @@ const usageProviders = computed(() => {
   const rows = Array.from(groups.values())
     .sort((left, right) => right.actualTokens - left.actualTokens)
     .slice(0, 2)
-  const maxTokens = Math.max(...rows.map(item => item.actualTokens), 1)
+  const maxTokens = Math.max(...rows.map((item) => item.actualTokens), 1)
 
-  return rows.map(item => ({
+  return rows.map((item) => ({
     ...item,
     percent: Math.max(4, Math.round((item.actualTokens / maxTokens) * 100))
   }))
@@ -625,7 +627,7 @@ function formatQuickCost(value) {
 function ensureSelectedCli() {
   if (
     selectedCli.value &&
-    cliTargets.value.find(item => item.id === selectedCli.value)
+    cliTargets.value.find((item) => item.id === selectedCli.value)
   ) {
     return
   }
@@ -683,7 +685,7 @@ function firstModelName(provider) {
   return (
     provider.runtimeConfig?.mainModel ||
     (props.state.runtimeModels || []).find(
-      item => item.providerId === provider.id
+      (item) => item.providerId === provider.id
     )?.name ||
     ""
   )
@@ -710,8 +712,8 @@ function formatAccountQuotas(account) {
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
   ]
-    .filter(item => item.window)
-    .map(item => {
+    .filter((item) => item.window)
+    .map((item) => {
       return {
         key: item.key,
         label: formatRateWindowName(item.key, item.window),

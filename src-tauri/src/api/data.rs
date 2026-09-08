@@ -11,13 +11,24 @@ use crate::core::{database, provider_store, rule_store, skill_store};
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
-use reqwest::header::{HeaderMap, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use reqwest::header::{HeaderMap, HeaderValue, ACCEPT_ENCODING, ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_MATCH, RANGE};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath};
+
+const MAX_COMPRESSED_BACKUP_PAYLOAD_SIZE: u64 = 1024 * 1024 * 1024;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BackupScope {
+    Local,
+    Cloud,
+}
 
 pub struct DataBackupCache {
     drafts: HashMap<String, Value>,
@@ -298,12 +309,9 @@ pub async fn push_cloud_backup(
         last_updated_at,
         ..cloud_sync.clone()
     };
-    let mut backup_settings = app_settings.clone();
-
-    set_cloud_sync_settings(&mut backup_settings, updated_cloud_sync.clone());
     upload_webdav_backup(
         &cloud_sync,
-        create_data_backup(paths, &backup_settings).await?,
+        create_scoped_data_backup(paths, app_settings, BackupScope::Cloud).await?,
     )
     .await?;
     set_cloud_sync_settings(app_settings, updated_cloud_sync);
@@ -331,8 +339,9 @@ pub async fn preview_cloud_backup_restore(
     let content = download_webdav_backup(&cloud_sync).await?;
     let mut preview_settings = app_settings.clone();
     set_cloud_sync_settings(&mut preview_settings, cloud_sync.clone());
+    let preview = preview_data_backup_restore_content(paths, &preview_settings, &content).await?;
     let restore_id = cache.cache_restore_backup(
-        content.clone(),
+        content,
         json!({
           "type": "cloud",
           "cloudSync": cloud_sync
@@ -342,7 +351,7 @@ pub async fn preview_cloud_backup_restore(
     Ok(json!({
       "restoreId": restore_id,
       "fileName": cloud_sync.file_name,
-      "preview": preview_data_backup_restore_content(paths, &preview_settings, &content).await?
+      "preview": preview
     }))
 }
 
@@ -401,16 +410,27 @@ pub async fn create_data_backup(
     paths: &AppPaths,
     app_settings: &AppSettings,
 ) -> Result<String, ManagerError> {
-    let provider_keys = export_provider_keys(paths)?;
+    create_scoped_data_backup(paths, app_settings, BackupScope::Local).await
+}
 
-    encrypt_backup_payload(&json!({
+async fn create_scoped_data_backup(
+    paths: &AppPaths,
+    app_settings: &AppSettings,
+    scope: BackupScope,
+) -> Result<String, ManagerError> {
+    let provider_keys = export_provider_keys(paths)?;
+    let mut payload = json!({
       "version": 1,
       "createdAt": now_millis(),
-      "appSettings": serialize_backup_app_settings(app_settings),
-      "workspaceEntries": collect_backup_entries(paths).await?,
-      "codexPetEntries": collect_codex_pet_entries(app_settings).await?,
+      "workspaceEntries": collect_backup_entries(paths, scope).await?,
+      "codexPetEntries": collect_codex_pet_entries(app_settings, scope).await?,
       "runtimeProviderKeys": encrypt_backup_data(&provider_keys)?
-    }))
+    });
+
+    if scope == BackupScope::Local {
+        payload["appSettings"] = serialize_backup_app_settings(app_settings);
+    }
+    encrypt_backup_payload(&payload, scope)
 }
 
 fn serialize_backup_app_settings(app_settings: &AppSettings) -> Value {
@@ -760,7 +780,10 @@ async fn rebuild_state_after_restore(
     sessions::refresh_sessions_state(paths, state).await
 }
 
-async fn collect_backup_entries(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
+async fn collect_backup_entries(
+    paths: &AppPaths,
+    scope: BackupScope,
+) -> Result<Vec<Value>, ManagerError> {
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
     provider_store::initialize(paths)?;
@@ -780,13 +803,13 @@ async fn collect_backup_entries(paths: &AppPaths) -> Result<Vec<Value>, ManagerE
     ];
 
     for source_path in source_dirs {
-        let source_entries = collect_directory_entries(&source_path).await?;
         let root_name = path_text(
             source_path
                 .strip_prefix(&paths.workspace_root)
                 .unwrap_or(&source_path),
         )
         .replace('\\', "/");
+        let source_entries = collect_directory_entries(&source_path, scope, &root_name).await?;
 
         entries.push(json!({
           "path": root_name,
@@ -803,7 +826,10 @@ async fn collect_backup_entries(paths: &AppPaths) -> Result<Vec<Value>, ManagerE
 }
 
 // 启用宠物由 Codex 直接读取，因此单独保存并恢复到当前机器的 Codex 配置目录。
-async fn collect_codex_pet_entries(app_settings: &AppSettings) -> Result<Vec<Value>, ManagerError> {
+async fn collect_codex_pet_entries(
+    app_settings: &AppSettings,
+    scope: BackupScope,
+) -> Result<Vec<Value>, ManagerError> {
     let Some(codex_pets_dir) = codex_pets_backup_dir(app_settings) else {
         return Ok(Vec::new());
     };
@@ -815,6 +841,10 @@ async fn collect_codex_pet_entries(app_settings: &AppSettings) -> Result<Vec<Val
 
     while let Some(child) = children.next_entry().await? {
         let pet_dir = child.path();
+
+        if scope == BackupScope::Cloud && child.file_type().await?.is_symlink() {
+            continue;
+        }
 
         if tools::is_codex_pet_directory(&pet_dir).await {
             pet_dirs.push(pet_dir);
@@ -833,7 +863,7 @@ async fn collect_codex_pet_entries(app_settings: &AppSettings) -> Result<Vec<Val
           "path": pet_id,
           "type": "dir"
         }));
-        for mut entry in collect_directory_entries(&pet_dir).await? {
+        for mut entry in collect_directory_entries(&pet_dir, scope, &format!("pets/{pet_id}")).await? {
             let child_path = string_value(entry.get("path"));
             entry["path"] = json!(format!("{}/{}", pet_id, child_path));
             entries.push(entry);
@@ -952,14 +982,89 @@ fn pet_id_key(id: impl AsRef<str>) -> String {
     id.as_ref().to_lowercase()
 }
 
-async fn collect_directory_entries(root_path: &Path) -> Result<Vec<Value>, ManagerError> {
+fn is_cloud_backup_entry(entry_path: &str, is_dir: bool) -> bool {
+    let components = entry_path.split('/').collect::<Vec<_>>();
+
+    match components.first().copied() {
+        Some("pets" | "pets-disabled") => {
+            return if is_dir {
+                components.len() <= 2
+            } else {
+                components.len() == 3 && matches!(components[2], "pet.json" | "spritesheet.webp")
+            };
+        }
+        Some("prompts") => return true,
+        Some("skills") => {}
+        _ => return false,
+    }
+    let skill_path = &components[components.len().min(2)..];
+
+    if components.iter().skip(1).any(|component| {
+        matches!(
+            *component,
+            ".git"
+                | "node_modules"
+                | "__pycache__"
+                | ".cache"
+                | ".pytest_cache"
+                | ".mypy_cache"
+                | ".ruff_cache"
+                | ".venv"
+        )
+    }) {
+        return false;
+    }
+    if matches!(skill_path.first(), Some(&"logs" | &"cache" | &"backups")) {
+        return false;
+    }
+    if skill_path.first() == Some(&"data") {
+        if matches!(
+            skill_path.get(1),
+            Some(
+                &"work-history"
+                    | &"logs"
+                    | &"cache"
+                    | &"backups"
+                    | &"persona-backups"
+                    | &"system-changelog"
+                    | &"self-improvement"
+            )
+        ) {
+            return false;
+        }
+        if skill_path.len() == 2
+            && matches!(
+                skill_path[1],
+                "log.json"
+                    | "log-summary.json"
+                    | "system-log.json"
+                    | "system-changelog-summary.json"
+            )
+        {
+            return false;
+        }
+    }
+    let file_name = components.last().copied().unwrap_or_default();
+
+    is_dir
+        || !(file_name.ends_with('~')
+            || [".pyc", ".pyo", ".tmp", ".temp", ".swp", ".bak"]
+                .iter()
+                .any(|suffix| file_name.ends_with(suffix)))
+}
+
+async fn collect_directory_entries(
+    root_path: &Path,
+    scope: BackupScope,
+    prefix: &str,
+) -> Result<Vec<Value>, ManagerError> {
     let mut entries = Vec::new();
 
     if !root_path.exists() {
         return Ok(entries);
     }
 
-    collect_directory_entries_inner(root_path, root_path, &mut entries).await?;
+    collect_directory_entries_inner(root_path, root_path, &mut entries, scope, prefix).await?;
     Ok(entries)
 }
 
@@ -967,6 +1072,8 @@ async fn collect_directory_entries_inner(
     root_path: &Path,
     current_path: &Path,
     entries: &mut Vec<Value>,
+    scope: BackupScope,
+    prefix: &str,
 ) -> Result<(), ManagerError> {
     let mut children = std::fs::read_dir(current_path)?.collect::<Result<Vec<_>, _>>()?;
 
@@ -981,6 +1088,13 @@ async fn collect_directory_entries_inner(
         let relative_path =
             path_text(child_path.strip_prefix(root_path).unwrap_or(&child_path)).replace('\\', "/");
         let stat = std::fs::symlink_metadata(&child_path)?;
+
+        if scope == BackupScope::Cloud
+            && (stat.file_type().is_symlink()
+                || !is_cloud_backup_entry(&format!("{prefix}/{relative_path}"), stat.is_dir()))
+        {
+            continue;
+        }
 
         if stat.file_type().is_symlink() {
             entries.push(json!({
@@ -1000,6 +1114,8 @@ async fn collect_directory_entries_inner(
                 root_path,
                 &child_path,
                 entries,
+                scope,
+                prefix,
             ))
             .await?;
             continue;
@@ -2185,14 +2301,24 @@ fn webdav_content_length(headers: &HeaderMap) -> Option<u64> {
 }
 
 async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, ManagerError> {
-    let response = reqwest::Client::new()
-        .get(build_webdav_file_url(config)?)
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .read_timeout(Duration::from_secs(30))
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .build()
+        .map_err(|cause| ManagerError::System(cause.to_string()))?;
+    let response = client
+        .head(build_webdav_file_url(config)?)
         .header(AUTHORIZATION, build_webdav_auth_header(config))
+        .header(ACCEPT_ENCODING, "identity")
+        .timeout(Duration::from_secs(30))
         .send()
         .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+        .map_err(|cause| ManagerError::System(format!("{}读取备份信息失败：{}", cloud_sync_provider_name(config), cause.without_url())))?;
     let status = response.status().as_u16();
-
     if status == 404 {
         return Err(ManagerError::System(format!(
             "{}上未找到配置备份",
@@ -2200,21 +2326,135 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
         )));
     }
 
-    if status != 200 {
+    if ![200, 405, 501].contains(&status) {
         let detail = read_webdav_error_detail(response, config).await?;
-
         return Err(ManagerError::System(format!(
-            "{}下载失败：{}{}",
+            "{}读取备份信息失败：{}{}",
             cloud_sync_provider_name(config),
             status,
             detail
         )));
     }
+    let size = webdav_content_length(response.headers());
+    let etag = response.headers().get(ETAG).filter(|value| {
+        value.to_str().is_ok_and(|value| value.starts_with('"') && value.ends_with('"'))
+    }).cloned();
+    let supports_ranges = status == 200 && response.headers().get(ACCEPT_RANGES)
+        .and_then(|value| value.to_str().ok()).is_some_and(|value| value.eq_ignore_ascii_case("bytes"));
+    drop(response);
+    let mut content = Vec::new();
+    if let (true, Some(total), Some(etag)) = (supports_ranges, size.filter(|size| *size > 0), etag) {
+        while (content.len() as u64) < total {
+            let start = content.len() as u64;
+            let range = WebdavDownloadRange {
+                start,
+                end: (start + 4 * 1024 * 1024 - 1).min(total - 1),
+                total,
+                etag: etag.clone(),
+            };
+            let bytes = download_webdav_part(&client, config, Some(&range)).await?;
+            content.extend_from_slice(&bytes);
+        }
+    } else {
+        content = download_webdav_part(&client, config, None).await?;
+    }
+    String::from_utf8(content).map_err(|_| ManagerError::System(format!(
+        "{}备份不是有效的 UTF-8 文本，请检查云端文件是否为完整备份；本地数据未恢复", cloud_sync_provider_name(config)
+    )))
+}
 
-    response
-        .text()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))
+struct WebdavDownloadRange {
+    start: u64,
+    end: u64,
+    total: u64,
+    etag: HeaderValue,
+}
+
+async fn download_webdav_part(
+    client: &reqwest::Client,
+    config: &CloudSyncSettings,
+    range: Option<&WebdavDownloadRange>,
+) -> Result<Vec<u8>, ManagerError> {
+    let provider = cloud_sync_provider_name(config);
+    let mut failure = String::new();
+    for attempt in 0..3 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(500 * attempt)).await;
+        }
+        let mut request = client.get(build_webdav_file_url(config)?)
+            .header(AUTHORIZATION, build_webdav_auth_header(config))
+            .header(ACCEPT_ENCODING, "identity")
+            .timeout(Duration::from_secs(if range.is_some() { 120 } else { 600 }));
+        if let Some(range) = range {
+            request = request.header(RANGE, format!("bytes={}-{}", range.start, range.end))
+                .header(IF_MATCH, range.etag.clone());
+        }
+        let mut response = match request.send().await {
+            Ok(response) => response,
+            Err(cause) => {
+                failure = format!("连接失败或超时：{}", cause.without_url());
+                continue;
+            }
+        };
+        let status = response.status().as_u16();
+        if status == 404 {
+            return Err(ManagerError::System(format!("{provider}上未找到配置备份")));
+        }
+        if status == 412 {
+            return Err(ManagerError::System(format!("{provider}备份在下载期间已更新，请重新预览；本地数据未恢复")));
+        }
+        if [408, 502, 503, 504].contains(&status) {
+            failure = format!("云端暂时无法完成下载（HTTP {status}）");
+            continue;
+        }
+        if status != if range.is_some() { 206 } else { 200 } {
+            let detail = read_webdav_error_detail(response, config).await?;
+            return Err(ManagerError::System(format!("{provider}下载失败：HTTP {status}{detail}")));
+        }
+        let expected_size = if let Some(range) = range {
+            let expected_range = format!("bytes {}-{}/{}", range.start, range.end, range.total);
+            if response.headers().get(CONTENT_RANGE).and_then(|value| value.to_str().ok()) != Some(expected_range.as_str()) {
+                return Err(ManagerError::System(format!("{provider}返回的下载分段范围不匹配，已停止下载，避免拼接错误备份")));
+            }
+            if response.headers().get(ETAG).is_some_and(|etag| etag != range.etag) {
+                return Err(ManagerError::System(format!("{provider}备份版本发生变化，请重新预览；本地数据未恢复")));
+            }
+            Some(range.end - range.start + 1)
+        } else {
+            webdav_content_length(response.headers())
+        };
+        let mut content = Vec::new();
+        let mut interrupted = false;
+        loop {
+            match response.chunk().await {
+                Ok(Some(bytes)) => {
+                    if expected_size.is_some_and(|expected| content.len() as u64 + bytes.len() as u64 > expected) {
+                        return Err(ManagerError::System(format!("{provider}下载数据超过声明大小，已停止下载；本地数据未恢复")));
+                    }
+                    content.extend_from_slice(&bytes);
+                }
+                Ok(None) => break,
+                Err(cause) => {
+                    failure = format!("响应读取中断或超时，本段已接收 {} 字节：{}", content.len(), cause.without_url());
+                    interrupted = true;
+                    break;
+                }
+            }
+        }
+        if interrupted {
+            continue;
+        }
+        if expected_size.is_some_and(|expected| content.len() as u64 != expected) {
+            failure = format!("下载不完整，本段预期 {} 字节，实际 {} 字节", expected_size.unwrap(), content.len());
+            continue;
+        }
+        if content.is_empty() {
+            return Err(ManagerError::System(format!("{provider}云端备份为空，请重新上传完整备份")));
+        }
+        return Ok(content);
+    }
+    let progress = range.map(|range| format!("，已完成 {} / {} 字节", range.start, range.total)).unwrap_or_default();
+    Err(ManagerError::System(format!("{provider}备份下载失败{progress}，已尝试 3 次：{failure}。本地数据未恢复，请检查网络后重新预览")))
 }
 
 async fn read_webdav_error_detail(
@@ -2225,7 +2465,9 @@ async fn read_webdav_error_detail(
     let body = response
         .text()
         .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+        .map_err(|cause| ManagerError::System(format!(
+            "{}返回 HTTP {status}，错误响应读取失败：{}", cloud_sync_provider_name(config), cause.without_url()
+        )))?;
     let body = body.trim();
 
     if body.is_empty() {
@@ -2271,8 +2513,21 @@ fn build_webdav_auth_header(config: &CloudSyncSettings) -> String {
     )
 }
 
-fn encrypt_backup_payload(payload: &Value) -> Result<String, ManagerError> {
+fn encrypt_backup_payload(payload: &Value, scope: BackupScope) -> Result<String, ManagerError> {
     let mut iv = [0u8; 12];
+    let mut content = serde_json::to_vec(payload)?;
+    let uncompressed_size = content.len() as u64;
+
+    if scope == BackupScope::Cloud {
+        if uncompressed_size > MAX_COMPRESSED_BACKUP_PAYLOAD_SIZE {
+            return Err(ManagerError::System(
+                "云备份原始数据超过 1 GiB，请缩减 Skill 资源后重试".to_string(),
+            ));
+        }
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&content)?;
+        content = encoder.finish()?;
+    }
 
     getrandom::getrandom(&mut iv).map_err(|error| ManagerError::System(error.to_string()))?;
 
@@ -2280,21 +2535,25 @@ fn encrypt_backup_payload(payload: &Value) -> Result<String, ManagerError> {
     let cipher = Aes256Gcm::new_from_slice(&secret)
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let encrypted = cipher
-        .encrypt(
-            Nonce::from_slice(&iv),
-            serde_json::to_string(payload)?.as_bytes(),
-        )
+        .encrypt(Nonce::from_slice(&iv), content.as_slice())
         .map_err(|error| ManagerError::System(format!("{:?}", error)))?;
     let tag_index = encrypted.len() - 16;
     let engine = base64::engine::general_purpose::STANDARD;
 
-    Ok(serde_json::to_string_pretty(&json!({
+    let mut envelope = json!({
       "version": 1,
       "algorithm": "aes-256-gcm",
       "iv": engine.encode(iv),
       "tag": engine.encode(&encrypted[tag_index..]),
       "content": engine.encode(&encrypted[..tag_index])
-    }))?)
+    });
+
+    if scope == BackupScope::Cloud {
+        envelope["version"] = json!(2);
+        envelope["compression"] = json!("gzip");
+        envelope["uncompressedSize"] = json!(uncompressed_size);
+    }
+    Ok(serde_json::to_string_pretty(&envelope)?)
 }
 
 fn decrypt_backup_payload(content: &str) -> Result<Value, ManagerError> {
@@ -2305,6 +2564,24 @@ fn decrypt_backup_payload(content: &str) -> Result<Value, ManagerError> {
             ManagerError::Json(error)
         }
     })?;
+    let uncompressed_size = match payload.get("version").and_then(Value::as_u64) {
+        Some(1) if payload.get("compression").is_none() => None,
+        Some(2) => {
+            if payload.get("compression").and_then(Value::as_str) != Some("gzip") {
+                return Err(ManagerError::System("不支持的备份压缩格式".to_string()));
+            }
+            let size = payload
+                .get("uncompressedSize")
+                .and_then(Value::as_u64)
+                .filter(|size| *size > 0 && *size <= MAX_COMPRESSED_BACKUP_PAYLOAD_SIZE)
+                .ok_or_else(|| ManagerError::System("备份解压大小无效或超过 1 GiB".to_string()))?;
+            Some(size)
+        }
+        _ => return Err(ManagerError::System("不支持的备份文件版本".to_string())),
+    };
+    if payload.get("algorithm").and_then(Value::as_str) != Some("aes-256-gcm") {
+        return Err(ManagerError::System("不支持的备份加密格式".to_string()));
+    }
     let engine = base64::engine::general_purpose::STANDARD;
     let iv = engine
         .decode(string_value(payload.get("iv")))
@@ -2312,6 +2589,9 @@ fn decrypt_backup_payload(content: &str) -> Result<Value, ManagerError> {
     let tag = engine
         .decode(string_value(payload.get("tag")))
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    if iv.len() != 12 || tag.len() != 16 {
+        return Err(ManagerError::System("备份加密参数无效".to_string()));
+    }
     let encrypted = engine
         .decode(string_value(payload.get("content")))
         .map_err(|error| ManagerError::System(error.to_string()))?;
@@ -2321,9 +2601,22 @@ fn decrypt_backup_payload(content: &str) -> Result<Value, ManagerError> {
 
     let cipher = Aes256Gcm::new_from_slice(&backup_secret())
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    let decrypted = cipher
+    let mut decrypted = cipher
         .decrypt(Nonce::from_slice(&iv), content.as_ref())
         .map_err(|error| ManagerError::System(format!("{:?}", error)))?;
+
+    if let Some(size) = uncompressed_size {
+        let mut decoded = Vec::new();
+        GzDecoder::new(decrypted.as_slice())
+            .take(size + 1)
+            .read_to_end(&mut decoded)?;
+        if decoded.len() as u64 != size {
+            return Err(ManagerError::System(
+                "备份解压大小与声明不一致，文件可能已损坏".to_string(),
+            ));
+        }
+        decrypted = decoded;
+    }
 
     Ok(serde_json::from_slice(&decrypted)?)
 }
@@ -3225,7 +3518,7 @@ mod tests {
         preview_data_backup_restore_content, redact_backup_app_settings,
         restore_backup_app_settings, restore_codex_pet_entries, restore_data_backup_content,
         restore_directory_entries, sanitize_runtime_backup_entries, serialize_backup_app_settings,
-        validate_backup_symlink_target, webdav_content_length,
+        validate_backup_symlink_target, webdav_content_length, BackupScope,
     };
     use crate::api::runtime_provider;
     use crate::core::paths::resolve_app_paths;
@@ -3236,6 +3529,146 @@ mod tests {
     use reqwest::header::{HeaderMap, HeaderValue, CONTENT_LENGTH};
     use serde_json::{json, Map};
     use std::path::Path;
+
+    async fn webdav_test_server(responses: Vec<Vec<u8>>) -> (crate::core::settings::CloudSyncSettings, tokio::task::JoinHandle<Vec<String>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let mut requests = Vec::new();
+            for response in responses {
+                let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept()).await.unwrap().unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0u8; 2048];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let count = stream.read(&mut buffer).await.unwrap();
+                    assert!(count > 0 && request.len() < 16384);
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                requests.push(String::from_utf8(request).unwrap().to_lowercase());
+                stream.write_all(&response).await.unwrap();
+                stream.shutdown().await.unwrap();
+            }
+            requests
+        });
+        let config = super::normalize_cloud_sync_settings(&json!({
+            "provider": "koofr", "webdavUrl": format!("http://{address}/dav"),
+            "username": "test", "password": "test-secret", "fileName": "test.aimbackup"
+        }));
+        (config, task)
+    }
+
+    fn webdav_test_response(status: u16, headers: &str, body: &[u8]) -> Vec<u8> {
+        let mut response = format!("HTTP/1.1 {status} Test\r\nConnection: close\r\n{headers}\r\n").into_bytes();
+        response.extend_from_slice(body);
+        response
+    }
+
+    #[test]
+    fn webdav_download_retries_only_the_interrupted_range_and_preserves_utf8() {
+        tauri::async_runtime::block_on(async {
+            let chunk_size = 4 * 1024 * 1024;
+            let content = format!("{}中文备份", "a".repeat(chunk_size - 1));
+            let total = content.len();
+            let head = webdav_test_response(200, &format!("Content-Length: {total}\r\nAccept-Ranges: bytes\r\nETag: \"version-1\"\r\n"), b"");
+            let first_headers = format!("Content-Length: {chunk_size}\r\nContent-Range: bytes 0-{}/{total}\r\nETag: \"version-1\"\r\n", chunk_size - 1);
+            let first = webdav_test_response(206, &first_headers, &content.as_bytes()[..chunk_size]);
+            let last_headers = format!("Content-Length: {}\r\nContent-Range: bytes {chunk_size}-{}/{total}\r\nETag: \"version-1\"\r\n", total - chunk_size, total - 1);
+            let interrupted = webdav_test_response(206, &last_headers, &content.as_bytes()[chunk_size..chunk_size + 1]);
+            let last = webdav_test_response(206, &last_headers, &content.as_bytes()[chunk_size..]);
+            let (config, server) = webdav_test_server(vec![head, first, interrupted, last]).await;
+            assert_eq!(super::download_webdav_backup(&config).await.unwrap(), content);
+            let requests = server.await.unwrap();
+            assert!(requests[0].starts_with("head "));
+            assert!(requests[1].contains(&format!("range: bytes=0-{}", chunk_size - 1)));
+            assert_eq!(requests[2], requests[3]);
+            assert!(requests[3].contains(&format!("range: bytes={chunk_size}-{}", total - 1)));
+            for request in &requests[1..] {
+                assert!(request.contains("if-match: \"version-1\""));
+                assert!(request.contains("accept-encoding: identity"));
+            }
+        });
+    }
+
+    #[test]
+    fn webdav_download_supports_servers_without_range_or_strong_etag() {
+        tauri::async_runtime::block_on(async {
+            for head in [
+                webdav_test_response(405, "Content-Length: 0\r\n", b""),
+                webdav_test_response(200, "Content-Length: 100\r\nAccept-Ranges: bytes\r\nETag: W/\"weak-version\"\r\n", b""),
+            ] {
+                let content = "完整备份文本";
+                let get = webdav_test_response(200, &format!("Content-Length: {}\r\nContent-Type: text/plain; charset=iso-8859-1\r\n", content.len()), content.as_bytes());
+                let (config, server) = webdav_test_server(vec![head, get]).await;
+                assert_eq!(super::download_webdav_backup(&config).await.unwrap(), content);
+                let requests = server.await.unwrap();
+                assert!(!requests[1].contains("range:"));
+            }
+        });
+    }
+
+    #[test]
+    fn webdav_download_refuses_changed_versions_wrong_ranges_and_partial_data() {
+        tauri::async_runtime::block_on(async {
+            for (status, headers, expected) in [
+                (412, "Content-Length: 0\r\n", "已更新"),
+                (206, "Content-Length: 4\r\nContent-Range: bytes 1-4/5\r\nETag: \"version-1\"\r\n", "分段范围不匹配"),
+                (206, "Content-Length: 4\r\nContent-Range: bytes 0-3/4\r\nETag: \"version-2\"\r\n", "版本发生变化"),
+                (200, "Content-Length: 0\r\n", "HTTP 200"),
+                (401, "Content-Length: 0\r\n", "HTTP 401"),
+                (401, "Content-Length: 4\r\n", "HTTP 401"),
+            ] {
+                let (config, server) = webdav_test_server(vec![webdav_test_response(status, headers, b"")]).await;
+                let range = super::WebdavDownloadRange { start: 0, end: 3, total: 4, etag: HeaderValue::from_static("\"version-1\"") };
+                let cause = super::download_webdav_part(&reqwest::Client::new(), &config, Some(&range)).await.unwrap_err().to_string();
+                assert!(cause.contains(expected), "{cause}");
+                assert!(!cause.contains("test-secret"));
+                assert_eq!(server.await.unwrap().len(), 1);
+            }
+            let truncated = webdav_test_response(206, "Content-Length: 4\r\nContent-Range: bytes 0-3/4\r\nETag: \"version-1\"\r\n", b"ab");
+            let (config, server) = webdav_test_server(vec![truncated.clone(), truncated.clone(), truncated]).await;
+            let range = super::WebdavDownloadRange { start: 0, end: 3, total: 4, etag: HeaderValue::from_static("\"version-1\"") };
+            let cause = super::download_webdav_part(&reqwest::Client::new(), &config, Some(&range)).await.unwrap_err().to_string();
+            assert!(cause.contains("已尝试 3 次"));
+            assert!(cause.contains("本地数据未恢复"));
+            assert!(!cause.contains("test-secret"));
+            assert_eq!(server.await.unwrap().len(), 3);
+        });
+    }
+
+    #[test]
+    fn webdav_preview_never_restores_or_caches_an_interrupted_backup() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("ai-manager-cloud-preview-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&root).unwrap();
+            let sentinel = root.join("keep.txt");
+            std::fs::write(&sentinel, "original local data").unwrap();
+            let head = webdav_test_response(200, "Content-Length: 4\r\nAccept-Ranges: bytes\r\nETag: \"version-1\"\r\n", b"");
+            let truncated = webdav_test_response(206, "Content-Length: 4\r\nContent-Range: bytes 0-3/4\r\nETag: \"version-1\"\r\n", b"ab");
+            let (config, server) = webdav_test_server(vec![head, truncated.clone(), truncated.clone(), truncated]).await;
+            let paths = resolve_app_paths(&root);
+            let settings = normalize_app_settings(root.join("settings.json"), None);
+            let mut cache = super::DataBackupCache::new();
+            let result = super::preview_cloud_backup_restore(&paths, &settings, &mut cache, serde_json::to_value(config).unwrap()).await;
+            assert!(result.is_err());
+            assert!(cache.drafts.is_empty());
+            assert_eq!(server.await.unwrap().len(), 4);
+            let invalid = b"{invalid-backup";
+            let (config, server) = webdav_test_server(vec![
+                webdav_test_response(405, "Content-Length: 0\r\n", b""),
+                webdav_test_response(200, &format!("Content-Length: {}\r\n", invalid.len()), invalid),
+            ]).await;
+            assert!(super::preview_cloud_backup_restore(&paths, &settings, &mut cache, serde_json::to_value(config).unwrap()).await.is_err());
+            assert!(cache.drafts.is_empty());
+            assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "original local data");
+            assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+            assert_eq!(server.await.unwrap().len(), 2);
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-cloud-preview-"));
+            std::fs::remove_dir_all(resolved).unwrap();
+        });
+    }
 
     #[test]
     fn claude_desktop_backup_keeps_providers_and_restores_keys_without_local_gateway_state() {
@@ -3412,7 +3845,9 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let entries = runtime.block_on(collect_backup_entries(&paths)).unwrap();
+        let entries = runtime
+            .block_on(collect_backup_entries(&paths, BackupScope::Local))
+            .unwrap();
         let entry_paths = entries
             .iter()
             .map(|entry| entry["path"].as_str().unwrap_or_default().to_string())
@@ -3452,10 +3887,26 @@ mod tests {
         assert!(!entry_paths.iter().any(|path| path.starts_with("sessions")));
         assert!(!entry_paths.iter().any(|path| path.contains("proxy")));
         assert!(!entry_paths.iter().any(|path| path.contains("usage")));
-        assert!(restore_tables
-            .iter()
-            .all(|table| !table.starts_with("usage_")));
-        assert_eq!(restore_tables, vec!["providers".to_string()]);
+        assert_eq!(
+            restore_tables,
+            vec!["providers", "usage_pricing_config", "usage_pricing_items"]
+        );
+        database::restore_selected(&restore_paths, &database, &restore_tables).unwrap();
+        assert_eq!(
+            usage_store::read_pricing(&restore_paths).unwrap(),
+            usage_store::read_pricing(&paths).unwrap()
+        );
+        let restore_connection = database::open(&restore_paths).unwrap();
+        for table in ["usage_logs", "usage_request_records"] {
+            assert_eq!(
+                restore_connection
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                0
+            );
+        }
         assert_eq!(database_view["typeName"], "主数据库");
         assert!(database_view["content"]
             .as_str()
@@ -3472,6 +3923,278 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn cloud_backup_filter_keeps_skill_resources_and_only_runtime_pet_files() {
+        for path in [
+            "skills/example/SKILL.md",
+            "skills/example/scripts/run.py",
+            "skills/example/references/api.md",
+            "skills/example/assets/icon.png",
+            "skills/example/data/colors.csv",
+            "skills/example/data/catalog.json",
+            "skills/example/data/stacks/vue.csv",
+            "skills/example/data/profile.json",
+            "skills/example/memory/build-user-profile.ps1",
+            "skills/example/memory/confidence-index.md",
+            "prompts/common/rule.md",
+            "pets/pet-a/pet.json",
+            "pets/pet-a/spritesheet.webp",
+            "pets-disabled/pet-b/pet.json",
+            "pets-disabled/pet-b/spritesheet.webp",
+        ] {
+            assert!(super::is_cloud_backup_entry(path, false), "应保留 {path}");
+        }
+        for path in [
+            "skills/.git",
+            "skills/example/.git",
+            "skills/example/node_modules",
+            "skills/example/scripts/__pycache__",
+            "skills/example/.cache",
+            "skills/example/.venv",
+            "skills/example/logs",
+            "skills/example/cache",
+            "skills/example/backups",
+            "skills/example/data/work-history",
+            "skills/example/data/logs",
+            "skills/example/data/persona-backups",
+            "skills/example/data/system-changelog",
+            "skills/example/data/self-improvement",
+            "pets/pet-a/preview",
+            "pets-disabled/pet-b/source",
+        ] {
+            assert!(
+                !super::is_cloud_backup_entry(path, true),
+                "应排除目录 {path}"
+            );
+        }
+        for path in [
+            "skills/example/data/log.json",
+            "skills/example/data/system-log.json",
+            "skills/example/data/log-summary.json",
+            "skills/example/data/system-changelog-summary.json",
+            "skills/example/scripts/run.pyc",
+            "skills/example/SKILL.md.bak",
+            "skills/example/SKILL.md~",
+            "skills/example/download.tmp",
+            "pets/pet-a/spritesheet.backup-2026.webp",
+            "pets/pet-a/spritesheet.before-edit.webp",
+            "pets/pet-a/preview.mp4",
+            "pets-disabled/pet-b/preview.png",
+            "pets-disabled/pet-b/preview/pet.json",
+            "sessions/session.jsonl",
+            "storage/settings.json",
+        ] {
+            assert!(
+                !super::is_cloud_backup_entry(path, false),
+                "应排除文件 {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn cloud_backup_scope_does_not_change_local_backups_or_source_files() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-cloud-backup-scope-{}-{}",
+            std::process::id(),
+            super::now_millis()
+        ));
+        let paths = resolve_app_paths(&root.join("data"));
+        let codex_path = root.join("codex");
+        let mut app_settings = normalize_app_settings(
+            root.join("settings.json"),
+            Some(json!({
+                "cliConfigPaths": {"codex": codex_path.to_string_lossy()},
+                "cloudSync": {"username": "local-user", "password": "local-password"}
+            })),
+        );
+        let kept_paths = [
+            "skills/example/SKILL.md",
+            "skills/example/scripts/run.py",
+            "skills/example/data/colors.csv",
+            "prompts/common/rule.md",
+            "pets-disabled/disabled/pet.json",
+            "pets-disabled/disabled/spritesheet.webp",
+        ];
+        let excluded_paths = [
+            "skills/example/data/work-history/project/batches/run.json",
+            "skills/example/data/logs/run.json",
+            "skills/example/.git/objects/pack.bin",
+            "skills/example/node_modules/dependency/index.js",
+            "skills/example/scripts/__pycache__/run.pyc",
+            "pets-disabled/disabled/spritesheet.backup-old.webp",
+            "pets-disabled/disabled/preview/preview.mp4",
+        ];
+        let file_content = "backup-scope-test\n".repeat(128);
+        for path in kept_paths.iter().chain(excluded_paths.iter()) {
+            let file = Path::new(&paths.workspace_root).join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, &file_content).unwrap();
+        }
+        let enabled_pet = codex_path.join("pets/enabled");
+        std::fs::create_dir_all(&enabled_pet).unwrap();
+        for name in [
+            "pet.json",
+            "spritesheet.webp",
+            "spritesheet.before-edit.webp",
+            "preview.png",
+        ] {
+            std::fs::write(enabled_pet.join(name), &file_content).unwrap();
+        }
+        let mut keys = Map::new();
+        runtime_provider::set_provider_key(&mut keys, "provider-a", "test-secret".to_string())
+            .unwrap();
+        provider_store::write_provider_bundle(
+            &paths,
+            &[json!({"id": "provider-a"})],
+            &[],
+            &[],
+            &keys,
+        )
+        .unwrap();
+        let local = runtime
+            .block_on(super::create_data_backup(&paths, &app_settings))
+            .unwrap();
+        let cloud = runtime
+            .block_on(super::create_scoped_data_backup(
+                &paths,
+                &app_settings,
+                BackupScope::Cloud,
+            ))
+            .unwrap();
+        let local_payload = super::parse_backup(&local).unwrap();
+        let cloud_payload = super::parse_backup(&cloud).unwrap();
+        assert!(cloud.len() < local.len());
+        assert!(cloud_payload.get("appSettings").is_none());
+        assert_eq!(
+            local_payload["appSettings"]["cloudSync"]["password"],
+            "local-password"
+        );
+        assert_eq!(
+            super::decrypt_backup_data(cloud_payload["runtimeProviderKeys"].as_str().unwrap())
+                .unwrap(),
+            super::export_provider_keys(&paths).unwrap()
+        );
+        let local_entries = local_payload["workspaceEntries"].as_array().unwrap();
+        let cloud_entries = cloud_payload["workspaceEntries"].as_array().unwrap();
+        for path in kept_paths {
+            assert!(
+                cloud_entries.iter().any(|entry| entry["path"] == path),
+                "应保留 {path}"
+            );
+        }
+        for path in excluded_paths {
+            assert!(
+                !cloud_entries.iter().any(|entry| entry["path"] == path),
+                "云备份应排除 {path}"
+            );
+            assert!(
+                local_entries.iter().any(|entry| entry["path"] == path),
+                "本地备份应保留 {path}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(Path::new(&paths.workspace_root).join(path)).unwrap(),
+                file_content
+            );
+        }
+        let cloud_pets = cloud_payload["codexPetEntries"].as_array().unwrap();
+        assert_eq!(cloud_pets.len(), 3);
+        assert!(cloud_pets
+            .iter()
+            .any(|entry| entry["path"] == "enabled/pet.json"));
+        assert!(cloud_pets
+            .iter()
+            .any(|entry| entry["path"] == "enabled/spritesheet.webp"));
+        assert_eq!(
+            local_payload["codexPetEntries"].as_array().unwrap().len(),
+            5
+        );
+        assert_eq!(
+            std::fs::read_to_string(enabled_pet.join("spritesheet.before-edit.webp")).unwrap(),
+            file_content
+        );
+
+        let restore_paths = resolve_app_paths(&root.join("restore"));
+        runtime
+            .block_on(restore_directory_entries(
+                &restore_paths,
+                cloud_entries.clone(),
+                &Map::new(),
+                &std::collections::HashMap::new(),
+            ))
+            .unwrap();
+        for path in kept_paths {
+            assert_eq!(
+                std::fs::read_to_string(Path::new(&restore_paths.workspace_root).join(path))
+                    .unwrap(),
+                file_content
+            );
+        }
+        let original_settings = serialize_backup_app_settings(&app_settings);
+        restore_backup_app_settings(&mut app_settings, &cloud_payload, &Map::new()).unwrap();
+        assert_eq!(
+            serialize_backup_app_settings(&app_settings),
+            original_settings
+        );
+        let resolved = root.canonicalize().unwrap();
+        assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        std::fs::remove_dir_all(resolved).unwrap();
+    }
+
+    #[test]
+    fn compressed_cloud_backups_and_legacy_backups_round_trip() {
+        let payload =
+            json!({"version": 1, "workspaceEntries": [], "testData": "compress-me".repeat(1000)});
+        let legacy = encrypt_backup_payload(&payload, BackupScope::Local).unwrap();
+        let compressed = encrypt_backup_payload(&payload, BackupScope::Cloud).unwrap();
+        let legacy_envelope: serde_json::Value = serde_json::from_str(&legacy).unwrap();
+        let compressed_envelope: serde_json::Value = serde_json::from_str(&compressed).unwrap();
+        assert_eq!(legacy_envelope["version"], 1);
+        assert!(legacy_envelope.get("compression").is_none());
+        assert_eq!(compressed_envelope["version"], 2);
+        assert_eq!(compressed_envelope["compression"], "gzip");
+        assert_eq!(decrypt_backup_payload(&legacy).unwrap(), payload);
+        assert_eq!(decrypt_backup_payload(&compressed).unwrap(), payload);
+        assert!(compressed.len() < legacy.len() / 10);
+    }
+
+    #[test]
+    fn cloud_backup_decoder_rejects_invalid_compression_and_sizes() {
+        let content =
+            encrypt_backup_payload(&json!({"value": "test"}), BackupScope::Cloud).unwrap();
+        let envelope: serde_json::Value = serde_json::from_str(&content).unwrap();
+        for (field, value) in [
+            ("version", json!(99)),
+            ("compression", json!("unknown")),
+            ("uncompressedSize", json!(0)),
+            (
+                "uncompressedSize",
+                json!(super::MAX_COMPRESSED_BACKUP_PAYLOAD_SIZE + 1),
+            ),
+            ("uncompressedSize", json!(1)),
+            ("uncompressedSize", json!(1024)),
+            ("iv", json!("AA==")),
+            ("tag", json!("AA==")),
+            ("content", json!("AAAA")),
+        ] {
+            let mut invalid = envelope.clone();
+            invalid[field] = value;
+            assert!(
+                decrypt_backup_payload(&invalid.to_string()).is_err(),
+                "应拒绝无效 {field}"
+            );
+        }
+        let legacy = encrypt_backup_payload(&json!({"value": "test"}), BackupScope::Local).unwrap();
+        let mut invalid: serde_json::Value = serde_json::from_str(&legacy).unwrap();
+        invalid["version"] = json!(2);
+        invalid["compression"] = json!("gzip");
+        invalid["uncompressedSize"] = json!(16);
+        assert!(decrypt_backup_payload(&invalid.to_string()).is_err());
     }
 
     #[test]
@@ -3527,10 +4250,10 @@ mod tests {
             .build()
             .unwrap();
         let backup_codex_entries = runtime
-            .block_on(collect_codex_pet_entries(&source_settings))
+            .block_on(collect_codex_pet_entries(&source_settings, BackupScope::Local))
             .unwrap();
         let backup_workspace_entries = runtime
-            .block_on(collect_backup_entries(&source_paths))
+            .block_on(collect_backup_entries(&source_paths, BackupScope::Local))
             .unwrap();
 
         let current_enabled_pet = target_codex_path.join("pets").join("enabled-locally");
@@ -3926,7 +4649,7 @@ mod tests {
               ])
             )
           ]
-        }))
+        }), BackupScope::Local)
         .unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()

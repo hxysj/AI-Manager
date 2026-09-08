@@ -1027,6 +1027,10 @@ impl ManagerState {
                 self.emit_state_changed(&app)?;
                 Ok(result)
             }
+            "provider:key-usage" => runtime_provider::read_provider_key_usage(
+                &self.paths,
+                &payload.unwrap_or_else(|| json!({})),
+            ),
             "provider:save" => {
                 let payload = payload.unwrap_or_else(|| json!({}));
                 let provider_id = payload

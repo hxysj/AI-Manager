@@ -1,6 +1,7 @@
 import { request } from '../request'
 
 export const providerApi = {
+  getKeyUsage: payload => request('provider:key-usage', payload),
   saveProvider: payload => request('provider:save', payload),
   deleteProvider: payload => request('provider:delete', payload)
 }

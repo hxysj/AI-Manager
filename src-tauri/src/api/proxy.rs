@@ -1,6 +1,7 @@
 use crate::api::{codex_account, runtime_provider};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
+use crate::core::provider_key_usage::KeyRequest;
 use crate::core::provider_store;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
@@ -57,6 +58,7 @@ struct ForwardResult {
     target: ProxyTarget,
     upstream_url: String,
     latency_ms: u64,
+    key_request: Option<KeyRequest>,
 }
 
 pub(crate) async fn request_active_codex_provider<R: Runtime>(
@@ -191,21 +193,32 @@ where
         }
     }
 
-    let api_key = get_provider_api_key(paths, "codex", &provider_id)?;
+    let (key_id, api_key) = runtime_provider::get_provider_api_key_with_id(paths, &provider_id)?;
+    if api_key.is_empty() {
+        return Err(ManagerError::System("当前 Codex Provider 缺少 API Key".to_string()));
+    }
     headers.insert(
         "authorization",
         HeaderValue::from_str(&format!("Bearer {}", api_key))
             .map_err(|error| ManagerError::System(error.to_string()))?,
     );
 
-    let response = http_client(&target.proxy)?
+    let outgoing = http_client(&target.proxy)?
         .post(upstream_url)
         .headers(headers)
-        .json(&Value::Object(request_body))
+        .json(&Value::Object(request_body));
+    let mut key_request = KeyRequest::new(paths, &provider_id, &key_id, &api_key);
+    key_request.start();
+    let response = outgoing
         .send()
         .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+        .map_err(|error| {
+            key_request.fail("network");
+            ManagerError::System(error.to_string())
+        })?;
     let status = response.status().as_u16();
+    key_request.response(status, response.headers().get("content-type")
+        .and_then(|value| value.to_str().ok()).is_some_and(|value| value.contains("text/event-stream")));
     let response_headers = response
         .headers()
         .iter()
@@ -228,6 +241,7 @@ where
     while let Some(chunk) = stream.next().await {
         match chunk {
             Ok(bytes) => {
+                key_request.observe(&bytes);
                 emit(json!({
                   "requestId": request_id,
                   "type": "chunk",
@@ -235,6 +249,7 @@ where
                 }))?;
             }
             Err(error) => {
+                key_request.fail("stream");
                 let message = error.to_string();
                 let _ = emit(json!({
                   "requestId": request_id,
@@ -246,6 +261,7 @@ where
         }
     }
 
+    key_request.finish();
     emit(json!({
       "requestId": request_id,
       "type": "done"
@@ -845,14 +861,24 @@ async fn process_proxy_request(
         )
         .await
         {
-            Ok(result) => {
+            Ok(mut result) => {
                 let status = result.response.status();
                 let headers = result.response.headers().clone();
+                let api_key_id = result.key_request.as_ref().map(|request| request.key_id().to_string());
                 let response_bytes = result
                     .response
                     .bytes()
                     .await
-                    .map_err(|error| ManagerError::System(error.to_string()))?;
+                    .map_err(|error| {
+                        if let Some(tracking) = &mut result.key_request {
+                            tracking.fail("stream");
+                        }
+                        ManagerError::System(error.to_string())
+                    })?;
+                if let Some(tracking) = &mut result.key_request {
+                    tracking.observe(&response_bytes);
+                    tracking.finish();
+                }
 
                 if !status.is_success() {
                     let error_text = String::from_utf8_lossy(&response_bytes).to_string();
@@ -861,6 +887,7 @@ async fn process_proxy_request(
                         &context.cli,
                         json!({
                           "providerId": provider_id,
+                          "apiKeyId": api_key_id,
                           "providerName": target.name,
                           "targetType": target.target_type,
                           "method": parts.method.as_str(),
@@ -891,6 +918,7 @@ async fn process_proxy_request(
                     &context.cli,
                     json!({
                       "providerId": provider_id,
+                      "apiKeyId": api_key_id,
                       "providerName": result.target.name,
                       "targetType": result.target.target_type,
                       "method": parts.method.as_str(),
@@ -1010,7 +1038,10 @@ async fn forward_request(
     };
     let mut request_body = body.to_vec();
     let model = if target.model.is_empty() && cli == "codex" {
-        read_toml_root_value(&string_value(read_live_backup(paths, cli)?.get("config")), "model")
+        read_toml_root_value(
+            &string_value(read_live_backup(paths, cli)?.get("config")),
+            "model",
+        )
     } else {
         target.model.clone()
     };
@@ -1023,28 +1054,46 @@ async fn forward_request(
     }
 
     let started_at = now_millis();
+    let (forward_headers, mut key_request) =
+        build_forward_headers(paths, cli_targets, cli, headers, target_id).await?;
     let mut request = http_client(&target.proxy)?
         .request(
             reqwest::Method::from_bytes(method.as_str().as_bytes())
                 .map_err(|error| ManagerError::System(error.to_string()))?,
             &upstream_url,
         )
-        .headers(build_forward_headers(paths, cli_targets, cli, headers, target_id).await?);
+        .headers(forward_headers);
 
     if method != hyper::Method::GET && method != hyper::Method::HEAD {
         request = request.body(request_body);
     }
 
-    let response = request
-        .send()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+    if let Some(tracking) = &mut key_request {
+        tracking.start();
+    }
+    let response = request.send().await.map_err(|error| {
+        if let Some(tracking) = &mut key_request {
+            tracking.fail("network");
+        }
+        ManagerError::System(error.to_string())
+    })?;
+    if let Some(tracking) = &mut key_request {
+        tracking.response(
+            response.status().as_u16(),
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.contains("text/event-stream")),
+        );
+    }
 
     Ok(ForwardResult {
         response,
         target,
         upstream_url,
         latency_ms: now_millis().saturating_sub(started_at),
+        key_request,
     })
 }
 
@@ -1054,7 +1103,7 @@ async fn build_forward_headers(
     cli: &str,
     headers: &hyper::HeaderMap,
     target_id: &str,
-) -> Result<HeaderMap, ManagerError> {
+) -> Result<(HeaderMap, Option<KeyRequest>), ManagerError> {
     let mut next_headers = HeaderMap::new();
 
     for (key, value) in headers.iter() {
@@ -1094,7 +1143,7 @@ async fn build_forward_headers(
             HeaderValue::from_str(&format!("Bearer {}", token))
                 .map_err(|error| ManagerError::System(error.to_string()))?,
         );
-        return Ok(next_headers);
+        return Ok((next_headers, None));
     }
 
     if cli == "claude" {
@@ -1103,7 +1152,15 @@ async fn build_forward_headers(
             HeaderValue::from_str(&token)
                 .map_err(|error| ManagerError::System(error.to_string()))?,
         );
-        return Ok(next_headers);
+        return Ok((
+            next_headers,
+            Some(KeyRequest::new(
+                paths,
+                target_id,
+                &string_value(auth.get("apiKeyId")),
+                &token,
+            )),
+        ));
     }
 
     next_headers.insert(
@@ -1111,7 +1168,15 @@ async fn build_forward_headers(
         HeaderValue::from_str(&format!("Bearer {}", token))
             .map_err(|error| ManagerError::System(error.to_string()))?,
     );
-    Ok(next_headers)
+    Ok((
+        next_headers,
+        Some(KeyRequest::new(
+            paths,
+            target_id,
+            &string_value(auth.get("apiKeyId")),
+            &token,
+        )),
+    ))
 }
 
 async fn get_target_auth(
@@ -1132,8 +1197,16 @@ async fn get_target_auth(
         }));
     }
 
+    let (key_id, api_key) = runtime_provider::get_provider_api_key_with_id(paths, target_id)?;
+    if api_key.is_empty() {
+        return Err(ManagerError::System(format!(
+            "当前 {} Provider 缺少 API Key",
+            cli_name(cli)
+        )));
+    }
     Ok(json!({
-      "token": get_provider_api_key(paths, cli, target_id)?,
+      "token": api_key,
+      "apiKeyId": key_id,
       "accountId": ""
     }))
 }
@@ -2123,9 +2196,156 @@ mod tests {
             .unwrap_err()
             .to_string();
             assert!(endpoint_error.contains("仅允许调用 /responses"));
+            let usage = runtime_provider::read_provider_key_usage(&paths, &json!({"providerId": "provider-active", "cli": "codex"})).unwrap();
+            let active = usage["activeApiKeyId"].as_str().unwrap();
+            assert_eq!(usage["keys"][active]["requestCount"], 1);
+            assert_eq!(usage["keys"][active]["successCount"], 1);
+            assert!(!usage.to_string().contains("secret-test-key"));
 
             server.await.unwrap();
             std::fs::remove_dir_all(root).unwrap();
         });
+    }
+
+    #[test]
+    fn proxy_failover_and_mid_request_key_switch_keep_exact_attribution() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let (paths, root) = create_json_agent_paths();
+            let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let upstream_address = upstream_listener.local_addr().unwrap();
+            let mut keys = Map::new();
+            runtime_provider::set_provider_keys(&mut keys, "first-provider", &[
+                json!({"id": "first", "apiKey": "first-secret"}),
+                json!({"id": "second", "apiKey": "unused-secret"})
+            ], "first".to_string()).unwrap();
+            runtime_provider::set_provider_keys(&mut keys, "backup-provider", &[
+                json!({"id": "backup", "apiKey": "backup-secret"})
+            ], "backup".to_string()).unwrap();
+            let providers = ["first-provider", "backup-provider"].map(|id| json!({
+                "id": id, "cli": "codex", "name": id, "enabled": true,
+                "baseUrl": format!("http://{upstream_address}/v1"), "runtimeConfig": {"mainModel": "test-model"}
+            }));
+            provider_store::write_provider_bundle(&paths, &providers, &[], &[], &keys).unwrap();
+            super::write_proxy_config(&paths, "codex", &json!({
+                "enabled": true, "activeProviderId": "first-provider", "failoverProviderIds": ["backup-provider"]
+            })).await.unwrap();
+            let upstream_paths = paths.clone();
+            let upstream = tokio::spawn(async move {
+                for index in 0..3 {
+                    let (stream, _) = upstream_listener.accept().await.unwrap();
+                    let source_paths = upstream_paths.clone();
+                    http1::Builder::new().serve_connection(TokioIo::new(stream), service_fn(move |request: hyper::Request<hyper::body::Incoming>| {
+                        let source_paths = source_paths.clone();
+                        async move {
+                            let expected = if index == 0 { "Bearer first-secret" } else { "Bearer backup-secret" };
+                            assert_eq!(request.headers()["authorization"], expected);
+                            request.into_body().collect().await.unwrap();
+                            if index == 0 {
+                                let mut keys = provider_store::read_keys(&source_paths).unwrap();
+                                keys["first-provider"]["activeKeyId"] = json!("second");
+                                provider_store::write_keys(&source_paths, &keys).unwrap();
+                            }
+                            let body = if index == 1 { "data: {\"type\":\"error\",\"error\":{\"message\":\"private\"}}\n\n" } else { "{\"ok\":true}" };
+                            Ok::<_, Infallible>(Response::builder()
+                                .status(if index == 0 { 401 } else { 200 })
+                                .header("connection", "close")
+                                .header("content-type", if index == 1 { "text/event-stream" } else { "application/json" })
+                                .body(Full::new(Bytes::from_static(body.as_bytes()))).unwrap())
+                        }
+                    })).await.unwrap();
+                }
+            });
+            let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let gateway_address = gateway_listener.local_addr().unwrap();
+            let context = super::ProxyContext { paths: paths.clone(), cli_targets: json!([]), cli: "codex".to_string() };
+            let gateway = tokio::spawn(async move {
+                for _ in 0..2 {
+                    let (stream, _) = gateway_listener.accept().await.unwrap();
+                    let context = context.clone();
+                    http1::Builder::new().serve_connection(TokioIo::new(stream), service_fn(move |request| {
+                        super::handle_proxy_request(request, context.clone())
+                    })).await.unwrap();
+                }
+            });
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            for _ in 0..2 {
+                let response = client.post(format!("http://{gateway_address}/v1/responses"))
+                    .json(&json!({"model": "test-model"})).send().await.unwrap();
+                assert_eq!(response.status(), 200);
+                response.bytes().await.unwrap();
+            }
+            let first = runtime_provider::read_provider_key_usage(&paths, &json!({"providerId": "first-provider"})).unwrap();
+            assert_eq!(first["activeApiKeyId"], "second");
+            assert_eq!(first["keys"]["first"]["requestCount"], 1);
+            assert_eq!(first["keys"]["first"]["lastErrorKind"], "auth");
+            assert_eq!(first["keys"]["second"]["requestCount"], 0);
+            let backup = runtime_provider::read_provider_key_usage(&paths, &json!({"providerId": "backup-provider"})).unwrap();
+            assert_eq!(backup["keys"]["backup"]["requestCount"], 2);
+            assert_eq!(backup["keys"]["backup"]["failureCount"], 1);
+            assert_eq!(backup["keys"]["backup"]["successCount"], 1);
+            assert_eq!(backup["keys"]["backup"]["consecutiveFailures"], 0);
+            upstream.await.unwrap();
+            gateway.await.unwrap();
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            std::fs::remove_dir_all(resolved).unwrap();
+        });
+    }
+
+    #[test]
+    fn proxy_connection_failure_is_counted_for_the_selected_key() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (paths, root) = create_json_agent_paths();
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let upstream = tokio::spawn(async move {
+                    use tokio::io::AsyncReadExt;
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    let mut buffer = [0u8; 64];
+                    stream.read(&mut buffer).await.unwrap();
+                });
+                write_json_agent_provider(&paths, &format!("http://{address}/v1"));
+                let mut providers = provider_store::read_providers(&paths).unwrap();
+                providers[0]["proxy"] = json!(format!("http://{address}"));
+                provider_store::write_provider_bundle(
+                    &paths,
+                    &providers,
+                    &provider_store::read_models(&paths).unwrap(),
+                    &provider_store::read_profiles(&paths).unwrap(),
+                    &provider_store::read_keys(&paths).unwrap(),
+                )
+                .unwrap();
+                assert!(super::forward_request(
+                    &paths,
+                    &json!([]),
+                    "codex",
+                    &json!({}),
+                    &hyper::Method::POST,
+                    &hyper::HeaderMap::new(),
+                    &json!({"endpoint": "/responses", "search": ""}),
+                    Bytes::from_static(b"{}"),
+                    "provider-active"
+                )
+                .await
+                .is_err());
+                let usage = runtime_provider::read_provider_key_usage(
+                    &paths,
+                    &json!({"providerId": "provider-active"}),
+                )
+                .unwrap();
+                let key_id = usage["activeApiKeyId"].as_str().unwrap();
+                assert_eq!(usage["keys"][key_id]["requestCount"], 1);
+                assert_eq!(usage["keys"][key_id]["failureCount"], 1);
+                assert_eq!(usage["keys"][key_id]["lastErrorKind"], "network");
+                assert_eq!(usage["keys"][key_id]["inFlightCount"], 0);
+                upstream.await.unwrap();
+                let resolved = root.canonicalize().unwrap();
+                assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+                std::fs::remove_dir_all(resolved).unwrap();
+            });
     }
 }

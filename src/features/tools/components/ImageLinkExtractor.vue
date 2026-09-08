@@ -140,7 +140,9 @@
             </button>
 
             <footer class="image-extractor-card-meta">
-              <span data-emphasis class="image-extractor-index">#{{ index + 1 }}</span>
+              <span data-emphasis class="image-extractor-index"
+                >#{{ index + 1 }}</span
+              >
               <button
                 class="image-extractor-link"
                 type="button"
@@ -166,7 +168,9 @@
       <section class="image-extractor-dialog" role="dialog" aria-modal="true">
         <header class="image-extractor-dialog-head">
           <div class="image-extractor-dialog-heading">
-            <span data-emphasis class="image-extractor-dialog-title">图片预览</span>
+            <span data-emphasis class="image-extractor-dialog-title"
+              >图片预览</span
+            >
             <span class="image-extractor-dialog-count">
               {{ previewIndex + 1 }} / {{ links.length }}
             </span>
@@ -836,11 +840,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           border: 1px solid
             color-mix(in srgb, var(--color-line-strong) 92%, transparent);
           border-radius: 7px;
-          background: color-mix(
-            in srgb,
-            var(--color-panel) 94%,
-            transparent
-          );
+          background: color-mix(in srgb, var(--color-panel) 94%, transparent);
           box-shadow: 0 4px 10px rgba(20, 33, 58, 0.12);
           cursor: pointer;
 
@@ -877,10 +877,10 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
               var(--color-panel-soft) 75%
             ),
             linear-gradient(
-                -45deg,
-                transparent 75%,
-                var(--color-panel-soft) 75%
-              ),
+              -45deg,
+              transparent 75%,
+              var(--color-panel-soft) 75%
+            ),
             var(--color-panel);
           background-position:
             0 0,
@@ -1093,11 +1093,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           padding: 0;
           border: 1px solid var(--color-line);
           border-radius: 7px;
-          background: color-mix(
-            in srgb,
-            var(--color-panel) 94%,
-            transparent
-          );
+          background: color-mix(in srgb, var(--color-panel) 94%, transparent);
           box-shadow: 0 7px 18px rgba(34, 56, 83, 0.14);
           color: var(--color-primary);
           cursor: pointer;

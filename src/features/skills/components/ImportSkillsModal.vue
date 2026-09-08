@@ -70,12 +70,24 @@
                 :value="option.id"
                 :disabled="loading"
               />
-              <span class="import-skills-modal__content">
-                <span data-emphasis>{{
-                  option.alreadyManaged ? "保留 Manager 版本" : option.name
-                }}</span>
-                <span>{{ option.description || "未提供描述" }}</span>
-                <small>{{ option.cliNames.join("、") }}</small>
+              <span class="import-skills-modal__content import-skill-conflict-content">
+                <span class="import-skill-conflict-heading" data-emphasis>
+                  {{ option.alreadyManaged ? "保留原有版本" : "使用本次导入版本" }}
+                  <small
+                    class="import-skill-conflict-badge"
+                    :class="{ 'import-skill-conflict-badge-current': option.alreadyManaged }"
+                  >
+                    {{ option.alreadyManaged ? "当前已管理" : "本次导入" }}
+                  </small>
+                </span>
+                <span class="import-skill-conflict-description">{{ option.description || "未提供描述" }}</span>
+                <small>来源：{{ option.cliNames.join("、") }}</small>
+                <code
+                  v-for="sourcePath in option.sourcePaths"
+                  :key="sourcePath"
+                  class="import-skill-conflict-path"
+                  :title="sourcePath"
+                >{{ sourcePath }}</code>
               </span>
             </label>
           </article>
@@ -187,6 +199,46 @@ function handleClose() {
 
 <style scoped lang="less">
 .import-skills-modal {
+  .import-skill-conflict-content {
+    gap: 6px;
+
+    .import-skill-conflict-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      white-space: normal;
+
+      .import-skill-conflict-badge {
+        padding: 2px 7px;
+        border-radius: 4px;
+        background: var(--color-primary-soft);
+        color: var(--color-accent);
+        font-size: 0.7rem;
+        font-weight: 500;
+
+        &.import-skill-conflict-badge-current {
+          background: var(--color-panel-soft);
+          color: var(--color-text-muted);
+        }
+      }
+    }
+
+    .import-skill-conflict-description {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      line-height: 1.5;
+    }
+
+    .import-skill-conflict-path {
+      color: var(--color-text-muted);
+      font-size: 0.72rem;
+      overflow-wrap: anywhere;
+      white-space: normal;
+      line-height: 1.5;
+    }
+  }
+
   display: flex;
   height: min(620px, calc(100vh - 180px));
   min-height: 0;

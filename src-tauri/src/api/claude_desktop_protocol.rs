@@ -1,4 +1,5 @@
 use super::{error, gateway_error, json_response, text, GatewayBody, ManagerError};
+use crate::core::provider_key_usage::KeyRequest;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use http_body_util::{BodyExt, StreamBody};
@@ -351,6 +352,7 @@ pub(super) async fn forward(
     provider: &Value,
     key: &str,
     payload: Value,
+    key_request: &mut Option<KeyRequest>,
 ) -> Result<Response<GatewayBody>, ManagerError> {
     if key.is_empty() {
         return Ok(gateway_error(
@@ -412,10 +414,16 @@ pub(super) async fn forward(
             }
         }
     }
+    if let Some(tracking) = key_request.as_mut() {
+        tracking.start();
+    }
     let upstream = outgoing
         .send()
         .await
         .map_err(|cause| error(&cause.to_string()))?;
+    if let Some(tracking) = key_request.as_mut() {
+        tracking.response(upstream.status().as_u16(), request["stream"] == true);
+    }
     if !upstream.status().is_success() {
         let status = upstream.status();
         return Ok(gateway_error(
@@ -443,7 +451,12 @@ pub(super) async fn forward(
     let body: Value = upstream
         .json()
         .await
-        .map_err(|cause| error(&cause.to_string()))?;
+        .map_err(|cause| {
+            if let Some(tracking) = key_request.as_mut() {
+                tracking.fail("stream");
+            }
+            error(&cause.to_string())
+        })?;
     match convert_response(&body, responses, model) {
         Ok(message) => Ok(json_response(StatusCode::OK, message)),
         Err(cause) => Ok(gateway_error(StatusCode::BAD_GATEWAY, &cause.to_string())),
@@ -1049,10 +1062,21 @@ mod tests {
                     });
                     let provider = json!({"apiFormat": if responses { "openai_responses" } else { "openai_chat" }, "baseUrl": format!("http://127.0.0.1:{port}/v1")});
                     let mut input = payload(); input["stream"] = json!(streaming);
-                    let response = forward(&provider, "upstream-secret", input).await.unwrap();
+                    let root = std::env::temp_dir().join(format!("monkey-thief-openai-key-usage-{}", uuid::Uuid::new_v4()));
+                    let paths = crate::core::paths::resolve_app_paths(&root);
+                    let mut tracking = Some(KeyRequest::new(&paths, "claude-desktop:provider", "key", "upstream-secret"));
+                    let response = forward(&provider, "upstream-secret", input, &mut tracking).await.unwrap();
+                    let response = super::super::track_gateway_key(response, tracking);
                     assert_eq!(response.status(), StatusCode::OK);
                     let output = response.into_body().collect().await.unwrap().to_bytes();
                     let output = String::from_utf8(output.to_vec()).unwrap();
+                    let usage = crate::core::provider_key_usage::read(&paths, "claude-desktop:provider", "key", "upstream-secret").unwrap();
+                    assert_eq!(usage["requestCount"], 1);
+                    assert_eq!(usage["successCount"], 1);
+                    assert_eq!(usage["failureCount"], 0);
+                    let resolved = root.canonicalize().unwrap();
+                    assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+                    std::fs::remove_dir_all(resolved).unwrap();
                     if streaming {
                         let start = output.lines().find_map(|line| {
                             let event: Value = serde_json::from_str(line.strip_prefix("data: ")?).ok()?;

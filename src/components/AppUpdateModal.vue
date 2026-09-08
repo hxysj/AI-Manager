@@ -30,7 +30,9 @@
       <div v-if="dialog.phase === 'downloading'" class="app-update-progress">
         <div class="app-update-progress-head">
           <span class="app-update-transfer">{{ updateTransferText }}</span>
-          <span data-emphasis class="app-update-percent">{{ updateProgressText }}</span>
+          <span data-emphasis class="app-update-percent">{{
+            updateProgressText
+          }}</span>
         </div>
         <div class="app-update-progress-track">
           <div

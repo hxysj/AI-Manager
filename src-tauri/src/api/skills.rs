@@ -975,7 +975,7 @@ pub async fn preview_skills_from_cli(
               "alreadyManaged": true
             })];
 
-            options.extend(new_groups.into_iter().map(|group| group.to_value(true)));
+            options.extend(new_groups.into_iter().map(|group| group.to_value(false)));
             conflicts.push(json!({
               "name": name,
               "options": options
@@ -3672,6 +3672,39 @@ mod tests {
             let resolved = root.canonicalize().unwrap();
             assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
             assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-literal-"));
+            std::fs::remove_dir_all(resolved).unwrap();
+        });
+    }
+
+    #[test]
+    fn cli_import_conflicts_distinguish_existing_and_incoming_versions() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("ai-manager-skill-conflict-{}", uuid::Uuid::new_v4()));
+            let paths = resolve_app_paths(&root);
+            let managed = Path::new(&paths.skills_dir).join("demo");
+            let external = root.join("desktop-skills").join("demo");
+            write_test_skill(&managed, "demo");
+            write_test_skill(&external, "demo");
+            std::fs::write(external.join("extra.md"), "incoming content").unwrap();
+            let state = json!({
+                "skills": [super::parse_skill(&path_text(&managed), serde_json::Value::Null).unwrap()],
+                "cliTargets": [{"id": "external", "name": "Claude Desktop", "installed": true, "skillsPath": external.parent().unwrap()}]
+            });
+            let preview = super::preview_skills_from_cli(&paths, &state, json!({})).await.unwrap();
+            let options = preview["conflicts"][0]["options"].as_array().unwrap();
+            assert_eq!(options.len(), 2);
+            assert_eq!(options.iter().filter(|option| option["alreadyManaged"] == true).count(), 1);
+            assert_eq!(options[0]["alreadyManaged"], true);
+            assert_eq!(options[0]["cliNames"], json!(["Monkey Thief"]));
+            assert_eq!(options[0]["sourcePaths"], json!([managed]));
+            assert_eq!(options[1]["alreadyManaged"], false);
+            assert_eq!(options[1]["cliNames"], json!(["Claude Desktop"]));
+            assert_eq!(options[1]["sourcePaths"], json!([external]));
+            assert!(!managed.join("extra.md").exists());
+            assert!(external.join("extra.md").is_file());
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-skill-conflict-"));
             std::fs::remove_dir_all(resolved).unwrap();
         });
     }
