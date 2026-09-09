@@ -37,36 +37,45 @@
             >待对方接收</span
           >
         </div>
-        <div class="chat-bubble">
-          <p v-if="message.content" class="chat-text">{{ message.content }}</p>
-          <LanShareAttachmentGallery
-            v-if="message.attachments?.length"
-            :files="message.attachments"
-            :service="service"
-            :session-id="currentSessionId"
-            @preview="$emit('preview-file', $event)"
-          />
-        </div>
-        <div class="chat-message-actions">
-          <button
-            v-if="message.content"
-            class="chat-icon-button"
-            type="button"
-            title="复制消息"
-            aria-label="复制消息"
-            @click="copyMessage(message)"
+        <div class="chat-message-body">
+          <div
+            class="chat-bubble"
+            :class="{
+              'chat-bubble-attachments': !message.content?.trim() && message.attachments?.length
+            }"
           >
-            <Copy :size="12" />
-          </button>
-          <button
-            class="chat-icon-button"
-            type="button"
-            title="删除本机消息"
-            aria-label="删除本机消息"
-            @click="deleteMessages([message.id])"
-          >
-            <Trash2 :size="12" />
-          </button>
+            <p v-if="message.content?.trim()" class="chat-text">
+              {{ message.content }}
+            </p>
+            <LanShareAttachmentGallery
+              v-if="message.attachments?.length"
+              :files="message.attachments"
+              :service="service"
+              :session-id="currentSessionId"
+              @preview="$emit('preview-file', $event)"
+            />
+          </div>
+          <div class="chat-message-actions">
+            <button
+              v-if="message.content"
+              class="chat-icon-button"
+              type="button"
+              title="复制消息"
+              aria-label="复制消息"
+              @click="copyMessage(message)"
+            >
+              <Copy :size="12" />
+            </button>
+            <button
+              class="chat-icon-button"
+              type="button"
+              title="删除本机消息"
+              aria-label="删除本机消息"
+              @click="deleteMessages([message.id])"
+            >
+              <Trash2 :size="12" />
+            </button>
+          </div>
         </div>
       </article>
     </div>
@@ -705,39 +714,53 @@ defineExpose({
           color: var(--color-warning);
         }
       }
-      .chat-bubble {
+      .chat-message-body {
         display: flex;
         min-width: 0;
-        flex-direction: column;
-        gap: 10px;
-        padding: 10px;
-        border: 1px solid var(--color-line);
-        border-radius: 0 12px 12px;
-        background: var(--color-panel);
+        align-items: flex-end;
+        gap: 6px;
 
-        .chat-text {
-          margin: 0;
-          padding: 1px 3px;
-          color: var(--color-text);
-          white-space: pre-wrap;
-          overflow-wrap: anywhere;
-          line-height: 1.7;
-          font-size: var(--font-size-base);
+        .chat-bubble {
+          display: flex;
+          min-width: 0;
+          flex: 1;
+          flex-direction: column;
+          gap: 10px;
+          &.chat-bubble-attachments {
+            flex: 0 1 auto;
+          }
+          &:not(.chat-bubble-attachments) {
+            padding: 10px;
+            border: 1px solid var(--color-line);
+            border-radius: 0 12px 12px;
+            background: var(--color-panel);
+          }
+
+          .chat-text {
+            margin: 0;
+            padding: 1px 3px;
+            color: var(--color-text);
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+            line-height: 1.7;
+            font-size: var(--font-size-base);
+          }
         }
-      }
-      .chat-message-actions {
-        display: flex;
-        gap: 4px;
-        opacity: 0;
-        .chat-icon-button {
-          display: grid;
-          width: 24px;
-          height: 22px;
-          place-items: center;
-          padding: 0;
-          border: 0;
-          background: transparent;
-          color: var(--color-text-muted);
+        .chat-message-actions {
+          display: flex;
+          flex: none;
+          gap: 4px;
+          opacity: 0;
+          .chat-icon-button {
+            display: grid;
+            width: 24px;
+            height: 22px;
+            place-items: center;
+            padding: 0;
+            border: 0;
+            background: transparent;
+            color: var(--color-text-muted);
+          }
         }
       }
       &:hover .chat-message-actions,
@@ -746,14 +769,16 @@ defineExpose({
       }
       &.chat-message-self {
         align-self: flex-end;
-        .chat-message-meta,
-        .chat-message-actions {
+        .chat-message-meta {
           justify-content: flex-end;
         }
-        .chat-bubble {
-          border-radius: 12px 0 12px 12px;
-          background: var(--color-primary-soft);
-          border-color: var(--color-info-line);
+        .chat-message-body {
+          flex-direction: row-reverse;
+          .chat-bubble:not(.chat-bubble-attachments) {
+            border-radius: 12px 0 12px 12px;
+            background: var(--color-primary-soft);
+            border-color: var(--color-info-line);
+          }
         }
       }
     }
