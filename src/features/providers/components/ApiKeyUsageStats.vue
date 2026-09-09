@@ -1,7 +1,7 @@
 <template>
   <section class="key-usage" :data-status="status">
     <header class="key-usage-header">
-      <span class="key-usage-title">请求概览</span>
+      <span class="key-usage-title">请求与用量</span>
       <span class="key-usage-status"
         ><span class="key-usage-status-dot"></span>{{ statusLabel }}</span
       >
@@ -11,7 +11,9 @@
       <span class="key-usage-empty-title">保存后开始统计</span>
       <span>当前密钥尚未保存，不会沿用其他密钥的统计。</span>
     </div>
-    <template v-else-if="usage?.requestCount">
+    <template
+      v-else-if="usage?.requestCount || usage?.tokenUsage?.requestCount"
+    >
       <div class="key-usage-metrics">
         <div
           v-for="metric in metrics"
@@ -45,9 +47,22 @@
       }}</span>
       <span>{{
         usage
-          ? "通过本项目发送请求后，这里会显示此 Key 的使用情况。"
+          ? "会话用量扫描和本地网关请求均按 Key 归属统计。"
           : "可点击刷新重新获取当前 Key 的使用情况。"
       }}</span>
+    </div>
+    <div v-if="usage && !pending" class="key-usage-history">
+      <span
+        >失败与进行中状态来自本地网关；直连仅统计扫描到的已完成用量，不重复累计网关请求。</span
+      >
+      <span v-if="usage.inferredRequestCount"
+        >{{ usage.inferredRequestCount }} 条历史用量按首次记录时唯一的 Key
+        推定。</span
+      >
+      <span v-if="usage.unattributedRequestCount"
+        >此 Provider 有 {{ usage.unattributedRequestCount }} 条历史用量无法确定
+        Key，未计入任一 Key。</span
+      >
     </div>
   </section>
 </template>
@@ -55,7 +70,7 @@
 <script setup>
 import { computed } from "vue"
 import { Activity, KeyRound } from "lucide-vue-next"
-import { formatDateTime } from "@/utils/formatters"
+import { formatDateTime, formatTokenCount } from "@/utils/formatters"
 
 const props = defineProps({
   usage: { type: Object, default: null },
@@ -111,7 +126,31 @@ const metrics = computed(() => {
       title: "失败次数 / 已完成请求，不包含进行中的请求"
     },
     { label: "连续失败", value: formatCount(usage.consecutiveFailures) },
-    { label: "进行中", value: formatCount(usage.inFlightCount) }
+    { label: "进行中", value: formatCount(usage.inFlightCount) },
+    {
+      label: "输入 Token",
+      value: formatTokenCount(usage.tokenUsage?.inputTokens || 0)
+    },
+    {
+      label: "输出 Token",
+      value: formatTokenCount(usage.tokenUsage?.outputTokens || 0)
+    },
+    {
+      label: "缓存读取",
+      value: formatTokenCount(usage.tokenUsage?.cacheReadTokens || 0)
+    },
+    {
+      label: "缓存写入",
+      value: formatTokenCount(usage.tokenUsage?.cacheCreationTokens || 0)
+    },
+    {
+      label: "总 Token",
+      value: formatTokenCount(usage.tokenUsage?.actualTokens || 0)
+    },
+    {
+      label: "费用（USD）",
+      value: "$" + Number(usage.tokenUsage?.totalCostUsd || 0).toFixed(4)
+    }
   ]
 })
 </script>

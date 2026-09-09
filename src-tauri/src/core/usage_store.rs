@@ -106,6 +106,42 @@ pub fn read_all_logs(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     )
 }
 
+pub fn bind_key_usage(paths: &AppPaths) -> Result<(), ManagerError> {
+    let mut logs = read_all_logs(paths)?;
+    let original = logs.clone();
+    crate::core::provider_key_usage::bind_logs(paths, &mut logs)?;
+    let mut connection = open_connection(paths)?;
+    let transaction = connection.transaction()?;
+    let mut changed = false;
+    for (log, before) in logs
+        .iter()
+        .zip(&original)
+        .filter(|(log, before)| log != before)
+    {
+        let request_id = text(log.get("requestId"));
+        transaction.execute(
+            "UPDATE usage_logs SET payload_json = ?1 WHERE request_id = ?2",
+            params![serde_json::to_string(log)?, request_id],
+        )?;
+        transaction.execute(
+            "UPDATE usage_request_records SET payload_json = json_set(payload_json,
+            '$.apiKeyId', ?1, '$.apiKeyHash', ?2, '$.apiKeyAttribution', ?3) WHERE request_id = ?4",
+            params![
+                text(log.get("apiKeyId")),
+                text(log.get("apiKeyHash")),
+                text(log.get("apiKeyAttribution")),
+                request_id
+            ],
+        )?;
+        changed |= log != before;
+    }
+    if changed {
+        bump_revision(&transaction)?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 pub fn write_usage_cost_snapshots(
     paths: &AppPaths,
     logs: &[Value],

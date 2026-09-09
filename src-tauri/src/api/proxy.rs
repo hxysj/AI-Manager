@@ -864,17 +864,20 @@ async fn process_proxy_request(
             Ok(mut result) => {
                 let status = result.response.status();
                 let headers = result.response.headers().clone();
-                let api_key_id = result.key_request.as_ref().map(|request| request.key_id().to_string());
-                let response_bytes = result
-                    .response
-                    .bytes()
-                    .await
-                    .map_err(|error| {
-                        if let Some(tracking) = &mut result.key_request {
-                            tracking.fail("stream");
-                        }
-                        ManagerError::System(error.to_string())
-                    })?;
+                let api_key_id = result
+                    .key_request
+                    .as_ref()
+                    .map(|request| request.key_id().to_string());
+                let api_key_hash = result
+                    .key_request
+                    .as_ref()
+                    .map(|request| request.key_hash().to_string());
+                let response_bytes = result.response.bytes().await.map_err(|error| {
+                    if let Some(tracking) = &mut result.key_request {
+                        tracking.fail("stream");
+                    }
+                    ManagerError::System(error.to_string())
+                })?;
                 if let Some(tracking) = &mut result.key_request {
                     tracking.observe(&response_bytes);
                     tracking.finish();
@@ -888,6 +891,7 @@ async fn process_proxy_request(
                         json!({
                           "providerId": provider_id,
                           "apiKeyId": api_key_id,
+                          "apiKeyHash": api_key_hash,
                           "providerName": target.name,
                           "targetType": target.target_type,
                           "method": parts.method.as_str(),
@@ -919,6 +923,7 @@ async fn process_proxy_request(
                     json!({
                       "providerId": provider_id,
                       "apiKeyId": api_key_id,
+                      "apiKeyHash": api_key_hash,
                       "providerName": result.target.name,
                       "targetType": result.target.target_type,
                       "method": parts.method.as_str(),

@@ -8,7 +8,9 @@
       <div class="restore-toolbar">
         <div class="restore-stats">
           <span class="restore-stat restore-stat-added">
-            <span class="restore-stat-value">{{ restoreAddedItems.length }}</span>
+            <span class="restore-stat-value">{{
+              restoreAddedItems.length
+            }}</span>
             <span class="restore-stat-label">新增</span>
           </span>
           <span class="restore-stat restore-stat-conflict">
@@ -18,11 +20,15 @@
             <span class="restore-stat-label">冲突</span>
           </span>
           <span class="restore-stat restore-stat-current">
-            <span class="restore-stat-value">{{ restoreCurrentChoiceCount }}</span>
+            <span class="restore-stat-value">{{
+              restoreCurrentChoiceCount
+            }}</span>
             <span class="restore-stat-label">保留当前</span>
           </span>
           <span class="restore-stat restore-stat-backup">
-            <span class="restore-stat-value">{{ restoreBackupChoiceCount }}</span>
+            <span class="restore-stat-value">{{
+              restoreBackupChoiceCount
+            }}</span>
             <span class="restore-stat-label">使用备份</span>
           </span>
         </div>
@@ -48,7 +54,8 @@
       </div>
 
       <p class="restore-notice">
-        已有 Provider、Codex 官方账号、Skill 和宠物保留本机启用状态；备份新增的 Provider、官方账号和 Skill 默认禁用。
+        自动合并双方数据：本机独有项不变，备份独有项自动新增；以下选择只影响对应冲突项，不替换整类数据。已有项目保留本机启用状态，新增
+        Provider、官方账号和 Skill 默认禁用。
       </p>
 
       <div class="restore-body">
@@ -99,7 +106,9 @@
                 class="restore-group"
               >
                 <div class="restore-group-head">
-                  <span data-emphasis class="restore-group-title">{{ group.path }}</span>
+                  <span data-emphasis class="restore-group-title">{{
+                    group.path
+                  }}</span>
                   <span class="restore-group-count">
                     {{ group.items.length }} 项
                   </span>
@@ -140,7 +149,9 @@
               class="restore-section"
             >
               <div class="restore-section-head">
-                <span data-emphasis class="restore-section-title">需要决策</span>
+                <span data-emphasis class="restore-section-title"
+                  >需要决策</span
+                >
                 <span class="restore-section-count">
                   {{ restoreFilteredConflictItems.length }} 项
                 </span>
@@ -151,7 +162,9 @@
                 class="restore-group"
               >
                 <div class="restore-group-head">
-                  <span data-emphasis class="restore-group-title">{{ group.path }}</span>
+                  <span data-emphasis class="restore-group-title">{{
+                    group.path
+                  }}</span>
                   <div class="restore-group-actions">
                     <span class="restore-group-count">
                       {{ group.items.length }} 项
@@ -249,7 +262,9 @@
                             :disabled="loading"
                           />
                           <span class="restore-choice-title">保留当前</span>
-                          <span class="restore-choice-desc">不覆盖本机数据</span>
+                          <span class="restore-choice-desc"
+                            >不覆盖本机数据</span
+                          >
                         </label>
                         <label
                           :class="[
@@ -306,7 +321,7 @@
           type="submit"
           :disabled="loading || !restoreCanSubmit"
         >
-          {{ loading ? '恢复中...' : '确认恢复' }}
+          {{ loading ? "恢复中..." : "确认恢复" }}
         </button>
       </div>
     </form>
@@ -386,8 +401,8 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from 'vue'
-import BaseModal from '@/components/BaseModal.vue'
+import { computed, reactive, ref, watch } from "vue"
+import BaseModal from "@/components/BaseModal.vue"
 
 const props = defineProps({
   preview: {
@@ -396,7 +411,7 @@ const props = defineProps({
   },
   description: {
     type: String,
-    default: ''
+    default: ""
   },
   loading: {
     type: Boolean,
@@ -404,10 +419,10 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['close', 'submit'])
+const emit = defineEmits(["close", "submit"])
 
-const restoreSelectedRoot = ref('all')
-const restoreCompareKey = ref('')
+const restoreSelectedRoot = ref("all")
+const restoreCompareKey = ref("")
 const restoreCurrentCompareCodeRef = ref(null)
 const restoreBackupCompareCodeRef = ref(null)
 const restoreChoices = reactive({})
@@ -440,13 +455,13 @@ const restoreFilteredConflictGroups = computed(() => {
 
 const restoreCurrentChoiceCount = computed(() => {
   return restoreConflictItems.value.filter(
-    item => restoreChoices[item.key] === 'current'
+    (item) => restoreChoices[item.key] === "current"
   ).length
 })
 
 const restoreBackupChoiceCount = computed(() => {
   return restoreConflictItems.value.filter(
-    item => restoreChoices[item.key] === 'backup'
+    (item) => restoreChoices[item.key] === "backup"
   ).length
 })
 
@@ -455,8 +470,8 @@ const restoreNavigationItems = computed(() => {
 
   // 导航按实际同步数据的最外层路径聚合，避免固定分类掩盖大量子项。
   for (const [items, countKey] of [
-    [restoreAddedItems.value, 'addedCount'],
-    [restoreConflictItems.value, 'conflictCount']
+    [restoreAddedItems.value, "addedCount"],
+    [restoreConflictItems.value, "conflictCount"]
   ]) {
     for (const item of items) {
       const rootPath = getRestoreItemRoot(item)
@@ -476,9 +491,9 @@ const restoreNavigationItems = computed(() => {
 
   return [
     {
-      id: 'all',
-      label: '全部同步数据',
-      path: '',
+      id: "all",
+      label: "全部同步数据",
+      path: "",
       addedCount: restoreAddedItems.value.length,
       conflictCount: restoreConflictItems.value.length,
       totalCount:
@@ -486,7 +501,7 @@ const restoreNavigationItems = computed(() => {
     },
     ...Array.from(roots.values())
       .sort((left, right) => left.path.localeCompare(right.path))
-      .map(item => ({
+      .map((item) => ({
         ...item,
         totalCount: item.addedCount + item.conflictCount
       }))
@@ -495,8 +510,9 @@ const restoreNavigationItems = computed(() => {
 
 const restoreCompareItem = computed(() => {
   return (
-    restoreConflictItems.value.find(item => item.key === restoreCompareKey.value) ||
-    null
+    restoreConflictItems.value.find(
+      (item) => item.key === restoreCompareKey.value
+    ) || null
   )
 })
 
@@ -512,12 +528,13 @@ const restoreCompareRows = computed(() => {
 })
 
 const restoreCompareChangedCount = computed(() => {
-  return restoreCompareRows.value.filter(item => item.status !== 'same').length
+  return restoreCompareRows.value.filter((item) => item.status !== "same")
+    .length
 })
 
 const restoreCompareDescription = computed(() => {
   if (!restoreCompareItem.value) {
-    return ''
+    return ""
   }
 
   return `${restoreCompareItem.value.type}：${
@@ -540,15 +557,15 @@ watch(
 )
 
 function resetRestoreState() {
-  restoreSelectedRoot.value = 'all'
-  restoreCompareKey.value = ''
+  restoreSelectedRoot.value = "all"
+  restoreCompareKey.value = ""
 
   for (const key of Object.keys(restoreChoices)) {
     delete restoreChoices[key]
   }
 
   for (const item of props.preview?.conflicts || []) {
-    restoreChoices[item.key] = 'current'
+    restoreChoices[item.key] = "current"
   }
 }
 
@@ -557,7 +574,7 @@ function handleClose() {
     return
   }
 
-  emit('close')
+  emit("close")
 }
 
 function submit() {
@@ -565,7 +582,7 @@ function submit() {
     return
   }
 
-  emit('submit', {
+  emit("submit", {
     choices: { ...restoreChoices }
   })
 }
@@ -575,7 +592,7 @@ function toggleRestoreCompare(item) {
 }
 
 function closeRestoreCompare() {
-  restoreCompareKey.value = ''
+  restoreCompareKey.value = ""
 }
 
 function syncRestoreCompareScroll(source) {
@@ -585,8 +602,8 @@ function syncRestoreCompareScroll(source) {
 
   const currentElement = restoreCurrentCompareCodeRef.value
   const backupElement = restoreBackupCompareCodeRef.value
-  const sourceElement = source === 'current' ? currentElement : backupElement
-  const targetElement = source === 'current' ? backupElement : currentElement
+  const sourceElement = source === "current" ? currentElement : backupElement
+  const targetElement = source === "current" ? backupElement : currentElement
 
   if (!sourceElement || !targetElement) {
     return
@@ -614,84 +631,86 @@ function syncRestoreCompareScroll(source) {
 }
 
 function formatRestoreCompareContent(value) {
-  if (value === undefined || value === null || value === '') {
-    return '空内容'
+  if (value === undefined || value === null || value === "") {
+    return "空内容"
   }
 
   return String(value)
 }
 
 function getRestoreItemPath(item) {
-  return String(item.groupPath || item.path || '根目录').replace(/\\/g, '/')
+  return String(item.groupPath || item.path || "根目录").replace(/\\/g, "/")
 }
 
 function getRestoreItemRoot(item) {
-  const itemPath = String(item.path || item.groupPath || '根目录').replace(
+  const itemPath = String(item.path || item.groupPath || "根目录").replace(
     /\\/g,
-    '/'
+    "/"
   )
-  const groupPath = String(item.groupPath || '').replace(/\\/g, '/')
+  const groupPath = String(item.groupPath || "").replace(/\\/g, "/")
 
-  if (groupPath === 'storage/ai-manager.db') {
+  if (groupPath === "storage/ai-manager.db") {
     return groupPath
   }
 
-  const pathParts = itemPath.split('/').filter(Boolean)
+  const pathParts = itemPath.split("/").filter(Boolean)
 
   if (
     pathParts.length > 1 &&
-    ['storage', 'skills', 'prompts', 'pets-disabled', 'codex-pets'].includes(
+    ["storage", "skills", "prompts", "pets-disabled", "codex-pets"].includes(
       pathParts[0]
     )
   ) {
-    return pathParts.slice(0, 2).join('/')
+    return pathParts.slice(0, 2).join("/")
   }
 
-  return pathParts[0] || '根目录'
+  return pathParts[0] || "根目录"
 }
 
 function getRestoreRootLabel(rootPath) {
   const labels = {
-    'app-settings.json': '云同步设置',
-    'storage/ai-manager.db': '主数据库',
-    'storage/providers.json': 'Provider',
-    'storage/codex-accounts.json': 'Codex 官方账号',
-    'storage/skills.json': 'Skill 索引',
-    'storage/rules.json': 'Prompt 索引'
+    "app-settings.json": "云同步设置",
+    "storage/ai-manager.db": "主数据库",
+    "storage/providers.json": "Provider",
+    "storage/codex-accounts.json": "Codex 官方账号",
+    "storage/skills.json": "Skill 索引",
+    "storage/rules.json": "Prompt 索引"
   }
 
   if (labels[rootPath]) {
     return labels[rootPath]
   }
-  if (rootPath.startsWith('skills/')) {
-    return `Skill · ${rootPath.slice('skills/'.length)}`
+  if (rootPath.startsWith("skills/")) {
+    return `Skill · ${rootPath.slice("skills/".length)}`
   }
-  if (rootPath.startsWith('prompts/')) {
-    return `Prompt · ${rootPath.slice('prompts/'.length)}`
+  if (rootPath.startsWith("prompts/")) {
+    return `Prompt · ${rootPath.slice("prompts/".length)}`
   }
-  if (rootPath.startsWith('codex-pets/')) {
-    return `启用宠物 · ${rootPath.slice('codex-pets/'.length)}`
+  if (rootPath.startsWith("codex-pets/")) {
+    return `启用宠物 · ${rootPath.slice("codex-pets/".length)}`
   }
-  if (rootPath.startsWith('pets-disabled/')) {
-    return `禁用宠物 · ${rootPath.slice('pets-disabled/'.length)}`
+  if (rootPath.startsWith("pets-disabled/")) {
+    return `禁用宠物 · ${rootPath.slice("pets-disabled/".length)}`
   }
 
   return rootPath
 }
 
 function filterRestoreItemsByRoot(items) {
-  if (restoreSelectedRoot.value === 'all') {
+  if (restoreSelectedRoot.value === "all") {
     return items
   }
 
-  return items.filter(item => getRestoreItemRoot(item) === restoreSelectedRoot.value)
+  return items.filter(
+    (item) => getRestoreItemRoot(item) === restoreSelectedRoot.value
+  )
 }
 
 function groupRestoreItems(items) {
   const groups = new Map()
 
   for (const item of items) {
-    const groupPath = item.groupPath || item.path || '根目录'
+    const groupPath = item.groupPath || item.path || "根目录"
 
     if (!groups.has(groupPath)) {
       groups.set(groupPath, {
@@ -703,7 +722,7 @@ function groupRestoreItems(items) {
     groups.get(groupPath).items.push(item)
   }
 
-  return Array.from(groups.values()).map(group => ({
+  return Array.from(groups.values()).map((group) => ({
     ...group,
     rows: createRestoreTreeRows(group.path, group.items)
   }))
@@ -712,9 +731,9 @@ function groupRestoreItems(items) {
 function createRestoreTreeRows(groupPath, items) {
   const rows = []
   const dirKeys = new Set()
-  const normalizedGroupPath = groupPath === '根目录' ? '' : groupPath
-  const itemInfos = items.map(item => {
-    const normalizedPath = String(item.path || '').replace(/\\/g, '/')
+  const normalizedGroupPath = groupPath === "根目录" ? "" : groupPath
+  const itemInfos = items.map((item) => {
+    const normalizedPath = String(item.path || "").replace(/\\/g, "/")
     const relativePath =
       normalizedGroupPath &&
       normalizedPath.startsWith(`${normalizedGroupPath}/`)
@@ -724,14 +743,14 @@ function createRestoreTreeRows(groupPath, items) {
     return {
       item,
       relativePath,
-      parts: relativePath.split('/').filter(Boolean)
+      parts: relativePath.split("/").filter(Boolean)
     }
   })
   const dirCounts = new Map()
 
   for (const itemInfo of itemInfos) {
     itemInfo.parts.slice(0, -1).forEach((part, index) => {
-      const key = itemInfo.parts.slice(0, index + 1).join('/')
+      const key = itemInfo.parts.slice(0, index + 1).join("/")
 
       dirCounts.set(key, (dirCounts.get(key) || 0) + 1)
     })
@@ -739,7 +758,7 @@ function createRestoreTreeRows(groupPath, items) {
 
   for (const itemInfo of itemInfos) {
     itemInfo.parts.slice(0, -1).forEach((part, index) => {
-      const key = itemInfo.parts.slice(0, index + 1).join('/')
+      const key = itemInfo.parts.slice(0, index + 1).join("/")
 
       if (dirKeys.has(key)) {
         return
@@ -748,22 +767,22 @@ function createRestoreTreeRows(groupPath, items) {
       dirKeys.add(key)
       rows.push({
         key: `dir:${groupPath}:${key}`,
-        kind: 'dir',
+        kind: "dir",
         name: part,
         depth: index,
         itemCount: dirCounts.get(key) || 0,
         items: itemInfos
           .filter(
-            targetInfo =>
-              targetInfo.parts.slice(0, index + 1).join('/') === key
+            (targetInfo) =>
+              targetInfo.parts.slice(0, index + 1).join("/") === key
           )
-          .map(targetInfo => targetInfo.item)
+          .map((targetInfo) => targetInfo.item)
       })
     })
 
     rows.push({
       key: itemInfo.item.key,
-      kind: 'item',
+      kind: "item",
       item: itemInfo.item,
       relativePath: itemInfo.relativePath,
       depth: Math.max(itemInfo.parts.length - 1, 0)
@@ -799,13 +818,13 @@ function createRestoreCompareRows(currentContent, backupContent) {
     if (hasCurrent && hasBackup && currentText === backupText) {
       rows.push({
         index: rows.length,
-        status: 'same',
-        currentStatus: 'same',
-        backupStatus: 'same',
+        status: "same",
+        currentStatus: "same",
+        backupStatus: "same",
         currentLineNumber: index + 1,
         backupLineNumber: index + 1,
-        currentMarker: '',
-        backupMarker: '',
+        currentMarker: "",
+        backupMarker: "",
         currentText,
         backupText
       })
@@ -814,15 +833,15 @@ function createRestoreCompareRows(currentContent, backupContent) {
 
     rows.push({
       index: rows.length,
-      status: 'changed',
-      currentStatus: hasCurrent ? 'current-only' : 'empty',
-      backupStatus: hasBackup ? 'backup-only' : 'empty',
-      currentLineNumber: hasCurrent ? index + 1 : '',
-      backupLineNumber: hasBackup ? index + 1 : '',
-      currentMarker: hasCurrent ? '当前' : '缺少',
-      backupMarker: hasBackup ? '备份' : '缺少',
-      currentText: hasCurrent ? currentText : '',
-      backupText: hasBackup ? backupText : ''
+      status: "changed",
+      currentStatus: hasCurrent ? "current-only" : "empty",
+      backupStatus: hasBackup ? "backup-only" : "empty",
+      currentLineNumber: hasCurrent ? index + 1 : "",
+      backupLineNumber: hasBackup ? index + 1 : "",
+      currentMarker: hasCurrent ? "当前" : "缺少",
+      backupMarker: hasBackup ? "备份" : "缺少",
+      currentText: hasCurrent ? currentText : "",
+      backupText: hasBackup ? backupText : ""
     })
   }
 

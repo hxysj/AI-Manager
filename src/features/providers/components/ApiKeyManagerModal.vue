@@ -170,20 +170,20 @@
               </label>
               <label class="key-manager-field">
                 <span class="key-manager-field-label">API Key</span>
-                <el-input
+                <ProviderApiKeyInput
                   :key="selectedKey.id"
                   :model-value="selectedKey.apiKey"
                   :disabled="busy"
-                  type="password"
-                  show-password
-                  autocomplete="new-password"
-                  spellcheck="false"
+                  :provider-id="provider.id"
+                  :key-id="selectedKey.id"
+                  :cli="provider.cli"
+                  :masked="selectedKey.masked"
                   :placeholder="selectedKey.masked || '输入 API Key'"
                   @update:model-value="(value) => updateKey({ apiKey: value })"
                 />
                 <span class="key-manager-field-hint">{{
                   selectedKey.masked
-                    ? "已保存的密钥留空则保持不变，输入新值将替换密钥。"
+                    ? "点击眼睛可查看此密钥，不会切换生效项；留空保持不变，输入新值将替换密钥。"
                     : "密钥加密保存在本机，请勿在备注中填写完整密钥。"
                 }}</span>
               </label>
@@ -314,6 +314,7 @@ import {
 } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import ApiKeyUsageStats from "./ApiKeyUsageStats.vue"
+import ProviderApiKeyInput from "./ProviderApiKeyInput.vue"
 
 const props = defineProps({
   provider: { type: Object, required: true },

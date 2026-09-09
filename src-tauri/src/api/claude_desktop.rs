@@ -873,6 +873,9 @@ impl DesktopManager {
         action: &str,
         payload: Value,
     ) -> Result<Value, ManagerError> {
+        if action == "import-preview" {
+            return preview_import_providers(paths);
+        }
         let mut data = DesktopData::load(paths)?;
         let mut written = false;
         let mut imported = 0;
@@ -941,15 +944,40 @@ impl DesktopManager {
                 data.save(paths)?;
             }
             "import" => {
-                for source in provider_store::read_providers(paths)?
+                let selected = payload["providerIds"]
+                    .as_array()
+                    .filter(|items| !items.is_empty())
+                    .ok_or_else(|| error("请先选择需要导入的供应商"))?;
+                let selected_ids = selected
                     .iter()
-                    .filter(|provider| text(provider, "cli") == "claude")
-                {
+                    .map(|id| {
+                        id.as_str()
+                            .filter(|id| !id.is_empty())
+                            .ok_or_else(|| error("供应商选择格式无效，请重新选择"))
+                    })
+                    .collect::<Result<std::collections::HashSet<_>, _>>()?;
+                let sources = provider_store::read_providers(paths)?;
+                if selected_ids.iter().any(|id| {
+                    !sources
+                        .iter()
+                        .any(|source| text(source, "id") == *id && text(source, "cli") == "claude")
+                }) {
+                    return Err(error(
+                        "部分已选供应商已不存在或不属于 Claude Code，请刷新后重新选择",
+                    ));
+                }
+                for source in sources.iter().filter(|provider| {
+                    text(provider, "cli") == "claude" && selected_ids.contains(text(provider, "id"))
+                }) {
                     if data
                         .providers
                         .iter()
                         .any(|provider| text(provider, "id") == text(source, "id"))
                     {
+                        skipped.push(format!(
+                            "{}：已导入，保留 Desktop 现有配置",
+                            text(source, "name")
+                        ));
                         continue;
                     }
                     let key = runtime_provider::get_provider_api_key(paths, text(source, "id"))?;
@@ -1040,6 +1068,39 @@ impl DesktopManager {
             "defaultRoutes": ROUTES.iter().map(|(id, label, field)| json!({"id": id, "label": label, "field": field})).collect::<Vec<_>>()
         }))
     }
+}
+
+fn preview_import_providers(paths: &AppPaths) -> Result<Value, ManagerError> {
+    let existing = provider_store::read_desktop_providers(paths)?;
+    let keys = provider_store::read_keys(paths)?;
+    let items = provider_store::read_providers(paths)?.iter()
+        .filter(|source| text(source, "cli") == "claude")
+        .map(|source| {
+            let mut item = json!({
+                "id": source["id"], "name": source["name"], "baseUrl": source["baseUrl"],
+                "enabled": source["enabled"] != false,
+                "apiKeyCount": runtime_provider::provider_key_records(keys.get(text(source, "id"))).len(),
+                "status": "available", "reason": ""
+            });
+            if existing.iter().any(|provider| text(provider, "id") == text(source, "id")) {
+                item["status"] = json!("existing");
+                item["reason"] = json!("已导入，保留 Desktop 现有配置");
+                return item;
+            }
+            match runtime_provider::get_provider_api_key(paths, text(source, "id"))
+                .and_then(|key| import_provider(source, &key)) {
+                Ok(provider) => {
+                    item["mode"] = provider["mode"].clone();
+                    item["apiFormat"] = provider["apiFormat"].clone();
+                }
+                Err(cause) => {
+                    item["status"] = json!("unavailable");
+                    item["reason"] = json!(cause.to_string());
+                }
+            }
+            item
+        }).collect::<Vec<_>>();
+    Ok(json!({"items": items}))
 }
 
 fn import_provider(source: &Value, key: &str) -> Result<Value, ManagerError> {
@@ -1205,6 +1266,7 @@ fn track_gateway_provider(
     let mut record = json!({
         "appType": "claude-desktop", "providerId": log["providerId"],
         "apiKeyId": log["apiKeyId"],
+        "apiKeyHash": log["apiKeyHash"],
         "providerName": log["providerName"], "providerType": log["providerType"],
         "model": log["model"], "requestModel": log["requestModel"],
         "requestSource": "proxy-managed", "createdAt": chrono::Utc::now().timestamp_millis()
@@ -1368,6 +1430,7 @@ async fn process_gateway(
     let key_id = runtime_provider::active_provider_key_id(stored, &runtime_provider::provider_key_records(stored));
     let key = data.key(data.current_id())?;
     log["apiKeyId"] = json!(key_id);
+    log["apiKeyHash"] = json!(crate::core::provider_key_usage::fingerprint(&key));
     *key_request = Some(KeyRequest::new(paths, &storage_id, &key_id, &key));
     if ["openai_chat", "openai_responses"].contains(&text(provider, "apiFormat")) {
         if endpoint != "/messages" {
@@ -1849,6 +1912,129 @@ mod tests {
     }
 
     #[test]
+    fn import_preview_is_read_only_and_marks_existing_and_invalid_candidates() {
+        tauri::async_runtime::block_on(async {
+            let fixture = Fixture::new();
+            let mut keys = Map::new();
+            for id in ["first", "second", "existing", "codex"] {
+                runtime_provider::set_provider_key(&mut keys, id, format!("secret-{id}")).unwrap();
+            }
+            let sources = [
+                json!({"id": "first", "name": "供应商一", "cli": "claude", "baseUrl": "https://example.invalid", "headers": {"Authorization": "secret-header"}, "runtimeConfig": {"mainModel": "claude-sonnet-4"}}),
+                json!({"id": "second", "name": "供应商二", "cli": "claude", "baseUrl": "https://example.invalid", "enabled": false}),
+                json!({"id": "existing", "name": "原供应商", "cli": "claude", "baseUrl": "https://example.invalid"}),
+                json!({"id": "invalid", "name": "缺少密钥", "cli": "claude", "baseUrl": "https://example.invalid"}),
+                json!({"id": "codex", "name": "不属于导入来源", "cli": "codex", "baseUrl": "https://example.invalid"}),
+            ];
+            provider_store::write_provider_bundle(&fixture.paths, &sources, &[], &[], &keys)
+                .unwrap();
+            let mut data = DesktopData::load(&fixture.paths).unwrap();
+            data.upsert_provider(&json!({"id": "existing", "name": "Desktop 已编辑", "mode": "direct", "baseUrl": "https://desktop.invalid", "apiKey": "desktop-secret", "routes": {}})).unwrap();
+            data.save(&fixture.paths).unwrap();
+            let before_providers = provider_store::read_desktop_providers(&fixture.paths).unwrap();
+            let before_keys = provider_store::read_keys(&fixture.paths).unwrap();
+            let before_settings = provider_store::read_desktop_settings(&fixture.paths).unwrap();
+            let manager = DesktopManager::new();
+            let preview = manager
+                .dispatch(&fixture.paths, "import-preview", json!({}))
+                .await
+                .unwrap();
+            let items = preview["items"].as_array().unwrap();
+            assert_eq!(items.len(), 4);
+            assert_eq!(items[0]["status"], "available");
+            assert_eq!(items[0]["mode"], "proxy");
+            assert_eq!(items[0]["apiKeyCount"], 1);
+            assert_eq!(items[1]["status"], "available");
+            assert_eq!(items[1]["enabled"], false);
+            assert_eq!(items[2]["status"], "existing");
+            assert_eq!(items[3]["status"], "unavailable");
+            assert!(!preview.to_string().contains("secret"));
+            assert_eq!(
+                provider_store::read_desktop_providers(&fixture.paths).unwrap(),
+                before_providers
+            );
+            assert_eq!(
+                provider_store::read_keys(&fixture.paths).unwrap(),
+                before_keys
+            );
+            assert_eq!(
+                provider_store::read_desktop_settings(&fixture.paths).unwrap(),
+                before_settings
+            );
+            let result = manager
+                .dispatch(
+                    &fixture.paths,
+                    "import",
+                    json!({"providerIds": ["second", "second", "existing"]}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result["importedCount"], 1);
+            assert_eq!(result["skipped"].as_array().unwrap().len(), 1);
+            let after = DesktopData::load(&fixture.paths).unwrap();
+            assert_eq!(after.providers.len(), 3);
+            assert!(after
+                .providers
+                .iter()
+                .all(|provider| text(provider, "id") != "first"));
+            assert_eq!(
+                after
+                    .providers
+                    .iter()
+                    .find(|provider| text(provider, "id") == "existing")
+                    .unwrap()["name"],
+                "Desktop 已编辑"
+            );
+            assert!(after.keys.contains_key("claude-desktop:second"));
+            assert!(!after.keys.contains_key("claude-desktop:first"));
+            assert_eq!(after.current_id(), "");
+            assert_eq!(
+                provider_store::read_providers(&fixture.paths).unwrap(),
+                sources
+            );
+            assert!(fixture.contents().iter().all(Option::is_none));
+        });
+    }
+
+    #[test]
+    fn import_rejects_missing_empty_invalid_and_stale_selections() {
+        tauri::async_runtime::block_on(async {
+            let fixture = Fixture::new();
+            let mut keys = Map::new();
+            runtime_provider::set_provider_key(&mut keys, "source", "test-secret".into()).unwrap();
+            provider_store::write_provider_bundle(&fixture.paths, &[
+                json!({"id": "source", "cli": "claude", "name": "供应商", "baseUrl": "https://example.invalid"}),
+                json!({"id": "codex", "cli": "codex", "name": "其他应用"})
+            ], &[], &[], &keys).unwrap();
+            let before = DesktopData::load(&fixture.paths).unwrap();
+            let manager = DesktopManager::new();
+            for payload in [
+                json!({}),
+                json!({"providerIds": []}),
+                json!({"providerIds": "source"}),
+                json!({"providerIds": [null]}),
+                json!({"providerIds": [""]}),
+                json!({"providerIds": ["source", "missing"]}),
+                json!({"providerIds": ["source", "codex"]}),
+            ] {
+                assert!(manager
+                    .dispatch(&fixture.paths, "import", payload)
+                    .await
+                    .is_err());
+                assert_eq!(
+                    provider_store::read_desktop_providers(&fixture.paths).unwrap(),
+                    before.providers
+                );
+                assert_eq!(
+                    provider_store::read_keys(&fixture.paths).unwrap(),
+                    before.keys
+                );
+            }
+            assert!(fixture.contents().iter().all(Option::is_none));
+        });
+    }
+
+    #[test]
     fn import_preserves_all_keys_and_disabled_state_without_linking_cli_edits() {
         runtime().block_on(async {
             let fixture = Fixture::new();
@@ -1860,7 +2046,7 @@ mod tests {
             provider_store::write_keys(&fixture.paths, &keys).unwrap();
             provider_store::write_provider_bundle(&fixture.paths, &[json!({"id": "cli-source", "cli": "claude", "name": "导入供应商", "baseUrl": "https://example.invalid", "website": "https://website.invalid", "enabled": false})], &[], &[], &keys).unwrap();
             let manager = DesktopManager::new();
-            let result = manager.dispatch(&fixture.paths, "import", json!({})).await.unwrap();
+            let result = manager.dispatch(&fixture.paths, "import", json!({"providerIds": ["cli-source"]})).await.unwrap();
             assert_eq!(result["importedCount"], 1);
             assert_eq!(result["providers"][1]["apiKeys"].as_array().unwrap().len(), 2);
             assert_eq!(result["providers"][1]["activeApiKeyId"], "backup");

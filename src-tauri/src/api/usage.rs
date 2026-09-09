@@ -393,6 +393,71 @@ fn read_priced_usage_logs(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> 
         .collect())
 }
 
+pub(crate) fn read_provider_key_logs(
+    paths: &AppPaths,
+    storage_id: &str,
+) -> Result<Vec<Value>, ManagerError> {
+    let desktop_id = storage_id.strip_prefix("claude-desktop:");
+    let pricing = read_pricing(paths)?;
+    let pricing_index = create_pricing_index(&pricing);
+    let filters = json!({"appType": if desktop_id.is_some() { "claude-desktop" } else { "all" },
+        "providerId": desktop_id.unwrap_or(storage_id), "model": "all", "requestSource": "all"});
+    Ok(
+        usage_store::query_logs(paths, &create_usage_log_query(&filters))?
+            .iter()
+            .filter(|log| desktop_id.is_some() || log["appType"] != "claude-desktop")
+            .map(|log| enrich_usage_log(log, &pricing, &pricing_index))
+            .collect(),
+    )
+}
+
+pub(crate) fn append_provider_key_usage(
+    usage: &mut Value,
+    logs: &[Value],
+    key_id: &str,
+    key_hash: &str,
+) {
+    let mut summary = create_empty_summary();
+    let mut scanned_count = 0;
+    let mut inferred_count = 0;
+    let mut last_used = number_value(usage.get("lastUsedAt"), 0);
+    for log in logs
+        .iter()
+        .filter(|log| log["apiKeyId"] == key_id && log["apiKeyHash"] == key_hash)
+    {
+        append_usage_summary(&mut summary, log);
+        inferred_count += u64::from(log["apiKeyAttribution"] == "single-key-inferred");
+        if !matches!(
+            log["requestSource"].as_str(),
+            Some("proxy-managed" | "provider-instance")
+        ) {
+            scanned_count += 1;
+            let created_at = number_value(log.get("createdAt"), 0);
+            usage["lastSuccessAt"] =
+                json!(number_value(usage.get("lastSuccessAt"), 0).max(created_at));
+            if created_at > last_used {
+                last_used = created_at;
+                usage["lastOutcome"] = json!("success");
+                usage["lastStatusCode"] = Value::Null;
+                usage["lastErrorKind"] = json!("");
+                usage["consecutiveFailures"] = json!(0);
+            }
+        }
+    }
+    usage["gatewayRequestCount"] = usage["requestCount"].clone();
+    usage["requestCount"] = json!(number_value(usage.get("requestCount"), 0) + scanned_count);
+    usage["successCount"] = json!(number_value(usage.get("successCount"), 0) + scanned_count);
+    usage["lastUsedAt"] = json!(last_used);
+    usage["scannedRequestCount"] = json!(scanned_count);
+    usage["inferredRequestCount"] = json!(inferred_count);
+    usage["unattributedRequestCount"] = json!(logs
+        .iter()
+        .filter(|log| string_value(log.get("apiKeyId")).is_empty()
+            || string_value(log.get("apiKeyHash")).is_empty())
+        .count());
+    usage["tokenUsage"] = finalize_summary(summary);
+}
+
 pub async fn save_pricing(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
     let pricing = normalize_pricing_config(payload)?;
     let current_pricing = read_pricing(paths)?;
@@ -712,6 +777,7 @@ fn get_initial_state_data(paths: &AppPaths) -> Result<Value, ManagerError> {
 }
 
 async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
+    crate::api::runtime_provider::capture_key_bindings(paths)?;
     let mut diagnostics = Vec::new();
     let mut updates = Vec::new();
     let workspace_created_at = std::fs::metadata(&paths.workspace_root)?
@@ -787,6 +853,7 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
     }
 
     usage_store::replace_sessions(paths, &updates)?;
+    usage_store::bind_key_usage(paths)?;
     Ok(diagnostics)
 }
 
@@ -917,6 +984,14 @@ fn bind_desktop_providers(paths: &AppPaths, logs: &mut [Value]) -> Result<(), Ma
         ] {
             log[field] = first[field].clone();
         }
+        if matches.iter().all(|record| {
+            record["apiKeyId"] == first["apiKeyId"] && record["apiKeyHash"] == first["apiKeyHash"]
+        }) {
+            log["apiKeyId"] = first["apiKeyId"].clone();
+            log["apiKeyHash"] = first["apiKeyHash"].clone();
+        } else {
+            log["apiKeyAttribution"] = json!("mixed-keys");
+        }
         for field in ["model", "requestModel"] {
             if !string_value(first.get(field)).is_empty()
                 && matches.iter().all(|record| record[field] == first[field])
@@ -998,6 +1073,14 @@ fn merge_usage_records(
                 && !should_refresh_legacy_record
             {
                 let mut log_with_record = log.clone();
+                for field in ["apiKeyId", "apiKeyHash", "apiKeyAttribution"] {
+                    if let Some(value) = record
+                        .get(field)
+                        .filter(|value| value.as_str().is_some_and(|value| !value.is_empty()))
+                    {
+                        log_with_record[field] = value.clone();
+                    }
+                }
 
                 log_with_record["requestSource"] = json!(string_value(record.get("requestSource")));
                 log_with_record["instanceProviderId"] =
@@ -2090,6 +2173,9 @@ fn in_range(log: &Value, filters: &Value) -> bool {
 
 fn create_request_record(log: &Value, provider_info: &Value) -> Value {
     json!({
+      "apiKeyId": log.get("apiKeyId"),
+      "apiKeyHash": log.get("apiKeyHash"),
+      "apiKeyAttribution": log.get("apiKeyAttribution"),
       "requestId": log.get("requestId").cloned().unwrap_or(Value::Null),
       "providerId": provider_info["providerId"],
       "providerName": provider_info["providerName"],
@@ -2120,6 +2206,11 @@ fn create_request_record(log: &Value, provider_info: &Value) -> Value {
 
 fn apply_request_record(log: &Value, record: &Value) -> Value {
     let mut next = log.clone();
+    for field in ["apiKeyId", "apiKeyHash", "apiKeyAttribution"] {
+        if let Some(value) = record.get(field) {
+            next[field] = value.clone();
+        }
+    }
 
     next["providerId"] = record.get("providerId").cloned().unwrap_or(Value::Null);
     next["providerName"] = record.get("providerName").cloned().unwrap_or(Value::Null);
@@ -4056,6 +4147,124 @@ mod tests {
     use crate::core::{paths::resolve_app_paths, usage_store};
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn key_usage_counts_scanned_tokens_without_double_counting_gateway_requests() {
+        let mut usage = json!({"requestCount": 2, "successCount": 1, "failureCount": 1,
+            "lastUsedAt": 100, "lastFailureAt": 100, "lastOutcome": "failure", "consecutiveFailures": 1});
+        let logs = vec![
+            json!({"apiKeyId": "first", "apiKeyHash": "first-hash", "requestSource": "proxy-managed",
+                "inputTokens": 100, "outputTokens": 20, "cacheReadTokens": 10, "cacheCreationTokens": 5, "totalCostUsd": 0.5, "createdAt": 100}),
+            json!({"apiKeyId": "first", "apiKeyHash": "first-hash", "requestSource": "direct", "apiKeyAttribution": "single-key-inferred",
+                "inputTokens": 200, "outputTokens": 40, "cacheReadTokens": 20, "cacheCreationTokens": 10, "totalCostUsd": 0.75, "createdAt": 200}),
+            json!({"apiKeyId": "first", "apiKeyHash": "first-hash", "requestSource": "provider-instance", "createdAt": 100}),
+            json!({"apiKeyId": "second", "apiKeyHash": "second-hash", "inputTokens": 900}),
+            json!({"apiKeyId": "first", "apiKeyHash": "old-secret-hash", "inputTokens": 800}),
+            json!({"inputTokens": 700}),
+            json!({"apiKeyId": "unknown", "inputTokens": 600}),
+        ];
+        super::append_provider_key_usage(&mut usage, &logs, "first", "first-hash");
+        assert_eq!(usage["requestCount"], 3);
+        assert_eq!(usage["successCount"], 2);
+        assert_eq!(usage["failureCount"], 1);
+        assert_eq!(usage["gatewayRequestCount"], 2);
+        assert_eq!(usage["scannedRequestCount"], 1);
+        assert_eq!(usage["inferredRequestCount"], 1);
+        assert_eq!(usage["unattributedRequestCount"], 2);
+        assert_eq!(usage["lastUsedAt"], 200);
+        assert_eq!(usage["lastSuccessAt"], 200);
+        assert_eq!(usage["lastOutcome"], "success");
+        assert_eq!(usage["consecutiveFailures"], 0);
+        assert_eq!(usage["tokenUsage"]["requestCount"], 3);
+        assert_eq!(usage["tokenUsage"]["inputTokens"], 300);
+        assert_eq!(usage["tokenUsage"]["outputTokens"], 60);
+        assert_eq!(usage["tokenUsage"]["cacheReadTokens"], 30);
+        assert_eq!(usage["tokenUsage"]["cacheCreationTokens"], 15);
+        assert_eq!(usage["tokenUsage"]["totalCostUsd"], 1.25);
+    }
+
+    #[test]
+    fn key_usage_api_prices_scans_and_preserves_attribution_when_rescanned() {
+        use crate::api::runtime_provider;
+        use crate::core::{provider_key_usage, provider_store};
+        let root = std::env::temp_dir().join(format!(
+            "ai-manager-key-usage-scan-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let paths = resolve_app_paths(&root);
+        let mut keys = serde_json::Map::new();
+        let key_records = vec![
+            json!({"id": "first", "name": "首选", "apiKey": "first-secret"}),
+            json!({"id": "second", "name": "备用", "apiKey": "second-secret"}),
+        ];
+        runtime_provider::set_provider_keys(&mut keys, "provider", &key_records, "first".into())
+            .unwrap();
+        provider_store::write_keys(&paths, &keys).unwrap();
+        provider_key_usage::sync_bindings(&paths, &serde_json::Map::from_iter([("provider".into(), json!({
+            "apiKeyId": "first", "apiKeyHash": provider_key_usage::fingerprint("first-secret"), "singleKey": false
+        }))]), 100).unwrap();
+        usage_store::write_pricing(
+            &paths,
+            &json!({"exchangeRate": 7.2, "items": [{
+                "id": "price", "modelId": "test-model", "modelCategory": "text", "currency": "USD",
+                "inputCostPerMillion": 2, "outputCostPerMillion": 4,
+                "cacheReadCostPerMillion": 1, "cacheCreationCostPerMillion": 3
+            }]}),
+        )
+        .unwrap();
+        let log = json!({"requestId": "request", "providerId": "provider", "appType": "claude",
+            "requestSource": "direct", "rawPath": "session", "createdAt": 150,
+            "inputTokens": 1000000, "outputTokens": 1000000, "model": "test-model"});
+        let (logs, records) =
+            super::merge_usage_records(vec![log.clone()], Default::default(), &json!({}), 0);
+        usage_store::replace_sessions(
+            &paths,
+            &[usage_store::UsageSessionUpdate {
+                raw_path: "session".into(),
+                app_type: "claude".into(),
+                updated_at: 150,
+                logs,
+                records,
+            }],
+        )
+        .unwrap();
+        let payload = json!({"providerId": "provider", "cli": "claude"});
+        let stats = runtime_provider::read_provider_key_usage(&paths, &payload).unwrap();
+        assert_eq!(stats["keys"]["first"]["requestCount"], 1);
+        assert_eq!(stats["keys"]["first"]["tokenUsage"]["inputTokens"], 1000000);
+        assert_eq!(stats["keys"]["first"]["tokenUsage"]["totalCostUsd"], 6.0);
+        runtime_provider::set_provider_keys(&mut keys, "provider", &key_records, "second".into())
+            .unwrap();
+        provider_store::write_keys(&paths, &keys).unwrap();
+        runtime_provider::capture_key_bindings(&paths).unwrap();
+        let records = usage_store::read_request_records(&paths, &["request".into()]).unwrap();
+        assert_eq!(records["request"]["apiKeyId"], "first");
+        let (logs, records) = super::merge_usage_records(vec![log], records, &json!({}), 0);
+        assert_eq!(logs[0]["apiKeyId"], "first");
+        usage_store::replace_sessions(
+            &paths,
+            &[usage_store::UsageSessionUpdate {
+                raw_path: "session".into(),
+                app_type: "claude".into(),
+                updated_at: 160,
+                logs,
+                records,
+            }],
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let stats = runtime_provider::read_provider_key_usage(&paths, &payload).unwrap();
+            assert_eq!(stats["activeApiKeyId"], "second");
+            assert_eq!(stats["keys"]["first"]["requestCount"], 1);
+            assert_eq!(stats["keys"]["second"]["requestCount"], 0);
+        }
+        let revision = usage_store::revision(&paths).unwrap();
+        usage_store::bind_key_usage(&paths).unwrap();
+        assert_eq!(usage_store::revision(&paths).unwrap(), revision);
+        let resolved = root.canonicalize().unwrap();
+        assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        std::fs::remove_dir_all(resolved).unwrap();
+    }
 
     #[test]
     fn desktop_provider_stats_require_exact_attribution_and_isolate_applications() {
