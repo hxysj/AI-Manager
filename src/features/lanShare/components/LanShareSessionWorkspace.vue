@@ -60,7 +60,7 @@
             class="workspace-icon"
             type="button"
             aria-label="更多会话操作"
-            :disabled="!currentSessionId"
+            :disabled="chatMode === 'direct' ? !currentDevice : !currentSessionId"
           >
             <MoreHorizontal :size="19" />
           </button>
@@ -71,6 +71,8 @@
               ><el-dropdown-item command="clear">清空本机会话</el-dropdown-item
               ><el-dropdown-item v-if="chatMode === 'direct'" command="delete"
                 >删除设备历史</el-dropdown-item
+              ><el-dropdown-item v-if="chatMode === 'direct'" command="delete-device" divided
+                >删除设备</el-dropdown-item
               ></el-dropdown-menu
             ></template
           >
@@ -289,6 +291,7 @@ const emit = defineEmits([
   "clear-group-messages",
   "delete-group",
   "delete-history",
+  "delete-device",
   "refresh-state",
   "preview-file",
   "copy-text"
@@ -334,6 +337,7 @@ function handleCommand(command) {
   if (command === "new") emit("create-session")
   if (command === "clear") messagesRef.value?.clearCurrentSession()
   if (command === "delete") emit("delete-history")
+  if (command === "delete-device") emit("delete-device")
 }
 function deleteSession(id) {
   if (window.confirm("删除这个会话的本机历史记录？")) emit("delete-session", id)

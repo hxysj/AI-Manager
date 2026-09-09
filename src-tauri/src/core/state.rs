@@ -561,6 +561,19 @@ impl ManagerState {
                 )
                 .await
             }
+            "lan-share:delete-device" => {
+                let result = lan_share::delete_device(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                app.emit(lan_share::EVENT_STATE_CHANGED, &result["data"])
+                    .map_err(|error| ManagerError::System(error.to_string()))?;
+                app.emit(lan_share::EVENT_DEVICES_CHANGED, &result["data"]["devices"])
+                    .map_err(|error| ManagerError::System(error.to_string()))?;
+                Ok(result)
+            }
             "lan-share:create-group" => {
                 let result = lan_share::create_group(
                     &self.lan_share_registry,

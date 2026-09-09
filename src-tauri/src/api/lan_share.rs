@@ -764,6 +764,75 @@ pub async fn delete_device_history(
     get_state(registry, paths).await
 }
 
+pub async fn delete_device(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let device_id = string_value(payload.get("deviceId"));
+    if device_id.trim().is_empty() {
+        return Err(ManagerError::System("设备标识不能为空。".into()));
+    }
+    {
+        let _storage = registry.storage.lock().await;
+        let mut devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices)?;
+        let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
+        let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
+        let direct_session_ids = sessions.iter()
+            .filter(|session| session.device_id == device_id && session.mode != "group")
+            .map(|session| session.id.clone()).collect::<Vec<_>>();
+        let device_group_sessions = sessions.iter()
+            .filter(|session| session.device_id == device_id && session.mode == "group")
+            .cloned().collect::<Vec<_>>();
+        for removed in device_group_sessions {
+            let host_id = sessions.iter().find(|session| {
+                session.mode == "group" && session.group_id == removed.group_id && session.device_id.is_empty()
+            }).map(|session| session.id.clone());
+            if let Some(host_id) = host_id {
+                for message in messages.iter_mut().filter(|message| message.session_id == removed.id) {
+                    message.session_id = host_id.clone();
+                }
+                for file in files.iter_mut().filter(|file| file.session_id == removed.id) {
+                    file.session_id = host_id.clone();
+                }
+            } else if let Some(session) = sessions.iter_mut().find(|session| session.id == removed.id) {
+                session.device_id.clear();
+                session.device_name = "群聊".into();
+                session.ip.clear();
+            }
+        }
+        devices.retain(|device| device.id != device_id);
+        sessions.retain(|session| session.device_id != device_id);
+        messages.retain(|message| !direct_session_ids.contains(&message.session_id));
+        files.retain(|file| !direct_session_ids.contains(&file.session_id));
+        for group in &mut groups {
+            let count = group.members.len();
+            group.members.retain(|member| member.device_id != device_id);
+            if group.members.len() != count { group.updated_at = now_millis(); }
+        }
+        let mut runtime = registry.inner.lock().await;
+        if device_id.starts_with("native-") {
+            runtime.native.forget(paths, &device_id).await?;
+        }
+        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
+        write_json(&paths.lan_share_files.files, &json!(files)).await?;
+        write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
+        write_json(&paths.lan_share_files.groups, &json!(groups)).await?;
+        write_json(&paths.lan_share_files.devices, &json!(devices)).await?;
+        runtime.active_sessions.remove(&device_id);
+        if let Some(sender) = runtime.clients.remove(&device_id) {
+            let _ = sender.send(WsOutbound { payload: json!({ "type": "deviceRemoved" }) });
+        }
+        for sender in runtime.clients.values() {
+            let _ = sender.send(WsOutbound { payload: json!({ "type": "groupsChanged" }) });
+        }
+    }
+    broadcast_files_changed(registry).await?;
+    get_state(registry, paths).await
+}
+
 pub async fn create_group(
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
@@ -1347,6 +1416,7 @@ fn mobile_page_html() -> String {
     const previewBodyEl = document.getElementById("previewBody");
     const previewDownloadEl = document.getElementById("previewDownload");
     let ws = null;
+    let deviceRemoved = false;
     let deviceId = "";
     let currentSessionId = "";
     let currentMode = "direct";
@@ -1759,15 +1829,24 @@ fn mobile_page_html() -> String {
     }
 
     function connectWs() {
+      if (deviceRemoved) return;
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(protocol + "//" + location.host + "/ws?token=" + encodeURIComponent(token) + "&deviceId=" + encodeURIComponent(deviceId));
       ws.onopen = () => { setStatus("已连接电脑端服务"); loadGroups().catch(error => setStatus(error.message)); };
       ws.onclose = () => {
+        if (deviceRemoved) return;
         setStatus("连接已断开，正在重连...");
         window.setTimeout(connectWs, 1600);
       };
       ws.onmessage = event => {
         const payload = JSON.parse(event.data);
+        if (payload.type === "deviceRemoved") {
+          deviceRemoved = true;
+          currentSessionId = "";
+          setStatus("此设备已被电脑端移除，请重新访问后加入。");
+          ws.close();
+          return;
+        }
         if (payload.type === "message" && (!currentSessionId || payload.message?.sessionId === currentSessionId)) {
           appendMessage(payload.message);
           setActiveView("messages");
@@ -3569,6 +3648,9 @@ async fn handle_websocket_connection(
     let client_sender = sender.clone();
 
     {
+        let _storage = context.registry.storage.lock().await;
+        let devices: Vec<LanShareDevice> = read_array(&context.paths.lan_share_files.devices)?;
+        if !devices.iter().any(|device| device.id == device_id) { return Ok(()); }
         let mut runtime = context.registry.inner.lock().await;
         if !is_valid_token(&runtime.token, &request_token) {
             return Ok(());
@@ -3579,11 +3661,16 @@ async fn handle_websocket_connection(
 
     let writer_handle = tauri::async_runtime::spawn(async move {
         while let Some(outbound) = receiver.recv().await {
+            let removed = outbound.payload["type"] == "deviceRemoved";
             if writer
                 .send(Message::Text(outbound.payload.to_string().into()))
                 .await
                 .is_err()
             {
+                break;
+            }
+            if removed {
+                let _ = writer.close().await;
                 break;
             }
         }
@@ -3602,6 +3689,10 @@ async fn handle_websocket_connection(
             continue;
         }
         if !is_request_token_valid(&context.registry, &request_token).await {
+            break;
+        }
+        if !context.registry.inner.lock().await.clients.get(&device_id)
+            .map(|sender| sender.same_channel(&client_sender)).unwrap_or(false) {
             break;
         }
 
@@ -3691,6 +3782,63 @@ mod tests {
     use crate::core::paths::resolve_app_paths;
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn delete_device_removes_direct_records_without_losing_shared_group_history() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("device-delete-test"));
+            let paths = resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            let removed = upsert_device(&registry, &paths, "", "待删除", "Chrome", "192.168.1.31").await.unwrap();
+            let kept = upsert_device(&registry, &paths, "", "保留", "Chrome", "192.168.1.32").await.unwrap();
+            let removed_session = create_session(&registry, &paths, json!({ "deviceId": removed.id })).await.unwrap();
+            let removed_session_id = removed_session["data"]["currentSession"]["id"].as_str().unwrap().to_string();
+            let kept_session = create_session(&registry, &paths, json!({ "deviceId": kept.id })).await.unwrap();
+            let kept_session_id = kept_session["data"]["currentSession"]["id"].as_str().unwrap().to_string();
+            let group = create_group(&registry, &paths, json!({ "name": "保留群聊", "deviceIds": [removed.id, kept.id] })).await.unwrap();
+            let host_id = group["data"]["currentSession"]["id"].as_str().unwrap().to_string();
+            let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
+            let member_id = sessions.iter().find(|session| session.device_id == removed.id && session.mode == "group").unwrap().id.clone();
+            let original = root.join("original.txt");
+            tokio::fs::write(&original, "保留磁盘上的文件").await.unwrap();
+            let mut fixture_messages = Vec::new();
+            let mut fixture_files = Vec::new();
+            for (identifier, session_id, device_id) in [
+                ("removed-direct", removed_session_id.as_str(), removed.id.as_str()),
+                ("kept-direct", kept_session_id.as_str(), kept.id.as_str()),
+                ("shared-group", member_id.as_str(), removed.id.as_str()),
+            ] {
+                fixture_messages.push(json!({ "id": identifier, "sessionId": session_id, "deviceId": device_id, "deviceName": "测试", "direction": "mobile-to-desktop", "messageType": "text", "content": identifier, "createdAt": 1, "delivered": true, "read": false }));
+                fixture_files.push(json!({ "id": identifier, "sessionId": session_id, "path": original, "name": "original.txt", "size": 1, "mimeType": "text/plain", "updatedAt": 1, "enabled": true }));
+            }
+            super::write_json(&paths.lan_share_files.messages, &json!(fixture_messages)).await.unwrap();
+            super::write_json(&paths.lan_share_files.files, &json!(fixture_files)).await.unwrap();
+            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+            registry.inner.lock().await.clients.insert(removed.id.clone(), sender);
+            registry.inner.lock().await.active_sessions.insert(removed.id.clone(), removed_session_id);
+            let result = super::delete_device(&registry, &paths, json!({ "deviceId": removed.id })).await.unwrap();
+            assert_eq!(result["data"]["devices"].as_array().unwrap().len(), 1);
+            assert_eq!(result["data"]["devices"][0]["id"], kept.id);
+            assert_eq!(receiver.try_recv().unwrap().payload["type"], "deviceRemoved");
+            assert!(!registry.inner.lock().await.active_sessions.contains_key(&removed.id));
+            let remaining: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
+            assert!(remaining.iter().all(|session| session.device_id != removed.id));
+            let messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages).unwrap();
+            assert_eq!(messages.len(), 2);
+            assert_eq!(messages.iter().find(|message| message.id == "shared-group").unwrap().session_id, host_id);
+            let files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files).unwrap();
+            assert_eq!(files.len(), 2);
+            assert_eq!(files.iter().find(|file| file.id == "shared-group").unwrap().session_id, host_id);
+            assert!(original.exists());
+            let groups: Vec<super::LanShareGroup> = read_array(&paths.lan_share_files.groups).unwrap();
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0].members.len(), 1);
+            assert_eq!(groups[0].members[0].device_id, kept.id);
+            assert!(super::delete_device(&registry, &paths, json!({ "deviceId": " " })).await.is_err());
+            assert_eq!(read_array::<LanShareDevice>(&paths.lan_share_files.devices).unwrap().len(), 1);
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
 
     #[test]
     fn group_creation_rejects_missing_or_invalid_invitees_without_creating_records() {

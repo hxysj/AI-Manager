@@ -30,6 +30,7 @@ struct Config {
     id: String,
     name: String,
     peers: Vec<TrustedPeer>,
+    ignored_peers: Vec<String>,
 }
 
 struct Pairing {
@@ -46,14 +47,14 @@ pub(super) struct NativeRuntime {
     pairing: HashMap<String, Pairing>,
     connecting: HashMap<String, String>,
     handle: Option<tauri::async_runtime::JoinHandle<()>>,
-    tasks: Vec<tauri::async_runtime::JoinHandle<()>>,
+    tasks: HashMap<String, tauri::async_runtime::JoinHandle<()>>,
     pub(super) error: String,
 }
 
 impl NativeRuntime {
     pub(super) fn stop(&mut self) {
         if let Some(handle) = self.handle.take() { handle.abort(); }
-        for task in self.tasks.drain(..) { task.abort(); }
+        for (_, task) in self.tasks.drain() { task.abort(); }
         self.nearby.clear();
         self.pairing.clear();
         self.connecting.clear();
@@ -71,9 +72,35 @@ impl NativeRuntime {
         self.config.peers.iter().find(|trusted| trusted.peer.ip == ip && is_valid_token(&trusted.secret, secret)).map(|trusted| trusted.peer.clone())
     }
 
+    pub(super) async fn forget(&mut self, paths: &AppPaths, device_id: &str) -> Result<(), ManagerError> {
+        let mut config = if self.config.id.is_empty() {
+            match tokio::fs::read(&paths.lan_share_files.config).await {
+                Ok(bytes) => serde_json::from_slice::<Config>(&bytes)?,
+                Err(error) if error.kind() == ErrorKind::NotFound => self.config.clone(),
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            self.config.clone()
+        };
+        if config.id == device_id {
+            return Err(ManagerError::System("不能删除当前设备自身。".into()));
+        }
+        config.peers.retain(|trusted| trusted.peer.id != device_id);
+        if !config.ignored_peers.iter().any(|id| id == device_id) {
+            config.ignored_peers.push(device_id.to_string());
+        }
+        write_json(&paths.lan_share_files.config, &json!(config)).await?;
+        self.config = config;
+        self.nearby.remove(device_id);
+        self.pairing.retain(|_, request| request.peer.id != device_id);
+        self.connecting.remove(device_id);
+        if let Some(task) = self.tasks.remove(device_id) { task.abort(); }
+        Ok(())
+    }
+
     pub(super) fn snapshot(&self) -> Value {
         let mut peers = self.config.peers.iter().map(|trusted| trusted.peer.clone()).collect::<Vec<_>>();
-        for discovered in self.nearby.values().filter(|peer| self.online(&peer.id)) {
+        for discovered in self.nearby.values().filter(|peer| self.online(&peer.id) && !self.config.ignored_peers.contains(&peer.id)) {
             if let Some(peer) = peers.iter_mut().find(|peer| peer.id == discovered.id) { *peer = discovered.clone(); }
             else { peers.push(discovered.clone()); }
         }
@@ -203,6 +230,7 @@ async fn remember(registry: &LanShareServerRegistry, paths: &AppPaths, trusted: 
     let mut runtime = registry.inner.lock().await;
     let mut config = runtime.native.config.clone();
     config.peers.retain(|current| current.peer.id != trusted.peer.id);
+    config.ignored_peers.retain(|id| id != &trusted.peer.id);
     config.peers.push(trusted.clone());
     write_json(&paths.lan_share_files.config, &json!(config)).await?;
     runtime.native.nearby.insert(trusted.peer.id.clone(), trusted.peer.clone());
@@ -249,6 +277,8 @@ pub async fn connect_peer(app: tauri::AppHandle, registry: &LanShareServerRegist
     }
     let task_registry = registry.clone();
     let task_paths = paths.clone();
+    let task_peer_id = peer.id.clone();
+    let task_code = pairing_code(&secret);
     let handle = tauri::async_runtime::spawn(async move {
         let result = async {
             let started = now_millis();
@@ -270,7 +300,14 @@ pub async fn connect_peer(app: tauri::AppHandle, registry: &LanShareServerRegist
         }
         let _ = emit_state_changed(&app, &task_registry, &task_paths).await;
     });
-    registry.inner.lock().await.native.tasks.push(handle);
+    {
+        let mut runtime = registry.inner.lock().await;
+        if runtime.native.connecting.get(&task_peer_id) == Some(&task_code) {
+            if let Some(previous) = runtime.native.tasks.insert(task_peer_id, handle) { previous.abort(); }
+        } else {
+            handle.abort();
+        }
+    }
     get_state(registry, paths).await
 }
 
@@ -411,6 +448,47 @@ pub(super) async fn deliver(registry: &LanShareServerRegistry, device_id: &str, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleting_native_device_revokes_pairing_and_hides_future_discovery() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("native-delete-test"));
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let removed = Peer { id: "native-removed".into(), name: "移除设备".into(), ip: "192.168.1.5".into(), port: DEFAULT_PORT, last_seen_at: now_millis() };
+            let kept = Peer { id: "native-kept".into(), name: "保留设备".into(), ip: "192.168.1.6".into(), port: DEFAULT_PORT, last_seen_at: now_millis() };
+            let config = Config {
+                id: "native-local".into(), name: "本机".into(),
+                peers: vec![TrustedPeer { peer: removed.clone(), secret: "removed-secret".into() }, TrustedPeer { peer: kept.clone(), secret: "kept-secret".into() }],
+                ..Config::default()
+            };
+            write_json(&paths.lan_share_files.config, &json!(config)).await.unwrap();
+            let mut native = NativeRuntime::default();
+            native.nearby.insert(removed.id.clone(), removed.clone());
+            native.connecting.insert(removed.id.clone(), "123456".into());
+            native.pairing.insert("pending-request".into(), Pairing { peer: removed.clone(), secret: "pending-secret".into(), created_at: now_millis(), status: "pending".into() });
+            native.tasks.insert(removed.id.clone(), tauri::async_runtime::spawn(std::future::pending::<()>()));
+            native.forget(&paths, &removed.id).await.unwrap();
+            assert!(native.authenticate(&removed.ip, "removed-secret").is_none());
+            assert!(native.authenticate(&kept.ip, "kept-secret").is_some());
+            assert!(!native.tasks.contains_key(&removed.id));
+            assert!(!native.connecting.contains_key(&removed.id));
+            assert!(native.pairing.is_empty());
+            let saved: Config = serde_json::from_slice(&tokio::fs::read(&paths.lan_share_files.config).await.unwrap()).unwrap();
+            assert_eq!(saved.id, "native-local");
+            assert_eq!(saved.peers.len(), 1);
+            native.config = saved;
+            native.nearby.insert(removed.id.clone(), removed.clone());
+            assert!(native.snapshot()["peers"].as_array().unwrap().iter().all(|peer| peer["id"] != removed.id));
+            assert!(native.forget(&paths, "native-local").await.is_err());
+            let registry = LanShareServerRegistry::new();
+            registry.inner.lock().await.native = native;
+            remember(&registry, &paths, TrustedPeer { peer: removed.clone(), secret: "new-approved-secret".into() }).await.unwrap();
+            let snapshot = registry.inner.lock().await.native.snapshot();
+            assert!(snapshot["peers"].as_array().unwrap().iter().any(|peer| peer["id"] == removed.id && peer["paired"] == true));
+            assert!(!registry.inner.lock().await.native.config.ignored_peers.contains(&removed.id));
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
 
     #[test]
     fn paired_credentials_are_bound_to_the_approved_peer_address() {

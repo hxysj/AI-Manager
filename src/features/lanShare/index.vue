@@ -98,39 +98,54 @@
         </div>
         <nav class="drop-conversations" aria-label="快传会话">
           <template v-if="chatMode === 'direct'">
-            <button
+            <div
               v-for="device in visibleDevices"
               :key="device.id"
               class="drop-device"
               :class="{ 'drop-device-active': selectedDeviceId === device.id }"
-              type="button"
-              @click="chooseDevice(device)"
             >
-              <span class="drop-device-icon"
-                ><MonitorSmartphone v-if="device.native" :size="20" /><Globe
-                  v-else
-                  :size="20" /><span
-                  v-if="device.online"
-                  class="drop-device-online"
-                ></span
-              ></span>
-              <span class="drop-device-copy"
-                ><span class="drop-device-name">{{
-                  device.name || device.autoName || "未命名设备"
-                }}</span
-                ><span class="drop-device-preview">{{
-                  device.pairingCode
-                    ? `等待确认 · ${device.pairingCode}`
-                    : device.requiresPairing
-                      ? "发现客户端 · 点击连接"
-                      : deviceLastMessage(device.id)
-                }}</span
-                ><span class="drop-device-address"
-                  >{{ device.ip || "历史设备" }} ·
-                  {{ device.native ? "客户端" : "网页访客" }}</span
-                ></span
+              <button
+                class="drop-device-select"
+                type="button"
+                :disabled="deleteDevicePending"
+                @click="chooseDevice(device)"
               >
-            </button>
+                <span class="drop-device-icon"
+                  ><MonitorSmartphone v-if="device.native" :size="20" /><Globe
+                    v-else
+                    :size="20" /><span
+                    v-if="device.online"
+                    class="drop-device-online"
+                  ></span
+                ></span>
+                <span class="drop-device-copy"
+                  ><span class="drop-device-name">{{
+                    device.name || device.autoName || "未命名设备"
+                  }}</span
+                  ><span class="drop-device-preview">{{
+                    device.pairingCode
+                      ? `等待确认 · ${device.pairingCode}`
+                      : device.requiresPairing
+                        ? "发现客户端 · 点击连接"
+                        : deviceLastMessage(device.id)
+                  }}</span
+                  ><span class="drop-device-address"
+                    >{{ device.ip || "历史设备" }} ·
+                    {{ device.native ? "客户端" : "网页访客" }}</span
+                  ></span
+                >
+              </button>
+              <button
+                class="drop-device-delete"
+                type="button"
+                title="删除设备"
+                :aria-label="`删除设备 ${device.name || device.autoName || '未命名设备'}`"
+                :disabled="deleteDevicePending"
+                @click="requestDeleteDevice(device)"
+              >
+                <Trash2 :size="15" />
+              </button>
+            </div>
             <div v-if="!visibleDevices.length" class="drop-sidebar-empty">
               <MonitorSmartphone :size="26" :stroke-width="1.4" /><span
                 >等待附近设备</span
@@ -190,11 +205,27 @@
         @clear-group-messages="clearGroupMessages"
         @delete-group="deleteGroup"
         @delete-history="deleteSelectedDeviceHistory"
+        @delete-device="requestDeleteDevice(currentDevice)"
         @refresh-state="loadState"
         @preview-file="openPreviewDialog"
         @copy-text="copyText"
       />
     </div>
+
+    <DeleteConfirmModal
+      v-if="deleteDeviceTarget"
+      title="删除设备"
+      :name="deleteDeviceTarget.name"
+      :description="
+        deleteDeviceTarget.native
+          ? '删除此设备及其本机单聊记录，并解除客户端配对。移除后不会自动发现回来，可通过地址重新连接。不会删除磁盘上的原始文件。'
+          : '删除此设备及其本机单聊记录，并移除群聊成员关联。群聊历史和其他设备不受影响，不会删除磁盘上的原始文件；对方重新访问后可再次加入。'
+      "
+      :pending="deleteDevicePending"
+      :error="deleteDeviceError"
+      @close="closeDeleteDevice"
+      @confirm="confirmDeleteDevice"
+    />
 
     <LanShareAccessDialog
       v-if="accessDialogOpen"
@@ -348,11 +379,13 @@ import {
   QrCode,
   Search,
   Settings2,
+  Trash2,
   Users
 } from "lucide-vue-next"
 import { lanShareApi } from "@/api"
 import { createMessage } from "@/utils/message"
 import BaseModal from "@/components/BaseModal.vue"
+import DeleteConfirmModal from "@/features/providers/components/ProviderDeleteConfirmModal.vue"
 import { fileUrl } from "./utils"
 import LanShareAccessDialog from "./components/LanShareAccessDialog.vue"
 import LanSharePreviewDialog from "./components/LanSharePreviewDialog.vue"
@@ -374,6 +407,9 @@ const state = reactive({
   messages: []
 })
 const loading = ref(false)
+const deleteDeviceTarget = ref(null)
+const deleteDevicePending = ref(false)
+const deleteDeviceError = ref("")
 const createGroupOpen = ref(false)
 const newGroup = reactive({ name: "新的群聊", deviceIds: [] })
 const selectedGroupDeviceIds = computed(() =>
@@ -936,6 +972,43 @@ async function deleteDeviceHistory(deviceId) {
   await loadState()
 }
 
+function requestDeleteDevice(device) {
+  if (!device?.id || deleteDevicePending.value || loading.value) return
+  deleteDeviceTarget.value = {
+    id: device.id,
+    name: device.name || device.autoName || "未命名设备",
+    native: Boolean(device.native)
+  }
+  deleteDeviceError.value = ""
+}
+
+function closeDeleteDevice() {
+  if (deleteDevicePending.value) return
+  deleteDeviceTarget.value = null
+  deleteDeviceError.value = ""
+}
+
+async function confirmDeleteDevice() {
+  if (!deleteDeviceTarget.value || deleteDevicePending.value) return
+  const deviceId = deleteDeviceTarget.value.id
+  deleteDevicePending.value = true
+  deleteDeviceError.value = ""
+  try {
+    const result = unwrapData(await lanShareApi.deleteDevice({ deviceId }))
+    if (selectedDeviceId.value === deviceId) {
+      selectedDeviceId.value = ""
+      selectedSessionId.value = ""
+    }
+    applyState(result)
+    deleteDeviceTarget.value = null
+    createMessage.success("设备已删除。")
+  } catch (error) {
+    deleteDeviceError.value = error?.message || String(error)
+  } finally {
+    deleteDevicePending.value = false
+  }
+}
+
 function openPreviewDialog(file) {
   if (!state.service.running) {
     createMessage.warning("请先启动服务后再预览共享文件。")
@@ -1225,6 +1298,35 @@ function isTextPreviewFile(name, mimeType) {
           &.drop-device-active {
             border-color: var(--color-info-line);
             background: var(--color-primary-soft);
+          }
+          .drop-device-select {
+            display: flex;
+            min-width: 0;
+            flex: 1;
+            align-items: center;
+            gap: 9px;
+            padding: 0;
+            border: 0;
+            color: inherit;
+            background: transparent;
+            text-align: left;
+          }
+          .drop-device-delete {
+            display: flex;
+            width: 28px;
+            height: 28px;
+            flex: none;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            border: 0;
+            border-radius: 6px;
+            color: var(--color-text-muted);
+            background: transparent;
+            &:hover:not(:disabled) {
+              color: var(--color-danger);
+              background: var(--color-danger-soft);
+            }
           }
           .drop-device-icon {
             position: relative;

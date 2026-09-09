@@ -23,6 +23,7 @@ export const lanShareApi = {
   deleteSession: payload => request('lan-share:delete-session', payload),
   deleteDeviceHistory: payload =>
     request('lan-share:delete-device-history', payload),
+  deleteDevice: payload => request('lan-share:delete-device', payload),
   createGroup: payload => request('lan-share:create-group', payload),
   updateGroup: payload => request('lan-share:update-group', payload),
   removeGroupMember: payload =>
