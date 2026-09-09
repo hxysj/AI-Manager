@@ -247,7 +247,11 @@
                     <span class="providers-view__state-dot"></span>
                     已启用
                   </span>
-                  <span v-else class="providers-view__state-pill providers-view__state-pill--disabled">未启用</span>
+                  <span
+                    v-else
+                    class="providers-view__state-pill providers-view__state-pill--disabled"
+                    >未启用</span
+                  >
                   <button
                     v-if="provider.enabled === false"
                     class="providers-view__enable"
@@ -823,6 +827,9 @@
                   v-if="item.provider.enabled !== false"
                   class="providers-view__icon-button providers-view__icon-button--danger"
                   type="button"
+                  title="删除 Provider"
+                  aria-label="删除 Provider"
+                  :disabled="pending"
                   @click.stop="removeProvider(item.provider)"
                 >
                   <Trash2 :size="16" />
@@ -928,7 +935,11 @@
           <section class="providers-view__api-keys providers-view__field--wide">
             <div class="providers-view__api-keys-header">
               <span>API Key</span>
-              <button type="button" @click="addApiKey()">
+              <button
+                class="provider-key-add"
+                type="button"
+                @click="addApiKey()"
+              >
                 <Plus :size="14" />
                 添加 Key
               </button>
@@ -938,27 +949,35 @@
                 v-for="(item, index) in draft.apiKeys"
                 :key="item.id"
                 class="providers-view__api-key-item"
+                :class="{
+                  'provider-key-card-active': draft.activeApiKeyId === item.id
+                }"
               >
                 <div class="providers-view__api-key-meta">
-                  <input
+                  <el-input
                     v-model.trim="item.name"
-                    class="providers-view__api-key-name"
+                    class="provider-key-input provider-key-name"
                     type="text"
                     placeholder="Key 名称"
+                    aria-label="Key 名称"
                   />
                   <button
+                    class="provider-key-action provider-key-activate"
                     type="button"
+                    :aria-pressed="draft.activeApiKeyId === item.id"
                     :class="{
                       'providers-view__api-key-active':
                         draft.activeApiKeyId === item.id
                     }"
                     @click="activateApiKey(item.id)"
                   >
+                    <Check v-if="draft.activeApiKeyId === item.id" :size="14" />
                     {{
                       draft.activeApiKeyId === item.id ? "当前生效" : "设为生效"
                     }}
                   </button>
                   <button
+                    class="provider-key-action provider-key-remove"
                     type="button"
                     title="删除 API Key"
                     aria-label="删除 API Key"
@@ -967,25 +986,34 @@
                     <Trash2 :size="14" />
                   </button>
                 </div>
-                <input
-                  v-model.trim="item.note"
-                  class="providers-view__api-key-note"
-                  type="text"
-                  placeholder="备注信息，例如：生产环境 / 备用额度"
-                />
-                <el-input
+                <ProviderApiKeyInput
                   v-model="item.apiKey"
-                  type="password"
-                  show-password
+                  class="provider-key-input provider-key-secret"
+                  :provider-id="draft.id"
+                  :key-id="item.id"
+                  :cli="draft.cli"
+                  :masked="item.masked"
+                  aria-label="API Key"
                   :placeholder="
                     item.masked
                       ? `${item.masked}，留空则保持不变`
                       : '输入 API Key'
                   "
+                >
+                  <template #prefix><KeyRound :size="16" /></template>
+                </ProviderApiKeyInput>
+                <el-input
+                  v-model.trim="item.note"
+                  class="provider-key-input"
+                  type="text"
+                  placeholder="备注（选填），例如：生产环境 / 备用额度"
+                  aria-label="Key 备注"
                 />
               </div>
             </div>
-            <small>可保存多个 Key，但同时只会使用当前生效的一个。</small>
+            <small class="provider-key-hint"
+              >可保存多个 Key，但同时只会使用当前生效的一个。</small
+            >
           </section>
           <label class="providers-view__field providers-view__field--wide">
             <span>请求地址</span>
@@ -1204,7 +1232,11 @@
           <section class="providers-view__api-keys providers-view__field--wide">
             <div class="providers-view__api-keys-header">
               <span>API Key</span>
-              <button type="button" @click="addApiKey()">
+              <button
+                class="provider-key-add"
+                type="button"
+                @click="addApiKey()"
+              >
                 <Plus :size="14" />
                 添加 Key
               </button>
@@ -1214,27 +1246,35 @@
                 v-for="(item, index) in draft.apiKeys"
                 :key="item.id"
                 class="providers-view__api-key-item"
+                :class="{
+                  'provider-key-card-active': draft.activeApiKeyId === item.id
+                }"
               >
                 <div class="providers-view__api-key-meta">
-                  <input
+                  <el-input
                     v-model.trim="item.name"
-                    class="providers-view__api-key-name"
+                    class="provider-key-input provider-key-name"
                     type="text"
                     placeholder="Key 名称"
+                    aria-label="Key 名称"
                   />
                   <button
+                    class="provider-key-action provider-key-activate"
                     type="button"
+                    :aria-pressed="draft.activeApiKeyId === item.id"
                     :class="{
                       'providers-view__api-key-active':
                         draft.activeApiKeyId === item.id
                     }"
                     @click="activateApiKey(item.id)"
                   >
+                    <Check v-if="draft.activeApiKeyId === item.id" :size="14" />
                     {{
                       draft.activeApiKeyId === item.id ? "当前生效" : "设为生效"
                     }}
                   </button>
                   <button
+                    class="provider-key-action provider-key-remove"
                     type="button"
                     title="删除 API Key"
                     aria-label="删除 API Key"
@@ -1243,25 +1283,34 @@
                     <Trash2 :size="14" />
                   </button>
                 </div>
-                <input
-                  v-model.trim="item.note"
-                  class="providers-view__api-key-note"
-                  type="text"
-                  placeholder="备注信息，例如：生产环境 / 备用额度"
-                />
-                <el-input
+                <ProviderApiKeyInput
                   v-model="item.apiKey"
-                  type="password"
-                  show-password
+                  class="provider-key-input provider-key-secret"
+                  :provider-id="draft.id"
+                  :key-id="item.id"
+                  :cli="draft.cli"
+                  :masked="item.masked"
+                  aria-label="API Key"
                   :placeholder="
                     item.masked
                       ? `${item.masked}，留空则保持不变`
                       : '输入 API Key'
                   "
+                >
+                  <template #prefix><KeyRound :size="16" /></template>
+                </ProviderApiKeyInput>
+                <el-input
+                  v-model.trim="item.note"
+                  class="provider-key-input"
+                  type="text"
+                  placeholder="备注（选填），例如：生产环境 / 备用额度"
+                  aria-label="Key 备注"
                 />
               </div>
             </div>
-            <small>可保存多个 Key，但同时只会使用当前生效的一个。</small>
+            <small class="provider-key-hint"
+              >可保存多个 Key，但同时只会使用当前生效的一个。</small
+            >
           </section>
           <label class="providers-view__field providers-view__field--wide">
             <span>请求地址</span>
@@ -1518,8 +1567,8 @@
       @close="closeApiKeyManager"
       @save="saveApiKeyManager"
       @add="addApiKey(apiKeyManagerDraft)"
-      @remove="index => removeApiKey(index, apiKeyManagerDraft)"
-      @activate="id => activateApiKey(id, apiKeyManagerDraft)"
+      @remove="(index) => removeApiKey(index, apiKeyManagerDraft)"
+      @activate="(id) => activateApiKey(id, apiKeyManagerDraft)"
       @update-key="updateApiKeyManagerItem"
       @refresh="refreshApiKeyUsage"
     />
@@ -2470,6 +2519,16 @@
         </button>
       </footer>
     </BaseModal>
+    <ProviderDeleteConfirmModal
+      v-if="deleteConfirmation"
+      :title="deleteConfirmation.title"
+      :name="deleteConfirmation.name"
+      :description="deleteConfirmation.description"
+      :pending="deleteSubmitted || pending"
+      :error="deleteError"
+      @close="!deleteSubmitted && !pending && (deleteConfirmation = null)"
+      @confirm="confirmDelete"
+    />
   </section>
 </template>
 
@@ -2511,6 +2570,8 @@ import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
 import ClaudeDesktopPanel from "./components/ClaudeDesktopPanel.vue"
 import ApiKeyManagerModal from "./components/ApiKeyManagerModal.vue"
+import ProviderApiKeyInput from "./components/ProviderApiKeyInput.vue"
+import ProviderDeleteConfirmModal from "./components/ProviderDeleteConfirmModal.vue"
 import TokenCount from "@/components/TokenCount.vue"
 import CodexProxyPanel from "@/features/providers/components/CodexProxyPanel.vue"
 import { accountApi, runtimeApi, systemApi, usageApi } from "@/api"
@@ -2686,6 +2747,9 @@ const showCodexAccountDrawer = ref(false)
 const showProviderDrawer = ref(false)
 const showRuntimeConfig = ref(false)
 const showRuntimeDiff = ref(false)
+const deleteConfirmation = ref(null)
+const deleteSubmitted = ref(false)
+const deleteError = ref("")
 const runtimeDiffEditorRef = ref(null)
 const runtimeConfigContent = ref("")
 const runtimeConfigPath = ref("")
@@ -3057,8 +3121,11 @@ const providerUsageLogs = computed(() => {
   }
 
   return (usageStats.value.logs || []).filter((item) => {
-    return item.providerId === providerUsageProviderId.value &&
-      (providerUsageAppType.value === "all" || item.appType === providerUsageAppType.value)
+    return (
+      item.providerId === providerUsageProviderId.value &&
+      (providerUsageAppType.value === "all" ||
+        item.appType === providerUsageAppType.value)
+    )
   })
 })
 
@@ -3069,8 +3136,11 @@ const providerUsageSummary = computed(() => {
 
   return mergeUsageSummaries(
     (usageStats.value.modelStats || []).filter((item) => {
-      return item.providerId === providerUsageProviderId.value &&
-        (providerUsageAppType.value === "all" || item.appType === providerUsageAppType.value)
+      return (
+        item.providerId === providerUsageProviderId.value &&
+        (providerUsageAppType.value === "all" ||
+          item.appType === providerUsageAppType.value)
+      )
     })
   )
 })
@@ -3101,7 +3171,8 @@ const providerUsageModelStats = computed(() => {
       return (
         usageStatsTarget.value === providerUsageTarget.value ||
         (item.providerId === providerUsageProviderId.value &&
-          (providerUsageAppType.value === "all" || item.appType === providerUsageAppType.value))
+          (providerUsageAppType.value === "all" ||
+            item.appType === providerUsageAppType.value))
       )
     }),
     providerUsageTodayModelStats.value
@@ -3333,17 +3404,16 @@ function clearCodexAccount() {
 }
 
 function deleteCodexAccount(account) {
-  const shouldContinue = window.confirm(
-    "删除官方账号后会清除本地 auth.json，是否继续？"
-  )
-
-  if (!shouldContinue) {
-    return
+  if (props.pending) return
+  deleteError.value = ""
+  deleteConfirmation.value = {
+    kind: "account",
+    id: account.id,
+    title: "删除 Codex 官方账号",
+    name: account.email || account.name || account.id,
+    description:
+      "将删除本机保存的账号及认证信息。若该账号当前已启用，还会清除 Codex 的本地 auth.json；不会注销云端账号。"
   }
-
-  emit("codex-account-delete", {
-    accountId: account.id
-  })
 }
 
 function openCodexAccountProxy(account) {
@@ -3411,7 +3481,7 @@ function closeProviderDetail() {
   providerDetailTab.value = "config"
 }
 
-watch(showApiKeyManager, visible => {
+watch(showApiKeyManager, (visible) => {
   window.clearInterval(apiKeyUsageTimer)
   apiKeyUsageRequest += 1
   apiKeyUsage.value = {}
@@ -3432,17 +3502,21 @@ async function refreshApiKeyUsage() {
   apiKeyUsageLoading.value = true
   apiKeyUsageError.value = ""
   try {
-    const result = await providerApi.getKeyUsage({ providerId: provider.id, cli: provider.cli })
+    const result = await providerApi.getKeyUsage({
+      providerId: provider.id,
+      cli: provider.cli
+    })
     if (requestId === apiKeyUsageRequest) apiKeyUsage.value = result.keys || {}
   } catch (error) {
-    if (requestId === apiKeyUsageRequest) apiKeyUsageError.value = `统计刷新失败：${error?.message || error}`
+    if (requestId === apiKeyUsageRequest)
+      apiKeyUsageError.value = `统计刷新失败：${error?.message || error}`
   } finally {
     if (requestId === apiKeyUsageRequest) apiKeyUsageLoading.value = false
   }
 }
 
 function updateApiKeyManagerItem(id, patch) {
-  const item = apiKeyManagerDraft.apiKeys.find(key => key.id === id)
+  const item = apiKeyManagerDraft.apiKeys.find((key) => key.id === id)
   if (item) Object.assign(item, patch)
 }
 
@@ -4366,14 +4440,49 @@ function resolveRuntimeDiff(source) {
 }
 
 function removeProvider(provider) {
-  const shouldContinue = window.confirm(
-    "删除 Provider 会同时删除关联模型和 Runtime Profile，是否继续？"
-  )
-
-  if (shouldContinue) {
-    emit("delete-provider", provider.id)
+  if (props.pending) return
+  deleteError.value = ""
+  deleteConfirmation.value = {
+    kind: "provider",
+    id: provider.id,
+    title: "删除供应商",
+    name: provider.name || provider.id,
+    description:
+      "将删除该供应商、全部 API Key、关联模型和 Runtime Profile 配置，不影响其他供应商。"
   }
 }
+
+function confirmDelete() {
+  if (!deleteConfirmation.value || deleteSubmitted.value || props.pending)
+    return
+  deleteSubmitted.value = true
+  deleteError.value = ""
+  if (deleteConfirmation.value.kind === "account") {
+    emit("codex-account-delete", { accountId: deleteConfirmation.value.id })
+  } else {
+    emit("delete-provider", deleteConfirmation.value.id)
+  }
+}
+
+watch(
+  () => [props.pending, props.providers, props.codexAccounts],
+  () => {
+    if (!deleteSubmitted.value || props.pending || !deleteConfirmation.value)
+      return
+    const items =
+      deleteConfirmation.value.kind === "account"
+        ? props.codexAccounts
+        : props.providers
+    const exists = items.some((item) => item.id === deleteConfirmation.value.id)
+    deleteSubmitted.value = false
+    if (exists) {
+      deleteError.value = "删除未完成，请根据错误提示处理后重试。"
+    } else {
+      deleteConfirmation.value = null
+    }
+  },
+  { flush: "post" }
+)
 
 watch(
   () => [visibleCliTargets.value, props.providers],
@@ -5507,7 +5616,6 @@ watch(
     color: var(--color-text-muted);
   }
 
-
   &__enable,
   &__using,
   &__primary,
@@ -5747,99 +5855,140 @@ watch(
   &__api-keys {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-  }
-
-  &__api-keys-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
     gap: 12px;
-  }
-
-  &__api-keys-header button,
-  &__api-key-meta button {
-    display: inline-flex;
-    height: 30px;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    padding: 0 9px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-  }
-
-  &__api-keys-header button:hover,
-  &__api-key-meta button:hover {
-    border-color: var(--color-info-line);
-    background: var(--color-primary-soft);
-    color: var(--color-primary);
-  }
-
-  &__api-key-list {
-    display: flex;
-    flex-direction: column;
-    gap: 9px;
-  }
-
-  &__api-key-item {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 9px;
-    background: var(--color-panel-soft);
-  }
-
-  &__api-key-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  &__api-key-name {
-    flex: 1;
-  }
-
-  &__api-key-note {
-    width: 100%;
-    height: 34px;
-    padding: 0 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel);
-    color: var(--color-text);
-  }
-
-  &__api-key-add {
-    display: inline-flex;
-    width: fit-content;
-    height: 34px;
-    align-items: center;
-    gap: 6px;
-    padding: 0 11px;
-    border: 1px dashed var(--color-info-line);
-    border-radius: 8px;
-    background: var(--color-primary-soft);
-    color: var(--color-primary);
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-  }
-
-  &__api-key-meta button.providers-view__api-key-active {
-    border-color: var(--color-info-line);
-    background: var(--color-primary-soft);
-    color: var(--color-primary);
-  }
-
-  &__api-keys small {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
+    .providers-view__api-keys-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      .provider-key-add {
+        display: inline-flex;
+        flex: none;
+        align-items: center;
+        gap: 6px;
+        min-width: 100px;
+        min-height: 34px;
+        padding: 0 11px;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        background: var(--color-panel);
+        color: var(--color-primary);
+        cursor: pointer;
+        font-size: var(--font-size-sm);
+        white-space: nowrap;
+        &:hover {
+          border-color: var(--color-info-line);
+          background: var(--color-primary-soft);
+        }
+        &:focus-visible {
+          outline: 2px solid var(--color-primary);
+          outline-offset: 2px;
+        }
+      }
+    }
+    .providers-view__api-key-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      .providers-view__api-key-item {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 14px;
+        border: 1px solid var(--color-line);
+        border-radius: 10px;
+        background: var(--color-panel-soft);
+        &.provider-key-card-active {
+          border-color: var(--color-info-line);
+        }
+        .provider-key-input {
+          min-width: 0;
+          :deep(.el-input__wrapper) {
+            min-height: 38px;
+            padding: 1px 12px;
+            border-radius: 8px;
+            background: var(--color-panel);
+            box-shadow: 0 0 0 1px var(--color-line) inset;
+            transition: box-shadow 0.15s ease;
+            &:hover {
+              box-shadow: 0 0 0 1px var(--color-line-strong) inset;
+            }
+            &.is-focus {
+              box-shadow: 0 0 0 1px var(--color-primary) inset;
+            }
+          }
+          :deep(.el-input__inner) {
+            height: 36px;
+            color: var(--color-text);
+            font-size: var(--font-size-base);
+            line-height: 36px;
+            &::placeholder {
+              color: var(--color-text-soft);
+            }
+          }
+          :deep(.el-input__prefix),
+          :deep(.el-input__password) {
+            color: var(--color-text-muted);
+          }
+          &.provider-key-secret {
+            :deep(.el-input__inner) {
+              font-family: Consolas, "Cascadia Code", monospace;
+            }
+          }
+        }
+        .providers-view__api-key-meta {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          .provider-key-name {
+            flex: 1;
+          }
+          .provider-key-action {
+            display: inline-flex;
+            flex: none;
+            height: 38px;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            padding: 0 11px;
+            border: 1px solid var(--color-line);
+            border-radius: 8px;
+            background: var(--color-panel);
+            color: var(--color-text-muted);
+            cursor: pointer;
+            font-size: var(--font-size-sm);
+            white-space: nowrap;
+            &.provider-key-activate {
+              min-width: 104px;
+            }
+            &:hover,
+            &.providers-view__api-key-active {
+              border-color: var(--color-info-line);
+              background: var(--color-primary-soft);
+              color: var(--color-primary);
+            }
+            &:focus-visible {
+              outline: 2px solid var(--color-primary);
+              outline-offset: 2px;
+            }
+            &.provider-key-remove {
+              width: 38px;
+              padding: 0;
+              &:hover {
+                border-color: var(--color-danger-line);
+                background: var(--color-danger-soft);
+                color: var(--color-danger);
+              }
+            }
+          }
+        }
+      }
+    }
+    .provider-key-hint {
+      color: var(--color-text-muted);
+      font-size: var(--font-size-sm);
+      line-height: 1.6;
+    }
   }
 
   &__warning {

@@ -1805,7 +1805,30 @@ pub(crate) fn get_provider_api_key_with_id(
     Ok((active_key_id, key))
 }
 
+pub fn read_provider_key_value(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
+    let provider_id = string_value(payload.get("providerId"));
+    let key_id = string_value(payload.get("keyId"));
+    if provider_id.trim().is_empty() || key_id.trim().is_empty() {
+        return Err(ManagerError::System("缺少供应商或 API Key ID".to_string()));
+    }
+    let storage_id = if payload["cli"] == "claude-desktop" {
+        format!("claude-desktop:{provider_id}")
+    } else {
+        provider_id
+    };
+    let keys = provider_store::read_keys(paths)?;
+    let records = provider_key_records(keys.get(&storage_id));
+    let value = records
+        .iter()
+        .find(|record| record["id"] == key_id)
+        .and_then(|record| record["value"].as_str())
+        .ok_or_else(|| ManagerError::System("API Key 不存在，请刷新后重试".to_string()))?;
+    Ok(json!({ "apiKey": decrypt_provider_key(value)? }))
+}
+
 pub fn read_provider_key_usage(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
+    capture_key_bindings(paths)?;
+    crate::core::usage_store::bind_key_usage(paths)?;
     let provider_id = string_value(payload.get("providerId"));
     if provider_id.is_empty() {
         return Err(ManagerError::System("缺少供应商 ID".to_string()));
@@ -1818,16 +1841,45 @@ pub fn read_provider_key_usage(paths: &AppPaths, payload: &Value) -> Result<Valu
     let keys = provider_store::read_keys(paths)?;
     let records = provider_key_records(keys.get(&storage_id));
     let active_key_id = active_provider_key_id(keys.get(&storage_id), &records);
+    let logs = crate::api::usage::read_provider_key_logs(paths, &storage_id)?;
     let mut usage = Map::new();
     for record in records {
         let key_id = string_value(record.get("id"));
         let key = decrypt_provider_key(&string_value(record.get("value")))?;
-        usage.insert(
-            key_id.clone(),
-            crate::core::provider_key_usage::read(paths, &storage_id, &key_id, &key)?,
+        let mut item = crate::core::provider_key_usage::read(paths, &storage_id, &key_id, &key)?;
+        crate::api::usage::append_provider_key_usage(
+            &mut item,
+            &logs,
+            &key_id,
+            &crate::core::provider_key_usage::fingerprint(&key),
         );
+        usage.insert(key_id.clone(), item);
     }
     Ok(json!({"keys": usage, "activeApiKeyId": active_key_id}))
+}
+
+pub fn capture_key_bindings(paths: &AppPaths) -> Result<(), ManagerError> {
+    let keys = provider_store::read_keys(paths)?;
+    let mut bindings = Map::new();
+    for (provider_id, value) in &keys {
+        let records = provider_key_records(Some(value));
+        let active_id = active_provider_key_id(Some(value), &records);
+        let Some(record) = records.iter().find(|record| record["id"] == active_id) else {
+            continue;
+        };
+        let Ok(secret) = decrypt_provider_key(&string_value(record.get("value"))) else {
+            continue;
+        };
+        bindings.insert(provider_id.clone(), json!({
+            "apiKeyId": active_id, "apiKeyHash": crate::core::provider_key_usage::fingerprint(&secret),
+            "singleKey": records.len() == 1
+        }));
+    }
+    crate::core::provider_key_usage::sync_bindings(
+        paths,
+        &bindings,
+        chrono::Utc::now().timestamp_millis(),
+    )
 }
 
 fn create_template_values(provider: &Value, profile: &Value, api_key: &str) -> Map<String, Value> {
@@ -3006,6 +3058,97 @@ mod tests {
         assert_eq!(active_key, "sk-legacy-123456");
         assert_eq!(public_keys.len(), 1);
         assert_eq!(public_keys[0]["name"], "默认 Key");
+    }
+
+    #[test]
+    fn reads_inactive_provider_key_without_changing_configuration() {
+        let (test_root, paths, config_dir) = create_codex_runtime_fixture();
+        let mut keys = Map::new();
+        for storage_id in ["provider-a", "claude-desktop:provider-a"] {
+            set_provider_keys(
+                &mut keys,
+                storage_id,
+                &[
+                    json!({ "id": "active", "apiKey": format!("sk-{storage_id}-active") }),
+                    json!({ "id": "backup", "apiKey": format!("sk-{storage_id}-backup") }),
+                ],
+                "active".to_string(),
+            )
+            .unwrap();
+        }
+        provider_store::write_keys(&paths, &keys).unwrap();
+        let settings = Map::from_iter([("activeProviderId".to_string(), json!("provider-a"))]);
+        provider_store::write_desktop_bundle(&paths, &[], &settings, &keys).unwrap();
+        let runtime_state = provider_store::read_runtime_state(&paths).unwrap();
+        let config_path = config_dir.join("config.toml");
+        fs::write(&config_path, "model = 'unchanged'\n").unwrap();
+
+        for (cli, storage_id) in [("claude", "provider-a"), ("claude-desktop", "claude-desktop:provider-a")] {
+            for key_id in ["active", "backup"] {
+                let result = read_provider_key_value(
+                    &paths,
+                    &json!({ "providerId": "provider-a", "keyId": key_id, "cli": cli }),
+                )
+                .unwrap();
+                assert_eq!(result, json!({ "apiKey": format!("sk-{storage_id}-{key_id}") }));
+            }
+            let (active_id, public_keys, active_key) = public_provider_keys(keys.get(storage_id));
+            assert_eq!(active_id, "active");
+            assert_eq!(active_key, format!("sk-{storage_id}-active"));
+            assert!(public_keys.iter().all(|record| record.get("apiKey").is_none()));
+            assert_ne!(public_keys[1]["masked"], format!("sk-{storage_id}-backup"));
+        }
+
+        assert_eq!(provider_store::read_keys(&paths).unwrap(), keys);
+        assert_eq!(provider_store::read_desktop_settings(&paths).unwrap(), settings);
+        assert_eq!(provider_store::read_runtime_state(&paths).unwrap(), runtime_state);
+        assert_eq!(fs::read_to_string(config_path).unwrap(), "model = 'unchanged'\n");
+        fs::remove_dir_all(test_root).unwrap();
+    }
+
+    #[test]
+    fn rejects_missing_provider_key_instead_of_returning_active_key() {
+        let (test_root, paths, _) = create_codex_runtime_fixture();
+        let mut keys = Map::new();
+        set_provider_keys(
+            &mut keys,
+            "provider-a",
+            &[json!({ "id": "active", "apiKey": "sk-active-test" })],
+            "active".to_string(),
+        )
+        .unwrap();
+        provider_store::write_keys(&paths, &keys).unwrap();
+        for payload in [
+            json!({}),
+            json!({ "providerId": "provider-a" }),
+            json!({ "providerId": "provider-a", "keyId": " " }),
+            json!({ "providerId": "", "keyId": "active" }),
+            json!({ "providerId": "missing", "keyId": "active" }),
+            json!({ "providerId": "provider-a", "keyId": "missing" }),
+            json!({ "providerId": "provider-a", "keyId": "active", "cli": "claude-desktop" }),
+        ] {
+            assert!(read_provider_key_value(&paths, &payload).is_err());
+        }
+        assert_eq!(provider_store::read_keys(&paths).unwrap(), keys);
+        fs::remove_dir_all(test_root).unwrap();
+    }
+
+    #[test]
+    fn reads_legacy_provider_key_value_by_default_id() {
+        let (test_root, paths, _) = create_codex_runtime_fixture();
+        let keys = Map::from_iter([(
+            "legacy-provider".to_string(),
+            json!(encrypt_provider_key("sk-legacy-test").unwrap()),
+        )]);
+        provider_store::write_keys(&paths, &keys).unwrap();
+        let result = read_provider_key_value(
+            &paths,
+            &json!({ "providerId": "legacy-provider", "keyId": "default", "cli": "codex" }),
+        )
+        .unwrap();
+        assert_eq!(result, json!({ "apiKey": "sk-legacy-test" }));
+        assert_eq!(provider_store::read_keys(&paths).unwrap(), keys);
+        fs::remove_dir_all(test_root).unwrap();
     }
 
     #[test]

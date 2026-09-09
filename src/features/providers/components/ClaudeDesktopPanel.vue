@@ -27,7 +27,7 @@
           class="desktop-tool-button"
           :disabled="busy"
           title="从 Claude Code 导入兼容供应商"
-          @click="importProviders"
+          @click="openImport"
         >
           <Download :size="15" /><span>导入</span>
         </button>
@@ -112,57 +112,38 @@
         clear: clearProvider,
         edit: openEditor,
         toggle: setProviderEnabled,
-        remove: (provider) => (deleteTarget = provider)
+        remove: requestDelete
       }"
     ></slot>
 
-    <BaseModal
+    <ProviderDeleteConfirmModal
       v-if="deleteTarget"
       title="删除 Desktop 供应商"
+      :name="deleteTarget.name"
+      description="将删除管理器内保存的供应商配置及全部 API Key，不修改 Claude Desktop 的系统配置。"
+      :pending="busy"
+      :error="errorText"
       @close="!busy && (deleteTarget = null)"
-    >
-      <div class="desktop-confirm">
-        <p class="desktop-confirm-text">
-          确定删除「{{
-            deleteTarget.name
-          }}」？仅删除管理器内的供应商及密钥，不修改 Desktop 配置。
-        </p>
-        <button
-          class="desktop-button desktop-danger"
-          :disabled="busy"
-          @click="removeProvider"
-        >
-          确认删除
-        </button>
-      </div>
-    </BaseModal>
-    <BaseModal
-      v-if="importResult"
-      title="Claude Code 导入结果"
-      @close="importResult = null"
-    >
-      <div class="desktop-confirm">
-        <p class="desktop-confirm-text">
-          已导入
-          {{ importResult.importedCount }}
-          个供应商；已存在的记录保持不变。导入不修改 Desktop 配置，需点击启用。
-        </p>
-        <p
-          v-for="reason in importResult.skipped"
-          :key="reason"
-          class="desktop-error"
-        >
-          {{ reason }}
-        </p>
-      </div>
-    </BaseModal>
+      @confirm="removeProvider"
+    />
+    <ClaudeDesktopImportModal
+      v-if="showImport"
+      :items="importItems"
+      :loading="importLoading"
+      :pending="busy"
+      :error="importError"
+      @close="closeImport"
+      @refresh="loadImportCandidates"
+      @submit="importSelected"
+    />
   </section>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 import { Download, Eye, EyeOff, Plus, RefreshCw, Server } from "lucide-vue-next"
-import BaseModal from "@/components/BaseModal.vue"
+import ProviderDeleteConfirmModal from "./ProviderDeleteConfirmModal.vue"
+import ClaudeDesktopImportModal from "./ClaudeDesktopImportModal.vue"
 import { claudeDesktopApi } from "@/api/modules/providers"
 import { createMessage } from "@/utils/message"
 
@@ -195,7 +176,11 @@ const busy = ref(false)
 const refreshing = ref(false)
 const errorText = ref("")
 const deleteTarget = ref(null)
-const importResult = ref(null)
+const showImport = ref(false)
+const importItems = ref([])
+const importLoading = ref(false)
+const importError = ref("")
+let importVersion = 0
 const gatewayPort = ref(15723)
 let pollTimer = null
 let requestVersion = 0
@@ -235,7 +220,9 @@ async function runAction(action, successMessage) {
     createMessage.success(
       next.configurationWritten
         ? "配置已写入，请完全退出并重启 Claude Desktop"
-        : successMessage
+        : typeof successMessage === "function"
+          ? successMessage(next)
+          : successMessage
     )
     return next
   } catch (cause) {
@@ -250,12 +237,55 @@ async function runAction(action, successMessage) {
   }
 }
 
-async function importProviders() {
+function openImport() {
+  if (busy.value || showImport.value) return
+  showImport.value = true
+  importItems.value = []
+  loadImportCandidates()
+}
+
+function closeImport() {
+  if (busy.value) return
+  showImport.value = false
+  importLoading.value = false
+  importVersion += 1
+}
+
+async function loadImportCandidates() {
+  if (busy.value) return
+  const version = ++importVersion
+  importLoading.value = true
+  importError.value = ""
+  try {
+    const result = await claudeDesktopApi.previewImport()
+    if (version === importVersion && showImport.value)
+      importItems.value = result.items
+  } catch (cause) {
+    if (version === importVersion) importError.value = String(cause)
+  } finally {
+    if (version === importVersion) importLoading.value = false
+  }
+}
+
+async function importSelected(providerIds) {
+  if (busy.value || importLoading.value || !providerIds.length) return
+  importError.value = ""
   const result = await runAction(
-    () => claudeDesktopApi.importProviders(),
-    "导入完成，尚未修改 Desktop 配置"
+    () => claudeDesktopApi.importProviders(providerIds),
+    (next) => `已导入 ${next.importedCount} 个供应商，未修改 Desktop 配置`
   )
-  if (result) importResult.value = result
+  if (result) {
+    closeImport()
+    if (result.skipped?.length) createMessage.warning(result.skipped.join("；"))
+  } else {
+    importError.value = errorText.value
+  }
+}
+
+function requestDelete(provider) {
+  if (busy.value) return
+  errorText.value = ""
+  deleteTarget.value = provider
 }
 
 function openEditor(provider = {}) {
@@ -285,6 +315,7 @@ async function applyProvider(provider) {
 }
 
 async function removeProvider() {
+  if (!deleteTarget.value || busy.value) return
   const result = await runAction(
     () => claudeDesktopApi.deleteProvider(deleteTarget.value.id),
     "供应商已删除"
@@ -310,6 +341,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.clearInterval(pollTimer)
   requestVersion += 1
+  importVersion += 1
 })
 </script>
 
@@ -425,24 +457,6 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
   color: var(--color-text);
-  .desktop-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    min-height: 34px;
-    padding: 7px 12px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel);
-    color: var(--color-text);
-    cursor: pointer;
-    white-space: nowrap;
-    &:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-    }
-  }
   .desktop-error {
     margin: 0;
     color: var(--color-danger);
@@ -460,17 +474,6 @@ onBeforeUnmount(() => {
       line-height: 1.5;
       color: var(--color-text-muted);
       overflow-wrap: anywhere;
-    }
-  }
-  .desktop-confirm {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 16px;
-    .desktop-confirm-text {
-      margin: 0;
-      font-size: var(--font-size-sm);
-      line-height: 1.7;
     }
   }
 }

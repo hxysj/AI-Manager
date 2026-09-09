@@ -5,6 +5,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 
+mod restore;
+pub use restore::{preview_rows, row_choice_key, RestoreRowDifference};
+
 // 仅跨设备恢复的业务数据进入备份，其他表只保留结构。
 const BACKUP_INCLUDED_TABLES: [&str; 10] = [
     "providers",
@@ -192,7 +195,19 @@ pub fn restore_selected(
     selected_tables: &[String],
 ) -> Result<(), ManagerError> {
     let selected_tables = selected_tables.iter().cloned().collect::<HashSet<_>>();
-    restore_tables(paths, content, &selected_tables)
+    restore_tables(paths, content, &selected_tables, None)
+}
+
+pub fn restore_merged(
+    paths: &AppPaths,
+    content: &[u8],
+    choices: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), ManagerError> {
+    let tables = BACKUP_INCLUDED_TABLES
+        .iter()
+        .map(|table| table.to_string())
+        .collect();
+    restore_tables(paths, content, &tables, Some(choices))
 }
 
 pub fn reconcile_local_state(
@@ -230,6 +245,7 @@ fn restore_tables(
     paths: &AppPaths,
     content: &[u8],
     selected_tables: &HashSet<String>,
+    choices: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> Result<(), ManagerError> {
     with_restore_snapshot(paths, content, |snapshot_path| {
         let mut connection = open_restore_connection(paths, snapshot_path)?;
@@ -242,8 +258,20 @@ fn restore_tables(
             .iter()
             .any(|table| table == "provider_models");
         let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TEMP TABLE restore_choices(choice_key TEXT PRIMARY KEY);
+            CREATE TEMP TABLE restore_applied(table_name TEXT NOT NULL, row_key TEXT NOT NULL);",
+        )?;
+        if let Some(choices) = choices {
+            for (key, choice) in choices {
+                if choice == "backup" {
+                    transaction.execute("INSERT INTO restore_choices VALUES (?1)", [key])?;
+                }
+            }
+        } else {
+            transaction.execute("INSERT INTO restore_choices VALUES ('*')", [])?;
+        }
 
-        // 只替换用户选择的业务表，保留当前库结构和本机运行态数据。
         for table in restore_tables {
             if table == "providers" {
                 restore_providers(&transaction)?;
@@ -361,21 +389,7 @@ fn read_table_names(connection: &Connection, schema: &str) -> Result<Vec<String>
 }
 
 fn restore_table(transaction: &rusqlite::Transaction<'_>, table: &str) -> Result<(), ManagerError> {
-    let columns = read_common_columns(transaction, table)?
-        .into_iter()
-        .map(|column| quote_identifier(&column))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let table = quote_identifier(table);
-    transaction.execute(&format!("DELETE FROM main.{table}"), [])?;
-    transaction.execute(
-        &format!(
-            "INSERT INTO main.{table} ({columns})
-             SELECT {columns} FROM restore_source.{table}"
-        ),
-        [],
-    )?;
-    Ok(())
+    restore::merge_table(transaction, table)
 }
 
 fn restore_providers(transaction: &rusqlite::Transaction<'_>) -> Result<(), ManagerError> {
@@ -403,7 +417,7 @@ fn restore_providers(transaction: &rusqlite::Transaction<'_>) -> Result<(), Mana
 
     restore_table(transaction, "providers")?;
     let restored = {
-        let mut statement = transaction.prepare("SELECT item_key, payload_json FROM providers")?;
+        let mut statement = transaction.prepare("SELECT item_key, payload_json FROM providers WHERE item_key IN (SELECT row_key FROM restore_applied WHERE table_name = 'providers')")?;
         let rows = statement
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -461,7 +475,8 @@ fn reconcile_provider_relations(
         reconcile_provider_runtime_state(transaction, &providers)?;
         transaction.execute(
             "DELETE FROM provider_keys
-             WHERE provider_id NOT IN (SELECT item_key FROM providers)",
+             WHERE provider_id NOT IN (SELECT item_key FROM providers)
+               AND provider_id NOT IN (SELECT 'claude-desktop:' || item_key FROM claude_desktop_providers)",
             [],
         )?;
     }
@@ -586,7 +601,7 @@ fn restore_skills(transaction: &rusqlite::Transaction<'_>) -> Result<(), Manager
 
     restore_table(transaction, "skills")?;
     let restored = {
-        let mut statement = transaction.prepare("SELECT item_key, payload_json FROM skills")?;
+        let mut statement = transaction.prepare("SELECT item_key, payload_json FROM skills WHERE item_key IN (SELECT row_key FROM restore_applied WHERE table_name = 'skills')")?;
         let rows = statement
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -594,15 +609,17 @@ fn restore_skills(transaction: &rusqlite::Transaction<'_>) -> Result<(), Manager
             .collect::<Result<Vec<_>, _>>()?;
         rows
     };
-    let mut restored_keys = HashSet::new();
-
     for (item_key, payload) in restored {
-        restored_keys.insert(item_key.clone());
         let mut skill: serde_json::Value = serde_json::from_str(&payload)?;
         let skill = skill
             .as_object_mut()
             .ok_or_else(|| ManagerError::System(format!("Skill {item_key} 的数据格式无效。")))?;
         let current = current_state.get(&item_key).map(|(_, value)| value);
+        for field in ["sourcePath", "entryPath", "repoName"] {
+            if let Some(value) = current.and_then(|value| value.get(field)) {
+                skill.insert(field.to_string(), value.clone());
+            }
+        }
         let disabled = current
             .and_then(|value| value.get("disabled"))
             .and_then(serde_json::Value::as_bool)
@@ -633,25 +650,6 @@ fn restore_skills(transaction: &rusqlite::Transaction<'_>) -> Result<(), Manager
             "UPDATE skills SET payload_json = ?1 WHERE item_key = ?2",
             params![serde_json::to_string(&skill)?, item_key],
         )?;
-    }
-
-    for (item_key, (sort_order, current_skill)) in &current_state {
-        if restored_keys.contains(item_key) {
-            continue;
-        }
-        let mut skill = current_skill.clone();
-        let skill = skill
-            .as_object_mut()
-            .ok_or_else(|| ManagerError::System(format!("Skill {item_key} 的数据格式无效。")))?;
-        skill.insert("disabled".to_string(), serde_json::Value::Bool(true));
-        skill.insert("installedTargets".to_string(), serde_json::json!([]));
-        skill.insert("installStates".to_string(), serde_json::json!({}));
-        skill.insert("status".to_string(), serde_json::json!("disabled"));
-        transaction.execute(
-            "INSERT INTO skills(item_key, sort_order, payload_json) VALUES (?1, ?2, ?3)",
-            params![item_key, sort_order, serde_json::to_string(&skill)?],
-        )?;
-        // 保留安装索引到恢复后的 Skill 重扫阶段，用于准确卸载当前 CLI 中的旧链接。
     }
 
     let installed_skills = {
@@ -763,7 +761,7 @@ fn restore_codex_accounts(transaction: &rusqlite::Transaction<'_>) -> Result<(),
     restore_table(transaction, "codex_accounts")?;
     let restored = {
         let mut statement =
-            transaction.prepare("SELECT item_key, payload_json FROM codex_accounts")?;
+            transaction.prepare("SELECT item_key, payload_json FROM codex_accounts WHERE item_key IN (SELECT row_key FROM restore_applied WHERE table_name = 'codex_accounts')")?;
         let rows = statement
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1304,7 +1302,7 @@ mod tests {
         assert!(provider_store::read_keys(&target_paths)
             .unwrap()
             .contains_key("provider-a"));
-        assert!(!provider_store::read_keys(&target_paths)
+        assert!(provider_store::read_keys(&target_paths)
             .unwrap()
             .contains_key("provider-local"));
         let account_a: serde_json::Value = serde_json::from_str(
@@ -1340,7 +1338,7 @@ mod tests {
                     |row| row.get::<_, String>(0),
                 )
                 .unwrap(),
-            ""
+            "account-local"
         );
         let skill_a: serde_json::Value = serde_json::from_str(
             &restored
@@ -1390,8 +1388,8 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(skill_local["disabled"], true);
-        assert_eq!(skill_local["status"], "disabled");
+        assert_eq!(skill_local["disabled"], false);
+        assert!(skill_local.get("status").is_none());
         let installs = skill_store::read_installs(&target_paths).unwrap();
         assert_eq!(installs["skill-a"], json!(["codex"]));
         assert_eq!(installs["skill-local"], json!(["codex"]));
@@ -1416,7 +1414,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        assert_eq!(codex_profile["activePromptId"], "");
+        assert_eq!(codex_profile["activePromptId"], "rule-local");
         assert_eq!(
             restored
                 .query_row(
@@ -1520,15 +1518,18 @@ mod tests {
 
         assert_eq!(provider_a["enabled"], true);
         assert_eq!(provider_new["enabled"], false);
-        assert!(profile_ids.is_empty());
+        assert_eq!(profile_ids, vec!["profile-removed"]);
         assert_eq!(runtime_state["codex"]["activeProviderId"], "provider-valid");
-        assert_eq!(runtime_state["gemini"]["activeProviderId"], "");
-        assert_eq!(runtime_state["gemini"]["status"], "NO_ACTIVE");
+        assert_eq!(
+            runtime_state["gemini"]["activeProviderId"],
+            "provider-removed"
+        );
+        assert_eq!(runtime_state["gemini"]["status"], "SYNCED");
         assert_eq!(model_ids, vec!["model-a", "model-valid", "model-new"]);
     }
 
     #[test]
-    fn restoring_providers_only_removes_models_for_missing_providers() {
+    fn restoring_providers_preserves_local_only_providers_and_models() {
         let source_root = std::env::temp_dir().join(format!(
             "monkey-thief-provider-model-cleanup-source-{}",
             std::process::id()
@@ -1576,8 +1577,9 @@ mod tests {
         .unwrap();
 
         let models = provider_store::read_models(&target_paths).unwrap();
-        assert_eq!(models.len(), 1);
+        assert_eq!(models.len(), 2);
         assert_eq!(models[0]["id"], "model-a");
+        assert_eq!(models[1]["id"], "model-removed");
     }
 
     #[test]

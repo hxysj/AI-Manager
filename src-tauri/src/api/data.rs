@@ -540,6 +540,9 @@ async fn preview_data_backup_restore_content(
     )
     .await?;
     let mut preview = create_restore_preview(paths, workspace_entries).await?;
+    if let Some(keys) = backup.get("runtimeProviderKeys").and_then(Value::as_str) {
+        append_provider_keys_preview(paths, &decrypt_backup_data(keys)?, &mut preview)?;
+    }
     append_app_settings_restore_preview(&mut preview, app_settings, &backup)?;
     append_codex_pets_restore_preview(&mut preview, app_settings, &codex_pet_entries).await?;
 
@@ -728,10 +731,7 @@ async fn restore_data_backup_content(
         || restored_paths
             .iter()
             .any(|path| path.starts_with("skills/"))
-        || choice_text(
-            &choices,
-            &create_restore_database_table_key("storage/ai-manager.db", "skills"),
-        ) == "backup";
+        || restored_paths.contains("storage/ai-manager.db");
     let current_restore_json_values =
         read_current_restore_json_values(paths, &workspace_entries).await?;
     restore_directory_entries(
@@ -1379,11 +1379,13 @@ async fn create_restore_preview(
                 .decode(string_value(entry.get("content")))
                 .map_err(|error| ManagerError::System(error.to_string()))?;
 
-            for difference in database::preview_restore(paths, &backup_content)? {
-                conflicts.push(create_database_table_restore_preview(
-                    &entry_path,
-                    &difference,
-                ));
+            for difference in database::preview_rows(paths, &backup_content)? {
+                let item = create_database_row_restore_preview(&entry_path, &difference)?;
+                if difference.current.is_some() {
+                    conflicts.push(item);
+                } else {
+                    added.push(item);
+                }
             }
             continue;
         }
@@ -1726,20 +1728,7 @@ async fn restore_database_entries(
     let backup_content = base64::engine::general_purpose::STANDARD
         .decode(string_value(entry.get("content")))
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    let selected_tables = database::preview_restore(paths, &backup_content)?
-        .into_iter()
-        .filter(|difference| {
-            choice_text(
-                choices,
-                &create_restore_database_table_key(entry_path, &difference.table),
-            ) == "backup"
-        })
-        .map(|difference| difference.table)
-        .collect::<Vec<_>>();
-
-    if !selected_tables.is_empty() {
-        database::restore_selected(paths, &backup_content, &selected_tables)?;
-    }
+    database::restore_merged(paths, &backup_content, choices)?;
     Ok(())
 }
 
@@ -2733,69 +2722,120 @@ fn export_provider_keys(paths: &AppPaths) -> Result<Value, ManagerError> {
     Ok(Value::Object(exported))
 }
 
+fn restore_provider_key_records(value: &Value) -> Vec<Value> {
+    if let Some(api_key) = value.as_str().filter(|key| !key.is_empty()) {
+        return vec![json!({"id": "default", "name": "默认 Key", "note": "", "apiKey": api_key})];
+    }
+    value
+        .get("apiKeys")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn provider_key_choice_key(provider_id: &str, key_id: &str) -> String {
+    format!("provider-key:{}", json!([provider_id, key_id]))
+}
+
+fn provider_key_preview_content(value: &Value) -> Result<String, ManagerError> {
+    let mut value = value.clone();
+    let secret = string_value(value.get("apiKey"));
+    value["apiKey"] = json!(format!("密钥指纹：{}", &sha256_text(&secret)[..12]));
+    Ok(serde_json::to_string_pretty(&value)?)
+}
+
+fn append_provider_keys_preview(
+    paths: &AppPaths,
+    backup: &Value,
+    preview: &mut Value,
+) -> Result<(), ManagerError> {
+    let current = export_provider_keys(paths)?;
+    for (provider_id, value) in backup.as_object().cloned().unwrap_or_default() {
+        let current_keys = restore_provider_key_records(&current[&provider_id]);
+        for key in restore_provider_key_records(&value) {
+            let key_id = string_value(key.get("id"));
+            let existing = current_keys.iter().find(|item| item["id"] == key_id);
+            if existing == Some(&key) {
+                continue;
+            }
+            let status = if existing.is_some() {
+                "conflict"
+            } else {
+                "added"
+            };
+            let item = json!({
+                "key": provider_key_choice_key(&provider_id, &key_id),
+                "type": "API Key",
+                "name": key.get("name").and_then(Value::as_str).filter(|name| !name.is_empty()).unwrap_or(&key_id),
+                "path": format!("providers/{provider_id}/keys/{key_id}"),
+                "groupPath": format!("providers/{provider_id}/keys"),
+                "status": status,
+                "currentContent": existing.map(provider_key_preview_content).transpose()?.unwrap_or_default(),
+                "backupContent": provider_key_preview_content(&key)?
+            });
+            preview[if existing.is_some() {
+                "conflicts"
+            } else {
+                "added"
+            }]
+            .as_array_mut()
+            .unwrap()
+            .push(item);
+        }
+    }
+    preview["addedCount"] = json!(preview["added"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or_default());
+    preview["conflictCount"] = json!(preview["conflicts"]
+        .as_array()
+        .map(Vec::len)
+        .unwrap_or_default());
+    Ok(())
+}
+
 async fn merge_provider_keys(
     paths: &AppPaths,
     api_keys: &Value,
     choices: &Map<String, Value>,
 ) -> Result<(), ManagerError> {
     let mut next_keys = provider_store::read_keys(paths)?;
+    let current = export_provider_keys(paths)?;
     let mut provider_ids = provider_store::read_providers(paths)?
-        .into_iter()
+        .iter()
         .map(|provider| string_value(provider.get("id")))
-        .filter(|provider_id| !provider_id.is_empty())
         .collect::<HashSet<_>>();
-    provider_ids.extend(provider_store::read_desktop_providers(paths)?.iter().map(|provider| {
-        format!("claude-desktop:{}", string_value(provider.get("id")))
-    }));
-    let uses_database_choices = choices
-        .keys()
-        .any(|key| key.starts_with("database:storage/ai-manager.db:"));
-    for (provider_id, api_key_data) in api_keys.as_object().cloned().unwrap_or_default() {
-        let table = if provider_id.starts_with("claude-desktop:") { "claude_desktop_providers" } else { "providers" };
-        let restore_provider_table = choice_text(
-            choices,
-            &create_restore_database_table_key("storage/ai-manager.db", table),
-        ) == "backup";
-        let legacy_key = string_value(Some(&api_key_data));
-        let requested_keys = api_key_data
-            .get("apiKeys")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-
-        if legacy_key.is_empty() && requested_keys.is_empty() {
+    provider_ids.extend(
+        provider_store::read_desktop_providers(paths)?
+            .iter()
+            .map(|provider| format!("claude-desktop:{}", string_value(provider.get("id")))),
+    );
+    for (provider_id, backup) in api_keys.as_object().cloned().unwrap_or_default() {
+        if !provider_ids.contains(&provider_id) {
             continue;
         }
-
-        // 保留当前 Provider 表时只补缺失密钥，不能覆盖当前设备已经保存的密钥。
-        if uses_database_choices
-            && !restore_provider_table
-            && (next_keys.contains_key(&provider_id) || !provider_ids.contains(&provider_id))
-        {
-            continue;
+        let mut merged = restore_provider_key_records(&current[&provider_id]);
+        for key in restore_provider_key_records(&backup) {
+            let key_id = string_value(key.get("id"));
+            if let Some(index) = merged.iter().position(|item| item["id"] == key_id) {
+                if choice_text(choices, &provider_key_choice_key(&provider_id, &key_id)) == "backup"
+                {
+                    merged[index] = key;
+                }
+            } else {
+                merged.push(key);
+            }
         }
-        if !uses_database_choices
-            && next_keys.contains_key(&provider_id)
-            && choice_text(
-                choices,
-                &create_restore_choice_key("storage/providers.json", &provider_id),
-            ) != "backup"
-        {
-            continue;
-        }
-
-        if !requested_keys.is_empty() {
-            runtime_provider::set_provider_keys(
-                &mut next_keys,
-                &provider_id,
-                &requested_keys,
-                string_value(api_key_data.get("activeApiKeyId")),
-            )?;
-        } else {
-            runtime_provider::set_provider_key(&mut next_keys, &provider_id, legacy_key)?;
+        if !merged.is_empty() {
+            let existing = runtime_provider::provider_key_records(next_keys.get(&provider_id));
+            let active = if existing.is_empty() {
+                string_value(backup.get("activeApiKeyId"))
+            } else {
+                runtime_provider::active_provider_key_id(next_keys.get(&provider_id), &existing)
+            };
+            runtime_provider::set_provider_keys(&mut next_keys, &provider_id, &merged, active)?;
         }
     }
-
     provider_store::write_keys(paths, &next_keys)
 }
 
@@ -3360,30 +3400,38 @@ fn format_restore_file_content(content: &[u8]) -> String {
     }
 }
 
-fn create_database_table_restore_preview(
+fn create_database_row_restore_preview(
     entry_path: &str,
-    difference: &database::RestoreTableDifference,
-) -> Value {
-    let name = restore_database_table_name(&difference.table);
-
-    json!({
-      "key": create_restore_database_table_key(entry_path, &difference.table),
-      "type": "数据库表",
-      "name": format!("{name} ({})", difference.table),
-      "path": format!("{entry_path}/{}", difference.table),
-      "groupPath": entry_path,
-      "status": "conflict",
-      "currentContent": format!(
-          "数据表：{name}\n记录数：{}\n仅当前存在或内容不同：{}",
-          difference.current_rows,
-          difference.current_only_rows
-      ),
-      "backupContent": format!(
-          "数据表：{name}\n记录数：{}\n仅备份存在或内容不同：{}",
-          difference.backup_rows,
-          difference.backup_only_rows
-      )
+    difference: &database::RestoreRowDifference,
+) -> Result<Value, ManagerError> {
+    let name = [
+        "name",
+        "displayName",
+        "title",
+        "email",
+        "modelId",
+        "model_id",
+        "fileName",
+    ]
+    .iter()
+    .find_map(|field| {
+        difference
+            .backup
+            .get(*field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
     })
+    .unwrap_or(&difference.row_key);
+    Ok(json!({
+        "key": database::row_choice_key(&difference.table, &difference.row_key),
+        "type": restore_database_table_name(&difference.table),
+        "name": name,
+        "path": format!("{entry_path}/{}/{}", difference.table, difference.row_key),
+        "groupPath": format!("{entry_path}/{}", difference.table),
+        "status": if difference.current.is_some() { "conflict" } else { "added" },
+        "currentContent": difference.current.as_ref().map(serde_json::to_string_pretty).transpose()?.unwrap_or_default(),
+        "backupContent": serde_json::to_string_pretty(&difference.backup)?
+    }))
 }
 
 fn restore_database_table_name(table: &str) -> &'static str {
@@ -3411,10 +3459,6 @@ fn create_restore_choice_key(entry_path: &str, item_key: &str) -> String {
 
 fn create_restore_file_key(entry_path: &str) -> String {
     format!("file:{}", entry_path)
-}
-
-fn create_restore_database_table_key(entry_path: &str, table: &str) -> String {
-    format!("database:{entry_path}:{table}")
 }
 
 fn choice_text(choices: &Map<String, Value>, key: &str) -> String {
@@ -4349,6 +4393,144 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn sqlite_restore_merges_rows_and_keys_for_local_and_cloud_backups() {
+        let root =
+            std::env::temp_dir().join(format!("ai-manager-merge-restore-{}", uuid::Uuid::new_v4()));
+        let source_paths = resolve_app_paths(&root.join("source"));
+        provider_store::write_provider_bundle(
+            &source_paths,
+            &[
+                json!({"id": "conflict-a", "cli": "codex", "name": "备份 A"}),
+                json!({"id": "conflict-b", "cli": "codex", "name": "备份 B"}),
+                json!({"id": "backup-only", "cli": "codex", "name": "新增"}),
+                json!({"id": "same", "cli": "codex", "name": "相同"}),
+            ],
+            &[],
+            &[],
+            &Map::new(),
+        )
+        .unwrap();
+        let database_content = database::backup(&source_paths).unwrap();
+        let backup_keys = json!({"conflict-a": {
+            "activeApiKeyId": "backup-key", "apiKeys": [
+                {"id": "shared-key", "name": "备份密钥", "note": "", "apiKey": "backup-shared-secret"},
+                {"id": "backup-key", "name": "新增密钥", "note": "", "apiKey": "backup-only-secret"}
+            ]
+        }});
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for (scope, directory) in [(BackupScope::Local, "local"), (BackupScope::Cloud, "cloud")] {
+            let target_root = root.join(directory);
+            let paths = resolve_app_paths(&target_root);
+            let mut settings = normalize_app_settings(
+                target_root.join("app-settings.json"),
+                Some(json!({"dataPath": target_root})),
+            );
+            let mut keys = Map::new();
+            runtime_provider::set_provider_keys(&mut keys, "conflict-a", &[
+                json!({"id": "shared-key", "name": "当前密钥", "note": "", "apiKey": "local-shared-secret"}),
+                json!({"id": "local-key", "name": "本机密钥", "note": "", "apiKey": "local-only-secret"})
+            ], "local-key".into()).unwrap();
+            provider_store::write_provider_bundle(&paths, &[
+                json!({"id": "conflict-a", "cli": "codex", "name": "本机 A", "enabled": true}),
+                json!({"id": "conflict-b", "cli": "codex", "name": "本机 B", "enabled": false}),
+                json!({"id": "local-only", "cli": "codex", "name": "本机独有", "enabled": true}),
+                json!({"id": "same", "cli": "codex", "name": "相同", "enabled": true})
+            ], &[], &[], &keys).unwrap();
+            let backup = encrypt_backup_payload(&json!({
+                "version": 1, "createdAt": 1, "workspaceEntries": [{
+                    "path": "storage/ai-manager.db", "type": "file",
+                    "content": base64::engine::general_purpose::STANDARD.encode(&database_content)
+                }], "runtimeProviderKeys": super::encrypt_backup_data(&backup_keys).unwrap()
+            }), scope).unwrap();
+            let preview = runtime
+                .block_on(preview_data_backup_restore_content(
+                    &paths, &settings, &backup,
+                ))
+                .unwrap();
+            assert_eq!(preview["conflictCount"], 3);
+            assert_eq!(preview["addedCount"], 2);
+            for item in preview["conflicts"].as_array().unwrap() {
+                assert!(!item.to_string().contains("local-shared-secret"));
+                assert!(!item.to_string().contains("backup-shared-secret"));
+            }
+            runtime
+                .block_on(restore_data_backup_content(
+                    &paths,
+                    &mut settings,
+                    &backup,
+                    &json!({}),
+                ))
+                .unwrap();
+            let providers = provider_store::read_providers(&paths).unwrap();
+            assert_eq!(providers.len(), 5);
+            assert_eq!(providers[0]["name"], "本机 A");
+            assert_eq!(providers[4]["id"], "backup-only");
+            assert_eq!(providers[4]["enabled"], false);
+            let mut choices = Map::new();
+            choices.insert(
+                database::row_choice_key("providers", "conflict-a"),
+                json!("backup"),
+            );
+            choices.insert(
+                super::provider_key_choice_key("conflict-a", "shared-key"),
+                json!("backup"),
+            );
+            for _ in 0..2 {
+                runtime
+                    .block_on(restore_data_backup_content(
+                        &paths,
+                        &mut settings,
+                        &backup,
+                        &serde_json::Value::Object(choices.clone()),
+                    ))
+                    .unwrap();
+                let providers = provider_store::read_providers(&paths).unwrap();
+                assert_eq!(providers.len(), 5);
+                assert_eq!(providers[0]["name"], "备份 A");
+                assert_eq!(providers[0]["enabled"], true);
+                assert_eq!(providers[1]["name"], "本机 B");
+                assert_eq!(providers[1]["enabled"], false);
+                assert_eq!(providers[2]["name"], "本机独有");
+                assert_eq!(providers[2]["enabled"], true);
+                assert_eq!(
+                    runtime_provider::get_provider_api_key(&paths, "conflict-a").unwrap(),
+                    "local-only-secret"
+                );
+                let exported = super::export_provider_keys(&paths).unwrap();
+                assert_eq!(
+                    exported["conflict-a"]["apiKeys"].as_array().unwrap().len(),
+                    3
+                );
+                assert_eq!(
+                    exported["conflict-a"]["apiKeys"][0]["apiKey"],
+                    "backup-shared-secret"
+                );
+                assert_eq!(
+                    exported["conflict-a"]["apiKeys"][2]["apiKey"],
+                    "backup-only-secret"
+                );
+            }
+            let preview = runtime
+                .block_on(preview_data_backup_restore_content(
+                    &paths, &settings, &backup,
+                ))
+                .unwrap();
+            assert_eq!(preview["addedCount"], 0);
+            assert_eq!(preview["conflictCount"], 1);
+            assert_eq!(
+                preview["conflicts"][0]["key"],
+                database::row_choice_key("providers", "conflict-b")
+            );
+        }
+        let resolved = root.canonicalize().unwrap();
+        assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        std::fs::remove_dir_all(resolved).unwrap();
     }
 
     #[test]

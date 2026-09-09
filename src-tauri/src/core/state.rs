@@ -52,6 +52,21 @@ impl AppState {
     ) -> Result<Value, ManagerError> {
         let mut manager = self.manager.lock().await;
         let result = manager.dispatch(app, channel, payload).await;
+        if result.is_ok()
+            && matches!(
+                channel,
+                "provider:save"
+                    | "provider:delete"
+                    | "claude-desktop:save"
+                    | "claude-desktop:delete"
+                    | "claude-desktop:import"
+                    | "data:restore"
+                    | "data:local-backup-restore"
+                    | "data:cloud-pull"
+            )
+        {
+            runtime_provider::capture_key_bindings(&manager.paths)?;
+        }
         let close_action = matches!(channel, "settings:save" | "app:close-action")
             .then(|| manager.app_settings.system.close_action.clone());
         drop(manager);
@@ -148,6 +163,7 @@ impl ManagerState {
             .map_err(|error| ManagerError::Path(error.to_string()))?;
 
         std::fs::create_dir_all(&user_data_path)?;
+        runtime_provider::capture_key_bindings(&paths)?;
 
         Ok(Self {
             user_data_path,
@@ -180,6 +196,12 @@ impl ManagerState {
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
         if let Some(action) = channel.strip_prefix("claude-desktop:") {
+            if matches!(
+                action,
+                "save" | "delete" | "import" | "switch" | "clear" | "set-enabled"
+            ) {
+                self.preserve_pending_usage_provider_bindings().await?;
+            }
             return self.desktop_manager.dispatch(&self.paths, action, payload.unwrap_or_else(|| json!({}))).await;
         }
         if matches!(
@@ -195,6 +217,10 @@ impl ManagerState {
                 | "codex-account:disable"
                 | "codex-account:delete"
                 | "provider:save"
+                | "provider:delete"
+                | "data:restore"
+                | "data:local-backup-restore"
+                | "data:cloud-pull"
                 | "runtime:switch"
                 | "runtime:clear"
         ) {
@@ -1031,10 +1057,17 @@ impl ManagerState {
                 self.emit_state_changed(&app)?;
                 Ok(result)
             }
-            "provider:key-usage" => runtime_provider::read_provider_key_usage(
+            "provider:key-value" => runtime_provider::read_provider_key_value(
                 &self.paths,
                 &payload.unwrap_or_else(|| json!({})),
             ),
+            "provider:key-usage" => {
+                usage::sync_pending_usage(&self.paths, &self.state).await?;
+                runtime_provider::read_provider_key_usage(
+                    &self.paths,
+                    &payload.unwrap_or_else(|| json!({})),
+                )
+            }
             "provider:save" => {
                 let payload = payload.unwrap_or_else(|| json!({}));
                 let provider_id = payload
