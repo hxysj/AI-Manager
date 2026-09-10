@@ -128,6 +128,20 @@ fn pairing_code(secret: &str) -> String {
     format!("{:02X}{:02X}{:02X}", digest[0], digest[1], digest[2])
 }
 
+fn is_native_id(id: &str) -> bool {
+    id.starts_with("native-") || id.starts_with("native_")
+}
+
+fn create_native_id() -> String {
+    format!("native-{}_{}", now_millis(), uuid::Uuid::new_v4())
+}
+
+fn normalize_native_id(id: &mut String) {
+    if id.is_empty() || id.starts_with("native_") {
+        *id = create_native_id();
+    }
+}
+
 fn peer_origin(peer: &Peer) -> Result<String, ManagerError> {
     let ip: Ipv4Addr = peer.ip.parse().map_err(|_| ManagerError::System("请输入局域网 IPv4 地址。".into()))?;
     if !(ip.is_private() || ip.is_loopback() || ip.is_link_local()) || peer.port == 0 {
@@ -140,7 +154,7 @@ fn discovery_peer(bytes: &[u8], source: SocketAddr, own_id: &str) -> Option<Peer
     let payload: Value = serde_json::from_slice(bytes).ok()?;
     if payload.get("protocol")?.as_str()? != DISCOVERY_PROTOCOL { return None; }
     let mut peer: Peer = serde_json::from_value(payload.get("peer")?.clone()).ok()?;
-    if peer.id == own_id || !peer.id.starts_with("native-") || peer.id.len() > 80 || peer.name.len() > 128 { return None; }
+    if peer.id == own_id || !is_native_id(&peer.id) || peer.id.len() > 80 || peer.name.len() > 128 { return None; }
     peer.ip = source.ip().to_string();
     peer_origin(&peer).ok()?;
     peer.last_seen_at = now_millis();
@@ -153,7 +167,7 @@ pub(super) async fn start(app: tauri::AppHandle, registry: &LanShareServerRegist
         Err(error) if error.kind() == ErrorKind::NotFound => Config::default(),
         Err(error) => return Err(error.into()),
     };
-    if config.id.is_empty() { config.id = create_id("native"); }
+    normalize_native_id(&mut config.id);
     if config.name.is_empty() {
         config.name = std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "我的电脑".into());
     }
@@ -263,7 +277,7 @@ pub async fn connect_peer(app: tauri::AppHandle, registry: &LanShareServerRegist
         if runtime.native.connecting.contains_key(&peer.id) { return Ok(lan_share_response(json!(true))); }
         (runtime.native.config.clone(), runtime.port)
     };
-    if !peer.id.starts_with("native-") || peer.id.len() > 80 { return Err(ManagerError::System("对方不是兼容的设备快传客户端。".into())); }
+    if !is_native_id(&peer.id) || peer.id.len() > 80 { return Err(ManagerError::System("对方不是兼容的设备快传客户端。".into())); }
     let secret = create_token()?;
     let request_id = create_id("pair");
     response_data(client.post(format!("{origin}/api/native/pair")).json(&json!({
@@ -361,7 +375,7 @@ pub(super) async fn handle_request(request: Request<Incoming>, context: &HttpCon
         peer.ip = client_ip(address);
         peer.last_seen_at = now_millis();
         peer_origin(&peer)?;
-        if !peer.id.starts_with("native-") || peer.id.len() > 80 || peer.name.len() > 128 || identifier.len() > 80 || identifier.is_empty() || secret.len() < 32 || secret.len() > 128 {
+        if !is_native_id(&peer.id) || peer.id.len() > 80 || peer.name.len() > 128 || identifier.len() > 80 || identifier.is_empty() || secret.len() < 32 || secret.len() > 128 {
             return Ok(api_error(StatusCode::BAD_REQUEST, "连接请求无效。"));
         }
         {
@@ -448,6 +462,17 @@ pub(super) async fn deliver(registry: &LanShareServerRegistry, device_id: &str, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_ids_accept_current_and_legacy_formats() {
+        assert!(is_native_id("native-1789038628947-12096-997"));
+        assert!(is_native_id("native_1789038628947_12096_997"));
+        assert!(!is_native_id("desktop_1789038628947"));
+        assert!(create_native_id().starts_with("native-"));
+        let mut legacy_id = "native_1789038628947_12096_997".to_string();
+        normalize_native_id(&mut legacy_id);
+        assert!(legacy_id.starts_with("native-"));
+    }
 
     #[test]
     fn deleting_native_device_revokes_pairing_and_hides_future_discovery() {
