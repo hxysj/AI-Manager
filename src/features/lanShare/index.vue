@@ -47,7 +47,11 @@
               ><el-dropdown-item
                 v-for="ip in state.service.lanIps || []"
                 :key="ip"
-                :disabled="ip === state.service.lanIp || loading"
+                :disabled="
+                  !state.service.running ||
+                  ip === state.service.lanIp ||
+                  loading
+                "
                 @click="setAccessIp(ip)"
                 >二维码使用 {{ ip }}</el-dropdown-item
               ><el-dropdown-item
@@ -742,7 +746,12 @@ async function showAccessDialog() {
 }
 
 async function setAccessIp(lanIp) {
-  if (!lanIp || lanIp === state.service.lanIp || loading.value) {
+  if (
+    !state.service.running ||
+    !lanIp ||
+    lanIp === state.service.lanIp ||
+    loading.value
+  ) {
     return
   }
 
