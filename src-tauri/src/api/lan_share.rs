@@ -538,7 +538,7 @@ pub async fn get_state(
             })
         })
         .collect::<Vec<_>>();
-    let lan_ips = available_lan_ips();
+    let lan_ips = available_lan_ips()?;
     let qr_svg = if runtime.access_url.is_empty() {
         String::new()
     } else {
@@ -1213,35 +1213,31 @@ fn qr_svg(access_url: &str) -> Result<String, ManagerError> {
     Ok(code.render::<svg::Color>().min_dimensions(220, 220).build())
 }
 
-fn available_lan_ips() -> Vec<String> {
-    let interfaces = local_ip_address::list_afinet_netifas().unwrap_or_default();
-
-    interfaces
-        .into_iter()
-        .filter_map(|(_, ip)| match ip {
-            IpAddr::V4(ipv4) if is_lan_ipv4(ipv4) => Some(ipv4.to_string()),
-            _ => None,
-        })
-        .collect()
+fn available_lan_ips() -> Result<Vec<String>, ManagerError> {
+    let interfaces = local_ip_address::list_afinet_netifas()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let mut ips = Vec::new();
+    // 保留网卡顺序，同一地址只展示一次。
+    for (_, ip) in interfaces {
+        if let IpAddr::V4(ipv4) = ip {
+            if is_lan_ipv4(ipv4) {
+                let address = ipv4.to_string();
+                if !ips.contains(&address) {
+                    ips.push(address);
+                }
+            }
+        }
+    }
+    Ok(ips)
 }
 
 fn find_lan_ip() -> Result<String, ManagerError> {
-    if let Some(ip) = available_lan_ips().into_iter().next() {
+    if let Some(ip) = available_lan_ips()?.into_iter().next() {
         return Ok(ip);
     }
 
     Err(ManagerError::System(
         "未找到可用局域网 IP，请确认电脑已连接 Wi-Fi、局域网或热点。".to_string(),
-    ))
-}
-
-fn validate_lan_ip(ip: &str) -> Result<(), ManagerError> {
-    if available_lan_ips().iter().any(|item| item == ip) {
-        return Ok(());
-    }
-
-    Err(ManagerError::System(
-        "所选 IP 已不可用，请刷新网络设置后重试。".to_string(),
     ))
 }
 
@@ -1252,11 +1248,16 @@ pub async fn set_access_ip(
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let lan_ip = string_value(payload.get("lanIp"));
-    validate_lan_ip(&lan_ip)?;
+    if !available_lan_ips()?.contains(&lan_ip) {
+        return Err(ManagerError::System(
+            "所选 IP 已不可用，请刷新网络设置后重试。".into(),
+        ));
+    }
     let mut runtime = registry.inner.lock().await;
     if runtime.handle.is_none() {
         return Err(ManagerError::System("请先上线设备快传。".into()));
     }
+    // 服务监听全部网卡；保留端口和访问凭据，让已连接设备继续传输。
     runtime.lan_ip = lan_ip.clone();
     runtime.access_url = format!(
         "http://{}:{}/?token={}",
@@ -2157,7 +2158,7 @@ pub async fn start_service(
             "accessUrl": runtime.access_url,
             "qrSvg": qr_svg(&runtime.access_url)?,
             "lanIp": runtime.lan_ip,
-            "lanIps": available_lan_ips(),
+            "lanIps": available_lan_ips()?,
             "port": runtime.port,
             "onlineDevices": runtime.clients.len() + runtime.native.online_count()
         })));
@@ -2229,7 +2230,7 @@ pub async fn start_service(
         "accessUrl": access_url,
         "qrSvg": qr_svg(&access_url)?,
         "lanIp": lan_ip,
-        "lanIps": available_lan_ips(),
+        "lanIps": available_lan_ips()?,
         "port": port,
         "onlineDevices": 0
     })))
