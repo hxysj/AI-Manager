@@ -209,20 +209,18 @@ pub async fn get_skill_usage_stats(
 
     for item in files {
         let raw_path = string_value(item.get("filePath"));
-        let (records, records_changed) = match read_session_records(
-            &item,
-            stored_session_records.get(&raw_path),
-        ) {
-            Ok(records) => records,
-            Err(error) => {
-                diagnostics.push(json!({
-                  "type": "skill-usage-parse-error",
-                  "message": error.to_string(),
-                  "sourcePath": string_value(item.get("filePath"))
-                }));
-                continue;
-            }
-        };
+        let (records, records_changed) =
+            match read_session_records(&item, stored_session_records.get(&raw_path)) {
+                Ok(records) => records,
+                Err(error) => {
+                    diagnostics.push(json!({
+                      "type": "skill-usage-parse-error",
+                      "message": error.to_string(),
+                      "sourcePath": string_value(item.get("filePath"))
+                    }));
+                    continue;
+                }
+            };
 
         if records_changed {
             session_record_updates.push((
@@ -256,15 +254,16 @@ pub async fn get_skill_usage_stats(
 
                 if reference.discoverable && !alias_map.contains_key(&alias) {
                     alias_map.insert(alias, skill_name.clone());
-                    let discovered = discovered_skills
-                        .entry(skill_name.clone())
-                        .or_insert_with(|| SkillInfo {
-                            name: skill_name.clone(),
-                            description: String::new(),
-                            source_paths: Vec::new(),
-                            cli_types: Vec::new(),
-                            aliases: vec![skill_name.clone(), reference.alias.clone()],
-                        });
+                    let discovered =
+                        discovered_skills
+                            .entry(skill_name.clone())
+                            .or_insert_with(|| SkillInfo {
+                                name: skill_name.clone(),
+                                description: String::new(),
+                                source_paths: Vec::new(),
+                                cli_types: Vec::new(),
+                                aliases: vec![skill_name.clone(), reference.alias.clone()],
+                            });
                     let cli = string_value(item.get("cli"));
 
                     if !cli.is_empty()
@@ -630,16 +629,18 @@ fn get_provider_stats_data(
     let mut cache = cache
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    let cached = cache.entry(cache_key).or_insert_with(|| UsageProviderStatsCache {
-        path: paths.storage_files.database.clone(),
-        logs: Arc::new(Vec::new()),
-        today_start_at,
-        log_signatures: HashMap::new(),
-        summary: create_empty_summary(),
-        today_summary: create_empty_summary(),
-        model_stats: HashMap::new(),
-        today_model_stats: HashMap::new(),
-    });
+    let cached = cache
+        .entry(cache_key)
+        .or_insert_with(|| UsageProviderStatsCache {
+            path: paths.storage_files.database.clone(),
+            logs: Arc::new(Vec::new()),
+            today_start_at,
+            log_signatures: HashMap::new(),
+            summary: create_empty_summary(),
+            today_summary: create_empty_summary(),
+            model_stats: HashMap::new(),
+            today_model_stats: HashMap::new(),
+        });
 
     if cached.path == paths.storage_files.database
         && cached.today_start_at == today_start_at
@@ -655,10 +656,9 @@ fn get_provider_stats_data(
 
     if cached.path != paths.storage_files.database
         || cached.today_start_at != today_start_at
-        || cached
-            .log_signatures
-            .iter()
-            .any(|(request_id, signature)| current_log_signatures.get(request_id) != Some(signature))
+        || cached.log_signatures.iter().any(|(request_id, signature)| {
+            current_log_signatures.get(request_id) != Some(signature)
+        })
     {
         cached.path = paths.storage_files.database.clone();
         cached.logs = raw_logs.clone();
@@ -701,7 +701,10 @@ fn get_provider_stats_data(
     Ok(provider_stats_cache_response(cached, pricing_config))
 }
 
-fn provider_stats_cache_response(cached: &UsageProviderStatsCache, pricing_config: &Value) -> Value {
+fn provider_stats_cache_response(
+    cached: &UsageProviderStatsCache,
+    pricing_config: &Value,
+) -> Value {
     json!({
       "summary": finalize_summary(cached.summary.clone()),
       "todaySummary": finalize_summary(cached.today_summary.clone()),
@@ -786,7 +789,11 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         .map_err(|error| ManagerError::System(error.to_string()))?
         .as_millis() as u64;
     usage_store::ensure_session_parser_version(paths, "codex", CODEX_USAGE_PARSER_VERSION)?;
-    usage_store::ensure_session_parser_version(paths, "claude-desktop", DESKTOP_USAGE_PARSER_VERSION)?;
+    usage_store::ensure_session_parser_version(
+        paths,
+        "claude-desktop",
+        DESKTOP_USAGE_PARSER_VERSION,
+    )?;
     let session_versions = usage_store::read_session_versions(paths)?;
     let pricing_config = read_pricing(paths)?;
     let pricing_index = create_pricing_index(&pricing_config);
@@ -795,14 +802,19 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         let app_type = normalize_app_type(&string_value(session.get("cli")));
         let raw_path = string_value(session.get("rawPath"));
 
-        if !["claude", "codex", "gemini", "claude-desktop"].contains(&app_type.as_str()) || raw_path.is_empty() {
+        if !["claude", "codex", "gemini", "claude-desktop"].contains(&app_type.as_str())
+            || raw_path.is_empty()
+        {
             continue;
         }
 
         let session_updated_at = session_file_modified_at(&app_type, &raw_path);
         session["updatedAt"] = json!(session_updated_at);
 
-        if session_versions.get(&raw_path).is_some_and(|(source, version)| source == &app_type && *version == session_updated_at) {
+        if session_versions
+            .get(&raw_path)
+            .is_some_and(|(source, version)| source == &app_type && *version == session_updated_at)
+        {
             continue;
         }
 
@@ -825,12 +837,8 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
                         }
                     }
                 }
-                let (logs, records) = merge_usage_records(
-                    logs,
-                    record_map,
-                    state,
-                    workspace_created_at,
-                );
+                let (logs, records) =
+                    merge_usage_records(logs, record_map, state, workspace_created_at);
                 let logs = logs
                     .into_iter()
                     .map(|log| lock_usage_log_cost(log, &pricing_config, &pricing_index))
@@ -918,7 +926,8 @@ async fn parse_usage_session(
                 log["dataSource"] = json!("desktop_code");
                 log["requestSource"] = json!("desktop-session");
                 log["desktopResponseIds"] = json!([string_value(log.get("requestId"))
-                    .strip_prefix("session:").unwrap_or("")]);
+                    .strip_prefix("session:")
+                    .unwrap_or("")]);
             }
             return Ok(logs);
         }
@@ -1171,7 +1180,11 @@ fn normalize_pricing_item(input: Value) -> Result<Value, ManagerError> {
     }))
 }
 
-fn extract_desktop_logs(session: &Value, content: &str, provider: &Value) -> Result<Vec<Value>, ManagerError> {
+fn extract_desktop_logs(
+    session: &Value,
+    content: &str,
+    provider: &Value,
+) -> Result<Vec<Value>, ManagerError> {
     let mut logs = Vec::new();
     let mut request_model = string_value(session.get("model"));
     let mut response_model = None;
@@ -1180,7 +1193,10 @@ fn extract_desktop_logs(session: &Value, content: &str, provider: &Value) -> Res
         let record: Value = serde_json::from_str(line)?;
         if record["type"] == "assistant" {
             response_ids.insert(string_value(record["message"].get("id")));
-            if let Some(model) = record["message"]["model"].as_str().filter(|model| !model.is_empty()) {
+            if let Some(model) = record["message"]["model"]
+                .as_str()
+                .filter(|model| !model.is_empty())
+            {
                 response_model = Some(model.to_string());
             }
         } else if record["type"] != "result" {
@@ -1191,20 +1207,41 @@ fn extract_desktop_logs(session: &Value, content: &str, provider: &Value) -> Res
         if record["type"] != "result" {
             continue;
         }
-        let model = response_model.take().unwrap_or_else(|| request_model.clone());
-        let turn_response_ids = std::mem::take(&mut response_ids).into_iter().collect::<Vec<_>>();
+        let model = response_model
+            .take()
+            .unwrap_or_else(|| request_model.clone());
+        let turn_response_ids = std::mem::take(&mut response_ids)
+            .into_iter()
+            .collect::<Vec<_>>();
         if !record["usage"].is_object() {
             continue;
         }
         let usage = &record["usage"];
-        let id = non_empty_text(record.get("uuid"), &create_hash_id(&[
-            string_value(session.get("rawPath")), value_to_text(record.get("timestamp")), logs.len().to_string()
-        ]));
+        let id = non_empty_text(
+            record.get("uuid"),
+            &create_hash_id(&[
+                string_value(session.get("rawPath")),
+                value_to_text(record.get("timestamp")),
+                logs.len().to_string(),
+            ]),
+        );
         let mut log = create_usage_log(
-            session, provider, &format!("desktop-turn:{id}"), model, &request_model,
-            to_number(usage.get("input_tokens")), to_number(usage.get("output_tokens")),
-            to_number(usage.get("cache_read_input_tokens")), to_number(usage.get("cache_creation_input_tokens")),
-            "desktop_audit", to_timestamp(record.get("timestamp").or_else(|| record.get("_audit_timestamp")), number_value(session.get("updatedAt"), 0)),
+            session,
+            provider,
+            &format!("desktop-turn:{id}"),
+            model,
+            &request_model,
+            to_number(usage.get("input_tokens")),
+            to_number(usage.get("output_tokens")),
+            to_number(usage.get("cache_read_input_tokens")),
+            to_number(usage.get("cache_creation_input_tokens")),
+            "desktop_audit",
+            to_timestamp(
+                record
+                    .get("timestamp")
+                    .or_else(|| record.get("_audit_timestamp")),
+                number_value(session.get("updatedAt"), 0),
+            ),
         );
         log["requestSource"] = json!("desktop-session");
         log["desktopResponseIds"] = json!(turn_response_ids);
@@ -1605,10 +1642,7 @@ fn lock_usage_log_cost(
     log
 }
 
-fn lock_existing_usage_costs(
-    paths: &AppPaths,
-    pricing_config: &Value,
-) -> Result<(), ManagerError> {
+fn lock_existing_usage_costs(paths: &AppPaths, pricing_config: &Value) -> Result<(), ManagerError> {
     let pricing_index = create_pricing_index(pricing_config);
     let logs = usage_store::read_all_logs(paths)?
         .into_iter()
@@ -2482,9 +2516,7 @@ fn create_alias_map(skills: &[SkillInfo]) -> HashMap<String, String> {
     alias_map
 }
 
-pub(crate) fn collect_cli_session_files(
-    cli_targets: &[Value],
-) -> Result<Vec<Value>, ManagerError> {
+pub(crate) fn collect_cli_session_files(cli_targets: &[Value]) -> Result<Vec<Value>, ManagerError> {
     let mut files = Vec::new();
 
     for cli_target in cli_targets {
@@ -2507,25 +2539,50 @@ pub(crate) fn collect_cli_session_files(
         }
     }
 
-    let transcripts = files.iter().enumerate().filter_map(|(index, item)| {
-        if string_value(item.get("cli")) != "claude" { return None; }
-        let path = string_value(item.get("filePath"));
-        Some((Path::new(&path).file_stem()?.to_str()?.to_string(), index))
-    }).collect::<HashMap<_, _>>();
+    let transcripts = files
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            if string_value(item.get("cli")) != "claude" {
+                return None;
+            }
+            let path = string_value(item.get("filePath"));
+            Some((Path::new(&path).file_stem()?.to_str()?.to_string(), index))
+        })
+        .collect::<HashMap<_, _>>();
     let mut duplicates = HashSet::new();
     for index in 0..files.len() {
-        if string_value(files[index].get("cli")) != "claude-desktop" { continue; }
+        if string_value(files[index].get("cli")) != "claude-desktop" {
+            continue;
+        }
         let path = string_value(files[index].get("filePath"));
-        if !Path::new(&path).components().any(|part| part.as_os_str() == "claude-code-sessions") { continue; }
-        let Some(metadata) = std::fs::read_to_string(&path).ok().and_then(|content| serde_json::from_str::<Value>(&content).ok()) else { continue; };
-        let Some(transcript_index) = transcripts.get(&string_value(metadata.get("cliSessionId"))) else { continue; };
+        if !Path::new(&path)
+            .components()
+            .any(|part| part.as_os_str() == "claude-code-sessions")
+        {
+            continue;
+        }
+        let Some(metadata) = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|content| serde_json::from_str::<Value>(&content).ok())
+        else {
+            continue;
+        };
+        let Some(transcript_index) = transcripts.get(&string_value(metadata.get("cliSessionId")))
+        else {
+            continue;
+        };
         files[*transcript_index]["cli"] = json!("claude-desktop");
         files[*transcript_index]["cliName"] = json!("Claude Desktop");
         files[*transcript_index]["title"] = metadata["title"].clone();
         files[*transcript_index]["requestModel"] = metadata["model"].clone();
         duplicates.insert(index);
     }
-    Ok(files.into_iter().enumerate().filter_map(|(index, item)| (!duplicates.contains(&index)).then_some(item)).collect())
+    Ok(files
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, item)| (!duplicates.contains(&index)).then_some(item))
+        .collect())
 }
 
 fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
@@ -2564,7 +2621,9 @@ fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>,
             continue;
         }
 
-        if scan_start_at > 0 && session_file_modified_at(&string_value(item.get("cli")), &raw_path) < scan_start_at {
+        if scan_start_at > 0
+            && session_file_modified_at(&string_value(item.get("cli")), &raw_path) < scan_start_at
+        {
             continue;
         }
 
@@ -2869,11 +2928,7 @@ fn extract_skill_references(display: &str) -> Vec<SkillReference> {
     let mut references = Vec::new();
 
     for capture in slash_skill_regex().captures_iter(display) {
-        append_skill_reference(
-            &mut references,
-            &capture[1],
-            capture[1].contains(':'),
-        );
+        append_skill_reference(&mut references, &capture[1], capture[1].contains(':'));
     }
 
     for capture in dollar_skill_regex().captures_iter(display) {
@@ -2891,11 +2946,7 @@ fn extract_skill_references(display: &str) -> Vec<SkillReference> {
     references
 }
 
-fn append_skill_reference(
-    references: &mut Vec<SkillReference>,
-    alias: &str,
-    discoverable: bool,
-) {
+fn append_skill_reference(references: &mut Vec<SkillReference>, alias: &str, discoverable: bool) {
     if alias.is_empty()
         || references
             .iter()
@@ -3330,7 +3381,14 @@ fn scan_session_files(
 
         if get_cli_type(cli_target) == "claude-desktop"
             && (entry.file_type()?.is_symlink()
-                || ["skills-plugin", "cowork_plugins", ".claude", "rpm", "remote_cowork_plugins"].contains(&file_name.as_str()))
+                || [
+                    "skills-plugin",
+                    "cowork_plugins",
+                    ".claude",
+                    "rpm",
+                    "remote_cowork_plugins",
+                ]
+                .contains(&file_name.as_str()))
         {
             continue;
         }
@@ -3840,7 +3898,10 @@ fn provider_stats_cache_key(filters: &Value) -> String {
     format!(
         "{}|{}|{}",
         string_value(filters.get("appType")),
-        non_empty_owned(provider_ids.join(","), &string_value(filters.get("providerId"))),
+        non_empty_owned(
+            provider_ids.join(","),
+            &string_value(filters.get("providerId"))
+        ),
         string_value(filters.get("requestSource"))
     )
 }
@@ -4079,10 +4140,8 @@ fn slash_skill_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
 
     REGEX.get_or_init(|| {
-        Regex::new(
-            r#"(?:^|[\s`"'(\[\{<])/([A-Za-z][A-Za-z0-9._-]*(?::[A-Za-z][A-Za-z0-9._-]*)*)"#,
-        )
-        .unwrap()
+        Regex::new(r#"(?:^|[\s`"'(\[\{<])/([A-Za-z][A-Za-z0-9._-]*(?::[A-Za-z][A-Za-z0-9._-]*)*)"#)
+            .unwrap()
     })
 }
 
@@ -4090,10 +4149,8 @@ fn dollar_skill_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
 
     REGEX.get_or_init(|| {
-        Regex::new(
-            r#"(?:^|[\s`"'(\[\{<])\$([A-Za-z][A-Za-z0-9._-]*(?::[A-Za-z][A-Za-z0-9._-]*)*)"#,
-        )
-        .unwrap()
+        Regex::new(r#"(?:^|[\s`"'(\[\{<])\$([A-Za-z][A-Za-z0-9._-]*(?::[A-Za-z][A-Za-z0-9._-]*)*)"#)
+            .unwrap()
     })
 }
 
@@ -4116,7 +4173,9 @@ fn skill_resource_regex() -> &'static Regex {
 
 fn decode_report_image_data_url(value: &str) -> Result<Vec<u8>, ManagerError> {
     let Some((metadata, data)) = value.trim().split_once(',') else {
-        return Err(ManagerError::System("用量报告图片数据格式无效。".to_string()));
+        return Err(ManagerError::System(
+            "用量报告图片数据格式无效。".to_string(),
+        ));
     };
     let metadata = metadata.to_ascii_lowercase();
 
@@ -4268,7 +4327,10 @@ mod tests {
 
     #[test]
     fn desktop_provider_stats_require_exact_attribution_and_isolate_applications() {
-        let root = std::env::temp_dir().join(format!("ai-manager-desktop-provider-stats-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "ai-manager-desktop-provider-stats-{}",
+            uuid::Uuid::new_v4()
+        ));
         let paths = resolve_app_paths(&root);
         for (name, app_type, provider_id, tokens) in [
             ("desktop", "claude-desktop", "shared-provider", 10),
@@ -4276,19 +4338,32 @@ mod tests {
             ("cli", "claude", "shared-provider", 100),
             ("unbound", "claude-desktop", "claude-desktop", 40),
         ] {
-            usage_store::replace_sessions(&paths, &[usage_store::UsageSessionUpdate {
-                raw_path: name.to_string(), app_type: app_type.to_string(), updated_at: 1,
-                logs: vec![json!({"requestId": name, "rawPath": name, "appType": app_type,
+            usage_store::replace_sessions(
+                &paths,
+                &[usage_store::UsageSessionUpdate {
+                    raw_path: name.to_string(),
+                    app_type: app_type.to_string(),
+                    updated_at: 1,
+                    logs: vec![
+                        json!({"requestId": name, "rawPath": name, "appType": app_type,
                     "providerId": provider_id, "model": "upstream-model", "inputTokens": tokens,
-                    "outputTokens": 2, "createdAt": super::now_millis()})], records: Vec::new(),
-            }]).unwrap();
+                    "outputTokens": 2, "createdAt": super::now_millis()}),
+                    ],
+                    records: Vec::new(),
+                }],
+            )
+            .unwrap();
             usage_store::write_request_record(&paths, &json!({
                 "requestId": format!("desktop-response:{name}"), "appType": app_type,
                 "providerId": provider_id, "requestSource": "proxy-managed", "model": "upstream-model"
             })).unwrap();
         }
         for _ in 0..2 {
-            for (app_type, request_count, input_tokens) in [("claude-desktop", 1, 10), ("claude", 1, 100), ("all", 2, 110)] {
+            for (app_type, request_count, input_tokens) in [
+                ("claude-desktop", 1, 10),
+                ("claude", 1, 100),
+                ("all", 2, 110),
+            ] {
                 let stats = super::get_stats_data(&paths, json!({"statsScope": "provider", "appType": app_type, "providerId": "shared-provider"})).unwrap();
                 assert_eq!(stats["summary"]["requestCount"], request_count);
                 assert_eq!(stats["summary"]["inputTokens"], input_tokens);
@@ -4304,11 +4379,19 @@ mod tests {
         ];
         super::bind_desktop_providers(&paths, &mut logs).unwrap();
         assert_eq!(logs[0]["providerId"], "shared-provider");
-        assert!(logs[1..].iter().all(|log| log["providerId"] == "claude-desktop"));
-        assert!(logs.iter().all(|log| log.get("desktopResponseIds").is_none()));
+        assert!(logs[1..]
+            .iter()
+            .all(|log| log["providerId"] == "claude-desktop"));
+        assert!(logs
+            .iter()
+            .all(|log| log.get("desktopResponseIds").is_none()));
         let root = root.canonicalize().unwrap();
         assert!(root.starts_with(std::env::temp_dir().canonicalize().unwrap()));
-        assert!(root.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-provider-stats-"));
+        assert!(root
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("ai-manager-desktop-provider-stats-"));
         std::fs::remove_dir_all(root).unwrap();
     }
     use std::time::Duration;
@@ -4358,16 +4441,19 @@ mod tests {
             &new_pricing,
             &create_pricing_index(&new_pricing),
         );
-        let locked_new_log = lock_usage_log_cost(
-            log,
-            &new_pricing,
-            &create_pricing_index(&new_pricing),
-        );
+        let locked_new_log =
+            lock_usage_log_cost(log, &new_pricing, &create_pricing_index(&new_pricing));
 
         assert_eq!(enriched_old_log["totalCostUsd"], 2.0);
-        assert_eq!(enriched_old_log["pricingSnapshot"]["pricingId"], "pricing-old");
+        assert_eq!(
+            enriched_old_log["pricingSnapshot"]["pricingId"],
+            "pricing-old"
+        );
         assert_eq!(locked_new_log["totalCostUsd"], 20.0);
-        assert_eq!(locked_new_log["pricingSnapshot"]["pricingId"], "pricing-new");
+        assert_eq!(
+            locked_new_log["pricingSnapshot"]["pricingId"],
+            "pricing-new"
+        );
     }
 
     #[test]
@@ -4449,7 +4535,9 @@ mod tests {
         assert!(slash_skill_regex().is_match("/browser:control-in-app-browser"));
         assert!(dollar_skill_regex().is_match("$imagegen"));
         assert!(skill_resource_regex().is_match("skill://browser/control-in-app-browser"));
-        assert!(path_skill_regex().is_match(r"C:\Users\readboy\.codex\skills\frontend-design\SKILL.md"));
+        assert!(
+            path_skill_regex().is_match(r"C:\Users\readboy\.codex\skills\frontend-design\SKILL.md")
+        );
     }
 
     #[test]
@@ -4468,7 +4556,10 @@ mod tests {
         assert!(aliases.contains(&"read"));
         assert!(aliases.contains(&"computer-use"));
         assert!(!references[0].discoverable);
-        assert!(references.iter().skip(1).all(|reference| reference.discoverable));
+        assert!(references
+            .iter()
+            .skip(1)
+            .all(|reference| reference.discoverable));
     }
 
     #[test]

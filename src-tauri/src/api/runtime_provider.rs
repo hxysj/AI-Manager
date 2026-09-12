@@ -87,11 +87,7 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
             string_value(payload.get("activeApiKeyId")),
         )?;
     } else if payload.get("apiKey").is_some() {
-        update_active_provider_key(
-            &mut keys,
-            &provider_id,
-            string_value(payload.get("apiKey")),
-        )?;
+        update_active_provider_key(&mut keys, &provider_id, string_value(payload.get("apiKey")))?;
     }
 
     let model_name = string_value(payload.get("model"));
@@ -517,7 +513,10 @@ pub async fn launch_codex_provider_instance(
             ));
         }
 
-        runtime_config = provider.get("runtimeConfig").cloned().unwrap_or_else(|| json!({}));
+        runtime_config = provider
+            .get("runtimeConfig")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
 
         model = first_string(
             runtime_config.get("mainModel"),
@@ -625,7 +624,8 @@ pub async fn launch_codex_provider_instance(
     });
     let mut instances = provider_store::read_instances(paths)?;
 
-    instances.retain(|item| item.get("providerId").and_then(Value::as_str) != Some(target_id.as_str()));
+    instances
+        .retain(|item| item.get("providerId").and_then(Value::as_str) != Some(target_id.as_str()));
     instances.insert(0, next_instance);
     provider_store::write_instances(paths, &instances)?;
 
@@ -753,7 +753,10 @@ pub async fn launch_claude_provider_instance(
     let local_base_url = string_value(proxy_state.get("localBaseUrl"));
     let target_name = string_value(provider.get("name"));
     let target_type = string_value(provider.get("type"));
-    let runtime_config = provider.get("runtimeConfig").cloned().unwrap_or_else(|| json!({}));
+    let runtime_config = provider
+        .get("runtimeConfig")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let profile_dir = Path::new(&paths.workspace_root)
         .join("claude-instances")
         .join(format!(
@@ -765,7 +768,10 @@ pub async fn launch_claude_provider_instance(
     let mut env = Map::new();
 
     env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), json!(token));
-    env.insert("ANTHROPIC_BASE_URL".to_string(), json!(local_base_url.clone()));
+    env.insert(
+        "ANTHROPIC_BASE_URL".to_string(),
+        json!(local_base_url.clone()),
+    );
     for (config_key, env_key) in [
         ("mainModel", "ANTHROPIC_MODEL"),
         ("haikuModel", "ANTHROPIC_DEFAULT_HAIKU_MODEL"),
@@ -778,11 +784,7 @@ pub async fn launch_claude_provider_instance(
             env.insert(env_key.to_string(), json!(value));
         }
     }
-    if runtime_config
-        .get("toolSearch")
-        .and_then(Value::as_bool)
-        == Some(true)
-    {
+    if runtime_config.get("toolSearch").and_then(Value::as_bool) == Some(true) {
         env.insert("ENABLE_TOOL_SEARCH".to_string(), json!("true"));
     }
     if runtime_config
@@ -798,30 +800,26 @@ pub async fn launch_claude_provider_instance(
     settings.insert("enabledPlugins".to_string(), json!({}));
     settings.insert(
         "includeCoAuthoredBy".to_string(),
-        json!(runtime_config
-            .get("hideAiSignature")
-            .and_then(Value::as_bool)
-            != Some(true)),
+        json!(
+            runtime_config
+                .get("hideAiSignature")
+                .and_then(Value::as_bool)
+                != Some(true)
+        ),
     );
     settings.insert("pluginConfigs".to_string(), json!({}));
-    if runtime_config
-        .get("teammatesMode")
-        .and_then(Value::as_bool)
-        != Some(false)
-    {
+    if runtime_config.get("teammatesMode").and_then(Value::as_bool) != Some(false) {
         settings.insert("teammateMode".to_string(), json!("tmux"));
     }
     settings.insert(
         "effortLevel".to_string(),
-        json!(if runtime_config
-            .get("maxThinking")
-            .and_then(Value::as_bool)
-            != Some(false)
-        {
-            "max"
-        } else {
-            "default"
-        }),
+        json!(
+            if runtime_config.get("maxThinking").and_then(Value::as_bool) != Some(false) {
+                "max"
+            } else {
+                "default"
+            }
+        ),
     );
     if runtime_config
         .get("hideAiSignature")
@@ -882,7 +880,10 @@ pub async fn launch_claude_provider_instance(
     let mut launcher_lines = vec![
         "@echo off".to_string(),
         "title Claude 实例".to_string(),
-        format!("set \"CLAUDE_CONFIG_DIR={}\"", profile_dir.to_string_lossy()),
+        format!(
+            "set \"CLAUDE_CONFIG_DIR={}\"",
+            profile_dir.to_string_lossy()
+        ),
         format!("set \"ANTHROPIC_AUTH_TOKEN={}\"", token),
         format!("set \"ANTHROPIC_BASE_URL={}\"", local_base_url),
     ];
@@ -1477,13 +1478,22 @@ fn build_claude_config_files(
         env.insert("ANTHROPIC_MODEL".to_string(), json!(main_model));
     }
     if !haiku_model.is_empty() {
-        env.insert("ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(), json!(haiku_model));
+        env.insert(
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
+            json!(haiku_model),
+        );
     }
     if !opus_model.is_empty() {
-        env.insert("ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(), json!(opus_model));
+        env.insert(
+            "ANTHROPIC_DEFAULT_OPUS_MODEL".to_string(),
+            json!(opus_model),
+        );
     }
     if !sonnet_model.is_empty() {
-        env.insert("ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(), json!(sonnet_model));
+        env.insert(
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+            json!(sonnet_model),
+        );
     }
     if values.get("toolSearch").and_then(Value::as_bool) == Some(true) {
         env.insert("ENABLE_TOOL_SEARCH".to_string(), json!("true"));
@@ -1528,7 +1538,10 @@ fn build_codex_config_files(
     let values = create_template_values(provider, profile, &api_key);
     let mut config_lines = vec![
         "model_provider = \"custom\"".to_string(),
-        format!("model = {}", to_toml_string(string_value(values.get("mainModel")))),
+        format!(
+            "model = {}",
+            to_toml_string(string_value(values.get("mainModel")))
+        ),
         format!(
             "model_reasoning_effort = {}",
             to_toml_string(string_value(values.get("modelReasoningEffort")))
@@ -1559,7 +1572,10 @@ fn build_codex_config_files(
         "name = \"custom\"".to_string(),
         "wire_api = \"responses\"".to_string(),
         "requires_openai_auth = true".to_string(),
-        format!("base_url = {}", to_toml_string(string_value(values.get("baseUrl")))),
+        format!(
+            "base_url = {}",
+            to_toml_string(string_value(values.get("baseUrl")))
+        ),
     ]);
 
     Ok(vec![
@@ -1781,7 +1797,10 @@ fn toml_literal(value: &Value) -> String {
     to_toml_string(string_value(Some(value)))
 }
 
-pub(crate) fn get_provider_api_key(paths: &AppPaths, provider_id: &str) -> Result<String, ManagerError> {
+pub(crate) fn get_provider_api_key(
+    paths: &AppPaths,
+    provider_id: &str,
+) -> Result<String, ManagerError> {
     get_provider_api_key_with_id(paths, provider_id).map(|(_, key)| key)
 }
 
@@ -2029,7 +2048,10 @@ pub(crate) fn combine_config_contents(files: &[Value]) -> String {
         .join("\n\n")
 }
 
-pub(crate) fn combine_managed_config_contents(cli: &str, files: &[Value]) -> Result<String, ManagerError> {
+pub(crate) fn combine_managed_config_contents(
+    cli: &str,
+    files: &[Value],
+) -> Result<String, ManagerError> {
     if cli == "claude" {
         return Ok(combine_config_contents(
             &files
@@ -2620,11 +2642,7 @@ pub(crate) fn set_provider_keys(
             None,
             &format!("key-{}-{}", now_millis(), index),
         );
-        let name = non_empty_string(
-            requested.get("name"),
-            None,
-            &format!("Key {}", index + 1),
-        );
+        let name = non_empty_string(requested.get("name"), None, &format!("Key {}", index + 1));
         let note = string_value(requested.get("note"));
         let api_key = string_value(requested.get("apiKey"));
         let encrypted = if !api_key.is_empty() {
@@ -2760,7 +2778,14 @@ fn mask_provider_key(value: &str) -> String {
     format!(
         "{}••••{}",
         chars.iter().take(4).collect::<String>(),
-        chars.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<String>()
+        chars
+            .iter()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<String>()
     )
 }
 
@@ -3083,26 +3108,43 @@ mod tests {
         let config_path = config_dir.join("config.toml");
         fs::write(&config_path, "model = 'unchanged'\n").unwrap();
 
-        for (cli, storage_id) in [("claude", "provider-a"), ("claude-desktop", "claude-desktop:provider-a")] {
+        for (cli, storage_id) in [
+            ("claude", "provider-a"),
+            ("claude-desktop", "claude-desktop:provider-a"),
+        ] {
             for key_id in ["active", "backup"] {
                 let result = read_provider_key_value(
                     &paths,
                     &json!({ "providerId": "provider-a", "keyId": key_id, "cli": cli }),
                 )
                 .unwrap();
-                assert_eq!(result, json!({ "apiKey": format!("sk-{storage_id}-{key_id}") }));
+                assert_eq!(
+                    result,
+                    json!({ "apiKey": format!("sk-{storage_id}-{key_id}") })
+                );
             }
             let (active_id, public_keys, active_key) = public_provider_keys(keys.get(storage_id));
             assert_eq!(active_id, "active");
             assert_eq!(active_key, format!("sk-{storage_id}-active"));
-            assert!(public_keys.iter().all(|record| record.get("apiKey").is_none()));
+            assert!(public_keys
+                .iter()
+                .all(|record| record.get("apiKey").is_none()));
             assert_ne!(public_keys[1]["masked"], format!("sk-{storage_id}-backup"));
         }
 
         assert_eq!(provider_store::read_keys(&paths).unwrap(), keys);
-        assert_eq!(provider_store::read_desktop_settings(&paths).unwrap(), settings);
-        assert_eq!(provider_store::read_runtime_state(&paths).unwrap(), runtime_state);
-        assert_eq!(fs::read_to_string(config_path).unwrap(), "model = 'unchanged'\n");
+        assert_eq!(
+            provider_store::read_desktop_settings(&paths).unwrap(),
+            settings
+        );
+        assert_eq!(
+            provider_store::read_runtime_state(&paths).unwrap(),
+            runtime_state
+        );
+        assert_eq!(
+            fs::read_to_string(config_path).unwrap(),
+            "model = 'unchanged'\n"
+        );
         fs::remove_dir_all(test_root).unwrap();
     }
 

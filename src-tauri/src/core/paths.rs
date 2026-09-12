@@ -144,7 +144,9 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
                 storage_dir.join("claude-proxy-request-logs.json"),
             ),
             codex_proxy_config: path_text(storage_dir.join("codex-proxy-config.json")),
-            claude_desktop_request_logs: path_text(storage_dir.join("claude-desktop-request-logs.json")),
+            claude_desktop_request_logs: path_text(
+                storage_dir.join("claude-desktop-request-logs.json"),
+            ),
             codex_proxy_live_backup: path_text(storage_dir.join("codex-proxy-live-backup.json")),
             codex_proxy_request_logs: path_text(storage_dir.join("codex-proxy-request-logs.json")),
             codex_accounts: path_text(storage_dir.join("codex-accounts.json")),

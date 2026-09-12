@@ -45,6 +45,12 @@
             ><el-dropdown-menu
               ><el-dropdown-item disabled>{{ serviceSummary }}</el-dropdown-item
               ><el-dropdown-item
+                v-for="ip in state.service.lanIps || []"
+                :key="ip"
+                :disabled="ip === state.service.lanIp || loading"
+                @click="setAccessIp(ip)"
+                >二维码使用 {{ ip }}</el-dropdown-item
+              ><el-dropdown-item
                 v-if="state.service.running"
                 @click="stopService"
                 >暂停接收并离线</el-dropdown-item
@@ -397,6 +403,7 @@ const state = reactive({
     accessUrl: "",
     qrSvg: "",
     lanIp: "",
+    lanIps: [],
     port: 0,
     onlineDevices: 0
   },
@@ -732,6 +739,18 @@ async function showAccessDialog() {
 
   accessQrSvg.value = state.service.qrSvg || accessQrSvg.value
   accessDialogOpen.value = true
+}
+
+async function setAccessIp(lanIp) {
+  if (!lanIp || lanIp === state.service.lanIp || loading.value) {
+    return
+  }
+
+  // 只切换二维码和访问链接中的 IP，不重启快传服务。
+  await runAction(
+    () => lanShareApi.setAccessIp({ lanIp }),
+    `二维码已切换到 ${lanIp}`
+  )
 }
 
 async function stopService() {

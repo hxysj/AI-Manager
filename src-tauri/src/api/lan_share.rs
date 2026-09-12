@@ -414,23 +414,49 @@ pub async fn add_files(
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let session_id = string_value(payload.get("sessionId"));
-    let session = read_array::<LanShareSession>(&paths.lan_share_files.sessions)?.into_iter()
+    let session = read_array::<LanShareSession>(&paths.lan_share_files.sessions)?
+        .into_iter()
         .find(|session| session.id == session_id)
         .ok_or_else(|| ManagerError::System("请先选择有效会话。".into()))?;
     let files = attachments::prepare(registry, paths, &session.id, &payload).await?;
-    if files.is_empty() { return get_state(registry, paths).await; }
+    if files.is_empty() {
+        return get_state(registry, paths).await;
+    }
     let message_id = create_id("message");
     let content = if files.len() == 1 {
-        format!("共享文件：{}（{}）", files[0].name, format_file_size(files[0].size))
+        format!(
+            "共享文件：{}（{}）",
+            files[0].name,
+            format_file_size(files[0].size)
+        )
     } else {
         format!("共享了 {} 个文件", files.len())
     };
-    let native_delivery = native::deliver(registry, &session.device_id, &content, &files, &message_id).await?;
-    let sender = registry.inner.lock().await.clients.get(&session.device_id).cloned();
-    let stored = append_message_with_attachments(registry, paths, &session.device_id, &session.id,
-        "desktop-to-mobile", &content, native_delivery || sender.is_some(), &files, Some(&message_id)).await?;
+    let native_delivery =
+        native::deliver(registry, &session.device_id, &content, &files, &message_id).await?;
+    let sender = registry
+        .inner
+        .lock()
+        .await
+        .clients
+        .get(&session.device_id)
+        .cloned();
+    let stored = append_message_with_attachments(
+        registry,
+        paths,
+        &session.device_id,
+        &session.id,
+        "desktop-to-mobile",
+        &content,
+        native_delivery || sender.is_some(),
+        &files,
+        Some(&message_id),
+    )
+    .await?;
     attachments::publish(registry, paths, &files).await?;
-    if let Some(sender) = sender { let _ = send_stored_message_to_client(&sender, &stored); }
+    if let Some(sender) = sender {
+        let _ = send_stored_message_to_client(&sender, &stored);
+    }
     if session.mode == "group" {
         for (_, sender) in group_online_targets(registry, paths, &session.group_id).await? {
             let _ = send_stored_message_to_client(&sender, &stored);
@@ -512,6 +538,7 @@ pub async fn get_state(
             })
         })
         .collect::<Vec<_>>();
+    let lan_ips = available_lan_ips();
     let qr_svg = if runtime.access_url.is_empty() {
         String::new()
     } else {
@@ -524,6 +551,7 @@ pub async fn get_state(
             "accessUrl": runtime.access_url,
             "qrSvg": qr_svg,
             "lanIp": runtime.lan_ip,
+            "lanIps": lan_ips,
             "port": runtime.port,
             "onlineDevices": runtime.clients.len() + runtime.native.online_count()
         },
@@ -629,7 +657,8 @@ pub async fn list_messages(
         let matches_keyword =
             keyword.is_empty() || message.content.to_lowercase().contains(&keyword);
         let matches_device = device_id.is_empty() || message.device_id == device_id;
-        let matches_session = session_id.is_empty() || session_scope_ids.contains(&message.session_id);
+        let matches_session =
+            session_id.is_empty() || session_scope_ids.contains(&message.session_id);
         let matches_time = message.created_at >= from && (to == 0 || message.created_at <= to);
 
         matches_keyword && matches_device && matches_session && matches_time
@@ -780,24 +809,41 @@ pub async fn delete_device(
         let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
         let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
         let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
-        let direct_session_ids = sessions.iter()
+        let direct_session_ids = sessions
+            .iter()
             .filter(|session| session.device_id == device_id && session.mode != "group")
-            .map(|session| session.id.clone()).collect::<Vec<_>>();
-        let device_group_sessions = sessions.iter()
+            .map(|session| session.id.clone())
+            .collect::<Vec<_>>();
+        let device_group_sessions = sessions
+            .iter()
             .filter(|session| session.device_id == device_id && session.mode == "group")
-            .cloned().collect::<Vec<_>>();
+            .cloned()
+            .collect::<Vec<_>>();
         for removed in device_group_sessions {
-            let host_id = sessions.iter().find(|session| {
-                session.mode == "group" && session.group_id == removed.group_id && session.device_id.is_empty()
-            }).map(|session| session.id.clone());
+            let host_id = sessions
+                .iter()
+                .find(|session| {
+                    session.mode == "group"
+                        && session.group_id == removed.group_id
+                        && session.device_id.is_empty()
+                })
+                .map(|session| session.id.clone());
             if let Some(host_id) = host_id {
-                for message in messages.iter_mut().filter(|message| message.session_id == removed.id) {
+                for message in messages
+                    .iter_mut()
+                    .filter(|message| message.session_id == removed.id)
+                {
                     message.session_id = host_id.clone();
                 }
-                for file in files.iter_mut().filter(|file| file.session_id == removed.id) {
+                for file in files
+                    .iter_mut()
+                    .filter(|file| file.session_id == removed.id)
+                {
                     file.session_id = host_id.clone();
                 }
-            } else if let Some(session) = sessions.iter_mut().find(|session| session.id == removed.id) {
+            } else if let Some(session) =
+                sessions.iter_mut().find(|session| session.id == removed.id)
+            {
                 session.device_id.clear();
                 session.device_name = "群聊".into();
                 session.ip.clear();
@@ -810,7 +856,9 @@ pub async fn delete_device(
         for group in &mut groups {
             let count = group.members.len();
             group.members.retain(|member| member.device_id != device_id);
-            if group.members.len() != count { group.updated_at = now_millis(); }
+            if group.members.len() != count {
+                group.updated_at = now_millis();
+            }
         }
         let mut runtime = registry.inner.lock().await;
         if device_id.starts_with("native-") {
@@ -823,10 +871,14 @@ pub async fn delete_device(
         write_json(&paths.lan_share_files.devices, &json!(devices)).await?;
         runtime.active_sessions.remove(&device_id);
         if let Some(sender) = runtime.clients.remove(&device_id) {
-            let _ = sender.send(WsOutbound { payload: json!({ "type": "deviceRemoved" }) });
+            let _ = sender.send(WsOutbound {
+                payload: json!({ "type": "deviceRemoved" }),
+            });
         }
         for sender in runtime.clients.values() {
-            let _ = sender.send(WsOutbound { payload: json!({ "type": "groupsChanged" }) });
+            let _ = sender.send(WsOutbound {
+                payload: json!({ "type": "groupsChanged" }),
+            });
         }
     }
     broadcast_files_changed(registry).await?;
@@ -840,7 +892,9 @@ pub async fn create_group(
 ) -> Result<Value, ManagerError> {
     let device_ids = string_array_value(payload.get("deviceIds"));
     if device_ids.is_empty() {
-        return Err(ManagerError::System("请至少邀请一台设备后再创建群聊。".into()));
+        return Err(ManagerError::System(
+            "请至少邀请一台设备后再创建群聊。".into(),
+        ));
     }
     let name = normalize_group_name(&string_value(payload.get("name")));
     let message_visibility =
@@ -875,12 +929,19 @@ pub async fn create_group(
         let devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices)?;
         let mut invited = Vec::new();
         for device_id in &device_ids {
-            let device = devices.iter().find(|device| &device.id == device_id)
+            let device = devices
+                .iter()
+                .find(|device| &device.id == device_id)
                 .ok_or_else(|| ManagerError::System("邀请的设备已不存在，请重新选择。".into()))?;
             if device.user_agent == "MonkeyThief/Desktop" {
-                return Err(ManagerError::System("客户端设备目前仅支持单聊，请选择已连接过的网页设备加入群聊。".into()));
+                return Err(ManagerError::System(
+                    "客户端设备目前仅支持单聊，请选择已连接过的网页设备加入群聊。".into(),
+                ));
             }
-            if !invited.iter().any(|current: &&LanShareDevice| current.id == device.id) {
+            if !invited
+                .iter()
+                .any(|current: &&LanShareDevice| current.id == device.id)
+            {
                 invited.push(device);
             }
         }
@@ -901,7 +962,9 @@ pub async fn create_group(
         let runtime = registry.inner.lock().await;
         for member in &group.members {
             if let Some(sender) = runtime.clients.get(&member.device_id) {
-                let _ = sender.send(WsOutbound { payload: json!({ "type": "groupsChanged" }) });
+                let _ = sender.send(WsOutbound {
+                    payload: json!({ "type": "groupsChanged" }),
+                });
             }
         }
     }
@@ -936,7 +999,10 @@ pub async fn update_group(
         group.updated_at = now_millis();
 
         let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
-        for session in sessions.iter_mut().filter(|session| session.group_id == group_id) {
+        for session in sessions
+            .iter_mut()
+            .filter(|session| session.group_id == group_id)
+        {
             session.group_name = name.clone();
             session.message_visibility = message_visibility.clone();
             session.updated_at = now_millis();
@@ -1094,8 +1160,7 @@ fn write_files_zip(files: &[LanShareFile], target_path: &str) -> Result<(), Mana
 
     let target = std::fs::File::create(target_path)?;
     let mut archive = zip::ZipWriter::new(target);
-    let options =
-        SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
     for file in files {
         let source_path = Path::new(&file.path);
@@ -1121,11 +1186,7 @@ fn write_files_zip(files: &[LanShareFile], target_path: &str) -> Result<(), Mana
 }
 
 fn safe_zip_entry_name(name: &str) -> String {
-    let value = name
-        .replace('\\', "_")
-        .replace('/', "_")
-        .trim()
-        .to_string();
+    let value = name.replace('\\', "_").replace('/', "_").trim().to_string();
 
     if value.is_empty() {
         "file".to_string()
@@ -1152,21 +1213,58 @@ fn qr_svg(access_url: &str) -> Result<String, ManagerError> {
     Ok(code.render::<svg::Color>().min_dimensions(220, 220).build())
 }
 
-fn find_lan_ip() -> Result<String, ManagerError> {
-    let interfaces = local_ip_address::list_afinet_netifas()
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+fn available_lan_ips() -> Vec<String> {
+    let interfaces = local_ip_address::list_afinet_netifas().unwrap_or_default();
 
-    for (_, ip) in interfaces {
-        if let IpAddr::V4(ipv4) = ip {
-            if is_lan_ipv4(ipv4) {
-                return Ok(ipv4.to_string());
-            }
-        }
+    interfaces
+        .into_iter()
+        .filter_map(|(_, ip)| match ip {
+            IpAddr::V4(ipv4) if is_lan_ipv4(ipv4) => Some(ipv4.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn find_lan_ip() -> Result<String, ManagerError> {
+    if let Some(ip) = available_lan_ips().into_iter().next() {
+        return Ok(ip);
     }
 
     Err(ManagerError::System(
         "未找到可用局域网 IP，请确认电脑已连接 Wi-Fi、局域网或热点。".to_string(),
     ))
+}
+
+fn validate_lan_ip(ip: &str) -> Result<(), ManagerError> {
+    if available_lan_ips().iter().any(|item| item == ip) {
+        return Ok(());
+    }
+
+    Err(ManagerError::System(
+        "所选 IP 已不可用，请刷新网络设置后重试。".to_string(),
+    ))
+}
+
+pub async fn set_access_ip(
+    app: tauri::AppHandle,
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let lan_ip = string_value(payload.get("lanIp"));
+    validate_lan_ip(&lan_ip)?;
+    let mut runtime = registry.inner.lock().await;
+    if runtime.handle.is_none() {
+        return Err(ManagerError::System("请先上线设备快传。".into()));
+    }
+    runtime.lan_ip = lan_ip.clone();
+    runtime.access_url = format!(
+        "http://{}:{}/?token={}",
+        lan_ip, runtime.port, runtime.token
+    );
+    drop(runtime);
+    emit_state_changed(&app, registry, paths).await?;
+    get_state(registry, paths).await
 }
 
 fn is_lan_ipv4(ip: Ipv4Addr) -> bool {
@@ -2059,6 +2157,7 @@ pub async fn start_service(
             "accessUrl": runtime.access_url,
             "qrSvg": qr_svg(&runtime.access_url)?,
             "lanIp": runtime.lan_ip,
+            "lanIps": available_lan_ips(),
             "port": runtime.port,
             "onlineDevices": runtime.clients.len() + runtime.native.online_count()
         })));
@@ -2130,6 +2229,7 @@ pub async fn start_service(
         "accessUrl": access_url,
         "qrSvg": qr_svg(&access_url)?,
         "lanIp": lan_ip,
+        "lanIps": available_lan_ips(),
         "port": port,
         "onlineDevices": 0
     })))
@@ -2215,7 +2315,9 @@ pub async fn upsert_device(
             if ip.is_empty() || native_device {
                 None
             } else {
-                devices.iter().position(|device| device.ip == ip && device.user_agent != "MonkeyThief/Desktop")
+                devices.iter().position(|device| {
+                    device.ip == ip && device.user_agent != "MonkeyThief/Desktop"
+                })
             }
         });
 
@@ -2233,7 +2335,11 @@ pub async fn upsert_device(
         };
 
         devices.retain(|device| {
-            native_device || device.user_agent == "MonkeyThief/Desktop" || device.id == canonical_device_id || device.ip != ip || device.ip.is_empty()
+            native_device
+                || device.user_agent == "MonkeyThief/Desktop"
+                || device.id == canonical_device_id
+                || device.ip != ip
+                || device.ip.is_empty()
         });
         rewrite_device_references(paths, &old_device_id, &canonical_device_id, ip).await?;
         write_json(&paths.lan_share_files.devices, &json!(devices)).await?;
@@ -2729,7 +2835,18 @@ pub async fn append_message(
     content: &str,
     delivered: bool,
 ) -> Result<LanShareMessage, ManagerError> {
-    append_message_with_attachments(registry, paths, device_id, session_id, direction, content, delivered, &[], None).await
+    append_message_with_attachments(
+        registry,
+        paths,
+        device_id,
+        session_id,
+        direction,
+        content,
+        delivered,
+        &[],
+        None,
+    )
+    .await
 }
 
 async fn append_message_with_attachments(
@@ -2784,11 +2901,15 @@ async fn append_message_with_attachments(
         )?
     };
     let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
-    if let Some(existing) = message_id.and_then(|id| messages.iter().find(|message| message.id == id)) {
+    if let Some(existing) =
+        message_id.and_then(|id| messages.iter().find(|message| message.id == id))
+    {
         return Ok(existing.clone());
     }
     let message = LanShareMessage {
-        id: message_id.map(str::to_string).unwrap_or_else(|| create_id("message")),
+        id: message_id
+            .map(str::to_string)
+            .unwrap_or_else(|| create_id("message")),
         session_id: session.id,
         device_id: device_id.to_string(),
         device_name,
@@ -2849,38 +2970,84 @@ pub async fn send_message(
         return Err(ManagerError::System("请填写消息或添加附件。".into()));
     }
     let requested_id = string_value(payload.get("messageId"));
-    let message_id = if requested_id.is_empty() { create_id("message") } else { requested_id };
+    let message_id = if requested_id.is_empty() {
+        create_id("message")
+    } else {
+        requested_id
+    };
     if let Some(group_session) = group_session_by_id(paths, &target_session_id)? {
         let targets = group_online_targets(registry, paths, &group_session.group_id).await?;
-        let stored = append_message_with_attachments(registry, paths,
-            if group_session.device_id.is_empty() { "desktop" } else { &group_session.device_id },
-            &group_session.id, "desktop-to-mobile", &content, !targets.is_empty(), &files, Some(&message_id)).await?;
+        let stored = append_message_with_attachments(
+            registry,
+            paths,
+            if group_session.device_id.is_empty() {
+                "desktop"
+            } else {
+                &group_session.device_id
+            },
+            &group_session.id,
+            "desktop-to-mobile",
+            &content,
+            !targets.is_empty(),
+            &files,
+            Some(&message_id),
+        )
+        .await?;
         attachments::publish(registry, paths, &files).await?;
-        for (_, sender) in targets { let _ = send_stored_message_to_client(&sender, &stored); }
+        for (_, sender) in targets {
+            let _ = send_stored_message_to_client(&sender, &stored);
+        }
         emit_message_created(&app, &stored);
         emit_state_changed(&app, registry, paths).await?;
         return Ok(lan_share_response(json!([stored])));
     }
-    let native_delivery = native::deliver(registry, &target_device_id, &content, &files, &message_id).await?;
+    let native_delivery =
+        native::deliver(registry, &target_device_id, &content, &files, &message_id).await?;
     if target_device_id.starts_with("native-") && !native_delivery {
         return Err(ManagerError::System("请先连接并配对这台设备。".into()));
     }
     let targets = {
         let runtime = registry.inner.lock().await;
         if target_device_id.is_empty() {
-            runtime.clients.iter().map(|(device_id, sender)| (device_id.clone(), Some(sender.clone()))).collect::<Vec<_>>()
+            runtime
+                .clients
+                .iter()
+                .map(|(device_id, sender)| (device_id.clone(), Some(sender.clone())))
+                .collect::<Vec<_>>()
         } else {
-            vec![(target_device_id.clone(), runtime.clients.get(&target_device_id).cloned())]
+            vec![(
+                target_device_id.clone(),
+                runtime.clients.get(&target_device_id).cloned(),
+            )]
         }
     };
     let mut sent_messages = Vec::new();
     for (device_id, sender) in targets {
-        let stored_id = if device_id == target_device_id { message_id.clone() } else { format!("{message_id}-{device_id}") };
-        let stored = append_message_with_attachments(registry, paths, &device_id,
-            if device_id == target_device_id { &target_session_id } else { "" },
-            "desktop-to-mobile", &content, native_delivery || sender.is_some(), &files, Some(&stored_id)).await?;
+        let stored_id = if device_id == target_device_id {
+            message_id.clone()
+        } else {
+            format!("{message_id}-{device_id}")
+        };
+        let stored = append_message_with_attachments(
+            registry,
+            paths,
+            &device_id,
+            if device_id == target_device_id {
+                &target_session_id
+            } else {
+                ""
+            },
+            "desktop-to-mobile",
+            &content,
+            native_delivery || sender.is_some(),
+            &files,
+            Some(&stored_id),
+        )
+        .await?;
         attachments::publish(registry, paths, &files).await?;
-        if let Some(sender) = sender { let _ = send_stored_message_to_client(&sender, &stored); }
+        if let Some(sender) = sender {
+            let _ = send_stored_message_to_client(&sender, &stored);
+        }
         emit_message_created(&app, &stored);
         sent_messages.push(stored);
     }
@@ -2900,14 +3067,32 @@ async fn handle_http_request(
     };
 
     if let Some(origin) = origin.filter(|value| {
-        value.to_str().ok().and_then(|value| Url::parse(value).ok()).map(|url| {
-            matches!(url.host_str(), Some("tauri.localhost" | "localhost" | "127.0.0.1"))
-        }).unwrap_or(false)
+        value
+            .to_str()
+            .ok()
+            .and_then(|value| Url::parse(value).ok())
+            .map(|url| {
+                matches!(
+                    url.host_str(),
+                    Some("tauri.localhost" | "localhost" | "127.0.0.1")
+                )
+            })
+            .unwrap_or(false)
     }) {
-        response.headers_mut().insert("access-control-allow-origin", origin);
-        response.headers_mut().insert("access-control-allow-methods", HeaderValue::from_static("GET, PUT, POST, OPTIONS"));
-        response.headers_mut().insert("access-control-allow-headers", HeaderValue::from_static("content-type"));
-        response.headers_mut().insert("vary", HeaderValue::from_static("Origin"));
+        response
+            .headers_mut()
+            .insert("access-control-allow-origin", origin);
+        response.headers_mut().insert(
+            "access-control-allow-methods",
+            HeaderValue::from_static("GET, PUT, POST, OPTIONS"),
+        );
+        response.headers_mut().insert(
+            "access-control-allow-headers",
+            HeaderValue::from_static("content-type"),
+        );
+        response
+            .headers_mut()
+            .insert("vary", HeaderValue::from_static("Origin"));
     }
 
     Ok(response)
@@ -2965,17 +3150,29 @@ async fn process_http_request(
         (&Method::PUT, "/api/files/upload") => {
             let session_id = query_value(request.uri(), "sessionId");
             let name = query_value(request.uri(), "name");
-            let file = attachments::upload(request.into_body(), &context.registry, &context.paths, &session_id, &name).await?;
+            let file = attachments::upload(
+                request.into_body(),
+                &context.registry,
+                &context.paths,
+                &session_id,
+                &name,
+            )
+            .await?;
             Ok(api_success(json!(attachments::Attachment::from(&file))))
-        },
+        }
         (&Method::GET, "/api/messages") => mobile_messages(request.uri(), &context, addr).await,
         (&Method::POST, "/api/messages") => {
-            let body = http_body_util::Limited::new(request.into_body(), 256 * 1024).collect().await
-                .map_err(|_| ManagerError::System("消息过大或接收中断。".into()))?.to_bytes();
+            let body = http_body_util::Limited::new(request.into_body(), 256 * 1024)
+                .collect()
+                .await
+                .map_err(|_| ManagerError::System("消息过大或接收中断。".into()))?
+                .to_bytes();
             let payload: Value = serde_json::from_slice(&body)?;
-            let stored = store_guest_message(&context, &device_id_from_ip(&client_ip(addr)), &payload).await?;
+            let stored =
+                store_guest_message(&context, &device_id_from_ip(&client_ip(addr)), &payload)
+                    .await?;
             Ok(api_success(json!(stored)))
-        },
+        }
         (&Method::GET, "/api/groups") => mobile_groups(request.uri(), &context, addr).await,
         (&Method::POST, "/api/devices") => register_device_request(request, &context, addr).await,
         (&Method::POST, "/api/sessions") => create_mobile_session(request, &context, addr).await,
@@ -3405,12 +3602,8 @@ async fn join_mobile_group(
             return Ok(api_error(StatusCode::NOT_FOUND, "群邀请码不存在。"));
         };
 
-        let session = upsert_group_session_blocking(
-            &context.paths,
-            &mut groups[group_index],
-            &device,
-            &ip,
-        )?;
+        let session =
+            upsert_group_session_blocking(&context.paths, &mut groups[group_index], &device, &ip)?;
         let group = groups[group_index].clone();
         write_json(&context.paths.lan_share_files.groups, &json!(groups)).await?;
         let all_messages: Vec<LanShareMessage> =
@@ -3510,7 +3703,11 @@ async fn leave_mobile_group(
         if runtime
             .active_sessions
             .get(&device_id)
-            .and_then(|session_id| group_session_by_id(&context.paths, session_id).ok().flatten())
+            .and_then(|session_id| {
+                group_session_by_id(&context.paths, session_id)
+                    .ok()
+                    .flatten()
+            })
             .map(|session| session.group_id == group_id)
             .unwrap_or(false)
         {
@@ -3650,7 +3847,9 @@ async fn handle_websocket_connection(
     {
         let _storage = context.registry.storage.lock().await;
         let devices: Vec<LanShareDevice> = read_array(&context.paths.lan_share_files.devices)?;
-        if !devices.iter().any(|device| device.id == device_id) { return Ok(()); }
+        if !devices.iter().any(|device| device.id == device_id) {
+            return Ok(());
+        }
         let mut runtime = context.registry.inner.lock().await;
         if !is_valid_token(&runtime.token, &request_token) {
             return Ok(());
@@ -3691,8 +3890,16 @@ async fn handle_websocket_connection(
         if !is_request_token_valid(&context.registry, &request_token).await {
             break;
         }
-        if !context.registry.inner.lock().await.clients.get(&device_id)
-            .map(|sender| sender.same_channel(&client_sender)).unwrap_or(false) {
+        if !context
+            .registry
+            .inner
+            .lock()
+            .await
+            .clients
+            .get(&device_id)
+            .map(|sender| sender.same_channel(&client_sender))
+            .unwrap_or(false)
+        {
             break;
         }
 
@@ -3701,7 +3908,9 @@ async fn handle_websocket_connection(
 
         if payload.get("type").and_then(Value::as_str) == Some("message") {
             if let Err(error) = store_guest_message(&context, &device_id, &payload).await {
-                let _ = client_sender.send(WsOutbound { payload: json!({ "type": "error", "message": error.to_string() }) });
+                let _ = client_sender.send(WsOutbound {
+                    payload: json!({ "type": "error", "message": error.to_string() }),
+                });
             }
         }
     }
@@ -3722,19 +3931,47 @@ async fn handle_websocket_connection(
     Ok(())
 }
 
-async fn store_guest_message(context: &HttpContext, device_id: &str, payload: &Value) -> Result<LanShareMessage, ManagerError> {
+async fn store_guest_message(
+    context: &HttpContext,
+    device_id: &str,
+    payload: &Value,
+) -> Result<LanShareMessage, ManagerError> {
     let session_id = string_value(payload.get("sessionId"));
-    let session = read_array::<LanShareSession>(&context.paths.lan_share_files.sessions)?.into_iter()
+    let session = read_array::<LanShareSession>(&context.paths.lan_share_files.sessions)?
+        .into_iter()
         .find(|session| session.id == session_id && session.device_id == device_id)
         .ok_or_else(|| ManagerError::System("请先选择当前设备的有效会话。".into()))?;
     let content = string_value(payload.get("content"));
-    let files = attachments::prepare(&context.registry, &context.paths, &session.id, &json!({ "attachmentIds": payload["attachmentIds"] })).await?;
+    let files = attachments::prepare(
+        &context.registry,
+        &context.paths,
+        &session.id,
+        &json!({ "attachmentIds": payload["attachmentIds"] }),
+    )
+    .await?;
     let requested_id = string_value(payload.get("messageId"));
-    let message_id = if requested_id.is_empty() { create_id("message") } else { format!("{device_id}-{requested_id}") };
-    let message = append_message_with_attachments(&context.registry, &context.paths, device_id, &session.id, "mobile-to-desktop", &content, true, &files, Some(&message_id)).await?;
+    let message_id = if requested_id.is_empty() {
+        create_id("message")
+    } else {
+        format!("{device_id}-{requested_id}")
+    };
+    let message = append_message_with_attachments(
+        &context.registry,
+        &context.paths,
+        device_id,
+        &session.id,
+        "mobile-to-desktop",
+        &content,
+        true,
+        &files,
+        Some(&message_id),
+    )
+    .await?;
     attachments::publish(&context.registry, &context.paths, &files).await?;
     if let Some(group_session) = group_session_by_id(&context.paths, &message.session_id)? {
-        for (_, sender) in group_online_targets(&context.registry, &context.paths, &group_session.group_id).await? {
+        for (_, sender) in
+            group_online_targets(&context.registry, &context.paths, &group_session.group_id).await?
+        {
             let _ = send_stored_message_to_client(&sender, &message);
         }
     } else if let Some(sender) = context.registry.inner.lock().await.clients.get(device_id) {
@@ -3774,10 +4011,11 @@ mod message_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        activate_session, add_files, append_message, create_file_id, create_group, create_id, create_session,
-        delete_messages, delete_session, device_id_from_ip, export_files_zip, list_messages,
-        mobile_files_payload, read_array, refresh_files, remove_files, string_value, upsert_device,
-        LanShareDevice, LanShareFile, LanShareMessage, LanShareServerRegistry, LanShareSession,
+        activate_session, add_files, append_message, create_file_id, create_group, create_id,
+        create_session, delete_messages, delete_session, device_id_from_ip, export_files_zip,
+        list_messages, mobile_files_payload, read_array, refresh_files, remove_files, string_value,
+        upsert_device, LanShareDevice, LanShareFile, LanShareMessage, LanShareServerRegistry,
+        LanShareSession,
     };
     use crate::core::paths::resolve_app_paths;
     use serde_json::json;
@@ -3789,53 +4027,141 @@ mod tests {
             let root = std::env::temp_dir().join(create_id("device-delete-test"));
             let paths = resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
-            let removed = upsert_device(&registry, &paths, "", "待删除", "Chrome", "192.168.1.31").await.unwrap();
-            let kept = upsert_device(&registry, &paths, "", "保留", "Chrome", "192.168.1.32").await.unwrap();
-            let removed_session = create_session(&registry, &paths, json!({ "deviceId": removed.id })).await.unwrap();
-            let removed_session_id = removed_session["data"]["currentSession"]["id"].as_str().unwrap().to_string();
-            let kept_session = create_session(&registry, &paths, json!({ "deviceId": kept.id })).await.unwrap();
-            let kept_session_id = kept_session["data"]["currentSession"]["id"].as_str().unwrap().to_string();
-            let group = create_group(&registry, &paths, json!({ "name": "保留群聊", "deviceIds": [removed.id, kept.id] })).await.unwrap();
-            let host_id = group["data"]["currentSession"]["id"].as_str().unwrap().to_string();
-            let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
-            let member_id = sessions.iter().find(|session| session.device_id == removed.id && session.mode == "group").unwrap().id.clone();
+            let removed = upsert_device(&registry, &paths, "", "待删除", "Chrome", "192.168.1.31")
+                .await
+                .unwrap();
+            let kept = upsert_device(&registry, &paths, "", "保留", "Chrome", "192.168.1.32")
+                .await
+                .unwrap();
+            let removed_session =
+                create_session(&registry, &paths, json!({ "deviceId": removed.id }))
+                    .await
+                    .unwrap();
+            let removed_session_id = removed_session["data"]["currentSession"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let kept_session = create_session(&registry, &paths, json!({ "deviceId": kept.id }))
+                .await
+                .unwrap();
+            let kept_session_id = kept_session["data"]["currentSession"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let group = create_group(
+                &registry,
+                &paths,
+                json!({ "name": "保留群聊", "deviceIds": [removed.id, kept.id] }),
+            )
+            .await
+            .unwrap();
+            let host_id = group["data"]["currentSession"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let sessions: Vec<LanShareSession> =
+                read_array(&paths.lan_share_files.sessions).unwrap();
+            let member_id = sessions
+                .iter()
+                .find(|session| session.device_id == removed.id && session.mode == "group")
+                .unwrap()
+                .id
+                .clone();
             let original = root.join("original.txt");
-            tokio::fs::write(&original, "保留磁盘上的文件").await.unwrap();
+            tokio::fs::write(&original, "保留磁盘上的文件")
+                .await
+                .unwrap();
             let mut fixture_messages = Vec::new();
             let mut fixture_files = Vec::new();
             for (identifier, session_id, device_id) in [
-                ("removed-direct", removed_session_id.as_str(), removed.id.as_str()),
+                (
+                    "removed-direct",
+                    removed_session_id.as_str(),
+                    removed.id.as_str(),
+                ),
                 ("kept-direct", kept_session_id.as_str(), kept.id.as_str()),
                 ("shared-group", member_id.as_str(), removed.id.as_str()),
             ] {
                 fixture_messages.push(json!({ "id": identifier, "sessionId": session_id, "deviceId": device_id, "deviceName": "测试", "direction": "mobile-to-desktop", "messageType": "text", "content": identifier, "createdAt": 1, "delivered": true, "read": false }));
                 fixture_files.push(json!({ "id": identifier, "sessionId": session_id, "path": original, "name": "original.txt", "size": 1, "mimeType": "text/plain", "updatedAt": 1, "enabled": true }));
             }
-            super::write_json(&paths.lan_share_files.messages, &json!(fixture_messages)).await.unwrap();
-            super::write_json(&paths.lan_share_files.files, &json!(fixture_files)).await.unwrap();
+            super::write_json(&paths.lan_share_files.messages, &json!(fixture_messages))
+                .await
+                .unwrap();
+            super::write_json(&paths.lan_share_files.files, &json!(fixture_files))
+                .await
+                .unwrap();
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            registry.inner.lock().await.clients.insert(removed.id.clone(), sender);
-            registry.inner.lock().await.active_sessions.insert(removed.id.clone(), removed_session_id);
-            let result = super::delete_device(&registry, &paths, json!({ "deviceId": removed.id })).await.unwrap();
+            registry
+                .inner
+                .lock()
+                .await
+                .clients
+                .insert(removed.id.clone(), sender);
+            registry
+                .inner
+                .lock()
+                .await
+                .active_sessions
+                .insert(removed.id.clone(), removed_session_id);
+            let result = super::delete_device(&registry, &paths, json!({ "deviceId": removed.id }))
+                .await
+                .unwrap();
             assert_eq!(result["data"]["devices"].as_array().unwrap().len(), 1);
             assert_eq!(result["data"]["devices"][0]["id"], kept.id);
-            assert_eq!(receiver.try_recv().unwrap().payload["type"], "deviceRemoved");
-            assert!(!registry.inner.lock().await.active_sessions.contains_key(&removed.id));
-            let remaining: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
-            assert!(remaining.iter().all(|session| session.device_id != removed.id));
-            let messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages).unwrap();
+            assert_eq!(
+                receiver.try_recv().unwrap().payload["type"],
+                "deviceRemoved"
+            );
+            assert!(!registry
+                .inner
+                .lock()
+                .await
+                .active_sessions
+                .contains_key(&removed.id));
+            let remaining: Vec<LanShareSession> =
+                read_array(&paths.lan_share_files.sessions).unwrap();
+            assert!(remaining
+                .iter()
+                .all(|session| session.device_id != removed.id));
+            let messages: Vec<LanShareMessage> =
+                read_array(&paths.lan_share_files.messages).unwrap();
             assert_eq!(messages.len(), 2);
-            assert_eq!(messages.iter().find(|message| message.id == "shared-group").unwrap().session_id, host_id);
+            assert_eq!(
+                messages
+                    .iter()
+                    .find(|message| message.id == "shared-group")
+                    .unwrap()
+                    .session_id,
+                host_id
+            );
             let files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files).unwrap();
             assert_eq!(files.len(), 2);
-            assert_eq!(files.iter().find(|file| file.id == "shared-group").unwrap().session_id, host_id);
+            assert_eq!(
+                files
+                    .iter()
+                    .find(|file| file.id == "shared-group")
+                    .unwrap()
+                    .session_id,
+                host_id
+            );
             assert!(original.exists());
-            let groups: Vec<super::LanShareGroup> = read_array(&paths.lan_share_files.groups).unwrap();
+            let groups: Vec<super::LanShareGroup> =
+                read_array(&paths.lan_share_files.groups).unwrap();
             assert_eq!(groups.len(), 1);
             assert_eq!(groups[0].members.len(), 1);
             assert_eq!(groups[0].members[0].device_id, kept.id);
-            assert!(super::delete_device(&registry, &paths, json!({ "deviceId": " " })).await.is_err());
-            assert_eq!(read_array::<LanShareDevice>(&paths.lan_share_files.devices).unwrap().len(), 1);
+            assert!(
+                super::delete_device(&registry, &paths, json!({ "deviceId": " " }))
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                read_array::<LanShareDevice>(&paths.lan_share_files.devices)
+                    .unwrap()
+                    .len(),
+                1
+            );
             tokio::fs::remove_dir_all(root).await.unwrap();
         });
     }
@@ -3845,14 +4171,46 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id("group-invite-validation"));
             let paths = resolve_app_paths(&root);
-            tokio::fs::create_dir_all(&paths.lan_share_dir).await.unwrap();
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
             let registry = LanShareServerRegistry::new();
-            let browser = upsert_device(&registry, &paths, "", "网页设备", "Chrome", "192.168.1.11").await.unwrap();
-            let native = upsert_device(&registry, &paths, "native-peer", "客户端", "MonkeyThief/Desktop", "192.168.1.12").await.unwrap();
-            for identifiers in [json!([]), json!([browser.id, "missing"]), json!([native.id])] {
-                assert!(create_group(&registry, &paths, json!({ "name": "不应创建", "deviceIds": identifiers })).await.is_err());
-                assert!(read_array::<super::LanShareGroup>(&paths.lan_share_files.groups).unwrap().is_empty());
-                assert!(read_array::<LanShareSession>(&paths.lan_share_files.sessions).unwrap().is_empty());
+            let browser =
+                upsert_device(&registry, &paths, "", "网页设备", "Chrome", "192.168.1.11")
+                    .await
+                    .unwrap();
+            let native = upsert_device(
+                &registry,
+                &paths,
+                "native-peer",
+                "客户端",
+                "MonkeyThief/Desktop",
+                "192.168.1.12",
+            )
+            .await
+            .unwrap();
+            for identifiers in [
+                json!([]),
+                json!([browser.id, "missing"]),
+                json!([native.id]),
+            ] {
+                assert!(create_group(
+                    &registry,
+                    &paths,
+                    json!({ "name": "不应创建", "deviceIds": identifiers })
+                )
+                .await
+                .is_err());
+                assert!(
+                    read_array::<super::LanShareGroup>(&paths.lan_share_files.groups)
+                        .unwrap()
+                        .is_empty()
+                );
+                assert!(
+                    read_array::<LanShareSession>(&paths.lan_share_files.sessions)
+                        .unwrap()
+                        .is_empty()
+                );
             }
             tokio::fs::remove_dir_all(root).await.unwrap();
         });
@@ -3863,21 +4221,49 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id("group-invite-members"));
             let paths = resolve_app_paths(&root);
-            tokio::fs::create_dir_all(&paths.lan_share_dir).await.unwrap();
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
             let registry = LanShareServerRegistry::new();
-            let online = upsert_device(&registry, &paths, "", "在线设备", "Chrome", "192.168.1.11").await.unwrap();
-            let offline = upsert_device(&registry, &paths, "", "离线设备", "Chrome", "192.168.1.12").await.unwrap();
+            let online = upsert_device(&registry, &paths, "", "在线设备", "Chrome", "192.168.1.11")
+                .await
+                .unwrap();
+            let offline =
+                upsert_device(&registry, &paths, "", "离线设备", "Chrome", "192.168.1.12")
+                    .await
+                    .unwrap();
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            registry.inner.lock().await.clients.insert(online.id.clone(), sender);
+            registry
+                .inner
+                .lock()
+                .await
+                .clients
+                .insert(online.id.clone(), sender);
             let result = create_group(&registry, &paths, json!({ "name": "测试群聊", "messageVisibility": "afterJoin", "deviceIds": [online.id, offline.id, online.id] })).await.unwrap();
-            let group_id = result["data"]["currentSession"]["groupId"].as_str().unwrap();
-            let groups: Vec<super::LanShareGroup> = read_array(&paths.lan_share_files.groups).unwrap();
+            let group_id = result["data"]["currentSession"]["groupId"]
+                .as_str()
+                .unwrap();
+            let groups: Vec<super::LanShareGroup> =
+                read_array(&paths.lan_share_files.groups).unwrap();
             assert_eq!(groups.len(), 1);
             assert_eq!(groups[0].members.len(), 2);
-            let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
-            assert_eq!(sessions.iter().filter(|session| session.group_id == group_id).count(), 3);
-            assert!(sessions.iter().any(|session| session.device_id == offline.id && session.message_visibility == "afterJoin"));
-            assert_eq!(receiver.try_recv().unwrap().payload["type"], "groupsChanged");
+            let sessions: Vec<LanShareSession> =
+                read_array(&paths.lan_share_files.sessions).unwrap();
+            assert_eq!(
+                sessions
+                    .iter()
+                    .filter(|session| session.group_id == group_id)
+                    .count(),
+                3
+            );
+            assert!(sessions
+                .iter()
+                .any(|session| session.device_id == offline.id
+                    && session.message_visibility == "afterJoin"));
+            assert_eq!(
+                receiver.try_recv().unwrap().payload["type"],
+                "groupsChanged"
+            );
             assert!(receiver.try_recv().is_err());
             assert!(super::mobile_page_html().contains("payload.type === \"groupsChanged\""));
             tokio::fs::remove_dir_all(root).await.unwrap();
@@ -4937,7 +5323,10 @@ mod tests {
             .unwrap();
 
             assert_eq!(messages["data"][0]["messageType"], "file");
-            assert_eq!(messages["data"][0]["content"], "共享文件：shared.txt（5 B）");
+            assert_eq!(
+                messages["data"][0]["content"],
+                "共享文件：shared.txt（5 B）"
+            );
 
             let _ = tokio::fs::remove_dir_all(root).await;
         });

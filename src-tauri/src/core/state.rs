@@ -1,6 +1,6 @@
 use crate::api::{
-    app, app_logs, claude_desktop, codex_account, data, git_tool, lan_share, proxy, repos, rules, runtime_provider,
-    sessions, settings, skills, system, tools, translation, usage,
+    app, app_logs, claude_desktop, codex_account, data, git_tool, lan_share, proxy, repos, rules,
+    runtime_provider, sessions, settings, skills, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
@@ -202,7 +202,10 @@ impl ManagerState {
             ) {
                 self.preserve_pending_usage_provider_bindings().await?;
             }
-            return self.desktop_manager.dispatch(&self.paths, action, payload.unwrap_or_else(|| json!({}))).await;
+            return self
+                .desktop_manager
+                .dispatch(&self.paths, action, payload.unwrap_or_else(|| json!({})))
+                .await;
         }
         if matches!(
             channel,
@@ -428,10 +431,42 @@ impl ManagerState {
                 Ok(self.state.clone())
             }
             "lan-share:state" => lan_share::get_state(&self.lan_share_registry, &self.paths).await,
+            "lan-share:set-access-ip" => {
+                lan_share::set_access_ip(
+                    app.clone(),
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
             "lan-share:clipboard-files" => lan_share::clipboard_files().await,
-            "lan-share:connect-peer" => lan_share::connect_peer(app.clone(), &self.lan_share_registry, &self.paths, payload.unwrap_or_else(|| json!({}))).await,
-            "lan-share:respond-pairing" => lan_share::respond_pairing(app.clone(), &self.lan_share_registry, &self.paths, payload.unwrap_or_else(|| json!({}))).await,
-            "lan-share:discard-uploads" => lan_share::discard_uploads(&self.lan_share_registry, &self.paths, payload.unwrap_or_else(|| json!({}))).await,
+            "lan-share:connect-peer" => {
+                lan_share::connect_peer(
+                    app.clone(),
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:respond-pairing" => {
+                lan_share::respond_pairing(
+                    app.clone(),
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:discard-uploads" => {
+                lan_share::discard_uploads(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
             "lan-share:start" => {
                 lan_share::start_service(
                     app.clone(),
@@ -1110,7 +1145,8 @@ impl ManagerState {
                     .await;
 
                     if let Err(sync_error) = sync_result {
-                        if let Some((providers, models, profiles, keys)) = previous_provider_bundle {
+                        if let Some((providers, models, profiles, keys)) = previous_provider_bundle
+                        {
                             provider_store::write_provider_bundle(
                                 &self.paths,
                                 &providers,

@@ -182,18 +182,15 @@ async fn refresh_skills_state_inner(
                 .unwrap_or(disable_new_skills)
         })
         .collect::<Vec<_>>();
-    let install_state_rows = join_all(
-        parsed_skills
-            .iter()
-            .zip(disabled_states.iter())
-            .map(|(skill, disabled)| {
-                join_all(
-                    cli_targets
-                        .iter()
-                        .map(|target| get_install_state(skill, target, *disabled)),
-                )
-            }),
-    )
+    let install_state_rows = join_all(parsed_skills.iter().zip(disabled_states.iter()).map(
+        |(skill, disabled)| {
+            join_all(
+                cli_targets
+                    .iter()
+                    .map(|target| get_install_state(skill, target, *disabled)),
+            )
+        },
+    ))
     .await;
 
     for ((mut skill, disabled), target_states) in parsed_skills
@@ -208,7 +205,8 @@ async fn refresh_skills_state_inner(
             if matches!(
                 state.get("state").and_then(Value::as_str),
                 Some("installed") | Some("broken-link")
-            ) || state.get("managed").and_then(Value::as_bool) == Some(true) {
+            ) || state.get("managed").and_then(Value::as_bool) == Some(true)
+            {
                 installed_targets.push(cli_target.get("id").cloned().unwrap_or(Value::Null));
             }
 
@@ -549,12 +547,9 @@ pub async fn save_skill_group(paths: &AppPaths, payload: Value) -> Result<Value,
         group.get("id").and_then(Value::as_str).unwrap_or_default(),
     );
 
-    if let Some(index) = groups
-        .iter()
-        .position(|item| {
-            item.get("id").and_then(Value::as_str) == group.get("id").and_then(Value::as_str)
-        })
-    {
+    if let Some(index) = groups.iter().position(|item| {
+        item.get("id").and_then(Value::as_str) == group.get("id").and_then(Value::as_str)
+    }) {
         group["createdAt"] = groups[index]
             .get("createdAt")
             .cloned()
@@ -564,7 +559,9 @@ pub async fn save_skill_group(paths: &AppPaths, payload: Value) -> Result<Value,
         groups.push(group.clone());
     }
 
-    groups.sort_by(|left, right| string_value(left.get("name")).cmp(&string_value(right.get("name"))));
+    groups.sort_by(|left, right| {
+        string_value(left.get("name")).cmp(&string_value(right.get("name")))
+    });
     skill_store::write_groups(paths, &groups)?;
 
     Ok(json!({
@@ -612,7 +609,8 @@ pub async fn remove_skill_group_items(
     }
 
     for group in &mut groups {
-        if !group_id.is_empty() && group.get("id").and_then(Value::as_str) != Some(group_id.as_str())
+        if !group_id.is_empty()
+            && group.get("id").and_then(Value::as_str) != Some(group_id.as_str())
         {
             continue;
         }
@@ -2382,8 +2380,12 @@ async fn get_install_state(skill: &Value, cli_target: &Value, skill_disabled: bo
 
     if target_id == "claude-desktop" {
         return match desktop_skill_link::install_state(cli_target, skill).await {
-            Ok(state) => json!({"targetId": target_id, "state": state, "targetPath": path_text(target_path), "managed": state != "not-installed"}),
-            Err(cause) => json!({"targetId": target_id, "state": "disabled", "targetPath": path_text(target_path), "reason": cause.to_string()}),
+            Ok(state) => {
+                json!({"targetId": target_id, "state": state, "targetPath": path_text(target_path), "managed": state != "not-installed"})
+            }
+            Err(cause) => {
+                json!({"targetId": target_id, "state": "disabled", "targetPath": path_text(target_path), "reason": cause.to_string()})
+            }
         };
     }
 
@@ -2530,7 +2532,9 @@ fn skill_target_path(target: &Value, name: &str) -> PathBuf {
 fn desktop_skill_snapshot(target: &Value, skill: &Value) -> Result<PathBuf, ManagerError> {
     let root = string_value(target.get("managedSkillsPath"));
     if root.is_empty() {
-        return Err(ManagerError::System("Desktop 技能托管目录未配置，请刷新应用状态".to_string()));
+        return Err(ManagerError::System(
+            "Desktop 技能托管目录未配置，请刷新应用状态".to_string(),
+        ));
     }
     Ok(Path::new(&root).join(create_skill_signature(skill)?))
 }
@@ -2546,12 +2550,19 @@ async fn prepare_desktop_skill(target: &Value, skill: &Value) -> Result<PathBuf,
     }
     copy_dir_all(&source, &destination.join("skills/skill")).await?;
     let name = format!("ai-manager-{}", sha1_hex(&string_value(skill.get("name"))));
-    let signature = destination.file_name().unwrap_or_default().to_string_lossy();
-    crate::api::runtime_provider::write_json(&path_text(manifest_path), &json!({
-        "name": name, "version": format!("0.0.0-ai-manager-{signature}"),
-        "description": string_value(skill.get("description")),
-        "skills": ["./skills/skill"], "installationPreference": "auto_install"
-    })).await?;
+    let signature = destination
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    crate::api::runtime_provider::write_json(
+        &path_text(manifest_path),
+        &json!({
+            "name": name, "version": format!("0.0.0-ai-manager-{signature}"),
+            "description": string_value(skill.get("description")),
+            "skills": ["./skills/skill"], "installationPreference": "auto_install"
+        }),
+    )
+    .await?;
     Ok(destination)
 }
 
@@ -2584,13 +2595,27 @@ async fn create_junction(source_path: &Path, target_path: &Path) -> Result<(), M
             "target": target_path, "source": source_path
         }))?);
         let script = format!("$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); $request = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{request}')) | ConvertFrom-Json; New-Item -ItemType Junction -Path $request.target -Target ([System.Management.Automation.WildcardPattern]::Escape($request.source)) | Out-Null");
-        let encoded = STANDARD.encode(script.encode_utf16().flat_map(u16::to_le_bytes).collect::<Vec<_>>());
-        let powershell = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()))
-            .join("System32/WindowsPowerShell/v1.0/powershell.exe");
+        let encoded = STANDARD.encode(
+            script
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>(),
+        );
+        let powershell =
+            PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()))
+                .join("System32/WindowsPowerShell/v1.0/powershell.exe");
         let mut command = Command::new(powershell);
         command.creation_flags(CREATE_NO_WINDOW);
         let output = command
-            .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-EncodedCommand", &encoded])
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-OutputFormat",
+                "Text",
+                "-EncodedCommand",
+                &encoded,
+            ])
             .output()
             .await?;
 
@@ -2907,7 +2932,9 @@ fn collect_skill_files_inner(
 
         if stat.file_type().is_symlink() {
             if reject_links {
-                return Err(ManagerError::System("Desktop 技能打包不支持内部符号链接，请使用真实文件后重试".to_string()));
+                return Err(ManagerError::System(
+                    "Desktop 技能打包不支持内部符号链接，请使用真实文件后重试".to_string(),
+                ));
             }
             continue;
         }
@@ -3161,11 +3188,7 @@ fn unique_string_values(value: Option<&Value>) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut items = Vec::new();
 
-    for item in value
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-    {
+    for item in value.and_then(Value::as_array).cloned().unwrap_or_default() {
         let text = string_value(Some(&item));
 
         if text.is_empty() || seen.contains(&text) {
@@ -3548,15 +3571,15 @@ mod tests {
     use super::{
         batch_skill_action, cleanup_expired_skill_trash, create_github_blob_url,
         create_repository_archive_url, delete_skills, ensure_skill_enabled,
-        extract_zip_command_args, load_skill_groups,
-        proxy_points_to_local_app_proxy, read_skill_trash, repository_archive_cache_path,
+        extract_zip_command_args, load_skill_groups, proxy_points_to_local_app_proxy,
+        read_skill_trash, remove_skill_group_items, repository_archive_cache_path,
         repository_archive_zip_is_valid, repository_branch_candidates, resolve_archive_content_dir,
         resolve_archive_skill_source_dir, resolve_skill_status, save_skill_group,
-        remove_skill_group_items, scan_repository_archive, skill_trash_root,
-        try_load_cached_repository_archive_zip, RepositoryArchive,
+        scan_repository_archive, skill_trash_root, try_load_cached_repository_archive_zip,
+        RepositoryArchive,
     };
-    use serde_json::json;
     use crate::core::skill_store;
+    use serde_json::json;
     use std::io::Write;
     use std::path::Path;
 
@@ -3586,7 +3609,10 @@ mod tests {
     #[test]
     fn claude_desktop_skills_register_personal_manifest_and_reuse_install_actions() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!("ai-manager-desktop-skills-{}", uuid::Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!(
+                "ai-manager-desktop-skills-{}",
+                uuid::Uuid::new_v4()
+            ));
             let paths = resolve_app_paths(&root);
             let source = Path::new(&paths.skills_dir).join("demo");
             std::fs::create_dir_all(&source).unwrap();
@@ -3594,19 +3620,29 @@ mod tests {
             let plugin = root.join("Claude-3p/local-agent-mode-sessions/skills-plugin/org/account");
             std::fs::create_dir_all(plugin.join("skills")).unwrap();
             std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
-            std::fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name":"anthropic-skills"}"#).unwrap();
+            std::fs::write(
+                plugin.join(".claude-plugin/plugin.json"),
+                r#"{"name":"anthropic-skills"}"#,
+            )
+            .unwrap();
             let builtin = json!({"skillId": "bundled:pdf", "name": "pdf", "creatorType": "anthropic", "enabled": true});
             let personal = json!({"skillId": "external", "name": "external", "creatorType": "user", "syncManaged": false, "enabled": false});
             let original = json!({"lastUpdated": 1, "skills": [builtin.clone(), personal.clone()], "preserve": true});
-            super::write_json(&path_text(plugin.join("manifest.json")), &original).await.unwrap();
+            super::write_json(&path_text(plugin.join("manifest.json")), &original)
+                .await
+                .unwrap();
             let target = json!({"id": "claude-desktop", "name": "Claude Desktop", "installed": true, "skillsPath": plugin.join("skills"), "managedSkillsPath": root.join("desktop-plugins")});
             let skill = json!({"name": "demo", "description": "test", "sourcePath": source});
             let mut state = json!({"skills": [skill.clone()], "cliTargets": [target.clone()]});
-            super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
+            super::install_skill_link(&state, &skill, "claude-desktop")
+                .await
+                .unwrap();
             let installed = super::get_install_state(&skill, &target, false).await;
             assert_eq!(installed["state"], "installed");
             let target_path = super::skill_target_path(&target, "demo");
-            let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(plugin.join("manifest.json")).unwrap()).unwrap();
+            let mut manifest: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(plugin.join("manifest.json")).unwrap())
+                    .unwrap();
             assert_eq!(target_path, plugin.join("skills/demo"));
             assert_eq!(manifest["skills"][0], builtin);
             assert_eq!(manifest["skills"][1], personal);
@@ -3619,40 +3655,103 @@ mod tests {
             assert!(target_path.join("SKILL.md").is_file());
             assert!(!source.join(".claude-plugin").exists());
             manifest["skills"][2]["enabled"] = json!(false);
-            super::write_json(&path_text(plugin.join("manifest.json")), &manifest).await.unwrap();
-            assert_eq!(super::get_install_state(&skill, &target, false).await["state"], "disabled");
-            super::refresh_skills_state(&paths, &mut state).await.unwrap();
-            assert_eq!(state["skills"][0]["installedTargets"], json!(["claude-desktop"]));
-            super::set_skill_enabled(&paths, &mut state, json!({"skillName": "demo", "enabled": false})).await.unwrap();
+            super::write_json(&path_text(plugin.join("manifest.json")), &manifest)
+                .await
+                .unwrap();
+            assert_eq!(
+                super::get_install_state(&skill, &target, false).await["state"],
+                "disabled"
+            );
+            super::refresh_skills_state(&paths, &mut state)
+                .await
+                .unwrap();
+            assert_eq!(
+                state["skills"][0]["installedTargets"],
+                json!(["claude-desktop"])
+            );
+            super::set_skill_enabled(
+                &paths,
+                &mut state,
+                json!({"skillName": "demo", "enabled": false}),
+            )
+            .await
+            .unwrap();
             assert!(!target_path.exists());
             assert!(source.join("SKILL.md").is_file());
-            super::set_skill_enabled(&paths, &mut state, json!({"skillName": "demo", "enabled": true})).await.unwrap();
-            super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
-            assert_eq!(super::get_install_state(&skill, &target, false).await["state"], "installed");
+            super::set_skill_enabled(
+                &paths,
+                &mut state,
+                json!({"skillName": "demo", "enabled": true}),
+            )
+            .await
+            .unwrap();
+            super::install_skill_link(&state, &skill, "claude-desktop")
+                .await
+                .unwrap();
+            assert_eq!(
+                super::get_install_state(&skill, &target, false).await["state"],
+                "installed"
+            );
             std::fs::write(source.join("extra.md"), "new content").unwrap();
-            assert_eq!(super::get_install_state(&skill, &target, false).await["state"], "broken-link");
-            super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
-            assert_eq!(std::fs::read_to_string(target_path.join("extra.md")).unwrap(), "new content");
-            super::write_json(&path_text(plugin.join("manifest.json")), &original).await.unwrap();
-            assert_eq!(super::get_install_state(&skill, &target, false).await["state"], "broken-link");
-            super::install_skill_link(&state, &skill, "claude-desktop").await.unwrap();
-            super::uninstall_skill_link(&[target.clone()], "demo", "claude-desktop").await.unwrap();
+            assert_eq!(
+                super::get_install_state(&skill, &target, false).await["state"],
+                "broken-link"
+            );
+            super::install_skill_link(&state, &skill, "claude-desktop")
+                .await
+                .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(target_path.join("extra.md")).unwrap(),
+                "new content"
+            );
+            super::write_json(&path_text(plugin.join("manifest.json")), &original)
+                .await
+                .unwrap();
+            assert_eq!(
+                super::get_install_state(&skill, &target, false).await["state"],
+                "broken-link"
+            );
+            super::install_skill_link(&state, &skill, "claude-desktop")
+                .await
+                .unwrap();
+            super::uninstall_skill_link(&[target.clone()], "demo", "claude-desktop")
+                .await
+                .unwrap();
             assert!(std::fs::symlink_metadata(&target_path).is_err());
             assert!(source.join("SKILL.md").is_file());
-            manifest = serde_json::from_slice(&std::fs::read(plugin.join("manifest.json")).unwrap()).unwrap();
+            manifest =
+                serde_json::from_slice(&std::fs::read(plugin.join("manifest.json")).unwrap())
+                    .unwrap();
             assert_eq!(manifest["skills"], original["skills"]);
             for name in ["pdf", "external", "..", "bad."] {
                 let conflict = json!({"name": name, "description": "test", "sourcePath": source});
-                assert!(super::install_skill_link(&state, &conflict, "claude-desktop").await.is_err());
+                assert!(
+                    super::install_skill_link(&state, &conflict, "claude-desktop")
+                        .await
+                        .is_err()
+                );
             }
             std::fs::create_dir_all(&target_path).unwrap();
             std::fs::write(target_path.join("keep.txt"), "foreign").unwrap();
-            assert!(super::install_skill_link(&state, &skill, "claude-desktop").await.is_err());
-            assert!(super::uninstall_skill_link(&[target.clone()], "demo", "claude-desktop").await.is_err());
-            assert_eq!(std::fs::read_to_string(target_path.join("keep.txt")).unwrap(), "foreign");
+            assert!(super::install_skill_link(&state, &skill, "claude-desktop")
+                .await
+                .is_err());
+            assert!(
+                super::uninstall_skill_link(&[target.clone()], "demo", "claude-desktop")
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                std::fs::read_to_string(target_path.join("keep.txt")).unwrap(),
+                "foreign"
+            );
             let resolved = root.canonicalize().unwrap();
             assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
-            assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-skills-"));
+            assert!(resolved
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("ai-manager-desktop-skills-"));
             std::fs::remove_dir_all(resolved).unwrap();
         });
     }
@@ -3660,18 +3759,28 @@ mod tests {
     #[test]
     fn claude_desktop_skills_links_preserve_literal_windows_paths() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!("ai-manager-desktop-literal-{}", uuid::Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!(
+                "ai-manager-desktop-literal-{}",
+                uuid::Uuid::new_v4()
+            ));
             let source = root.join("中文 source & [files] %PATH% !");
             let target = root.join("中文 target & [files] %PATH% !");
             std::fs::create_dir_all(&source).unwrap();
             write_test_skill(&source, "literal");
             super::create_junction(&source, &target).await.unwrap();
-            assert_eq!(source.canonicalize().unwrap(), target.canonicalize().unwrap());
+            assert_eq!(
+                source.canonicalize().unwrap(),
+                target.canonicalize().unwrap()
+            );
             super::remove_managed_link(&target).await.unwrap();
             assert!(source.join("SKILL.md").is_file());
             let resolved = root.canonicalize().unwrap();
             assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
-            assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-literal-"));
+            assert!(resolved
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("ai-manager-desktop-literal-"));
             std::fs::remove_dir_all(resolved).unwrap();
         });
     }
@@ -3679,7 +3788,10 @@ mod tests {
     #[test]
     fn cli_import_conflicts_distinguish_existing_and_incoming_versions() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!("ai-manager-skill-conflict-{}", uuid::Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!(
+                "ai-manager-skill-conflict-{}",
+                uuid::Uuid::new_v4()
+            ));
             let paths = resolve_app_paths(&root);
             let managed = Path::new(&paths.skills_dir).join("demo");
             let external = root.join("desktop-skills").join("demo");
@@ -3690,10 +3802,18 @@ mod tests {
                 "skills": [super::parse_skill(&path_text(&managed), serde_json::Value::Null).unwrap()],
                 "cliTargets": [{"id": "external", "name": "Claude Desktop", "installed": true, "skillsPath": external.parent().unwrap()}]
             });
-            let preview = super::preview_skills_from_cli(&paths, &state, json!({})).await.unwrap();
+            let preview = super::preview_skills_from_cli(&paths, &state, json!({}))
+                .await
+                .unwrap();
             let options = preview["conflicts"][0]["options"].as_array().unwrap();
             assert_eq!(options.len(), 2);
-            assert_eq!(options.iter().filter(|option| option["alreadyManaged"] == true).count(), 1);
+            assert_eq!(
+                options
+                    .iter()
+                    .filter(|option| option["alreadyManaged"] == true)
+                    .count(),
+                1
+            );
             assert_eq!(options[0]["alreadyManaged"], true);
             assert_eq!(options[0]["cliNames"], json!(["Monkey Thief"]));
             assert_eq!(options[0]["sourcePaths"], json!([managed]));
@@ -3704,7 +3824,11 @@ mod tests {
             assert!(external.join("extra.md").is_file());
             let resolved = root.canonicalize().unwrap();
             assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
-            assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-skill-conflict-"));
+            assert!(resolved
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("ai-manager-skill-conflict-"));
             std::fs::remove_dir_all(resolved).unwrap();
         });
     }
@@ -4023,7 +4147,10 @@ mod tests {
                 .and_then(serde_json::Value::as_array)
                 .cloned()
                 .unwrap_or_default();
-            let first_id = groups[0].get("id").and_then(serde_json::Value::as_str).unwrap();
+            let first_id = groups[0]
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap();
             let groups = load_skill_groups(&paths).unwrap();
             let first_group = groups
                 .iter()
@@ -4136,7 +4263,10 @@ mod tests {
 
             let groups = load_skill_groups(&paths).unwrap();
 
-            assert_eq!(groups[0].get("id").and_then(serde_json::Value::as_str), Some(group_id));
+            assert_eq!(
+                groups[0].get("id").and_then(serde_json::Value::as_str),
+                Some(group_id)
+            );
             assert_eq!(
                 groups[0].get("name").and_then(serde_json::Value::as_str),
                 Some("new name")
@@ -4276,10 +4406,7 @@ mod tests {
                 .contains_key("demo-skill"));
             assert_eq!(state["skills"][0]["disabled"], true);
             assert_eq!(state["skills"][0]["id"], "stable-skill-id");
-            assert_eq!(
-                state["skills"][0]["sourcePath"],
-                path_text(&skill_root)
-            );
+            assert_eq!(state["skills"][0]["sourcePath"], path_text(&skill_root));
             assert_eq!(
                 load_skill_groups(&paths).unwrap()[0]["skillIds"],
                 json!(["stable-skill-id"])
@@ -4344,17 +4471,11 @@ mod tests {
             write_test_skill(&skill_root, "demo-skill");
             std::fs::create_dir_all(&occupied_target).unwrap();
             std::fs::write(occupied_target.join("keep.txt"), "keep").unwrap();
-            skill_store::write_skills(
-                &paths,
-                &[json!({"name": "demo-skill", "disabled": true})],
-            )
-            .unwrap();
+            skill_store::write_skills(&paths, &[json!({"name": "demo-skill", "disabled": true})])
+                .unwrap();
             skill_store::write_installs(
                 &paths,
-                &serde_json::Map::from_iter([(
-                    "demo-skill".to_string(),
-                    json!(["test-cli"]),
-                )]),
+                &serde_json::Map::from_iter([("demo-skill".to_string(), json!(["test-cli"]))]),
             )
             .unwrap();
 

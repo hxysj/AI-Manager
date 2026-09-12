@@ -448,15 +448,12 @@ pub(super) async fn forward(
         }
         return Ok(stream_response(upstream, responses, model));
     }
-    let body: Value = upstream
-        .json()
-        .await
-        .map_err(|cause| {
-            if let Some(tracking) = key_request.as_mut() {
-                tracking.fail("stream");
-            }
-            error(&cause.to_string())
-        })?;
+    let body: Value = upstream.json().await.map_err(|cause| {
+        if let Some(tracking) = key_request.as_mut() {
+            tracking.fail("stream");
+        }
+        error(&cause.to_string())
+    })?;
     match convert_response(&body, responses, model) {
         Ok(message) => Ok(json_response(StatusCode::OK, message)),
         Err(cause) => Ok(gateway_error(StatusCode::BAD_GATEWAY, &cause.to_string())),

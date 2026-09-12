@@ -12,7 +12,10 @@ use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
 use base64::Engine;
 use flate2::{read::GzDecoder, write::GzEncoder, Compression};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT_ENCODING, ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_MATCH, RANGE};
+use reqwest::header::{
+    HeaderMap, HeaderValue, ACCEPT_ENCODING, ACCEPT_RANGES, AUTHORIZATION, CONTENT_LENGTH,
+    CONTENT_RANGE, CONTENT_TYPE, ETAG, IF_MATCH, RANGE,
+};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -467,8 +470,7 @@ fn normalize_backup_app_settings(value: Option<&Value>) -> Option<Value> {
         settings.insert(
             "koofrSync".to_string(),
             serialize_backup_cloud_sync_settings(&normalize_provider_cloud_sync_settings(
-                koofr_sync,
-                "koofr",
+                koofr_sync, "koofr",
             )),
         );
     }
@@ -496,8 +498,7 @@ fn restore_backup_app_settings(
     app_settings.cloud_sync =
         normalize_provider_cloud_sync_settings(&merged["cloudSync"], "jianguoyun");
     app_settings.cloud_sync.last_updated_at = cloud_sync_last_updated_at;
-    app_settings.koofr_sync =
-        normalize_provider_cloud_sync_settings(&merged["koofrSync"], "koofr");
+    app_settings.koofr_sync = normalize_provider_cloud_sync_settings(&merged["koofrSync"], "koofr");
     app_settings.koofr_sync.last_updated_at = koofr_sync_last_updated_at;
     Ok(())
 }
@@ -863,7 +864,9 @@ async fn collect_codex_pet_entries(
           "path": pet_id,
           "type": "dir"
         }));
-        for mut entry in collect_directory_entries(&pet_dir, scope, &format!("pets/{pet_id}")).await? {
+        for mut entry in
+            collect_directory_entries(&pet_dir, scope, &format!("pets/{pet_id}")).await?
+        {
             let child_path = string_value(entry.get("path"));
             entry["path"] = json!(format!("{}/{}", pet_id, child_path));
             entries.push(entry);
@@ -2306,7 +2309,13 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
         .timeout(Duration::from_secs(30))
         .send()
         .await
-        .map_err(|cause| ManagerError::System(format!("{}读取备份信息失败：{}", cloud_sync_provider_name(config), cause.without_url())))?;
+        .map_err(|cause| {
+            ManagerError::System(format!(
+                "{}读取备份信息失败：{}",
+                cloud_sync_provider_name(config),
+                cause.without_url()
+            ))
+        })?;
     let status = response.status().as_u16();
     if status == 404 {
         return Err(ManagerError::System(format!(
@@ -2325,14 +2334,25 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
         )));
     }
     let size = webdav_content_length(response.headers());
-    let etag = response.headers().get(ETAG).filter(|value| {
-        value.to_str().is_ok_and(|value| value.starts_with('"') && value.ends_with('"'))
-    }).cloned();
-    let supports_ranges = status == 200 && response.headers().get(ACCEPT_RANGES)
-        .and_then(|value| value.to_str().ok()).is_some_and(|value| value.eq_ignore_ascii_case("bytes"));
+    let etag = response
+        .headers()
+        .get(ETAG)
+        .filter(|value| {
+            value
+                .to_str()
+                .is_ok_and(|value| value.starts_with('"') && value.ends_with('"'))
+        })
+        .cloned();
+    let supports_ranges = status == 200
+        && response
+            .headers()
+            .get(ACCEPT_RANGES)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("bytes"));
     drop(response);
     let mut content = Vec::new();
-    if let (true, Some(total), Some(etag)) = (supports_ranges, size.filter(|size| *size > 0), etag) {
+    if let (true, Some(total), Some(etag)) = (supports_ranges, size.filter(|size| *size > 0), etag)
+    {
         while (content.len() as u64) < total {
             let start = content.len() as u64;
             let range = WebdavDownloadRange {
@@ -2347,9 +2367,12 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
     } else {
         content = download_webdav_part(&client, config, None).await?;
     }
-    String::from_utf8(content).map_err(|_| ManagerError::System(format!(
-        "{}备份不是有效的 UTF-8 文本，请检查云端文件是否为完整备份；本地数据未恢复", cloud_sync_provider_name(config)
-    )))
+    String::from_utf8(content).map_err(|_| {
+        ManagerError::System(format!(
+            "{}备份不是有效的 UTF-8 文本，请检查云端文件是否为完整备份；本地数据未恢复",
+            cloud_sync_provider_name(config)
+        ))
+    })
 }
 
 struct WebdavDownloadRange {
@@ -2370,12 +2393,14 @@ async fn download_webdav_part(
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(500 * attempt)).await;
         }
-        let mut request = client.get(build_webdav_file_url(config)?)
+        let mut request = client
+            .get(build_webdav_file_url(config)?)
             .header(AUTHORIZATION, build_webdav_auth_header(config))
             .header(ACCEPT_ENCODING, "identity")
             .timeout(Duration::from_secs(if range.is_some() { 120 } else { 600 }));
         if let Some(range) = range {
-            request = request.header(RANGE, format!("bytes={}-{}", range.start, range.end))
+            request = request
+                .header(RANGE, format!("bytes={}-{}", range.start, range.end))
                 .header(IF_MATCH, range.etag.clone());
         }
         let mut response = match request.send().await {
@@ -2390,7 +2415,9 @@ async fn download_webdav_part(
             return Err(ManagerError::System(format!("{provider}上未找到配置备份")));
         }
         if status == 412 {
-            return Err(ManagerError::System(format!("{provider}备份在下载期间已更新，请重新预览；本地数据未恢复")));
+            return Err(ManagerError::System(format!(
+                "{provider}备份在下载期间已更新，请重新预览；本地数据未恢复"
+            )));
         }
         if [408, 502, 503, 504].contains(&status) {
             failure = format!("云端暂时无法完成下载（HTTP {status}）");
@@ -2398,15 +2425,30 @@ async fn download_webdav_part(
         }
         if status != if range.is_some() { 206 } else { 200 } {
             let detail = read_webdav_error_detail(response, config).await?;
-            return Err(ManagerError::System(format!("{provider}下载失败：HTTP {status}{detail}")));
+            return Err(ManagerError::System(format!(
+                "{provider}下载失败：HTTP {status}{detail}"
+            )));
         }
         let expected_size = if let Some(range) = range {
             let expected_range = format!("bytes {}-{}/{}", range.start, range.end, range.total);
-            if response.headers().get(CONTENT_RANGE).and_then(|value| value.to_str().ok()) != Some(expected_range.as_str()) {
-                return Err(ManagerError::System(format!("{provider}返回的下载分段范围不匹配，已停止下载，避免拼接错误备份")));
+            if response
+                .headers()
+                .get(CONTENT_RANGE)
+                .and_then(|value| value.to_str().ok())
+                != Some(expected_range.as_str())
+            {
+                return Err(ManagerError::System(format!(
+                    "{provider}返回的下载分段范围不匹配，已停止下载，避免拼接错误备份"
+                )));
             }
-            if response.headers().get(ETAG).is_some_and(|etag| etag != range.etag) {
-                return Err(ManagerError::System(format!("{provider}备份版本发生变化，请重新预览；本地数据未恢复")));
+            if response
+                .headers()
+                .get(ETAG)
+                .is_some_and(|etag| etag != range.etag)
+            {
+                return Err(ManagerError::System(format!(
+                    "{provider}备份版本发生变化，请重新预览；本地数据未恢复"
+                )));
             }
             Some(range.end - range.start + 1)
         } else {
@@ -2417,14 +2459,22 @@ async fn download_webdav_part(
         loop {
             match response.chunk().await {
                 Ok(Some(bytes)) => {
-                    if expected_size.is_some_and(|expected| content.len() as u64 + bytes.len() as u64 > expected) {
-                        return Err(ManagerError::System(format!("{provider}下载数据超过声明大小，已停止下载；本地数据未恢复")));
+                    if expected_size.is_some_and(|expected| {
+                        content.len() as u64 + bytes.len() as u64 > expected
+                    }) {
+                        return Err(ManagerError::System(format!(
+                            "{provider}下载数据超过声明大小，已停止下载；本地数据未恢复"
+                        )));
                     }
                     content.extend_from_slice(&bytes);
                 }
                 Ok(None) => break,
                 Err(cause) => {
-                    failure = format!("响应读取中断或超时，本段已接收 {} 字节：{}", content.len(), cause.without_url());
+                    failure = format!(
+                        "响应读取中断或超时，本段已接收 {} 字节：{}",
+                        content.len(),
+                        cause.without_url()
+                    );
                     interrupted = true;
                     break;
                 }
@@ -2434,15 +2484,23 @@ async fn download_webdav_part(
             continue;
         }
         if expected_size.is_some_and(|expected| content.len() as u64 != expected) {
-            failure = format!("下载不完整，本段预期 {} 字节，实际 {} 字节", expected_size.unwrap(), content.len());
+            failure = format!(
+                "下载不完整，本段预期 {} 字节，实际 {} 字节",
+                expected_size.unwrap(),
+                content.len()
+            );
             continue;
         }
         if content.is_empty() {
-            return Err(ManagerError::System(format!("{provider}云端备份为空，请重新上传完整备份")));
+            return Err(ManagerError::System(format!(
+                "{provider}云端备份为空，请重新上传完整备份"
+            )));
         }
         return Ok(content);
     }
-    let progress = range.map(|range| format!("，已完成 {} / {} 字节", range.start, range.total)).unwrap_or_default();
+    let progress = range
+        .map(|range| format!("，已完成 {} / {} 字节", range.start, range.total))
+        .unwrap_or_default();
     Err(ManagerError::System(format!("{provider}备份下载失败{progress}，已尝试 3 次：{failure}。本地数据未恢复，请检查网络后重新预览")))
 }
 
@@ -2451,12 +2509,13 @@ async fn read_webdav_error_detail(
     config: &CloudSyncSettings,
 ) -> Result<String, ManagerError> {
     let status = response.status().as_u16();
-    let body = response
-        .text()
-        .await
-        .map_err(|cause| ManagerError::System(format!(
-            "{}返回 HTTP {status}，错误响应读取失败：{}", cloud_sync_provider_name(config), cause.without_url()
-        )))?;
+    let body = response.text().await.map_err(|cause| {
+        ManagerError::System(format!(
+            "{}返回 HTTP {status}，错误响应读取失败：{}",
+            cloud_sync_provider_name(config),
+            cause.without_url()
+        ))
+    })?;
     let body = body.trim();
 
     if body.is_empty() {
@@ -2674,9 +2733,9 @@ fn backup_secret() -> [u8; 32] {
 
 fn export_provider_keys(paths: &AppPaths) -> Result<Value, ManagerError> {
     let mut providers = provider_store::read_providers(paths)?;
-    providers.extend(provider_store::read_desktop_providers(paths)?.iter().map(|provider| {
-        json!({"id": format!("claude-desktop:{}", string_value(provider.get("id")))})
-    }));
+    providers.extend(provider_store::read_desktop_providers(paths)?.iter().map(
+        |provider| json!({"id": format!("claude-desktop:{}", string_value(provider.get("id")))}),
+    ));
     let keys = provider_store::read_keys(paths)?;
     let mut exported = Map::new();
 
@@ -3574,14 +3633,23 @@ mod tests {
     use serde_json::{json, Map};
     use std::path::Path;
 
-    async fn webdav_test_server(responses: Vec<Vec<u8>>) -> (crate::core::settings::CloudSyncSettings, tokio::task::JoinHandle<Vec<String>>) {
+    async fn webdav_test_server(
+        responses: Vec<Vec<u8>>,
+    ) -> (
+        crate::core::settings::CloudSyncSettings,
+        tokio::task::JoinHandle<Vec<String>>,
+    ) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move {
             let mut requests = Vec::new();
             for response in responses {
-                let (mut stream, _) = tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept()).await.unwrap().unwrap();
+                let (mut stream, _) =
+                    tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
+                        .await
+                        .unwrap()
+                        .unwrap();
                 let mut request = Vec::new();
                 let mut buffer = [0u8; 2048];
                 while !request.windows(4).any(|window| window == b"\r\n\r\n") {
@@ -3603,7 +3671,8 @@ mod tests {
     }
 
     fn webdav_test_response(status: u16, headers: &str, body: &[u8]) -> Vec<u8> {
-        let mut response = format!("HTTP/1.1 {status} Test\r\nConnection: close\r\n{headers}\r\n").into_bytes();
+        let mut response =
+            format!("HTTP/1.1 {status} Test\r\nConnection: close\r\n{headers}\r\n").into_bytes();
         response.extend_from_slice(body);
         response
     }
@@ -3614,14 +3683,28 @@ mod tests {
             let chunk_size = 4 * 1024 * 1024;
             let content = format!("{}中文备份", "a".repeat(chunk_size - 1));
             let total = content.len();
-            let head = webdav_test_response(200, &format!("Content-Length: {total}\r\nAccept-Ranges: bytes\r\nETag: \"version-1\"\r\n"), b"");
+            let head = webdav_test_response(
+                200,
+                &format!(
+                    "Content-Length: {total}\r\nAccept-Ranges: bytes\r\nETag: \"version-1\"\r\n"
+                ),
+                b"",
+            );
             let first_headers = format!("Content-Length: {chunk_size}\r\nContent-Range: bytes 0-{}/{total}\r\nETag: \"version-1\"\r\n", chunk_size - 1);
-            let first = webdav_test_response(206, &first_headers, &content.as_bytes()[..chunk_size]);
+            let first =
+                webdav_test_response(206, &first_headers, &content.as_bytes()[..chunk_size]);
             let last_headers = format!("Content-Length: {}\r\nContent-Range: bytes {chunk_size}-{}/{total}\r\nETag: \"version-1\"\r\n", total - chunk_size, total - 1);
-            let interrupted = webdav_test_response(206, &last_headers, &content.as_bytes()[chunk_size..chunk_size + 1]);
+            let interrupted = webdav_test_response(
+                206,
+                &last_headers,
+                &content.as_bytes()[chunk_size..chunk_size + 1],
+            );
             let last = webdav_test_response(206, &last_headers, &content.as_bytes()[chunk_size..]);
             let (config, server) = webdav_test_server(vec![head, first, interrupted, last]).await;
-            assert_eq!(super::download_webdav_backup(&config).await.unwrap(), content);
+            assert_eq!(
+                super::download_webdav_backup(&config).await.unwrap(),
+                content
+            );
             let requests = server.await.unwrap();
             assert!(requests[0].starts_with("head "));
             assert!(requests[1].contains(&format!("range: bytes=0-{}", chunk_size - 1)));
@@ -3639,12 +3722,26 @@ mod tests {
         tauri::async_runtime::block_on(async {
             for head in [
                 webdav_test_response(405, "Content-Length: 0\r\n", b""),
-                webdav_test_response(200, "Content-Length: 100\r\nAccept-Ranges: bytes\r\nETag: W/\"weak-version\"\r\n", b""),
+                webdav_test_response(
+                    200,
+                    "Content-Length: 100\r\nAccept-Ranges: bytes\r\nETag: W/\"weak-version\"\r\n",
+                    b"",
+                ),
             ] {
                 let content = "完整备份文本";
-                let get = webdav_test_response(200, &format!("Content-Length: {}\r\nContent-Type: text/plain; charset=iso-8859-1\r\n", content.len()), content.as_bytes());
+                let get = webdav_test_response(
+                    200,
+                    &format!(
+                        "Content-Length: {}\r\nContent-Type: text/plain; charset=iso-8859-1\r\n",
+                        content.len()
+                    ),
+                    content.as_bytes(),
+                );
                 let (config, server) = webdav_test_server(vec![head, get]).await;
-                assert_eq!(super::download_webdav_backup(&config).await.unwrap(), content);
+                assert_eq!(
+                    super::download_webdav_backup(&config).await.unwrap(),
+                    content
+                );
                 let requests = server.await.unwrap();
                 assert!(!requests[1].contains("range:"));
             }
@@ -3656,23 +3753,54 @@ mod tests {
         tauri::async_runtime::block_on(async {
             for (status, headers, expected) in [
                 (412, "Content-Length: 0\r\n", "已更新"),
-                (206, "Content-Length: 4\r\nContent-Range: bytes 1-4/5\r\nETag: \"version-1\"\r\n", "分段范围不匹配"),
-                (206, "Content-Length: 4\r\nContent-Range: bytes 0-3/4\r\nETag: \"version-2\"\r\n", "版本发生变化"),
+                (
+                    206,
+                    "Content-Length: 4\r\nContent-Range: bytes 1-4/5\r\nETag: \"version-1\"\r\n",
+                    "分段范围不匹配",
+                ),
+                (
+                    206,
+                    "Content-Length: 4\r\nContent-Range: bytes 0-3/4\r\nETag: \"version-2\"\r\n",
+                    "版本发生变化",
+                ),
                 (200, "Content-Length: 0\r\n", "HTTP 200"),
                 (401, "Content-Length: 0\r\n", "HTTP 401"),
                 (401, "Content-Length: 4\r\n", "HTTP 401"),
             ] {
-                let (config, server) = webdav_test_server(vec![webdav_test_response(status, headers, b"")]).await;
-                let range = super::WebdavDownloadRange { start: 0, end: 3, total: 4, etag: HeaderValue::from_static("\"version-1\"") };
-                let cause = super::download_webdav_part(&reqwest::Client::new(), &config, Some(&range)).await.unwrap_err().to_string();
+                let (config, server) =
+                    webdav_test_server(vec![webdav_test_response(status, headers, b"")]).await;
+                let range = super::WebdavDownloadRange {
+                    start: 0,
+                    end: 3,
+                    total: 4,
+                    etag: HeaderValue::from_static("\"version-1\""),
+                };
+                let cause =
+                    super::download_webdav_part(&reqwest::Client::new(), &config, Some(&range))
+                        .await
+                        .unwrap_err()
+                        .to_string();
                 assert!(cause.contains(expected), "{cause}");
                 assert!(!cause.contains("test-secret"));
                 assert_eq!(server.await.unwrap().len(), 1);
             }
-            let truncated = webdav_test_response(206, "Content-Length: 4\r\nContent-Range: bytes 0-3/4\r\nETag: \"version-1\"\r\n", b"ab");
-            let (config, server) = webdav_test_server(vec![truncated.clone(), truncated.clone(), truncated]).await;
-            let range = super::WebdavDownloadRange { start: 0, end: 3, total: 4, etag: HeaderValue::from_static("\"version-1\"") };
-            let cause = super::download_webdav_part(&reqwest::Client::new(), &config, Some(&range)).await.unwrap_err().to_string();
+            let truncated = webdav_test_response(
+                206,
+                "Content-Length: 4\r\nContent-Range: bytes 0-3/4\r\nETag: \"version-1\"\r\n",
+                b"ab",
+            );
+            let (config, server) =
+                webdav_test_server(vec![truncated.clone(), truncated.clone(), truncated]).await;
+            let range = super::WebdavDownloadRange {
+                start: 0,
+                end: 3,
+                total: 4,
+                etag: HeaderValue::from_static("\"version-1\""),
+            };
+            let cause = super::download_webdav_part(&reqwest::Client::new(), &config, Some(&range))
+                .await
+                .unwrap_err()
+                .to_string();
             assert!(cause.contains("已尝试 3 次"));
             assert!(cause.contains("本地数据未恢复"));
             assert!(!cause.contains("test-secret"));
@@ -3683,67 +3811,157 @@ mod tests {
     #[test]
     fn webdav_preview_never_restores_or_caches_an_interrupted_backup() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!("ai-manager-cloud-preview-{}", uuid::Uuid::new_v4()));
+            let root = std::env::temp_dir()
+                .join(format!("ai-manager-cloud-preview-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&root).unwrap();
             let sentinel = root.join("keep.txt");
             std::fs::write(&sentinel, "original local data").unwrap();
-            let head = webdav_test_response(200, "Content-Length: 4\r\nAccept-Ranges: bytes\r\nETag: \"version-1\"\r\n", b"");
-            let truncated = webdav_test_response(206, "Content-Length: 4\r\nContent-Range: bytes 0-3/4\r\nETag: \"version-1\"\r\n", b"ab");
-            let (config, server) = webdav_test_server(vec![head, truncated.clone(), truncated.clone(), truncated]).await;
+            let head = webdav_test_response(
+                200,
+                "Content-Length: 4\r\nAccept-Ranges: bytes\r\nETag: \"version-1\"\r\n",
+                b"",
+            );
+            let truncated = webdav_test_response(
+                206,
+                "Content-Length: 4\r\nContent-Range: bytes 0-3/4\r\nETag: \"version-1\"\r\n",
+                b"ab",
+            );
+            let (config, server) =
+                webdav_test_server(vec![head, truncated.clone(), truncated.clone(), truncated])
+                    .await;
             let paths = resolve_app_paths(&root);
             let settings = normalize_app_settings(root.join("settings.json"), None);
             let mut cache = super::DataBackupCache::new();
-            let result = super::preview_cloud_backup_restore(&paths, &settings, &mut cache, serde_json::to_value(config).unwrap()).await;
+            let result = super::preview_cloud_backup_restore(
+                &paths,
+                &settings,
+                &mut cache,
+                serde_json::to_value(config).unwrap(),
+            )
+            .await;
             assert!(result.is_err());
             assert!(cache.drafts.is_empty());
             assert_eq!(server.await.unwrap().len(), 4);
             let invalid = b"{invalid-backup";
             let (config, server) = webdav_test_server(vec![
                 webdav_test_response(405, "Content-Length: 0\r\n", b""),
-                webdav_test_response(200, &format!("Content-Length: {}\r\n", invalid.len()), invalid),
-            ]).await;
-            assert!(super::preview_cloud_backup_restore(&paths, &settings, &mut cache, serde_json::to_value(config).unwrap()).await.is_err());
+                webdav_test_response(
+                    200,
+                    &format!("Content-Length: {}\r\n", invalid.len()),
+                    invalid,
+                ),
+            ])
+            .await;
+            assert!(super::preview_cloud_backup_restore(
+                &paths,
+                &settings,
+                &mut cache,
+                serde_json::to_value(config).unwrap()
+            )
+            .await
+            .is_err());
             assert!(cache.drafts.is_empty());
-            assert_eq!(std::fs::read_to_string(&sentinel).unwrap(), "original local data");
+            assert_eq!(
+                std::fs::read_to_string(&sentinel).unwrap(),
+                "original local data"
+            );
             assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
             assert_eq!(server.await.unwrap().len(), 2);
             let resolved = root.canonicalize().unwrap();
             assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
-            assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-cloud-preview-"));
+            assert!(resolved
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("ai-manager-cloud-preview-"));
             std::fs::remove_dir_all(resolved).unwrap();
         });
     }
 
     #[test]
     fn claude_desktop_backup_keeps_providers_and_restores_keys_without_local_gateway_state() {
-        let root = std::env::temp_dir().join(format!("ai-manager-desktop-backup-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "ai-manager-desktop-backup-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let paths = resolve_app_paths(&root);
         let mut keys = Map::new();
         runtime_provider::set_provider_key(&mut keys, "same-id", "cli-secret".to_string()).unwrap();
-        runtime_provider::set_provider_key(&mut keys, "claude-desktop:same-id", "desktop-secret".to_string()).unwrap();
-        provider_store::write_provider_bundle(&paths, &[json!({"id": "same-id"})], &[], &[], &keys).unwrap();
-        provider_store::write_desktop_bundle(&paths, &[json!({"id": "same-id", "name": "Desktop"})], json!({"currentProviderId": "same-id", "claude-desktop:gateway": "local-only"}).as_object().unwrap(), &keys).unwrap();
+        runtime_provider::set_provider_key(
+            &mut keys,
+            "claude-desktop:same-id",
+            "desktop-secret".to_string(),
+        )
+        .unwrap();
+        provider_store::write_provider_bundle(&paths, &[json!({"id": "same-id"})], &[], &[], &keys)
+            .unwrap();
+        provider_store::write_desktop_bundle(
+            &paths,
+            &[json!({"id": "same-id", "name": "Desktop"})],
+            json!({"currentProviderId": "same-id", "claude-desktop:gateway": "local-only"})
+                .as_object()
+                .unwrap(),
+            &keys,
+        )
+        .unwrap();
         let exported = super::export_provider_keys(&paths).unwrap();
         assert_eq!(exported["same-id"]["apiKeys"][0]["apiKey"], "cli-secret");
-        assert_eq!(exported["claude-desktop:same-id"]["apiKeys"][0]["apiKey"], "desktop-secret");
+        assert_eq!(
+            exported["claude-desktop:same-id"]["apiKeys"][0]["apiKey"],
+            "desktop-secret"
+        );
         assert!(!exported.to_string().contains("local-only"));
         let snapshot = database::backup(&paths).unwrap();
         let snapshot_path = root.join("snapshot.db");
         std::fs::write(&snapshot_path, snapshot).unwrap();
         let connection = rusqlite::Connection::open(&snapshot_path).unwrap();
-        assert_eq!(connection.query_row("SELECT COUNT(*) FROM claude_desktop_providers", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(connection.query_row("SELECT COUNT(*) FROM claude_desktop_settings", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
-        assert_eq!(connection.query_row("SELECT COUNT(*) FROM provider_keys", [], |row| row.get::<_, i64>(0)).unwrap(), 0);
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM claude_desktop_providers", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM claude_desktop_settings", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM provider_keys", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
         drop(connection);
-        runtime_provider::set_provider_key(&mut keys, "same-id", "keep-cli-secret".to_string()).unwrap();
+        runtime_provider::set_provider_key(&mut keys, "same-id", "keep-cli-secret".to_string())
+            .unwrap();
         keys.remove("claude-desktop:same-id");
         provider_store::write_keys(&paths, &keys).unwrap();
         let choices = json!({"database:storage/ai-manager.db:claude_desktop_providers": "backup"});
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
-            merge_provider_keys(&paths, &exported, choices.as_object().unwrap())
-        ).unwrap();
-        assert_eq!(runtime_provider::get_provider_api_key(&paths, "same-id").unwrap(), "keep-cli-secret");
-        assert_eq!(runtime_provider::get_provider_api_key(&paths, "claude-desktop:same-id").unwrap(), "desktop-secret");
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(merge_provider_keys(
+                &paths,
+                &exported,
+                choices.as_object().unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(
+            runtime_provider::get_provider_api_key(&paths, "same-id").unwrap(),
+            "keep-cli-secret"
+        );
+        assert_eq!(
+            runtime_provider::get_provider_api_key(&paths, "claude-desktop:same-id").unwrap(),
+            "desktop-secret"
+        );
         let resolved = root.canonicalize().unwrap();
         assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
         std::fs::remove_dir_all(resolved).unwrap();
@@ -4294,7 +4512,10 @@ mod tests {
             .build()
             .unwrap();
         let backup_codex_entries = runtime
-            .block_on(collect_codex_pet_entries(&source_settings, BackupScope::Local))
+            .block_on(collect_codex_pet_entries(
+                &source_settings,
+                BackupScope::Local,
+            ))
             .unwrap();
         let backup_workspace_entries = runtime
             .block_on(collect_backup_entries(&source_paths, BackupScope::Local))
@@ -5020,10 +5241,7 @@ mod tests {
         );
         assert_eq!(app_settings.koofr_sync.username, "backup-koofr-user");
         assert_eq!(app_settings.koofr_sync.password, "backup-koofr-password");
-        assert_eq!(
-            app_settings.koofr_sync.file_name,
-            "backup-koofr.aimbackup"
-        );
+        assert_eq!(app_settings.koofr_sync.file_name, "backup-koofr.aimbackup");
         assert_eq!(app_settings.koofr_sync.last_updated_at, 800);
         assert_eq!(app_settings.data_path, original_data_path);
         assert_eq!(
@@ -5069,10 +5287,7 @@ mod tests {
 
         assert_eq!(app_settings.cloud_sync.username, "backup-user");
         assert_eq!(app_settings.koofr_sync.username, "current-koofr-user");
-        assert_eq!(
-            app_settings.koofr_sync.password,
-            "current-koofr-password"
-        );
+        assert_eq!(app_settings.koofr_sync.password, "current-koofr-password");
     }
 
     #[test]

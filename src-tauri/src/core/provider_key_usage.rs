@@ -7,7 +7,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
-static IN_FLIGHT: LazyLock<Mutex<HashMap<String, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static IN_FLIGHT: LazyLock<Mutex<HashMap<String, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 const MAX_ERROR_BUFFER: usize = 64 * 1024;
 
 pub struct KeyRequest {
@@ -212,11 +213,13 @@ impl KeyRequest {
             Some(500..=599) => "upstream",
             Some(status) if !(200..300).contains(&status) => "http",
             _ if self.api_error => "api",
-            _ => failure.unwrap_or(if self.streaming && self.expects_completion && !self.completed_stream {
-                "stream"
-            } else {
-                ""
-            }),
+            _ => failure.unwrap_or(
+                if self.streaming && self.expects_completion && !self.completed_stream {
+                    "stream"
+                } else {
+                    ""
+                },
+            ),
         };
         let failed = !kind.is_empty();
         let now = chrono::Utc::now().timestamp_millis();
@@ -670,7 +673,8 @@ mod tests {
                 read(paths, "provider", "oversized", "secret").unwrap()["failureCount"],
                 1
             );
-            let mut closed_after_error = KeyRequest::new(paths, "provider", "closed-after-error", "secret");
+            let mut closed_after_error =
+                KeyRequest::new(paths, "provider", "closed-after-error", "secret");
             closed_after_error.start();
             closed_after_error.response(200, true);
             closed_after_error.observe(b"event: error\ndata: failed\n\n");

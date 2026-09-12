@@ -36,7 +36,12 @@ pub fn write_desktop_bundle(
     let mut connection = database::open(paths)?;
     let transaction = connection.transaction()?;
     replace_collection(&transaction, "claude_desktop_providers", providers, &["id"])?;
-    replace_map(&transaction, "claude_desktop_settings", "setting_key", settings)?;
+    replace_map(
+        &transaction,
+        "claude_desktop_settings",
+        "setting_key",
+        settings,
+    )?;
     replace_map(&transaction, "provider_keys", "provider_id", keys)?;
     transaction.commit()?;
     Ok(())

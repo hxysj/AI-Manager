@@ -1699,11 +1699,7 @@ async fn run_git_raw(args: &[&str], cwd: &str) -> Result<String, ManagerError> {
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
-    let output = command
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .await?;
+    let output = command.args(args).current_dir(cwd).output().await?;
 
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1728,11 +1724,7 @@ async fn run_git_raw_vec(args: &[String], cwd: &str) -> Result<String, ManagerEr
     #[cfg(windows)]
     command.creation_flags(CREATE_NO_WINDOW);
 
-    let output = command
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .await?;
+    let output = command.args(args).current_dir(cwd).output().await?;
 
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr).trim().to_string();

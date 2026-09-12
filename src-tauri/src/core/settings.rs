@@ -120,10 +120,7 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
 pub fn normalize_cloud_sync_settings(input: &Value, provider: &str) -> CloudSyncSettings {
     let (provider, default_url) = match provider {
         "koofr" => ("koofr", "https://app.koofr.net/dav/Koofr/AI-Manager"),
-        _ => (
-            "jianguoyun",
-            "https://dav.jianguoyun.com/dav/AI-Manager",
-        ),
+        _ => ("jianguoyun", "https://dav.jianguoyun.com/dav/AI-Manager"),
     };
 
     CloudSyncSettings {

@@ -5,11 +5,11 @@ use crate::api::{app, app_logs};
 use crate::core::state::{AppState, ManagerState};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{Emitter, Manager};
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
+use tauri::{Emitter, Manager};
 
 static CLOSE_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 
@@ -119,9 +119,7 @@ pub fn run() {
                         return;
                     }
 
-                    if let Err(error) =
-                        app_handle.emit("app:close-requested", Value::Bool(true))
-                    {
+                    if let Err(error) = app_handle.emit("app:close-requested", Value::Bool(true)) {
                         CLOSE_DIALOG_OPEN.store(false, Ordering::SeqCst);
                         eprintln!("{error}");
                     }
@@ -448,8 +446,7 @@ fn show_main_from_tray(app: &tauri::AppHandle) {
             return;
         };
         let (app_settings, quick_switch_collapsed) = state.quick_switch_settings().await;
-        if let Err(error) =
-            app::show_main_panel(&app_handle, &app_settings, quick_switch_collapsed)
+        if let Err(error) = app::show_main_panel(&app_handle, &app_settings, quick_switch_collapsed)
         {
             eprintln!("{error}");
         }
