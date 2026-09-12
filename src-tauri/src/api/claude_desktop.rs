@@ -1,6 +1,6 @@
 use crate::api::{proxy, runtime_provider};
-use crate::core::{error::ManagerError, paths::AppPaths, provider_store, usage_store};
 use crate::core::provider_key_usage::KeyRequest;
+use crate::core::{error::ManagerError, paths::AppPaths, provider_store, usage_store};
 use bytes::Bytes;
 use futures_util::StreamExt;
 use http_body_util::{combinators::UnsyncBoxBody, BodyExt, Full, Limited, StreamBody};
@@ -111,7 +111,11 @@ impl DesktopPaths {
     }
 }
 
-pub(super) fn skills_data_root(platform: &str, home: &Path, local: Option<&Path>) -> Option<PathBuf> {
+pub(super) fn skills_data_root(
+    platform: &str,
+    home: &Path,
+    local: Option<&Path>,
+) -> Option<PathBuf> {
     DesktopPaths::resolve(platform, home, local)?
         .threep
         .parent()
@@ -1200,12 +1204,18 @@ async fn handle_gateway(
     log["ok"] = json!(response.status().is_success());
     log["latencyMs"] = json!(started.elapsed().as_millis() as u64);
     if !response.status().is_success() {
-        log["errorMessage"] = json!(format!("Desktop 网关请求失败：HTTP {}", response.status().as_u16()));
+        log["errorMessage"] = json!(format!(
+            "Desktop 网关请求失败：HTTP {}",
+            response.status().as_u16()
+        ));
     }
     let response = track_gateway_key(response, key_request);
     let response = track_gateway_provider(response, paths.clone(), &log);
     let _guard = REQUEST_LOG_LOCK.lock().await;
-    if proxy::append_log(&paths, "claude-desktop", log).await.is_err() {
+    if proxy::append_log(&paths, "claude-desktop", log)
+        .await
+        .is_err()
+    {
         eprintln!("Desktop 请求记录写入失败，请检查数据目录权限");
     }
     Ok(response)
@@ -1427,7 +1437,10 @@ async fn process_gateway(
     payload["model"] = mapping["model"].clone();
     let storage_id = format!("claude-desktop:{}", data.current_id());
     let stored = data.keys.get(&storage_id);
-    let key_id = runtime_provider::active_provider_key_id(stored, &runtime_provider::provider_key_records(stored));
+    let key_id = runtime_provider::active_provider_key_id(
+        stored,
+        &runtime_provider::provider_key_records(stored),
+    );
     let key = data.key(data.current_id())?;
     log["apiKeyId"] = json!(key_id);
     log["apiKeyHash"] = json!(crate::core::provider_key_usage::fingerprint(&key));
@@ -1439,13 +1452,7 @@ async fn process_gateway(
                 "OpenAI 上游不提供 Anthropic 精确 token 计数接口",
             ));
         }
-        return protocol::forward(
-            provider,
-            &key,
-            payload,
-            key_request,
-        )
-        .await;
+        return protocol::forward(provider, &key, payload, key_request).await;
     }
     let search = parts
         .uri
@@ -2610,7 +2617,11 @@ mod tests {
             );
             assert!(stream.next().await.is_none());
             drop(stream);
-            let key_usage = runtime_provider::read_provider_key_usage(&fixture.paths, &json!({"providerId": "example", "cli": "claude-desktop"})).unwrap();
+            let key_usage = runtime_provider::read_provider_key_usage(
+                &fixture.paths,
+                &json!({"providerId": "example", "cli": "claude-desktop"}),
+            )
+            .unwrap();
             let key_id = key_usage["activeApiKeyId"].as_str().unwrap();
             assert_eq!(key_usage["keys"][key_id]["requestCount"], 1);
             assert_eq!(key_usage["keys"][key_id]["successCount"], 1);
@@ -2621,15 +2632,35 @@ mod tests {
             assert_eq!(logs[0]["model"], "upstream-model");
             assert_eq!(logs[0]["statusCode"], 200);
             assert_eq!(logs[0]["streaming"], true);
-            for secret in ["upstream-secret", "local-secret", "wrong-secret", "must-not-leak"] {
+            for secret in [
+                "upstream-secret",
+                "local-secret",
+                "wrong-secret",
+                "must-not-leak",
+            ] {
                 assert!(!logs.to_string().contains(secret));
             }
-            assert_eq!(proxy::read_logs(&fixture.paths, "claude").unwrap(), json!([]));
-            assert_eq!(proxy::read_logs(&fixture.paths, "codex").unwrap(), json!([]));
-            std::fs::write(&fixture.paths.storage_files.claude_desktop_request_logs, "invalid-json").unwrap();
             assert_eq!(
-                client.get(format!("{base}/v1/models"))
-                    .bearer_auth("local-secret").send().await.unwrap().status(),
+                proxy::read_logs(&fixture.paths, "claude").unwrap(),
+                json!([])
+            );
+            assert_eq!(
+                proxy::read_logs(&fixture.paths, "codex").unwrap(),
+                json!([])
+            );
+            std::fs::write(
+                &fixture.paths.storage_files.claude_desktop_request_logs,
+                "invalid-json",
+            )
+            .unwrap();
+            assert_eq!(
+                client
+                    .get(format!("{base}/v1/models"))
+                    .bearer_auth("local-secret")
+                    .send()
+                    .await
+                    .unwrap()
+                    .status(),
                 StatusCode::OK
             );
             manager.stop().await;

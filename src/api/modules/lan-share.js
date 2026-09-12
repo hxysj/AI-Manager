@@ -2,6 +2,7 @@ import { request, subscribe } from '../request'
 
 export const lanShareApi = {
   getState: () => request('lan-share:state'),
+  setAccessIp: payload => request('lan-share:set-access-ip', payload),
   getClipboardFiles: () => request('lan-share:clipboard-files'),
   connectPeer: payload => request('lan-share:connect-peer', payload),
   respondPairing: payload => request('lan-share:respond-pairing', payload),

@@ -142,10 +142,7 @@ pub fn bind_key_usage(paths: &AppPaths) -> Result<(), ManagerError> {
     Ok(())
 }
 
-pub fn write_usage_cost_snapshots(
-    paths: &AppPaths,
-    logs: &[Value],
-) -> Result<(), ManagerError> {
+pub fn write_usage_cost_snapshots(paths: &AppPaths, logs: &[Value]) -> Result<(), ManagerError> {
     if logs.is_empty() {
         return Ok(());
     }
@@ -198,7 +195,11 @@ pub fn record_codex_quota_stages(
             continue;
         }
 
-        let completed_at = if starts_at > 0 { starts_at } else { observed_at };
+        let completed_at = if starts_at > 0 {
+            starts_at
+        } else {
+            observed_at
+        };
         transaction.execute(
             "UPDATE codex_quota_stages
              SET completed_at = ?1
@@ -314,12 +315,18 @@ pub fn read_app_types(paths: &AppPaths) -> Result<Vec<String>, ManagerError> {
     Ok(items)
 }
 
-pub fn read_session_versions(paths: &AppPaths) -> Result<HashMap<String, (String, u64)>, ManagerError> {
+pub fn read_session_versions(
+    paths: &AppPaths,
+) -> Result<HashMap<String, (String, u64)>, ManagerError> {
     initialize(paths)?;
     let connection = open_connection(paths)?;
-    let mut statement = connection.prepare("SELECT raw_path, app_type, updated_at FROM usage_sessions")?;
+    let mut statement =
+        connection.prepare("SELECT raw_path, app_type, updated_at FROM usage_sessions")?;
     let items = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, (row.get::<_, String>(1)?, row.get::<_, i64>(2)? as u64)))
+        Ok((
+            row.get::<_, String>(0)?,
+            (row.get::<_, String>(1)?, row.get::<_, i64>(2)? as u64),
+        ))
     })?;
 
     Ok(items.collect::<Result<HashMap<_, _>, _>>()?)
@@ -330,9 +337,8 @@ pub fn read_skill_session_records(
 ) -> Result<HashMap<String, (u64, Vec<Value>)>, ManagerError> {
     initialize(paths)?;
     let connection = open_connection(paths)?;
-    let mut statement = connection.prepare(
-        "SELECT raw_path, updated_at, payload_json FROM skill_usage_session_records",
-    )?;
+    let mut statement = connection
+        .prepare("SELECT raw_path, updated_at, payload_json FROM skill_usage_session_records")?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -525,9 +531,8 @@ pub fn replace_sessions(
 
     for update in updates {
         let existing_logs = {
-            let mut statement = transaction.prepare(
-                "SELECT request_id, payload_json FROM usage_logs WHERE raw_path = ?1",
-            )?;
+            let mut statement = transaction
+                .prepare("SELECT request_id, payload_json FROM usage_logs WHERE raw_path = ?1")?;
             let rows = statement.query_map(params![update.raw_path], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?;
@@ -1090,8 +1095,8 @@ fn now_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_schema, ensure_skill_session_parser_version, initialize, query_logs, read_pricing,
-        read_codex_quota_stages, read_request_records, read_session_versions,
+        create_schema, ensure_skill_session_parser_version, initialize, query_logs,
+        read_codex_quota_stages, read_pricing, read_request_records, read_session_versions,
         read_skill_session_records, record_codex_quota_stages, replace_sessions, write_pricing,
         write_skill_session_records, UsageLogQuery, UsageSessionUpdate,
     };

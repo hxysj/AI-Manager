@@ -50,8 +50,8 @@ pub fn write_repository_cache(paths: &AppPaths, items: &[Value]) -> Result<(), M
 pub fn read_installs(paths: &AppPaths) -> Result<Map<String, Value>, ManagerError> {
     initialize(paths)?;
     let connection = database::open(paths)?;
-    let mut statement =
-        connection.prepare("SELECT skill_name, payload_json FROM skill_installs ORDER BY skill_name")?;
+    let mut statement = connection
+        .prepare("SELECT skill_name, payload_json FROM skill_installs ORDER BY skill_name")?;
     let rows = statement.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
@@ -135,9 +135,7 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
 fn read_collection(paths: &AppPaths, table: &str) -> Result<Vec<Value>, ManagerError> {
     initialize(paths)?;
     let connection = database::open(paths)?;
-    let sql = format!(
-        "SELECT payload_json FROM {table} ORDER BY sort_order ASC, item_key ASC"
-    );
+    let sql = format!("SELECT payload_json FROM {table} ORDER BY sort_order ASC, item_key ASC");
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
     let mut items = Vec::new();
@@ -170,9 +168,8 @@ fn replace_collection(
     key_fields: &[&str],
 ) -> Result<(), ManagerError> {
     transaction.execute(&format!("DELETE FROM {table}"), [])?;
-    let sql = format!(
-        "INSERT INTO {table}(item_key, sort_order, payload_json) VALUES (?1, ?2, ?3)"
-    );
+    let sql =
+        format!("INSERT INTO {table}(item_key, sort_order, payload_json) VALUES (?1, ?2, ?3)");
 
     for (index, item) in items.iter().enumerate() {
         let item_key = collection_key(item, key_fields, index);
@@ -184,10 +181,7 @@ fn replace_collection(
     Ok(())
 }
 
-fn migrate_legacy_json(
-    paths: &AppPaths,
-    connection: &mut Connection,
-) -> Result<(), ManagerError> {
+fn migrate_legacy_json(paths: &AppPaths, connection: &mut Connection) -> Result<(), ManagerError> {
     let trash_path = legacy_trash_path(paths);
     let legacy_files = [
         Path::new(&paths.storage_files.skills),
@@ -211,18 +205,18 @@ fn migrate_legacy_json(
     let transaction = connection.transaction()?;
 
     if legacy_files[0].exists() {
-        replace_collection(&transaction, "skills", &skills, &["name", "id", "sourcePath"])?;
+        replace_collection(
+            &transaction,
+            "skills",
+            &skills,
+            &["name", "id", "sourcePath"],
+        )?;
     }
     if legacy_files[1].exists() {
         replace_collection(&transaction, "skill_groups", &groups, &["id"])?;
     }
     if legacy_files[2].exists() {
-        replace_collection(
-            &transaction,
-            "skill_repositories",
-            &repositories,
-            &["id"],
-        )?;
+        replace_collection(&transaction, "skill_repositories", &repositories, &["id"])?;
     }
     if legacy_files[3].exists() {
         replace_collection(
@@ -342,10 +336,8 @@ mod tests {
 
     #[test]
     fn migrates_skill_json_into_main_database() {
-        let root = std::env::temp_dir().join(format!(
-            "monkey-thief-skill-store-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("monkey-thief-skill-store-{}", std::process::id()));
         if root.exists() {
             std::fs::remove_dir_all(&root).unwrap();
         }
@@ -363,8 +355,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             &paths.storage_files.skill_groups,
-            serde_json::to_string(&json!([{"id": "group-a", "skillIds": ["skill-a"]}]))
-                .unwrap(),
+            serde_json::to_string(&json!([{"id": "group-a", "skillIds": ["skill-a"]}])).unwrap(),
         )
         .unwrap();
         std::fs::write(

@@ -115,9 +115,7 @@ pub async fn start_login(
 ) -> Result<Value, ManagerError> {
     if let Some(state) = login_cache.state().await {
         if state.get("status").and_then(Value::as_str) == Some("pending") {
-            return Err(ManagerError::System(
-                "Codex 官方登录正在进行中".to_string(),
-            ));
+            return Err(ManagerError::System("Codex 官方登录正在进行中".to_string()));
         }
     }
 
@@ -131,9 +129,7 @@ pub async fn start_login(
     }
 
     if !login_cache.begin_listener().await {
-        return Err(ManagerError::System(
-            "Codex 官方登录正在进行中".to_string(),
-        ));
+        return Err(ManagerError::System("Codex 官方登录正在进行中".to_string()));
     }
 
     let verifier = random_url_token(32)?;
@@ -173,9 +169,7 @@ pub async fn start_login(
 
     app.opener()
         .open_url(auth_url.clone(), None::<&str>)
-        .map_err(|error| {
-            ManagerError::System(format!("打开 Codex 授权链接失败：{}", error))
-        })?;
+        .map_err(|error| ManagerError::System(format!("打开 Codex 授权链接失败：{}", error)))?;
 
     Ok(json!({
       "authUrl": auth_url,
@@ -415,10 +409,7 @@ pub async fn delete_account(
     provider_store::write_codex_accounts(paths, &next_accounts)
 }
 
-pub async fn account_detail(
-    paths: &AppPaths,
-    payload: Value,
-) -> Result<Value, ManagerError> {
+pub async fn account_detail(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
     let account_id = string_value(payload.get("accountId"));
     let active_account_id = read_active_account_id(paths)?;
     let account = provider_store::read_codex_accounts(paths)?
@@ -526,9 +517,21 @@ async fn complete_login(
         return Err(ManagerError::System("Not found".to_string()));
     }
 
-    let code = url.query_pairs().find(|(key, _)| key == "code").map(|(_, value)| value.to_string()).unwrap_or_default();
-    let state = url.query_pairs().find(|(key, _)| key == "state").map(|(_, value)| value.to_string()).unwrap_or_default();
-    let error = url.query_pairs().find(|(key, _)| key == "error").map(|(_, value)| value.to_string()).unwrap_or_default();
+    let code = url
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.to_string())
+        .unwrap_or_default();
+    let state = url
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.to_string())
+        .unwrap_or_default();
+    let error = url
+        .query_pairs()
+        .find(|(key, _)| key == "error")
+        .map(|(_, value)| value.to_string())
+        .unwrap_or_default();
 
     if !error.is_empty() {
         return Err(ManagerError::System(format!("Codex 登录失败：{}", error)));
@@ -580,8 +583,7 @@ async fn complete_login(
     let account = save_account(&context.paths, tokens, profile, &mut claims, usage, proxy).await?;
 
     if string_value(account.get("id")) == read_active_account_id(&context.paths)? {
-        write_account_bundle(&account, &find_codex_cli_target(&context.cli_targets)?)
-        .await?;
+        write_account_bundle(&account, &find_codex_cli_target(&context.cli_targets)?).await?;
     }
 
     let success_state = merge_object(
@@ -600,7 +602,10 @@ async fn complete_login(
     context.cache.finish_listener().await;
     context
         .app
-        .emit("state:changed", state_patch(&context.paths, &context.cache).await?)
+        .emit(
+            "state:changed",
+            state_patch(&context.paths, &context.cache).await?,
+        )
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
     Ok("Codex 登录已完成，可以返回 Monkey Thief。".to_string())
@@ -621,7 +626,10 @@ async fn fail_login(context: &CallbackContext, message: String) -> Result<(), Ma
         context.cache.finish_listener().await;
         context
             .app
-            .emit("state:changed", state_patch(&context.paths, &context.cache).await?)
+            .emit(
+                "state:changed",
+                state_patch(&context.paths, &context.cache).await?,
+            )
             .map_err(|error| ManagerError::System(error.to_string()))?;
     }
 
@@ -647,7 +655,12 @@ async fn exchange_code(code: &str, login_state: &Value) -> Result<TokenBundle, M
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let payload = read_response_json(response).await?;
     let now = now_millis();
-    let expires_at = now + payload.get("expires_in").and_then(Value::as_u64).unwrap_or(86400) * 1000;
+    let expires_at = now
+        + payload
+            .get("expires_in")
+            .and_then(Value::as_u64)
+            .unwrap_or(86400)
+            * 1000;
 
     Ok(TokenBundle {
         access_token: string_value(payload.get("access_token")),
@@ -699,7 +712,12 @@ async fn refresh_token(refresh_token: &str, proxy: &str) -> Result<TokenBundle, 
 
     let payload: Value = serde_json::from_str(&text)?;
     let now = now_millis();
-    let expires_at = now + payload.get("expires_in").and_then(Value::as_u64).unwrap_or(86400) * 1000;
+    let expires_at = now
+        + payload
+            .get("expires_in")
+            .and_then(Value::as_u64)
+            .unwrap_or(86400)
+            * 1000;
     let next_refresh_token = first_string(payload.get("refresh_token"), None, refresh_token);
 
     Ok(TokenBundle {
@@ -744,27 +762,27 @@ async fn refresh_account_usage(
             return Err(ManagerError::System(message.to_string()));
         }
 
-        tokens = match refresh_token(&tokens.refresh_token, &string_value(account.get("proxy"))).await
-        {
-            Ok(mut tokens) => {
-                tokens.token_generation = number_value(account.get("token_generation"), 0) + 1;
-                tokens.token_updated_at = now_millis();
-                tokens
-            }
-            Err(error) => {
-                if should_mark_reauth(&error.to_string()) {
-                    mark_account_reauth(
-                        paths,
-                        account_id,
-                        "invalid_grant",
-                        "Codex 登录授权已失效，请重新登录。",
-                    )
-                    .await?;
+        tokens =
+            match refresh_token(&tokens.refresh_token, &string_value(account.get("proxy"))).await {
+                Ok(mut tokens) => {
+                    tokens.token_generation = number_value(account.get("token_generation"), 0) + 1;
+                    tokens.token_updated_at = now_millis();
+                    tokens
                 }
-                mark_account_refresh_error(paths, account_id, 0, &error.to_string()).await?;
-                return Err(error);
-            }
-        };
+                Err(error) => {
+                    if should_mark_reauth(&error.to_string()) {
+                        mark_account_reauth(
+                            paths,
+                            account_id,
+                            "invalid_grant",
+                            "Codex 登录授权已失效，请重新登录。",
+                        )
+                        .await?;
+                    }
+                    mark_account_refresh_error(paths, account_id, 0, &error.to_string()).await?;
+                    return Err(error);
+                }
+            };
     }
 
     let mut claims = decode_jwt_payload(&first_string(
@@ -778,11 +796,13 @@ async fn refresh_account_usage(
         &string_value(account.get("id")),
     );
     claims["account_id"] = json!(account_identity);
-    let usage = fetch_usage_info(&tokens.access_token, &claims, &string_value(account.get("proxy")))
-        .await
-        .map_err(|error| {
-            ManagerError::System(error.to_string())
-        })?;
+    let usage = fetch_usage_info(
+        &tokens.access_token,
+        &claims,
+        &string_value(account.get("proxy")),
+    )
+    .await
+    .map_err(|error| ManagerError::System(error.to_string()))?;
     let next_account = save_account(
         paths,
         tokens,
@@ -870,11 +890,13 @@ async fn sync_account_from_authority_sources(
         return Ok(account);
     }
 
-    let source_updated_at = tokens.token_updated_at.max(parse_timestamp(&string_value(auth_data.get("last_refresh"))));
+    let source_updated_at = tokens.token_updated_at.max(parse_timestamp(&string_value(
+        auth_data.get("last_refresh"),
+    )));
     let account_updated_at = number_value(account.get("token_updated_at"), 0)
         .max(parse_timestamp(&string_value(account.get("last_refresh"))));
-    let should_use_source =
-        source_updated_at >= account_updated_at || (account_access_token_expired(&account) && !tokens_access_token_expired(&tokens));
+    let should_use_source = source_updated_at >= account_updated_at
+        || (account_access_token_expired(&account) && !tokens_access_token_expired(&tokens));
 
     if !should_use_source {
         return Ok(account);
@@ -953,7 +975,13 @@ async fn perform_managed_token_refresh(
                 )
                 .await?;
             }
-            mark_account_refresh_error(paths, &string_value(account.get("id")), 0, &error.to_string()).await?;
+            mark_account_refresh_error(
+                paths,
+                &string_value(account.get("id")),
+                0,
+                &error.to_string(),
+            )
+            .await?;
             return Err(error);
         }
     };
@@ -967,7 +995,12 @@ async fn perform_managed_token_refresh(
         account.get("accountId"),
         &string_value(account.get("id")),
     ));
-    let usage = fetch_usage_info(&tokens.access_token, &claims, &string_value(account.get("proxy"))).await?;
+    let usage = fetch_usage_info(
+        &tokens.access_token,
+        &claims,
+        &string_value(account.get("proxy")),
+    )
+    .await?;
 
     tokens.token_generation = number_value(account.get("token_generation"), 0) + 1;
     tokens.token_updated_at = now_millis();
@@ -991,10 +1024,7 @@ async fn perform_managed_token_refresh(
     Ok(next_account)
 }
 
-async fn write_account_bundle(
-    account: &Value,
-    cli_target: &Value,
-) -> Result<(), ManagerError> {
+async fn write_account_bundle(account: &Value, cli_target: &Value) -> Result<(), ManagerError> {
     write_account_auth(account, cli_target).await?;
     write_codex_builtin_config(cli_target).await
 }
@@ -1044,7 +1074,10 @@ async fn write_codex_builtin_config(cli_target: &Value) -> Result<(), ManagerErr
     };
     let without_managed_providers = remove_toml_sections(
         &content,
-        &["model_providers.custom", "model_providers.codex_local_access"],
+        &[
+            "model_providers.custom",
+            "model_providers.codex_local_access",
+        ],
     );
     let next_content = remove_toml_root_keys(
         &without_managed_providers,
@@ -1268,9 +1301,7 @@ async fn fetch_usage_info(
     );
     headers.insert(
         "user-agent",
-        HeaderValue::from_static(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        ),
+        HeaderValue::from_static("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
     );
     if !account_id.is_empty() {
         headers.insert(
@@ -1434,7 +1465,9 @@ fn create_tokens_from_auth_data(auth_data: &Value) -> Result<(TokenBundle, Value
     );
     let id_token = first_string(
         token_source.get("id_token"),
-        token_source.get("idToken").or_else(|| token_source.get("id_otkne")),
+        token_source
+            .get("idToken")
+            .or_else(|| token_source.get("id_otkne")),
         "",
     );
     let mut claims = decode_jwt_payload(&first_string(
@@ -1442,9 +1475,16 @@ fn create_tokens_from_auth_data(auth_data: &Value) -> Result<(TokenBundle, Value
         Some(&json!(access_token.clone())),
         "",
     ))?;
-    let expires_at = number_value(token_source.get("expiresAt"), number_value(auth_data.get("expiresAt"), 0))
-        .max(parse_timestamp(&first_string(token_source.get("expired"), auth_data.get("expired"), "")))
-        .max(number_value(claims.get("exp"), 0) * 1000);
+    let expires_at = number_value(
+        token_source.get("expiresAt"),
+        number_value(auth_data.get("expiresAt"), 0),
+    )
+    .max(parse_timestamp(&first_string(
+        token_source.get("expired"),
+        auth_data.get("expired"),
+        "",
+    )))
+    .max(number_value(claims.get("exp"), 0) * 1000);
     let account_id = first_string(token_source.get("account_id"), None, "");
 
     if !account_id.is_empty() {
@@ -1468,7 +1508,13 @@ fn create_tokens_from_auth_data(auth_data: &Value) -> Result<(TokenBundle, Value
                 "",
             ),
             expired: first_string(token_source.get("expired"), auth_data.get("expired"), "")
-                .if_empty_then(|| if expires_at == 0 { String::new() } else { format_rfc3339(expires_at) }),
+                .if_empty_then(|| {
+                    if expires_at == 0 {
+                        String::new()
+                    } else {
+                        format_rfc3339(expires_at)
+                    }
+                }),
             token_generation: number_value(token_source.get("token_generation"), 0),
             token_updated_at: number_value(
                 token_source.get("token_updated_at"),
@@ -1492,7 +1538,9 @@ fn tokens_from_account(account: &Value) -> TokenBundle {
             "",
         ),
         refresh_token: first_string(
-            account.get("auth").and_then(|auth| auth.get("refreshToken")),
+            account
+                .get("auth")
+                .and_then(|auth| auth.get("refreshToken")),
             account.get("refresh_token"),
             "",
         ),
@@ -1568,7 +1616,9 @@ fn account_access_token(account: &Value) -> String {
 
 fn account_refresh_token(account: &Value) -> String {
     first_string(
-        account.get("auth").and_then(|auth| auth.get("refreshToken")),
+        account
+            .get("auth")
+            .and_then(|auth| auth.get("refreshToken")),
         account.get("refresh_token"),
         "",
     )
@@ -1642,7 +1692,12 @@ fn remove_toml_root_keys(content: &str, keys: &[&str]) -> String {
     }
 
     regex::Regex::new(r"\n{3,}")
-        .map(|regex| regex.replace_all(&next_lines.join("\n"), "\n\n").trim().to_string())
+        .map(|regex| {
+            regex
+                .replace_all(&next_lines.join("\n"), "\n\n")
+                .trim()
+                .to_string()
+        })
         .unwrap_or_else(|_| next_lines.join("\n").trim().to_string())
 }
 
@@ -1734,7 +1789,11 @@ fn number_value(value: Option<&Value>, fallback: u64) -> u64 {
 fn decimal_value(value: Option<&Value>, fallback: f64) -> f64 {
     value
         .and_then(Value::as_f64)
-        .or_else(|| value.and_then(Value::as_str).and_then(|value| value.parse().ok()))
+        .or_else(|| {
+            value
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse().ok())
+        })
         .unwrap_or(fallback)
 }
 

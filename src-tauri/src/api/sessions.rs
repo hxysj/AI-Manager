@@ -46,12 +46,15 @@ pub async fn refresh_sessions_state(
             continue;
         }
 
-        let source_updated_at = usage::session_file_modified_at(&string_value(item.get("cli")), &raw_path);
+        let source_updated_at =
+            usage::session_file_modified_at(&string_value(item.get("cli")), &raw_path);
 
         if let Some(previous) = previous_session_map.get(&raw_path).filter(|session| {
             source_updated_at > 0
                 && session.get("cli") == item.get("cli")
-                && item.get("title").is_none_or(|title| session.get("title") == Some(title))
+                && item
+                    .get("title")
+                    .is_none_or(|title| session.get("title") == Some(title))
                 && session.get("updatedAt").and_then(Value::as_u64) == Some(source_updated_at)
         }) {
             sessions.push(previous.clone());
@@ -197,9 +200,8 @@ async fn reconcile_recycled_session(
     metadata["cliConfigPath"] = json!(cli_config_path);
     metadata["cliExecutablePath"] = json!(cli_executable_path);
     metadata["cliSessionId"] = json!(cli_session_id);
-    metadata["cliHistoryEntries"] = json!(
-        remove_cli_history_entries(&cli_config_path, &cli_session_id).await?
-    );
+    metadata["cliHistoryEntries"] =
+        json!(remove_cli_history_entries(&cli_config_path, &cli_session_id).await?);
     metadata["cliStateSynchronized"] = json!(true);
     Ok(())
 }
@@ -213,13 +215,16 @@ async fn scan_session_metadata(item: &Value) -> Result<Option<Value>, ManagerErr
         tokio::fs::read_to_string(&raw_path).await?
     };
     let mut metadata = scan_session_metadata_content(&raw_path, &cli, &content)?;
-    if let Some(title) = item.get("title").and_then(Value::as_str).filter(|title| !title.is_empty()) {
+    if let Some(title) = item
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|title| !title.is_empty())
+    {
         metadata.title = title.to_string();
     }
 
     if (metadata.message_count == 0 && cli != "claude-desktop")
-        || (["claude", "codex", "opencode"].contains(&cli.as_str())
-            && !metadata.has_conversation)
+        || (["claude", "codex", "opencode"].contains(&cli.as_str()) && !metadata.has_conversation)
     {
         return Ok(None);
     }
@@ -319,7 +324,11 @@ fn scan_session_metadata_content(
         return Ok(summary);
     }
 
-    for line in content.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         if let Ok(record) = serde_json::from_str::<Value>(line) {
             append_session_metadata_record(&mut summary, &record, cli);
         }
@@ -327,11 +336,7 @@ fn scan_session_metadata_content(
     Ok(summary)
 }
 
-fn append_session_metadata_record(
-    summary: &mut SessionMetadataSummary,
-    record: &Value,
-    cli: &str,
-) {
+fn append_session_metadata_record(summary: &mut SessionMetadataSummary, record: &Value, cli: &str) {
     append_session_metadata_fields(summary, record);
 
     let payload = record.get("payload").unwrap_or(record);
@@ -519,7 +524,9 @@ pub async fn delete_session(
     let recycled_path = get_recycle_session_path(paths, &session);
     let cli = string_value(session.get("cli"));
     if cli == "claude-desktop" {
-        return Err(ManagerError::System("Desktop 会话包含关联文件，请在 Claude Desktop 中删除".to_string()));
+        return Err(ManagerError::System(
+            "Desktop 会话包含关联文件，请在 Claude Desktop 中删除".to_string(),
+        ));
     }
     let cli_target = cli_targets
         .as_array()
@@ -564,13 +571,11 @@ pub async fn delete_session(
             &cli_session_id,
         )
         .await?;
-        let archived_path = Path::new(&cli_config_path)
-            .join("archived_sessions")
-            .join(
-                Path::new(&string_value(session.get("rawPath")))
-                    .file_name()
-                    .unwrap_or_default(),
-            );
+        let archived_path = Path::new(&cli_config_path).join("archived_sessions").join(
+            Path::new(&string_value(session.get("rawPath")))
+                .file_name()
+                .unwrap_or_default(),
+        );
 
         if !archived_path.exists() {
             return Err(ManagerError::System(
@@ -582,9 +587,8 @@ pub async fn delete_session(
     } else {
         move_file(string_value(session.get("rawPath")), &recycled_path).await?;
     }
-    metadata["cliHistoryEntries"] = json!(
-        remove_cli_history_entries(&cli_config_path, &cli_session_id).await?
-    );
+    metadata["cliHistoryEntries"] =
+        json!(remove_cli_history_entries(&cli_config_path, &cli_session_id).await?);
     write_json(get_recycle_metadata_path(paths, &session_id), &metadata).await?;
     sessions.retain(|item| item.get("id").and_then(Value::as_str) != Some(session_id.as_str()));
     write_json(&paths.storage_files.sessions, &json!(sessions)).await
@@ -1293,12 +1297,9 @@ mod tests {
             )
             .unwrap();
 
-            let removed = remove_cli_history_entries(
-                root.to_string_lossy().as_ref(),
-                "session-a",
-            )
-            .await
-            .unwrap();
+            let removed = remove_cli_history_entries(root.to_string_lossy().as_ref(), "session-a")
+                .await
+                .unwrap();
 
             assert_eq!(removed.len(), 2);
             assert!(!std::fs::read_to_string(&history_path)
@@ -1330,7 +1331,8 @@ mod tests {
             ));
             let paths = resolve_app_paths(Path::new(&root));
             let config_path = root.join("claude");
-            let recycled_path = Path::new(&paths.session_recycle_sessions_dir).join("session.jsonl");
+            let recycled_path =
+                Path::new(&paths.session_recycle_sessions_dir).join("session.jsonl");
             let metadata_path = Path::new(&paths.session_recycle_metadata_dir).join("session.json");
 
             std::fs::create_dir_all(recycled_path.parent().unwrap()).unwrap();

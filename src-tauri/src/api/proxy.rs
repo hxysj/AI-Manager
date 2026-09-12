@@ -195,7 +195,9 @@ where
 
     let (key_id, api_key) = runtime_provider::get_provider_api_key_with_id(paths, &provider_id)?;
     if api_key.is_empty() {
-        return Err(ManagerError::System("当前 Codex Provider 缺少 API Key".to_string()));
+        return Err(ManagerError::System(
+            "当前 Codex Provider 缺少 API Key".to_string(),
+        ));
     }
     headers.insert(
         "authorization",
@@ -209,16 +211,19 @@ where
         .json(&Value::Object(request_body));
     let mut key_request = KeyRequest::new(paths, &provider_id, &key_id, &api_key);
     key_request.start();
-    let response = outgoing
-        .send()
-        .await
-        .map_err(|error| {
-            key_request.fail("network");
-            ManagerError::System(error.to_string())
-        })?;
+    let response = outgoing.send().await.map_err(|error| {
+        key_request.fail("network");
+        ManagerError::System(error.to_string())
+    })?;
     let status = response.status().as_u16();
-    key_request.response(status, response.headers().get("content-type")
-        .and_then(|value| value.to_str().ok()).is_some_and(|value| value.contains("text/event-stream")));
+    key_request.response(
+        status,
+        response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.contains("text/event-stream")),
+    );
     let response_headers = response
         .headers()
         .iter()
@@ -318,9 +323,8 @@ impl ProxyServerRegistry {
                 let context = context.clone();
 
                 tauri::async_runtime::spawn(async move {
-                    let service = service_fn(move |request| {
-                        handle_proxy_request(request, context.clone())
-                    });
+                    let service =
+                        service_fn(move |request| handle_proxy_request(request, context.clone()));
 
                     if let Err(error) = http1::Builder::new().serve_connection(io, service).await {
                         eprintln!("{error}");
@@ -761,7 +765,11 @@ pub async fn start_provider_instance_server(
 }
 
 pub fn create_provider_instance_token(provider_id: &str) -> String {
-    format!("{}{}", PROXY_PROVIDER_INSTANCE_TOKEN_PREFIX, provider_id.trim())
+    format!(
+        "{}{}",
+        PROXY_PROVIDER_INSTANCE_TOKEN_PREFIX,
+        provider_id.trim()
+    )
 }
 
 async fn handle_proxy_request(
@@ -995,7 +1003,9 @@ async fn update_active_provider_if_needed(
     provider_id: &str,
     instance_provider_id: &str,
 ) -> Result<(), ManagerError> {
-    if !instance_provider_id.is_empty() || string_value(config.get("activeProviderId")) == provider_id {
+    if !instance_provider_id.is_empty()
+        || string_value(config.get("activeProviderId")) == provider_id
+    {
         return Ok(());
     }
 
@@ -1286,7 +1296,10 @@ fn get_target(
         )));
     }
 
-    let runtime_config = provider.get("runtimeConfig").cloned().unwrap_or_else(|| json!({}));
+    let runtime_config = provider
+        .get("runtimeConfig")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
 
     Ok(ProxyTarget {
         target_type: "provider".to_string(),
@@ -1298,7 +1311,11 @@ fn get_target(
     })
 }
 
-fn get_provider_api_key(paths: &AppPaths, cli: &str, provider_id: &str) -> Result<String, ManagerError> {
+fn get_provider_api_key(
+    paths: &AppPaths,
+    cli: &str,
+    provider_id: &str,
+) -> Result<String, ManagerError> {
     let api_key = runtime_provider::get_provider_api_key(paths, provider_id)?;
 
     if api_key.is_empty() {
@@ -1373,7 +1390,11 @@ fn read_proxy_config(paths: &AppPaths, cli: &str) -> Result<Value, ManagerError>
     Ok(normalize_proxy_config(&value, cli))
 }
 
-async fn write_proxy_config(paths: &AppPaths, cli: &str, config: &Value) -> Result<(), ManagerError> {
+async fn write_proxy_config(
+    paths: &AppPaths,
+    cli: &str,
+    config: &Value,
+) -> Result<(), ManagerError> {
     runtime_provider::write_json(proxy_config_path(paths, cli), config).await
 }
 
@@ -1385,7 +1406,11 @@ fn read_live_backup(paths: &AppPaths, cli: &str) -> Result<Value, ManagerError> 
     }
 }
 
-async fn write_live_backup(paths: &AppPaths, cli: &str, payload: &Value) -> Result<(), ManagerError> {
+async fn write_live_backup(
+    paths: &AppPaths,
+    cli: &str,
+    payload: &Value,
+) -> Result<(), ManagerError> {
     runtime_provider::write_json(proxy_live_backup_path(paths, cli), payload).await
 }
 
@@ -1397,7 +1422,11 @@ pub(crate) fn read_logs(paths: &AppPaths, cli: &str) -> Result<Value, ManagerErr
     }
 }
 
-pub(crate) async fn append_log(paths: &AppPaths, cli: &str, input: Value) -> Result<(), ManagerError> {
+pub(crate) async fn append_log(
+    paths: &AppPaths,
+    cli: &str,
+    input: Value,
+) -> Result<(), ManagerError> {
     let mut logs = read_logs(paths, cli)?
         .as_array()
         .cloned()
@@ -1492,7 +1521,8 @@ async fn write_live_config_atomic(
     )
     .await?;
 
-    if let Err(error) = tokio::fs::write(&toml_path, string_value(live_config.get("config"))).await {
+    if let Err(error) = tokio::fs::write(&toml_path, string_value(live_config.get("config"))).await
+    {
         if let Some(previous_auth) = previous_auth {
             tokio::fs::write(&auth_path, previous_auth).await?;
         } else {
@@ -1530,7 +1560,9 @@ fn normalize_proxy_config(input: &Value, cli: &str) -> Value {
 fn build_local_base_url(config: &Value) -> String {
     format!(
         "http://{}:{}/v1",
-        format_host_for_url(&normalize_host_for_client(&string_value(config.get("host")))),
+        format_host_for_url(&normalize_host_for_client(&string_value(
+            config.get("host")
+        ))),
         number_value(config.get("port"), 15721)
     )
 }
@@ -1538,12 +1570,18 @@ fn build_local_base_url(config: &Value) -> String {
 fn build_anthropic_local_base_url(config: &Value) -> String {
     format!(
         "http://{}:{}",
-        format_host_for_url(&normalize_host_for_client(&string_value(config.get("host")))),
+        format_host_for_url(&normalize_host_for_client(&string_value(
+            config.get("host")
+        ))),
         number_value(config.get("port"), 15722)
     )
 }
 
-fn build_upstream_url(base_url: &str, endpoint: &str, search: &str) -> Result<String, ManagerError> {
+fn build_upstream_url(
+    base_url: &str,
+    endpoint: &str,
+    search: &str,
+) -> Result<String, ManagerError> {
     let clean_base = base_url.trim().trim_end_matches('/').to_string();
 
     if clean_base.is_empty() {
@@ -1561,7 +1599,8 @@ fn build_upstream_url(base_url: &str, endpoint: &str, search: &str) -> Result<St
         return Ok(format!("{}{}", clean_base, search));
     }
 
-    let url = url::Url::parse(&clean_base).map_err(|error| ManagerError::System(error.to_string()))?;
+    let url =
+        url::Url::parse(&clean_base).map_err(|error| ManagerError::System(error.to_string()))?;
     let base_path = url.path().trim_end_matches('/');
     let path_prefix = if !base_path.is_empty() && base_path != "/" {
         ""
@@ -1591,7 +1630,8 @@ pub(crate) fn build_anthropic_upstream_url(
         return Ok(format!("{}{}", clean_base, search));
     }
 
-    let url = url::Url::parse(&clean_base).map_err(|error| ManagerError::System(error.to_string()))?;
+    let url =
+        url::Url::parse(&clean_base).map_err(|error| ManagerError::System(error.to_string()))?;
     let base_path = url.path().trim_end_matches('/');
     let path_prefix = if base_path.to_lowercase().ends_with("/v1") {
         ""
@@ -1654,14 +1694,20 @@ fn build_claude_proxy_settings(
     } else {
         serde_json::from_str(content)?
     };
-    let runtime_config = provider.get("runtimeConfig").cloned().unwrap_or_else(|| json!({}));
+    let runtime_config = provider
+        .get("runtimeConfig")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let mut env = settings
         .get("env")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
 
-    env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), json!(PROXY_MANAGED_API_KEY));
+    env.insert(
+        "ANTHROPIC_AUTH_TOKEN".to_string(),
+        json!(PROXY_MANAGED_API_KEY),
+    );
     env.insert("ANTHROPIC_BASE_URL".to_string(), json!(local_base_url));
 
     for (config_key, env_key) in [
@@ -1741,7 +1787,11 @@ fn parse_toml_string(value: &str) -> String {
 
 fn set_toml_root_value(content: &str, key: &str, value: &str) -> String {
     let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
-    let next_line = format!("{} = {}", key, runtime_provider::to_toml_string(value.to_string()));
+    let next_line = format!(
+        "{} = {}",
+        key,
+        runtime_provider::to_toml_string(value.to_string())
+    );
 
     if let Some(index) = lines.iter().position(|line| {
         let text = line.trim();
@@ -1795,7 +1845,11 @@ fn remove_toml_root_value(content: &str, key: &str) -> String {
 fn set_toml_section_value(content: &str, section_name: &str, key: &str, value: &str) -> String {
     let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
     let section_header = format!("[{}]", section_name);
-    let next_line = format!("{} = {}", key, runtime_provider::to_toml_string(value.to_string()));
+    let next_line = format!(
+        "{} = {}",
+        key,
+        runtime_provider::to_toml_string(value.to_string())
+    );
     let Some(section_index) = lines.iter().position(|line| line.trim() == section_header) else {
         let trimmed = lines.join("\n").trim_end().to_string();
         let prefix = if trimmed.is_empty() {
@@ -1899,7 +1953,9 @@ fn is_account_target(target_id: &str) -> bool {
 }
 
 fn account_id_from_target(target_id: &str) -> String {
-    target_id.trim_start_matches(CODEX_ACCOUNT_PREFIX).to_string()
+    target_id
+        .trim_start_matches(CODEX_ACCOUNT_PREFIX)
+        .to_string()
 }
 
 fn proxy_config_path<'a>(paths: &'a AppPaths, cli: &str) -> &'a str {
@@ -2085,39 +2141,41 @@ mod tests {
                 http1::Builder::new()
                     .serve_connection(
                         TokioIo::new(stream),
-                        service_fn(|request: hyper::Request<hyper::body::Incoming>| async move {
-                            let path = request.uri().path().to_string();
-                            let authorization = request
-                                .headers()
-                                .get("authorization")
-                                .and_then(|value| value.to_str().ok())
-                                .unwrap_or_default()
-                                .to_string();
-                            let provider_header = request
-                                .headers()
-                                .get("x-provider-header")
-                                .and_then(|value| value.to_str().ok())
-                                .unwrap_or_default()
-                                .to_string();
-                            let body = request.into_body().collect().await.unwrap().to_bytes();
-                            let payload: Value = serde_json::from_slice(&body).unwrap();
-                            let response_body = json!({
-                              "path": path,
-                              "authorization": authorization,
-                              "providerHeader": provider_header,
-                              "model": payload["model"],
-                              "stream": payload["stream"]
-                            });
-                            Ok::<_, Infallible>(
-                                Response::builder()
-                                    .header("content-type", "text/event-stream")
-                                    .body(Full::new(Bytes::from(format!(
-                                        "data: {}\n\n",
-                                        response_body
-                                    ))))
-                                    .unwrap(),
-                            )
-                        }),
+                        service_fn(
+                            |request: hyper::Request<hyper::body::Incoming>| async move {
+                                let path = request.uri().path().to_string();
+                                let authorization = request
+                                    .headers()
+                                    .get("authorization")
+                                    .and_then(|value| value.to_str().ok())
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let provider_header = request
+                                    .headers()
+                                    .get("x-provider-header")
+                                    .and_then(|value| value.to_str().ok())
+                                    .unwrap_or_default()
+                                    .to_string();
+                                let body = request.into_body().collect().await.unwrap().to_bytes();
+                                let payload: Value = serde_json::from_slice(&body).unwrap();
+                                let response_body = json!({
+                                  "path": path,
+                                  "authorization": authorization,
+                                  "providerHeader": provider_header,
+                                  "model": payload["model"],
+                                  "stream": payload["stream"]
+                                });
+                                Ok::<_, Infallible>(
+                                    Response::builder()
+                                        .header("content-type", "text/event-stream")
+                                        .body(Full::new(Bytes::from(format!(
+                                            "data: {}\n\n",
+                                            response_body
+                                        ))))
+                                        .unwrap(),
+                                )
+                            },
+                        ),
                     )
                     .await
                     .unwrap();
@@ -2201,7 +2259,11 @@ mod tests {
             .unwrap_err()
             .to_string();
             assert!(endpoint_error.contains("仅允许调用 /responses"));
-            let usage = runtime_provider::read_provider_key_usage(&paths, &json!({"providerId": "provider-active", "cli": "codex"})).unwrap();
+            let usage = runtime_provider::read_provider_key_usage(
+                &paths,
+                &json!({"providerId": "provider-active", "cli": "codex"}),
+            )
+            .unwrap();
             let active = usage["activeApiKeyId"].as_str().unwrap();
             assert_eq!(usage["keys"][active]["requestCount"], 1);
             assert_eq!(usage["keys"][active]["successCount"], 1);

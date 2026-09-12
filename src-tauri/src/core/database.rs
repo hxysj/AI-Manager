@@ -533,9 +533,8 @@ fn reconcile_provider_runtime_state(
     }
 
     let runtime_states = {
-        let mut statement = transaction.prepare(
-            "SELECT cli, payload_json FROM provider_runtime_state ORDER BY cli",
-        )?;
+        let mut statement = transaction
+            .prepare("SELECT cli, payload_json FROM provider_runtime_state ORDER BY cli")?;
         let rows = statement
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -1499,7 +1498,10 @@ mod tests {
         .unwrap();
 
         let providers = provider_store::read_providers(&target_paths).unwrap();
-        let provider_a = providers.iter().find(|item| item["id"] == "provider-a").unwrap();
+        let provider_a = providers
+            .iter()
+            .find(|item| item["id"] == "provider-a")
+            .unwrap();
         let provider_new = providers
             .iter()
             .find(|item| item["id"] == "provider-new")

@@ -576,10 +576,9 @@ fn load_prompts(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     for mut prompt in rule_store::read_prompts(paths)? {
         let cli = string_value(prompt.get("cli"));
         let prompt_dir = prompt_dir(paths, &cli);
-        let content = std::fs::read_to_string(
-            prompt_dir.join(string_value(prompt.get("fileName"))),
-        )
-        .unwrap_or_default();
+        let content =
+            std::fs::read_to_string(prompt_dir.join(string_value(prompt.get("fileName"))))
+                .unwrap_or_default();
 
         prompt["content"] = json!(content);
         prompt["metadataFileName"] = json!(format!("{}.json", string_value(prompt.get("id"))));

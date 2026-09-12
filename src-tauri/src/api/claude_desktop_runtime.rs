@@ -62,7 +62,9 @@ fn target(platform: &str, home: &Path, local: Option<&Path>) -> Option<Value> {
 }
 
 fn personal_skills_path(root: &Path) -> Result<PathBuf, ManagerError> {
-    let unavailable = || ManagerError::System("尚未识别 Desktop 个人 Skills 目录，请先以第三方模式启动 Desktop 并打开一次 Cowork，再刷新应用状态".to_string());
+    let unavailable = || {
+        ManagerError::System("尚未识别 Desktop 个人 Skills 目录，请先以第三方模式启动 Desktop 并打开一次 Cowork，再刷新应用状态".to_string())
+    };
     let encoded = std::fs::read_to_string(root.join("ant-did")).map_err(|_| unavailable())?;
     let decoded = STANDARD.decode(encoded.trim()).map_err(|_| unavailable())?;
     let account = String::from_utf8(decoded).map_err(|_| unavailable())?;
@@ -82,7 +84,8 @@ fn personal_skills_path(root: &Path) -> Result<PathBuf, ManagerError> {
         if !manifest.is_file() {
             continue;
         }
-        let metadata: Value = serde_json::from_slice(&std::fs::read(plugin.join(".claude-plugin/plugin.json"))?)?;
+        let metadata: Value =
+            serde_json::from_slice(&std::fs::read(plugin.join(".claude-plugin/plugin.json"))?)?;
         if metadata["name"] == "anthropic-skills" && plugin.join("skills").is_dir() {
             candidates.push(plugin.join("skills"));
         }
@@ -180,7 +183,10 @@ mod tests {
         assert_eq!(windows["id"], APP_ID);
         assert!(windows["sessionPaths"].as_array().unwrap().len() >= 4);
         assert_eq!(windows["skillsPath"], "");
-        assert!(windows["skillsHint"].as_str().unwrap().contains("第三方模式"));
+        assert!(windows["skillsHint"]
+            .as_str()
+            .unwrap()
+            .contains("第三方模式"));
         assert!(target("linux", home, None).is_none());
         let mac = target("macos", home, None).unwrap();
         assert_eq!(mac["sessionPaths"].as_array().unwrap().len(), 4);
@@ -188,32 +194,60 @@ mod tests {
 
     #[test]
     fn claude_desktop_skills_resolve_install_identity_without_guessing_an_account() {
-        let root = std::env::temp_dir().join(format!("ai-manager-desktop-skill-paths-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "ai-manager-desktop-skill-paths-{}",
+            uuid::Uuid::new_v4()
+        ));
         let data = root.join("Claude-3p");
         let account = uuid::Uuid::new_v4().to_string();
         let organization = uuid::Uuid::new_v4().to_string();
-        let plugin = data.join("local-agent-mode-sessions/skills-plugin").join(&organization).join(&account);
+        let plugin = data
+            .join("local-agent-mode-sessions/skills-plugin")
+            .join(&organization)
+            .join(&account);
         assert!(personal_skills_path(&data).is_err());
         std::fs::create_dir_all(plugin.join("skills")).unwrap();
         std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
-        std::fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name":"anthropic-skills"}"#).unwrap();
+        std::fs::write(
+            plugin.join(".claude-plugin/plugin.json"),
+            r#"{"name":"anthropic-skills"}"#,
+        )
+        .unwrap();
         std::fs::write(plugin.join("manifest.json"), r#"{"skills":[]}"#).unwrap();
         std::fs::write(data.join("ant-did"), STANDARD.encode(&account)).unwrap();
         assert_eq!(personal_skills_path(&data).unwrap(), plugin.join("skills"));
-        std::fs::write(data.join("ant-did"), STANDARD.encode(uuid::Uuid::new_v4().to_string())).unwrap();
+        std::fs::write(
+            data.join("ant-did"),
+            STANDARD.encode(uuid::Uuid::new_v4().to_string()),
+        )
+        .unwrap();
         assert!(personal_skills_path(&data).is_err());
         std::fs::write(data.join("ant-did"), STANDARD.encode(&account)).unwrap();
-        let other = data.join("local-agent-mode-sessions/skills-plugin").join(uuid::Uuid::new_v4().to_string()).join(&account);
+        let other = data
+            .join("local-agent-mode-sessions/skills-plugin")
+            .join(uuid::Uuid::new_v4().to_string())
+            .join(&account);
         std::fs::create_dir_all(other.join("skills")).unwrap();
         std::fs::create_dir_all(other.join(".claude-plugin")).unwrap();
-        std::fs::write(other.join(".claude-plugin/plugin.json"), r#"{"name":"anthropic-skills"}"#).unwrap();
+        std::fs::write(
+            other.join(".claude-plugin/plugin.json"),
+            r#"{"name":"anthropic-skills"}"#,
+        )
+        .unwrap();
         std::fs::write(other.join("manifest.json"), r#"{"skills":[]}"#).unwrap();
-        assert!(personal_skills_path(&data).unwrap_err().to_string().contains("多个组织"));
+        assert!(personal_skills_path(&data)
+            .unwrap_err()
+            .to_string()
+            .contains("多个组织"));
         std::fs::write(data.join("ant-did"), STANDARD.encode("../invalid-account")).unwrap();
         assert!(personal_skills_path(&data).is_err());
         let resolved = root.canonicalize().unwrap();
         assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
-        assert!(resolved.file_name().unwrap().to_string_lossy().starts_with("ai-manager-desktop-skill-paths-"));
+        assert!(resolved
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("ai-manager-desktop-skill-paths-"));
         std::fs::remove_dir_all(resolved).unwrap();
     }
 
@@ -274,12 +308,16 @@ mod tests {
                 usage::collect_cli_session_files(state["cliTargets"].as_array().unwrap()).unwrap();
             assert_eq!(files.len(), 1);
             assert_eq!(files[0]["cli"], APP_ID);
-            usage_store::write_request_record(&paths, &json!({
-                "requestId": "desktop-response:code-message", "appType": APP_ID,
-                "providerId": "desktop-provider", "providerName": "测试供应商",
-                "model": "upstream-model", "requestModel": "claude-sonnet-4-6",
-                "requestSource": "proxy-managed"
-            })).unwrap();
+            usage_store::write_request_record(
+                &paths,
+                &json!({
+                    "requestId": "desktop-response:code-message", "appType": APP_ID,
+                    "providerId": "desktop-provider", "providerName": "测试供应商",
+                    "model": "upstream-model", "requestModel": "claude-sonnet-4-6",
+                    "requestSource": "proxy-managed"
+                }),
+            )
+            .unwrap();
             for _ in 0..2 {
                 usage::sync_usage(&paths, json!({}), &state).await.unwrap();
             }
@@ -379,41 +417,57 @@ mod tests {
                     .len(),
                 1
             );
-            for (model, cost, expected_cost) in [
-                ("upstream-model", 5, 5),
-                ("claude-sonnet-4-6", 99, 0),
-            ] {
+            for (model, cost, expected_cost) in
+                [("upstream-model", 5, 5), ("claude-sonnet-4-6", 99, 0)]
+            {
                 let mut cached_log = logs[0].clone();
                 cached_log["model"] = json!(model);
                 cached_log["totalCostUsd"] = json!(cost);
                 cached_log["costLockedAt"] = json!(1);
                 usage_store::write_usage_cost_snapshots(&paths, &[cached_log.clone()]).unwrap();
                 usage_store::ensure_session_parser_version(&paths, APP_ID, 0).unwrap();
-                usage_store::replace_sessions(&paths, &[usage_store::UsageSessionUpdate {
-                    raw_path: session["rawPath"].as_str().unwrap().to_string(),
-                    app_type: APP_ID.to_string(),
-                    updated_at: modified_at(&metadata_path),
-                    logs: vec![cached_log],
-                    records: Vec::new(),
-                }]).unwrap();
+                usage_store::replace_sessions(
+                    &paths,
+                    &[usage_store::UsageSessionUpdate {
+                        raw_path: session["rawPath"].as_str().unwrap().to_string(),
+                        app_type: APP_ID.to_string(),
+                        updated_at: modified_at(&metadata_path),
+                        logs: vec![cached_log],
+                        records: Vec::new(),
+                    }],
+                )
+                .unwrap();
                 state["providers"] = json!([{"id": "new-provider", "cli": APP_ID, "runtimeConfig": {"mainModel": "different-model"}}]);
                 for _ in 0..2 {
-                    usage::sync_usage(&paths, json!({"appType": APP_ID}), &state).await.unwrap();
+                    usage::sync_usage(&paths, json!({"appType": APP_ID}), &state)
+                        .await
+                        .unwrap();
                     let refreshed = usage_store::read_all_logs(&paths).unwrap();
                     assert_eq!(refreshed.len(), 1);
                     assert_eq!(refreshed[0]["model"], "upstream-model");
                     assert_eq!(refreshed[0]["requestModel"], "claude-sonnet-4-6");
-                    assert_eq!(refreshed[0]["totalCostUsd"].as_f64().unwrap(), expected_cost as f64);
-                    let records = usage_store::read_request_records(&paths, &["desktop-turn:turn-one".to_string()]).unwrap();
+                    assert_eq!(
+                        refreshed[0]["totalCostUsd"].as_f64().unwrap(),
+                        expected_cost as f64
+                    );
+                    let records = usage_store::read_request_records(
+                        &paths,
+                        &["desktop-turn:turn-one".to_string()],
+                    )
+                    .unwrap();
                     assert_eq!(records["desktop-turn:turn-one"]["model"], "upstream-model");
                 }
             }
-            usage_store::write_request_record(&paths, &json!({
-                "requestId": "desktop-response:desktop-message-one", "appType": APP_ID,
-                "providerId": "desktop-provider", "providerName": "测试供应商",
-                "model": "upstream-model", "requestModel": "claude-sonnet-4-6",
-                "requestSource": "proxy-managed"
-            })).unwrap();
+            usage_store::write_request_record(
+                &paths,
+                &json!({
+                    "requestId": "desktop-response:desktop-message-one", "appType": APP_ID,
+                    "providerId": "desktop-provider", "providerName": "测试供应商",
+                    "model": "upstream-model", "requestModel": "claude-sonnet-4-6",
+                    "requestSource": "proxy-managed"
+                }),
+            )
+            .unwrap();
             usage_store::ensure_session_parser_version(&paths, APP_ID, 0).unwrap();
             for _ in 0..2 {
                 usage::sync_usage(&paths, json!({}), &state).await.unwrap();
@@ -435,10 +489,16 @@ mod tests {
                 .unwrap();
             let logs = usage_store::read_all_logs(&paths).unwrap();
             assert_eq!(logs.len(), 2);
-            let second_log = logs.iter().find(|log| log["requestId"] == "desktop-turn:turn-two").unwrap();
+            let second_log = logs
+                .iter()
+                .find(|log| log["requestId"] == "desktop-turn:turn-two")
+                .unwrap();
             assert_eq!(second_log["model"], "claude-sonnet-4-6");
             assert_eq!(second_log["providerId"], APP_ID);
-            let first_log = logs.iter().find(|log| log["requestId"] == "desktop-turn:turn-one").unwrap();
+            let first_log = logs
+                .iter()
+                .find(|log| log["requestId"] == "desktop-turn:turn-one")
+                .unwrap();
             assert_eq!(first_log["providerId"], "desktop-provider");
             assert_eq!(
                 logs.iter()
