@@ -155,6 +155,9 @@
           v-else-if="activeView === 'settings'"
           :app-settings="state.appSettings"
           :cli-targets="state.cliTargets"
+          :providers="state.providers"
+          :codex-accounts="state.codexAccounts"
+          :runtime-models="state.runtimeModels"
           :local-backup-directory="localBackupDirectory"
           :local-backups="localBackups"
           :pending="pending"
@@ -362,7 +365,10 @@
       </section>
     </div>
 
-    <SelectionTranslator :active-view="activeView" />
+    <SelectionTranslator
+      :active-view="activeView"
+      :settings="state.appSettings?.agents?.translation"
+    />
     <GlobalLoading />
   </div>
 </template>

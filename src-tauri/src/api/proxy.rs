@@ -61,6 +61,82 @@ struct ForwardResult {
     key_request: Option<KeyRequest>,
 }
 
+// 翻译独立选择 Provider，固定本次请求的认证和模型，不切换 CLI 的当前配置。
+pub(crate) struct LlmTarget {
+    pub info: Value,
+    client: reqwest::Client,
+    upstream_url: String,
+    headers: HeaderMap,
+    key_id: String,
+    api_key: String,
+}
+
+pub(crate) fn translation_target_info(
+    paths: &AppPaths,
+    settings: &crate::core::settings::TranslationAgentSettings,
+) -> Result<Value, ManagerError> {
+    if settings.target_id.is_empty() || settings.model.is_empty() {
+        return Err(ManagerError::System("请在设置 → 功能扩展 → 划词翻译中选择 Provider / 账号并填写模型".to_string()));
+    }
+    if settings.target_language.len() > 100 {
+        return Err(ManagerError::System("翻译目标语言过长".to_string()));
+    }
+    let target = get_target(paths, "codex", &json!({}), &settings.target_id)?;
+    Ok(json!({
+        "targetId": settings.target_id, "providerName": target.name,
+        "model": settings.model, "engine": if target.target_type == "account" { "codex" } else { "langchain" }
+    }))
+}
+
+pub(crate) async fn prepare_translation_target(
+    paths: &AppPaths,
+    cli_targets: &Value,
+    settings: &crate::core::settings::TranslationAgentSettings,
+) -> Result<LlmTarget, ManagerError> {
+    let info = translation_target_info(paths, settings)?;
+    let target = get_target(paths, "codex", &json!({}), &settings.target_id)?;
+    let mut headers = hyper::HeaderMap::new();
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    if let Some(custom) = target.provider.as_ref().and_then(|item| item["headers"].as_object()) {
+        for (key, value) in custom {
+            let name = HeaderName::from_bytes(key.as_bytes()).map_err(|error| ManagerError::System(error.to_string()))?;
+            let value = HeaderValue::from_str(&string_value(Some(value))).map_err(|error| ManagerError::System(error.to_string()))?;
+            headers.insert(name, value);
+        }
+    }
+    let (headers, tracking) = build_forward_headers(paths, cli_targets, "codex", &headers, &settings.target_id).await?;
+    let key_id = tracking.as_ref().map(|item| item.key_id().to_string()).unwrap_or_default();
+    let api_key = if tracking.is_some() {
+        headers.get("authorization").and_then(|item| item.to_str().ok()).unwrap_or("").trim_start_matches("Bearer ").to_string()
+    } else {
+        String::new()
+    };
+    Ok(LlmTarget {
+        info,
+        client: http_client(&target.proxy)?,
+        upstream_url: build_upstream_url(&target.base_url, "/responses", "")?,
+        headers,
+        key_id,
+        api_key,
+    })
+}
+
+impl LlmTarget {
+    pub(crate) fn tracking(&self, paths: &AppPaths) -> Option<KeyRequest> {
+        (!self.key_id.is_empty()).then(|| KeyRequest::new(paths, self.info["targetId"].as_str().unwrap_or(""), &self.key_id, &self.api_key))
+    }
+
+    pub(crate) async fn send(&self, mut body: Value) -> Result<reqwest::Response, ManagerError> {
+        // 翻译只生成文本；即使原文含指令，也不给 agent 暴露执行工具。
+        body["model"] = self.info["model"].clone();
+        body["tools"] = json!([]);
+        body["tool_choice"] = json!("none");
+        body["store"] = json!(false);
+        self.client.post(&self.upstream_url).headers(self.headers.clone()).json(&body).send().await
+            .map_err(|error| ManagerError::System(error.to_string()))
+    }
+}
+
 pub(crate) async fn request_active_codex_provider<R: Runtime>(
     app: &AppHandle<R>,
     paths: &AppPaths,

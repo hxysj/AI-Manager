@@ -163,9 +163,7 @@
           <article class="settings-view__data-card">
             <div class="settings-view__data-copy">
               <span data-emphasis>导出到本地文件</span>
-              <span
-                >选择保存位置，生成加密的 .aimbackup 本地备份文件。</span
-              >
+              <span>选择保存位置，生成加密的 .aimbackup 本地备份文件。</span>
             </div>
             <button type="button" @click="$emit('export-data')">
               <Download :size="16" />
@@ -176,7 +174,10 @@
           <article class="settings-view__data-card">
             <div class="settings-view__data-copy">
               <span data-emphasis>从本地备份文件恢复</span>
-              <span>选择 .aimbackup 文件，预览冲突后再恢复并保留本机启用状态。</span>
+              <span
+                >选择 .aimbackup
+                文件，预览冲突后再恢复并保留本机启用状态。</span
+              >
             </div>
             <button type="button" @click="$emit('restore-data')">
               <Upload :size="16" />
@@ -332,9 +333,7 @@
             </div>
             <span class="settings-view__cloud-time">
               上次同步：{{
-                formatCloudSyncTime(
-                  draft[syncItem.settingKey].lastUpdatedAt
-                )
+                formatCloudSyncTime(draft[syncItem.settingKey].lastUpdatedAt)
               }}
             </span>
           </div>
@@ -402,6 +401,54 @@
             </button>
           </div>
         </section>
+      </section>
+
+      <section v-else-if="activeTab === 'agents'" class="settings-agent-panel">
+        <template v-if="!activeAgent">
+          <div class="settings-view__panel-header">
+            <div>
+              <h2>功能扩展</h2>
+              <span>管理应用的扩展功能，点击查看配置和使用记录。</span>
+            </div>
+          </div>
+          <div class="settings-agent-list">
+            <article
+              class="settings-agent-card"
+              tabindex="0"
+              @click="activeAgent = 'translation'"
+              @keydown.enter="activeAgent = 'translation'"
+            >
+              <div class="settings-agent-icon"><Languages :size="20" /></div>
+              <div class="settings-agent-copy">
+                <span data-emphasis>划词翻译</span>
+                <span>选中文本后右键翻译，支持查看翻译历史和消耗记录。</span>
+              </div>
+              <button
+                class="settings-agent-toggle"
+                :class="{
+                  'settings-agent-toggle-active':
+                    draft.agents.translation.enabled
+                }"
+                type="button"
+                @click.stop="
+                  draft.agents.translation.enabled =
+                    !draft.agents.translation.enabled
+                "
+              >
+                {{ draft.agents.translation.enabled ? "已启用" : "已禁用" }}
+              </button>
+              <ChevronRight :size="18" />
+            </article>
+          </div>
+        </template>
+        <TranslationAgentSettings
+          v-else
+          v-model="draft.agents.translation"
+          :providers="providers"
+          :codex-accounts="codexAccounts"
+          :runtime-models="runtimeModels"
+          @back="activeAgent = ''"
+        />
       </section>
 
       <section v-else class="settings-view__panel">
@@ -563,11 +610,14 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue"
 import {
+  ChevronRight,
   Download,
   DownloadCloud,
   Eye,
   FolderOpen,
+  Languages,
   Power,
+  Puzzle,
   RefreshCw,
   RotateCcw,
   Save,
@@ -577,12 +627,16 @@ import {
   UploadCloud
 } from "lucide-vue-next"
 import { systemApi } from "@/api"
+import TranslationAgentSettings from "./components/TranslationAgentSettings.vue"
 
 const props = defineProps({
   appSettings: {
     type: Object,
     required: true
   },
+  providers: { type: Array, default: () => [] },
+  codexAccounts: { type: Array, default: () => [] },
+  runtimeModels: { type: Array, default: () => [] },
   cliTargets: {
     type: Array,
     required: true
@@ -618,6 +672,7 @@ const emit = defineEmits([
 ])
 
 const activeTab = ref("directories")
+const activeAgent = ref("")
 
 // 两个 WebDAV 服务保留独立配置，避免切换同步目标时覆盖凭据。
 const cloudSyncItems = [
@@ -640,6 +695,14 @@ const cloudSyncItems = [
 ]
 
 const draft = reactive({
+  agents: {
+    translation: {
+      enabled: false,
+      targetId: "",
+      model: "",
+      targetLanguage: "简体中文"
+    }
+  },
   dataPath: "",
   cliConfigPaths: {
     claude: "",
@@ -698,7 +761,8 @@ const tabs = [
     id: "system",
     label: "系统设置",
     icon: Settings
-  }
+  },
+  { id: "agents", label: "功能扩展", icon: Puzzle }
 ]
 
 const closeActionItems = [
@@ -736,6 +800,14 @@ const cliItems = computed(() => {
 })
 
 function syncDraft() {
+  // 保存后的全局配置驱动划词入口；未保存的编辑仅留在设置草稿中。
+  draft.agents.translation = {
+    enabled: false,
+    targetId: "",
+    model: "",
+    targetLanguage: "简体中文",
+    ...props.appSettings.agents?.translation
+  }
   draft.dataPath = props.appSettings.dataPath || ""
   draft.cliConfigPaths.claude = props.appSettings.cliConfigPaths?.claude || ""
   draft.cliConfigPaths.codex = props.appSettings.cliConfigPaths?.codex || ""
@@ -795,6 +867,7 @@ function resetCliPath(key) {
 
 function submitSettings() {
   emit("save", {
+    agents: { translation: { ...draft.agents.translation } },
     dataPath: draft.dataPath,
     cliConfigPaths: {
       claude: draft.cliConfigPaths.claude,
@@ -1448,6 +1521,66 @@ watch(
     color: var(--color-text-muted);
     font-size: var(--font-size-sm);
     line-height: 1.5;
+  }
+
+  .settings-agent-panel {
+    min-height: 0;
+    overflow: auto;
+    .settings-agent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      .settings-agent-card {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 16px;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        background: var(--color-panel);
+        cursor: pointer;
+        &:hover,
+        &:focus-visible {
+          border-color: var(--color-line-strong);
+          outline: none;
+        }
+        .settings-agent-icon {
+          display: grid;
+          width: 38px;
+          height: 38px;
+          flex: none;
+          place-items: center;
+          border-radius: 8px;
+          background: var(--color-panel-soft);
+          color: var(--color-primary);
+        }
+        .settings-agent-copy {
+          display: flex;
+          min-width: 0;
+          flex: 1;
+          flex-direction: column;
+          gap: 4px;
+          span:not([data-emphasis]) {
+            color: var(--color-text-muted);
+            font-size: var(--font-size-sm);
+          }
+        }
+        .settings-agent-toggle {
+          flex: none;
+          padding: 6px 10px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          background: var(--color-panel);
+          color: var(--color-text-muted);
+          cursor: pointer;
+          &.settings-agent-toggle-active {
+            border-color: var(--color-primary);
+            background: var(--color-panel-soft);
+            color: var(--color-primary);
+          }
+        }
+      }
+    }
   }
 }
 </style>

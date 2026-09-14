@@ -13,10 +13,14 @@ pub async fn save_settings(
     state: &mut Value,
     payload: Value,
 ) -> Result<(), ManagerError> {
-    *app_settings = normalize_app_settings(
+    let next_settings = normalize_app_settings(
         PathBuf::from(&app_settings.settings_file_path),
         Some(payload),
     );
+    if next_settings.agents.translation.enabled {
+        crate::api::proxy::translation_target_info(paths, &next_settings.agents.translation)?;
+    }
+    *app_settings = next_settings;
     *paths = resolve_app_paths(Path::new(&app_settings.data_path));
     tokio::fs::create_dir_all(&app_settings.data_path).await?;
     write_json_file(

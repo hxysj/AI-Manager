@@ -50,6 +50,19 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        // 模型请求可能持续较久，快照后释放状态锁，让其他页面和设置保持可用。
+        if channel == "translation:translate" {
+            let manager = self.manager.lock().await;
+            let paths = manager.paths.clone();
+            let workspace_root = manager.workspace_root.clone();
+            let resource_dir = manager.resource_dir.clone();
+            let cli_targets = manager.state["cliTargets"].clone();
+            let settings = manager.app_settings.agents.translation.clone();
+            drop(manager);
+            let result = translation::translate_text(&paths, &workspace_root, &resource_dir, &cli_targets, &settings, payload.unwrap_or_else(|| json!({}))).await;
+            let _ = app.emit("translation:changed", json!({}));
+            return result;
+        }
         let mut manager = self.manager.lock().await;
         let result = manager.dispatch(app, channel, payload).await;
         if result.is_ok()
@@ -155,6 +168,7 @@ impl ManagerState {
         let user_data_path = PathBuf::from(&app_settings.data_path);
         migrate_tauri_app_data(&tauri_app_data_path, &user_data_path)?;
         let paths = resolve_app_paths(&user_data_path);
+        crate::core::translation_store::initialize(&paths)?;
         let state = create_initial_state(&paths, &app_settings)?;
         let workspace_root = translation::workspace_root_from_current_dir()?;
         let resource_dir = app
@@ -1731,15 +1745,7 @@ impl ManagerState {
                 )
                 .await
             }
-            "translation:translate" => {
-                translation::translate_text(
-                    &self.user_data_path,
-                    &self.workspace_root,
-                    &self.resource_dir,
-                    payload.unwrap_or_else(|| json!({})),
-                )
-                .await
-            }
+            "translation:list" => crate::core::translation_store::list(&self.paths, &payload.unwrap_or_else(|| json!({}))),
             _ => Err(ManagerError::UnknownChannel(channel.to_string())),
         }
     }

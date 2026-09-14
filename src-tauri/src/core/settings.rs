@@ -34,6 +34,21 @@ pub struct SystemSettings {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TranslationAgentSettings {
+    pub enabled: bool,
+    pub target_id: String,
+    pub model: String,
+    pub target_language: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSettings {
+    pub translation: TranslationAgentSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppSettings {
     pub data_path: String,
     pub default_data_path: String,
@@ -44,6 +59,7 @@ pub struct AppSettings {
     pub koofr_sync: CloudSyncSettings,
     pub local_backup: LocalBackupSettings,
     pub system: SystemSettings,
+    pub agents: AgentSettings,
     pub restart_required: bool,
 }
 
@@ -75,6 +91,7 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
         .cloned()
         .unwrap_or_else(|| json!({}));
     let system = input.get("system").cloned().unwrap_or_else(|| json!({}));
+    let translation = &input["agents"]["translation"];
 
     AppSettings {
         data_path: resolve_portable_path(
@@ -112,6 +129,14 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
             close_action: normalize_close_action(system.get("closeAction")),
             quick_switch_visible: bool_value(system.get("quickSwitchVisible"), true),
             auto_launch_enabled: bool_value(system.get("autoLaunchEnabled"), false),
+        },
+        agents: AgentSettings {
+            translation: TranslationAgentSettings {
+                enabled: bool_value(translation.get("enabled"), false),
+                target_id: string_value(translation.get("targetId")),
+                model: string_value(translation.get("model")),
+                target_language: non_empty_string(translation.get("targetLanguage"), "简体中文"),
+            },
         },
         restart_required: false,
     }

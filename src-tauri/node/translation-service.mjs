@@ -1,24 +1,28 @@
-import path from 'node:path'
-import { env, pipeline } from '@xenova/transformers'
+import { ChatOpenAI } from '@langchain/openai'
+import { createAgent } from 'langchain'
 
-const payload = JSON.parse(process.argv[2] || '{}')
-const sourceText = String(payload.text || '').trim()
-
-if (!sourceText) {
-  throw new Error('没有可翻译的文本')
+// 从标准输入读取原文和本次回环代理凭据，避免文本进入命令行参数。
+async function main() {
+  let input = ''
+  for await (const chunk of process.stdin) input += chunk
+  const payload = JSON.parse(input)
+  const model = new ChatOpenAI({
+    apiKey: payload.token,
+    model: payload.model,
+    useResponsesApi: true,
+    maxRetries: 0,
+    configuration: { baseURL: payload.baseURL }
+  })
+  const agent = createAgent({ model, tools: [], systemPrompt: payload.systemPrompt })
+  const result = await agent.invoke({ messages: [{ role: 'user', content: payload.text }] })
+  const content = result.messages.at(-1)?.content
+  const translatedText = typeof content === 'string'
+    ? content
+    : (content || []).filter(item => item.type === 'text').map(item => item.text).join('')
+  process.stdout.write(JSON.stringify({ translatedText }))
 }
 
-env.cacheDir = path.join(String(payload.userDataPath || ''), 'models', 'transformers')
-env.remoteHost = process.env.AI_MANAGER_HF_ENDPOINT || 'https://hf-mirror.com/'
-env.allowLocalModels = true
-env.allowRemoteModels = true
-
-const translator = await pipeline('translation_en_to_zh', 'Xenova/opus-mt-en-zh')
-const result = await translator(sourceText.slice(0, 1200))
-
-process.stdout.write(
-  JSON.stringify({
-    sourceText,
-    translatedText: result[0]?.translation_text || ''
-  })
-)
+main().catch(error => {
+  process.stderr.write(error.message || String(error))
+  process.exitCode = 1
+})
