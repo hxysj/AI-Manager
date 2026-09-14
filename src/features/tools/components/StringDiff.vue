@@ -53,7 +53,7 @@
             ref="leftInput"
             v-model="leftText"
             class="string-diff-textarea"
-            wrap="off"
+            wrap="soft"
             spellcheck="false"
             placeholder="在这里输入 JSON 或字符串"
             @scroll="syncEditorScroll('left', $event)"
@@ -98,7 +98,7 @@
             ref="rightInput"
             v-model="rightText"
             class="string-diff-textarea"
-            wrap="off"
+            wrap="soft"
             spellcheck="false"
             placeholder="在这里输入 JSON 或字符串"
             @scroll="syncEditorScroll('right', $event)"
@@ -368,7 +368,10 @@ function renderEditorHighlight(text, rows, side) {
       .join("")
   })
 
-  return html.join("\n")
+  // 保留每个原始行的容器，换行后仍能按实际位置跳转到差异。
+  return html
+    .map((line) => `<span class="string-diff-highlight-line">${line}</span>`)
+    .join("")
 }
 
 function buildDiffMarkers(rows, leftValue, rightValue) {
@@ -463,12 +466,12 @@ function scrollInputToLine(input, highlight, lineNo) {
   }
 
   // 将目标行放在编辑区中上方，点击导航后能立即看见上下文。
-  const lineHeight =
-    Number.parseFloat(window.getComputedStyle(input).lineHeight) || 18
-  const targetTop = Math.max(
-    0,
-    (lineNo - 1) * lineHeight - input.clientHeight * 0.35
-  )
+  const line =
+    highlight.children[Math.min(lineNo, highlight.children.length) - 1]
+  if (!line) {
+    return
+  }
+  const targetTop = Math.max(0, line.offsetTop - input.clientHeight * 0.35)
   const maxTop = Math.max(0, input.scrollHeight - input.clientHeight)
   const scrollTop = Math.min(targetTop, maxTop)
   input.scrollTop = scrollTop
@@ -994,24 +997,25 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
           font-size: var(--font-size-base);
           line-height: 1.55;
           tab-size: 2;
-          white-space: pre;
-          overflow-wrap: normal;
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
           word-break: normal;
+          scrollbar-gutter: stable;
         }
 
         .string-diff-highlight {
           z-index: 0;
-          overflow: auto;
+          overflow: hidden;
           color: transparent;
           pointer-events: none;
-          scrollbar-width: none;
-        }
-
-        .string-diff-highlight::-webkit-scrollbar {
-          display: none;
         }
 
         .string-diff-highlight {
+          :deep(.string-diff-highlight-line) {
+            display: block;
+            min-height: 1.55em;
+          }
+
           :deep(.string-diff-highlight-mark-left),
           :deep(.string-diff-highlight-mark-right) {
             border-radius: 3px;
@@ -1092,8 +1096,9 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
     right: 0;
     bottom: 0;
     display: flex;
-    width: min(680px, calc(100% - 24px));
-    min-width: 0;
+    width: max-content;
+    min-width: min(680px, calc(100% - 24px));
+    max-width: min(1200px, calc(100% - 24px));
     flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--color-line-strong);
@@ -1223,9 +1228,8 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
 
       .string-diff-table {
         width: 100%;
-        min-width: 820px;
         border-collapse: collapse;
-        table-layout: fixed;
+        table-layout: auto;
 
         .string-diff-table-head {
           .string-diff-table-row {
@@ -1259,7 +1263,8 @@ onBeforeUnmount(() => window.clearTimeout(copyTimer))
               line-height: 1.5;
               text-align: left;
               white-space: pre-wrap;
-              word-break: break-word;
+              overflow-wrap: anywhere;
+              word-break: normal;
             }
 
             .string-diff-key-cell {
