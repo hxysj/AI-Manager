@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
+    "predev:renderer": "node scripts/build-translation-agent.mjs",
     "dev:renderer": "vite",
     "build": "tauri build",
+    "prebuild:renderer": "node scripts/build-translation-agent.mjs",
     "build:renderer": "vite build",
     "dist:win": "tauri build --bundles nsis --ci",
     "preview": "vite preview"
@@ -28,6 +30,7 @@
     "@tauri-apps/cli": "^2.11.2",
     "@vitejs/plugin-vue": "^5.2.4",
     "less": "^4.4.1",
+    "esbuild": "^0.25.12",
     "vite": "^6.3.5"
   }
 }

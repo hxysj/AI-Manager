@@ -8,4 +8,5 @@ pub mod settings;
 pub mod skill_store;
 pub mod state;
 pub mod storage_state;
+pub mod translation_store;
 pub mod usage_store;

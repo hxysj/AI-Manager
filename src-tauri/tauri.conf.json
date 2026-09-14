@@ -32,9 +32,7 @@
     "resources": {
       "../src/assets/ai-manager-logo.svg": "assets/ai-manager-logo.svg",
       "../build/icon.png": "assets/icon.png",
-      "node/translation-service.mjs": "node/translation-service.mjs",
-      "../node_modules/@xenova/transformers": "node_modules/@xenova/transformers",
-      "../node_modules/onnxruntime-node": "node_modules/onnxruntime-node"
+      "node/translation-agent.cjs": "node/translation-agent.cjs"
     },
     "windows": {
       "nsis": {
