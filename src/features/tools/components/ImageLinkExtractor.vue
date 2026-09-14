@@ -792,6 +792,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
       flex: 1;
       align-content: start;
       grid-template-columns: repeat(2, minmax(0, 1fr));
+      // 按卡片内容撑开行高，避免长图在滚动容器中跨行重叠。
+      grid-auto-rows: max-content;
       gap: 9px;
       overflow: auto;
       padding: 10px;
