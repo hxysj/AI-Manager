@@ -101,8 +101,6 @@ async fn run_agent(
                 .args(["exec", "--json", "--ephemeral", "--skip-git-repo-check", "--color", "never", "-"]);
             input = format!("{prompt}\n\n待翻译文本（JSON 字符串）：\n{}", serde_json::to_string(text)?);
         } else {
-            command = Command::new(if cfg!(windows) { "node.exe" } else { "node" });
-            command.env("LANGSMITH_TRACING", "false").env("LANGCHAIN_TRACING_V2", "false");
             let bundled = resource_dir.join("node/translation-agent.cjs");
             let workspace_script = workspace_root.join("src-tauri/node/translation-agent.cjs");
             let executable_script = std::env::current_exe()
@@ -113,9 +111,8 @@ async fn run_agent(
                 .flatten()
                 .find(|path| path.is_file())
                 .ok_or_else(|| ManagerError::System("划词翻译运行文件缺失，请重新构建或安装应用".to_string()))?;
-            // Windows 下把盘符路径规范为绝对路径，并用 -- 防止 Node 将盘符当成参数。
-            let script = std::fs::canonicalize(&script).unwrap_or(script);
-            command.arg("--").arg(script.to_string_lossy().into_owned());
+            command = node_command(&std::fs::canonicalize(&script)?);
+            command.env("LANGSMITH_TRACING", "false").env("LANGCHAIN_TRACING_V2", "false");
             input = json!({ "text": text, "systemPrompt": prompt, "model": settings.model, "baseURL": llm_proxy.base_url, "token": llm_proxy.token }).to_string();
         }
         #[cfg(windows)]
@@ -142,21 +139,32 @@ async fn run_agent(
     result
 }
 
+fn node_command(path: &Path) -> Command {
+    let mut script = path.to_string_lossy().into_owned();
+    // Node 22 的入口 realpath 不兼容 Windows 扩展路径，传入普通盘符或 UNC 路径。
+    if cfg!(windows) {
+        script = if let Some(path) = script.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{path}")
+        } else {
+            script.strip_prefix(r"\\?\").unwrap_or(&script).to_string()
+        };
+    }
+    let mut command = Command::new(if cfg!(windows) { "node.exe" } else { "node" });
+    command.arg("--").arg(script);
+    command
+}
+
 fn codex_command(executable: &str) -> Command {
     let path = Path::new(executable);
     // npm 在 Windows 上使用脚本入口，通过 Node 启动以避免 cmd 二次解析参数。
     if cfg!(windows) {
         let npm_entry = path.parent().unwrap_or(Path::new("")).join("node_modules/@openai/codex/bin/codex.js");
         if npm_entry.is_file() {
-            let mut command = Command::new("node.exe");
-            command.arg(npm_entry);
-            return command;
+            return node_command(&npm_entry);
         }
     }
     if path.extension().is_some_and(|extension| extension == "js") {
-        let mut command = Command::new(if cfg!(windows) { "node.exe" } else { "node" });
-        command.arg(path);
-        return command;
+        return node_command(path);
     }
     if cfg!(windows) && path.extension().is_some_and(|extension| extension == "ps1") {
         let mut command = Command::new("powershell.exe");
@@ -188,4 +196,97 @@ fn parse_codex_output(output: &[u8]) -> Result<String, ManagerError> {
 pub fn workspace_root_from_current_dir() -> Result<PathBuf, ManagerError> {
     let current = std::env::current_dir()?;
     Ok(if current.file_name().is_some_and(|name| name == "src-tauri") { current.parent().unwrap_or(&current).to_path_buf() } else { current })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{paths::resolve_app_paths, provider_store};
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::{server::conn::http1, service::service_fn, Response};
+    use hyper_util::rt::TokioIo;
+    use std::convert::Infallible;
+    use tokio::net::TcpListener;
+
+    #[test]
+    #[ignore = "需要 Node.js 和已打包的 translation-agent.cjs，仅访问本地模拟接口"]
+    fn translation_starts_node_and_records_usage_from_a_canonical_resource_path() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let target_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+            let root = target_dir.join(format!("translation-test 中文 空格-{}", uuid::Uuid::new_v4()));
+            let resources = root.join("resources");
+            std::fs::create_dir_all(resources.join("node")).unwrap();
+            std::fs::copy(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("node/translation-agent.cjs"),
+                resources.join("node/translation-agent.cjs"),
+            ).unwrap();
+            let paths = resolve_app_paths(&root.join("data"));
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                http1::Builder::new().serve_connection(TokioIo::new(stream), service_fn(
+                    |request: hyper::Request<hyper::body::Incoming>| async move {
+                        assert_eq!(request.uri().path(), "/v1/responses");
+                        assert_eq!(request.headers()["authorization"], "Bearer translation-test-key");
+                        let body = request.into_body().collect().await.unwrap().to_bytes();
+                        let payload: Value = serde_json::from_slice(&body).unwrap();
+                        assert_eq!(payload["model"], "custom-translation-model");
+                        assert_eq!(payload["tools"], json!([]));
+                        let response = json!({
+                            "id": "resp_translation_test", "object": "response", "status": "completed",
+                            "model": "custom-translation-model",
+                            "output": [{
+                                "id": "msg_translation_test", "type": "message", "role": "assistant", "status": "completed",
+                                "content": [{"type": "output_text", "text": "你好，世界！", "annotations": []}]
+                            }],
+                            "usage": {
+                                "input_tokens": 12, "output_tokens": 6, "total_tokens": 18,
+                                "input_tokens_details": {"cached_tokens": 3},
+                                "output_tokens_details": {"reasoning_tokens": 2}
+                            }
+                        });
+                        Ok::<_, Infallible>(Response::builder().header("content-type", "application/json")
+                            .header("connection", "close").body(Full::new(Bytes::from(response.to_string()))).unwrap())
+                    }
+                )).await.unwrap();
+            });
+            let mut keys = serde_json::Map::new();
+            runtime_provider::set_provider_key(&mut keys, "translation-test", "translation-test-key".to_string()).unwrap();
+            provider_store::write_provider_bundle(&paths, &[json!({
+                "id": "translation-test", "cli": "codex", "name": "本地翻译测试", "baseUrl": base_url, "enabled": true
+            })], &[], &[], &keys).unwrap();
+            let settings = TranslationAgentSettings {
+                enabled: true, target_id: "translation-test".to_string(),
+                model: "custom-translation-model".to_string(), target_language: "简体中文".to_string(),
+            };
+            // 使用实际入口、独立工作目录和 Windows 扩展路径，覆盖本次启动失败。
+            let result = translate_text(&paths, &root, &resources.canonicalize().unwrap(), &json!([]), &settings, json!({"text": "Hello, world!"})).await;
+            server.abort();
+            let history = translation_store::list(&paths, &json!({})).unwrap();
+            let usage = translation_store::list(&paths, &json!({"kind": "usage"})).unwrap();
+            let run_dirs = std::fs::read_dir(Path::new(&paths.temp_dir).join("translation-agent")).unwrap().count();
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(target_dir.canonicalize().unwrap()));
+            std::fs::remove_dir_all(resolved).unwrap();
+
+            let translated = result.unwrap();
+            assert_eq!(translated["translatedText"], "你好，世界！");
+            assert_eq!(translated["status"], "success");
+            assert_eq!(translated["requestCount"], 1);
+            assert_eq!(translated["usageKnown"], true);
+            assert_eq!(translated["inputTokens"], 12);
+            assert_eq!(translated["outputTokens"], 6);
+            assert_eq!(translated["cacheReadTokens"], 3);
+            assert_eq!(translated["reasoningTokens"], 2);
+            assert_eq!(history["items"][0], translated);
+            assert_eq!(usage["total"], 1);
+            assert_eq!(usage["items"][0]["translationId"], translated["id"]);
+            assert_eq!(usage["items"][0]["status"], "success");
+            assert_eq!(usage["summary"]["inputTokens"], 12);
+            assert_eq!(usage["summary"]["outputTokens"], 6);
+            assert_eq!(run_dirs, 0);
+        });
+    }
 }
