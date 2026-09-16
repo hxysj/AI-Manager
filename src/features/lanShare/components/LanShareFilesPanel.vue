@@ -90,6 +90,16 @@
           <button
             class="lan-share-files-icon-button"
             type="button"
+            title="下载文件"
+            aria-label="下载文件"
+            :disabled="!file.enabled"
+            @click="emit('download-file', file)"
+          >
+            <Download :size="14" />
+          </button>
+          <button
+            class="lan-share-files-icon-button"
+            type="button"
             title="预览文件"
             :disabled="!serviceRunning || !file.enabled"
             @click="emit('preview-file', file)"
@@ -118,6 +128,7 @@
 import { computed, ref, watch } from "vue"
 import {
   Archive,
+  Download,
   Eye,
   FileText,
   Plus,
@@ -147,7 +158,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(["refresh-state", "preview-file"])
+const emit = defineEmits(["refresh-state", "preview-file", "download-file"])
 
 const files = ref([])
 const selectedFileIds = ref([])

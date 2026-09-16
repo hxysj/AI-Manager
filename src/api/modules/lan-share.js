@@ -14,6 +14,8 @@ export const lanShareApi = {
   removeFiles: payload => request('lan-share:remove-files', payload),
   refreshFiles: () => request('lan-share:refresh-files'),
   exportFilesZip: payload => request('lan-share:export-files-zip', payload),
+  // 按已保存的文件记录另存为，不向前端暴露本机源路径。
+  saveFile: payload => request('lan-share:save-file', payload),
   listMessages: payload => request('lan-share:list-messages', payload),
   sendMessage: payload => request('lan-share:send-message', payload),
   createSession: payload => request('lan-share:create-session', payload),

@@ -53,6 +53,7 @@
               :service="service"
               :session-id="currentSessionId"
               @preview="$emit('preview-file', $event)"
+              @download="$emit('download-file', $event)"
             />
           </div>
           <div class="chat-message-actions">
@@ -285,7 +286,7 @@ const props = defineProps({
   service: { type: Object, default: () => ({}) },
   stateVersion: { type: Number, default: 0 }
 })
-const emit = defineEmits(["refresh-state", "preview-file"])
+const emit = defineEmits(["refresh-state", "preview-file", "download-file"])
 const panelRef = ref(null)
 const messageListRef = ref(null)
 const composerRef = ref(null)

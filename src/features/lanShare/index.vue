@@ -218,6 +218,7 @@
         @delete-device="requestDeleteDevice(currentDevice)"
         @refresh-state="loadState"
         @preview-file="openPreviewDialog"
+        @download-file="downloadFile"
         @copy-text="copyText"
       />
     </div>
@@ -250,9 +251,30 @@
       :preview-url="previewDialog.previewUrl"
       :preview-kind="previewDialog.previewKind"
       :text-content="previewDialog.textContent"
+      :saving="savingFile"
       @close="closePreviewDialog"
-      @download="downloadPreviewFile"
+      @download="downloadFile"
     />
+
+    <BaseModal
+      v-if="savedFile"
+      class="drop-save-success-modal"
+      title="文件保存成功"
+      @close="savedFile = null"
+    >
+      <div class="drop-save-success-content">
+        <p>“{{ savedFile.name }}”已保存到本地。</p>
+        <span class="drop-save-success-path" :title="savedFile.path">
+          {{ savedFile.path }}
+        </span>
+        <div class="drop-save-success-actions">
+          <el-button @click="savedFile = null">关闭</el-button>
+          <el-button type="primary" @click="openSavedFileDirectory">
+            打开所在目录
+          </el-button>
+        </div>
+      </div>
+    </BaseModal>
 
     <BaseModal
       v-if="connectDialogOpen"
@@ -392,7 +414,7 @@ import {
   Trash2,
   Users
 } from "lucide-vue-next"
-import { lanShareApi } from "@/api"
+import { lanShareApi, systemApi } from "@/api"
 import { createMessage } from "@/utils/message"
 import BaseModal from "@/components/BaseModal.vue"
 import DeleteConfirmModal from "@/features/providers/components/ProviderDeleteConfirmModal.vue"
@@ -418,6 +440,8 @@ const state = reactive({
   messages: []
 })
 const loading = ref(false)
+const savingFile = ref(false)
+const savedFile = ref(null)
 const deleteDeviceTarget = ref(null)
 const deleteDevicePending = ref(false)
 const deleteDeviceError = ref("")
@@ -1061,17 +1085,35 @@ function closePreviewDialog() {
   previewDialog.textContent = ""
 }
 
-function downloadPreviewFile(file) {
-  const url = fileServiceUrl(file, "download")
+async function downloadFile(file) {
+  if (savingFile.value) return
+  savingFile.value = true
+  try {
+    // 已接收的附件在本机留存，另存为无需依赖服务在线或 WebView 下载行为。
+    const targetPath = await systemApi.saveFile({
+      title: "保存快传文件",
+      defaultPath: file.name
+    })
+    if (!targetPath) return
+    await lanShareApi.saveFile({ fileId: file.id, targetPath })
+    savedFile.value = {
+      name: file.name,
+      path: targetPath,
+      directory: targetPath.replace(/[\\/][^\\/]*$/, "") || targetPath
+    }
+  } catch (error) {
+    createMessage.error(`保存失败：${error?.message || error}`)
+  } finally {
+    savingFile.value = false
+  }
+}
 
-  if (url) {
-    const link = document.createElement("a")
-
-    link.href = url
-    link.download = file?.name || "download"
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
+async function openSavedFileDirectory() {
+  if (!savedFile.value?.directory) return
+  try {
+    await systemApi.openPath({ targetPath: savedFile.value.directory })
+  } catch (error) {
+    createMessage.error(`打开目录失败：${error?.message || error}`)
   }
 }
 
@@ -1522,6 +1564,32 @@ function isTextPreviewFile(name, mimeType) {
       display: flex;
       justify-content: flex-end;
       gap: 8px;
+    }
+  }
+}
+.drop-save-success-modal.base-modal {
+  :deep(.base-modal__panel) {
+    width: min(520px, calc(100vw - 48px));
+  }
+  .drop-save-success-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 10px;
+    .drop-save-success-path {
+      overflow: hidden;
+      padding: 10px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      color: var(--color-text-muted);
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .drop-save-success-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 6px;
     }
   }
 }

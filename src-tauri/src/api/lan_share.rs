@@ -1116,6 +1116,34 @@ pub async fn clear_group_messages(
     get_state(registry, paths).await
 }
 
+pub async fn save_file(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let file_id = string_value(payload.get("fileId"));
+    let target_path = string_value(payload.get("targetPath"));
+    if target_path.is_empty() {
+        return Err(ManagerError::System("请选择文件保存路径。".into()));
+    }
+    let file = {
+        let _storage = registry.storage.lock().await;
+        read_array::<LanShareFile>(&paths.lan_share_files.files)?
+            .into_iter()
+            .find(|file| file.id == file_id && file.enabled)
+            .ok_or_else(|| ManagerError::System("文件记录不存在或已移除。".into()))?
+    };
+    let source_path = tokio::fs::canonicalize(&file.path).await?;
+    // 不能将副本写回源文件，避免复制时截断已接收的附件。
+    if Path::new(&target_path).exists()
+        && tokio::fs::canonicalize(&target_path).await? == source_path
+    {
+        return Err(ManagerError::System("保存位置与原文件相同，请选择其他位置。".into()));
+    }
+    tokio::fs::copy(&source_path, &target_path).await?;
+    Ok(lan_share_response(json!({ "targetPath": target_path })))
+}
+
 pub async fn export_files_zip(
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
@@ -4675,6 +4703,91 @@ mod tests {
             assert_eq!(state["data"]["files"][0]["id"], "file_2");
 
             let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
+    fn save_file_copies_received_attachments_without_running_service() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan-share-save-test"));
+            let paths = resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            let uploads = Path::new(&paths.lan_share_dir).join("uploads");
+            let downloads = root.join("downloads");
+            tokio::fs::create_dir_all(&uploads).await.unwrap();
+            tokio::fs::create_dir_all(&downloads).await.unwrap();
+            let contents = [
+                ("收到的文本.txt", "完整的文本内容\n第二行".as_bytes()),
+                ("收到的图片.png", &[0x89, 0x50, 0x4e, 0x47, 0, 0xff][..]),
+            ];
+            let mut files = Vec::new();
+            for (name, content) in contents {
+                let source = uploads.join(format!("upload-{name}"));
+                tokio::fs::write(&source, content).await.unwrap();
+                let mut file = super::file_payload(&source.to_string_lossy(), "session_1")
+                    .await
+                    .unwrap();
+                file.name = name.into();
+                files.push(file);
+            }
+            super::attachments::publish(&registry, &paths, &files).await.unwrap();
+            for (file, (name, content)) in files.iter().zip(contents) {
+                let target = downloads.join(name);
+                let result = super::save_file(
+                    &registry,
+                    &paths,
+                    json!({"fileId": file.id, "targetPath": target}),
+                )
+                .await
+                .unwrap();
+                assert_eq!(result["data"]["targetPath"], json!(target));
+                assert_eq!(tokio::fs::read(&target).await.unwrap(), content);
+                assert_eq!(tokio::fs::read(&file.path).await.unwrap(), content);
+            }
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            tokio::fs::remove_dir_all(resolved).await.unwrap();
+        });
+    }
+
+    #[test]
+    fn save_file_rejects_invalid_records_and_preserves_source_file() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("lan-share-save-validation-test"));
+            let paths = resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            tokio::fs::create_dir_all(&root).await.unwrap();
+            let source = root.join("source.txt");
+            let target = root.join("saved.txt");
+            tokio::fs::write(&source, "原文件内容").await.unwrap();
+            tokio::fs::write(&target, "已有内容").await.unwrap();
+            let file = super::file_payload(&source.to_string_lossy(), "session_1")
+                .await
+                .unwrap();
+            let mut unpublished = file.clone();
+            unpublished.id = "unpublished".into();
+            unpublished.enabled = false;
+            super::write_json(&paths.lan_share_files.files, &json!([file, unpublished]))
+                .await
+                .unwrap();
+            for payload in [
+                json!({"fileId": "missing", "targetPath": target}),
+                json!({"fileId": "unpublished", "targetPath": target}),
+                json!({"fileId": file.id, "targetPath": ""}),
+                json!({"fileId": file.id, "targetPath": source}),
+            ] {
+                assert!(super::save_file(&registry, &paths, payload).await.is_err());
+                assert_eq!(tokio::fs::read_to_string(&source).await.unwrap(), "原文件内容");
+                assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "已有内容");
+            }
+            tokio::fs::remove_file(&source).await.unwrap();
+            assert!(super::save_file(
+                &registry, &paths, json!({"fileId": file.id, "targetPath": target}),
+            ).await.is_err());
+            assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "已有内容");
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            tokio::fs::remove_dir_all(resolved).await.unwrap();
         });
     }
 

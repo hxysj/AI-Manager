@@ -77,10 +77,11 @@
           <button
             class="lan-share-preview-button lan-share-preview-button-primary"
             type="button"
+            :disabled="saving"
             @click="emit('download', file)"
           >
             <Download :size="14" />
-            下载文件
+            {{ saving ? "保存中…" : "下载文件" }}
           </button>
         </footer>
       </div>
@@ -111,6 +112,10 @@ defineProps({
   textContent: {
     type: String,
     default: ""
+  },
+  saving: {
+    type: Boolean,
+    default: false
   }
 })
 
