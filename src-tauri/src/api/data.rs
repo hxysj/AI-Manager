@@ -4755,6 +4755,93 @@ mod tests {
     }
 
     #[test]
+    fn backup_restore_adds_keys_when_provider_configuration_is_unchanged() {
+        let root = std::env::temp_dir().join(format!(
+            "ai-manager-key-only-restore-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let source_paths = resolve_app_paths(&root.join("source"));
+        let source_settings = normalize_app_settings(
+            root.join("source/app-settings.json"),
+            Some(json!({"dataPath": root.join("source"), "cliConfigPaths": {"codex": root.join("codex")}})),
+        );
+        let providers = [
+            json!({"id": "claude-provider", "cli": "claude", "name": "Claude", "enabled": true}),
+            json!({"id": "codex-provider", "cli": "codex", "name": "Codex", "enabled": true}),
+        ];
+        let desktop_providers = [json!({"id": "desktop-provider", "name": "Desktop"})];
+        let key_ids = ["claude-provider", "codex-provider", "claude-desktop:desktop-provider"];
+        let mut source_keys = Map::new();
+        let mut local_keys = Map::new();
+        for id in key_ids {
+            runtime_provider::set_provider_key(&mut local_keys, id, "primary-secret".into())
+                .unwrap();
+            runtime_provider::set_provider_keys(
+                &mut source_keys,
+                id,
+                &[
+                    json!({"id": "default", "name": "默认 Key", "note": "", "apiKey": "primary-secret"}),
+                    json!({"id": "second", "name": "备用 Key", "note": "备用额度", "apiKey": "second-secret"}),
+                ],
+                "second".into(),
+            )
+            .unwrap();
+        }
+        provider_store::write_provider_bundle(&source_paths, &providers, &[], &[], &source_keys)
+            .unwrap();
+        provider_store::write_desktop_bundle(
+            &source_paths, &desktop_providers, &Map::new(), &source_keys,
+        )
+        .unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        for (scope, directory) in [(BackupScope::Local, "local"), (BackupScope::Cloud, "cloud")] {
+            let target_root = root.join(directory);
+            let paths = resolve_app_paths(&target_root);
+            let mut settings = normalize_app_settings(
+                target_root.join("app-settings.json"),
+                Some(json!({"dataPath": target_root, "cliConfigPaths": {"codex": root.join("codex")}})),
+            );
+            provider_store::write_provider_bundle(&paths, &providers, &[], &[], &local_keys)
+                .unwrap();
+            provider_store::write_desktop_bundle(
+                &paths, &desktop_providers, &Map::new(), &local_keys,
+            )
+            .unwrap();
+            // Provider 配置不变时，新增密钥仍应独立预览、恢复，并保留本机生效 Key。
+            let backup = runtime
+                .block_on(super::create_scoped_data_backup(&source_paths, &source_settings, scope))
+                .unwrap();
+            let preview = runtime
+                .block_on(preview_data_backup_restore_content(&paths, &settings, &backup))
+                .unwrap();
+            assert_eq!(preview["conflictCount"], 0);
+            assert_eq!(preview["addedCount"], 3);
+            for _ in 0..2 {
+                runtime
+                    .block_on(restore_data_backup_content(&paths, &mut settings, &backup, &json!({})))
+                    .unwrap();
+                let restored_keys = super::export_provider_keys(&paths).unwrap();
+                for id in key_ids {
+                    assert_eq!(restored_keys[id]["apiKeys"].as_array().unwrap().len(), 2);
+                    assert_eq!(restored_keys[id]["apiKeys"][1]["apiKey"], "second-secret");
+                    assert_eq!(restored_keys[id]["apiKeys"][1]["note"], "备用额度");
+                    assert_eq!(restored_keys[id]["activeApiKeyId"], "default");
+                }
+                let public_providers = runtime_provider::read_public_providers(&paths).unwrap();
+                for provider in public_providers.as_array().unwrap() {
+                    assert_eq!(provider["apiKeys"].as_array().unwrap().len(), 2);
+                }
+            }
+        }
+        let resolved = root.canonicalize().unwrap();
+        assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        std::fs::remove_dir_all(resolved).unwrap();
+    }
+
+    #[test]
     fn restore_keys_without_provider_table_only_fills_missing_keys() {
         let root = std::env::temp_dir().join(format!(
             "monkey-thief-provider-key-restore-{}",

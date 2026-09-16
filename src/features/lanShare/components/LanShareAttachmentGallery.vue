@@ -63,15 +63,15 @@
                 }}</span>
               </span>
             </button>
-            <a
-              v-if="entry.downloadUrl && (expanded || index === 0)"
+            <button
+              v-if="expanded || index === 0"
               class="attachment-download"
-              :href="entry.downloadUrl"
-              :download="entry.file.name"
+              type="button"
               :aria-label="`下载第 ${entry.position} 张图片`"
               title="下载图片"
+              @click="$emit('download', entry.file)"
               ><Download :size="15"
-            /></a>
+            /></button>
           </div>
         </Transition>
       </div>
@@ -145,6 +145,10 @@
           <ImageOff v-if="kind === 'image'" :size="30" :stroke-width="1.4" />
           <FileText v-else :size="30" :stroke-width="1.4" />
           <span class="attachment-document-copy">
+            <span
+              class="attachment-document-name"
+              :title="currentFile.name"
+            >{{ currentFile.name }}</span>
             <span class="attachment-document-kind">{{
               kind === "image"
                 ? "图片加载失败"
@@ -157,15 +161,14 @@
             }}</span>
           </span>
         </button>
-        <a
-          v-if="downloadUrl"
+        <button
           class="attachment-download"
-          :href="downloadUrl"
-          :download="currentFile.name"
+          type="button"
           title="下载附件"
           aria-label="下载附件"
+          @click="$emit('download', currentFile)"
           ><Download :size="15"
-        /></a>
+        /></button>
       </div>
       <div v-if="files.length > 1" class="attachment-navigation">
         <button
@@ -212,7 +215,8 @@ const props = defineProps({
   service: { type: Object, default: () => ({}) },
   sessionId: { type: String, default: "" }
 })
-defineEmits(["preview"])
+// 附件和预览窗口统一交给页面调用本地保存流程。
+defineEmits(["preview", "download"])
 const activeIndex = ref(0)
 const failed = ref(false)
 const expanded = ref(false)
@@ -243,17 +247,13 @@ const visibleImages = computed(() =>
       return {
         file,
         position: index + 1,
-        previewUrl: fileUrl(props.service, file, props.sessionId),
-        downloadUrl: fileUrl(props.service, file, props.sessionId, "download")
+        previewUrl: fileUrl(props.service, file, props.sessionId)
       }
     }
   )
 )
 const previewUrl = computed(() =>
   fileUrl(props.service, currentFile.value, props.sessionId)
-)
-const downloadUrl = computed(() =>
-  fileUrl(props.service, currentFile.value, props.sessionId, "download")
 )
 watch(
   [
@@ -379,12 +379,14 @@ function scrollImages(event) {
     display: flex;
     width: 28px;
     height: 28px;
+    padding: 0;
     align-items: center;
     justify-content: center;
     border: 1px solid var(--color-line);
     border-radius: 7px;
     color: var(--color-text-muted);
     background: var(--color-panel);
+    cursor: pointer;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.15s ease;
@@ -444,6 +446,13 @@ function scrollImages(event) {
         flex: 1;
         flex-direction: column;
         gap: 5px;
+        .attachment-document-name {
+          overflow: hidden;
+          color: var(--color-text);
+          font-size: var(--font-size-base);
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
         .attachment-document-kind {
           color: var(--color-text);
           font-size: var(--font-size-base);

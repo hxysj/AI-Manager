@@ -89,6 +89,7 @@
       :state-version="stateVersion"
       @refresh-state="$emit('refresh-state')"
       @preview-file="$emit('preview-file', $event)"
+      @download-file="$emit('download-file', $event)"
     />
 
     <el-drawer
@@ -153,6 +154,7 @@
         :state-version="stateVersion"
         @refresh-state="$emit('refresh-state')"
         @preview-file="$emit('preview-file', $event)"
+        @download-file="$emit('download-file', $event)"
       />
     </el-drawer>
 
@@ -294,6 +296,7 @@ const emit = defineEmits([
   "delete-device",
   "refresh-state",
   "preview-file",
+  "download-file",
   "copy-text"
 ])
 const messagesRef = ref(null)

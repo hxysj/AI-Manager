@@ -682,6 +682,14 @@ impl ManagerState {
                 )
                 .await
             }
+            "lan-share:save-file" => {
+                lan_share::save_file(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
             "git-tool:branches" => {
                 git_tool::scan_branches(
                     &self.paths,
