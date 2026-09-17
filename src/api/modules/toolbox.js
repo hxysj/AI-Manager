@@ -1,6 +1,14 @@
 import { request } from "../request"
 
 export const toolboxApi = {
+  // 图片生成只由后端读取官方账号凭据，前端只传账号 ID。
+  imageAccounts: () => request("tools:image-accounts"),
+  submitImageTask: (payload) => request("tools:image-submit", payload),
+  listImageTasks: (payload) => request("tools:image-list", payload),
+  imageTaskDetail: (payload) => request("tools:image-detail", payload),
+  imageTaskInputs: payload => request('tools:image-inputs', payload),
+  deleteImageTasks: (payload) => request("tools:image-delete", payload),
+  exportImageTasks: (payload) => request("tools:image-export", payload),
   exportImages: (payload) => request("tools:export-images", payload),
   // JSON Agent 请求由后端注入当前 Codex Provider 的密钥和地址。
   requestJsonAgent: (payload) => request("tools:json-agent-request", payload),

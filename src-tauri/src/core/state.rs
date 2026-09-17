@@ -1,5 +1,5 @@
 use crate::api::{
-    app, app_logs, claude_desktop, codex_account, data, git_tool, lan_share, proxy, repos, rules,
+    app, app_logs, claude_desktop, codex_account, data, git_tool, image_workbench, lan_share, proxy, repos, rules,
     runtime_provider, sessions, settings, skills, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
@@ -50,6 +50,18 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        // 图片读取与导出只需路径快照，不占用整个应用的状态锁。
+        if matches!(channel, "tools:image-list" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-export") {
+            let paths = self.manager.lock().await.paths.clone();
+            let payload = payload.unwrap_or_else(|| json!({}));
+            return match channel {
+                "tools:image-list" => crate::core::image_store::list(&paths, &payload),
+                "tools:image-detail" => crate::core::image_store::detail(&paths, payload["id"].as_str().unwrap_or("")),
+                "tools:image-inputs" => crate::core::image_store::inputs(&paths, payload["id"].as_str().unwrap_or("")),
+                "tools:image-delete" => crate::core::image_store::delete(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
+                _ => image_workbench::export(&paths, payload).await,
+            };
+        }
         // 模型请求可能持续较久，快照后释放状态锁，让其他页面和设置保持可用。
         if channel == "translation:translate" {
             let manager = self.manager.lock().await;
@@ -169,6 +181,7 @@ impl ManagerState {
         migrate_tauri_app_data(&tauri_app_data_path, &user_data_path)?;
         let paths = resolve_app_paths(&user_data_path);
         crate::core::translation_store::initialize(&paths)?;
+        crate::core::image_store::initialize(&paths)?;
         let state = create_initial_state(&paths, &app_settings)?;
         let workspace_root = translation::workspace_root_from_current_dir()?;
         let resource_dir = app
@@ -1711,6 +1724,8 @@ impl ManagerState {
             "system:save-file" => system::save_file(&app, payload),
             "system:open-path" => system::open_path(&app, payload),
             "system:open-external" => system::open_external(&app, payload),
+            "tools:image-accounts" => image_workbench::accounts(&self.paths),
+            "tools:image-submit" => image_workbench::submit(&app, &self.paths, &self.state["cliTargets"], payload.unwrap_or_else(|| json!({}))).await,
             "tools:export-images" => {
                 tools::export_images(payload.unwrap_or_else(|| json!({}))).await
             }
