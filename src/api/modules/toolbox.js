@@ -1,6 +1,11 @@
 import { request } from "../request"
 
 export const toolboxApi = {
+  // 提示词库分页读取，完整提示词只在打开详情时加载。
+  imagePromptCatalog: () => request('tools:image-prompts-catalog'),
+  listImagePrompts: payload => request('tools:image-prompts-list', payload),
+  imagePromptDetail: payload => request('tools:image-prompts-detail', payload),
+  importImagePrompts: payload => request('tools:image-prompts-import', payload),
   // 图片生成只由后端读取官方账号凭据，前端只传账号 ID。
   imageAccounts: () => request("tools:image-accounts"),
   submitImageTask: (payload) => request("tools:image-submit", payload),

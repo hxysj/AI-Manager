@@ -50,6 +50,20 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        // 大型 JSON 词库展开和搜索在阻塞线程执行，不占用应用状态锁。
+        if channel.starts_with("tools:image-prompts-") {
+            let manager = self.manager.lock().await;
+            let paths = manager.paths.clone();
+            let seed_path = if cfg!(debug_assertions) {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/image-prompts/gpt-image-2-prompts.json")
+            } else {
+                manager.resource_dir.join("assets/image-prompts/gpt-image-2-prompts.json")
+            };
+            drop(manager);
+            let channel = channel.to_string();
+            return tauri::async_runtime::spawn_blocking(move || crate::core::image_prompt_store::dispatch(&paths, &seed_path, &channel, payload.unwrap_or_else(|| json!({}))))
+                .await.map_err(|error| ManagerError::System(error.to_string()))?;
+        }
         // 图片读取与导出只需路径快照，不占用整个应用的状态锁。
         if matches!(channel, "tools:image-list" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-export") {
             let paths = self.manager.lock().await.paths.clone();
