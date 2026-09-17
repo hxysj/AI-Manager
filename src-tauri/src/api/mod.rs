@@ -5,6 +5,7 @@ pub(crate) mod claude_desktop_runtime;
 pub mod codex_account;
 pub mod data;
 pub mod git_tool;
+pub mod image_workbench;
 pub mod lan_share;
 pub mod llm_proxy;
 pub mod proxy;

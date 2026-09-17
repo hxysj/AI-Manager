@@ -229,6 +229,8 @@ fn sanitize_log_value(value: Value) -> Value {
                 .collect(),
         ),
         Value::Array(items) => Value::Array(items.into_iter().map(sanitize_log_value).collect()),
+        // 图片正文只存入工作台，不把完整参考图复制到操作日志。
+        Value::String(text) if text.starts_with("data:image/") => json!("[图片内容已省略]"),
         value => value,
     }
 }

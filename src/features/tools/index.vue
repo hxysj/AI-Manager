@@ -21,7 +21,9 @@
             <component :is="tool.icon" :size="20" />
           </span>
           <span class="tools-view-tool-main">
-            <span data-emphasis class="tools-view-tool-name">{{ tool.label }}</span>
+            <span data-emphasis class="tools-view-tool-name">{{
+              tool.label
+            }}</span>
             <span class="tools-view-tool-desc">{{ tool.summary }}</span>
           </span>
           <span class="tools-view-tool-meta">{{ tool.meta }}</span>
@@ -58,9 +60,7 @@
         <button
           class="tools-view-theme"
           type="button"
-          :title="
-            themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'
-          "
+          :title="themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'"
           :aria-label="
             themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'
           "
@@ -82,6 +82,7 @@
       <PortMonitor v-else-if="activeTool === 'port-monitor'" />
       <StringDiff v-else-if="activeTool === 'string-diff'" />
       <ImageLinkExtractor v-else-if="activeTool === 'image-link-extractor'" />
+      <ImageWorkbench v-else-if="activeTool === 'image-workbench'" />
       <JsonAgentTool
         v-else-if="activeTool === 'json-agent'"
         :providers="providers"
@@ -121,6 +122,11 @@ import StringDiff from "@/features/tools/components/StringDiff.vue"
 
 const JsonAgentTool = defineAsyncComponent(
   () => import("@/features/tools/components/JsonAgentTool.vue")
+)
+
+// 图片工作台按需加载，进入工具后再读取任务和官方账号。
+const ImageWorkbench = defineAsyncComponent(
+  () => import("@/features/tools/components/ImageWorkbench.vue")
 )
 
 const props = defineProps({
@@ -163,6 +169,13 @@ const codexInstalled = computed(() =>
 
 const toolItems = computed(() => {
   const items = [
+    {
+      id: "image-workbench",
+      label: "图片工作台",
+      summary: "使用 Codex 官方账号生成、编辑图片，管理与导出图片任务。",
+      meta: "文生图 / 图片编辑",
+      icon: Images
+    },
     {
       id: "json-agent",
       label: "JSON 智能解析",

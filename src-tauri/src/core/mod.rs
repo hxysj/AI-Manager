@@ -10,3 +10,4 @@ pub mod state;
 pub mod storage_state;
 pub mod translation_store;
 pub mod usage_store;
+pub mod image_store;
