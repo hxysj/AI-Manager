@@ -76,7 +76,11 @@ const emit = defineEmits(["start", "show-access", "stop"])
   padding: 12px;
   border: 1px solid var(--color-line);
   border-radius: 8px;
-  background: linear-gradient(135deg, var(--color-panel) 0%, var(--color-panel-soft) 100%);
+  background: linear-gradient(
+    135deg,
+    var(--color-panel) 0%,
+    var(--color-panel-soft) 100%
+  );
 
   .lan-share-toolbar-title {
     display: flex;
