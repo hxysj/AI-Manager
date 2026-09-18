@@ -104,7 +104,7 @@ npm ci
 npm run dev
 ```
 
-Tauri 开发窗口使用 `http://127.0.0.1:5173` 作为前端开发服务。仅调试界面时可以运行 `npm run dev:renderer`，但依赖 Tauri IPC 的功能必须通过 `npm run dev` 使用。
+Tauri 开发窗口默认使用 `http://127.0.0.1:13134` 作为前端开发服务。如果该端口已被占用，启动器会自动顺延到下一个可用端口。仅调试界面时可以运行 `npm run dev:renderer`，它也会从 13134 开始自动顺延；依赖 Tauri IPC 的功能必须通过 `npm run dev` 使用。
 
 构建 Windows NSIS 安装包：
 

@@ -4,7 +4,7 @@
   "description": "Desktop manager for AI CLI skills, repos and runtime metadata",
   "type": "module",
   "scripts": {
-    "dev": "tauri dev",
+    "dev": "node scripts/start-tauri-dev.mjs",
     "predev:renderer": "node scripts/build-translation-agent.mjs",
     "dev:renderer": "vite",
     "build": "tauri build",

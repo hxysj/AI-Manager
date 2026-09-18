@@ -5,7 +5,7 @@
   "identifier": "com.monkeythief.desktop",
   "build": {
     "beforeDevCommand": "npm run dev:renderer",
-    "devUrl": "http://127.0.0.1:5173",
+    "devUrl": "http://127.0.0.1:13134",
     "beforeBuildCommand": "npm run build:renderer",
     "frontendDist": "../dist"
   },
