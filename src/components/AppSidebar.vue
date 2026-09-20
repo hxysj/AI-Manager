@@ -104,7 +104,7 @@
 <script setup>
 import { Moon, Sun } from 'lucide-vue-next'
 import AiIcon from '@/components/AiIcon.vue'
-import logoUrl from '@/assets/ai-manager-logo.svg?url'
+import logoUrl from '@/assets/ai-manager-logo.png?url'
 
 defineProps({
   activeView: {

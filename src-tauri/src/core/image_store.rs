@@ -38,55 +38,78 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
     open(paths)?.execute(
         "UPDATE image_tasks SET status = 'interrupted', payload_json = json_set(payload_json,
          '$.status', 'interrupted', '$.error.message', '应用已退出，生成结果未知；请确认后重新提交')
-         WHERE status = 'processing'",
+         WHERE status IN ('processing', 'queued')",
         [],
     )?;
     Ok(())
 }
 
-pub fn create(
-    paths: &AppPaths,
-    task: &Value,
-    images: &[String],
-    mask: &str,
-) -> Result<(), ManagerError> {
+// 一轮任务原子入队，共享输入图片，避免 100 张生成重复保存 100 份参考图。
+pub fn create_batch(paths: &AppPaths, tasks: &[Value], images: &[String], mask: &str) -> Result<(), ManagerError> {
+    if tasks.is_empty() || tasks.len() > 100 { return Err(ManagerError::System("一轮可提交 1–100 个任务".into())); }
     let mut connection = open(paths)?;
-    let transaction =
-        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let active: u64 = transaction.query_row(
-        "SELECT COUNT(*) FROM image_tasks WHERE status = 'processing'",
-        [],
-        |row| row.get(0),
-    )?;
-    if active >= 2 {
-        return Err(ManagerError::System(
-            "已有 2 个图片任务正在生成，请等待完成后再提交".into(),
-        ));
-    }
-    transaction.execute(
-        "INSERT INTO image_tasks(id, created_at, status, payload_json) VALUES (?1, ?2, 'processing', ?3)",
-        params![task["id"].as_str(), task["createdAt"].as_i64(), task.to_string()],
-    )?;
-    // 参考图独立存储，列表只读参数；复用编辑任务时按需加载。
-    for (index, url) in images.iter().enumerate() {
+    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for task in tasks {
         transaction.execute(
-            "INSERT INTO image_inputs(task_id, position, data_url) VALUES (?1, ?2, ?3)",
-            params![task["id"].as_str(), index, url],
+            "INSERT INTO image_tasks(id, created_at, status, payload_json) VALUES (?1, ?2, 'queued', ?3)",
+            params![task["id"].as_str(), task["createdAt"].as_i64(), task.to_string()],
         )?;
+    }
+    let input_id = tasks[0]["inputId"].as_str();
+    for (index, url) in images.iter().enumerate() {
+        transaction.execute("INSERT INTO image_inputs(task_id, position, data_url) VALUES (?1, ?2, ?3)", params![input_id, index, url])?;
     }
     if !mask.is_empty() {
-        transaction.execute(
-            "INSERT INTO image_inputs(task_id, position, data_url) VALUES (?1, -1, ?2)",
-            params![task["id"].as_str(), mask],
-        )?;
+        transaction.execute("INSERT INTO image_inputs(task_id, position, data_url) VALUES (?1, -1, ?2)", params![input_id, mask])?;
     }
     transaction.commit()?;
     Ok(())
 }
 
+pub fn start(paths: &AppPaths, id: &str) -> Result<bool, ManagerError> {
+    Ok(open(paths)?.execute("UPDATE image_tasks SET status = 'processing', payload_json = json_set(payload_json, '$.status', 'processing') WHERE id = ?1 AND status = 'queued'", [id])? == 1)
+}
+
+pub fn checkpoint(paths: &AppPaths, id: &str, recovery: &Value) -> Result<(), ManagerError> {
+    open(paths)?.execute("UPDATE image_tasks SET payload_json = json_set(payload_json, '$.recovery', json(?2), '$.canResume', json('true')) WHERE id = ?1 AND status = 'processing'", params![id, recovery.to_string()])?;
+    Ok(())
+}
+
+pub fn requeue(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
+    let mut connection = open(paths)?;
+    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let raw: String = transaction.query_row("SELECT payload_json FROM image_tasks WHERE id = ?1 AND status IN ('failed', 'interrupted')", [id], |row| row.get(0))?;
+    let mut task: Value = serde_json::from_str(&raw)?;
+    if task["request"]["generationMode"] != "web" || !task["recovery"]["conversationId"].is_string() {
+        return Err(ManagerError::System("此任务没有可继续查询的 Web 会话".into()));
+    }
+    task["status"] = json!("queued");
+    task["error"] = Value::Null;
+    task["finishedAt"] = Value::Null;
+    transaction.execute("UPDATE image_tasks SET status = 'queued', payload_json = ?2 WHERE id = ?1", params![id, task.to_string()])?;
+    transaction.commit()?;
+    Ok(task)
+}
+
+// 历史索引只返回小型元数据；缩略图和原图仍按当前会话按需读取。
+pub fn history(paths: &AppPaths) -> Result<Value, ManagerError> {
+    let connection = open(paths)?;
+    let mut statement = connection.prepare("SELECT id, created_at, status, json_extract(payload_json, '$.request.conversationId'), json_extract(payload_json, '$.request.roundId'), json_extract(payload_json, '$.request.prompt') FROM image_tasks ORDER BY created_at")?;
+    let rows = statement.query_map([], |row| Ok(json!({
+        "id": row.get::<_, String>(0)?, "createdAt": row.get::<_, i64>(1)?, "status": row.get::<_, String>(2)?,
+        "conversationId": row.get::<_, Option<String>>(3)?, "roundId": row.get::<_, Option<String>>(4)?, "prompt": row.get::<_, Option<String>>(5)?
+    })))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(json!(rows))
+}
+
 pub fn finish(paths: &AppPaths, task: &Value, images: &[StoredImage]) -> Result<(), ManagerError> {
     let mut connection = open(paths)?;
     let transaction = connection.transaction()?;
+    let mut task = task.clone();
+    let saved: String = transaction.query_row("SELECT payload_json FROM image_tasks WHERE id = ?1", [task["id"].as_str()], |row| row.get(0))?;
+    let saved: Value = serde_json::from_str(&saved)?;
+    task["recovery"] = saved["recovery"].clone();
+    task["canResume"] = json!(task["status"] == "failed" && task["recovery"]["conversationId"].is_string());
     for (index, image) in images.iter().enumerate() {
         transaction.execute(
             "INSERT INTO image_outputs(task_id, position, format, bytes) VALUES (?1, ?2, ?3, ?4)",
@@ -111,17 +134,28 @@ pub fn list(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
     let connection = open(paths)?;
     let status = payload["status"].as_str().unwrap_or("");
     let page = payload["page"].as_u64().unwrap_or(1).clamp(1, 1_000_000);
+    let conversation_id = payload["conversationId"].as_str().unwrap_or("");
+    let page_size = payload["pageSize"].as_u64().unwrap_or(12).clamp(1, 100);
+    let grouped = payload["groupByRound"] == true;
+    let filter = "(?1 = '' OR status = ?1) AND (?2 = '' OR COALESCE(NULLIF(json_extract(payload_json, '$.request.conversationId'), ''), 'legacy') = ?2)";
+    let round_key = "COALESCE(NULLIF(json_extract(payload_json, '$.request.roundId'), ''), id)";
+    let count = if grouped { format!("COUNT(DISTINCT {round_key})") } else { "COUNT(*)".to_string() };
     let total: u64 = connection.query_row(
-        "SELECT COUNT(*) FROM image_tasks WHERE (?1 = '' OR status = ?1)",
-        [status],
-        |row| row.get(0),
+        &format!("SELECT {count} FROM image_tasks WHERE {filter}"),
+        params![status, conversation_id], |row| row.get(0),
     )?;
-    let mut statement = connection.prepare(
-        "SELECT payload_json, thumbnail FROM image_tasks WHERE (?1 = '' OR status = ?1)
-         ORDER BY created_at DESC, id DESC LIMIT 12 OFFSET ?2",
-    )?;
+    // 按轮分页，100 张图片始终一起展示，不在任务分页边界拆开。
+    let query = if grouped {
+        format!("WITH filtered AS (SELECT *, {round_key} AS round_key FROM image_tasks WHERE {filter}),
+            page_rounds AS (SELECT round_key FROM filtered GROUP BY round_key ORDER BY MAX(created_at) DESC, round_key DESC LIMIT ?3 OFFSET ?4)
+            SELECT payload_json, thumbnail FROM filtered WHERE round_key IN (SELECT round_key FROM page_rounds)
+            ORDER BY created_at DESC, json_extract(payload_json, '$.batchIndex') ASC, id DESC")
+    } else {
+        format!("SELECT payload_json, thumbnail FROM image_tasks WHERE {filter} ORDER BY created_at DESC, id DESC LIMIT ?3 OFFSET ?4")
+    };
+    let mut statement = connection.prepare(&query)?;
     let rows = statement
-        .query_map(params![status, (page - 1) * 12], |row| {
+        .query_map(params![status, conversation_id, page_size, (page - 1) * page_size], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -133,7 +167,7 @@ pub fn list(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
             Ok(task)
         })
         .collect::<Result<Vec<Value>, serde_json::Error>>()?;
-    Ok(json!({ "items": items, "total": total, "pageSize": 12 }))
+    Ok(json!({ "items": items, "total": total, "pageSize": page_size }))
 }
 
 pub fn detail(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
@@ -161,10 +195,11 @@ pub fn detail(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
 
 pub fn inputs(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
     let connection = open(paths)?;
+    let input_id: String = connection.query_row("SELECT COALESCE(json_extract(payload_json, '$.inputId'), id) FROM image_tasks WHERE id = ?1", [id], |row| row.get(0))?;
     let mut statement = connection.prepare(
         "SELECT position, data_url FROM image_inputs WHERE task_id = ?1 ORDER BY position",
     )?;
-    let rows = statement.query_map([id], |row| {
+    let rows = statement.query_map([input_id], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
     })?;
     let mut images = Vec::new();
@@ -184,8 +219,8 @@ pub fn read_images(
     paths: &AppPaths,
     ids: &[String],
 ) -> Result<Vec<(String, usize, String, Vec<u8>)>, ManagerError> {
-    if ids.is_empty() || ids.len() > 12 {
-        return Err(ManagerError::System("请选取 1–12 个任务".into()));
+    if ids.is_empty() || ids.len() > 100 {
+        return Err(ManagerError::System("请选取 1–100 个任务".into()));
     }
     let connection = open(paths)?;
     let mut output = Vec::new();
@@ -217,8 +252,8 @@ pub fn read_images(
 }
 
 pub fn delete(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
-    if ids.is_empty() || ids.len() > 12 {
-        return Err(ManagerError::System("请选取 1–12 个任务".into()));
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(ManagerError::System("请选取 1–10000 个任务".into()));
     }
     let mut connection = open(paths)?;
     let transaction = connection.transaction()?;
@@ -234,9 +269,27 @@ pub fn delete(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
             return Err(ManagerError::System("生成中的任务不能删除".into()));
         }
         transaction.execute("DELETE FROM image_outputs WHERE task_id = ?1", [id])?;
-        transaction.execute("DELETE FROM image_inputs WHERE task_id = ?1", [id])?;
         transaction.execute("DELETE FROM image_tasks WHERE id = ?1", [id])?;
     }
+    transaction.execute("DELETE FROM image_inputs WHERE task_id NOT IN (SELECT COALESCE(json_extract(payload_json, '$.inputId'), id) FROM image_tasks)", [])?;
     transaction.commit()?;
     Ok(json!({ "deleted": ids.len() }))
+}
+
+pub fn clear_results(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(ManagerError::System("请选择要删除结果的任务".into()));
+    }
+    let mut connection = open(paths)?;
+    let transaction = connection.transaction()?;
+    for id in ids {
+        let status: String = transaction.query_row("SELECT status FROM image_tasks WHERE id = ?1", [id], |row| row.get(0))?;
+        if matches!(status.as_str(), "processing" | "queued") {
+            return Err(ManagerError::System("请等待本轮任务完成后删除结果".into()));
+        }
+        transaction.execute("DELETE FROM image_outputs WHERE task_id = ?1", [id])?;
+        transaction.execute("UPDATE image_tasks SET thumbnail = '', payload_json = json_set(payload_json, '$.imageCount', 0, '$.images', json('[]'), '$.resultsDeleted', json('true')) WHERE id = ?1", [id])?;
+    }
+    transaction.commit()?;
+    Ok(json!({"deleted": ids.len()}))
 }

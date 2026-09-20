@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="src/assets/ai-manager-logo.svg" width="104" height="104" alt="Monkey Thief 图标" />
+  <img src="src/assets/ai-manager-logo.png" width="104" height="104" alt="Monkey Thief 图标" />
   <h1>Monkey Thief</h1>
   <p>面向 Claude Code 与 Codex 的本地优先 Windows 桌面管理工具。</p>
   <p>

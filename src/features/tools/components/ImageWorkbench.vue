@@ -1,5 +1,80 @@
 <template>
   <section class="image-workbench">
+    <header class="conversation-toolbar">
+      <button
+        class="conversation-button"
+        type="button"
+        @click="historyOpen = !historyOpen"
+      >
+        会话历史
+      </button>
+      <span class="conversation-title">{{
+        currentConversation?.title || "新对话"
+      }}</span>
+      <button
+        class="conversation-button"
+        type="button"
+        @click="newConversation"
+      >
+        新建对话
+      </button>
+    </header>
+    <aside v-if="historyOpen" class="conversation-sidebar">
+      <header class="history-head">
+        <span>历史会话</span
+        ><button
+          class="history-action"
+          type="button"
+          @click="historyOpen = false"
+        >
+          收起
+        </button>
+      </header>
+      <div class="history-list">
+        <article
+          v-for="conversation in conversations"
+          :key="conversation.id"
+          class="history-item"
+          :class="{ active: conversation.id === activeConversationId }"
+        >
+          <button
+            class="history-select"
+            type="button"
+            @click="selectConversation(conversation.id)"
+          >
+            <span class="history-title">{{ conversation.title }}</span>
+            <span class="history-meta"
+              >{{ conversationStats(conversation.id).rounds }} 轮 ·
+              {{ formatDateTime(conversation.updatedAt) }}</span
+            >
+            <span
+              v-if="conversationStats(conversation.id).active"
+              class="history-meta"
+              >{{ conversationStats(conversation.id).queued }} 排队 ·
+              {{ conversationStats(conversation.id).processing }} 处理中</span
+            >
+          </button>
+          <div class="history-actions">
+            <button
+              class="history-action"
+              type="button"
+              @click="renameConversation(conversation)"
+            >
+              重命名</button
+            ><button
+              class="history-action"
+              type="button"
+              @click="deleteConversation(conversation.id)"
+            >
+              删除
+            </button>
+          </div>
+        </article>
+      </div>
+      <button class="history-clear" type="button" @click="deleteConversation()">
+        清空全部历史
+      </button>
+    </aside>
     <div
       ref="workbenchLayout"
       class="workbench-layout"
@@ -12,6 +87,8 @@
           flexBasis: `calc(${leftWidth}% - ${(18 * leftWidth) / 100}px)`
         }"
         @submit.prevent="submitTask"
+        @dragover.prevent
+        @drop.prevent="dropImages"
       >
         <header class="panel-head">
           <span data-emphasis>创建任务</span>
@@ -23,20 +100,6 @@
             <BookOpen :size="13" />提示词库
           </button>
         </header>
-        <div class="mode-tabs" role="tablist" aria-label="图片任务类型">
-          <button
-            v-for="mode in modes"
-            :key="mode.value"
-            class="mode-tab"
-            :class="{ active: form.mode === mode.value }"
-            type="button"
-            role="tab"
-            :aria-selected="form.mode === mode.value"
-            @click="form.mode = mode.value"
-          >
-            <component :is="mode.icon" :size="15" />{{ mode.label }}
-          </button>
-        </div>
         <label class="form-field">
           <span class="field-label">官方账号</span>
           <select
@@ -118,37 +181,50 @@
             v-model="form.prompt"
             class="field-input prompt-input"
             :placeholder="
-              form.mode === 'edit'
-                ? '描述你希望如何修改参考图，例如：给人物加一顶红色帽子'
-                : '描述你想生成的画面，例如：木桌上的红苹果，柔和的摄影棚光线'
+              references.length
+                ? '描述你希望如何修改参考图'
+                : '输入你想要生成的画面，也可直接粘贴图片'
             "
+            @keydown="promptKeydown"
+            @paste="pasteImages"
             maxlength="16000"
             required
           ></textarea>
         </label>
-        <div class="parameter-fields">
-          <label v-for="field in fields" :key="field.key" class="form-field">
-            <span class="field-label">
-              {{ field.label }}
-              <span class="field-key">{{ field.apiName }}</span>
-              <button
-                v-if="field.key === 'model'"
-                class="model-refresh"
-                type="button"
-                :disabled="loadingModels || !form.accountId || submitting"
-                @click.prevent="loadModels"
+        <div class="composer-tools">
+          <button
+            class="composer-button"
+            type="button"
+            @click="settingsOpen = !settingsOpen"
+          >
+            {{ width }} × {{ height }} · {{ form.quality }} · {{ form.n }} 张
+            <span>{{ settingsOpen ? "收起设置" : "图像设置" }}</span>
+          </button>
+          <button
+            class="composer-button"
+            type="button"
+            @click="drawing = { source: '' }"
+          >
+            <Paintbrush :size="14" />草图
+          </button>
+        </div>
+        <section v-if="settingsOpen" class="image-settings">
+          <div class="parameter-fields">
+            <label class="form-field model-field">
+              <span class="field-label"
+                >模型<button
+                  class="model-refresh"
+                  type="button"
+                  :disabled="loadingModels"
+                  @click="loadModels"
+                >
+                  {{ loadingModels ? "获取中…" : "刷新模型" }}
+                </button></span
               >
-                {{ loadingModels ? "获取中…" : "刷新模型" }}
-              </button>
-            </span>
-            <template v-if="field.key === 'model'">
               <input
                 v-model.trim="form.model"
                 class="field-input"
                 list="image-workbench-models"
-                :placeholder="
-                  loadingModels ? '正在获取生图模型…' : '选择或输入图片模型'
-                "
                 maxlength="128"
                 required
               />
@@ -159,32 +235,108 @@
                   :value="model.id"
                 />
               </datalist>
-            </template>
-            <select v-else v-model="form[field.key]" class="field-input">
-              <option
-                v-for="option in field.options"
-                :key="option.value"
-                :value="option.value"
-              >
-                {{ option.label }}
-              </option>
-            </select>
-          </label>
-          <label class="form-field">
-            <span class="field-label"
-              >数量 <span class="field-key">n</span></span
+            </label>
+            <label class="form-field"
+              ><span class="field-label">质量</span
+              ><select v-model="form.quality" class="field-input">
+                <option
+                  v-for="option in qualityOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select></label
             >
-            <input
+            <label class="form-field"
+              ><span class="field-label">宽度 W</span
+              ><input
+                v-model.number="width"
+                class="field-input"
+                type="number"
+                min="1"
+                step="1"
+                required
+            /></label>
+            <label class="form-field"
+              ><span class="field-label">高度 H</span
+              ><input
+                v-model.number="height"
+                class="field-input"
+                type="number"
+                min="1"
+                step="1"
+                required
+            /></label>
+          </div>
+          <div class="preset-list">
+            <button
+              v-for="preset in sizePresets"
+              :key="preset.label"
+              class="preset-button"
+              :class="{
+                active: ratio === preset.ratio && tier === preset.tier
+              }"
+              type="button"
+              :disabled="
+                preset.tier !== '1k' &&
+                preset.tier !== 'auto' &&
+                !form.model.includes('codex')
+              "
+              :title="
+                preset.tier !== '1k' && preset.tier !== 'auto'
+                  ? '仅名称包含 codex 的模型可用'
+                  : `${preset.width} × ${preset.height}`
+              "
+              @click="applySizePreset(preset)"
+            >
+              {{ preset.label }}
+            </button>
+          </div>
+          <label class="form-field"
+            ><span class="field-label">生成数量（每张一个任务）</span
+            ><input
               v-model.number="form.n"
               class="field-input"
               type="number"
               min="1"
-              max="10"
+              max="100"
               step="1"
               required
-            />
-          </label>
-        </div>
+          /></label>
+          <div class="preset-list">
+            <button
+              v-for="count in 10"
+              :key="count"
+              class="preset-button"
+              :class="{ active: form.n === count }"
+              type="button"
+              @click="form.n = count"
+            >
+              {{ count }} 张
+            </button>
+          </div>
+          <details class="advanced-settings">
+            <summary>输出选项</summary>
+            <div class="parameter-fields">
+              <label v-for="field in fields" :key="field.key" class="form-field"
+                ><span class="field-label">{{ field.label }}</span
+                ><select v-model="form[field.key]" class="field-input">
+                  <option
+                    v-for="option in field.options"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select></label
+              >
+            </div>
+          </details>
+        </section>
+        <p v-if="width * height > 40000000" class="field-error">
+          尺寸总像素不能超过 4000 万，请调整宽度和高度。
+        </p>
         <p v-if="modelsError" class="field-error">{{ modelsError }}</p>
         <p
           v-if="
@@ -194,7 +346,7 @@
         >
           透明背景需要选择 PNG 或 WebP。
         </p>
-        <section v-if="form.mode === 'edit'" class="reference-section">
+        <section class="reference-section">
           <div class="reference-head">
             <span>参考图</span
             ><span class="field-key">{{ references.length }} / 10</span>
@@ -205,16 +357,20 @@
               :key="reference.id"
               class="reference-item"
             >
-              <img
+              <el-image
                 class="reference-image"
                 :src="reference.url"
                 :alt="reference.name"
+                :preview-src-list="references.map((item) => item.url)"
+                :initial-index="index"
+                fit="cover"
+                preview-teleported
               />
               <button
                 class="remove-reference"
                 type="button"
                 :aria-label="`移除 ${reference.name}`"
-                @click="references.splice(index, 1)"
+                @click="removeReference(index)"
               >
                 <X :size="12" />
               </button>
@@ -303,8 +459,8 @@
       <section id="image-tasks-panel" class="tasks-panel">
         <header class="tasks-head">
           <div class="tasks-title">
-            <span data-emphasis>我的任务</span
-            ><span class="task-count">{{ total }}</span>
+            <span data-emphasis>当前会话</span
+            ><span class="task-count">{{ total }} 轮</span>
           </div>
           <div class="tasks-controls">
             <select
@@ -387,117 +543,196 @@
           }}</span>
         </div>
         <div v-else class="task-list">
-          <article
-            v-for="task in tasks"
-            :key="task.id"
-            class="task-card"
-            :class="{ 'task-selected': selected.includes(task.id) }"
-          >
-            <header class="task-meta">
-              <label v-if="selecting" class="task-check">
-                <input
-                  v-model="selected"
-                  type="checkbox"
-                  :value="task.id"
-                  :disabled="task.status === 'processing'"
-                  :aria-label="`选择任务 ${formatDateTime(task.createdAt)}`"
-                />
-              </label>
-              <span class="task-status" :class="task.status">{{
-                statusLabels[task.status]
-              }}</span>
-              <span class="task-generation-mode" aria-label="调用模式">{{
-                task.request.generationMode === "web" ? "Web" : "Codex"
-              }}</span>
-              <span class="task-time">{{
-                formatDateTime(task.createdAt)
-              }}</span>
-              <span class="task-count"
-                >{{ task.imageCount }} / {{ task.request.n }} 张</span
-              >
-            </header>
-            <button
-              v-if="task.imageCount"
-              class="task-preview"
-              type="button"
-              :disabled="detailLoading"
-              aria-label="查看生成图片"
-              @click="showDetail(task, 'images')"
-            >
-              <el-image
-                class="task-thumbnail"
-                :src="task.thumbnail"
-                fit="contain"
-                lazy
-              >
-                <template #placeholder>
-                  <span class="preview-placeholder"
-                    ><LoaderCircle
-                      class="spinning"
-                      :size="28"
-                    />正在加载图片…</span
-                  >
-                </template>
-                <template #error>
-                  <span class="preview-placeholder"
-                    ><ImageOff :size="28" />预览暂不可用，点击查看原图</span
-                  >
-                </template>
-              </el-image>
-              <span class="preview-hint">{{
-                task.imageCount > 1
-                  ? `查看全部 ${task.imageCount} 张图片`
-                  : "点击查看原图"
-              }}</span>
-            </button>
-            <div v-else class="task-placeholder" role="status">
-              <template v-if="task.status === 'processing'">
-                <LoaderCircle class="spinning" :size="36" />
-                <span class="placeholder-title">正在生成图片…</span>
-                <span class="placeholder-hint">{{
-                  autoRefresh
-                    ? "完成后会自动显示在这里"
-                    : "完成后点击刷新查看结果"
-                }}</span>
-              </template>
-              <template v-else>
-                <ImageOff :size="36" :stroke-width="1.3" />
-                <span class="placeholder-title"
-                  >{{ statusLabels[task.status] }}，暂无生成图片</span
+          <section v-for="round in rounds" :key="round.id" class="round-card">
+            <header class="round-header">
+              <p v-if="!roundState[round.id]?.hidePrompt" class="round-prompt">
+                {{ round.tasks[0].request.prompt }}
+              </p>
+              <div class="round-actions">
+                <button
+                  class="text-button"
+                  type="button"
+                  @click="reuseTask(round.tasks[0], true)"
                 >
-                <span class="placeholder-hint">可以复用参数重新生成</span>
-              </template>
-            </div>
-            <p v-if="task.error?.message" class="task-error">
-              {{ task.error.message }}
-            </p>
-            <footer class="task-actions">
-              <button
-                class="text-button"
-                type="button"
-                :disabled="detailLoading"
-                @click="showDetail(task, 'parameters')"
-              >
-                查看参数
-              </button>
-              <button
-                class="text-button"
-                type="button"
-                @click="reuseTask(task)"
-              >
-                复用参数
-              </button>
+                  复用配置
+                </button>
+                <button
+                  class="text-button"
+                  type="button"
+                  :disabled="submitting"
+                  @click="regenerateRound(round)"
+                >
+                  全部重新生成
+                </button>
+                <button
+                  class="text-button"
+                  type="button"
+                  @click="removeRoundPrompt(round)"
+                >
+                  删除提示词记录
+                </button>
+                <button
+                  class="text-button"
+                  type="button"
+                  @click="removeRoundResults(round)"
+                >
+                  删除本轮生成结果
+                </button>
+              </div>
+            </header>
+            <article
+              v-for="task in round.tasks"
+              :key="task.id"
+              class="task-card"
+              :class="{ 'task-selected': selected.includes(task.id) }"
+            >
+              <header class="task-meta">
+                <label v-if="selecting" class="task-check">
+                  <input
+                    v-model="selected"
+                    type="checkbox"
+                    :value="task.id"
+                    :disabled="task.status === 'processing'"
+                    :aria-label="`选择任务 ${formatDateTime(task.createdAt)}`"
+                  />
+                </label>
+                <span class="task-status" :class="task.status">{{
+                  statusLabels[task.status]
+                }}</span>
+                <span class="task-generation-mode" aria-label="调用模式">{{
+                  task.request.generationMode === "web" ? "Web" : "Codex"
+                }}</span>
+                <span class="task-time">{{
+                  formatDateTime(task.createdAt)
+                }}</span>
+                <span class="task-count"
+                  >{{ task.imageCount }} / {{ task.request.n }} 张</span
+                >
+              </header>
               <button
                 v-if="task.imageCount"
-                class="text-button"
+                class="task-preview"
                 type="button"
-                :disabled="exporting"
-                @click="exportTasks([task.id])"
+                :disabled="detailLoading"
+                aria-label="查看生成图片"
+                @click="showDetail(task, 'images')"
               >
-                导出图片
+                <el-image
+                  class="task-thumbnail"
+                  :src="task.thumbnail"
+                  fit="contain"
+                  lazy
+                >
+                  <template #placeholder>
+                    <span class="preview-placeholder"
+                      ><LoaderCircle
+                        class="spinning"
+                        :size="28"
+                      />正在加载图片…</span
+                    >
+                  </template>
+                  <template #error>
+                    <span class="preview-placeholder"
+                      ><ImageOff :size="28" />预览暂不可用，点击查看原图</span
+                    >
+                  </template>
+                </el-image>
+                <span class="preview-hint">{{
+                  task.imageCount > 1
+                    ? `查看全部 ${task.imageCount} 张图片`
+                    : "点击查看原图"
+                }}</span>
               </button>
-            </footer>
-          </article>
+              <div v-else class="task-placeholder" role="status">
+                <template v-if="['processing', 'queued'].includes(task.status)">
+                  <LoaderCircle class="spinning" :size="36" />
+                  <span class="placeholder-title">{{
+                    task.status === "queued" ? "排队中…" : "正在生成图片…"
+                  }}</span>
+                  <span class="placeholder-hint">{{
+                    autoRefresh
+                      ? "完成后会自动显示在这里"
+                      : "完成后点击刷新查看结果"
+                  }}</span>
+                </template>
+                <template v-else>
+                  <ImageOff :size="36" :stroke-width="1.3" />
+                  <span class="placeholder-title"
+                    >{{ statusLabels[task.status] }}，暂无生成图片</span
+                  >
+                  <span class="placeholder-hint">可以复用参数重新生成</span>
+                </template>
+              </div>
+              <p
+                v-if="
+                  task.error?.message &&
+                  !roundState[round.id]?.ignored?.includes(task.id)
+                "
+                class="task-error"
+              >
+                {{ task.error.message }}
+              </p>
+              <footer class="task-actions">
+                <button
+                  class="text-button"
+                  type="button"
+                  :disabled="
+                    submitting || ['queued', 'processing'].includes(task.status)
+                  "
+                  @click="regenerateTask(task)"
+                >
+                  重新生成
+                </button>
+                <button
+                  v-if="
+                    task.canResume &&
+                    ['failed', 'interrupted'].includes(task.status)
+                  "
+                  class="text-button"
+                  type="button"
+                  :disabled="resuming.includes(task.id)"
+                  @click="resumeTask(task)"
+                >
+                  继续等待
+                </button>
+                <button
+                  v-if="
+                    task.error?.message &&
+                    !roundState[round.id]?.ignored?.includes(task.id)
+                  "
+                  class="text-button"
+                  type="button"
+                  @click="ignoreTaskError(round, task)"
+                >
+                  忽略错误
+                </button>
+                <button
+                  class="text-button"
+                  type="button"
+                  :disabled="detailLoading"
+                  @click="showDetail(task, 'parameters')"
+                >
+                  查看参数
+                </button>
+                <button
+                  class="text-button"
+                  type="button"
+                  @click="reuseTask(task)"
+                >
+                  复用参数
+                </button>
+                <button
+                  v-if="task.imageCount"
+                  class="text-button"
+                  type="button"
+                  :disabled="exporting"
+                  @click="exportTasks([task.id])"
+                >
+                  导出图片
+                </button>
+              </footer>
+            </article>
+          </section>
         </div>
         <footer v-if="total > pageSize" class="pagination">
           <button
@@ -523,6 +758,12 @@
       </section>
     </div>
 
+    <ImageDrawingDialog
+      v-if="drawing"
+      :source="drawing.source"
+      @close="drawing = null"
+      @apply="applyDrawing"
+    />
     <ImagePromptLibrary
       v-if="promptLibraryOpen"
       @close="promptLibraryOpen = false"
@@ -562,7 +803,22 @@
                 type="button"
                 @click="editResult(item)"
               >
-                用此图编辑
+                编辑
+              </button>
+              <button
+                class="text-button"
+                type="button"
+                @click="referenceResult(item)"
+              >
+                引用
+              </button>
+              <button
+                class="text-button"
+                type="button"
+                :disabled="exporting"
+                @click="downloadImage(index)"
+              >
+                下载
               </button>
             </figcaption>
           </figure>
@@ -646,6 +902,7 @@ import { ElImage, ElMessageBox } from "element-plus"
 import "element-plus/es/components/image/style/css"
 import "element-plus/es/components/message-box/style/css"
 import BaseModal from "@/components/BaseModal.vue"
+import ImageDrawingDialog from "./ImageDrawingDialog.vue"
 import { systemApi, toolboxApi } from "@/api"
 import { subscribe } from "@/api/request"
 import { formatDateTime } from "@/utils/formatters"
@@ -721,7 +978,7 @@ function applyLibraryPrompt(template) {
   form.prompt = template.prompt
   if (typeof template.model === "string" && template.model.trim())
     form.model = template.model.trim()
-  form.mode = template.mode
+  form.mode = references.value.length ? "edit" : "generate"
   submitError.value = ""
   promptLibraryOpen.value = false
   createMessage.success(
@@ -731,11 +988,8 @@ function applyLibraryPrompt(template) {
   )
 }
 
-const modes = [
-  { value: "generate", label: "文生图", icon: Sparkles },
-  { value: "edit", label: "图片编辑", icon: Paintbrush }
-]
 const statusLabels = {
+  queued: "排队中",
   processing: "生成中",
   completed: "已完成",
   partial: "部分完成",
@@ -743,32 +997,6 @@ const statusLabels = {
   interrupted: "已中断"
 }
 const fields = [
-  {
-    key: "model",
-    label: "模型",
-    apiName: "model"
-  },
-  {
-    key: "size",
-    label: "尺寸",
-    apiName: "size",
-    options: [
-      { value: "1024x1024", label: "1K · 1024 × 1024" },
-      { value: "1024x1536", label: "竖图 · 1024 × 1536" },
-      { value: "1536x1024", label: "横图 · 1536 × 1024" },
-      { value: "2048x2048", label: "2K · 2048 × 2048" },
-      { value: "auto", label: "自动" }
-    ]
-  },
-  {
-    key: "quality",
-    label: "质量",
-    apiName: "quality",
-    options: ["high", "medium", "low", "auto"].map((value) => ({
-      value,
-      label: value
-    }))
-  },
   {
     key: "outputFormat",
     label: "图片格式",
@@ -801,16 +1029,454 @@ const form = reactive({
   generationMode,
   mode: "generate",
   prompt: "",
-  model: "",
+  model: "gpt-image-2",
   size: "1024x1024",
-  quality: "high",
+  quality: "auto",
   n: 1,
   outputFormat: "png",
   background: "",
   responseFormat: "url"
 })
+// 浏览器只保存会话目录与偏好，图片、参考图、蒙版继续由 SQLite 按需读取。
+function readLocal(key, fallback) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "null") ?? fallback
+  } catch {
+    return fallback
+  }
+}
+
+function writeLocal(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value))
+  } catch {
+    createMessage.error("本地存储空间不足，当前更改未持久化")
+  }
+}
+
+const preferences = readLocal("image-workbench-preferences", {})
+for (const key of ["model", "quality", "n"]) {
+  if (preferences[key] !== undefined) form[key] = preferences[key]
+}
+const width = ref(preferences.width || 1024)
+const height = ref(preferences.height || 1024)
+const ratio = ref(preferences.ratio || "1:1")
+const tier = ref(preferences.tier || "1k")
+const settingsOpen = ref(false)
+const drawing = ref(null)
+const historyOpen = ref(false)
+const savedHistory = readLocal("image-workbench-conversations", {})
+const conversations = ref(
+  Array.isArray(savedHistory.conversations) ? savedHistory.conversations : []
+)
+const roundState = ref(savedHistory.rounds || {})
+const activeConversationId = ref(savedHistory.active || "")
+const historyIndex = ref([])
+const resuming = ref([])
+const currentConversation = computed(() =>
+  conversations.value.find((item) => item.id === activeConversationId.value)
+)
+const sizePresets = [
+  ["1:1", "1k", 1024, 1024],
+  ["2:3", "1k", 1024, 1536],
+  ["3:2", "1k", 1536, 1024],
+  ["3:4", "1k", 1024, 1365],
+  ["4:3", "1k", 1365, 1024],
+  ["9:16", "1k", 1088, 1920],
+  ["16:9", "1k", 1920, 1088],
+  ["1:1", "2k", 2048, 2048],
+  ["16:9", "2k", 2560, 1440],
+  ["9:16", "2k", 1440, 2560],
+  ["16:9", "4k", 3840, 2160],
+  ["9:16", "4k", 2160, 3840],
+  ["auto", "auto", 1024, 1024]
+].map(([ratio, tier, width, height]) => ({
+  ratio,
+  tier,
+  width,
+  height,
+  label: `${ratio}${["2k", "4k"].includes(tier) ? `(${tier})` : ""}`
+}))
+const qualityOptions = computed(() => [
+  { value: "auto", label: "自动" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+  ...(form.model.includes("image-2.5")
+    ? [
+        { value: "xhigh", label: "超高" },
+        { value: "max", label: "最高" }
+      ]
+    : [])
+])
+
+function applySizePreset(preset) {
+  width.value = preset.width
+  height.value = preset.height
+  ratio.value = preset.ratio
+  tier.value = preset.tier
+}
+
+watch(
+  () => form.model,
+  () => {
+    if (
+      !form.model.includes("image-2.5") &&
+      ["xhigh", "max"].includes(form.quality)
+    )
+      form.quality = "auto"
+  },
+  { immediate: true }
+)
+watch(
+  [
+    () => form.model,
+    () => form.quality,
+    () => form.n,
+    width,
+    height,
+    ratio,
+    tier
+  ],
+  () => {
+    form.size = `${width.value}x${height.value}`
+    writeLocal("image-workbench-preferences", {
+      model: form.model,
+      quality: form.quality,
+      n: form.n,
+      width: width.value,
+      height: height.value,
+      ratio: ratio.value,
+      tier: tier.value
+    })
+  }
+)
+
+function saveHistory() {
+  writeLocal("image-workbench-conversations", {
+    conversations: conversations.value,
+    active: activeConversationId.value,
+    rounds: roundState.value
+  })
+}
+
+function patchRound(id, changes) {
+  roundState.value[id] = { ...roundState.value[id], ...changes }
+  saveHistory()
+}
+
+function ensureConversation() {
+  if (!currentConversation.value) {
+    const item = {
+      id: crypto.randomUUID(),
+      title: "新对话",
+      updatedAt: Date.now()
+    }
+    conversations.value.unshift(item)
+    activeConversationId.value = item.id
+    saveHistory()
+  }
+  return currentConversation.value
+}
+ensureConversation()
+
+function conversationStats(id) {
+  const items = historyIndex.value.filter(
+    (item) =>
+      (item.conversationId || "legacy") === id &&
+      !roundState.value[item.roundId || item.id]?.replaced?.includes(item.id)
+  )
+  const queued = items.filter((item) => item.status === "queued").length
+  const processing = items.filter((item) => item.status === "processing").length
+  return {
+    rounds: new Set(items.map((item) => item.roundId || item.id)).size,
+    queued,
+    processing,
+    active: queued + processing
+  }
+}
+
+let historyVersion = 0
+async function loadHistory() {
+  const version = ++historyVersion
+  const items = await toolboxApi.imageHistory()
+  if (disposed || version !== historyVersion) return
+  historyIndex.value = items
+  for (const item of items) {
+    const id = item.conversationId || "legacy"
+    let conversation = conversations.value.find((item) => item.id === id)
+    if (!conversation) {
+      conversation = {
+        id,
+        title:
+          id === "legacy"
+            ? "早期任务"
+            : (item.prompt || "生图对话").slice(0, 28),
+        updatedAt: item.createdAt
+      }
+      conversations.value.push(conversation)
+    }
+    conversation.updatedAt = Math.max(conversation.updatedAt, item.createdAt)
+  }
+  conversations.value.sort((a, b) => b.updatedAt - a.updatedAt)
+  saveHistory()
+}
+
+function selectConversation(id) {
+  activeConversationId.value = id
+  historyOpen.value = false
+  selected.value = []
+  status.value = ""
+  page.value = 1
+  saveHistory()
+  loadTasks()
+}
+
+function newConversation() {
+  activeConversationId.value = ""
+  ensureConversation()
+  form.prompt = ""
+  references.value = []
+  mask.value = null
+  form.mode = "generate"
+  selectConversation(activeConversationId.value)
+}
+
+async function renameConversation(conversation) {
+  try {
+    const result = await ElMessageBox.prompt("输入会话名称", "重命名会话", {
+      inputValue: conversation.title,
+      inputPattern: /\S/,
+      inputErrorMessage: "名称不能为空",
+      confirmButtonText: "保存",
+      cancelButtonText: "取消"
+    })
+    conversation.title = result.value.trim().slice(0, 100)
+    saveHistory()
+  } catch {
+    /* 取消时保留原名。 */
+  }
+}
+
+async function deleteConversation(id) {
+  try {
+    await loadHistory()
+  } catch (error) {
+    createMessage.error(String(error))
+    return
+  }
+  const items = historyIndex.value.filter(
+    (item) => !id || (item.conversationId || "legacy") === id
+  )
+  if (items.some((item) => item.status === "processing"))
+    return createMessage.warning("会话中仍有任务生成中，请完成后再删除")
+  try {
+    await ElMessageBox.confirm(
+      id
+        ? "删除此会话及其本地图片，并取消排队任务？"
+        : "清空全部历史及本地图片，并取消排队任务？",
+      "删除历史",
+      { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" }
+    )
+  } catch {
+    return
+  }
+  try {
+    if (items.length)
+      await toolboxApi.deleteImageTasks({ ids: items.map((item) => item.id) })
+    historyVersion++
+    for (const item of items) delete roundState.value[item.roundId || item.id]
+    conversations.value = id
+      ? conversations.value.filter((item) => item.id !== id)
+      : []
+    historyIndex.value = historyIndex.value.filter(
+      (item) => id && (item.conversationId || "legacy") !== id
+    )
+    if (!currentConversation.value) {
+      activeConversationId.value = ""
+      ensureConversation()
+    }
+    saveHistory()
+    await loadTasks()
+  } catch (error) {
+    createMessage.error(String(error))
+  }
+}
+
+function promptKeydown(event) {
+  if (
+    event.key === "Enter" &&
+    !event.shiftKey &&
+    !event.isComposing &&
+    event.keyCode !== 229
+  ) {
+    event.preventDefault()
+    submitTask()
+  }
+}
+
+function pasteImages(event) {
+  const files = Array.from(event.clipboardData?.files || []).filter((file) =>
+    file.type.startsWith("image/")
+  )
+  if (files.length) {
+    event.preventDefault()
+    addImages({ target: { files } }, false)
+  }
+}
+
+function dropImages(event) {
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (files.length) addImages({ target: { files } }, false)
+}
+
+function removeReference(index) {
+  references.value.splice(index, 1)
+  if (index === 0) mask.value = null
+  form.mode = references.value.length ? "edit" : "generate"
+}
+
+function appendReference(item) {
+  if (references.value.length >= 10) {
+    createMessage.error("最多添加 10 张参考图")
+    return false
+  }
+  if (
+    references.value.reduce((size, item) => size + item.url.length, 0) +
+      item.url.length +
+      (mask.value?.url.length || 0) >
+    32 * 1024 * 1024
+  ) {
+    createMessage.error("图片编码后总大小不能超过 32 MB")
+    return false
+  }
+  references.value.push(item)
+  form.mode = "edit"
+  return true
+}
+
+function applyDrawing(result) {
+  if (result.source) {
+    if (result.source.length + result.url.length > 32 * 1024 * 1024)
+      return createMessage.error("图片与蒙版总大小超过 32 MB")
+    references.value = [
+      { id: crypto.randomUUID(), name: "重绘原图.png", url: result.source }
+    ]
+    mask.value = { name: result.name, url: result.url }
+    form.mode = "edit"
+  } else if (!appendReference({ ...result, id: crypto.randomUUID() })) return
+  drawing.value = null
+}
+
+async function regenerateTask(task, count = 1, wholeRound = false) {
+  if (submitting.value) return
+  submitting.value = true
+  try {
+    const inputs = await toolboxApi.imageTaskInputs({ id: task.id })
+    // 重试使用原账号、通道和输入，不受当前草稿的设置影响。
+    const roundId = wholeRound
+      ? crypto.randomUUID()
+      : task.request.roundId || task.id
+    await toolboxApi.submitImageTask({
+      ...task.request,
+      generationMode: task.request.generationMode || "codex",
+      conversationId: task.request.conversationId || "legacy",
+      roundId,
+      n: count,
+      images: inputs.images,
+      mask: inputs.mask
+    })
+    status.value = ""
+    if (wholeRound) {
+      patchRound(roundId, { count })
+      page.value = 1
+    } else {
+      patchRound(roundId, {
+        replaced: [
+          ...new Set([...(roundState.value[roundId]?.replaced || []), task.id])
+        ]
+      })
+    }
+    await loadTasks()
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    submitting.value = false
+  }
+}
+
+async function regenerateRound(round) {
+  const task = round.tasks[0]
+  const count =
+    roundState.value[round.id]?.count || task.batchCount || task.request.n
+  await regenerateTask(task, count, true)
+}
+
+async function removeRoundPrompt(round) {
+  try {
+    await ElMessageBox.confirm(
+      "删除这条提示词记录？对应生成结果会保留。",
+      "删除提示词记录",
+      { confirmButtonText: "删除", cancelButtonText: "取消" }
+    )
+  } catch {
+    return
+  }
+  patchRound(round.id, { hidePrompt: true })
+}
+
+async function removeRoundResults(round) {
+  const ids = historyIndex.value
+    .filter((item) => (item.roundId || item.id) === round.id)
+    .map((item) => item.id)
+  try {
+    await ElMessageBox.confirm(
+      "删除本轮已经生成的图片？提示词、配置和输入仍可复用。",
+      "删除生成结果",
+      { confirmButtonText: "删除", cancelButtonText: "取消" }
+    )
+  } catch {
+    return
+  }
+  try {
+    await toolboxApi.clearImageResults({ ids })
+    await loadTasks()
+  } catch (error) {
+    createMessage.error(String(error))
+  }
+}
+
+function ignoreTaskError(round, task) {
+  patchRound(round.id, {
+    ignored: [
+      ...new Set([...(roundState.value[round.id]?.ignored || []), task.id])
+    ]
+  })
+}
+
+async function resumeTask(task) {
+  if (resuming.value.includes(task.id)) return
+  resuming.value.push(task.id)
+  try {
+    await toolboxApi.resumeImageTask({ id: task.id })
+    await loadTasks()
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    resuming.value = resuming.value.filter((id) => id !== task.id)
+  }
+}
+
 const accounts = ref([])
-const imageModels = ref([])
+const fallbackModels = [
+  "gpt-image-2.5-sunburst",
+  "gpt-image-2.5-flare",
+  "gpt-image-2",
+  "gpt-5-5-thinking",
+  "gpt-5-5",
+  "gpt-5-3"
+].map((id) => ({ id }))
+const imageModels = ref(readLocal("image-workbench-models", fallbackModels))
 const loadingModels = ref(false)
 const modelsError = ref("")
 let modelsRequestVersion = 0
@@ -827,9 +1493,19 @@ const quotaResetLabel = computed(() => {
 const references = ref([])
 const mask = ref(null)
 const tasks = ref([])
+const rounds = computed(() => {
+  const groups = new Map()
+  for (const task of tasks.value) {
+    const id = task.request.roundId || task.id
+    if (roundState.value[id]?.replaced?.includes(task.id)) continue
+    if (!groups.has(id)) groups.set(id, { id, tasks: [] })
+    groups.get(id).tasks.push(task)
+  }
+  return [...groups.values()]
+})
 const total = ref(0)
 const page = ref(1)
-const pageSize = 12
+const pageSize = 1
 const status = ref("")
 const autoRefresh = ref(true)
 const selecting = ref(false)
@@ -862,12 +1538,19 @@ const canSubmit = computed(
     form.model.trim() &&
     Number.isInteger(form.n) &&
     form.n >= 1 &&
-    form.n <= 10 &&
+    form.n <= 100 &&
+    Number.isInteger(width.value) &&
+    width.value >= 1 &&
+    Number.isInteger(height.value) &&
+    height.value >= 1 &&
+    width.value * height.value <= 40_000_000 &&
     (form.mode !== "edit" || references.value.length) &&
     !(form.background === "transparent" && form.outputFormat === "jpeg")
 )
 const selectableTasks = computed(() =>
-  tasks.value.filter((task) => task.status !== "processing")
+  rounds.value
+    .flatMap((round) => round.tasks)
+    .filter((task) => task.status !== "processing")
 )
 const allSelected = computed(
   () =>
@@ -897,7 +1580,6 @@ async function loadModels() {
   // 切换账号时丢弃旧请求，避免不同代理的目录结果互相覆盖。
   const version = ++modelsRequestVersion
   const accountId = form.accountId
-  imageModels.value = []
   modelsError.value = ""
   loadingModels.value = Boolean(accountId)
   if (!accountId) return
@@ -906,6 +1588,7 @@ async function loadModels() {
     const result = await toolboxApi.imageModels({ accountId })
     if (version !== modelsRequestVersion || disposed) return
     imageModels.value = result.data
+    writeLocal("image-workbench-models", result.data)
     // 初次使用默认选接口的第一项，刷新不覆盖手动输入或历史任务模型。
     if (!form.model.trim())
       form.model = result.default_image_model || result.data[0]?.id || ""
@@ -946,15 +1629,18 @@ async function loadTasks() {
   try {
     const result = await toolboxApi.listImageTasks({
       page: page.value,
-      status: status.value
+      status: status.value,
+      conversationId: activeConversationId.value,
+      pageSize,
+      groupByRound: true
     })
     if (version !== requestVersion || disposed) return
     tasks.value = result.items
+    await loadHistory()
+    if (version !== requestVersion || disposed) return
     total.value = result.total
     selected.value = selected.value.filter((id) =>
-      result.items.some(
-        (task) => task.id === id && task.status !== "processing"
-      )
+      selectableTasks.value.some((task) => task.id === id)
     )
     listError.value = ""
     const lastPage = Math.max(1, Math.ceil(total.value / pageSize))
@@ -974,10 +1660,13 @@ async function refreshAll() {
 
 async function addImages(event, isMask) {
   const files = Array.from(event.target.files || [])
+  if (!files.length || uploading.value) return
   event.target.value = ""
   uploading.value = true
   submitError.value = ""
   try {
+    if (isMask && !references.value.length)
+      throw new Error("请先添加需要编辑的参考图")
     if (!isMask && references.value.length + files.length > 10)
       throw new Error("最多添加 10 张参考图")
     const added = []
@@ -1010,6 +1699,7 @@ async function addImages(event, isMask) {
       throw new Error("图片编码后总大小超过 32 MB，请减少图片或压缩后上传")
     references.value = nextReferences
     mask.value = nextMask
+    form.mode = references.value.length ? "edit" : "generate"
   } catch (error) {
     submitError.value = error.message || String(error)
   } finally {
@@ -1023,12 +1713,23 @@ async function submitTask() {
   submitError.value = ""
   try {
     // 草稿在提交后仍然保留；上游失败不会清空用户的提示词和参考图。
-    await toolboxApi.submitImageTask({
+    const conversation = ensureConversation()
+    const result = await toolboxApi.submitImageTask({
       ...form,
-      images:
-        form.mode === "edit" ? references.value.map((item) => item.url) : [],
-      mask: form.mode === "edit" ? mask.value?.url || "" : ""
+      mode: references.value.length ? "edit" : "generate",
+      size: `${width.value}x${height.value}`,
+      ratio: ratio.value,
+      tier: tier.value,
+      conversationId: conversation.id,
+      roundId: crypto.randomUUID(),
+      images: references.value.map((item) => item.url),
+      mask: mask.value?.url || ""
     })
+    conversation.updatedAt = Date.now()
+    if (conversation.title === "新对话")
+      conversation.title = form.prompt.trim().slice(0, 28)
+    patchRound(result.roundId, { count: form.n })
+    saveHistory()
     status.value = ""
     page.value = 1
     await loadTasks()
@@ -1051,14 +1752,27 @@ function toggleAll() {
     : selectableTasks.value.map((task) => task.id)
 }
 
-async function reuseTask(task) {
+async function reuseTask(task, wholeRound = false) {
   if (uploading.value) return
   uploading.value = true
   try {
     // 编辑历史同时恢复参考图和蒙版，用户确认后再手动提交。
     // 早期任务没有记录调用模式，当时仅支持 Codex。
     const inputs = await toolboxApi.imageTaskInputs({ id: task.id })
-    Object.assign(form, { generationMode: "codex" }, task.request)
+    for (const key of Object.keys(form)) {
+      if (key in task.request) form[key] = task.request[key]
+    }
+    form.generationMode = task.request.generationMode || "codex"
+    form.n = wholeRound
+      ? roundState.value[task.request.roundId || task.id]?.count ||
+        task.batchCount ||
+        task.request.n
+      : task.request.n
+    const dimensions = task.request.size.split("x").map(Number)
+    width.value = dimensions[0] || 1024
+    height.value = dimensions[1] || 1024
+    ratio.value = task.request.ratio || "1:1"
+    tier.value = task.request.tier || "1k"
     references.value = inputs.images.map((url, index) => ({
       id: crypto.randomUUID(),
       name: `参考图 ${index + 1}`,
@@ -1094,14 +1808,35 @@ function imageUrl(item) {
 }
 
 function editResult(item) {
-  Object.assign(form, { generationMode: "codex" }, detail.value.request)
-  mask.value = null
-  form.mode = "edit"
-  references.value = [
-    { id: crypto.randomUUID(), name: "生成结果", url: imageUrl(item) }
-  ]
-  submitError.value = ""
+  drawing.value = { source: imageUrl(item) }
   detail.value = null
+}
+
+function referenceResult(item) {
+  appendReference({
+    id: crypto.randomUUID(),
+    name: "生成结果.png",
+    url: imageUrl(item)
+  })
+  detail.value = null
+}
+
+async function downloadImage(index) {
+  const taskId = detail.value.id
+  exporting.value = true
+  try {
+    const targetPath = await systemApi.saveFile({
+      title: "下载图片",
+      defaultPath: `image-${index + 1}.png`,
+      filters: [{ name: "PNG 图片", extensions: ["png"] }]
+    })
+    if (targetPath)
+      await toolboxApi.exportImageTasks({ ids: [taskId], index, targetPath })
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    exporting.value = false
+  }
 }
 
 async function exportTasks(ids) {
@@ -1149,7 +1884,7 @@ async function deleteTasks() {
   }
 }
 
-watch(() => form.accountId, loadModels)
+watch([() => form.accountId, () => form.generationMode], loadModels)
 watch([() => form.accountId, () => form.generationMode], loadQuota)
 watch(status, () => {
   selected.value = []
@@ -1196,6 +1931,109 @@ onBeforeUnmount(() => {
   color: var(--color-text);
   font-size: var(--font-size-base);
 
+  position: relative;
+  .conversation-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 4px 0 12px;
+    .conversation-button {
+      padding: 6px 9px;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel);
+      color: var(--color-text);
+      cursor: pointer;
+    }
+    .conversation-title {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--color-text-muted);
+    }
+  }
+  .conversation-sidebar {
+    position: absolute;
+    inset: 42px auto 16px 0;
+    z-index: 5;
+    width: 250px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    box-shadow: var(--shadow-panel);
+    .history-head {
+      display: flex;
+      justify-content: space-between;
+      .history-action {
+        border: 0;
+        color: var(--color-primary);
+        background: transparent;
+        cursor: pointer;
+      }
+    }
+    .history-list {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      .history-item {
+        margin-bottom: 8px;
+        padding: 8px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        &.active {
+          border-color: var(--color-primary);
+          background: var(--color-panel-soft);
+        }
+        .history-select {
+          display: flex;
+          flex-direction: column;
+          width: 100%;
+          gap: 7px;
+          padding: 0;
+          text-align: left;
+          border: 0;
+          background: transparent;
+          color: var(--color-text);
+          cursor: pointer;
+          .history-title {
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .history-meta {
+            color: var(--color-text-muted);
+            font-size: var(--font-size-sm);
+          }
+        }
+        .history-actions {
+          display: flex;
+          gap: 10px;
+          margin-top: 10px;
+          .history-action {
+            border: 0;
+            color: var(--color-primary);
+            background: transparent;
+            padding: 0;
+            cursor: pointer;
+          }
+        }
+      }
+    }
+    .history-clear {
+      border: 1px solid var(--color-line);
+      background: var(--color-panel-soft);
+      color: var(--color-danger);
+      padding: 8px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+  }
   .workbench-layout {
     display: flex;
     flex: 1;
@@ -1266,29 +2104,67 @@ onBeforeUnmount(() => {
           font-size: var(--font-size-sm);
         }
       }
-      .mode-tabs {
+      .composer-tools {
         display: flex;
-        padding: 4px;
-        gap: 4px;
-        border: 1px solid var(--color-line);
-        border-radius: 8px;
-        background: var(--color-panel-soft);
-        .mode-tab {
+        flex-wrap: wrap;
+        gap: 8px;
+        .composer-button {
           display: flex;
-          flex: 1;
           align-items: center;
-          justify-content: center;
           gap: 8px;
-          height: 34px;
-          border: 0;
+          padding: 7px 9px;
+          background: var(--color-panel-soft);
+          color: var(--color-text);
+          border: 1px solid var(--color-line);
           border-radius: 6px;
-          color: var(--color-text-muted);
-          background: transparent;
           cursor: pointer;
-          &.active {
-            background: var(--color-primary-solid);
-            color: #fff;
-            box-shadow: 0 3px 10px #00000012;
+        }
+      }
+      .image-settings {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+        background: var(--color-panel-soft);
+        border: 1px solid var(--color-line);
+        border-radius: 7px;
+        .parameter-fields {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          .form-field {
+            min-width: 0;
+            flex: 1 1 40%;
+            &.model-field {
+              flex-basis: 100%;
+            }
+          }
+        }
+        .preset-list {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          .preset-button {
+            padding: 5px 8px;
+            border: 1px solid var(--color-line);
+            border-radius: 5px;
+            background: var(--color-panel);
+            color: var(--color-text);
+            cursor: pointer;
+            &.active {
+              border-color: var(--color-primary);
+              color: var(--color-primary);
+            }
+            &:disabled {
+              opacity: 0.35;
+              cursor: not-allowed;
+            }
+          }
+        }
+        .advanced-settings {
+          color: var(--color-text-muted);
+          .parameter-fields {
+            margin-top: 10px;
           }
         }
       }
@@ -1640,130 +2516,148 @@ onBeforeUnmount(() => {
         flex-direction: column;
         padding: 0 18px 18px;
         gap: 12px;
-        .task-card {
+        .round-card {
           display: flex;
-          flex-shrink: 0;
           flex-direction: column;
-          min-width: 0;
-          overflow: hidden;
-          border: 1px solid var(--color-line);
-          border-radius: 7px;
-          &.task-selected {
-            border-color: var(--color-primary);
-            background: var(--color-primary-soft);
+          gap: 12px;
+          .round-header {
+            padding: 10px 0;
+            border-bottom: 1px solid var(--color-line);
+            .round-prompt {
+              margin: 0 0 8px;
+              white-space: pre-wrap;
+              overflow-wrap: anywhere;
+            }
+            .round-actions {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 8px;
+            }
           }
-          .task-meta {
+          .task-card {
             display: flex;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px 12px;
-            padding: 12px 14px;
-            font-size: var(--font-size-sm);
-            .task-check {
+            flex-shrink: 0;
+            flex-direction: column;
+            min-width: 0;
+            overflow: hidden;
+            border: 1px solid var(--color-line);
+            border-radius: 7px;
+            &.task-selected {
+              border-color: var(--color-primary);
+              background: var(--color-primary-soft);
+            }
+            .task-meta {
               display: flex;
               align-items: center;
-            }
-            .task-status {
-              color: var(--color-text-muted);
-              &.completed {
-                color: var(--color-success);
-              }
-              &.failed {
-                color: var(--color-danger);
-              }
-              &.processing {
-                color: var(--color-primary);
-              }
-              &.partial,
-              &.interrupted {
-                color: var(--color-warning);
-              }
-            }
-            .task-time {
-              color: var(--color-text-soft);
-            }
-            .task-generation-mode {
-              padding: 2px 6px;
-              border: 1px solid var(--color-line);
-              border-radius: 4px;
-              color: var(--color-primary);
-              background: var(--color-panel-soft);
-            }
-            .task-count {
-              margin-left: auto;
-              color: var(--color-text-muted);
-            }
-          }
-          .task-preview {
-            position: relative;
-            display: flex;
-            width: 100%;
-            aspect-ratio: 4 / 3;
-            max-height: 480px;
-            padding: 0;
-            border: 0;
-            background: var(--color-panel-soft);
-            cursor: zoom-in;
-            .task-thumbnail {
-              width: 100%;
-              height: 100%;
-              .preview-placeholder {
+              flex-wrap: wrap;
+              gap: 8px 12px;
+              padding: 12px 14px;
+              font-size: var(--font-size-sm);
+              .task-check {
                 display: flex;
-                height: 100%;
-                flex-direction: column;
                 align-items: center;
-                justify-content: center;
-                gap: 12px;
+              }
+              .task-status {
                 color: var(--color-text-muted);
+                &.completed {
+                  color: var(--color-success);
+                }
+                &.failed {
+                  color: var(--color-danger);
+                }
+                &.processing {
+                  color: var(--color-primary);
+                }
+                &.partial,
+                &.interrupted {
+                  color: var(--color-warning);
+                }
+              }
+              .task-time {
+                color: var(--color-text-soft);
+              }
+              .task-generation-mode {
+                padding: 2px 6px;
+                border: 1px solid var(--color-line);
+                border-radius: 4px;
+                color: var(--color-primary);
+                background: var(--color-panel-soft);
+              }
+              .task-count {
+                margin-left: auto;
+                color: var(--color-text-muted);
+              }
+            }
+            .task-preview {
+              position: relative;
+              display: flex;
+              width: 100%;
+              aspect-ratio: 4 / 3;
+              max-height: 480px;
+              padding: 0;
+              border: 0;
+              background: var(--color-panel-soft);
+              cursor: zoom-in;
+              .task-thumbnail {
+                width: 100%;
+                height: 100%;
+                .preview-placeholder {
+                  display: flex;
+                  height: 100%;
+                  flex-direction: column;
+                  align-items: center;
+                  justify-content: center;
+                  gap: 12px;
+                  color: var(--color-text-muted);
+                  font-size: var(--font-size-sm);
+                }
+              }
+              .preview-hint {
+                position: absolute;
+                right: 12px;
+                bottom: 12px;
+                padding: 5px 9px;
+                border-radius: 5px;
+                background: #0009;
+                color: #fff;
                 font-size: var(--font-size-sm);
               }
             }
-            .preview-hint {
-              position: absolute;
-              right: 12px;
-              bottom: 12px;
-              padding: 5px 9px;
-              border-radius: 5px;
-              background: #0009;
-              color: #fff;
+            .task-placeholder {
+              display: flex;
+              min-height: 260px;
+              padding: 28px;
+              flex-direction: column;
+              align-items: center;
+              justify-content: center;
+              gap: 14px;
+              text-align: center;
+              background: var(--color-panel-soft);
+              color: var(--color-text-muted);
+              .placeholder-title {
+                font-size: var(--font-size-base);
+              }
+              .placeholder-hint {
+                font-size: var(--font-size-sm);
+                color: var(--color-text-soft);
+              }
+            }
+            .task-error {
+              margin: 0;
+              padding: 12px 14px 0;
+              color: var(--color-danger);
               font-size: var(--font-size-sm);
+              overflow-wrap: anywhere;
             }
-          }
-          .task-placeholder {
-            display: flex;
-            min-height: 260px;
-            padding: 28px;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 14px;
-            text-align: center;
-            background: var(--color-panel-soft);
-            color: var(--color-text-muted);
-            .placeholder-title {
-              font-size: var(--font-size-base);
+            .task-actions {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 12px 20px;
+              padding: 14px;
             }
-            .placeholder-hint {
-              font-size: var(--font-size-sm);
-              color: var(--color-text-soft);
-            }
-          }
-          .task-error {
-            margin: 0;
-            padding: 12px 14px 0;
-            color: var(--color-danger);
-            font-size: var(--font-size-sm);
-            overflow-wrap: anywhere;
-          }
-          .task-actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px 20px;
-            padding: 14px;
           }
         }
       }
-
       .pagination {
         display: flex;
         flex-shrink: 0;

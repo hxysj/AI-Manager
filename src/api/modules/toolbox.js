@@ -15,9 +15,12 @@ export const toolboxApi = {
   // Web 生图额度由后端使用所选账号查询，凭据不进入前端。
   imageQuota: (payload) => request("tools:image-quota", payload),
   submitImageTask: (payload) => request("tools:image-submit", payload),
+  imageHistory: () => request("tools:image-history"),
+  resumeImageTask: (payload) => request("tools:image-resume", payload),
   listImageTasks: (payload) => request("tools:image-list", payload),
   imageTaskDetail: (payload) => request("tools:image-detail", payload),
   imageTaskInputs: (payload) => request("tools:image-inputs", payload),
+  clearImageResults: (payload) => request("tools:image-clear-results", payload),
   deleteImageTasks: (payload) => request("tools:image-delete", payload),
   exportImageTasks: (payload) => request("tools:image-export", payload),
   exportImages: (payload) => request("tools:export-images", payload),
