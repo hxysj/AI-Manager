@@ -77,6 +77,17 @@ impl AppState {
             };
         }
         // 模型请求可能持续较久，快照后释放状态锁，让其他页面和设置保持可用。
+        if matches!(channel, "tools:image-models" | "tools:image-quota") {
+            let manager = self.manager.lock().await;
+            let paths = manager.paths.clone();
+            let cli_targets = manager.state["cliTargets"].clone();
+            drop(manager);
+            let payload = payload.unwrap_or_else(|| json!({}));
+            return match channel {
+                "tools:image-quota" => image_workbench::quota(&paths, &cli_targets, payload).await,
+                _ => image_workbench::models(&paths, payload).await,
+            };
+        }
         if channel == "translation:translate" {
             let manager = self.manager.lock().await;
             let paths = manager.paths.clone();

@@ -71,6 +71,45 @@
           请先在 Provider 页面登录或恢复 Codex 官方账号。其他 Provider
           暂不支持图片生成。
         </p>
+        <section
+          v-if="form.generationMode === 'web'"
+          class="web-quota"
+          aria-label="Web 生图额度"
+          aria-live="polite"
+          :aria-busy="loadingQuota"
+        >
+          <div class="web-quota-head">
+            <span>Web 生图额度</span>
+            <button
+              class="quota-refresh"
+              type="button"
+              :disabled="loadingQuota || !form.accountId || submitting"
+              @click="loadQuota"
+            >
+              {{ loadingQuota ? "查询中…" : "刷新额度" }}
+            </button>
+          </div>
+          <span v-if="!form.accountId" class="web-quota-info"
+            >选择账号后查询</span
+          >
+          <span
+            v-else-if="webQuota"
+            :class="{ 'quota-empty': webQuota.remaining === 0 }"
+          >
+            {{ quotaError ? "上次查询：" : "" }}剩余 {{ webQuota.remaining }} 次
+            {{ webQuota.remaining === 0 ? "（已用尽）" : "" }}
+          </span>
+          <span v-else class="web-quota-info">{{
+            loadingQuota ? "正在查询网页额度…" : "额度未知"
+          }}</span>
+          <span v-if="quotaResetLabel" class="web-quota-info">
+            额度恢复：{{ quotaResetLabel }}
+          </span>
+          <span v-if="webQuota" class="web-quota-info">
+            更新于 {{ formatDateTime(webQuota.updatedAt) }}
+          </span>
+          <p v-if="quotaError" class="field-error">{{ quotaError }}</p>
+        </section>
         <label class="form-field prompt-field">
           <span class="field-label"
             >提示词 <span class="field-key">prompt</span></span
@@ -89,24 +128,35 @@
         </label>
         <div class="parameter-fields">
           <label v-for="field in fields" :key="field.key" class="form-field">
-            <span class="field-label"
-              >{{ field.label }}
-              <span class="field-key">{{ field.apiName }}</span></span
-            >
+            <span class="field-label">
+              {{ field.label }}
+              <span class="field-key">{{ field.apiName }}</span>
+              <button
+                v-if="field.key === 'model'"
+                class="model-refresh"
+                type="button"
+                :disabled="loadingModels || !form.accountId || submitting"
+                @click.prevent="loadModels"
+              >
+                {{ loadingModels ? "获取中…" : "刷新模型" }}
+              </button>
+            </span>
             <template v-if="field.key === 'model'">
               <input
                 v-model.trim="form.model"
                 class="field-input"
                 list="image-workbench-models"
-                placeholder="选择或输入图片模型"
+                :placeholder="
+                  loadingModels ? '正在获取生图模型…' : '选择或输入图片模型'
+                "
                 maxlength="128"
                 required
               />
               <datalist id="image-workbench-models">
                 <option
-                  v-for="option in field.options"
-                  :key="option.value"
-                  :value="option.value"
+                  v-for="model in imageModels"
+                  :key="model.id"
+                  :value="model.id"
                 />
               </datalist>
             </template>
@@ -135,6 +185,7 @@
             />
           </label>
         </div>
+        <p v-if="modelsError" class="field-error">{{ modelsError }}</p>
         <p
           v-if="
             form.background === 'transparent' && form.outputFormat === 'jpeg'
@@ -355,6 +406,9 @@
               <span class="task-status" :class="task.status">{{
                 statusLabels[task.status]
               }}</span>
+              <span class="task-generation-mode" aria-label="调用模式">{{
+                task.request.generationMode === "web" ? "Web" : "Codex"
+              }}</span>
               <span class="task-time">{{
                 formatDateTime(task.createdAt)
               }}</span>
@@ -514,6 +568,11 @@
           </figure>
         </div>
         <div v-if="detailView === 'parameters'" class="detail-meta">
+          <span
+            >调用模式：{{
+              detail.request.generationMode === "web" ? "Web" : "Codex"
+            }}</span
+          >
           <span>模型：{{ detail.request.model }}</span
           ><span>质量：{{ detail.request.quality }}</span
           ><span>请求尺寸：{{ detail.request.size }}</span>
@@ -591,6 +650,12 @@ import { systemApi, toolboxApi } from "@/api"
 import { subscribe } from "@/api/request"
 import { formatDateTime } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
+
+// reactive 会解包模式引用，表单回填直接同步到页面头部。
+const generationMode = defineModel("generationMode", {
+  type: String,
+  default: "web"
+})
 
 // 词库按需加载，打开时才读取分类和分页内容。
 const ImagePromptLibrary = defineAsyncComponent(
@@ -681,16 +746,7 @@ const fields = [
   {
     key: "model",
     label: "模型",
-    apiName: "model",
-    options: [
-      "gpt-image-2",
-      "gpt-image-1.5",
-      "gpt-image-1",
-      "gpt-image-2.5-flare",
-      "gpt-image-2.5-sunburst",
-      "gpt-image-2.5-flare-2026-09-08",
-      "gpt-image-2.5-sunburst-2026-09-08"
-    ].map((value) => ({ value, label: value }))
+    apiName: "model"
   },
   {
     key: "size",
@@ -742,9 +798,10 @@ const fields = [
 ]
 const form = reactive({
   accountId: "",
+  generationMode,
   mode: "generate",
   prompt: "",
-  model: "gpt-image-2",
+  model: "",
   size: "1024x1024",
   quality: "high",
   n: 1,
@@ -753,6 +810,20 @@ const form = reactive({
   responseFormat: "url"
 })
 const accounts = ref([])
+const imageModels = ref([])
+const loadingModels = ref(false)
+const modelsError = ref("")
+let modelsRequestVersion = 0
+const webQuota = ref(null)
+const loadingQuota = ref(false)
+const quotaError = ref("")
+let quotaRequestVersion = 0
+// 上游恢复信息可能是日期或说明文字，只有有效日期才进行格式化。
+const quotaResetLabel = computed(() => {
+  const value = webQuota.value?.resetAfter
+  if (!value) return ""
+  return Number.isNaN(new Date(value).getTime()) ? value : formatDateTime(value)
+})
 const references = ref([])
 const mask = ref(null)
 const tasks = ref([])
@@ -819,6 +890,52 @@ async function loadAccounts() {
     }
   } finally {
     loadingAccounts.value = false
+  }
+}
+
+async function loadModels() {
+  // 切换账号时丢弃旧请求，避免不同代理的目录结果互相覆盖。
+  const version = ++modelsRequestVersion
+  const accountId = form.accountId
+  imageModels.value = []
+  modelsError.value = ""
+  loadingModels.value = Boolean(accountId)
+  if (!accountId) return
+
+  try {
+    const result = await toolboxApi.imageModels({ accountId })
+    if (version !== modelsRequestVersion || disposed) return
+    imageModels.value = result.data
+    // 初次使用默认选接口的第一项，刷新不覆盖手动输入或历史任务模型。
+    if (!form.model.trim())
+      form.model = result.default_image_model || result.data[0]?.id || ""
+  } catch (error) {
+    if (version === modelsRequestVersion && !disposed)
+      modelsError.value = String(error)
+  } finally {
+    if (version === modelsRequestVersion && !disposed)
+      loadingModels.value = false
+  }
+}
+
+async function loadQuota() {
+  const version = ++quotaRequestVersion
+  const accountId = form.accountId
+  const enabled = form.generationMode === "web" && Boolean(accountId)
+  if (!enabled || webQuota.value?.accountId !== accountId) webQuota.value = null
+  quotaError.value = ""
+  loadingQuota.value = enabled
+  if (!enabled) return
+
+  try {
+    const result = await toolboxApi.imageQuota({ accountId })
+    // 账号切换或退出 Web 后，旧请求不能覆盖当前额度。
+    if (version === quotaRequestVersion && !disposed) webQuota.value = result
+  } catch (error) {
+    if (version === quotaRequestVersion && !disposed)
+      quotaError.value = String(error)
+  } finally {
+    if (version === quotaRequestVersion && !disposed) loadingQuota.value = false
   }
 }
 
@@ -939,8 +1056,9 @@ async function reuseTask(task) {
   uploading.value = true
   try {
     // 编辑历史同时恢复参考图和蒙版，用户确认后再手动提交。
+    // 早期任务没有记录调用模式，当时仅支持 Codex。
     const inputs = await toolboxApi.imageTaskInputs({ id: task.id })
-    Object.assign(form, task.request)
+    Object.assign(form, { generationMode: "codex" }, task.request)
     references.value = inputs.images.map((url, index) => ({
       id: crypto.randomUUID(),
       name: `参考图 ${index + 1}`,
@@ -976,7 +1094,7 @@ function imageUrl(item) {
 }
 
 function editResult(item) {
-  Object.assign(form, detail.value.request)
+  Object.assign(form, { generationMode: "codex" }, detail.value.request)
   mask.value = null
   form.mode = "edit"
   references.value = [
@@ -1031,6 +1149,8 @@ async function deleteTasks() {
   }
 }
 
+watch(() => form.accountId, loadModels)
+watch([() => form.accountId, () => form.generationMode], loadQuota)
 watch(status, () => {
   selected.value = []
   if (page.value !== 1) page.value = 1
@@ -1040,8 +1160,11 @@ watch(page, () => {
   selected.value = []
   loadTasks()
 })
-const unsubscribe = subscribe("images:changed", () => {
+const unsubscribe = subscribe("images:changed", (event) => {
   if (autoRefresh.value) loadTasks()
+  // 任务结束后向上游重查额度，不根据生成数量在本地扣减。
+  if (event.accountId === form.accountId && event.generationMode === "web")
+    loadQuota()
 })
 const unsubscribeError = subscribe("images:storage-error", (event) => {
   listError.value = `任务结果保存失败：${event.message}`
@@ -1169,6 +1292,41 @@ onBeforeUnmount(() => {
           }
         }
       }
+      .web-quota {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 10px;
+        border: 1px solid var(--color-line);
+        border-radius: 7px;
+        background: var(--color-panel-soft);
+        .web-quota-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          .quota-refresh {
+            padding: 0;
+            border: 0;
+            color: var(--color-primary);
+            background: transparent;
+            font-size: var(--font-size-sm);
+            cursor: pointer;
+            &:disabled {
+              opacity: 0.5;
+              cursor: default;
+            }
+          }
+        }
+        .web-quota-info {
+          color: var(--color-text-muted);
+          font-size: var(--font-size-sm);
+          overflow-wrap: anywhere;
+        }
+        .quota-empty {
+          color: var(--color-warning);
+        }
+      }
       .parameter-fields {
         display: flex;
         flex-wrap: wrap;
@@ -1185,6 +1343,19 @@ onBeforeUnmount(() => {
           align-items: baseline;
           gap: 5px;
           color: var(--color-text-muted);
+          .model-refresh {
+            margin-left: auto;
+            padding: 0;
+            border: 0;
+            background: transparent;
+            color: var(--color-primary);
+            font-size: var(--font-size-sm);
+            cursor: pointer;
+            &:disabled {
+              opacity: 0.5;
+              cursor: default;
+            }
+          }
         }
         .field-input {
           width: 100%;
@@ -1510,6 +1681,13 @@ onBeforeUnmount(() => {
             }
             .task-time {
               color: var(--color-text-soft);
+            }
+            .task-generation-mode {
+              padding: 2px 6px;
+              border: 1px solid var(--color-line);
+              border-radius: 4px;
+              color: var(--color-primary);
+              background: var(--color-panel-soft);
             }
             .task-count {
               margin-left: auto;
