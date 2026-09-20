@@ -2,16 +2,22 @@ import { request } from "../request"
 
 export const toolboxApi = {
   // 提示词库分页读取，完整提示词只在打开详情时加载。
-  imagePromptCatalog: () => request('tools:image-prompts-catalog'),
-  listImagePrompts: payload => request('tools:image-prompts-list', payload),
-  imagePromptDetail: payload => request('tools:image-prompts-detail', payload),
-  importImagePrompts: payload => request('tools:image-prompts-import', payload),
+  imagePromptCatalog: () => request("tools:image-prompts-catalog"),
+  listImagePrompts: (payload) => request("tools:image-prompts-list", payload),
+  imagePromptDetail: (payload) =>
+    request("tools:image-prompts-detail", payload),
+  importImagePrompts: (payload) =>
+    request("tools:image-prompts-import", payload),
   // 图片生成只由后端读取官方账号凭据，前端只传账号 ID。
   imageAccounts: () => request("tools:image-accounts"),
+  // 模型目录使用匿名会话，后端只读取所选账号的代理配置。
+  imageModels: (payload) => request("tools:image-models", payload),
+  // Web 生图额度由后端使用所选账号查询，凭据不进入前端。
+  imageQuota: (payload) => request("tools:image-quota", payload),
   submitImageTask: (payload) => request("tools:image-submit", payload),
   listImageTasks: (payload) => request("tools:image-list", payload),
   imageTaskDetail: (payload) => request("tools:image-detail", payload),
-  imageTaskInputs: payload => request('tools:image-inputs', payload),
+  imageTaskInputs: (payload) => request("tools:image-inputs", payload),
   deleteImageTasks: (payload) => request("tools:image-delete", payload),
   exportImageTasks: (payload) => request("tools:image-export", payload),
   exportImages: (payload) => request("tools:export-images", payload),

@@ -57,6 +57,24 @@
             }}</span>
           </div>
         </div>
+        <div
+          v-if="activeTool === 'image-workbench'"
+          class="image-generation-modes"
+          role="group"
+          aria-label="生图调用模式"
+        >
+          <button
+            v-for="mode in imageGenerationModes"
+            :key="mode.value"
+            class="image-generation-mode"
+            :class="{ active: imageGenerationMode === mode.value }"
+            type="button"
+            :aria-pressed="imageGenerationMode === mode.value"
+            @click="imageGenerationMode = mode.value"
+          >
+            {{ mode.label }}
+          </button>
+        </div>
         <button
           class="tools-view-theme"
           type="button"
@@ -82,7 +100,10 @@
       <PortMonitor v-else-if="activeTool === 'port-monitor'" />
       <StringDiff v-else-if="activeTool === 'string-diff'" />
       <ImageLinkExtractor v-else-if="activeTool === 'image-link-extractor'" />
-      <ImageWorkbench v-else-if="activeTool === 'image-workbench'" />
+      <ImageWorkbench
+        v-else-if="activeTool === 'image-workbench'"
+        v-model:generation-mode="imageGenerationMode"
+      />
       <JsonAgentTool
         v-else-if="activeTool === 'json-agent'"
         :providers="providers"
@@ -160,6 +181,12 @@ const emit = defineEmits(["add-repo", "detail-change", "toggle-theme"])
 
 const activeTool = ref("")
 const gitToolStatus = ref([])
+// 头部和工作台共享模式，历史任务回填时也同步切换。
+const imageGenerationMode = ref("web")
+const imageGenerationModes = [
+  { value: "web", label: "Web（网页额度）" },
+  { value: "codex", label: "Codex（API额度）" }
+]
 
 const codexInstalled = computed(() =>
   props.cliTargets.some(
@@ -172,7 +199,7 @@ const toolItems = computed(() => {
     {
       id: "image-workbench",
       label: "图片工作台",
-      summary: "使用 Codex 官方账号生成、编辑图片，管理与导出图片任务。",
+      summary: "使用官方账号通过 Web 或 Codex 生成、编辑图片，管理与导出任务。",
       meta: "文生图 / 图片编辑",
       icon: Images
     },
@@ -240,6 +267,7 @@ const activeToolMeta = computed(
 )
 
 function openTool(toolId) {
+  if (toolId === "image-workbench") imageGenerationMode.value = "web"
   activeTool.value = toolId
 }
 
@@ -387,6 +415,33 @@ onBeforeUnmount(() => emit("detail-change", false))
     gap: 12px;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--color-line);
+
+    .image-generation-modes {
+      display: flex;
+      flex: none;
+      gap: 3px;
+      padding: 3px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: var(--color-panel-soft);
+
+      .image-generation-mode {
+        height: 28px;
+        padding: 0 8px;
+        border: 0;
+        border-radius: 5px;
+        color: var(--color-text-muted);
+        background: transparent;
+        cursor: pointer;
+        white-space: nowrap;
+        font-size: var(--font-size-sm);
+
+        &.active {
+          color: #fff;
+          background: var(--color-primary-solid);
+        }
+      }
+    }
   }
 
   .tools-view-back {
