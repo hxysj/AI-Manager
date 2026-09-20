@@ -65,25 +65,29 @@ impl AppState {
                 .await.map_err(|error| ManagerError::System(error.to_string()))?;
         }
         // 图片读取与导出只需路径快照，不占用整个应用的状态锁。
-        if matches!(channel, "tools:image-list" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-export") {
+        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-export") {
             let paths = self.manager.lock().await.paths.clone();
             let payload = payload.unwrap_or_else(|| json!({}));
             return match channel {
+                "tools:image-history" => crate::core::image_store::history(&paths),
                 "tools:image-list" => crate::core::image_store::list(&paths, &payload),
                 "tools:image-detail" => crate::core::image_store::detail(&paths, payload["id"].as_str().unwrap_or("")),
                 "tools:image-inputs" => crate::core::image_store::inputs(&paths, payload["id"].as_str().unwrap_or("")),
+                "tools:image-clear-results" => crate::core::image_store::clear_results(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
                 "tools:image-delete" => crate::core::image_store::delete(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
                 _ => image_workbench::export(&paths, payload).await,
             };
         }
         // 模型请求可能持续较久，快照后释放状态锁，让其他页面和设置保持可用。
-        if matches!(channel, "tools:image-models" | "tools:image-quota") {
+        if matches!(channel, "tools:image-models" | "tools:image-quota" | "tools:image-submit" | "tools:image-resume") {
             let manager = self.manager.lock().await;
             let paths = manager.paths.clone();
             let cli_targets = manager.state["cliTargets"].clone();
             drop(manager);
             let payload = payload.unwrap_or_else(|| json!({}));
             return match channel {
+                "tools:image-submit" => image_workbench::submit(&app, &paths, &cli_targets, payload).await,
+                "tools:image-resume" => image_workbench::resume(&app, &paths, &cli_targets, payload).await,
                 "tools:image-quota" => image_workbench::quota(&paths, &cli_targets, payload).await,
                 _ => image_workbench::models(&paths, payload).await,
             };
@@ -1750,7 +1754,6 @@ impl ManagerState {
             "system:open-path" => system::open_path(&app, payload),
             "system:open-external" => system::open_external(&app, payload),
             "tools:image-accounts" => image_workbench::accounts(&self.paths),
-            "tools:image-submit" => image_workbench::submit(&app, &self.paths, &self.state["cliTargets"], payload.unwrap_or_else(|| json!({}))).await,
             "tools:export-images" => {
                 tools::export_images(payload.unwrap_or_else(|| json!({}))).await
             }

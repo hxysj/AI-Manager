@@ -21,9 +21,6 @@
           aria-label="AI Manager"
         >
           <defs>
-            <clipPath id="quick-switch-logo-clip">
-              <circle cx="22" cy="21" r="14"></circle>
-            </clipPath>
             <linearGradient
               id="quick-switch-logo-ring"
               x1="8"
@@ -58,25 +55,8 @@
               y="7"
               width="28"
               height="28"
-              clip-path="url(#quick-switch-logo-clip)"
-              preserveAspectRatio="xMidYMid slice"
+              preserveAspectRatio="xMidYMid meet"
             ></image>
-            <path
-              class="quick-switch-panel-logo-scan"
-              d="M10 22a12 12 0 0 1 24 0"
-            ></path>
-            <circle
-              class="quick-switch-panel-logo-eye quick-switch-panel-logo-eye-left"
-              cx="18"
-              cy="20"
-              r="1.5"
-            ></circle>
-            <circle
-              class="quick-switch-panel-logo-eye quick-switch-panel-logo-eye-right"
-              cx="26"
-              cy="20"
-              r="1.5"
-            ></circle>
           </g>
           <g class="quick-switch-panel-logo-sparks">
             <circle cx="8" cy="15" r="1.3"></circle>
@@ -338,7 +318,7 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue"
 import { ChevronDown, ExternalLink, RefreshCw } from "lucide-vue-next"
 import { accountApi, appApi, proxyApi, runtimeApi } from "@/api"
-import logoUrl from "@/assets/ai-manager-logo.svg?url"
+import logoUrl from "@/assets/ai-manager-logo.png?url"
 import TokenCount from "@/components/TokenCount.vue"
 import { useGlobalLoading } from "@/utils/global-loading"
 import { formatTokenCount } from "@/utils/formatters"
@@ -1054,21 +1034,6 @@ onBeforeUnmount(() => {
     transform-origin: 22px 21px;
   }
 
-  .quick-switch-panel-logo-scan {
-    animation: quick-switch-logo-scan 1.8s linear infinite;
-    fill: none;
-    stroke: #ffffff;
-    stroke-linecap: round;
-    stroke-width: 2.2;
-    transform-origin: 22px 22px;
-  }
-
-  .quick-switch-panel-logo-eye {
-    animation: quick-switch-logo-blink 3.6s ease-in-out infinite;
-    fill: #18a058;
-    transform-origin: center;
-  }
-
   .quick-switch-panel-logo-sparks {
     animation: quick-switch-logo-sparkle 2.2s ease-in-out infinite;
     fill: #ffb84d;
@@ -1620,35 +1585,6 @@ onBeforeUnmount(() => {
 
   50% {
     transform: scale(1.03);
-  }
-}
-
-@keyframes quick-switch-logo-scan {
-  0% {
-    opacity: 0.2;
-    transform: rotate(0deg);
-  }
-
-  45% {
-    opacity: 0.78;
-  }
-
-  100% {
-    opacity: 0.2;
-    transform: rotate(360deg);
-  }
-}
-
-@keyframes quick-switch-logo-blink {
-  0%,
-  88%,
-  100% {
-    transform: scaleY(1);
-  }
-
-  92%,
-  96% {
-    transform: scaleY(0.18);
   }
 }
 
