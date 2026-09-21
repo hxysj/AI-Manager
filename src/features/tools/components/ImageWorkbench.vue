@@ -8,9 +8,17 @@
       >
         会话历史
       </button>
-      <span class="conversation-title">{{
+      <span class="conversation-title" :title="currentConversation?.title">{{
         currentConversation?.title || "新对话"
       }}</span>
+      <button
+        class="conversation-button"
+        type="button"
+        :disabled="!currentConversation"
+        @click="renameConversation(currentConversation)"
+      >
+        重命名
+      </button>
       <button
         class="conversation-button"
         type="button"
@@ -734,7 +742,20 @@
             </article>
           </section>
         </div>
-        <footer v-if="total > pageSize" class="pagination">
+        <footer class="pagination">
+          <label class="page-size-control">
+            <span>每页</span>
+            <select
+              v-model.number="pageSize"
+              class="page-size-select"
+              aria-label="每页显示条数"
+            >
+              <option v-for="size in pageSizeOptions" :key="size" :value="size">
+                {{ size }}
+              </option>
+            </select>
+            <span>条</span>
+          </label>
           <button
             class="action-button"
             type="button"
@@ -771,6 +792,7 @@
     />
     <BaseModal
       v-if="detail"
+      :class="{ 'image-detail-modal': detailView === 'images' }"
       :title="detailView === 'parameters' ? '任务参数' : '生成图片'"
       :description="`${detail.accountName} · ${formatDateTime(detail.createdAt)} · ${statusLabels[detail.status]}`"
       @close="detail = null"
@@ -797,29 +819,63 @@
               preview-teleported
             />
             <figcaption class="detail-caption">
-              {{ detail.images[index]?.size }} · {{ item.output_format
-              }}<button
-                class="text-button"
-                type="button"
-                @click="editResult(item)"
-              >
-                编辑
-              </button>
-              <button
-                class="text-button"
-                type="button"
-                @click="referenceResult(item)"
-              >
-                引用
-              </button>
-              <button
-                class="text-button"
-                type="button"
-                :disabled="exporting"
-                @click="downloadImage(index)"
-              >
-                下载
-              </button>
+              <div class="detail-image-info">
+                <p class="detail-info-title">图片信息</p>
+                <dl class="detail-info-list">
+                  <div class="detail-info-field">
+                    <dt class="detail-info-label">尺寸</dt>
+                    <dd class="detail-info-value">
+                      {{ detail.images[index]?.size || "未知" }}
+                    </dd>
+                  </div>
+                  <div class="detail-info-field">
+                    <dt class="detail-info-label">格式</dt>
+                    <dd class="detail-info-value">
+                      {{ item.output_format || "未知" }}
+                    </dd>
+                  </div>
+                  <div class="detail-info-field">
+                    <dt class="detail-info-label">调用模式</dt>
+                    <dd class="detail-info-value">
+                      {{
+                        detail.request.generationMode === "web"
+                          ? "Web"
+                          : "Codex"
+                      }}
+                    </dd>
+                  </div>
+                  <div class="detail-info-field">
+                    <dt class="detail-info-label">模型</dt>
+                    <dd class="detail-info-value">
+                      {{ detail.request.model }}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+              <div class="detail-image-actions">
+                <button
+                  class="action-button"
+                  type="button"
+                  @click="editResult(item)"
+                >
+                  <Paintbrush :size="14" />编辑
+                </button>
+                <button
+                  class="action-button"
+                  type="button"
+                  @click="referenceResult(item)"
+                >
+                  <ImagePlus :size="14" />引用
+                </button>
+                <button
+                  class="action-button"
+                  type="button"
+                  :disabled="exporting"
+                  @click="downloadImage(index)"
+                >
+                  <Download :size="14" />{{ exporting ? "下载中…" : "下载" }}
+                </button>
+              </div>
             </figcaption>
           </figure>
         </div>
@@ -1055,6 +1111,10 @@ function writeLocal(key, value) {
 }
 
 const preferences = readLocal("image-workbench-preferences", {})
+const pageSizeOptions = [10, 20, 50, 100]
+const pageSize = ref(
+  pageSizeOptions.includes(preferences.pageSize) ? preferences.pageSize : 50
+)
 for (const key of ["model", "quality", "n"]) {
   if (preferences[key] !== undefined) form[key] = preferences[key]
 }
@@ -1136,7 +1196,8 @@ watch(
     width,
     height,
     ratio,
-    tier
+    tier,
+    pageSize
   ],
   () => {
     form.size = `${width.value}x${height.value}`
@@ -1147,7 +1208,8 @@ watch(
       width: width.value,
       height: height.value,
       ratio: ratio.value,
-      tier: tier.value
+      tier: tier.value,
+      pageSize: pageSize.value
     })
   }
 )
@@ -1252,6 +1314,8 @@ async function renameConversation(conversation) {
       cancelButtonText: "取消"
     })
     conversation.title = result.value.trim().slice(0, 100)
+    // 用户主动命名后，即便名称是“新对话”，提交任务也不再自动覆盖。
+    conversation.renamed = true
     saveHistory()
   } catch {
     /* 取消时保留原名。 */
@@ -1505,7 +1569,6 @@ const rounds = computed(() => {
 })
 const total = ref(0)
 const page = ref(1)
-const pageSize = 1
 const status = ref("")
 const autoRefresh = ref(true)
 const selecting = ref(false)
@@ -1631,7 +1694,7 @@ async function loadTasks() {
       page: page.value,
       status: status.value,
       conversationId: activeConversationId.value,
-      pageSize,
+      pageSize: pageSize.value,
       groupByRound: true
     })
     if (version !== requestVersion || disposed) return
@@ -1643,7 +1706,7 @@ async function loadTasks() {
       selectableTasks.value.some((task) => task.id === id)
     )
     listError.value = ""
-    const lastPage = Math.max(1, Math.ceil(total.value / pageSize))
+    const lastPage = Math.max(1, Math.ceil(total.value / pageSize.value))
     if (page.value > lastPage) page.value = lastPage
   } catch (error) {
     if (version === requestVersion) listError.value = String(error)
@@ -1726,7 +1789,7 @@ async function submitTask() {
       mask: mask.value?.url || ""
     })
     conversation.updatedAt = Date.now()
-    if (conversation.title === "新对话")
+    if (!conversation.renamed && conversation.title === "新对话")
       conversation.title = form.prompt.trim().slice(0, 28)
     patchRound(result.roundId, { count: form.n })
     saveHistory()
@@ -1886,7 +1949,8 @@ async function deleteTasks() {
 
 watch([() => form.accountId, () => form.generationMode], loadModels)
 watch([() => form.accountId, () => form.generationMode], loadQuota)
-watch(status, () => {
+// 切换条数与筛选都返回第一页，沿用页码监听完成实际查询。
+watch([status, pageSize], () => {
   selected.value = []
   if (page.value !== 1) page.value = 1
   else loadTasks()
@@ -2664,8 +2728,24 @@ onBeforeUnmount(() => {
         justify-content: flex-end;
         align-items: center;
         gap: 12px;
-        padding: 0 18px 18px;
+        padding: 18px;
         color: var(--color-text-muted);
+        .page-size-control {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-right: auto;
+          white-space: nowrap;
+          .page-size-select {
+            height: 31px;
+            padding: 0 6px;
+            border: 1px solid var(--color-line);
+            border-radius: 6px;
+            color: var(--color-text);
+            background: var(--color-panel-soft);
+            font-size: var(--font-size-sm);
+          }
+        }
       }
     }
   }
@@ -2705,6 +2785,11 @@ onBeforeUnmount(() => {
   .spinning {
     animation: image-workbench-spin 1.5s linear infinite;
   }
+  .image-detail-modal {
+    :deep(.base-modal__panel) {
+      width: min(1000px, calc(100vw - 48px));
+    }
+  }
   .detail-content {
     overflow: auto;
     .detail-prompt {
@@ -2720,20 +2805,63 @@ onBeforeUnmount(() => {
       flex-wrap: wrap;
       gap: 16px;
       .detail-image-card {
+        display: grid;
+        grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
         margin: 0;
         width: 100%;
+        height: min(60vh, 640px);
         .detail-image {
+          display: block;
+          box-sizing: border-box;
+          min-height: 0;
           width: 100%;
-          height: min(60vh, 640px);
+          height: 100%;
           border: 1px solid var(--color-line);
           border-radius: 6px;
           background: var(--color-panel-soft);
         }
         .detail-caption {
           display: flex;
-          justify-content: space-between;
-          padding: 8px 0;
-          color: var(--color-text-muted);
+          flex-direction: column;
+          gap: 16px;
+          min-width: 0;
+          min-height: 0;
+          padding-left: 16px;
+          .detail-image-info {
+            flex: 1;
+            min-height: 0;
+            overflow: auto;
+            .detail-info-title {
+              margin: 0 0 12px;
+              color: var(--color-text);
+            }
+            .detail-info-list {
+              display: grid;
+              gap: 12px;
+              margin: 0;
+              font-size: var(--font-size-sm);
+              .detail-info-field {
+                min-width: 0;
+                .detail-info-label {
+                  margin-bottom: 4px;
+                  color: var(--color-text-muted);
+                }
+                .detail-info-value {
+                  margin: 0;
+                  overflow-wrap: anywhere;
+                  color: var(--color-text);
+                }
+              }
+            }
+          }
+          .detail-image-actions {
+            display: flex;
+            flex: none;
+            flex-direction: column;
+            gap: 8px;
+            padding-top: 16px;
+            border-top: 1px solid var(--color-line);
+          }
         }
       }
     }

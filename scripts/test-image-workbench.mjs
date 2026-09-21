@@ -14,13 +14,15 @@ globalThis.document = { hidden: false }
 const calls = []
 let tasks = []
 let history = []
+let taskTotal = null
 globalThis.__imageTest = {
+  promptName: '新名称',
   systemApi: { saveFile: async () => '' },
   toolboxApi: {
     imageAccounts: async () => [{ id: 'account', active: true }],
     imageModels: async () => ({ data: [{ id: 'gpt-image-2' }, { id: 'gpt-5-5' }] }),
     imageQuota: async () => ({ accountId: 'account', remaining: 3 }),
-    listImageTasks: async payload => { calls.push(['list', payload]); return { items: tasks, total: tasks.length ? 1 : 0 } },
+    listImageTasks: async payload => { calls.push(['list', payload]); return { items: tasks, total: taskTotal ?? (tasks.length ? 1 : 0) } },
     imageHistory: async () => history,
     imageTaskInputs: async () => ({ images: ['data:image/png;base64,reference'], mask: 'data:image/png;base64,mask' }),
     submitImageTask: async payload => { calls.push(['submit', structuredClone(payload)]); return { roundId: payload.roundId, items: [] } },
@@ -54,7 +56,7 @@ try {
         if (args.kind === 'entry-point') return
         return { path: args.path, namespace: 'ui' }
       })
-      builder.onLoad({ filter: /.*/, namespace: 'ui' }, () => ({ contents: 'export default {}; export const ElImage = {}; export const ElMessageBox = {confirm: async () => {}, prompt: async () => ({value: "新名称"})}; export const Download={}, BookOpen={}, ImageOff={}, ImagePlus={}, LoaderCircle={}, Paintbrush={}, Plus={}, RefreshCw={}, Sparkles={}, Trash2={}, X={}' }))
+      builder.onLoad({ filter: /.*/, namespace: 'ui' }, () => ({ contents: 'export default {}; export const ElImage = {}; export const ElMessageBox = {confirm: async () => {}, prompt: async () => ({value: globalThis.__imageTest.promptName})}; export const Download={}, BookOpen={}, ImageOff={}, ImagePlus={}, LoaderCircle={}, Paintbrush={}, Plus={}, RefreshCw={}, Sparkles={}, Trash2={}, X={}' }))
       builder.onResolve({ filter: /^@\// }, args => ({ path: resolve('src', args.path.slice(2) + '.js') }))
       builder.onLoad({ filter: /ImageWorkbench\.vue$/ }, async args => ({ contents: compileScript(parse(await readFile(args.path, 'utf8')).descriptor, { id: 'workbench-test' }).content, resolveDir: resolve('src/features/tools/components') }))
     } }]
@@ -72,6 +74,24 @@ try {
   assert.equal(state.form.quality, 'auto')
   assert.equal(state.form.model, 'gpt-image-2')
   assert.equal(state.form.accountId, 'account')
+  assert.equal(state.pageSize, 50)
+  assert.equal(calls.filter(([name]) => name === 'list').at(-1)[1].pageSize, 50)
+  // 切换条数应重置页码和勾选，并把数值传给后端，而不是 Vue 引用。
+  taskTotal = 123
+  state.page = 3
+  await settle()
+  assert.equal(state.page, 3)
+  state.selected = ['stale-task']
+  state.pageSize = 20
+  await settle()
+  assert.equal(state.page, 1)
+  assert.deepEqual([...state.selected], [])
+  assert.equal(calls.filter(([name]) => name === 'list').at(-1)[1].pageSize, 20)
+  state.pageSize = 100
+  await settle()
+  assert.equal(calls.filter(([name]) => name === 'list').at(-1)[1].pageSize, 100)
+  assert.equal(JSON.parse(storage.get('image-workbench-preferences')).pageSize, 100)
+  taskTotal = null
   state.form.model = 'gpt-image-2.5-flare'
   await settle()
   assert.equal(state.qualityOptions.length, 6)
@@ -142,6 +162,13 @@ try {
   assert.equal(state.references.length, 0)
   await state.renameConversation(state.currentConversation)
   assert.equal(state.currentConversation.title, '新名称')
+  globalThis.__imageTest.promptName = '新对话'
+  await state.renameConversation(state.currentConversation)
+  state.form.prompt = '保留用户主动填写的名称'
+  await state.submitTask()
+  assert.equal(state.currentConversation.title, '新对话')
+  globalThis.__imageTest.promptName = '新名称'
+  await state.renameConversation(state.currentConversation)
   assert.ok(!storage.get('image-workbench-conversations').includes('data:image'))
   assert.ok(calls.some(([name, payload]) => name === 'list' && payload.groupByRound))
   tasks = [task]
@@ -164,6 +191,8 @@ try {
   assert.equal(restored.activeConversationId, lastConversation)
   assert.equal(restored.height, 1536)
   assert.equal(restored.form.n, 4)
+  assert.equal(restored.pageSize, 100)
+  assert.equal(restored.currentConversation.title, '新名称')
   restoredApp.unmount()
   console.log('生图工作台离线检查通过：设置、100 张提交、输入法、草图/蒙版回填、复用、重试、继续等待与会话持久化。')
 } finally {
