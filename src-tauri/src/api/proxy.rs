@@ -1,4 +1,4 @@
-use crate::api::{codex_account, runtime_provider};
+use crate::api::{codex_account, google_gateway, runtime_provider};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use crate::core::provider_key_usage::KeyRequest;
@@ -113,7 +113,7 @@ pub(crate) async fn prepare_translation_target(
     };
     Ok(LlmTarget {
         info,
-        client: http_client(&target.proxy)?,
+        client: target_http_client(&target)?,
         upstream_url: build_upstream_url(&target.base_url, "/responses", "")?,
         headers,
         key_id,
@@ -269,6 +269,7 @@ where
         }
     }
 
+    google_gateway::ensure_started(paths, provider).await?;
     let (key_id, api_key) = runtime_provider::get_provider_api_key_with_id(paths, &provider_id)?;
     if api_key.is_empty() {
         return Err(ManagerError::System(
@@ -281,7 +282,7 @@ where
             .map_err(|error| ManagerError::System(error.to_string()))?,
     );
 
-    let outgoing = http_client(&target.proxy)?
+    let outgoing = target_http_client(&target)?
         .post(upstream_url)
         .headers(headers)
         .json(&Value::Object(request_body));
@@ -1147,7 +1148,7 @@ async fn forward_request(
     let started_at = now_millis();
     let (forward_headers, mut key_request) =
         build_forward_headers(paths, cli_targets, cli, headers, target_id).await?;
-    let mut request = http_client(&target.proxy)?
+    let mut request = target_http_client(&target)?
         .request(
             reqwest::Method::from_bytes(method.as_str().as_bytes())
                 .map_err(|error| ManagerError::System(error.to_string()))?,
@@ -1288,6 +1289,7 @@ async fn get_target_auth(
         }));
     }
 
+    google_gateway::ensure_started(paths, &runtime_provider::find_provider(paths, target_id)?).await?;
     let (key_id, api_key) = runtime_provider::get_provider_api_key_with_id(paths, target_id)?;
     if api_key.is_empty() {
         return Err(ManagerError::System(format!(
@@ -1317,6 +1319,7 @@ async fn assert_target_ready(
         return Ok(());
     }
 
+    google_gateway::ensure_started(paths, &runtime_provider::find_provider(paths, target_id)?).await?;
     get_provider_api_key(paths, cli, target_id)?;
     Ok(())
 }
@@ -1954,6 +1957,13 @@ fn set_toml_section_value(content: &str, section_name: &str, key: &str, value: &
 
     lines.insert(insert_index, next_line);
     format!("{}\n", lines.join("\n").trim_end())
+}
+
+fn target_http_client(target: &ProxyTarget) -> Result<reqwest::Client, ManagerError> {
+    if target.provider.as_ref().is_some_and(|provider| provider["type"] == "google-account") {
+        return reqwest::Client::builder().no_proxy().build().map_err(|error| ManagerError::System(error.to_string()));
+    }
+    http_client(&target.proxy)
 }
 
 pub(crate) fn http_client(proxy: &str) -> Result<reqwest::Client, ManagerError> {
