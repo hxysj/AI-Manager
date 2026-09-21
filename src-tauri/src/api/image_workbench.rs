@@ -67,7 +67,7 @@ impl ImageRequest {
         }
         if !matches!(self.generation_mode.as_str(), "web" | "codex")
             || !matches!(self.mode.as_str(), "generate" | "edit")
-            || !(is_image_model(&self.model) || self.model.starts_with("gpt-5"))
+            || !(is_image_model(&self.model) || self.model.starts_with("gpt-5") || self.model.starts_with("gpt5"))
             || self.model.len() > 128
             || !self
                 .model
@@ -283,7 +283,7 @@ async fn fetch_image_models(
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        if (is_image_model(&slug) || slug.starts_with("gpt-5")) && ids.insert(slug.clone()) {
+        if (is_image_model(&slug) || slug.starts_with("gpt-5") || slug.starts_with("gpt5")) && ids.insert(slug.clone()) {
             data.push(json!({ "id": slug, "object": "model", "owned_by": "openai" }));
         }
     }
@@ -593,8 +593,18 @@ async fn execute_web(
         )));
     }
 
-    let model = if request.model == "gpt-image-2" {
-        "gpt-5-5-thinking".to_string()
+    let normalized = request.model.trim().to_ascii_lowercase();
+    let model = if is_image_model(&normalized)
+        || normalized == "gpt-5-5-thinking"
+        || normalized == "gpt5.6sol"
+        || normalized == "gpt-5.6sol"
+        || normalized == "gpt-5.6-sol"
+        || normalized == "gpt5.6-sol"
+        || normalized == "gpt5.6"
+        || normalized == "gpt-5.6"
+        || normalized.is_empty()
+    {
+        "gpt-5.6-sol".to_string()
     } else {
         request.model.clone()
     };
@@ -886,12 +896,33 @@ async fn web_finish_assets(client: &reqwest::Client, auth: &Value, context: &Web
     if images.is_empty() && !errors.is_empty() {
         return Err(failure(&format!("Web 图片下载失败：{}", errors.join("；"))));
     }
+    if !images.is_empty() {
+        web_delete_conversation(client, auth, context, &ids.conversation_id).await;
+    }
     let error = if errors.is_empty() {
         Value::Null
     } else {
         json!({"source": "web", "message": format!("部分图片下载失败：{}", errors.join("；"))})
     };
     Ok((ids.conversation_id.clone(), images, error))
+}
+
+async fn web_delete_conversation(
+    client: &reqwest::Client,
+    auth: &Value,
+    context: &WebContext,
+    conversation_id: &str,
+) {
+    if conversation_id.trim().is_empty() {
+        return;
+    }
+    let path = format!("/backend-api/conversation/{conversation_id}");
+    let _ = web_builder(client, auth, context, reqwest::Method::PATCH, &path)
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .json(&json!({ "is_visible": false }))
+        .send()
+        .await;
 }
 
 async fn read_response_limited(
@@ -2843,6 +2874,8 @@ mod tests {
         assert!(request.validate().is_ok());
         request.model = "gpt-5-5-thinking".into();
         assert!(request.validate().is_ok());
+        request.model = "gpt5.6sol".into();
+        assert!(request.validate().is_ok());
         request.generation_mode = "other".into();
         assert!(request.validate().is_err());
         request.generation_mode = "codex".into();
@@ -3229,14 +3262,20 @@ mod tests {
     #[test]
     fn web_continue_waiting_only_reads_original_conversation() {
         tauri::async_runtime::block_on(async {
-            let (address, handle) = mock_http_responder(4, |index, raw, address| {
-                assert!(raw.starts_with("GET "));
+            let (address, handle) = mock_http_responder(5, |index, raw, address| {
                 let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
                 match index {
-                    0 => { assert_eq!(path, "/backend-api/tasks"); (200, "application/json".into(), b"{}".to_vec()) },
-                    1 => { assert_eq!(path, "/backend-api/conversation/original"); (200, "application/json".into(), b"{}".to_vec()) },
-                    2 => { assert_eq!(path, "/backend-api/files/output/download"); (200, "application/json".into(), serde_json::to_vec(&json!({"download_url":format!("{address}/image")})).unwrap()) },
-                    3 => { assert_eq!(path, "/image"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) },
+                    0 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/tasks"); (200, "application/json".into(), b"{}".to_vec()) },
+                    1 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/conversation/original"); (200, "application/json".into(), b"{}".to_vec()) },
+                    2 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/files/output/download"); (200, "application/json".into(), serde_json::to_vec(&json!({"download_url":format!("{address}/image")})).unwrap()) },
+                    3 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/image"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) },
+                    4 => {
+                        assert!(raw.starts_with("PATCH "));
+                        assert_eq!(path, "/backend-api/conversation/original");
+                        let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+                        assert_eq!(body["is_visible"], false);
+                        (200, "application/json".into(), serde_json::to_vec(&json!({"success": true})).unwrap())
+                    },
                     _ => unreachable!()
                 }
             }).await;
@@ -3246,7 +3285,26 @@ mod tests {
             assert_eq!(conversation, "original");
             assert_eq!(images.len(), 1);
             assert!(error.is_null());
-            assert_eq!(handle.join().unwrap().len(), 4);
+            assert_eq!(handle.join().unwrap().len(), 5);
+        });
+    }
+
+    #[test]
+    fn web_delete_conversation_sends_patch_with_is_visible_false() {
+        tauri::async_runtime::block_on(async {
+            let (address, handle) = mock_http_responder(1, |index, raw, _| {
+                assert_eq!(index, 0);
+                assert!(raw.starts_with("PATCH /backend-api/conversation/conv-delete-123 "));
+                assert!(raw.to_ascii_lowercase().contains("authorization: bearer del-token"));
+                let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+                assert_eq!(body["is_visible"], false);
+                (200, "application/json".into(), serde_json::to_vec(&json!({"success": true})).unwrap())
+            }).await;
+            let context = WebContext { base_url: address, ..WebContext::new() };
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let auth = json!({"accessToken": "del-token"});
+            web_delete_conversation(&client, &auth, &context, "conv-delete-123").await;
+            assert_eq!(handle.join().unwrap().len(), 1);
         });
     }
 
@@ -3353,11 +3411,11 @@ mod tests {
     #[test]
     fn web_image_flow_keeps_outputs_after_transient_poll_and_partial_download_failure() {
         tauri::async_runtime::block_on(async {
-            let (address, handle) = mock_http_responder(14, move |index, raw, address| {
+            let (address, handle) = mock_http_responder(15, move |index, raw, address| {
                 let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
                 let json_response = |value: Value| (200, "application/json".into(), serde_json::to_vec(&value).unwrap());
                 match index {
-                    0 | 13 => {
+                    0 | 14 => {
                         assert_eq!(path, "/backend-api/conversation/init");
                         json_response(json!({"limits_progress":[{"feature_name":"image_gen", "remaining": if index == 0 { 3 } else { 1 }}]}))
                     }
@@ -3381,7 +3439,7 @@ mod tests {
                         assert!(!raw.to_ascii_lowercase().contains("x-conduit-token:"));
                         assert!(raw.to_ascii_lowercase().contains("openai-sentinel-chat-requirements-token: accepted"));
                         let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
-                        assert_eq!(body["model"], "gpt-5-5-thinking");
+                        assert_eq!(body["model"], "gpt-5.6-sol");
                         assert_eq!(body["system_hints"], json!(["picture_v2"]));
                         assert_eq!(body["client_contextual_info"]["screen_width"], 2560);
                         (200, "text/event-stream".into(), events(&[json!({"conversation_id":"conversation-1", "message":{
@@ -3398,6 +3456,13 @@ mod tests {
                     10 => { assert_eq!(path, "/backend-api/files/output-1/download"); json_response(json!({"download_url":format!("{address}/asset")})) }
                     11 => { assert_eq!(path, "/asset"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) }
                     12 => { assert_eq!(path, "/backend-api/conversation/conversation-1/attachment/attachment-1/download"); (403, "application/json".into(), b"{}".to_vec()) }
+                    13 => {
+                        assert!(raw.starts_with("PATCH "));
+                        assert_eq!(path, "/backend-api/conversation/conversation-1");
+                        let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+                        assert_eq!(body["is_visible"], false);
+                        json_response(json!({"success": true}))
+                    }
                     _ => unreachable!(),
                 }
             }).await;
@@ -3435,7 +3500,7 @@ mod tests {
                     .len(),
                 1
             );
-            assert_eq!(handle.join().unwrap().len(), 14);
+            assert_eq!(handle.join().unwrap().len(), 15);
         });
     }
 
