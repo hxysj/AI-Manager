@@ -467,8 +467,9 @@
       <section id="image-tasks-panel" class="tasks-panel">
         <header class="tasks-head">
           <div class="tasks-title">
-            <span data-emphasis>当前会话</span
-            ><span class="task-count">{{ total }} 轮</span>
+            <Sparkles :size="18" class="tasks-title-icon" />
+            <span data-emphasis>当前会话</span>
+            <span class="task-count-pill">{{ total }} 轮</span>
           </div>
           <div class="tasks-controls">
             <select
@@ -485,9 +486,11 @@
                 {{ label }}
               </option>
             </select>
-            <label class="auto-refresh"
-              ><input v-model="autoRefresh" type="checkbox" />自动刷新</label
-            >
+            <label class="auto-refresh-pill" :class="{ active: autoRefresh }">
+              <input v-model="autoRefresh" type="checkbox" />
+              <span class="status-dot"></span>
+              <span>自动刷新</span>
+            </label>
             <button
               class="icon-button"
               type="button"
@@ -499,41 +502,51 @@
               <RefreshCw :size="15" :class="{ spinning: refreshing }" />
             </button>
             <button
-              class="action-button"
+              class="action-button select-toggle-btn"
+              :class="{ active: selecting }"
               type="button"
               @click="toggleSelection"
             >
-              {{ selecting ? "取消" : "选择" }}
+              {{ selecting ? "退出选择" : "选择" }}
             </button>
           </div>
         </header>
+
         <div v-if="selecting" class="selection-bar">
-          <label class="auto-refresh"
-            ><input
+          <label class="selection-check-all">
+            <input
               type="checkbox"
               :checked="allSelected"
               :disabled="!selectableTasks.length"
               @change="toggleAll"
-            />本页全选</label
+            />
+            <span>本页全选</span>
+          </label>
+          <span class="selection-count"
+            >已选 <strong>{{ selected.length }}</strong> 项</span
           >
-          <span class="selection-count">已选 {{ selected.length }} 项</span>
-          <button
-            class="action-button"
-            type="button"
-            :disabled="!selected.length || exporting"
-            @click="exportTasks(selected)"
-          >
-            <Download :size="14" />导出
-          </button>
-          <button
-            class="action-button danger-button"
-            type="button"
-            :disabled="!selected.length || deleting"
-            @click="deleteTasks"
-          >
-            <Trash2 :size="14" />删除
-          </button>
+          <div class="selection-actions">
+            <button
+              class="action-button"
+              type="button"
+              :disabled="!selected.length || exporting"
+              @click="exportTasks(selected)"
+            >
+              <Download :size="14" />
+              <span>导出</span>
+            </button>
+            <button
+              class="action-button danger-button"
+              type="button"
+              :disabled="!selected.length || deleting"
+              @click="deleteTasks"
+            >
+              <Trash2 :size="14" />
+              <span>删除</span>
+            </button>
+          </div>
         </div>
+
         <p v-if="listError" class="list-error" role="alert">{{ listError }}</p>
         <div v-if="!tasks.length" class="empty-state">
           <div class="empty-icon">
@@ -551,197 +564,376 @@
           }}</span>
         </div>
         <div v-else class="task-list">
-          <section v-for="round in rounds" :key="round.id" class="round-card">
+          <section
+            v-for="(round, roundIndex) in rounds"
+            :key="round.id"
+            class="round-card"
+          >
             <header class="round-header">
-              <p v-if="!roundState[round.id]?.hidePrompt" class="round-prompt">
-                {{ round.tasks[0].request.prompt }}
-              </p>
-              <div class="round-actions">
-                <button
-                  class="text-button"
-                  type="button"
-                  @click="reuseTask(round.tasks[0], true)"
+              <div class="round-header-bar">
+                <div class="round-meta-badges">
+                  <span class="round-badge round-index-badge"
+                    >第 {{ rounds.length - roundIndex }} 轮</span
+                  >
+                  <span
+                    v-if="round.tasks[0]?.request.model"
+                    class="round-badge round-model-badge"
+                    :title="`模型: ${round.tasks[0].request.model}`"
+                  >
+                    {{ round.tasks[0].request.model }}
+                  </span>
+                  <span
+                    v-if="round.tasks[0]?.request.size"
+                    class="round-badge round-size-badge"
+                    :title="`尺寸: ${round.tasks[0].request.size}`"
+                  >
+                    {{ round.tasks[0].request.size }}
+                  </span>
+                  <span class="round-badge round-mode-badge">
+                    {{
+                      round.tasks[0]?.request.generationMode === "web"
+                        ? "Web"
+                        : "Codex"
+                    }}
+                  </span>
+                </div>
+                <div class="round-actions">
+                  <button
+                    v-if="round.tasks[0]?.request.prompt"
+                    class="round-btn round-copy-btn"
+                    type="button"
+                    :title="
+                      copiedRoundId === round.id ? '已复制到剪切板' : '复制提示词'
+                    "
+                    @click="copyPrompt(round.tasks[0].request.prompt, round.id)"
+                  >
+                    <Check
+                      v-if="copiedRoundId === round.id"
+                      :size="13"
+                      class="copy-success-icon"
+                    />
+                    <Copy v-else :size="13" />
+                    <span>{{
+                      copiedRoundId === round.id ? "已复制" : "复制提示词"
+                    }}</span>
+                  </button>
+                  <button
+                    class="round-btn"
+                    type="button"
+                    title="复用此轮配置到输入表单"
+                    @click="reuseTask(round.tasks[0], true)"
+                  >
+                    <SlidersHorizontal :size="13" />
+                    <span>复用配置</span>
+                  </button>
+                  <button
+                    class="round-btn round-btn-primary"
+                    type="button"
+                    :disabled="submitting"
+                    title="按此轮提示词与设置全部重新生成"
+                    @click="regenerateRound(round)"
+                  >
+                    <RefreshCw :size="13" :class="{ spinning: submitting }" />
+                    <span>全部重新生成</span>
+                  </button>
+                  <button
+                    class="round-btn round-btn-ghost"
+                    type="button"
+                    title="隐藏此轮提示词记录"
+                    @click="removeRoundPrompt(round)"
+                  >
+                    删除提示词
+                  </button>
+                  <button
+                    class="round-btn round-btn-danger"
+                    type="button"
+                    title="删除此轮生成的所有结果"
+                    @click="removeRoundResults(round)"
+                  >
+                    删除结果
+                  </button>
+                </div>
+              </div>
+              <div
+                v-if="
+                  !roundState[round.id]?.hidePrompt &&
+                  round.tasks[0]?.request.prompt
+                "
+                class="round-prompt-box"
+              >
+                <p
+                  class="round-prompt-text"
+                  :class="{
+                    'is-clamped':
+                      isLongPrompt(round.tasks[0].request.prompt) &&
+                      !isPromptExpanded(round.id)
+                  }"
                 >
-                  复用配置
-                </button>
+                  {{ round.tasks[0].request.prompt }}
+                </p>
                 <button
-                  class="text-button"
+                  v-if="isLongPrompt(round.tasks[0].request.prompt)"
+                  class="prompt-expand-btn"
                   type="button"
-                  :disabled="submitting"
-                  @click="regenerateRound(round)"
+                  @click="togglePrompt(round.id)"
                 >
-                  全部重新生成
-                </button>
-                <button
-                  class="text-button"
-                  type="button"
-                  @click="removeRoundPrompt(round)"
-                >
-                  删除提示词记录
-                </button>
-                <button
-                  class="text-button"
-                  type="button"
-                  @click="removeRoundResults(round)"
-                >
-                  删除本轮生成结果
+                  <component
+                    :is="isPromptExpanded(round.id) ? ChevronUp : ChevronDown"
+                    :size="13"
+                  />
+                  <span>{{
+                    isPromptExpanded(round.id) ? "收起提示词" : "展开完整提示词"
+                  }}</span>
                 </button>
               </div>
             </header>
-            <article
-              v-for="task in round.tasks"
-              :key="task.id"
-              class="task-card"
-              :class="{ 'task-selected': selected.includes(task.id) }"
-            >
-              <header class="task-meta">
-                <label v-if="selecting" class="task-check">
-                  <input
-                    v-model="selected"
-                    type="checkbox"
-                    :value="task.id"
-                    :disabled="task.status === 'processing'"
+
+            <div class="round-tasks-grid">
+              <article
+                v-for="task in round.tasks"
+                :key="task.id"
+                class="task-card"
+                :class="{
+                  'task-selected': selected.includes(task.id),
+                  'task-has-error':
+                    task.error?.message &&
+                    !roundState[round.id]?.ignored?.includes(task.id)
+                }"
+              >
+                <header class="task-meta">
+                  <label
+                    v-if="selecting"
+                    class="task-check"
                     :aria-label="`选择任务 ${formatDateTime(task.createdAt)}`"
-                  />
-                </label>
-                <span class="task-status" :class="task.status">{{
-                  statusLabels[task.status]
-                }}</span>
-                <span class="task-generation-mode" aria-label="调用模式">{{
-                  task.request.generationMode === "web" ? "Web" : "Codex"
-                }}</span>
-                <span class="task-time">{{
-                  formatDateTime(task.createdAt)
-                }}</span>
-                <span class="task-count"
-                  >{{ task.imageCount }} / {{ task.request.n }} 张</span
-                >
-              </header>
-              <button
-                v-if="task.imageCount"
-                class="task-preview"
-                type="button"
-                :disabled="detailLoading"
-                aria-label="查看生成图片"
-                @click="showDetail(task, 'images')"
-              >
-                <el-image
-                  class="task-thumbnail"
-                  :src="task.thumbnail"
-                  fit="contain"
-                  lazy
-                >
-                  <template #placeholder>
-                    <span class="preview-placeholder"
-                      ><LoaderCircle
-                        class="spinning"
-                        :size="28"
-                      />正在加载图片…</span
-                    >
-                  </template>
-                  <template #error>
-                    <span class="preview-placeholder"
-                      ><ImageOff :size="28" />预览暂不可用，点击查看原图</span
-                    >
-                  </template>
-                </el-image>
-                <span class="preview-hint">{{
-                  task.imageCount > 1
-                    ? `查看全部 ${task.imageCount} 张图片`
-                    : "点击查看原图"
-                }}</span>
-              </button>
-              <div v-else class="task-placeholder" role="status">
-                <template v-if="['processing', 'queued'].includes(task.status)">
-                  <LoaderCircle class="spinning" :size="36" />
-                  <span class="placeholder-title">{{
-                    task.status === "queued" ? "排队中…" : "正在生成图片…"
-                  }}</span>
-                  <span class="placeholder-hint">{{
-                    autoRefresh
-                      ? "完成后会自动显示在这里"
-                      : "完成后点击刷新查看结果"
-                  }}</span>
-                </template>
-                <template v-else>
-                  <ImageOff :size="36" :stroke-width="1.3" />
-                  <span class="placeholder-title"
-                    >{{ statusLabels[task.status] }}，暂无生成图片</span
                   >
-                  <span class="placeholder-hint">可以复用参数重新生成</span>
-                </template>
-              </div>
-              <p
-                v-if="
-                  task.error?.message &&
-                  !roundState[round.id]?.ignored?.includes(task.id)
-                "
-                class="task-error"
-              >
-                {{ task.error.message }}
-              </p>
-              <footer class="task-actions">
-                <button
-                  class="text-button"
-                  type="button"
-                  :disabled="
-                    submitting || ['queued', 'processing'].includes(task.status)
-                  "
-                  @click="regenerateTask(task)"
+                    <input
+                      v-model="selected"
+                      type="checkbox"
+                      :value="task.id"
+                      :disabled="task.status === 'processing'"
+                    />
+                  </label>
+                  <div class="task-status-pill" :class="task.status">
+                    <LoaderCircle
+                      v-if="task.status === 'processing'"
+                      class="spinning"
+                      :size="12"
+                    />
+                    <Clock v-else-if="task.status === 'queued'" :size="12" />
+                    <AlertCircle
+                      v-else-if="['failed', 'interrupted'].includes(task.status)"
+                      :size="12"
+                    />
+                    <span v-else class="status-indicator-dot"></span>
+                    <span class="status-text">{{
+                      statusLabels[task.status]
+                    }}</span>
+                  </div>
+                  <span
+                    class="task-time"
+                    :title="formatDateTime(task.createdAt)"
+                  >
+                    <Clock :size="12" />
+                    {{ formatDateTime(task.createdAt) }}
+                  </span>
+                  <span class="task-count-badge">
+                    {{ task.imageCount }} / {{ task.request.n }} 张
+                  </span>
+                </header>
+
+                <div
+                  v-if="task.imageCount"
+                  class="task-preview"
+                  :class="{ 'is-loading': detailLoading }"
                 >
-                  重新生成
-                </button>
-                <button
-                  v-if="
-                    task.canResume &&
-                    ['failed', 'interrupted'].includes(task.status)
-                  "
-                  class="text-button"
-                  type="button"
-                  :disabled="resuming.includes(task.id)"
-                  @click="resumeTask(task)"
+                  <el-image
+                    class="task-thumbnail"
+                    :src="task.thumbnail"
+                    fit="contain"
+                    lazy
+                  >
+                    <template #placeholder>
+                      <div class="preview-placeholder">
+                        <LoaderCircle class="spinning" :size="28" />
+                        <span>正在加载图片…</span>
+                      </div>
+                    </template>
+                    <template #error>
+                      <div class="preview-placeholder error">
+                        <ImageOff :size="28" />
+                        <span>预览暂不可用，点击查看原图</span>
+                      </div>
+                    </template>
+                  </el-image>
+                  <div
+                    class="preview-overlay"
+                    @click.self="showDetail(task, 'images')"
+                  >
+                    <button
+                      class="overlay-view-btn"
+                      type="button"
+                      :disabled="detailLoading"
+                      @click="showDetail(task, 'images')"
+                    >
+                      <Maximize2 :size="14" />
+                      <span>查看原图</span>
+                    </button>
+                    <div class="overlay-quick-actions">
+                      <button
+                        class="overlay-icon-btn"
+                        type="button"
+                        title="查看参数"
+                        :disabled="detailLoading"
+                        @click.stop="showDetail(task, 'parameters')"
+                      >
+                        <Info :size="14" />
+                      </button>
+                      <button
+                        class="overlay-icon-btn"
+                        type="button"
+                        title="复用参数"
+                        @click.stop="reuseTask(task)"
+                      >
+                        <SlidersHorizontal :size="14" />
+                      </button>
+                      <button
+                        class="overlay-icon-btn"
+                        type="button"
+                        title="导出图片"
+                        :disabled="exporting"
+                        @click.stop="exportTasks([task.id])"
+                      >
+                        <Download :size="14" />
+                      </button>
+                    </div>
+                    <span v-if="task.imageCount > 1" class="overlay-multi-hint">
+                      共 {{ task.imageCount }} 张
+                    </span>
+                  </div>
+                </div>
+
+                <div
+                  v-else
+                  class="task-placeholder"
+                  role="status"
+                  :class="task.status"
                 >
-                  继续等待
-                </button>
-                <button
+                  <template
+                    v-if="['processing', 'queued'].includes(task.status)"
+                  >
+                    <div class="pulse-loader-ring">
+                      <LoaderCircle class="spinning" :size="32" />
+                    </div>
+                    <span class="placeholder-title">{{
+                      task.status === "queued"
+                        ? "排队中…"
+                        : "AI 正在绘制画面…"
+                    }}</span>
+                    <span class="placeholder-hint">{{
+                      autoRefresh
+                        ? "完成后会自动显示在这里"
+                        : "完成后点击上方刷新查看结果"
+                    }}</span>
+                  </template>
+                  <template v-else>
+                    <div class="empty-icon-box">
+                      <ImageOff :size="32" :stroke-width="1.3" />
+                    </div>
+                    <span class="placeholder-title"
+                      >{{ statusLabels[task.status] }}，暂无生成图片</span
+                    >
+                    <span class="placeholder-hint">可以复用参数重新生成</span>
+                  </template>
+                </div>
+
+                <div
                   v-if="
                     task.error?.message &&
                     !roundState[round.id]?.ignored?.includes(task.id)
                   "
-                  class="text-button"
-                  type="button"
-                  @click="ignoreTaskError(round, task)"
+                  class="task-error-box"
                 >
-                  忽略错误
-                </button>
-                <button
-                  class="text-button"
-                  type="button"
-                  :disabled="detailLoading"
-                  @click="showDetail(task, 'parameters')"
-                >
-                  查看参数
-                </button>
-                <button
-                  class="text-button"
-                  type="button"
-                  @click="reuseTask(task)"
-                >
-                  复用参数
-                </button>
-                <button
-                  v-if="task.imageCount"
-                  class="text-button"
-                  type="button"
-                  :disabled="exporting"
-                  @click="exportTasks([task.id])"
-                >
-                  导出图片
-                </button>
-              </footer>
-            </article>
+                  <AlertCircle :size="14" class="error-icon" />
+                  <p class="task-error-text">{{ task.error.message }}</p>
+                </div>
+
+                <footer class="task-actions">
+                  <button
+                    class="task-btn task-btn-primary"
+                    type="button"
+                    :disabled="
+                      submitting ||
+                      ['queued', 'processing'].includes(task.status)
+                    "
+                    title="以此任务参数重新生成"
+                    @click="regenerateTask(task)"
+                  >
+                    <RefreshCw :size="13" />
+                    <span>重新生成</span>
+                  </button>
+                  <button
+                    v-if="
+                      task.canResume &&
+                      ['failed', 'interrupted'].includes(task.status)
+                    "
+                    class="task-btn task-btn-warning"
+                    type="button"
+                    :disabled="resuming.includes(task.id)"
+                    title="继续等待任务完成"
+                    @click="resumeTask(task)"
+                  >
+                    <RotateCcw :size="13" />
+                    <span>继续等待</span>
+                  </button>
+                  <button
+                    v-if="
+                      task.error?.message &&
+                      !roundState[round.id]?.ignored?.includes(task.id)
+                    "
+                    class="task-btn task-btn-ghost"
+                    type="button"
+                    title="忽略此错误信息"
+                    @click="ignoreTaskError(round, task)"
+                  >
+                    <X :size="13" />
+                    <span>忽略错误</span>
+                  </button>
+                  <button
+                    class="task-btn"
+                    type="button"
+                    :disabled="detailLoading"
+                    title="查看生成参数"
+                    @click="showDetail(task, 'parameters')"
+                  >
+                    <Info :size="13" />
+                    <span>查看参数</span>
+                  </button>
+                  <button
+                    class="task-btn"
+                    type="button"
+                    title="复用此任务参数"
+                    @click="reuseTask(task)"
+                  >
+                    <SlidersHorizontal :size="13" />
+                    <span>复用参数</span>
+                  </button>
+                  <button
+                    v-if="task.imageCount"
+                    class="task-btn"
+                    type="button"
+                    :disabled="exporting"
+                    title="导出此任务图片"
+                    @click="exportTasks([task.id])"
+                  >
+                    <Download :size="13" />
+                    <span>导出图片</span>
+                  </button>
+                </footer>
+              </article>
+            </div>
           </section>
         </div>
+
         <footer class="pagination">
           <label class="page-size-control">
             <span>每页</span>
@@ -756,25 +948,31 @@
             </select>
             <span>条</span>
           </label>
-          <button
-            class="action-button"
-            type="button"
-            :disabled="page <= 1"
-            @click="page--"
-          >
-            上一页
-          </button>
-          <span
-            >{{ page }} / {{ Math.max(1, Math.ceil(total / pageSize)) }}</span
-          >
-          <button
-            class="action-button"
-            type="button"
-            :disabled="page * pageSize >= total"
-            @click="page++"
-          >
-            下一页
-          </button>
+          <div class="page-nav-group">
+            <button
+              class="page-nav-btn"
+              type="button"
+              :disabled="page <= 1"
+              title="上一页"
+              @click="page--"
+            >
+              <ChevronLeft :size="14" />
+              <span>上一页</span>
+            </button>
+            <span class="page-indicator">
+              {{ page }} / {{ Math.max(1, Math.ceil(total / pageSize)) }}
+            </span>
+            <button
+              class="page-nav-btn"
+              type="button"
+              :disabled="page * pageSize >= total"
+              title="下一页"
+              @click="page++"
+            >
+              <span>下一页</span>
+              <ChevronRight :size="14" />
+            </button>
+          </div>
         </footer>
       </section>
     </div>
@@ -952,7 +1150,19 @@ import {
   RefreshCw,
   Sparkles,
   Trash2,
-  X
+  X,
+  Copy,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  SlidersHorizontal,
+  Maximize2,
+  RotateCcw,
+  Info,
+  Clock,
+  AlertCircle
 } from "lucide-vue-next"
 import { ElImage, ElMessageBox } from "element-plus"
 import "element-plus/es/components/image/style/css"
@@ -1567,6 +1777,40 @@ const rounds = computed(() => {
   }
   return [...groups.values()]
 })
+
+const expandedPrompts = ref(new Set())
+function togglePrompt(roundId) {
+  const next = new Set(expandedPrompts.value)
+  if (next.has(roundId)) {
+    next.delete(roundId)
+  } else {
+    next.add(roundId)
+  }
+  expandedPrompts.value = next
+}
+function isPromptExpanded(roundId) {
+  return expandedPrompts.value.has(roundId)
+}
+function isLongPrompt(text) {
+  return Boolean(text && (text.length > 90 || text.includes("\n")))
+}
+
+const copiedRoundId = ref(null)
+let copiedTimer = null
+async function copyPrompt(text, roundId) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    copiedRoundId.value = roundId
+    if (copiedTimer) clearTimeout(copiedTimer)
+    copiedTimer = setTimeout(() => {
+      if (copiedRoundId.value === roundId) copiedRoundId.value = null
+    }, 1500)
+    createMessage.success("提示词已复制到剪切板")
+  } catch (err) {
+    createMessage.error("复制失败: " + (err?.message || String(err)))
+  }
+}
 const total = ref(0)
 const page = ref(1)
 const status = ref("")
@@ -2463,287 +2707,842 @@ onBeforeUnmount(() => {
       flex-direction: column;
       min-width: 0;
       min-height: 0;
-      overflow: auto;
+      overflow: hidden;
       border: 1px solid var(--color-line);
-      border-radius: 9px;
+      border-radius: 10px;
       background: var(--color-panel);
+
       .tasks-head {
         display: flex;
         flex-shrink: 0;
         flex-wrap: wrap;
         align-items: center;
         justify-content: space-between;
-        gap: 14px;
-        padding: 18px;
+        gap: 12px;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--color-line);
+        background: var(--color-panel);
+
         .tasks-title {
           display: flex;
           align-items: center;
           gap: 8px;
-          font-size: var(--font-size-lg);
-          .task-count {
-            color: var(--color-text-soft);
-            font-size: var(--font-size-base);
+          font-size: var(--font-size-base);
+          font-weight: 600;
+          color: var(--color-text);
+
+          .tasks-title-icon {
+            color: var(--color-primary);
+          }
+
+          .task-count-pill {
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: var(--color-primary-soft);
+            color: var(--color-primary);
+            font-size: var(--font-size-xs, 12px);
+            font-weight: 500;
           }
         }
+
         .tasks-controls {
           display: flex;
           flex-wrap: wrap;
           align-items: center;
           gap: 8px;
+
           .status-select {
-            width: 96px;
-            height: 36px;
-            padding: 4px 6px;
+            height: 32px;
+            padding: 0 8px;
             border: 1px solid var(--color-line);
             border-radius: 6px;
             color: var(--color-text);
             background: var(--color-panel-soft);
             font-size: var(--font-size-sm);
+            cursor: pointer;
+            transition: border-color 0.15s;
+            &:hover {
+              border-color: var(--color-line-strong);
+            }
           }
+
+          .auto-refresh-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 32px;
+            padding: 0 10px;
+            border: 1px solid var(--color-line);
+            border-radius: 6px;
+            background: var(--color-panel-soft);
+            color: var(--color-text-muted);
+            font-size: var(--font-size-sm);
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.15s;
+
+            input {
+              display: none;
+            }
+
+            .status-dot {
+              width: 7px;
+              height: 7px;
+              border-radius: 50%;
+              background: var(--color-text-soft);
+              transition: all 0.2s;
+            }
+
+            &.active {
+              color: var(--color-text);
+              border-color: rgba(16, 185, 129, 0.35);
+              background: rgba(16, 185, 129, 0.08);
+
+              .status-dot {
+                background: var(--color-success, #10b981);
+                box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+              }
+            }
+
+            &:hover {
+              border-color: var(--color-line-strong);
+            }
+          }
+
           .icon-button {
-            display: flex;
+            display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 31px;
-            height: 31px;
+            width: 32px;
+            height: 32px;
             border: 1px solid var(--color-line);
             border-radius: 6px;
             background: var(--color-panel-soft);
             color: var(--color-text-muted);
             cursor: pointer;
+            transition: all 0.15s;
+
+            &:hover:not(:disabled) {
+              color: var(--color-text);
+              border-color: var(--color-line-strong);
+              background: var(--color-panel);
+            }
+          }
+
+          .select-toggle-btn {
+            &.active {
+              background: var(--color-primary-soft);
+              color: var(--color-primary);
+              border-color: var(--color-primary);
+            }
           }
         }
       }
-      .auto-refresh {
-        display: flex;
-        align-items: center;
-        gap: 3px;
-        white-space: nowrap;
-        font-size: var(--font-size-sm);
-        color: var(--color-text-muted);
-      }
+
       .selection-bar {
         display: flex;
         flex-shrink: 0;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
         padding: 10px 18px;
-        border-top: 1px solid var(--color-line);
+        border-bottom: 1px solid var(--color-line);
         background: var(--color-panel-soft);
+        animation: selection-slide-down 0.2s ease;
+
+        .selection-check-all {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          cursor: pointer;
+          font-size: var(--font-size-sm);
+          color: var(--color-text);
+        }
+
         .selection-count {
-          flex: 1;
           color: var(--color-text-muted);
           font-size: var(--font-size-sm);
+
+          strong {
+            color: var(--color-primary);
+          }
+        }
+
+        .selection-actions {
+          margin-left: auto;
+          display: flex;
+          align-items: center;
+          gap: 8px;
         }
       }
+
       .list-error {
         margin: 0;
-        padding: 0 18px 12px;
+        padding: 10px 18px;
         color: var(--color-danger);
+        background: rgba(239, 68, 68, 0.08);
+        border-bottom: 1px solid rgba(239, 68, 68, 0.2);
+        font-size: var(--font-size-sm);
         overflow-wrap: anywhere;
       }
+
       .empty-state {
         display: flex;
         flex: 1;
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 9px;
-        min-height: 270px;
-        padding: 25px;
+        gap: 10px;
+        min-height: 280px;
+        padding: 24px;
+
         .empty-icon {
           display: flex;
           align-items: center;
           justify-content: center;
-          width: 62px;
-          height: 62px;
-          margin-bottom: 9px;
+          width: 58px;
+          height: 58px;
+          margin-bottom: 6px;
           border: 1px dashed var(--color-line-strong);
           border-radius: 16px;
           color: var(--color-text-soft);
           background: var(--color-panel-soft);
         }
+
         .empty-title {
-          color: var(--color-text-muted);
+          color: var(--color-text);
+          font-weight: 500;
           font-size: var(--font-size-base);
         }
+
         .empty-description {
           color: var(--color-text-soft);
           font-size: var(--font-size-sm);
         }
       }
+
       .task-list {
         display: flex;
         flex: 1;
         min-height: 0;
-        overflow: auto;
+        overflow-y: auto;
         flex-direction: column;
-        padding: 0 18px 18px;
-        gap: 12px;
+        padding: 16px 18px;
+        gap: 16px;
+
         .round-card {
           display: flex;
           flex-direction: column;
-          gap: 12px;
+          border: 1px solid var(--color-line);
+          border-radius: 10px;
+          background: var(--color-panel);
+          padding: 14px 16px 16px;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+          transition: border-color 0.15s, box-shadow 0.15s;
+
+          &:hover {
+            border-color: var(--color-line-strong);
+          }
+
           .round-header {
-            padding: 10px 0;
-            border-bottom: 1px solid var(--color-line);
-            .round-prompt {
-              margin: 0 0 8px;
-              white-space: pre-wrap;
-              overflow-wrap: anywhere;
-            }
-            .round-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+
+            .round-header-bar {
               display: flex;
               flex-wrap: wrap;
-              gap: 8px;
+              align-items: center;
+              justify-content: space-between;
+              gap: 10px;
+
+              .round-meta-badges {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 6px;
+
+                .round-badge {
+                  display: inline-flex;
+                  align-items: center;
+                  padding: 2px 7px;
+                  border-radius: 4px;
+                  font-size: 11px;
+                  font-weight: 500;
+                  line-height: 1.4;
+                  border: 1px solid var(--color-line);
+                  background: var(--color-panel-soft);
+                  color: var(--color-text-muted);
+
+                  &.round-index-badge {
+                    background: var(--color-primary-soft);
+                    color: var(--color-primary);
+                    border-color: rgba(59, 130, 246, 0.25);
+                    font-weight: 600;
+                  }
+
+                  &.round-model-badge {
+                    color: var(--color-text);
+                    max-width: 140px;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                  }
+
+                  &.round-size-badge {
+                    font-family: monospace;
+                  }
+
+                  &.round-mode-badge {
+                    text-transform: uppercase;
+                  }
+                }
+              }
+
+              .round-actions {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 6px;
+
+                .round-btn {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 4px;
+                  height: 26px;
+                  padding: 0 8px;
+                  border: 1px solid var(--color-line);
+                  border-radius: 5px;
+                  background: var(--color-panel-soft);
+                  color: var(--color-text-muted);
+                  font-size: 12px;
+                  cursor: pointer;
+                  transition: all 0.15s;
+
+                  &:hover:not(:disabled) {
+                    color: var(--color-text);
+                    background: var(--color-panel);
+                    border-color: var(--color-line-strong);
+                  }
+
+                  &.round-copy-btn {
+                    color: var(--color-text);
+                    .copy-success-icon {
+                      color: var(--color-success, #10b981);
+                    }
+                  }
+
+                  &.round-btn-primary {
+                    color: var(--color-primary);
+                    &:hover:not(:disabled) {
+                      background: var(--color-primary-soft);
+                      border-color: var(--color-primary);
+                    }
+                  }
+
+                  &.round-btn-ghost {
+                    border-color: transparent;
+                    background: transparent;
+                    color: var(--color-text-soft);
+                    &:hover:not(:disabled) {
+                      background: var(--color-panel-soft);
+                      color: var(--color-text);
+                    }
+                  }
+
+                  &.round-btn-danger {
+                    border-color: transparent;
+                    background: transparent;
+                    color: var(--color-danger);
+                    &:hover:not(:disabled) {
+                      background: rgba(239, 68, 68, 0.08);
+                      border-color: rgba(239, 68, 68, 0.2);
+                    }
+                  }
+
+                  &:disabled {
+                    opacity: 0.45;
+                    cursor: not-allowed;
+                  }
+                }
+              }
+            }
+
+            .round-prompt-box {
+              position: relative;
+              padding: 9px 12px;
+              background: var(--color-panel-soft);
+              border-radius: 7px;
+              border-left: 3px solid var(--color-primary);
+
+              .round-prompt-text {
+                margin: 0;
+                color: var(--color-text);
+                font-size: var(--font-size-sm);
+                line-height: 1.6;
+                white-space: pre-wrap;
+                word-break: break-word;
+                user-select: text;
+
+                &.is-clamped {
+                  display: -webkit-box;
+                  -webkit-box-orient: vertical;
+                  -webkit-line-clamp: 2;
+                  line-clamp: 2;
+                  overflow: hidden;
+                }
+              }
+
+              .prompt-expand-btn {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                margin-top: 5px;
+                padding: 0;
+                border: 0;
+                background: transparent;
+                color: var(--color-primary);
+                font-size: 11px;
+                font-weight: 500;
+                cursor: pointer;
+
+                &:hover {
+                  text-decoration: underline;
+                }
+              }
             }
           }
-          .task-card {
-            display: flex;
-            flex-shrink: 0;
-            flex-direction: column;
-            min-width: 0;
-            overflow: hidden;
-            border: 1px solid var(--color-line);
-            border-radius: 7px;
-            &.task-selected {
-              border-color: var(--color-primary);
-              background: var(--color-primary-soft);
-            }
-            .task-meta {
+
+          .round-tasks-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+            gap: 14px;
+            margin-top: 12px;
+
+            .task-card {
               display: flex;
-              align-items: center;
-              flex-wrap: wrap;
-              gap: 8px 12px;
-              padding: 12px 14px;
-              font-size: var(--font-size-sm);
-              .task-check {
+              flex-direction: column;
+              min-width: 0;
+              overflow: hidden;
+              border: 1px solid var(--color-line);
+              border-radius: 9px;
+              background: var(--color-panel);
+              transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s ease, border-color 0.2s ease;
+
+              &:hover {
+                transform: translateY(-2px);
+                border-color: var(--color-line-strong);
+                box-shadow: 0 6px 18px rgba(0, 0, 0, 0.05);
+              }
+
+              &.task-selected {
+                border-color: var(--color-primary);
+                box-shadow: 0 0 0 2px var(--color-primary-soft), 0 6px 18px rgba(0, 0, 0, 0.06);
+              }
+
+              &.task-has-error {
+                border-color: rgba(239, 68, 68, 0.35);
+              }
+
+              .task-meta {
                 display: flex;
                 align-items: center;
-              }
-              .task-status {
-                color: var(--color-text-muted);
-                &.completed {
-                  color: var(--color-success);
-                }
-                &.failed {
-                  color: var(--color-danger);
-                }
-                &.processing {
-                  color: var(--color-primary);
-                }
-                &.partial,
-                &.interrupted {
-                  color: var(--color-warning);
-                }
-              }
-              .task-time {
-                color: var(--color-text-soft);
-              }
-              .task-generation-mode {
-                padding: 2px 6px;
-                border: 1px solid var(--color-line);
-                border-radius: 4px;
-                color: var(--color-primary);
+                flex-wrap: wrap;
+                gap: 8px;
+                padding: 10px 12px;
+                border-bottom: 1px solid var(--color-line);
+                font-size: var(--font-size-xs, 12px);
                 background: var(--color-panel-soft);
+
+                .task-check {
+                  display: inline-flex;
+                  align-items: center;
+                  cursor: pointer;
+                }
+
+                .task-status-pill {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 5px;
+                  padding: 2px 7px;
+                  border-radius: 12px;
+                  font-size: 11px;
+                  font-weight: 500;
+                  border: 1px solid transparent;
+
+                  .status-indicator-dot {
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 50%;
+                  }
+
+                  &.completed {
+                    background: rgba(16, 185, 129, 0.1);
+                    color: var(--color-success, #10b981);
+                    border-color: rgba(16, 185, 129, 0.25);
+                    .status-indicator-dot {
+                      background: var(--color-success, #10b981);
+                      box-shadow: 0 0 4px rgba(16, 185, 129, 0.4);
+                    }
+                  }
+
+                  &.processing {
+                    background: rgba(59, 130, 246, 0.1);
+                    color: var(--color-primary, #3b82f6);
+                    border-color: rgba(59, 130, 246, 0.25);
+                  }
+
+                  &.queued {
+                    background: rgba(156, 163, 175, 0.12);
+                    color: var(--color-text-muted);
+                    border-color: rgba(156, 163, 175, 0.25);
+                  }
+
+                  &.failed {
+                    background: rgba(239, 68, 68, 0.1);
+                    color: var(--color-danger, #ef4444);
+                    border-color: rgba(239, 68, 68, 0.25);
+                  }
+
+                  &.partial,
+                  &.interrupted {
+                    background: rgba(245, 158, 11, 0.1);
+                    color: var(--color-warning, #f59e0b);
+                    border-color: rgba(245, 158, 11, 0.25);
+                  }
+                }
+
+                .task-time {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 4px;
+                  color: var(--color-text-soft);
+                  font-size: 11px;
+                }
+
+                .task-count-badge {
+                  margin-left: auto;
+                  font-weight: 500;
+                  color: var(--color-text-muted);
+                  font-size: 11px;
+                }
               }
-              .task-count {
-                margin-left: auto;
-                color: var(--color-text-muted);
-              }
-            }
-            .task-preview {
-              position: relative;
-              display: flex;
-              width: 100%;
-              aspect-ratio: 4 / 3;
-              max-height: 480px;
-              padding: 0;
-              border: 0;
-              background: var(--color-panel-soft);
-              cursor: zoom-in;
-              .task-thumbnail {
+
+              .task-preview {
+                position: relative;
+                display: flex;
                 width: 100%;
-                height: 100%;
-                .preview-placeholder {
-                  display: flex;
+                aspect-ratio: 4 / 3;
+                padding: 0;
+                border: 0;
+                background-color: var(--color-panel-soft);
+                background-image: radial-gradient(rgba(128, 128, 128, 0.08) 1px, transparent 1px);
+                background-size: 16px 16px;
+                cursor: pointer;
+                overflow: hidden;
+
+                .task-thumbnail {
+                  width: 100%;
                   height: 100%;
+                  transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+
+                  .preview-placeholder {
+                    display: flex;
+                    height: 100%;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 10px;
+                    color: var(--color-text-muted);
+                    font-size: var(--font-size-sm);
+
+                    &.error {
+                      color: var(--color-text-soft);
+                    }
+                  }
+                }
+
+                &:hover .task-thumbnail {
+                  transform: scale(1.02);
+                }
+
+                .preview-overlay {
+                  position: absolute;
+                  inset: 0;
+                  display: flex;
                   flex-direction: column;
+                  justify-content: space-between;
+                  align-items: center;
+                  padding: 12px;
+                  background: linear-gradient(180deg, rgba(0, 0, 0, 0.25) 0%, transparent 40%, rgba(0, 0, 0, 0.6) 100%);
+                  opacity: 0;
+                  transition: opacity 0.2s ease;
+
+                  .overlay-view-btn {
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 6px;
+                    margin: auto 0;
+                    padding: 7px 16px;
+                    border: 0;
+                    border-radius: 20px;
+                    background: rgba(255, 255, 255, 0.9);
+                    backdrop-filter: blur(8px);
+                    color: #111;
+                    font-size: 12px;
+                    font-weight: 600;
+                    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+                    cursor: pointer;
+                    transition: transform 0.15s, background 0.15s;
+
+                    &:hover {
+                      transform: scale(1.05);
+                      background: #fff;
+                    }
+                  }
+
+                  .overlay-quick-actions {
+                    display: flex;
+                    align-items: center;
+                    gap: 6px;
+                    align-self: flex-start;
+
+                    .overlay-icon-btn {
+                      display: inline-flex;
+                      align-items: center;
+                      justify-content: center;
+                      width: 28px;
+                      height: 28px;
+                      border: 1px solid rgba(255, 255, 255, 0.25);
+                      border-radius: 6px;
+                      background: rgba(0, 0, 0, 0.55);
+                      backdrop-filter: blur(6px);
+                      color: #fff;
+                      cursor: pointer;
+                      transition: background 0.15s, transform 0.15s;
+
+                      &:hover:not(:disabled) {
+                        background: rgba(0, 0, 0, 0.85);
+                        transform: scale(1.08);
+                      }
+
+                      &:disabled {
+                        opacity: 0.4;
+                        cursor: not-allowed;
+                      }
+                    }
+                  }
+
+                  .overlay-multi-hint {
+                    position: absolute;
+                    right: 12px;
+                    bottom: 12px;
+                    padding: 3px 8px;
+                    border-radius: 4px;
+                    background: rgba(0, 0, 0, 0.65);
+                    backdrop-filter: blur(4px);
+                    color: #fff;
+                    font-size: 11px;
+                    font-weight: 500;
+                  }
+                }
+
+                &:hover .preview-overlay {
+                  opacity: 1;
+                }
+              }
+
+              .task-placeholder {
+                display: flex;
+                min-height: 200px;
+                padding: 24px;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                text-align: center;
+                background: var(--color-panel-soft);
+                color: var(--color-text-muted);
+
+                .pulse-loader-ring {
+                  display: flex;
                   align-items: center;
                   justify-content: center;
-                  gap: 12px;
-                  color: var(--color-text-muted);
+                  color: var(--color-primary);
+                }
+
+                .empty-icon-box {
+                  display: flex;
+                  align-items: center;
+                  justify-content: center;
+                  color: var(--color-text-soft);
+                }
+
+                .placeholder-title {
+                  font-weight: 500;
                   font-size: var(--font-size-sm);
+                  color: var(--color-text);
+                }
+
+                .placeholder-hint {
+                  font-size: var(--font-size-xs, 12px);
+                  color: var(--color-text-soft);
                 }
               }
-              .preview-hint {
-                position: absolute;
-                right: 12px;
-                bottom: 12px;
-                padding: 5px 9px;
-                border-radius: 5px;
-                background: #0009;
-                color: #fff;
-                font-size: var(--font-size-sm);
+
+              .task-error-box {
+                display: flex;
+                align-items: flex-start;
+                gap: 8px;
+                margin: 0;
+                padding: 8px 12px;
+                background: rgba(239, 68, 68, 0.08);
+                border-top: 1px solid rgba(239, 68, 68, 0.15);
+                color: var(--color-danger);
+
+                .error-icon {
+                  flex-shrink: 0;
+                  margin-top: 2px;
+                }
+
+                .task-error-text {
+                  margin: 0;
+                  font-size: 12px;
+                  line-height: 1.5;
+                  overflow-wrap: anywhere;
+                }
               }
-            }
-            .task-placeholder {
-              display: flex;
-              min-height: 260px;
-              padding: 28px;
-              flex-direction: column;
-              align-items: center;
-              justify-content: center;
-              gap: 14px;
-              text-align: center;
-              background: var(--color-panel-soft);
-              color: var(--color-text-muted);
-              .placeholder-title {
-                font-size: var(--font-size-base);
+
+              .task-actions {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 6px;
+                padding: 10px 12px;
+                background: var(--color-panel);
+                border-top: 1px solid var(--color-line);
+
+                .task-btn {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 4px;
+                  height: 26px;
+                  padding: 0 8px;
+                  border: 1px solid var(--color-line);
+                  border-radius: 5px;
+                  background: var(--color-panel-soft);
+                  color: var(--color-text-muted);
+                  font-size: 11px;
+                  font-weight: 500;
+                  cursor: pointer;
+                  transition: all 0.15s;
+
+                  &:hover:not(:disabled) {
+                    color: var(--color-text);
+                    background: var(--color-panel);
+                    border-color: var(--color-line-strong);
+                  }
+
+                  &.task-btn-primary {
+                    color: var(--color-primary);
+                    &:hover:not(:disabled) {
+                      background: var(--color-primary-soft);
+                      border-color: var(--color-primary);
+                    }
+                  }
+
+                  &.task-btn-warning {
+                    color: var(--color-warning);
+                    &:hover:not(:disabled) {
+                      background: rgba(245, 158, 11, 0.12);
+                      border-color: var(--color-warning);
+                    }
+                  }
+
+                  &.task-btn-ghost {
+                    border-color: transparent;
+                    background: transparent;
+                    color: var(--color-text-soft);
+                    &:hover:not(:disabled) {
+                      background: var(--color-panel-soft);
+                      color: var(--color-text);
+                    }
+                  }
+
+                  &:disabled {
+                    opacity: 0.45;
+                    cursor: not-allowed;
+                  }
+                }
               }
-              .placeholder-hint {
-                font-size: var(--font-size-sm);
-                color: var(--color-text-soft);
-              }
-            }
-            .task-error {
-              margin: 0;
-              padding: 12px 14px 0;
-              color: var(--color-danger);
-              font-size: var(--font-size-sm);
-              overflow-wrap: anywhere;
-            }
-            .task-actions {
-              display: flex;
-              flex-wrap: wrap;
-              gap: 12px 20px;
-              padding: 14px;
             }
           }
         }
       }
+
       .pagination {
         display: flex;
         flex-shrink: 0;
-        justify-content: flex-end;
+        justify-content: space-between;
         align-items: center;
         gap: 12px;
-        padding: 18px;
+        padding: 12px 18px;
+        border-top: 1px solid var(--color-line);
+        background: var(--color-panel);
         color: var(--color-text-muted);
+
         .page-size-control {
           display: flex;
           align-items: center;
           gap: 6px;
-          margin-right: auto;
           white-space: nowrap;
+          font-size: var(--font-size-sm);
+
           .page-size-select {
-            height: 31px;
+            height: 28px;
             padding: 0 6px;
             border: 1px solid var(--color-line);
-            border-radius: 6px;
+            border-radius: 5px;
             color: var(--color-text);
             background: var(--color-panel-soft);
             font-size: var(--font-size-sm);
+            cursor: pointer;
+          }
+        }
+
+        .page-nav-group {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+
+          .page-nav-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            height: 28px;
+            padding: 0 8px;
+            border: 1px solid var(--color-line);
+            border-radius: 5px;
+            background: var(--color-panel-soft);
+            color: var(--color-text);
+            font-size: var(--font-size-sm);
+            cursor: pointer;
+            transition: all 0.15s;
+
+            &:hover:not(:disabled) {
+              border-color: var(--color-line-strong);
+              background: var(--color-panel);
+            }
+
+            &:disabled {
+              opacity: 0.4;
+              cursor: not-allowed;
+            }
+          }
+
+          .page-indicator {
+            padding: 0 4px;
+            font-size: var(--font-size-sm);
+            color: var(--color-text-muted);
           }
         }
       }
@@ -2891,6 +3690,16 @@ onBeforeUnmount(() => {
 @keyframes image-workbench-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+@keyframes selection-slide-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 </style>
