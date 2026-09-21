@@ -1,7 +1,7 @@
 <div align="center">
   <img src="src/assets/ai-manager-logo.png" width="104" height="104" alt="Monkey Thief 图标" />
   <h1>Monkey Thief</h1>
-  <p>面向 Claude Code 与 Codex 的本地优先 Windows 桌面管理工具。</p>
+  <p>面向 Claude Code 与 Codex 的本地优先 Windows 桌面管理与创作工具。</p>
   <p>
     <a href="https://github.com/hxysj/AI-Manager/releases/latest">
       <img src="https://img.shields.io/github/v/release/hxysj/AI-Manager?display_name=tag&sort=semver" alt="最新版本" />
@@ -30,7 +30,7 @@
 
 ## 一句话介绍
 
-Monkey Thief 把 Claude Code 与 Codex 分散在配置文件、账号目录和本地数据中的 Provider、API Key、Skills、Prompt、Session 与用量记录集中到一个桌面界面中管理。
+Monkey Thief 集中管理 Claude Code 与 Codex 的 Provider、账号、API Key、Skills、Prompt、Session 和用量记录，并提供 Google 账号接入、图片工作台、Git 管理与局域网快传等桌面工具。
 
 ## 核心功能
 
@@ -39,13 +39,14 @@ Monkey Thief 把 Claude Code 与 Codex 分散在配置文件、账号目录和�
 | Provider 管理 | 统一维护 Claude Code、Codex 的兼容 Provider、请求地址、模型映射和 Runtime 配置。 |
 | 多 API Key | 同一 Provider 可保存多个带名称和备注的 API Key，随时切换唯一生效项；启用状态下自动同步 CLI 配置。 |
 | Codex 官方账号 | 支持 OAuth 登录、`auth.json` 导入、多账号维护、额度刷新、账号代理和接管。 |
+| Google 账号 | 支持 OAuth 登录、模型与额度刷新，并通过绑定到本机回环地址的网关将 Gemini 模型接入 Codex。 |
 | Proxy 接管 | 为 Claude Code 与 Codex 管理本机代理服务和接管池，可在多个 Provider 或 Codex 官方账号之间切换；当前激活目标请求失败时，会自动切换到池内下一个可用 Provider 或账号继续发送请求。 |
 | Usage 统计 | 按时间、应用、Provider、来源和模型查看 Token、缓存、费用趋势与请求明细，并可导出 PNG 长图。 |
 | Skills 管理 | 维护 Skill 源目录、仓库、分组和回收站，支持创建、ZIP/CLI 导入、批量安装、卸载、启用与禁用。 |
 | Sessions 管理 | 聚合 Claude Code 与 Codex 本地会话，支持全文筛选、项目分页、消息查看和会话回收站。 |
 | Prompt Rules | 管理公共或 CLI 专属 Prompt，支持导入现有全局 Prompt、目标启用、Runtime 检查和差异对比。 |
 | 数据与备份 | 支持加密导出、恢复预览、定时本地备份，以及坚果云和 Koofr WebDAV 云端备份。 |
-| 桌面与工具 | 提供系统托盘、Provider 快速切换悬浮窗、开机启动、应用内更新、Git 工具、局域网快传和实用工具面板。 |
+| 桌面与工具 | 提供图片工作台、提示词库、JSON Agent、Git 管理、端口监测、图片链接提取、系统托盘、Provider 快速切换悬浮窗、开机启动和应用内更新。 |
 
 ### 设备快传
 
@@ -56,6 +57,12 @@ Monkey Thief 把 Claude Code 与 Codex 分散在配置文件、账号目录和�
 - 创建群聊时必须选择至少一台已连接过的网页设备；在线设备会收到邀请提示，离线设备重新连接后可在群聊列表查看。客户端直连目前仅支持单聊，不会将不支持群聊的客户端作为可邀请成员。
 - 自动发现使用 UDP `17632`，传输使用 HTTP `17631` 起的可用端口。请允许应用通过系统防火墙的专用网络；跨网段、访客 Wi-Fi 或路由器设备隔离可能阻止发现，可尝试在客户端输入对方局域网地址连接。
 - 客户端直连目前支持单聊。请仅在可信局域网使用，当前 HTTP 传输不提供端到端加密；“网络设置”中可停止服务。
+
+### 图片工作台与工具中心
+
+- 图片工作台支持通过 Web 或 Codex 通道生成和编辑图片，可上传参考图、批量提交任务、查看与续接历史任务，并导出生成结果。两个通道都使用选定的 Codex 官方账号，分别消耗 ChatGPT 网页额度和 Codex API 额度。
+- 内置提示词库支持分类浏览、搜索、查看提示词与推荐模型，并将提示词填入工作台继续编辑。
+- 工具中心还提供 JSON 格式化与 Codex Agent 修复、文本和 JSON 差异对比、图片链接提取与导出、本机端口监测、Git 分支与 stash 归档，以及 Codex 宠物管理。宠物管理在检测到 Codex 后显示。
 
 ## 为什么需要这个项目
 
@@ -69,6 +76,7 @@ Claude Code 与 Codex 都依赖本地配置文件和目录。Provider、认证�
 | Skills、Prompt 和 Session 分散，难以检索和迁移 | 在统一界面中索引、筛选、安装、回收和恢复。 |
 | Token 与费用缺少统一视图 | 汇总本地会话和代理请求记录，按模型与来源统计用量。 |
 | 更换设备时配置恢复成本高 | 使用加密 `.aimbackup` 备份，并在恢复前预览新增项和冲突。 |
+| 图片生成任务与开发辅助工具分散 | 在图片工作台、提示词库和工具中心中集中处理生成任务与常用本机操作。 |
 
 Monkey Thief 采用本地优先设计。Provider、账号、配置索引和运行数据默认保存在用户指定的数据目录中；只有用户主动配置 WebDAV 并执行同步时，备份文件才会上传到对应服务。
 
@@ -117,11 +125,12 @@ npm run dist:win
 ## 快速开始
 
 1. **确认目录**：打开 `Settings > 目录`，检查 Data 目录以及 Claude Code、Codex 配置目录。修改 Data 目录后需要重启应用。
-2. **选择 AI 工具**：进入 `Providers`，在顶部选择 Claude Code 或 Codex。
+2. **选择 AI 工具**：进入 `Providers`，在顶部选择 Claude Code 或 Codex。Codex 除兼容 Provider 外，也支持 Codex 官方账号或 Google 账号。
 3. **添加 Provider**：填写供应商名称、请求地址和模型；按需要选择 API 格式与认证字段。
 4. **配置 Key**：添加一个或多个 API Key，为它们填写名称和备注，并选择唯一的当前生效 Key。
 5. **启用配置**：保存 Provider 后启用它，Monkey Thief 会同步对应 CLI 配置。Codex 也可以改用官方账号登录。
-6. **使用其他模块**：在 `Skills`、`Sessions`、`Rules` 和 `Usage` 中管理资源并查看本地统计。
+6. **配置 Google 账号（可选）**：在 `Providers > Codex` 登录 Google、刷新模型与额度、选择模型并保存；启用后 Codex 使用本机网关转发请求。
+7. **使用其他模块**：在 `Skills`、`Sessions`、`Rules` 和 `Usage` 中管理资源并查看本地统计；在 `Tools` 中打开图片工作台或实用工具。
 
 > [!TIP]
 > Proxy 接管开启时，CLI 配置会保持指向本地代理。切换 Provider 或 API Key 后，代理请求会动态使用最新生效项。
@@ -156,7 +165,10 @@ Monkey Thief 是一个 Tauri 2 桌面应用。Vue 3 渲染层负责交互，通�
 flowchart LR
     UI[Vue 3 + Element Plus] -->|dispatch_api / Tauri IPC| API[Rust API 层]
     API --> Core[Core 状态、路径与配置]
-    API --> Proxy[本地 HTTP / WebSocket Proxy]
+    API --> Proxy[Claude Code / Codex 本地 HTTP 与 WebSocket Proxy]
+    API --> Google[Google 账号回环网关]
+    API --> Image[图片工作台]
+    Image --> ImageServices[Web / Codex 官方服务]
     API --> Node[Node 翻译辅助服务]
     Core --> DB[(SQLite)]
     Core --> Files[Workspace 文件与加密备份]
@@ -167,6 +179,7 @@ flowchart LR
 主要技术：
 
 - Vue 3、Vite、Element Plus、ECharts、Monaco Editor、Lucide Icons
+- LangChain、OpenAI 兼容请求与本地图片工作台
 - Tauri 2、Rust、Tokio
 - SQLite（`rusqlite`，WAL 模式）
 - 本地 HTTP、WebSocket 与 WebDAV
@@ -179,7 +192,7 @@ AI-Manager/
 ├─ src/
 │  ├─ api/                    # 前端 IPC 请求封装
 │  ├─ components/             # 跨模块桌面组件
-│  ├─ features/               # Providers、Usage、Skills、Rules、Tools 等模块
+│  ├─ features/               # Providers、Usage、Skills、Rules、Sessions 与 Tools 等模块
 │  └─ styles/                 # 全局 Less 样式
 ├─ src-tauri/
 │  ├─ node/                   # 随应用分发的 Node 辅助服务
@@ -187,6 +200,7 @@ AI-Manager/
 │     ├─ api/                 # Tauri 命令与业务接口
 │     └─ core/                # 路径、数据库、设置和状态管理
 ├─ build/                     # 图标、NSIS Hooks 与发布说明
+├─ assets/image-prompts/      # 内置图片提示词库
 ├─ scripts/                   # 构建辅助脚本
 └─ .github/workflows/         # Windows Release 自动发布流程
 ```
@@ -195,12 +209,14 @@ AI-Manager/
 
 当前直接检测和管理两个 AI CLI：
 
-| AI 工具 | Provider | 官方账号 | Proxy | Skills / Rules | Sessions / Usage |
+| AI 工具 | Provider | 账号登录 | Proxy | Skills / Rules | Sessions / Usage |
 | --- | --- | --- | --- | --- | --- |
-| Claude Code | 支持兼容 Provider、多 Key、模型映射和 Runtime Profile | 不适用 | 支持 | 支持 | 支持 |
-| OpenAI Codex CLI | 支持兼容 Provider、多 Key、模型和 Runtime Profile | 支持 OAuth 与 `auth.json` | 支持 | 支持 | 支持 |
+| Claude Code | 支持兼容 Provider、多 Key、模型映射和 Runtime Profile | — | 支持 | 支持 | 支持 |
+| OpenAI Codex CLI | 支持兼容 Provider、多 Key、模型和 Runtime Profile | Codex OAuth、`auth.json`；Google OAuth 账号 | 支持 | 支持 | 支持 |
 
 Provider 按接口兼容性工作，并不限制具体模型品牌。高级选项可配置 Anthropic Messages、OpenAI Chat Completions、Gemini Native `generateContent` 或自定义接口格式；这不代表当前已经支持对应品牌的 CLI。
+
+Google 账号以 Codex Provider 的形式接入：本机网关将 Codex Responses API 请求转换为 Google Gemini 请求，并只监听 `127.0.0.1`。它不是独立的 Gemini CLI 集成，也不是供局域网或公网使用的通用代理。网关支持 Codex 的本地工具和 MCP 工具；Google 账号不提供内置联网搜索，联网搜索请配置 MCP 工具。
 
 ## 配置方法
 
@@ -250,6 +266,10 @@ Claude Desktop 的“导入”先展示 Claude Code 供应商预览，支持搜�
 ### Codex 官方账号
 
 进入 `Providers > Codex`，选择官方账号登录或导入现有 `auth.json`。官方账号使用 OAuth / `auth.json` 认证，不显示 API Key 管理入口。启用官方账号前请确认是否需要关闭当前 Codex Proxy 接管。
+
+### Google 账号
+
+进入 `Providers > Codex`，选择 `Google 账号登录` 并完成 OAuth 授权。可选填写网络代理，刷新可用模型与额度，选择默认模型后保存并启用。应用会在本机 `127.0.0.1` 启动转发网关，将 Codex 请求转换为 Google Gemini 请求；启用期间需要保持 Monkey Thief 运行。该账号支持 Codex 本地工具和 MCP 工具，联网搜索请使用 MCP。
 
 ### Proxy 接管
 
@@ -301,6 +321,14 @@ Element Plus 控件通过全局样式映射同一组变量；ECharts 图表、Mo
 
 Codex 官方账号使用 OAuth 或 `auth.json` 管理认证，不使用兼容 Provider 的 API Key 配置。
 
+### Google 账号登录后为什么要保持应用运行？
+
+Codex 使用 Google 账号时，请求会经过 Monkey Thief 在 `127.0.0.1` 启动的本地转发网关。关闭应用会停止该网关；重新启动应用后，已启用账号的网关会随应用启动。Google Gemini CLI 尚未作为独立 CLI 集成。
+
+### 图片工作台使用哪个账号和额度？
+
+图片工作台可切换 Web 与 Codex 通道，两个通道都使用选定的 Codex 官方账号，分别消耗 ChatGPT 网页额度和 Codex API 额度。兼容 Provider 和 Google 账号不用于图片生成。历史任务记录会保存在本机，可恢复任务参数后再次提交。
+
 ### 一个 Provider 能同时使用多个 API Key 吗？
 
 可以保存多个，但同一时间只会有一个 Key 生效。当前版本不会自动轮询多个 Key，需要手动切换生效项。
@@ -311,7 +339,7 @@ Data 目录属于启动配置，保存后需要重启 Monkey Thief。重启前�
 
 ### 备份会包含 Usage、Session 和请求日志吗？
 
-不会。云备份只包含 Skills、Provider（含 Desktop 供应商、模型和加密 Key）、Codex 官方账号、Rules、模型费用表及 Codex 宠物。模型费用表包含单价和汇率，不包含用量记录；Sessions、代理请求日志、Git 归档、设备运行状态和云服务连接设置不上传。
+不会。云备份包含 Skills、Provider（含 Claude Desktop 供应商、Google 账号凭据、模型和加密 Key）、Codex 官方账号、Rules、模型费用表及 Codex 宠物。模型费用表包含单价和汇率，不包含用量记录；Sessions、代理请求日志、Google 网关会话、Git 归档、设备运行状态和云服务连接设置不上传。
 
 云端打包 Skills 时保留定义、脚本、静态数据和资源，排除 Git 元数据、依赖目录、缓存、临时文件，以及 `data/work-history`、运行日志和历史备份等已知运行产物；不会整体排除 `data/` 或 `memory/`，避免丢失静态资源和 Skill 规则。宠物只上传运行必需的 `pet.json`、`spritesheet.webp`，不上传旧图、预览视频或制作中间文件，也不上传本机挂载链接。
 
@@ -333,6 +361,8 @@ Data 目录属于启动配置，保存后需要重启 Monkey Thief。重启前�
 - [x] Claude Code、Codex Provider 与 Runtime 管理
 - [x] Provider 多 API Key、名称、备注和手动切换
 - [x] Codex 官方多账号、Proxy 接管与额度刷新
+- [x] Google OAuth 账号、Gemini 模型额度与 Codex 本地网关
+- [x] Web / Codex 图片工作台、历史任务与图片提示词库
 - [x] Skills、Rules、Sessions、Usage 和加密备份
 
 规划方向：
