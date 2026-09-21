@@ -694,7 +694,73 @@
               >
                 {{ item.provider.note }}
               </span>
-              <span>{{ item.provider.baseUrl || "未配置官网地址" }}</span>
+              <template v-if="item.provider.type === 'google-account'">
+                <span
+                  >Google · {{ formatPlanName(item.provider.google?.plan) }} ·
+                  {{ item.provider.runtimeConfig?.mainModel || "尚未选择模型" }}</span
+                >
+                <div
+                  v-if="googleQuotaGroupsMap[item.provider.id]?.length"
+                  class="providers-google-groups"
+                >
+                  <div
+                    v-for="(group, groupIndex) in googleQuotaGroupsMap[item.provider.id]"
+                    :key="groupIndex"
+                    class="providers-google-group"
+                  >
+                    <span class="providers-google-group-name">{{ group.name }}</span>
+                    <div class="providers-view__quota-list">
+                      <div
+                        v-for="(quota, quotaIndex) in group.windows"
+                        :key="quotaIndex"
+                        :class="[
+                          'providers-view__account-quota',
+                          quota.levelClass,
+                          { 'providers-view__account-quota--loading': googleAccountRefreshingMap[item.provider.id] }
+                        ]"
+                      >
+                        <div class="providers-view__quota-bar" :title="formatUnixTime(quota.resetAt)">
+                          <div class="providers-view__quota-title">
+                            <span class="providers-view__quota-icon"></span>
+                            <span class="providers-view__quota-name">{{ quota.name }}</span>
+                          </div>
+                          <span
+                            class="providers-view__quota-fill"
+                            role="progressbar"
+                            :aria-label="`${group.name} · ${quota.name}剩余比例`"
+                            :aria-valuenow="quota.remainingPercent ?? undefined"
+                            aria-valuemin="0"
+                            aria-valuemax="100"
+                            :style="{ width: formatRateWidth(quota.remainingPercent) }"
+                          ></span>
+                          <div class="providers-view__quota-meta">
+                            <span data-emphasis class="providers-view__quota-value">
+                              {{ quota.remainingPercent == null ? "未知" : `${quota.remainingPercent}%` }} ·
+                            </span>
+                            <span class="providers-view__quota-reset">
+                              {{ !quota.resetAt ? "重置时间未知" : quota.resetAt <= countdownNow ? "待刷新" : `${formatResetCountdown(quota.resetAt)}后重置` }}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <span v-else class="providers-view__provider-note">分组配额尚未获取</span>
+                <span
+                  v-if="item.provider.google?.quotaWarning"
+                  class="providers-view__provider-note"
+                  :title="item.provider.google.quotaWarning"
+                >分组配额刷新失败，请重试</span>
+                <span
+                  v-if="item.provider.google?.message"
+                  class="providers-view__provider-note"
+                  >{{ item.provider.google.message }}</span
+                >
+              </template>
+              <span v-else>{{
+                item.provider.baseUrl || "未配置官网地址"
+              }}</span>
             </div>
             <div class="providers-view__provider-actions">
               <div class="providers-view__action-main">
@@ -768,6 +834,20 @@
                   <Eye :size="16" />
                 </button>
                 <button
+                  v-if="item.provider.type === 'google-account' && item.provider.enabled !== false"
+                  :class="[
+                    'providers-view__icon-button',
+                    { 'providers-view__icon-button--loading': googleAccountRefreshingMap[item.provider.id] }
+                  ]"
+                  type="button"
+                  title="刷新模型与分组配额"
+                  aria-label="刷新模型与分组配额"
+                  :disabled="pending || googleAccountRefreshingMap[item.provider.id]"
+                  @click.stop="refreshGoogleAccount(item.provider)"
+                >
+                  <RefreshCw :size="16" />
+                </button>
+                <button
                   v-if="
                     activeCli === 'codex' && item.provider.enabled !== false
                   "
@@ -794,7 +874,10 @@
                   <SquareTerminal :size="16" />
                 </button>
                 <button
-                  v-if="item.provider.enabled !== false"
+                  v-if="
+                    item.provider.enabled !== false &&
+                    item.provider.type !== 'google-account'
+                  "
                   class="providers-view__icon-button"
                   type="button"
                   title="管理 API Key"
@@ -1576,7 +1659,7 @@
     <BaseModal
       v-if="showCodexCreateOptions"
       title="新增供应商"
-      description="选择官方账号登录，或者继续使用兼容供应商配置。"
+      description="选择 Codex 官方账号、Google 账号，或使用 API Key 配置供应商。"
       @close="showCodexCreateOptions = false"
     >
       <section class="providers-view__create-options">
@@ -1597,6 +1680,21 @@
         <button
           class="providers-view__create-option"
           type="button"
+          @click="openGoogleAccount()"
+        >
+          <div class="option-logo">
+            <AiIcon
+              style="width: 28px; height: 28px"
+              name="google"
+              alt="Google"
+            />
+            <span data-emphasis>Google 账号登录</span>
+          </div>
+          <span>授权后获取模型和额度，启用时自动开启本地转发。</span>
+        </button>
+        <button
+          class="providers-view__create-option"
+          type="button"
           @click="startProviderCreate"
         >
           <div class="option-logo">
@@ -1607,6 +1705,13 @@
         </button>
       </section>
     </BaseModal>
+
+    <GoogleAccountModal
+      v-if="showGoogleAccountModal"
+      :provider="googleProvider"
+      @created="googleProviderId = $event"
+      @close="showGoogleAccountModal = false"
+    />
 
     <BaseModal
       v-if="showCodexLoginModal"
@@ -2574,7 +2679,9 @@ import ProviderApiKeyInput from "./components/ProviderApiKeyInput.vue"
 import ProviderDeleteConfirmModal from "./components/ProviderDeleteConfirmModal.vue"
 import TokenCount from "@/components/TokenCount.vue"
 import CodexProxyPanel from "@/features/providers/components/CodexProxyPanel.vue"
+import GoogleAccountModal from "@/features/providers/components/GoogleAccountModal.vue"
 import { accountApi, runtimeApi, systemApi, usageApi } from "@/api"
+import { googleAccountApi } from "@/api/modules/accounts"
 import { claudeDesktopApi, providerApi } from "@/api/modules/providers"
 import { formatTokenCount } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
@@ -2739,6 +2846,15 @@ const activeCli = ref("")
 const viewMode = ref("list")
 const showIconPicker = ref(false)
 const showCodexCreateOptions = ref(false)
+// Google 账号使用独立授权弹窗，继续复用服务商列表和启用流程。
+const showGoogleAccountModal = ref(false)
+const googleProviderId = ref("")
+const googleProvider = computed(
+  () =>
+    props.providers.find(
+      (provider) => provider.id === googleProviderId.value
+    ) || null
+)
 const showProviderCreateModal = ref(false)
 const showApiKeyManager = ref(false)
 const showCodexLoginModal = ref(false)
@@ -2760,6 +2876,7 @@ const codexProxyDraft = ref("")
 const codexAuthUpdateAccountId = ref("")
 const codexAccountProxyDrafts = reactive({})
 const codexAccountRefreshingMap = reactive({})
+const googleAccountRefreshingMap = reactive({})
 const editingCodexAccountId = ref("")
 const editingCodexProxy = ref("")
 const codexAccountDetail = ref(null)
@@ -2870,6 +2987,28 @@ const activeDraftApiKey = computed(() => {
 const scopedProviders = computed(() => {
   return props.providers.filter((item) => item.cli === activeCli.value)
 })
+
+// 分组额度直接使用 Google 返回的窗口，复用列表已有的卡片、颜色和倒计时。
+const googleQuotaGroupsMap = computed(() => Object.fromEntries(
+  scopedProviders.value.filter(provider => provider.type === "google-account").map(provider => [
+    provider.id,
+    (provider.google?.quotaGroups || []).map(group => ({
+      name: group.displayName || "共享额度",
+      windows: (group.buckets || []).map(bucket => {
+        const window = String(bucket.window || "").replace(/^WINDOW_/i, "").toLowerCase()
+        const seconds = { "5h": 18000, "weekly": 604800 }[window]
+        const remainingPercent = bucket.remainingFraction == null ? null : Math.round(Math.max(0, Math.min(1, bucket.remainingFraction)) * 1000) / 10
+        return {
+          name: seconds ? formatRateWindowName(seconds) : bucket.displayName || bucket.window || "额度",
+          order: seconds || Number.MAX_SAFE_INTEGER,
+          remainingPercent,
+          resetAt: Date.parse(bucket.resetTime) || 0,
+          levelClass: remainingPercent == null ? "providers-google-quota-unknown" : quotaLevelClass({ used_percent: 100 - remainingPercent })
+        }
+      }).sort((left, right) => left.order - right.order)
+    })).filter(group => group.windows.length)
+  ])
+))
 
 // 统计当前 CLI 下可按需展示的禁用项。
 const disabledItemCount = computed(() => {
@@ -3268,7 +3407,32 @@ function selectCli(cli) {
   }
 }
 
+function openGoogleAccount(provider = null) {
+  showCodexCreateOptions.value = false
+  googleProviderId.value = provider?.id || ""
+  showGoogleAccountModal.value = true
+}
+
+// 刷新接口会推送应用状态，使列表和已打开的账号弹窗同步更新。
+async function refreshGoogleAccount(provider) {
+  if (provider.enabled === false || googleAccountRefreshingMap[provider.id]) return
+  googleAccountRefreshingMap[provider.id] = true
+  try {
+    const result = await googleAccountApi.refresh(provider.id)
+    if (result.google?.quotaWarning) createMessage.error(result.google.quotaWarning)
+    else createMessage.success("Google 模型与分组配额已刷新。")
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  } finally {
+    googleAccountRefreshingMap[provider.id] = false
+  }
+}
+
 function editProvider(provider) {
+  if (provider.type === "google-account") {
+    openGoogleAccount(provider)
+    return
+  }
   closeCodexAccountDetail()
   closeProviderDetail()
   draft.id = provider.id
@@ -3469,6 +3633,10 @@ function closeCodexAccountDetail() {
 }
 
 function openProviderDetail(provider) {
+  if (provider.type === "google-account") {
+    openGoogleAccount(provider)
+    return
+  }
   closeCodexAccountDetail()
   providerDetail.value = provider
   providerDetailTab.value = "config"
@@ -3653,6 +3821,8 @@ function rateLimitWindows(rateLimit) {
 }
 
 function formatPlanName(value) {
+  const googlePlans = { "g1-pro-tier": "Google AI Pro", "g1-ultra-tier": "Google AI Ultra", "free-tier": "免费版", "FREE": "免费版" }
+  if (googlePlans[value]) return googlePlans[value]
   if (value === "pro") {
     return "Pro"
   }
@@ -5314,6 +5484,43 @@ watch(
     flex-direction: row;
     gap: 12px;
     min-width: 0;
+  }
+
+  .providers-google-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+
+    .providers-google-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+
+      .providers-google-group-name {
+        color: var(--color-text-muted);
+        font-size: var(--font-size-sm);
+      }
+
+      .providers-view__quota-list {
+        .providers-view__account-quota {
+          .providers-view__quota-name,
+          .providers-view__quota-reset {
+            color: var(--color-text-muted);
+            font-size: var(--font-size-sm);
+          }
+
+          .providers-view__quota-value {
+            color: var(--quota-color);
+          }
+
+          &.providers-google-quota-unknown {
+            --quota-color: var(--color-text-soft);
+            --quota-bg: var(--color-panel-soft);
+            --quota-icon-bg: var(--color-panel);
+          }
+        }
+      }
+    }
   }
 
   &__account-quota {

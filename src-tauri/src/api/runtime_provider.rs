@@ -1,4 +1,4 @@
-use crate::api::{codex_account, proxy};
+use crate::api::{codex_account, google_gateway, proxy};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use crate::core::provider_store;
@@ -38,7 +38,14 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
         ));
     }
 
-    let provider = normalize_provider(&payload, previous.as_ref())?;
+    // Google 授权、转发地址和本地密钥由专用流程维护，通用操作只允许禁用或恢复。
+    let provider = if let Some(previous) = previous.as_ref().filter(|item| item["type"] == "google-account") {
+        let mut provider = previous.clone();
+        if let Some(enabled) = payload["enabled"].as_bool() { provider["enabled"] = json!(enabled); }
+        provider
+    } else {
+        normalize_provider(&payload, previous.as_ref())?
+    };
     let provider_id = string_value(provider.get("id"));
 
     if previous.is_some() {
@@ -79,7 +86,9 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
         });
     }
 
-    if let Some(api_keys) = payload.get("apiKeys").and_then(Value::as_array) {
+    if provider["type"] == "google-account" {
+        if provider["enabled"] == false { google_gateway::stop(paths, &provider_id).await; }
+    } else if let Some(api_keys) = payload.get("apiKeys").and_then(Value::as_array) {
         set_provider_keys(
             &mut keys,
             &provider_id,
@@ -155,6 +164,11 @@ pub async fn delete_provider(paths: &AppPaths, payload: Value) -> Result<(), Man
         item.get("providerId").and_then(Value::as_str) != Some(provider_id.as_str())
     });
     keys.remove(&provider_id);
+    keys.remove(&format!("google-oauth:{provider_id}"));
+    google_gateway::stop(paths, &provider_id).await;
+    if provider.as_ref().is_some_and(|provider| provider["type"] == "google-account") {
+        crate::api::google_session::clear(paths, &provider_id)?;
+    }
 
     provider_store::write_provider_bundle(paths, &providers, &models, &profiles, &keys)
 }
@@ -252,6 +266,8 @@ pub async fn switch_runtime(
         ));
     }
 
+    // 启用前先确认本地监听成功，端口占用时不改变当前 Runtime。
+    google_gateway::ensure_started(paths, &provider).await?;
     let previous = profiles
         .iter()
         .find(|item| item.get("cli").and_then(Value::as_str) == Some(cli.as_str()))
@@ -1394,6 +1410,7 @@ pub(crate) async fn write_cli_config(
 ) -> Result<(), ManagerError> {
     let profile = find_runtime_profile(paths, cli)?;
     let provider = find_provider(paths, &string_value(profile.get("providerId")))?;
+    google_gateway::ensure_started(paths, &provider).await?;
     let config_path = string_value(cli_target.get("configPath"));
 
     if config_path.is_empty() {
@@ -1827,6 +1844,9 @@ pub(crate) fn get_provider_api_key_with_id(
 pub fn read_provider_key_value(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
     let provider_id = string_value(payload.get("providerId"));
     let key_id = string_value(payload.get("keyId"));
+    if provider_id.starts_with("google-oauth:") {
+        return Err(ManagerError::System("Google OAuth 凭据不提供给前端".into()));
+    }
     if provider_id.trim().is_empty() || key_id.trim().is_empty() {
         return Err(ManagerError::System("缺少供应商或 API Key ID".to_string()));
     }
@@ -2789,7 +2809,7 @@ fn mask_provider_key(value: &str) -> String {
     )
 }
 
-fn encrypt_provider_key(value: &str) -> Result<String, ManagerError> {
+pub(crate) fn encrypt_provider_key(value: &str) -> Result<String, ManagerError> {
     let mut iv = [0u8; 12];
     getrandom::getrandom(&mut iv).map_err(|error| ManagerError::System(error.to_string()))?;
     let secret = runtime_secret();

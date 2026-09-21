@@ -1,5 +1,5 @@
 use crate::api::{
-    app, app_logs, claude_desktop, codex_account, data, git_tool, image_workbench, lan_share, proxy, repos, rules,
+    app, app_logs, claude_desktop, codex_account, data, git_tool, google_account, image_workbench, lan_share, proxy, repos, rules,
     runtime_provider, sessions, settings, skills, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
@@ -23,6 +23,7 @@ pub struct ManagerState {
     quick_switch_collapsed: bool,
     data_backup_cache: data::DataBackupCache,
     codex_login_cache: codex_account::CodexLoginCache,
+    google_login: google_account::GoogleLogin,
     proxy_server_registry: proxy::ProxyServerRegistry,
     desktop_manager: claude_desktop::DesktopManager,
     lan_share_registry: lan_share::LanShareServerRegistry,
@@ -50,6 +51,16 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        // Google 额度刷新释放应用锁，外部接口较慢时不阻塞其他页面。
+        if channel == "google-account:refresh" {
+            let paths = self.manager.lock().await.paths.clone();
+            let payload = payload.unwrap_or_else(|| json!({}));
+            let result = google_account::refresh(&paths, payload["providerId"].as_str().unwrap_or("")).await;
+            let mut manager = self.manager.lock().await;
+            manager.refresh_state().await?;
+            manager.emit_state_changed(&app)?;
+            return result;
+        }
         // 大型 JSON 词库展开和搜索在阻塞线程执行，不占用应用状态锁。
         if channel.starts_with("tools:image-prompts-") {
             let manager = self.manager.lock().await;
@@ -170,6 +181,7 @@ impl AppState {
     pub async fn start_enabled_proxy_servers(&self) -> Result<(), ManagerError> {
         let manager = self.manager.lock().await;
 
+        let google_result = google_account::start_enabled(&manager.paths).await;
         let desktop_result = manager.desktop_manager.start_enabled(&manager.paths).await;
 
         proxy::start_enabled_servers(
@@ -178,7 +190,8 @@ impl AppState {
             &manager.state["cliTargets"],
         )
         .await?;
-        desktop_result
+        desktop_result?;
+        google_result
     }
 
     pub async fn state_snapshot(&self) -> Value {
@@ -230,6 +243,7 @@ impl ManagerState {
             quick_switch_collapsed: false,
             data_backup_cache: data::DataBackupCache::new(),
             codex_login_cache: codex_account::CodexLoginCache::new(),
+            google_login: google_account::GoogleLogin::default(),
             proxy_server_registry: proxy::ProxyServerRegistry::new(),
             desktop_manager: claude_desktop::DesktopManager::new(),
             lan_share_registry: lan_share::LanShareServerRegistry::new(),
@@ -286,6 +300,24 @@ impl ManagerState {
             self.preserve_pending_usage_provider_bindings().await?;
         }
 
+        if let Some(action) = channel.strip_prefix("google-account:") {
+            let payload = payload.unwrap_or_else(|| json!({}));
+            let mut result = match action {
+                "login" => self.google_login.start(&app, &self.paths, payload).await?,
+                "cancel" => self.google_login.cancel().await,
+                "state" => self.google_login.state().await,
+                "save" => google_account::save_settings(&self.paths, &self.state["cliTargets"], &payload).await?,
+                _ => return Err(ManagerError::UnknownChannel(channel.into())),
+            };
+            if result["status"] == "success" {
+                result["provider"] = google_account::find_account(&self.paths, result["providerId"].as_str().unwrap_or(""))?;
+            }
+            if result["status"] == "success" || action == "save" {
+                self.refresh_state().await?;
+                self.emit_state_changed(&app)?;
+            }
+            return Ok(result);
+        }
         match channel {
             "app:bootstrap" | "app:refresh" => {
                 self.refresh_state().await?;

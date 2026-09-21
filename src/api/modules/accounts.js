@@ -1,5 +1,14 @@
 import { request } from '../request'
 
+// Google 登录与额度只通过后端操作，前端不接触 OAuth Token。
+export const googleAccountApi = {
+  login: payload => request('google-account:login', payload),
+  cancel: () => request('google-account:cancel'),
+  state: () => request('google-account:state'),
+  refresh: providerId => request('google-account:refresh', { providerId }),
+  save: payload => request('google-account:save', payload)
+}
+
 export const accountApi = {
   startCodexOfficialLogin: payload => request('codex-account:login', payload),
   cancelCodexOfficialLogin: () => request('codex-account:cancel'),

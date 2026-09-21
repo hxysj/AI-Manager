@@ -2733,6 +2733,9 @@ fn backup_secret() -> [u8; 32] {
 
 fn export_provider_keys(paths: &AppPaths) -> Result<Value, ManagerError> {
     let mut providers = provider_store::read_providers(paths)?;
+    let google_credentials: Vec<_> = providers.iter().filter(|provider| provider["type"] == "google-account")
+        .map(|provider| json!({"id": format!("google-oauth:{}", string_value(provider.get("id")))})).collect();
+    providers.extend(google_credentials);
     providers.extend(provider_store::read_desktop_providers(paths)?.iter().map(
         |provider| json!({"id": format!("claude-desktop:{}", string_value(provider.get("id")))}),
     ));
@@ -2864,6 +2867,8 @@ async fn merge_provider_keys(
         .iter()
         .map(|provider| string_value(provider.get("id")))
         .collect::<HashSet<_>>();
+    provider_ids.extend(provider_store::read_providers(paths)?.iter().filter(|provider| provider["type"] == "google-account")
+        .map(|provider| format!("google-oauth:{}", string_value(provider.get("id")))));
     provider_ids.extend(
         provider_store::read_desktop_providers(paths)?
             .iter()
@@ -3613,6 +3618,26 @@ fn is_database_backup_path(entry_path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn google_oauth_credentials_round_trip_through_encrypted_backup_fields() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let root = std::env::temp_dir().join(format!("google-backup-test-{}", uuid::Uuid::new_v4()));
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let mut keys = serde_json::Map::new();
+            crate::api::runtime_provider::set_provider_key(&mut keys, "google-test", "local-key".into()).unwrap();
+            crate::api::runtime_provider::set_provider_key(&mut keys, "google-oauth:google-test", "private-token-json".into()).unwrap();
+            crate::core::provider_store::write_provider_bundle(&paths, &[serde_json::json!({"id": "google-test", "type": "google-account"})], &[], &[], &keys).unwrap();
+            let exported = super::export_provider_keys(&paths).unwrap();
+            assert_eq!(exported["google-oauth:google-test"]["apiKeys"][0]["apiKey"], "private-token-json");
+            let encrypted = super::encrypt_backup_data(&exported).unwrap();
+            let restored = super::decrypt_backup_data(&encrypted).unwrap();
+            crate::core::provider_store::write_keys(&paths, &serde_json::Map::new()).unwrap();
+            super::merge_provider_keys(&paths, &restored, &serde_json::Map::new()).await.unwrap();
+            assert_eq!(crate::api::runtime_provider::get_provider_api_key(&paths, "google-oauth:google-test").unwrap(), "private-token-json");
+            std::fs::remove_dir_all(root).unwrap();
+        });
+    }
+
     use super::{
         append_app_settings_restore_preview, collect_backup_entries, collect_codex_pet_entries,
         create_backup_entry_view, decrypt_backup_payload, encrypt_backup_payload,
