@@ -181,6 +181,55 @@
           </span>
           <p v-if="quotaError" class="field-error">{{ quotaError }}</p>
         </section>
+        <div class="model-select-section">
+          <div class="model-select-head">
+            <span class="field-label"
+              >生成模型 <span class="field-key">model</span></span
+            >
+            <button
+              class="model-refresh"
+              type="button"
+              :disabled="loadingModels || !form.accountId"
+              title="刷新可用模型列表"
+              @click="loadModels"
+            >
+              <RefreshCw :size="12" :class="{ spinning: loadingModels }" />
+              <span>{{ loadingModels ? "获取中…" : "刷新模型" }}</span>
+            </button>
+          </div>
+          <input
+            v-model.trim="form.model"
+            class="field-input model-input"
+            placeholder="输入或从下方点击选择模型"
+            maxlength="128"
+            required
+          />
+          <div
+            class="model-picker-list"
+            role="listbox"
+            aria-label="可用模型列表"
+          >
+            <button
+              v-for="model in imageModels"
+              :key="model.id"
+              type="button"
+              class="model-picker-item"
+              :class="{ active: form.model === model.id }"
+              :title="model.id"
+              @click="form.model = model.id"
+            >
+              <span class="model-picker-dot"></span>
+              <span class="model-picker-name">{{ model.id }}</span>
+            </button>
+            <span
+              v-if="!imageModels.length && !loadingModels"
+              class="model-empty-hint"
+            >
+              暂无模型列表，可手动输入模型标识
+            </span>
+          </div>
+          <p v-if="modelsError" class="field-error">{{ modelsError }}</p>
+        </div>
         <label class="form-field prompt-field">
           <span class="field-label"
             >提示词 <span class="field-key">prompt</span></span
@@ -202,11 +251,23 @@
         <div class="composer-tools">
           <button
             class="composer-button"
+            :class="{ 'has-error': hasSettingsError }"
             type="button"
-            @click="settingsOpen = !settingsOpen"
+            title="配置生成尺寸、画质、张数与输出格式"
+            @click="settingsOpen = true"
           >
-            {{ width }} × {{ height }} · {{ form.quality }} · {{ form.n }} 张
-            <span>{{ settingsOpen ? "收起设置" : "图像设置" }}</span>
+            <SlidersHorizontal :size="14" />
+            <span class="composer-summary"
+              >{{ width }} × {{ height }} · {{ formatQuality(form.quality) }} ·
+              {{ form.n }} 张</span
+            >
+            <span class="composer-label">图像设置</span>
+            <span
+              v-if="hasSettingsError"
+              class="error-badge"
+              title="图像设置存在错误"
+              >!</span
+            >
           </button>
           <button
             class="composer-button"
@@ -216,144 +277,20 @@
             <Paintbrush :size="14" />草图
           </button>
         </div>
-        <section v-if="settingsOpen" class="image-settings">
-          <div class="parameter-fields">
-            <label class="form-field model-field">
-              <span class="field-label"
-                >模型<button
-                  class="model-refresh"
-                  type="button"
-                  :disabled="loadingModels"
-                  @click="loadModels"
-                >
-                  {{ loadingModels ? "获取中…" : "刷新模型" }}
-                </button></span
-              >
-              <input
-                v-model.trim="form.model"
-                class="field-input"
-                list="image-workbench-models"
-                maxlength="128"
-                required
-              />
-              <datalist id="image-workbench-models">
-                <option
-                  v-for="model in imageModels"
-                  :key="model.id"
-                  :value="model.id"
-                />
-              </datalist>
-            </label>
-            <label class="form-field"
-              ><span class="field-label">质量</span
-              ><select v-model="form.quality" class="field-input">
-                <option
-                  v-for="option in qualityOptions"
-                  :key="option.value"
-                  :value="option.value"
-                >
-                  {{ option.label }}
-                </option>
-              </select></label
-            >
-            <label class="form-field"
-              ><span class="field-label">宽度 W</span
-              ><input
-                v-model.number="width"
-                class="field-input"
-                type="number"
-                min="1"
-                step="1"
-                required
-            /></label>
-            <label class="form-field"
-              ><span class="field-label">高度 H</span
-              ><input
-                v-model.number="height"
-                class="field-input"
-                type="number"
-                min="1"
-                step="1"
-                required
-            /></label>
-          </div>
-          <div class="preset-list">
-            <button
-              v-for="preset in sizePresets"
-              :key="preset.label"
-              class="preset-button"
-              :class="{
-                active: ratio === preset.ratio && tier === preset.tier
-              }"
-              type="button"
-              :disabled="
-                preset.tier !== '1k' &&
-                preset.tier !== 'auto' &&
-                !form.model.includes('codex')
-              "
-              :title="
-                preset.tier !== '1k' && preset.tier !== 'auto'
-                  ? '仅名称包含 codex 的模型可用'
-                  : `${preset.width} × ${preset.height}`
-              "
-              @click="applySizePreset(preset)"
-            >
-              {{ preset.label }}
-            </button>
-          </div>
-          <label class="form-field"
-            ><span class="field-label">生成数量（每张一个任务）</span
-            ><input
-              v-model.number="form.n"
-              class="field-input"
-              type="number"
-              min="1"
-              max="100"
-              step="1"
-              required
-          /></label>
-          <div class="preset-list">
-            <button
-              v-for="count in 10"
-              :key="count"
-              class="preset-button"
-              :class="{ active: form.n === count }"
-              type="button"
-              @click="form.n = count"
-            >
-              {{ count }} 张
-            </button>
-          </div>
-          <details class="advanced-settings">
-            <summary>输出选项</summary>
-            <div class="parameter-fields">
-              <label v-for="field in fields" :key="field.key" class="form-field"
-                ><span class="field-label">{{ field.label }}</span
-                ><select v-model="form[field.key]" class="field-input">
-                  <option
-                    v-for="option in field.options"
-                    :key="option.value"
-                    :value="option.value"
-                  >
-                    {{ option.label }}
-                  </option>
-                </select></label
-              >
-            </div>
-          </details>
-        </section>
-        <p v-if="width * height > 40000000" class="field-error">
-          尺寸总像素不能超过 4000 万，请调整宽度和高度。
-        </p>
-        <p v-if="modelsError" class="field-error">{{ modelsError }}</p>
-        <p
-          v-if="
-            form.background === 'transparent' && form.outputFormat === 'jpeg'
-          "
-          class="field-error"
+        <div
+          v-if="hasSettingsError && !settingsOpen"
+          class="settings-alert-banner"
         >
-          透明背景需要选择 PNG 或 WebP。
-        </p>
+          <AlertCircle :size="14" class="alert-icon" />
+          <span class="alert-msg">{{ settingsErrorMessage }}</span>
+          <button
+            type="button"
+            class="text-button inline-fix-btn"
+            @click="settingsOpen = true"
+          >
+            修改设置
+          </button>
+        </div>
         <section class="reference-section">
           <div class="reference-head">
             <span>参考图</span
@@ -603,7 +540,9 @@
                     class="round-btn round-copy-btn"
                     type="button"
                     :title="
-                      copiedRoundId === round.id ? '已复制到剪切板' : '复制提示词'
+                      copiedRoundId === round.id
+                        ? '已复制到剪切板'
+                        : '复制提示词'
                     "
                     @click="copyPrompt(round.tasks[0].request.prompt, round.id)"
                   >
@@ -721,7 +660,9 @@
                     />
                     <Clock v-else-if="task.status === 'queued'" :size="12" />
                     <AlertCircle
-                      v-else-if="['failed', 'interrupted'].includes(task.status)"
+                      v-else-if="
+                        ['failed', 'interrupted'].includes(task.status)
+                      "
                       :size="12"
                     />
                     <span v-else class="status-indicator-dot"></span>
@@ -825,9 +766,7 @@
                       <LoaderCircle class="spinning" :size="32" />
                     </div>
                     <span class="placeholder-title">{{
-                      task.status === "queued"
-                        ? "排队中…"
-                        : "AI 正在绘制画面…"
+                      task.status === "queued" ? "排队中…" : "AI 正在绘制画面…"
                     }}</span>
                     <span class="placeholder-hint">{{
                       autoRefresh
@@ -990,19 +929,19 @@
     />
     <BaseModal
       v-if="detail"
-      :class="{ 'image-detail-modal': detailView === 'images' }"
+      :class="{
+        'image-detail-modal': detailView === 'images',
+        'params-detail-modal': detailView === 'parameters'
+      }"
       :title="detailView === 'parameters' ? '任务参数' : '生成图片'"
       :description="`${detail.accountName} · ${formatDateTime(detail.createdAt)} · ${statusLabels[detail.status]}`"
       @close="detail = null"
     >
-      <section class="detail-content">
-        <p v-if="detailView === 'parameters'" class="detail-prompt">
-          {{ detail.request.prompt }}
-        </p>
+      <section v-if="detailView === 'images'" class="detail-content">
         <p v-if="detail.error?.message" class="detail-error">
           {{ detail.error.message }}
         </p>
-        <div v-if="detailView === 'images'" class="detail-images">
+        <div class="detail-images">
           <figure
             v-for="(item, index) in detail.data"
             :key="index"
@@ -1077,54 +1016,455 @@
             </figcaption>
           </figure>
         </div>
-        <div v-if="detailView === 'parameters'" class="detail-meta">
-          <span
-            >调用模式：{{
-              detail.request.generationMode === "web" ? "Web" : "Codex"
-            }}</span
-          >
-          <span>模型：{{ detail.request.model }}</span
-          ><span>质量：{{ detail.request.quality }}</span
-          ><span>请求尺寸：{{ detail.request.size }}</span>
-          <span
-            >任务类型：{{
-              detail.request.mode === "edit" ? "图片编辑" : "文生图"
-            }}</span
-          >
-          <span>请求数量：{{ detail.request.n }} 张</span>
-          <span>图片格式：{{ detail.request.outputFormat }}</span>
-          <span>响应格式：{{ detail.request.responseFormat }}</span>
-          <span>蒙版：{{ detail.hasMask ? "有" : "无" }}</span>
-          <span>背景：{{ detail.request.background || "默认" }}</span
-          ><span>实际图片：{{ detail.imageCount }} 张</span
-          ><span>参考图：{{ detail.inputCount }} 张</span>
-        </div>
-        <details v-if="detailView === 'parameters'" class="technical-detail">
-          <summary>请求与用量记录</summary>
-          <pre class="usage-content">{{
-            JSON.stringify(
-              {
-                taskId: detail.id,
-                requestId: detail.requestId,
-                endpoint: detail.endpoint,
-                usage: detail.usage
-              },
-              null,
-              2
-            )
-          }}</pre>
-        </details>
-        <p
-          v-if="
-            detailView === 'parameters' &&
-            detail.request.responseFormat === 'url' &&
-            detail.imageCount
-          "
-          class="detail-hint"
-        >
-          图片保存在本地；URL 为预览用 data URL，不是可分享的公网链接。
-        </p>
       </section>
+
+      <div v-else class="params-modal-container">
+        <div class="params-modal-body">
+          <div
+            v-if="detail.error?.message"
+            class="params-error-alert"
+            role="alert"
+          >
+            <AlertCircle :size="16" class="alert-icon" />
+            <div class="alert-content">
+              <span class="alert-title">任务遇到异常</span>
+              <p class="alert-message">{{ detail.error.message }}</p>
+            </div>
+          </div>
+
+          <section class="params-card prompt-card">
+            <header class="card-header">
+              <div class="card-title">
+                <FileText :size="15" class="title-icon" />
+                <span>生成提示词</span>
+                <span v-if="detail.request.prompt" class="char-count-pill"
+                  >{{ detail.request.prompt.length }} 字符</span
+                >
+              </div>
+              <button
+                class="card-action-btn"
+                type="button"
+                :title="copiedPromptInModal ? '已复制' : '复制提示词'"
+                @click="copyPromptFromModal(detail.request.prompt)"
+              >
+                <Check
+                  v-if="copiedPromptInModal"
+                  :size="13"
+                  class="copy-success-icon"
+                />
+                <Copy v-else :size="13" />
+                <span>{{ copiedPromptInModal ? "已复制" : "复制提示词" }}</span>
+              </button>
+            </header>
+            <div class="prompt-display-box">
+              <p class="prompt-text">
+                {{ detail.request.prompt || "（无提示词）" }}
+              </p>
+            </div>
+          </section>
+
+          <section class="params-card specs-card">
+            <header class="card-header">
+              <div class="card-title">
+                <Cpu :size="15" class="title-icon" />
+                <span>配置与规格</span>
+              </div>
+            </header>
+            <div class="specs-grid">
+              <div class="spec-tile">
+                <span class="spec-label">模型</span>
+                <span
+                  class="spec-value mono-val"
+                  :title="detail.request.model"
+                  >{{ detail.request.model }}</span
+                >
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">调用模式</span>
+                <span class="spec-value">
+                  <span
+                    class="mode-tag"
+                    :class="
+                      detail.request.generationMode === 'web' ? 'web' : 'codex'
+                    "
+                  >
+                    {{
+                      detail.request.generationMode === "web" ? "Web" : "Codex"
+                    }}
+                  </span>
+                </span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">任务类型</span>
+                <span class="spec-value">{{
+                  detail.request.mode === "edit" ? "图片编辑" : "文生图"
+                }}</span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">尺寸与比例</span>
+                <span class="spec-value mono-val">
+                  {{ detail.request.size }}
+                  <span v-if="detail.request.ratio" class="sub-pill">{{
+                    detail.request.ratio
+                  }}</span>
+                </span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">画面质量</span>
+                <span class="spec-value">{{
+                  formatQuality(detail.request.quality)
+                }}</span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">任务状态</span>
+                <span class="spec-value status-val" :class="detail.status">{{
+                  statusLabels[detail.status] || detail.status
+                }}</span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">生成数量</span>
+                <span class="spec-value">
+                  请求 {{ detail.request.n }} 张 · 实际
+                  {{ detail.imageCount }} 张
+                </span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">格式 / 响应</span>
+                <span class="spec-value uppercase-val">
+                  {{ detail.request.outputFormat }}
+                  <span class="sub-pill">{{
+                    detail.request.responseFormat
+                  }}</span>
+                </span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">背景模式</span>
+                <span class="spec-value">{{
+                  detail.request.background || "默认"
+                }}</span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">参考图</span>
+                <span class="spec-value">{{
+                  detail.inputCount ? `${detail.inputCount} 张参考图` : "无"
+                }}</span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">重绘蒙版</span>
+                <span class="spec-value">
+                  <span
+                    class="mask-tag"
+                    :class="{ 'has-mask': detail.hasMask }"
+                  >
+                    {{ detail.hasMask ? "已应用蒙版" : "无" }}
+                  </span>
+                </span>
+              </div>
+              <div class="spec-tile">
+                <span class="spec-label">执行账号</span>
+                <span
+                  class="spec-value text-ellipsis"
+                  :title="detail.accountName"
+                  >{{ detail.accountName || "默认账号" }}</span
+                >
+              </div>
+            </div>
+          </section>
+
+          <section class="params-card technical-card">
+            <details class="tech-accordion">
+              <summary class="tech-summary">
+                <div class="tech-summary-left">
+                  <Terminal :size="15" class="title-icon" />
+                  <span>请求与用量记录</span>
+                  <ChevronDown :size="13" class="tech-chevron" />
+                  <span class="tech-summary-hint">点击展开底层追踪数据</span>
+                </div>
+                <button
+                  class="card-action-btn"
+                  type="button"
+                  :title="copiedTechnicalInModal ? '已复制' : '复制 JSON'"
+                  @click.stop="copyTechnicalJson"
+                >
+                  <Check
+                    v-if="copiedTechnicalInModal"
+                    :size="13"
+                    class="copy-success-icon"
+                  />
+                  <Copy v-else :size="13" />
+                  <span>{{
+                    copiedTechnicalInModal ? "已复制" : "复制 JSON"
+                  }}</span>
+                </button>
+              </summary>
+              <div class="tech-body">
+                <div class="tech-quick-ids">
+                  <div v-if="detail.id" class="quick-id-item">
+                    <span class="id-label">Task ID:</span>
+                    <span class="id-val mono-val">{{ detail.id }}</span>
+                  </div>
+                  <div v-if="detail.requestId" class="quick-id-item">
+                    <span class="id-label">Request ID:</span>
+                    <span class="id-val mono-val">{{ detail.requestId }}</span>
+                  </div>
+                  <div v-if="detail.endpoint" class="quick-id-item">
+                    <span class="id-label">Endpoint:</span>
+                    <span class="id-val mono-val">{{ detail.endpoint }}</span>
+                  </div>
+                </div>
+                <pre class="json-code-box"><code>{{
+                  JSON.stringify(
+                    {
+                      taskId: detail.id,
+                      requestId: detail.requestId,
+                      endpoint: detail.endpoint,
+                      usage: detail.usage
+                    },
+                    null,
+                    2
+                  )
+                }}</code></pre>
+              </div>
+            </details>
+          </section>
+
+          <div
+            v-if="detail.request.responseFormat === 'url' && detail.imageCount"
+            class="params-hint-banner"
+          >
+            <Info :size="14" class="hint-icon" />
+            <span
+              >图片保存在本地；URL 为预览用 data
+              URL，不是可分享的公网链接。</span
+            >
+          </div>
+        </div>
+
+        <footer class="params-modal-footer">
+          <div class="footer-left">
+            <button
+              class="action-button modal-footer-btn"
+              type="button"
+              :title="copiedAllParamsInModal ? '已复制' : '复制全部参数为 JSON'"
+              @click="copyAllParamsJson"
+            >
+              <Check
+                v-if="copiedAllParamsInModal"
+                :size="14"
+                class="copy-success-icon"
+              />
+              <Copy v-else :size="14" />
+              <span>{{
+                copiedAllParamsInModal ? "已复制全部" : "复制全部参数"
+              }}</span>
+            </button>
+          </div>
+          <div class="footer-right">
+            <button
+              class="action-button modal-footer-btn"
+              type="button"
+              @click="detail = null"
+            >
+              关闭
+            </button>
+            <button
+              class="action-button modal-footer-btn"
+              type="button"
+              title="将本任务提示词及规格参数填入左侧表单"
+              @click="handleReuseFromModal"
+            >
+              <SlidersHorizontal :size="14" />
+              <span>复用参数到表单</span>
+            </button>
+            <button
+              class="action-button modal-footer-btn primary-btn"
+              type="button"
+              :disabled="
+                submitting || ['queued', 'processing'].includes(detail.status)
+              "
+              title="以此任务参数重新发起生成"
+              @click="handleRegenerateFromModal"
+            >
+              <RefreshCw :size="14" :class="{ spinning: submitting }" />
+              <span>重新生成</span>
+            </button>
+          </div>
+        </footer>
+      </div>
+    </BaseModal>
+
+    <BaseModal
+      v-if="settingsOpen"
+      class="image-settings-modal"
+      title="图像设置"
+      :description="`${width} × ${height} · ${formatQuality(form.quality)} · ${form.n} 张`"
+      @close="settingsOpen = false"
+    >
+      <div class="image-settings-modal-body">
+        <section class="modal-settings-group">
+          <div class="group-head">
+            <span class="group-title">尺寸与画质</span>
+          </div>
+          <div class="settings-grid-3">
+            <label class="form-field">
+              <span class="field-label">画质等级</span>
+              <select v-model="form.quality" class="field-input">
+                <option
+                  v-for="option in qualityOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+            <label class="form-field">
+              <span class="field-label">宽度 (W, px)</span>
+              <input
+                v-model.number="width"
+                class="field-input"
+                type="number"
+                min="1"
+                step="1"
+                required
+              />
+            </label>
+            <label class="form-field">
+              <span class="field-label">高度 (H, px)</span>
+              <input
+                v-model.number="height"
+                class="field-input"
+                type="number"
+                min="1"
+                step="1"
+                required
+              />
+            </label>
+          </div>
+
+          <div class="preset-block">
+            <span class="preset-label">常用尺寸与比例预设</span>
+            <div class="preset-list">
+              <button
+                v-for="preset in sizePresets"
+                :key="preset.label"
+                class="preset-button"
+                :class="{
+                  active:
+                    width === preset.width &&
+                    height === preset.height &&
+                    ratio === preset.ratio &&
+                    tier === preset.tier
+                }"
+                type="button"
+                :disabled="
+                  preset.tier !== '1k' &&
+                  preset.tier !== 'auto' &&
+                  !form.model.includes('codex')
+                "
+                :title="
+                  preset.tier !== '1k' && preset.tier !== 'auto'
+                    ? '仅名称包含 codex 的模型可用'
+                    : `${preset.width} × ${preset.height}`
+                "
+                @click="applySizePreset(preset)"
+              >
+                {{ preset.label }}
+              </button>
+            </div>
+          </div>
+          <p v-if="width * height > 40000000" class="field-error">
+            尺寸总像素不能超过 4000 万（当前约为
+            {{ Math.round((width * height) / 10000) }}
+            万像素），请调整宽度和高度。
+          </p>
+        </section>
+
+        <section class="modal-settings-group">
+          <div class="group-head">
+            <span class="group-title">生成数量</span>
+            <span class="group-hint"
+              >单次提交每张图片将作为一条独立的生图任务</span
+            >
+          </div>
+          <div class="settings-grid-1">
+            <label class="form-field">
+              <span class="field-label">任务张数 (1 - 100)</span>
+              <input
+                v-model.number="form.n"
+                class="field-input"
+                type="number"
+                min="1"
+                max="100"
+                step="1"
+                required
+              />
+            </label>
+          </div>
+          <div class="preset-list">
+            <button
+              v-for="count in 10"
+              :key="count"
+              class="preset-button"
+              :class="{ active: form.n === count }"
+              type="button"
+              @click="form.n = count"
+            >
+              {{ count }} 张
+            </button>
+          </div>
+        </section>
+
+        <section class="modal-settings-group">
+          <div class="group-head">
+            <span class="group-title">输出选项</span>
+          </div>
+          <div class="settings-grid-3">
+            <label v-for="field in fields" :key="field.key" class="form-field">
+              <span class="field-label">{{ field.label }}</span>
+              <select v-model="form[field.key]" class="field-input">
+                <option
+                  v-for="option in field.options"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </option>
+              </select>
+            </label>
+          </div>
+          <p
+            v-if="
+              form.background === 'transparent' && form.outputFormat === 'jpeg'
+            "
+            class="field-error"
+          >
+            透明背景需要选择 PNG 或 WebP 格式。
+          </p>
+        </section>
+      </div>
+
+      <footer class="image-settings-modal-footer">
+        <div class="footer-left">
+          <button
+            class="action-button modal-footer-btn"
+            type="button"
+            title="恢复为默认画质、1024×1024 尺寸与 1 张生成"
+            @click="resetToDefaultSettings"
+          >
+            恢复默认
+          </button>
+        </div>
+        <div class="footer-right">
+          <button
+            class="action-button modal-footer-btn primary-btn"
+            type="button"
+            @click="settingsOpen = false"
+          >
+            完成
+          </button>
+        </div>
+      </footer>
     </BaseModal>
   </section>
 </template>
@@ -1162,7 +1502,10 @@ import {
   RotateCcw,
   Info,
   Clock,
-  AlertCircle
+  AlertCircle,
+  Cpu,
+  Terminal,
+  FileText
 } from "lucide-vue-next"
 import { ElImage, ElMessageBox } from "element-plus"
 import "element-plus/es/components/image/style/css"
@@ -1836,23 +2179,65 @@ const availableAccounts = computed(() =>
     (account) => !account.disabled && !account.requiresReauth
   )
 )
+const hasSettingsError = computed(
+  () =>
+    !Number.isInteger(width.value) ||
+    width.value < 1 ||
+    !Number.isInteger(height.value) ||
+    height.value < 1 ||
+    width.value * height.value > 40_000_000 ||
+    !Number.isInteger(form.n) ||
+    form.n < 1 ||
+    form.n > 100 ||
+    (form.background === "transparent" && form.outputFormat === "jpeg")
+)
+const settingsErrorMessage = computed(() => {
+  if (width.value * height.value > 40_000_000) {
+    return "尺寸总像素不能超过 4000 万，请调整宽度和高度。"
+  }
+  if (form.background === "transparent" && form.outputFormat === "jpeg") {
+    return "透明背景需要选择 PNG 或 WebP 格式。"
+  }
+  if (
+    !Number.isInteger(width.value) ||
+    width.value < 1 ||
+    !Number.isInteger(height.value) ||
+    height.value < 1
+  ) {
+    return "宽度与高度必须为正整数。"
+  }
+  if (!Number.isInteger(form.n) || form.n < 1 || form.n > 100) {
+    return "生成数量必须在 1 到 100 之间。"
+  }
+  return ""
+})
+
+function resetToDefaultSettings() {
+  form.quality = "auto"
+  width.value = 1024
+  height.value = 1024
+  ratio.value = "1:1"
+  tier.value = "1k"
+  form.n = 1
+  form.outputFormat = "png"
+  form.background = ""
+  form.responseFormat = "url"
+  createMessage.success("已恢复默认图像设置")
+}
+
 const canSubmit = computed(
   () =>
-    !submitting.value &&
-    !uploading.value &&
-    availableAccounts.value.some((account) => account.id === form.accountId) &&
-    form.prompt.trim() &&
-    form.model.trim() &&
-    Number.isInteger(form.n) &&
-    form.n >= 1 &&
-    form.n <= 100 &&
-    Number.isInteger(width.value) &&
-    width.value >= 1 &&
-    Number.isInteger(height.value) &&
-    height.value >= 1 &&
-    width.value * height.value <= 40_000_000 &&
-    (form.mode !== "edit" || references.value.length) &&
-    !(form.background === "transparent" && form.outputFormat === "jpeg")
+    Boolean(
+      !submitting.value &&
+        !uploading.value &&
+        availableAccounts.value.some(
+          (account) => account.id === form.accountId
+        ) &&
+        form.prompt.trim() &&
+        form.model.trim() &&
+        !hasSettingsError.value &&
+        (form.mode !== "edit" || references.value.length)
+    )
 )
 const selectableTasks = computed(() =>
   rounds.value
@@ -2128,6 +2513,105 @@ function referenceResult(item) {
   detail.value = null
 }
 
+function formatQuality(quality) {
+  const labels = {
+    auto: "自动 (Auto)",
+    low: "低 (Low)",
+    medium: "中 (Medium)",
+    high: "高 (High)",
+    xhigh: "超高 (X-High)",
+    max: "最高 (Max)"
+  }
+  return labels[quality] || quality || "默认"
+}
+
+const copiedPromptInModal = ref(false)
+let copiedPromptModalTimer = null
+async function copyPromptFromModal(promptText) {
+  if (!promptText) return
+  try {
+    await navigator.clipboard.writeText(promptText)
+    copiedPromptInModal.value = true
+    if (copiedPromptModalTimer) clearTimeout(copiedPromptModalTimer)
+    copiedPromptModalTimer = setTimeout(() => {
+      copiedPromptInModal.value = false
+    }, 1500)
+    createMessage.success("提示词已复制到剪切板")
+  } catch (err) {
+    createMessage.error("复制失败: " + (err?.message || String(err)))
+  }
+}
+
+const copiedTechnicalInModal = ref(false)
+let copiedTechnicalModalTimer = null
+async function copyTechnicalJson() {
+  if (!detail.value) return
+  try {
+    const payload = {
+      taskId: detail.value.id,
+      requestId: detail.value.requestId,
+      endpoint: detail.value.endpoint,
+      usage: detail.value.usage
+    }
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+    copiedTechnicalInModal.value = true
+    if (copiedTechnicalModalTimer) clearTimeout(copiedTechnicalModalTimer)
+    copiedTechnicalModalTimer = setTimeout(() => {
+      copiedTechnicalInModal.value = false
+    }, 1500)
+    createMessage.success("用量记录已复制为 JSON")
+  } catch (err) {
+    createMessage.error("复制失败: " + (err?.message || String(err)))
+  }
+}
+
+const copiedAllParamsInModal = ref(false)
+let copiedAllParamsModalTimer = null
+async function copyAllParamsJson() {
+  if (!detail.value) return
+  try {
+    const payload = {
+      id: detail.value.id,
+      status: detail.value.status,
+      createdAt: detail.value.createdAt,
+      accountName: detail.value.accountName,
+      request: detail.value.request,
+      imageCount: detail.value.imageCount,
+      inputCount: detail.value.inputCount,
+      hasMask: detail.value.hasMask,
+      error: detail.value.error,
+      usage: detail.value.usage
+    }
+    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+    copiedAllParamsInModal.value = true
+    if (copiedAllParamsModalTimer) clearTimeout(copiedAllParamsModalTimer)
+    copiedAllParamsModalTimer = setTimeout(() => {
+      copiedAllParamsInModal.value = false
+    }, 1500)
+    createMessage.success("全部任务参数已复制为 JSON")
+  } catch (err) {
+    createMessage.error("复制失败: " + (err?.message || String(err)))
+  }
+}
+
+function handleReuseFromModal() {
+  if (!detail.value) return
+  reuseTask(detail.value)
+  detail.value = null
+}
+
+async function handleRegenerateFromModal() {
+  if (
+    !detail.value ||
+    submitting.value ||
+    ["queued", "processing"].includes(detail.value.status)
+  )
+    return
+  const currentDetail = detail.value
+  detail.value = null
+  await regenerateTask(currentDetail)
+}
+
 async function downloadImage(index) {
   const taskId = detail.value.id
   exporting.value = true
@@ -2222,6 +2706,10 @@ onBeforeUnmount(() => {
   disposed = true
   requestVersion++
   window.clearInterval(timer)
+  if (copiedTimer) clearTimeout(copiedTimer)
+  if (copiedPromptModalTimer) clearTimeout(copiedPromptModalTimer)
+  if (copiedTechnicalModalTimer) clearTimeout(copiedTechnicalModalTimer)
+  if (copiedAllParamsModalTimer) clearTimeout(copiedAllParamsModalTimer)
   unsubscribe()
   unsubscribeError()
 })
@@ -2412,68 +2900,212 @@ onBeforeUnmount(() => {
           font-size: var(--font-size-sm);
         }
       }
+      .model-select-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        width: 100%;
+
+        .model-select-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+
+          .field-label {
+            display: flex;
+            align-items: baseline;
+            gap: 5px;
+            color: var(--color-text-muted);
+            font-size: var(--font-size-base);
+          }
+
+          .model-refresh {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 6px;
+            border: 0;
+            background: transparent;
+            color: var(--color-primary);
+            font-size: var(--font-size-sm);
+            cursor: pointer;
+            border-radius: 4px;
+            transition: opacity 0.15s;
+
+            &:hover:not(:disabled) {
+              opacity: 0.8;
+            }
+
+            &:disabled {
+              opacity: 0.5;
+              cursor: default;
+            }
+          }
+        }
+
+        .model-input {
+          width: 100%;
+          height: 38px;
+          padding: 8px 10px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          outline: none;
+          color: var(--color-text);
+          background: var(--color-panel-soft);
+          font-size: var(--font-size-base);
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+            monospace;
+          transition: border-color 0.15s;
+
+          &:focus {
+            border-color: var(--color-primary);
+          }
+        }
+
+        .model-picker-list {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          max-height: 132px;
+          overflow-y: auto;
+          padding: 2px 1px;
+
+          .model-picker-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 9px;
+            border: 1px solid var(--color-line);
+            border-radius: 5px;
+            background: var(--color-panel-soft);
+            color: var(--color-text-muted);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            user-select: none;
+
+            .model-picker-dot {
+              width: 6px;
+              height: 6px;
+              border-radius: 50%;
+              background: var(--color-text-soft);
+              transition: all 0.15s ease;
+            }
+
+            .model-picker-name {
+              max-width: 220px;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+
+            &:hover {
+              color: var(--color-text);
+              border-color: var(--color-line-strong);
+              background: var(--color-panel);
+            }
+
+            &.active {
+              border-color: var(--color-primary);
+              background: var(--color-primary-soft);
+              color: var(--color-primary);
+              font-weight: 500;
+
+              .model-picker-dot {
+                background: var(--color-primary);
+                box-shadow: 0 0 5px rgba(59, 130, 246, 0.5);
+              }
+            }
+          }
+
+          .model-empty-hint {
+            font-size: var(--font-size-sm);
+            color: var(--color-text-soft);
+            padding: 4px 0;
+          }
+        }
+      }
+
       .composer-tools {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
+
         .composer-button {
-          display: flex;
+          display: inline-flex;
           align-items: center;
-          gap: 8px;
-          padding: 7px 9px;
+          gap: 7px;
+          padding: 7px 11px;
           background: var(--color-panel-soft);
           color: var(--color-text);
           border: 1px solid var(--color-line);
           border-radius: 6px;
           cursor: pointer;
+          font-size: var(--font-size-sm);
+          transition: all 0.15s;
+
+          &:hover {
+            border-color: var(--color-line-strong);
+            background: var(--color-panel);
+          }
+
+          .composer-summary {
+            color: var(--color-text-muted);
+            font-size: 12px;
+          }
+
+          .composer-label {
+            font-weight: 500;
+            color: var(--color-primary);
+          }
+
+          .error-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--color-danger);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1;
+          }
+
+          &.has-error {
+            border-color: rgba(239, 68, 68, 0.5);
+            background: rgba(239, 68, 68, 0.06);
+          }
         }
       }
-      .image-settings {
+
+      .settings-alert-banner {
         display: flex;
-        flex-direction: column;
-        gap: 12px;
-        padding: 12px;
-        background: var(--color-panel-soft);
-        border: 1px solid var(--color-line);
-        border-radius: 7px;
-        .parameter-fields {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-          .form-field {
-            min-width: 0;
-            flex: 1 1 40%;
-            &.model-field {
-              flex-basis: 100%;
-            }
-          }
+        align-items: center;
+        gap: 7px;
+        padding: 8px 12px;
+        border-radius: 6px;
+        background: rgba(239, 68, 68, 0.08);
+        border: 1px solid rgba(239, 68, 68, 0.25);
+        color: var(--color-danger);
+        font-size: var(--font-size-sm);
+
+        .alert-icon {
+          flex-shrink: 0;
         }
-        .preset-list {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-          .preset-button {
-            padding: 5px 8px;
-            border: 1px solid var(--color-line);
-            border-radius: 5px;
-            background: var(--color-panel);
-            color: var(--color-text);
-            cursor: pointer;
-            &.active {
-              border-color: var(--color-primary);
-              color: var(--color-primary);
-            }
-            &:disabled {
-              opacity: 0.35;
-              cursor: not-allowed;
-            }
-          }
+
+        .alert-msg {
+          flex: 1;
+          min-width: 0;
+          overflow-wrap: anywhere;
         }
-        .advanced-settings {
-          color: var(--color-text-muted);
-          .parameter-fields {
-            margin-top: 10px;
-          }
+
+        .inline-fix-btn {
+          flex-shrink: 0;
+          text-decoration: underline;
+          font-weight: 500;
         }
       }
       .web-quota {
@@ -2937,7 +3569,9 @@ onBeforeUnmount(() => {
           background: var(--color-panel);
           padding: 14px 16px 16px;
           box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
-          transition: border-color 0.15s, box-shadow 0.15s;
+          transition:
+            border-color 0.15s,
+            box-shadow 0.15s;
 
           &:hover {
             border-color: var(--color-line-strong);
@@ -3126,7 +3760,10 @@ onBeforeUnmount(() => {
               border: 1px solid var(--color-line);
               border-radius: 9px;
               background: var(--color-panel);
-              transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.2s ease, border-color 0.2s ease;
+              transition:
+                transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1),
+                box-shadow 0.2s ease,
+                border-color 0.2s ease;
 
               &:hover {
                 transform: translateY(-2px);
@@ -3136,7 +3773,9 @@ onBeforeUnmount(() => {
 
               &.task-selected {
                 border-color: var(--color-primary);
-                box-shadow: 0 0 0 2px var(--color-primary-soft), 0 6px 18px rgba(0, 0, 0, 0.06);
+                box-shadow:
+                  0 0 0 2px var(--color-primary-soft),
+                  0 6px 18px rgba(0, 0, 0, 0.06);
               }
 
               &.task-has-error {
@@ -3235,7 +3874,10 @@ onBeforeUnmount(() => {
                 padding: 0;
                 border: 0;
                 background-color: var(--color-panel-soft);
-                background-image: radial-gradient(rgba(128, 128, 128, 0.08) 1px, transparent 1px);
+                background-image: radial-gradient(
+                  rgba(128, 128, 128, 0.08) 1px,
+                  transparent 1px
+                );
                 background-size: 16px 16px;
                 cursor: pointer;
                 overflow: hidden;
@@ -3273,7 +3915,12 @@ onBeforeUnmount(() => {
                   justify-content: space-between;
                   align-items: center;
                   padding: 12px;
-                  background: linear-gradient(180deg, rgba(0, 0, 0, 0.25) 0%, transparent 40%, rgba(0, 0, 0, 0.6) 100%);
+                  background: linear-gradient(
+                    180deg,
+                    rgba(0, 0, 0, 0.25) 0%,
+                    transparent 40%,
+                    rgba(0, 0, 0, 0.6) 100%
+                  );
                   opacity: 0;
                   transition: opacity 0.2s ease;
 
@@ -3292,7 +3939,9 @@ onBeforeUnmount(() => {
                     font-weight: 600;
                     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
                     cursor: pointer;
-                    transition: transform 0.15s, background 0.15s;
+                    transition:
+                      transform 0.15s,
+                      background 0.15s;
 
                     &:hover {
                       transform: scale(1.05);
@@ -3318,7 +3967,9 @@ onBeforeUnmount(() => {
                       backdrop-filter: blur(6px);
                       color: #fff;
                       cursor: pointer;
-                      transition: background 0.15s, transform 0.15s;
+                      transition:
+                        background 0.15s,
+                        transform 0.15s;
 
                       &:hover:not(:disabled) {
                         background: rgba(0, 0, 0, 0.85);
@@ -3589,13 +4240,194 @@ onBeforeUnmount(() => {
       width: min(1000px, calc(100vw - 48px));
     }
   }
+  .params-detail-modal {
+    :deep(.base-modal__panel) {
+      width: min(820px, calc(100vw - 36px));
+      max-height: min(88vh, 880px);
+    }
+    :deep(.base-modal__content) {
+      padding: 0;
+    }
+  }
+  .image-settings-modal {
+    :deep(.base-modal__panel) {
+      width: min(640px, calc(100vw - 32px));
+      max-height: min(86vh, 760px);
+    }
+
+    :deep(.base-modal__content) {
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .image-settings-modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 24px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+
+      .modal-settings-group {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 14px 16px;
+        border: 1px solid var(--color-line);
+        border-radius: 9px;
+        background: var(--color-panel-soft);
+
+        .group-head {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          gap: 10px;
+
+          .group-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--color-text);
+          }
+
+          .group-hint {
+            font-size: 11px;
+            color: var(--color-text-soft);
+          }
+        }
+
+        .settings-grid-3 {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 10px;
+
+          @media (max-width: 580px) {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        .settings-grid-1 {
+          display: flex;
+          flex-direction: column;
+          gap: 10px;
+        }
+
+        .form-field {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+
+          .field-label {
+            font-size: 12px;
+            color: var(--color-text-muted);
+          }
+
+          .field-input {
+            width: 100%;
+            height: 36px;
+            padding: 6px 10px;
+            border: 1px solid var(--color-line);
+            border-radius: 6px;
+            outline: none;
+            color: var(--color-text);
+            background: var(--color-panel);
+            font-size: 13px;
+
+            &:focus {
+              border-color: var(--color-primary);
+            }
+          }
+        }
+
+        .preset-block {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+
+          .preset-label {
+            font-size: 12px;
+            color: var(--color-text-muted);
+          }
+        }
+
+        .preset-list {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+
+          .preset-button {
+            padding: 5px 9px;
+            border: 1px solid var(--color-line);
+            border-radius: 5px;
+            background: var(--color-panel);
+            color: var(--color-text);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+
+            &:hover:not(:disabled) {
+              border-color: var(--color-line-strong);
+            }
+
+            &.active {
+              border-color: var(--color-primary);
+              background: var(--color-primary-soft);
+              color: var(--color-primary);
+              font-weight: 500;
+            }
+
+            &:disabled {
+              opacity: 0.35;
+              cursor: not-allowed;
+            }
+          }
+        }
+
+        .field-error {
+          margin: 0;
+          color: var(--color-danger);
+          font-size: 12px;
+          line-height: 1.5;
+        }
+      }
+    }
+
+    .image-settings-modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 24px;
+      border-top: 1px solid var(--color-line);
+      background: var(--color-panel);
+      flex-shrink: 0;
+
+      .footer-left,
+      .footer-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .modal-footer-btn {
+        height: 32px;
+        font-size: 13px;
+
+        &.primary-btn {
+          background: var(--color-primary-solid, var(--color-primary));
+          border-color: var(--color-primary-solid, var(--color-primary));
+          color: #fff;
+
+          &:hover:not(:disabled) {
+            opacity: 0.9;
+          }
+        }
+      }
+    }
+  }
   .detail-content {
     overflow: auto;
-    .detail-prompt {
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      line-height: 1.8;
-    }
     .detail-error {
       color: var(--color-danger);
     }
@@ -3664,26 +4496,448 @@ onBeforeUnmount(() => {
         }
       }
     }
-    .detail-meta {
+  }
+
+  .params-modal-container {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+
+    .params-modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 24px 20px;
       display: flex;
-      flex-wrap: wrap;
-      gap: 12px 22px;
-      padding: 16px 0;
-      color: var(--color-text-muted);
-    }
-    .technical-detail {
-      color: var(--color-text-muted);
-      .usage-content {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
-        padding: 12px;
+      flex-direction: column;
+      gap: 16px;
+
+      .params-error-alert {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        padding: 12px 14px;
+        border-radius: 8px;
+        background: rgba(239, 68, 68, 0.08);
+        border: 1px solid rgba(239, 68, 68, 0.25);
+        color: var(--color-danger);
+
+        .alert-icon {
+          flex-shrink: 0;
+          margin-top: 2px;
+        }
+
+        .alert-content {
+          flex: 1;
+          min-width: 0;
+
+          .alert-title {
+            display: block;
+            font-weight: 600;
+            font-size: var(--font-size-sm);
+            margin-bottom: 2px;
+          }
+
+          .alert-message {
+            margin: 0;
+            font-size: 13px;
+            line-height: 1.5;
+            overflow-wrap: anywhere;
+            color: var(--color-text);
+          }
+        }
+      }
+
+      .params-card {
+        border: 1px solid var(--color-line);
+        border-radius: 9px;
+        background: var(--color-panel-soft);
+        padding: 14px 16px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+
+        .card-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          margin-bottom: 12px;
+
+          .card-title {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--color-text);
+
+            .title-icon {
+              color: var(--color-primary);
+            }
+
+            .char-count-pill {
+              padding: 1px 7px;
+              border-radius: 10px;
+              background: var(--color-panel);
+              border: 1px solid var(--color-line);
+              font-size: 11px;
+              font-weight: 400;
+              color: var(--color-text-muted);
+            }
+          }
+
+          .card-action-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            height: 26px;
+            padding: 0 9px;
+            border: 1px solid var(--color-line);
+            border-radius: 5px;
+            background: var(--color-panel);
+            color: var(--color-text-muted);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+
+            &:hover {
+              color: var(--color-text);
+              border-color: var(--color-line-strong);
+            }
+
+            .copy-success-icon {
+              color: var(--color-success, #10b981);
+            }
+          }
+        }
+
+        &.prompt-card {
+          .prompt-display-box {
+            padding: 12px 14px;
+            background: var(--color-panel);
+            border: 1px solid var(--color-line);
+            border-radius: 7px;
+            max-height: 200px;
+            overflow-y: auto;
+
+            .prompt-text {
+              margin: 0;
+              font-size: 13px;
+              line-height: 1.7;
+              color: var(--color-text);
+              white-space: pre-wrap;
+              word-break: break-word;
+              user-select: text;
+            }
+          }
+        }
+
+        &.specs-card {
+          .specs-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+
+            @media (max-width: 680px) {
+              grid-template-columns: repeat(2, 1fr);
+            }
+
+            .spec-tile {
+              display: flex;
+              flex-direction: column;
+              gap: 5px;
+              padding: 10px 12px;
+              background: var(--color-panel);
+              border: 1px solid var(--color-line);
+              border-radius: 6px;
+              min-width: 0;
+
+              .spec-label {
+                font-size: 11px;
+                color: var(--color-text-muted);
+              }
+
+              .spec-value {
+                font-size: 13px;
+                font-weight: 500;
+                color: var(--color-text);
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+
+                &.mono-val {
+                  font-family:
+                    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                    monospace;
+                  font-size: 12px;
+                }
+
+                &.uppercase-val {
+                  text-transform: uppercase;
+                  font-size: 12px;
+                }
+
+                &.text-ellipsis {
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  white-space: nowrap;
+                }
+
+                .sub-pill {
+                  display: inline-block;
+                  margin-left: 4px;
+                  padding: 1px 5px;
+                  border-radius: 3px;
+                  background: var(--color-panel-soft);
+                  border: 1px solid var(--color-line);
+                  font-size: 10px;
+                  font-family: inherit;
+                  color: var(--color-text-muted);
+                  vertical-align: baseline;
+                }
+
+                .mode-tag {
+                  display: inline-block;
+                  padding: 1px 7px;
+                  border-radius: 4px;
+                  font-size: 11px;
+                  font-weight: 600;
+
+                  &.web {
+                    background: rgba(16, 185, 129, 0.1);
+                    color: var(--color-success, #10b981);
+                    border: 1px solid rgba(16, 185, 129, 0.25);
+                  }
+
+                  &.codex {
+                    background: rgba(59, 130, 246, 0.1);
+                    color: var(--color-primary, #3b82f6);
+                    border: 1px solid rgba(59, 130, 246, 0.25);
+                  }
+                }
+
+                .mask-tag {
+                  display: inline-block;
+                  padding: 1px 6px;
+                  border-radius: 4px;
+                  font-size: 11px;
+                  color: var(--color-text-muted);
+
+                  &.has-mask {
+                    background: rgba(139, 92, 246, 0.1);
+                    color: #8b5cf6;
+                    border: 1px solid rgba(139, 92, 246, 0.25);
+                    font-weight: 500;
+                  }
+                }
+
+                &.status-val {
+                  &.completed {
+                    color: var(--color-success, #10b981);
+                  }
+                  &.processing {
+                    color: var(--color-primary, #3b82f6);
+                  }
+                  &.failed {
+                    color: var(--color-danger, #ef4444);
+                  }
+                  &.partial,
+                  &.interrupted {
+                    color: var(--color-warning, #f59e0b);
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        &.technical-card {
+          padding: 0;
+          overflow: hidden;
+
+          .tech-accordion {
+            .tech-summary {
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              padding: 12px 16px;
+              cursor: pointer;
+              user-select: none;
+              font-size: 13px;
+              font-weight: 600;
+              color: var(--color-text);
+              outline: none;
+              list-style: none;
+
+              &::-webkit-details-marker {
+                display: none;
+              }
+
+              .tech-summary-left {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+
+                .title-icon {
+                  color: var(--color-primary);
+                }
+
+                .tech-chevron {
+                  color: var(--color-text-soft);
+                  transition: transform 0.2s ease;
+                }
+
+                .tech-summary-hint {
+                  font-size: 11px;
+                  font-weight: 400;
+                  color: var(--color-text-soft);
+                  margin-left: 4px;
+                }
+              }
+
+              .card-action-btn {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                height: 26px;
+                padding: 0 9px;
+                border: 1px solid var(--color-line);
+                border-radius: 5px;
+                background: var(--color-panel);
+                color: var(--color-text-muted);
+                font-size: 12px;
+                cursor: pointer;
+                transition: all 0.15s;
+
+                &:hover {
+                  color: var(--color-text);
+                  border-color: var(--color-line-strong);
+                }
+
+                .copy-success-icon {
+                  color: var(--color-success, #10b981);
+                }
+              }
+            }
+
+            &[open] {
+              .tech-chevron {
+                transform: rotate(180deg);
+              }
+            }
+
+            .tech-body {
+              padding: 0 16px 14px;
+              border-top: 1px solid var(--color-line);
+              display: flex;
+              flex-direction: column;
+              gap: 10px;
+
+              .tech-quick-ids {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 12px;
+                padding-top: 10px;
+
+                .quick-id-item {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 5px;
+                  font-size: 11px;
+
+                  .id-label {
+                    color: var(--color-text-muted);
+                  }
+
+                  .id-val {
+                    color: var(--color-text);
+                    font-family:
+                      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                      monospace;
+                  }
+                }
+              }
+
+              .json-code-box {
+                margin: 0;
+                padding: 12px;
+                border-radius: 6px;
+                background: var(--color-panel);
+                border: 1px solid var(--color-line);
+                font-family:
+                  ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                  monospace;
+                font-size: 12px;
+                line-height: 1.6;
+                color: var(--color-text);
+                white-space: pre-wrap;
+                word-break: break-all;
+                max-height: 220px;
+                overflow-y: auto;
+              }
+            }
+          }
+        }
+      }
+
+      .params-hint-banner {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
         border-radius: 6px;
         background: var(--color-panel-soft);
-        font-size: var(--font-size-sm);
+        border: 1px dashed var(--color-line-strong);
+        color: var(--color-text-soft);
+        font-size: 12px;
+
+        .hint-icon {
+          flex-shrink: 0;
+          color: var(--color-primary);
+        }
       }
     }
-    .detail-hint {
-      color: var(--color-text-soft);
+
+    .params-modal-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 24px;
+      border-top: 1px solid var(--color-line);
+      background: var(--color-panel);
+      flex-shrink: 0;
+
+      .footer-left,
+      .footer-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .modal-footer-btn {
+        height: 32px;
+        font-size: 13px;
+
+        &.primary-btn {
+          background: var(--color-primary-solid, var(--color-primary));
+          border-color: var(--color-primary-solid, var(--color-primary));
+          color: #fff;
+
+          &:hover:not(:disabled) {
+            opacity: 0.9;
+          }
+
+          &:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
+        }
+
+        .copy-success-icon {
+          color: var(--color-success, #10b981);
+        }
+      }
     }
   }
 }

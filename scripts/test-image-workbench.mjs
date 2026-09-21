@@ -56,7 +56,7 @@ try {
         if (args.kind === 'entry-point') return
         return { path: args.path, namespace: 'ui' }
       })
-      builder.onLoad({ filter: /.*/, namespace: 'ui' }, () => ({ contents: 'export default {}; export const ElImage = {}; export const ElMessageBox = {confirm: async () => {}, prompt: async () => ({value: globalThis.__imageTest.promptName})}; export const Download={}, BookOpen={}, ImageOff={}, ImagePlus={}, LoaderCircle={}, Paintbrush={}, Plus={}, RefreshCw={}, Sparkles={}, Trash2={}, X={}' }))
+      builder.onLoad({ filter: /.*/, namespace: 'ui' }, () => ({ contents: 'export default {}; export const ElImage = {}; export const ElMessageBox = {confirm: async () => {}, prompt: async () => ({value: globalThis.__imageTest.promptName})}; export const Download={}, BookOpen={}, ImageOff={}, ImagePlus={}, LoaderCircle={}, Paintbrush={}, Plus={}, RefreshCw={}, Sparkles={}, Trash2={}, X={}, Copy={}, Check={}, ChevronDown={}, ChevronUp={}, ChevronLeft={}, ChevronRight={}, SlidersHorizontal={}, Maximize2={}, RotateCcw={}, Info={}, Clock={}, AlertCircle={}, Cpu={}, Terminal={}, FileText={}' }))
       builder.onResolve({ filter: /^@\// }, args => ({ path: resolve('src', args.path.slice(2) + '.js') }))
       builder.onLoad({ filter: /ImageWorkbench\.vue$/ }, async args => ({ contents: compileScript(parse(await readFile(args.path, 'utf8')).descriptor, { id: 'workbench-test' }).content, resolveDir: resolve('src/features/tools/components') }))
     } }]
@@ -193,6 +193,39 @@ try {
   assert.equal(restored.form.n, 4)
   assert.equal(restored.pageSize, 100)
   assert.equal(restored.currentConversation.title, '新名称')
+  restored.form.prompt = '测试提示词'
+  // 校验图像设置弹框相关计算属性、重置与超限检测
+  assert.equal(restored.hasSettingsError, false)
+  restored.width = 9000
+  restored.height = 9000
+  await settle()
+  assert.equal(restored.hasSettingsError, true)
+  assert.ok(restored.settingsErrorMessage.includes('4000'))
+  assert.equal(restored.canSubmit, false)
+  restored.resetToDefaultSettings()
+  await settle()
+  assert.equal(restored.width, 1024)
+  assert.equal(restored.height, 1024)
+  assert.equal(restored.form.quality, 'auto')
+  assert.equal(restored.form.n, 1)
+  assert.equal(restored.hasSettingsError, false)
+  // 透明背景与 JPEG 冲突检测
+  restored.form.background = 'transparent'
+  restored.form.outputFormat = 'jpeg'
+  await settle()
+  assert.equal(restored.hasSettingsError, true)
+  assert.ok(restored.settingsErrorMessage.includes('PNG 或 WebP'))
+  restored.form.outputFormat = 'png'
+  await settle()
+  assert.equal(restored.hasSettingsError, false)
+  // 校验模型直选与自定义输入
+  restored.form.model = 'gpt-5-5'
+  await settle()
+  assert.equal(restored.form.model, 'gpt-5-5')
+  restored.form.model = 'custom-model-x'
+  await settle()
+  assert.equal(restored.form.model, 'custom-model-x')
+  assert.equal(restored.canSubmit, true)
   restoredApp.unmount()
   console.log('生图工作台离线检查通过：设置、100 张提交、输入法、草图/蒙版回填、复用、重试、继续等待与会话持久化。')
 } finally {
