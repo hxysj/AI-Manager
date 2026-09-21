@@ -2089,6 +2089,7 @@ const fallbackModels = [
   "gpt-image-2.5-sunburst",
   "gpt-image-2.5-flare",
   "gpt-image-2",
+  "gpt-5.6-sol",
   "gpt-5-5-thinking",
   "gpt-5-5",
   "gpt-5-3"

@@ -2,96 +2,181 @@
   <section class="image-prompt-library">
     <BaseModal
       title="提示词库"
-      :description="`按分类发现画面灵感 · ${catalog.count || 0} 条提示词`"
+      :description="`按分类发现画面灵感 · ${catalog.count || 0} 条社区收录提示词`"
       @close="$emit('close')"
     >
       <div class="library-toolbar">
-        <label class="search-box">
-          <Search :size="15" />
+        <div class="search-box">
+          <Search :size="15" class="search-icon" />
           <input
             v-model="search"
             class="search-input"
             type="search"
-            placeholder="搜索标题、提示词或标签"
+            placeholder="搜索标题、提示词、风格或标签..."
             aria-label="搜索提示词"
             :disabled="initializing || importing"
           />
-        </label>
-        <span class="library-source" :title="catalog.filename">{{
-          catalog.filename
-        }}</span>
+          <button
+            v-if="search"
+            class="clear-search-btn"
+            type="button"
+            title="清空搜索"
+            @click="clearSearch"
+          >
+            <X :size="13" />
+          </button>
+        </div>
+
+        <div class="library-meta-chips">
+          <span
+            class="meta-chip database-chip"
+            :title="`收录文件: ${catalog.filename}`"
+          >
+            <Database :size="12" />
+            <span class="tech-dot"></span>
+            <span>{{ catalog.count || 0 }} 灵感库</span>
+          </span>
+          <span
+            v-if="catalog.filename"
+            class="meta-chip source-file-chip"
+            :title="catalog.filename"
+          >
+            <Terminal :size="12" />
+            <span class="filename-text">{{ catalog.filename }}</span>
+          </span>
+        </div>
+
         <button
-          class="library-button"
+          class="library-button import-btn"
           type="button"
           :disabled="initializing || importing"
           @click="importLibrary"
         >
-          <Upload :size="14" />{{ importing ? "导入中…" : "导入 JSON" }}
+          <Upload :size="14" :class="{ 'spinning-icon': importing }" />
+          <span>{{ importing ? "导入中…" : "导入 JSON" }}</span>
         </button>
       </div>
+
       <p v-if="error" class="library-error" role="alert">
-        {{ error
-        }}<button class="retry-button" type="button" @click="initialize">
+        <span>{{ error }}</span>
+        <button class="retry-button" type="button" @click="initialize">
           重试
         </button>
       </p>
+
       <div v-if="initializing" class="library-loading">
-        <LoaderCircle class="spinning" :size="24" /><span
-          >正在加载本地提示词库，首次打开需要建立索引…</span
-        >
+        <div class="tech-loader">
+          <LoaderCircle class="spinning" :size="26" />
+        </div>
+        <span>正在加载本地提示词库，首次打开需要建立索引…</span>
       </div>
+
       <div v-else class="library-body">
         <nav class="category-sidebar" aria-label="提示词分类">
+          <div class="sidebar-header">
+            <span class="sidebar-title">// 分类导航</span>
+            <span class="sidebar-count">{{
+              catalog.categories?.length || 0
+            }}</span>
+          </div>
+
           <button
-            class="category-button"
+            class="category-button all-category-btn"
             :class="{ active: !category }"
             type="button"
             @click="selectCategory('')"
           >
-            <span>全部提示词</span
-            ><span class="category-count">{{ catalog.count }}</span>
+            <span class="cat-left">
+              <Layers :size="14" class="cat-icon" />
+              <span class="category-name">全部提示词</span>
+            </span>
+            <span class="category-count">{{ catalog.count }}</span>
           </button>
-          <section
-            v-for="group in categoryGroups"
-            :key="group.name"
-            class="category-group"
-          >
-            <div class="category-heading">{{ group.name }}</div>
-            <button
-              v-for="item in group.items"
-              :key="item.id"
-              class="category-button"
-              :class="{ active: category === item.id }"
-              type="button"
-              :title="item.originalTitle"
-              @click="selectCategory(item.id)"
+
+          <div class="category-scroll-container">
+            <section
+              v-for="group in categoryGroups"
+              :key="group.name"
+              class="category-group"
             >
-              <span class="category-name">{{ item.title }}</span
-              ><span class="category-count">{{ item.count }}</span>
-            </button>
-          </section>
+              <div class="category-heading">
+                <span class="group-prefix">//</span>
+                <span class="group-name">{{ group.name }}</span>
+              </div>
+              <button
+                v-for="item in group.items"
+                :key="item.id"
+                class="category-button"
+                :class="{ active: category === item.id }"
+                type="button"
+                :title="item.originalTitle"
+                @click="selectCategory(item.id)"
+              >
+                <span class="cat-left">
+                  <span class="active-indicator"></span>
+                  <span class="category-name">{{ item.title }}</span>
+                </span>
+                <span class="category-count">{{ item.count }}</span>
+              </button>
+            </section>
+          </div>
         </nav>
+
         <section class="library-main">
           <template v-if="!detail">
             <header class="gallery-heading">
-              <span
-                >{{ activeCategory }}
-                <span class="result-count">{{ total }} 条</span></span
-              ><span v-if="loading" class="loading-label">加载中…</span>
-            </header>
-            <div class="prompt-gallery-scroll" :aria-busy="loading">
-              <div v-if="!items.length && !loading" class="library-empty">
-                <Search :size="28" /><span>没有找到匹配的提示词</span
-                ><span class="empty-hint">试试其他分类或关键词</span>
+              <div class="heading-left">
+                <span class="heading-title">{{ activeCategory }}</span>
+                <span class="result-count-badge">
+                  <span class="live-dot"></span>
+                  <span>{{ total }} 条匹配</span>
+                </span>
               </div>
-              <div v-else class="prompt-gallery">
+              <div class="heading-right">
+                <span v-if="loading" class="loading-label">
+                  <LoaderCircle :size="13" class="spinning" />
+                  <span>加载中…</span>
+                </span>
+                <span class="page-quick-tag">
+                  PAGE {{ String(page).padStart(2, "0") }} /
+                  {{ String(totalPages).padStart(2, "0") }}
+                </span>
+              </div>
+            </header>
+
+            <div
+              ref="galleryScrollRef"
+              class="prompt-gallery-scroll"
+              :aria-busy="loading"
+              @scroll.passive="onGalleryScroll"
+            >
+              <div v-if="!items.length && !loading" class="library-empty">
+                <div class="empty-icon-wrapper">
+                  <Search :size="30" />
+                </div>
+                <span class="empty-title">没有找到匹配的提示词</span>
+                <span class="empty-hint">试试其他分类或换个关键词搜索</span>
                 <button
+                  v-if="category || search"
+                  class="empty-reset-button"
+                  type="button"
+                  @click="resetFilter"
+                >
+                  重置检索条件
+                </button>
+              </div>
+
+              <div v-else class="prompt-gallery">
+                <div
                   v-for="item in items"
                   :key="item.id"
                   class="prompt-card"
-                  type="button"
-                  :disabled="detailLoading || importing"
+                  :class="{ 'is-edit-mode': isEditMode(item.inputMode) }"
+                  role="button"
+                  tabindex="0"
+                  :aria-disabled="detailLoading || importing"
                   @click="openDetail(item.id)"
+                  @keydown.enter="openDetail(item.id)"
                 >
                   <div class="card-image">
                     <el-image
@@ -103,175 +188,333 @@
                       scroll-container=".prompt-gallery-scroll"
                       referrerpolicy="no-referrer"
                     >
-                      <template #placeholder
-                        ><div class="image-placeholder">
-                          <Image :size="24" /></div
-                      ></template>
-                      <template #error
-                        ><div class="image-placeholder">
-                          <ImageOff :size="24" /><span>预览图暂不可用</span>
-                        </div></template
-                      >
+                      <template #placeholder>
+                        <div class="image-placeholder">
+                          <Image :size="22" />
+                        </div>
+                      </template>
+                      <template #error>
+                        <div class="image-placeholder error-placeholder">
+                          <ImageOff :size="22" />
+                          <span>预览图不可用</span>
+                        </div>
+                      </template>
                     </el-image>
                     <div v-else class="image-placeholder">
-                      <ImageOff :size="24" /><span>暂无预览图</span>
+                      <ImageOff :size="22" />
+                      <span>暂无预览图</span>
                     </div>
-                    <span class="mode-badge">{{
-                      modeLabel(item.inputMode)
-                    }}</span>
-                  </div>
-                  <div class="card-content">
-                    <span class="card-title" :title="item.title">{{
-                      item.title
-                    }}</span
-                    ><span class="card-category">{{
-                      categoryTitle(item.categoryIds?.[0])
-                    }}</span>
-                  </div>
-                </button>
-              </div>
-            </div>
-            <footer class="gallery-footer">
-              <span class="footer-hint">图片来自词库中的链接</span>
-              <button
-                class="library-button"
-                type="button"
-                :disabled="page <= 1 || loading"
-                @click="changePage(-1)"
-              >
-                <ChevronLeft :size="14" />
-              </button>
-              <span>{{ page }} / {{ Math.max(1, Math.ceil(total / 24)) }}</span>
-              <button
-                class="library-button"
-                type="button"
-                :disabled="page * 24 >= total || loading"
-                @click="changePage(1)"
-              >
-                <ChevronRight :size="14" />
-              </button>
-            </footer>
-          </template>
-          <template v-else>
-            <header class="detail-heading">
-              <button class="back-button" type="button" @click="detail = null">
-                <ArrowLeft :size="14" />返回词库</button
-              ><span class="detail-title">{{ detail.title }}</span>
-            </header>
-            <div class="prompt-detail">
-              <div class="detail-visual">
-                <el-image
-                  class="detail-image"
-                  :src="detail.highQualityImageUrl || detail.previewImageUrl"
-                  :preview-src-list="
-                    [
-                      detail.highQualityImageUrl || detail.previewImageUrl
-                    ].filter(Boolean)
-                  "
-                  fit="contain"
-                  preview-teleported
-                  referrerpolicy="no-referrer"
-                >
-                  <template #error
-                    ><div class="image-placeholder">
-                      <ImageOff :size="32" /><span
-                        >图片链接暂不可用，仍可使用提示词</span
+
+                    <div class="image-overlay-gradient"></div>
+
+                    <div class="badge-row">
+                      <span
+                        class="mode-badge"
+                        :class="{ 'mode-edit': isEditMode(item.inputMode) }"
                       >
-                    </div></template
-                  >
-                </el-image>
-                <div class="detail-tags">
-                  <span
-                    v-for="id in detail.categoryIds"
-                    :key="id"
-                    class="category-tag"
-                    >{{ categoryTitle(id) }}</span
-                  >
+                        <span class="badge-dot"></span>
+                        <span>{{ modeLabel(item.inputMode) }}</span>
+                      </span>
+                    </div>
+
+                    <div class="card-hover-overlay">
+                      <span class="hover-inspect-btn">
+                        <Sparkles :size="12" />
+                        <span>查看详情</span>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="card-content">
+                    <div class="card-title-row">
+                      <span class="card-title" :title="item.title">
+                        {{ item.title }}
+                      </span>
+                    </div>
+                    <div class="card-footer-row">
+                      <span class="card-category-pill">
+                        # {{ categoryTitle(item.categoryIds?.[0]) }}
+                      </span>
+                      <span
+                        v-if="item.categoryIds?.length > 1"
+                        class="more-tags-indicator"
+                      >
+                        +{{ item.categoryIds.length - 1 }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 回到顶部浮动按钮 -->
+              <button
+                v-if="showBackToTop"
+                class="floating-back-to-top"
+                type="button"
+                title="回到顶部"
+                @click="scrollToTop('smooth')"
+              >
+                <ArrowUp :size="14" />
+                <span>顶部</span>
+              </button>
+            </div>
+
+            <footer class="gallery-footer">
+              <span class="footer-hint">
+                <ExternalLink :size="12" />
+                <span>图片来自公开收录链接 · 点击卡片查看完整提示词与参数</span>
+              </span>
+              <div class="pagination-controls">
+                <button
+                  class="page-nav-button"
+                  type="button"
+                  title="上一页"
+                  :disabled="page <= 1 || loading"
+                  @click="changePage(-1)"
+                >
+                  <ChevronLeft :size="14" />
+                </button>
+                <div class="page-indicator">
+                  <span class="current-page">{{
+                    String(page).padStart(2, "0")
+                  }}</span>
+                  <span class="page-separator">/</span>
+                  <span class="total-pages">{{
+                    String(totalPages).padStart(2, "0")
+                  }}</span>
                 </div>
                 <button
+                  class="page-nav-button"
+                  type="button"
+                  title="下一页"
+                  :disabled="page >= totalPages || loading"
+                  @click="changePage(1)"
+                >
+                  <ChevronRight :size="14" />
+                </button>
+              </div>
+            </footer>
+          </template>
+
+          <template v-else>
+            <header class="detail-heading">
+              <button class="back-button" type="button" @click="closeDetail">
+                <ArrowLeft :size="14" />
+                <span>返回词库列表</span>
+              </button>
+              <div class="detail-heading-info">
+                <span class="detail-category-badge">
+                  # {{ categoryTitle(detail.categoryIds?.[0]) }}
+                </span>
+                <span class="detail-title" :title="detail.title">{{
+                  detail.title
+                }}</span>
+              </div>
+            </header>
+
+            <div class="prompt-detail">
+              <div class="detail-visual">
+                <div class="detail-image-wrapper">
+                  <el-image
+                    class="detail-image"
+                    :src="detail.highQualityImageUrl || detail.previewImageUrl"
+                    :preview-src-list="
+                      [
+                        detail.highQualityImageUrl || detail.previewImageUrl
+                      ].filter(Boolean)
+                    "
+                    fit="contain"
+                    preview-teleported
+                    referrerpolicy="no-referrer"
+                  >
+                    <template #placeholder>
+                      <div class="image-placeholder">
+                        <LoaderCircle class="spinning" :size="24" />
+                        <span>加载原图中…</span>
+                      </div>
+                    </template>
+                    <template #error>
+                      <div class="image-placeholder">
+                        <ImageOff :size="32" />
+                        <span>图片链接暂不可用，仍可使用提示词</span>
+                      </div>
+                    </template>
+                  </el-image>
+                  <div class="corner-bracket top-left"></div>
+                  <div class="corner-bracket top-right"></div>
+                  <div class="corner-bracket bottom-left"></div>
+                  <div class="corner-bracket bottom-right"></div>
+                </div>
+
+                <div class="detail-tags-box">
+                  <div class="tags-header">// 标签分类</div>
+                  <div class="detail-tags">
+                    <span
+                      v-for="id in detail.categoryIds"
+                      :key="id"
+                      class="category-tag"
+                    >
+                      # {{ categoryTitle(id) }}
+                    </span>
+                  </div>
+                </div>
+
+                <button
                   v-if="sourceUrl"
-                  class="source-link"
+                  class="source-link-button"
                   type="button"
                   @click="openSource(sourceUrl)"
                 >
-                  <ExternalLink :size="12" />查看原始来源
+                  <ExternalLink :size="12" />
+                  <span>查看原始收录来源</span>
                 </button>
               </div>
+
               <div class="detail-editor">
-                <div class="editor-heading">
-                  <span>提示词</span
-                  ><select
-                    v-model="language"
-                    class="language-select"
-                    aria-label="提示词语言"
+                <div class="console-box">
+                  <div class="editor-heading">
+                    <div class="console-title">
+                      <Terminal :size="14" class="console-icon" />
+                      <span>PROMPT CONSOLE // 提示词</span>
+                    </div>
+
+                    <div class="editor-controls">
+                      <div class="lang-switch-box">
+                        <label class="lang-label">语言:</label>
+                        <select
+                          v-model="language"
+                          class="language-select"
+                          aria-label="提示词语言"
+                        >
+                          <option value="original">英文/原文</option>
+                          <option v-if="detail.promptLocalized?.zh" value="zh">
+                            中文翻译
+                          </option>
+                        </select>
+                      </div>
+
+                      <button
+                        class="copy-prompt-btn"
+                        type="button"
+                        :class="{ copied }"
+                        title="复制提示词"
+                        @click="copyPrompt"
+                      >
+                        <Check v-if="copied" :size="13" />
+                        <Copy v-else :size="13" />
+                        <span>{{ copied ? "已复制" : "复制" }}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <div class="textarea-wrapper">
+                    <textarea
+                      v-model="prompt"
+                      class="prompt-text"
+                      aria-label="可编辑的提示词"
+                      spellcheck="false"
+                      placeholder="提示词内容..."
+                    ></textarea>
+                    <div class="prompt-metrics-bar">
+                      <span :class="{ 'warning-limit': promptTooLong }">
+                        {{ prompt.length }} 字符 ·
+                        {{ (promptByteLength / 1024).toFixed(1) }} KB / 32 KB
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="detail.variables?.length" class="tech-hint-card">
+                  <Sparkles :size="14" class="hint-icon" />
+                  <span
+                    >此模板含可替换内容，可直接在上方控制台修改占位参数。</span
                   >
-                    <option value="original">原文</option>
-                    <option v-if="detail.promptLocalized?.zh" value="zh">
-                      中文
-                    </option>
-                  </select>
                 </div>
-                <textarea
-                  v-model="prompt"
-                  class="prompt-text"
-                  aria-label="可编辑的提示词"
-                  spellcheck="false"
-                ></textarea>
-                <p v-if="detail.variables?.length" class="detail-hint">
-                  此模板含可替换内容，可直接在上方修改占位参数。
-                </p>
-                <div class="template-meta">
-                  <span>{{ detail.model || "沿用当前模型" }}</span
-                  ><span>{{ modeLabel(detail.inputMode) }}</span>
+
+                <div class="template-meta-strip">
+                  <div class="meta-strip-item">
+                    <Cpu :size="13" />
+                    <span class="meta-strip-label">推荐模型:</span>
+                    <span class="meta-strip-value">{{
+                      detail.model || "沿用当前所选模型"
+                    }}</span>
+                  </div>
+                  <div class="meta-strip-item">
+                    <Layers :size="13" />
+                    <span class="meta-strip-label">生成模式:</span>
+                    <span class="meta-strip-value">{{
+                      modeLabel(detail.inputMode)
+                    }}</span>
+                  </div>
                 </div>
-                <p
+
+                <div
                   v-if="detail.inputMode !== 'text_to_image'"
-                  class="detail-hint"
+                  class="tech-hint-card edit-hint-card"
                 >
-                  此模板需要你提供参考图，示例预览图不会作为编辑输入。
-                </p>
+                  <Image :size="14" class="hint-icon" />
+                  <span
+                    >图片编辑模式：载入工作台后需提供参考图，示例预览图不会作为输入。</span
+                  >
+                </div>
+
                 <p v-if="promptTooLong" class="detail-error">
                   提示词超过工作台的 32000 字节限制，请精简后使用。
                 </p>
-                <button
-                  class="use-button"
-                  type="button"
-                  :disabled="!prompt.trim() || promptTooLong || importing"
-                  @click="usePrompt"
-                >
-                  <Sparkles :size="15" />使用此提示词
-                </button>
+
+                <div class="detail-action-bar">
+                  <button
+                    class="use-button"
+                    type="button"
+                    :disabled="!prompt.trim() || promptTooLong || importing"
+                    @click="usePrompt"
+                  >
+                    <Sparkles :size="15" />
+                    <span>填入生图工作台</span>
+                  </button>
+                </div>
               </div>
             </div>
           </template>
         </section>
       </div>
+
       <footer class="library-attribution">
-        <span>提示词整理自</span>
+        <span class="attribution-label">// 提示词整理自社区项目：</span>
         <a
           class="attribution-link"
           :href="sourceRepositoryUrl"
           @click.prevent="openSource(sourceRepositoryUrl)"
-          >Toolcentral-ai / Image Prompt Gallery<ExternalLink :size="11"
-        /></a>
+        >
+          Toolcentral-ai / Image Prompt Gallery
+          <ExternalLink :size="11" />
+        </a>
       </footer>
     </BaseModal>
   </section>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   ArrowLeft,
+  ArrowUp,
+  Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
+  Cpu,
+  Database,
   ExternalLink,
   Image,
   ImageOff,
+  Layers,
   LoaderCircle,
   Search,
   Sparkles,
-  Upload
+  Terminal,
+  Upload,
+  X
 } from "lucide-vue-next"
 import { ElImage, ElMessageBox } from "element-plus"
 import "element-plus/es/components/image/style/css"
@@ -298,10 +541,16 @@ const loading = ref(false)
 const detailLoading = ref(false)
 const importing = ref(false)
 const error = ref("")
+const copied = ref(false)
+const showBackToTop = ref(false)
+const galleryScrollRef = ref(null)
+
+let copyTimer
 let searchTimer
 let requestVersion = 0
 let detailVersion = 0
 let disposed = false
+
 const categoryMap = computed(
   () => new Map(catalog.value.categories.map((item) => [item.id, item]))
 )
@@ -322,9 +571,12 @@ const categoryGroups = computed(() => {
 const activeCategory = computed(
   () => categoryMap.value.get(category.value)?.title || "全部提示词"
 )
-const promptTooLong = computed(
-  () => new TextEncoder().encode(prompt.value).length > 32000
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / 24)))
+const promptByteLength = computed(
+  () => new TextEncoder().encode(prompt.value).length
 )
+const promptTooLong = computed(() => promptByteLength.value > 32000)
+
 const sourceUrl = computed(() => {
   const value =
     detail.value?.source?.originalSourceUrl ||
@@ -340,6 +592,7 @@ const sourceUrl = computed(() => {
 function categoryTitle(id) {
   return categoryMap.value.get(id)?.title || "未分类"
 }
+
 function modeLabel(mode) {
   return (
     {
@@ -348,6 +601,26 @@ function modeLabel(mode) {
       multi_image_to_image: "多图编辑"
     }[mode] || "文生图"
   )
+}
+
+function isEditMode(mode) {
+  return ["single_image_to_image", "multi_image_to_image"].includes(mode)
+}
+
+function scrollToTop(behavior = "smooth") {
+  nextTick(() => {
+    if (galleryScrollRef.value) {
+      if (typeof galleryScrollRef.value.scrollTo === "function") {
+        galleryScrollRef.value.scrollTo({ top: 0, behavior })
+      } else {
+        galleryScrollRef.value.scrollTop = 0
+      }
+    }
+  })
+}
+
+function onGalleryScroll(e) {
+  showBackToTop.value = (e.target?.scrollTop || 0) > 220
 }
 
 async function loadList() {
@@ -365,6 +638,7 @@ async function loadList() {
     items.value = result.items
     total.value = result.total
     page.value = result.page
+    scrollToTop("instant")
   } catch (cause) {
     if (!disposed && version === requestVersion) error.value = String(cause)
   } finally {
@@ -392,11 +666,35 @@ function selectCategory(id) {
   detail.value = null
   detailVersion++
   loadList()
+  scrollToTop("instant")
 }
 
 function changePage(delta) {
   page.value += delta
   loadList()
+  scrollToTop("smooth")
+}
+
+function clearSearch() {
+  search.value = ""
+  page.value = 1
+  detail.value = null
+  loadList()
+  scrollToTop("instant")
+}
+
+function resetFilter() {
+  category.value = ""
+  search.value = ""
+  page.value = 1
+  detail.value = null
+  loadList()
+  scrollToTop("instant")
+}
+
+function closeDetail() {
+  detail.value = null
+  scrollToTop("instant")
 }
 
 async function openDetail(id) {
@@ -420,12 +718,34 @@ function usePrompt() {
   emit("select", {
     prompt: prompt.value,
     model: detail.value.model,
-    mode: ["single_image_to_image", "multi_image_to_image"].includes(
-      detail.value.inputMode
-    )
-      ? "edit"
-      : "generate"
+    mode: isEditMode(detail.value.inputMode) ? "edit" : "generate"
   })
+}
+
+async function copyPrompt() {
+  if (!prompt.value) return
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(prompt.value)
+    } else {
+      const textarea = document.createElement("textarea")
+      textarea.value = prompt.value
+      textarea.style.position = "fixed"
+      textarea.style.opacity = "0"
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand("copy")
+      document.body.removeChild(textarea)
+    }
+    copied.value = true
+    createMessage.success("提示词已复制到剪贴板")
+    window.clearTimeout(copyTimer)
+    copyTimer = window.setTimeout(() => {
+      copied.value = false
+    }, 2000)
+  } catch (cause) {
+    createMessage.error("复制失败：" + String(cause))
+  }
 }
 
 async function openSource(url) {
@@ -478,6 +798,7 @@ watch(search, () => {
   page.value = 1
   if (!importing.value) searchTimer = window.setTimeout(loadList, 300)
 })
+
 watch(language, () => {
   if (detail.value)
     prompt.value =
@@ -485,64 +806,97 @@ watch(language, () => {
         ? detail.value.promptLocalized.zh
         : detail.value.prompt
 })
+
 onMounted(initialize)
+
 onBeforeUnmount(() => {
   disposed = true
   requestVersion++
   detailVersion++
   window.clearTimeout(searchTimer)
+  window.clearTimeout(copyTimer)
 })
 </script>
 
 <style scoped lang="less">
 .image-prompt-library {
   font-size: var(--font-size-base);
-  .library-attribution {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    margin-top: 12px;
-    padding-top: 10px;
-    border-top: 1px solid var(--color-line);
-    color: var(--color-text-soft);
-    font-size: var(--font-size-sm);
-    .attribution-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      color: var(--color-primary);
-      text-decoration: none;
-      &:hover {
-        text-decoration: underline;
-      }
-    }
-  }
+
   :deep(.base-modal__panel) {
-    width: calc(100vw - 48px);
-    max-width: 1200px;
-    height: calc(100vh - 48px);
+    width: calc(100vw - 44px);
+    max-width: 1260px;
+    height: calc(100vh - 44px);
+    max-height: 900px;
+    border-radius: 12px;
+    border: 1px solid
+      color-mix(in srgb, var(--color-line-strong) 80%, var(--color-primary));
+    box-shadow:
+      0 20px 50px rgba(0, 0, 0, 0.28),
+      0 0 0 1px color-mix(in srgb, var(--color-primary) 20%, transparent);
   }
+
+  :deep(.base-modal__header) {
+    padding: 16px 22px 14px;
+    border-bottom: 1px solid
+      color-mix(in srgb, var(--color-line) 85%, var(--color-primary));
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-panel) 94%, var(--color-primary-soft)) 0%,
+      var(--color-panel) 100%
+    );
+  }
+
+  :deep(.base-modal__title) {
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+
+  :deep(.base-modal__description) {
+    font-family: var(--font-family-mono, inherit);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+  }
+
   :deep(.base-modal__content) {
-    padding: 8px 20px 18px;
+    padding: 14px 20px 14px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
   }
+
+  // --- Toolbar Deck ---
   .library-toolbar {
     display: flex;
     align-items: center;
     gap: 12px;
     padding-bottom: 14px;
+    flex: none;
+
     .search-box {
       display: flex;
       flex: 1;
       align-items: center;
-      gap: 9px;
-      padding: 0 11px;
-      height: 36px;
+      gap: 8px;
+      padding: 0 12px;
+      height: 38px;
       border: 1px solid var(--color-line);
-      border-radius: 6px;
+      border-radius: 8px;
       background: var(--color-panel-soft);
       color: var(--color-text-muted);
+      transition: all 0.2s ease;
+
+      &:focus-within {
+        border-color: var(--color-primary);
+        box-shadow: 0 0 0 2px
+          color-mix(in srgb, var(--color-primary) 25%, transparent);
+        background: var(--color-panel);
+      }
+
+      .search-icon {
+        color: var(--color-primary);
+        flex: none;
+      }
+
       .search-input {
         flex: 1;
         min-width: 0;
@@ -550,71 +904,225 @@ onBeforeUnmount(() => {
         outline: none;
         color: var(--color-text);
         background: transparent;
-        font-size: var(--font-size-base);
+        font-size: var(--font-size-sm);
+
+        &::placeholder {
+          color: var(--color-text-soft);
+        }
+      }
+
+      .clear-search-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        border: 0;
+        border-radius: 4px;
+        background: var(--color-line);
+        color: var(--color-text-muted);
+        cursor: pointer;
+        transition: all 0.15s ease;
+
+        &:hover {
+          background: color-mix(
+            in srgb,
+            var(--color-primary) 30%,
+            var(--color-line)
+          );
+          color: var(--color-text);
+        }
       }
     }
-    .library-source {
-      max-width: 200px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--color-text-soft);
+
+    .library-meta-chips {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: none;
+
+      .meta-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 34px;
+        padding: 0 10px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        background: var(--color-panel-soft);
+        color: var(--color-text-muted);
+        font-size: var(--font-size-xs);
+        font-family: var(--font-family-mono, monospace);
+
+        .tech-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #10b981;
+          box-shadow: 0 0 6px #10b981;
+        }
+
+        &.source-file-chip {
+          max-width: 210px;
+
+          .filename-text {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+        }
+      }
+    }
+
+    .library-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      height: 38px;
+      padding: 0 14px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      color: var(--color-text);
+      cursor: pointer;
       font-size: var(--font-size-sm);
+      font-weight: 500;
+      transition: all 0.18s ease;
+
+      &:hover:not(:disabled) {
+        border-color: var(--color-primary);
+        color: var(--color-primary);
+        box-shadow: 0 2px 8px
+          color-mix(in srgb, var(--color-primary) 18%, transparent);
+      }
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .spinning-icon {
+        animation: tech-spin 1.4s linear infinite;
+      }
     }
   }
-  .library-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    min-height: 36px;
-    padding: 0 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 6px;
-    background: var(--color-panel);
-    color: var(--color-text);
-    cursor: pointer;
-    font-size: var(--font-size-sm);
-    &:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-  }
+
+  // --- Error & Loading ---
   .library-error {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     margin: 0 0 12px;
+    padding: 10px 14px;
+    border: 1px solid var(--color-danger-line);
+    border-radius: 6px;
+    background: var(--color-danger-soft);
     color: var(--color-danger);
-    font-size: var(--font-size-base);
+    font-size: var(--font-size-sm);
     overflow-wrap: anywhere;
+
     .retry-button {
-      margin-left: 8px;
       border: 0;
       background: transparent;
       color: var(--color-primary);
+      text-decoration: underline;
       cursor: pointer;
+      font-weight: 600;
     }
   }
+
   .library-loading {
     display: flex;
     flex: 1;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: 14px;
     color: var(--color-text-muted);
     font-size: var(--font-size-base);
-    .spinning {
-      animation: prompt-library-spin 1.4s linear infinite;
+
+    .tech-loader {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+      border: 1px solid
+        color-mix(in srgb, var(--color-primary) 25%, transparent);
+
+      .spinning {
+        animation: tech-spin 1.2s linear infinite;
+        color: var(--color-primary);
+      }
     }
   }
+
+  // --- Main Body Layout ---
   .library-body {
     display: flex;
     flex: 1;
-    gap: 20px;
+    gap: 18px;
     min-height: 0;
+
+    // --- Left Sidebar ---
     .category-sidebar {
-      flex: 0 0 190px;
-      overflow: auto;
-      padding-right: 8px;
+      display: flex;
+      flex-direction: column;
+      flex: 0 0 210px;
       border-right: 1px solid var(--color-line);
+      padding-right: 10px;
+      min-height: 0;
+
+      .sidebar-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 6px 10px;
+        border-bottom: 1px dashed var(--color-line);
+        margin-bottom: 8px;
+
+        .sidebar-title {
+          font-size: var(--font-size-xs);
+          font-family: var(--font-family-mono, monospace);
+          font-weight: 600;
+          color: var(--color-text-soft);
+          letter-spacing: 0.8px;
+        }
+
+        .sidebar-count {
+          padding: 1px 6px;
+          border-radius: 10px;
+          background: var(--color-panel-soft);
+          border: 1px solid var(--color-line);
+          font-size: 11px;
+          font-family: var(--font-family-mono, monospace);
+          color: var(--color-text-muted);
+        }
+      }
+
+      .all-category-btn {
+        margin-bottom: 6px;
+      }
+
+      .category-scroll-container {
+        flex: 1;
+        overflow-y: auto;
+        min-height: 0;
+        padding-right: 4px;
+
+        &::-webkit-scrollbar {
+          width: 4px;
+        }
+        &::-webkit-scrollbar-thumb {
+          background: var(--color-line);
+          border-radius: 2px;
+        }
+      }
+
       .category-button {
         display: flex;
         align-items: center;
@@ -622,65 +1130,203 @@ onBeforeUnmount(() => {
         gap: 6px;
         width: 100%;
         min-height: 36px;
-        padding: 6px 8px;
+        padding: 7px 10px;
         margin-bottom: 3px;
-        border: 0;
-        border-radius: 5px;
+        border: 1px solid transparent;
+        border-radius: 6px;
         text-align: left;
         background: transparent;
         color: var(--color-text-muted);
         font-size: var(--font-size-sm);
         cursor: pointer;
+        transition: all 0.16s ease;
+        position: relative;
+
+        .cat-left {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          min-width: 0;
+
+          .cat-icon {
+            flex: none;
+            opacity: 0.8;
+          }
+
+          .active-indicator {
+            width: 4px;
+            height: 12px;
+            border-radius: 2px;
+            background: transparent;
+            transition: all 0.16s ease;
+          }
+
+          .category-name {
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+          }
+        }
+
+        .category-count {
+          font-family: var(--font-family-mono, monospace);
+          font-size: 11px;
+          padding: 1px 6px;
+          border-radius: 4px;
+          background: var(--color-panel-soft);
+          color: var(--color-text-soft);
+          transition: all 0.16s ease;
+        }
+
         &:hover {
           background: var(--color-panel-soft);
+          color: var(--color-text);
+          transform: translateX(2px);
         }
+
         &.active {
-          background: var(--color-primary-soft);
+          background: color-mix(
+            in srgb,
+            var(--color-primary-soft) 85%,
+            var(--color-panel)
+          );
+          border-color: color-mix(
+            in srgb,
+            var(--color-primary) 35%,
+            transparent
+          );
           color: var(--color-primary);
-        }
-        .category-name {
-          overflow: hidden;
-          white-space: nowrap;
-          text-overflow: ellipsis;
-        }
-        .category-count {
-          opacity: 0.7;
-          font-size: var(--font-size-sm);
+          font-weight: 600;
+
+          .cat-left .active-indicator {
+            background: var(--color-primary);
+            box-shadow: 0 0 6px var(--color-primary);
+          }
+
+          .category-count {
+            background: color-mix(
+              in srgb,
+              var(--color-primary) 20%,
+              transparent
+            );
+            color: var(--color-primary);
+          }
         }
       }
+
       .category-group {
-        margin-top: 16px;
+        margin-top: 14px;
+
         .category-heading {
-          padding: 0 8px 7px;
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          padding: 3px 6px 6px;
           color: var(--color-text-soft);
-          font-size: var(--font-size-sm);
-          letter-spacing: 1px;
+          font-size: 11px;
+          font-family: var(--font-family-mono, monospace);
+          text-transform: uppercase;
+          letter-spacing: 0.8px;
+
+          .group-prefix {
+            color: var(--color-primary);
+            opacity: 0.7;
+          }
         }
       }
     }
+
+    // --- Main Right Content Area ---
     .library-main {
       display: flex;
       flex-direction: column;
       flex: 1;
       min-width: 0;
       min-height: 0;
+
       .gallery-heading {
         display: flex;
+        align-items: center;
         justify-content: space-between;
-        padding: 2px 0 13px;
-        font-size: var(--font-size-lg);
-        .result-count,
-        .loading-label {
-          margin-left: 8px;
-          color: var(--color-text-soft);
-          font-size: var(--font-size-sm);
+        padding: 0 0 12px;
+        flex: none;
+
+        .heading-left {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+
+          .heading-title {
+            font-size: var(--font-size-lg);
+            font-weight: 700;
+            color: var(--color-text);
+          }
+
+          .result-count-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: var(--color-panel-soft);
+            border: 1px solid var(--color-line);
+            font-size: var(--font-size-xs);
+            font-family: var(--font-family-mono, monospace);
+            color: var(--color-text-muted);
+
+            .live-dot {
+              width: 6px;
+              height: 6px;
+              border-radius: 50%;
+              background: var(--color-primary);
+              box-shadow: 0 0 5px var(--color-primary);
+              animation: tech-pulse 2s infinite ease-in-out;
+            }
+          }
+        }
+
+        .heading-right {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+
+          .loading-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            color: var(--color-primary);
+            font-size: var(--font-size-xs);
+            font-family: var(--font-family-mono, monospace);
+          }
+
+          .page-quick-tag {
+            font-family: var(--font-family-mono, monospace);
+            font-size: var(--font-size-xs);
+            color: var(--color-text-soft);
+            background: var(--color-panel-soft);
+            padding: 2px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--color-line);
+          }
         }
       }
+
+      // --- Prompt Cards Gallery (Scrollable) ---
       .prompt-gallery-scroll {
         flex: 1;
         min-height: 0;
-        overflow: auto;
+        overflow-y: auto;
         padding-right: 6px;
+        position: relative;
+
+        &::-webkit-scrollbar {
+          width: 6px;
+        }
+        &::-webkit-scrollbar-thumb {
+          background: var(--color-line-strong);
+          border-radius: 3px;
+        }
+
         .library-empty {
           display: flex;
           flex-direction: column;
@@ -688,252 +1334,866 @@ onBeforeUnmount(() => {
           justify-content: center;
           gap: 12px;
           height: 100%;
+          min-height: 320px;
           color: var(--color-text-muted);
-          font-size: var(--font-size-base);
+
+          .empty-icon-wrapper {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: var(--color-panel-soft);
+            border: 1px solid var(--color-line);
+            color: var(--color-text-soft);
+          }
+
+          .empty-title {
+            font-size: var(--font-size-base);
+            font-weight: 600;
+            color: var(--color-text);
+          }
+
           .empty-hint {
             color: var(--color-text-soft);
             font-size: var(--font-size-sm);
           }
+
+          .empty-reset-button {
+            margin-top: 6px;
+            padding: 6px 14px;
+            border: 1px solid var(--color-line);
+            border-radius: 6px;
+            background: var(--color-panel);
+            color: var(--color-primary);
+            font-size: var(--font-size-sm);
+            cursor: pointer;
+            transition: all 0.15s ease;
+
+            &:hover {
+              border-color: var(--color-primary);
+              background: var(--color-primary-soft);
+            }
+          }
         }
+
         .prompt-gallery {
-          display: flex;
-          flex-wrap: wrap;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
           gap: 14px;
+          padding-bottom: 8px;
+
           .prompt-card {
             display: flex;
             flex-direction: column;
-            width: calc((100% - 28px) / 3);
-            padding: 0;
-            overflow: hidden;
             border: 1px solid var(--color-line);
-            border-radius: 8px;
+            border-radius: 9px;
             background: var(--color-panel);
             color: var(--color-text);
             text-align: left;
             cursor: pointer;
-            transition: border-color 0.15s;
+            overflow: hidden;
+            position: relative;
+            transition:
+              transform 0.2s ease,
+              border-color 0.2s ease,
+              box-shadow 0.2s ease;
+
+            &::before {
+              content: "";
+              position: absolute;
+              top: 0;
+              left: 0;
+              right: 0;
+              height: 2px;
+              background: linear-gradient(
+                90deg,
+                transparent,
+                var(--color-primary),
+                transparent
+              );
+              opacity: 0;
+              transition: opacity 0.25s ease;
+              z-index: 2;
+            }
+
             &:hover {
-              border-color: var(--color-primary);
+              transform: translateY(-3px);
+              border-color: color-mix(
+                in srgb,
+                var(--color-primary) 70%,
+                var(--color-line)
+              );
+              box-shadow:
+                0 10px 24px -4px rgba(0, 0, 0, 0.18),
+                0 0 0 1px
+                  color-mix(in srgb, var(--color-primary) 28%, transparent);
+
+              &::before {
+                opacity: 1;
+              }
+
+              .card-image .card-hover-overlay {
+                opacity: 1;
+              }
             }
-            &:disabled {
-              cursor: progress;
+
+            &:focus-visible {
+              outline: 2px solid var(--color-primary);
+              outline-offset: 1px;
             }
+
             .card-image {
               position: relative;
               width: 100%;
-              height: 152px;
+              height: 156px;
               background: var(--color-panel-soft);
+              overflow: hidden;
+
               .preview-image {
                 width: 100%;
                 height: 100%;
+                display: block;
+                transition: transform 0.3s ease;
               }
-              .mode-badge {
+
+              .image-overlay-gradient {
                 position: absolute;
-                left: 8px;
+                inset: 0;
+                background: linear-gradient(
+                  180deg,
+                  rgba(0, 0, 0, 0.05) 0%,
+                  rgba(0, 0, 0, 0.45) 100%
+                );
+                pointer-events: none;
+              }
+
+              .badge-row {
+                position: absolute;
                 bottom: 8px;
-                padding: 3px 7px;
-                border-radius: 4px;
-                background: #101820b8;
-                color: #fff;
-                font-size: var(--font-size-sm);
+                left: 8px;
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                z-index: 1;
+
+                .mode-badge {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 5px;
+                  padding: 3px 8px;
+                  border-radius: 4px;
+                  background: rgba(15, 23, 42, 0.78);
+                  backdrop-filter: blur(8px);
+                  border: 1px solid rgba(255, 255, 255, 0.16);
+                  color: #ffffff;
+                  font-size: 11px;
+                  font-weight: 500;
+                  line-height: 1;
+
+                  .badge-dot {
+                    width: 5px;
+                    height: 5px;
+                    border-radius: 50%;
+                    background: #06b6d4;
+                    box-shadow: 0 0 5px #06b6d4;
+                  }
+
+                  &.mode-edit .badge-dot {
+                    background: #f59e0b;
+                    box-shadow: 0 0 5px #f59e0b;
+                  }
+                }
+              }
+
+              .card-hover-overlay {
+                position: absolute;
+                inset: 0;
+                background: color-mix(
+                  in srgb,
+                  var(--color-primary) 20%,
+                  rgba(0, 0, 0, 0.38)
+                );
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                opacity: 0;
+                transition: opacity 0.2s ease;
+                z-index: 2;
+
+                .hover-inspect-btn {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 5px;
+                  padding: 6px 12px;
+                  border-radius: 20px;
+                  background: rgba(15, 23, 42, 0.88);
+                  border: 1px solid rgba(255, 255, 255, 0.3);
+                  color: #ffffff;
+                  font-size: var(--font-size-xs);
+                  font-weight: 600;
+                  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                }
               }
             }
+
             .card-content {
               display: flex;
               flex-direction: column;
-              gap: 5px;
-              padding: 11px;
-              .card-title {
-                display: -webkit-box;
-                -webkit-line-clamp: 2;
-                -webkit-box-orient: vertical;
-                overflow: hidden;
-                min-height: 3em;
-                line-height: 1.5;
-                font-size: var(--font-size-base);
+              gap: 8px;
+              padding: 12px;
+              background: var(--color-panel);
+
+              .card-title-row {
+                .card-title {
+                  display: -webkit-box;
+                  -webkit-line-clamp: 2;
+                  line-clamp: 2;
+                  -webkit-box-orient: vertical;
+                  overflow: hidden;
+                  min-height: 2.8em;
+                  line-height: 1.45;
+                  font-size: var(--font-size-sm);
+                  font-weight: 600;
+                  color: var(--color-text);
+                }
               }
-              .card-category {
-                color: var(--color-text-soft);
-                font-size: var(--font-size-sm);
+
+              .card-footer-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 6px;
+
+                .card-category-pill {
+                  color: var(--color-text-soft);
+                  font-size: 11px;
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  white-space: nowrap;
+                  font-family: var(--font-family-mono, monospace);
+                }
+
+                .more-tags-indicator {
+                  color: var(--color-text-soft);
+                  font-size: 10px;
+                  font-family: var(--font-family-mono, monospace);
+                  padding: 1px 4px;
+                  border-radius: 3px;
+                  background: var(--color-panel-soft);
+                }
               }
             }
           }
         }
+
+        // --- Back to Top Button ---
+        .floating-back-to-top {
+          position: sticky;
+          bottom: 12px;
+          left: 100%;
+          margin-right: 12px;
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          padding: 6px 12px;
+          border-radius: 20px;
+          border: 1px solid
+            color-mix(in srgb, var(--color-primary) 50%, var(--color-line));
+          background: color-mix(
+            in srgb,
+            var(--color-panel) 90%,
+            var(--color-primary-soft)
+          );
+          color: var(--color-primary);
+          box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+          font-size: var(--font-size-xs);
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.18s ease;
+          z-index: 10;
+
+          &:hover {
+            transform: translateY(-2px);
+            background: var(--color-primary);
+            color: #ffffff;
+            border-color: var(--color-primary);
+          }
+        }
       }
+
+      // --- Pagination Footer ---
       .gallery-footer {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding-top: 14px;
-        color: var(--color-text-muted);
-        font-size: var(--font-size-sm);
+        justify-content: space-between;
+        gap: 12px;
+        padding-top: 12px;
+        border-top: 1px solid var(--color-line);
+        flex: none;
+
         .footer-hint {
-          flex: 1;
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
           color: var(--color-text-soft);
-          font-size: var(--font-size-sm);
+          font-size: var(--font-size-xs);
+        }
+
+        .pagination-controls {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+
+          .page-nav-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--color-line);
+            border-radius: 6px;
+            background: var(--color-panel);
+            color: var(--color-text);
+            cursor: pointer;
+            transition: all 0.15s ease;
+
+            &:hover:not(:disabled) {
+              border-color: var(--color-primary);
+              color: var(--color-primary);
+              background: var(--color-primary-soft);
+            }
+
+            &:disabled {
+              opacity: 0.4;
+              cursor: not-allowed;
+            }
+          }
+
+          .page-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 0 10px;
+            height: 32px;
+            border: 1px solid var(--color-line);
+            border-radius: 6px;
+            background: var(--color-panel-soft);
+            font-family: var(--font-family-mono, monospace);
+            font-size: var(--font-size-xs);
+
+            .current-page {
+              color: var(--color-primary);
+              font-weight: 700;
+            }
+
+            .page-separator {
+              color: var(--color-text-soft);
+              opacity: 0.6;
+            }
+
+            .total-pages {
+              color: var(--color-text-muted);
+            }
+          }
         }
       }
+
+      // --- Detail View ---
       .detail-heading {
         display: flex;
         align-items: center;
-        gap: 16px;
-        padding-bottom: 12px;
+        gap: 14px;
+        padding: 0 0 14px;
+        border-bottom: 1px solid var(--color-line);
+        flex: none;
+
         .back-button {
-          display: flex;
-          flex: none;
+          display: inline-flex;
           align-items: center;
-          gap: 5px;
-          padding: 0;
-          border: 0;
-          background: transparent;
-          color: var(--color-primary);
-          font-size: var(--font-size-sm);
+          gap: 6px;
+          padding: 6px 12px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          background: var(--color-panel-soft);
+          color: var(--color-text);
+          font-size: var(--font-size-xs);
+          font-weight: 600;
           cursor: pointer;
+          transition: all 0.15s ease;
+          flex: none;
+
+          &:hover {
+            border-color: var(--color-primary);
+            color: var(--color-primary);
+            background: var(--color-primary-soft);
+          }
         }
-        .detail-title {
-          overflow: hidden;
-          white-space: nowrap;
-          text-overflow: ellipsis;
-          font-size: var(--font-size-lg);
+
+        .detail-heading-info {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+
+          .detail-category-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: var(--color-panel-soft);
+            border: 1px solid var(--color-line);
+            color: var(--color-text-muted);
+            font-size: 11px;
+            font-family: var(--font-family-mono, monospace);
+            flex: none;
+          }
+
+          .detail-title {
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            font-size: var(--font-size-base);
+            font-weight: 700;
+            color: var(--color-text);
+          }
         }
       }
+
       .prompt-detail {
         display: flex;
         flex: 1;
-        gap: 18px;
+        gap: 20px;
         min-height: 0;
-        overflow: auto;
+        overflow-y: auto;
+        padding-top: 14px;
+
+        &::-webkit-scrollbar {
+          width: 5px;
+        }
+        &::-webkit-scrollbar-thumb {
+          background: var(--color-line);
+          border-radius: 2px;
+        }
+
         .detail-visual {
           display: flex;
           flex-direction: column;
-          width: 43%;
-          gap: 12px;
-          .detail-image {
-            flex: none;
+          width: 42%;
+          gap: 14px;
+          flex: none;
+
+          .detail-image-wrapper {
+            position: relative;
             width: 100%;
-            height: 280px;
+            height: 300px;
             background: var(--color-panel-soft);
             border: 1px solid var(--color-line);
-            border-radius: 7px;
-          }
-          .detail-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            .category-tag {
-              padding: 3px 6px;
-              background: var(--color-panel-soft);
-              color: var(--color-text-muted);
-              border-radius: 4px;
-              font-size: var(--font-size-sm);
+            border-radius: 8px;
+            overflow: hidden;
+
+            .detail-image {
+              width: 100%;
+              height: 100%;
+              display: block;
+            }
+
+            .corner-bracket {
+              position: absolute;
+              width: 8px;
+              height: 8px;
+              border-color: var(--color-primary);
+              pointer-events: none;
+              opacity: 0.8;
+
+              &.top-left {
+                top: 4px;
+                left: 4px;
+                border-top: 2px solid;
+                border-left: 2px solid;
+              }
+              &.top-right {
+                top: 4px;
+                right: 4px;
+                border-top: 2px solid;
+                border-right: 2px solid;
+              }
+              &.bottom-left {
+                bottom: 4px;
+                left: 4px;
+                border-bottom: 2px solid;
+                border-left: 2px solid;
+              }
+              &.bottom-right {
+                bottom: 4px;
+                right: 4px;
+                border-bottom: 2px solid;
+                border-right: 2px solid;
+              }
             }
           }
-          .source-link {
+
+          .detail-tags-box {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+
+            .tags-header {
+              font-size: 11px;
+              font-family: var(--font-family-mono, monospace);
+              color: var(--color-text-soft);
+            }
+
+            .detail-tags {
+              display: flex;
+              flex-wrap: wrap;
+              gap: 6px;
+
+              .category-tag {
+                padding: 3px 8px;
+                background: var(--color-panel-soft);
+                border: 1px solid var(--color-line);
+                color: var(--color-text-muted);
+                border-radius: 4px;
+                font-size: var(--font-size-xs);
+                font-family: var(--font-family-mono, monospace);
+              }
+            }
+          }
+
+          .source-link-button {
             display: inline-flex;
             align-items: center;
-            gap: 5px;
+            gap: 6px;
             align-self: flex-start;
-            padding: 0;
-            border: 0;
+            padding: 4px 8px;
+            border: 1px solid var(--color-line);
+            border-radius: 5px;
             background: transparent;
             color: var(--color-primary);
-            font-size: var(--font-size-sm);
+            font-size: var(--font-size-xs);
             cursor: pointer;
+            transition: all 0.15s ease;
+
+            &:hover {
+              background: var(--color-primary-soft);
+              border-color: var(--color-primary);
+            }
           }
         }
+
         .detail-editor {
           display: flex;
           flex: 1;
           min-width: 0;
-          min-height: 340px;
           flex-direction: column;
-          gap: 10px;
-          .editor-heading {
+          gap: 12px;
+
+          .console-box {
             display: flex;
-            justify-content: space-between;
-            align-items: center;
-            color: var(--color-text-muted);
-            font-size: var(--font-size-base);
-            .language-select {
-              padding: 4px 7px;
-              border: 1px solid var(--color-line);
-              border-radius: 4px;
-              background: var(--color-panel);
-              color: var(--color-text);
-              font-size: var(--font-size-sm);
+            flex-direction: column;
+            flex: 1;
+            min-height: 220px;
+            border: 1px solid var(--color-line);
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--color-panel-soft);
+
+            .editor-heading {
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              padding: 8px 12px;
+              background: color-mix(
+                in srgb,
+                var(--color-panel) 85%,
+                var(--color-line)
+              );
+              border-bottom: 1px solid var(--color-line);
+
+              .console-title {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                color: var(--color-text-muted);
+                font-family: var(--font-family-mono, monospace);
+                font-size: var(--font-size-xs);
+                font-weight: 600;
+
+                .console-icon {
+                  color: var(--color-primary);
+                }
+              }
+
+              .editor-controls {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+
+                .lang-switch-box {
+                  display: flex;
+                  align-items: center;
+                  gap: 4px;
+
+                  .lang-label {
+                    font-size: 11px;
+                    color: var(--color-text-soft);
+                  }
+
+                  .language-select {
+                    padding: 2px 6px;
+                    border: 1px solid var(--color-line);
+                    border-radius: 4px;
+                    background: var(--color-panel);
+                    color: var(--color-text);
+                    font-size: var(--font-size-xs);
+                    outline: none;
+                    cursor: pointer;
+
+                    &:focus {
+                      border-color: var(--color-primary);
+                    }
+                  }
+                }
+
+                .copy-prompt-btn {
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 4px;
+                  padding: 3px 8px;
+                  border: 1px solid var(--color-line);
+                  border-radius: 4px;
+                  background: var(--color-panel);
+                  color: var(--color-text);
+                  font-size: var(--font-size-xs);
+                  cursor: pointer;
+                  transition: all 0.15s ease;
+
+                  &:hover {
+                    border-color: var(--color-primary);
+                    color: var(--color-primary);
+                  }
+
+                  &.copied {
+                    border-color: #10b981;
+                    color: #10b981;
+                    background: color-mix(in srgb, #10b981 12%, transparent);
+                  }
+                }
+              }
+            }
+
+            .textarea-wrapper {
+              display: flex;
+              flex-direction: column;
+              flex: 1;
+              position: relative;
+
+              .prompt-text {
+                flex: 1;
+                min-height: 160px;
+                resize: none;
+                padding: 12px;
+                border: 0;
+                outline: none;
+                background: transparent;
+                color: var(--color-text);
+                font-family: inherit;
+                font-size: var(--font-size-sm);
+                line-height: 1.65;
+              }
+
+              .prompt-metrics-bar {
+                display: flex;
+                justify-content: flex-end;
+                padding: 4px 10px 8px;
+                font-family: var(--font-family-mono, monospace);
+                font-size: 11px;
+                color: var(--color-text-soft);
+
+                .warning-limit {
+                  color: var(--color-danger);
+                  font-weight: 600;
+                }
+              }
             }
           }
-          .prompt-text {
-            flex: 1;
-            min-height: 150px;
-            resize: none;
-            padding: 12px;
+
+          .tech-hint-card {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 6px;
+            background: color-mix(
+              in srgb,
+              var(--color-primary-soft) 70%,
+              transparent
+            );
+            border: 1px solid
+              color-mix(in srgb, var(--color-primary) 30%, transparent);
+            color: var(--color-text-muted);
+            font-size: var(--font-size-xs);
+            line-height: 1.5;
+
+            .hint-icon {
+              color: var(--color-primary);
+              flex: none;
+              margin-top: 1px;
+            }
+
+            &.edit-hint-card {
+              background: color-mix(in srgb, #f59e0b 8%, var(--color-panel));
+              border-color: color-mix(in srgb, #f59e0b 28%, transparent);
+
+              .hint-icon {
+                color: #f59e0b;
+              }
+            }
+          }
+
+          .template-meta-strip {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            padding: 8px 12px;
             border: 1px solid var(--color-line);
             border-radius: 6px;
-            outline: none;
-            background: var(--color-panel-soft);
-            color: var(--color-text);
-            font-family: inherit;
-            font-size: var(--font-size-base);
-            line-height: 1.7;
-            &:focus {
-              border-color: var(--color-primary);
+            background: var(--color-panel);
+
+            .meta-strip-item {
+              display: flex;
+              align-items: center;
+              gap: 6px;
+              font-size: var(--font-size-xs);
+              color: var(--color-text-muted);
+
+              .meta-strip-label {
+                color: var(--color-text-soft);
+              }
+
+              .meta-strip-value {
+                font-family: var(--font-family-mono, monospace);
+                font-weight: 600;
+                color: var(--color-text);
+              }
             }
           }
-          .detail-hint {
-            margin: 0;
-            color: var(--color-text-soft);
-            font-size: var(--font-size-sm);
-            line-height: 1.6;
-          }
+
           .detail-error {
             margin: 0;
             color: var(--color-danger);
-            font-size: var(--font-size-sm);
+            font-size: var(--font-size-xs);
           }
-          .template-meta {
-            display: flex;
-            justify-content: space-between;
-            gap: 8px;
-            color: var(--color-text-muted);
-            font-size: var(--font-size-sm);
-          }
-          .use-button {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            flex: none;
-            height: 36px;
-            border: 0;
-            border-radius: 6px;
-            background: var(--color-primary-solid);
-            color: #fff;
-            cursor: pointer;
-            &:disabled {
-              opacity: 0.5;
-              cursor: not-allowed;
+
+          .detail-action-bar {
+            margin-top: 4px;
+
+            .use-button {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              gap: 8px;
+              width: 100%;
+              height: 40px;
+              border: 0;
+              border-radius: 8px;
+              background: linear-gradient(
+                135deg,
+                var(--color-primary) 0%,
+                color-mix(in srgb, var(--color-primary) 80%, #000) 100%
+              );
+              box-shadow: 0 4px 14px
+                color-mix(in srgb, var(--color-primary) 35%, transparent);
+              color: #ffffff;
+              font-weight: 600;
+              font-size: var(--font-size-sm);
+              cursor: pointer;
+              transition: all 0.2s ease;
+
+              &:hover:not(:disabled) {
+                transform: translateY(-1px);
+                box-shadow: 0 6px 18px
+                  color-mix(in srgb, var(--color-primary) 45%, transparent);
+              }
+
+              &:disabled {
+                opacity: 0.5;
+                cursor: not-allowed;
+                box-shadow: none;
+              }
             }
           }
         }
       }
     }
   }
+
+  // --- Image Placeholder ---
   .image-placeholder {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 9px;
+    gap: 8px;
     width: 100%;
     height: 100%;
     color: var(--color-text-soft);
-    font-size: var(--font-size-sm);
+    font-size: var(--font-size-xs);
+
+    &.error-placeholder {
+      opacity: 0.75;
+    }
+  }
+
+  // --- Attribution Footer ---
+  .library-attribution {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--color-line);
+    color: var(--color-text-soft);
+    font-size: var(--font-size-xs);
+
+    .attribution-label {
+      font-family: var(--font-family-mono, monospace);
+    }
+
+    .attribution-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--color-primary);
+      text-decoration: none;
+      font-weight: 500;
+
+      &:hover {
+        text-decoration: underline;
+      }
+    }
   }
 }
-@keyframes prompt-library-spin {
+
+// --- Keyframes ---
+@keyframes tech-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes tech-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.85);
   }
 }
 </style>
