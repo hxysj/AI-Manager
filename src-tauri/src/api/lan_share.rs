@@ -3030,11 +3030,29 @@ pub async fn send_message(
         emit_state_changed(&app, registry, paths).await?;
         return Ok(lan_share_response(json!([stored])));
     }
-    let native_delivery =
-        native::deliver(registry, &target_device_id, &content, &files, &message_id).await?;
-    if target_device_id.starts_with("native-") && !native_delivery {
+    let is_native = target_device_id.starts_with("native-");
+    let is_trusted_peer = if is_native {
+        let runtime = registry.inner.lock().await;
+        runtime
+            .native
+            .config
+            .peers
+            .iter()
+            .any(|trusted| trusted.peer.id == target_device_id)
+    } else {
+        false
+    };
+    if is_native && !is_trusted_peer {
         return Err(ManagerError::System("请先连接并配对这台设备。".into()));
     }
+    let native_delivery = if is_native {
+        match native::deliver(registry, &target_device_id, &content, &files, &message_id).await {
+            Ok(delivered) => delivered,
+            Err(_) => false,
+        }
+    } else {
+        false
+    };
     let targets = {
         let runtime = registry.inner.lock().await;
         if target_device_id.is_empty() {
@@ -3082,6 +3100,136 @@ pub async fn send_message(
     }
     emit_state_changed(&app, registry, paths).await?;
     Ok(lan_share_response(json!(sent_messages)))
+}
+
+pub async fn retry_message(
+    app: tauri::AppHandle,
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let message_id = string_value(payload.get("messageId"));
+    if message_id.is_empty() {
+        return Err(ManagerError::System("缺少消息 ID。".into()));
+    }
+    let (message, files) = {
+        let _storage = registry.storage.lock().await;
+        let messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        let msg = messages
+            .into_iter()
+            .find(|m| m.id == message_id)
+            .ok_or_else(|| ManagerError::System("消息不存在。".into()))?;
+        if msg.delivered {
+            return Ok(lan_share_response(json!(msg)));
+        }
+        let all_files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
+        let files = msg
+            .attachments
+            .iter()
+            .filter_map(|att| all_files.iter().find(|f| f.id == att.id).cloned())
+            .collect::<Vec<_>>();
+        (msg, files)
+    };
+
+    let delivered = native::deliver(
+        registry,
+        &message.device_id,
+        &message.content,
+        &files,
+        &message.id,
+    )
+    .await?;
+    if !delivered {
+        return Err(ManagerError::System("对方设备离线或未配对。".into()));
+    }
+
+    let updated_message = {
+        let _storage = registry.storage.lock().await;
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        let mut updated = message.clone();
+        if let Some(m) = messages.iter_mut().find(|m| m.id == message_id) {
+            m.delivered = true;
+            updated = m.clone();
+        }
+        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
+        updated
+    };
+
+    emit_state_changed(&app, registry, paths).await?;
+    Ok(lan_share_response(json!(updated_message)))
+}
+
+pub(super) async fn deliver_pending_messages_for_peer(
+    app: &tauri::AppHandle,
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    device_id: &str,
+) {
+    let pending_items = {
+        let _storage = registry.storage.lock().await;
+        let Ok(messages) = read_array::<LanShareMessage>(&paths.lan_share_files.messages) else {
+            return;
+        };
+        let Ok(all_files) = read_array::<LanShareFile>(&paths.lan_share_files.files) else {
+            return;
+        };
+        messages
+            .into_iter()
+            .filter(|m| {
+                m.device_id == device_id && !m.delivered && m.direction == "desktop-to-mobile"
+            })
+            .map(|m| {
+                let files = m
+                    .attachments
+                    .iter()
+                    .filter_map(|att| all_files.iter().find(|f| f.id == att.id).cloned())
+                    .collect::<Vec<_>>();
+                (m, files)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    if pending_items.is_empty() {
+        return;
+    }
+
+    let mut delivered_ids = Vec::new();
+    for (m, files) in pending_items {
+        match native::deliver(registry, device_id, &m.content, &files, &m.id).await {
+            Ok(true) => delivered_ids.push(m.id),
+            _ => break,
+        }
+    }
+
+    if !delivered_ids.is_empty() {
+        let _storage = registry.storage.lock().await;
+        if let Ok(mut messages) = read_array::<LanShareMessage>(&paths.lan_share_files.messages) {
+            for m in messages.iter_mut() {
+                if delivered_ids.contains(&m.id) {
+                    m.delivered = true;
+                }
+            }
+            let _ = write_json(&paths.lan_share_files.messages, &json!(messages)).await;
+        }
+        let _ = emit_state_changed(app, registry, paths).await;
+    }
+}
+
+pub async fn set_auto_discovery(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let enabled = payload.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+    let result = native::set_auto_discovery(registry, paths, enabled).await?;
+    Ok(lan_share_response(result))
+}
+
+pub async fn scan_devices(
+    registry: &LanShareServerRegistry,
+) -> Result<Value, ManagerError> {
+    let result = native::scan_nearby(registry).await?;
+    Ok(lan_share_response(result))
 }
 
 async fn handle_http_request(

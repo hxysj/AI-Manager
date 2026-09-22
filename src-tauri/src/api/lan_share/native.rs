@@ -1,4 +1,5 @@
 use super::*;
+use futures_util::FutureExt;
 use http_body_util::Limited;
 use std::time::Duration;
 use tokio::net::UdpSocket;
@@ -9,43 +10,45 @@ const PAIRING_LIFETIME: u64 = 90_000;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct Peer {
-    id: String,
-    name: String,
-    ip: String,
-    port: u16,
+pub(super) struct Peer {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) ip: String,
+    pub(super) port: u16,
     #[serde(default)]
-    last_seen_at: u64,
+    pub(super) last_seen_at: u64,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
-struct TrustedPeer {
-    peer: Peer,
-    secret: String,
+pub(super) struct TrustedPeer {
+    pub(super) peer: Peer,
+    pub(super) secret: String,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-struct Config {
-    id: String,
-    name: String,
-    peers: Vec<TrustedPeer>,
-    ignored_peers: Vec<String>,
+pub(super) struct Config {
+    pub(super) id: String,
+    pub(super) name: String,
+    pub(super) auto_discovery: bool,
+    pub(super) peers: Vec<TrustedPeer>,
+    pub(super) ignored_peers: Vec<String>,
 }
 
-struct Pairing {
-    peer: Peer,
-    secret: String,
-    created_at: u64,
-    status: String,
+pub(super) struct Pairing {
+    pub(super) peer: Peer,
+    pub(super) secret: String,
+    pub(super) created_at: u64,
+    pub(super) status: String,
 }
 
 #[derive(Default)]
 pub(super) struct NativeRuntime {
-    config: Config,
-    nearby: HashMap<String, Peer>,
-    pairing: HashMap<String, Pairing>,
-    connecting: HashMap<String, String>,
+    pub(super) config: Config,
+    pub(super) nearby: HashMap<String, Peer>,
+    pub(super) pairing: HashMap<String, Pairing>,
+    pub(super) connecting: HashMap<String, String>,
+    pub(super) scan_trigger: Option<tokio::sync::mpsc::Sender<()>>,
     handle: Option<tauri::async_runtime::JoinHandle<()>>,
     tasks: HashMap<String, tauri::async_runtime::JoinHandle<()>>,
     pub(super) error: String,
@@ -59,6 +62,7 @@ impl NativeRuntime {
         for (_, task) in self.tasks.drain() {
             task.abort();
         }
+        self.scan_trigger = None;
         self.nearby.clear();
         self.pairing.clear();
         self.connecting.clear();
@@ -142,6 +146,7 @@ impl NativeRuntime {
         json!({
             "deviceName": self.config.name,
             "deviceId": self.config.id,
+            "autoDiscovery": self.config.auto_discovery,
             "error": self.error,
             "peers": peers.iter().map(|peer| json!({
                 "id": peer.id, "name": peer.name, "ip": peer.ip, "port": peer.port,
@@ -245,26 +250,28 @@ pub(super) async fn start(
     socket.set_broadcast(true)?;
     let announcement =
         serde_json::to_vec(&json!({ "protocol": DISCOVERY_PROTOCOL, "peer": peer }))?;
+    let (scan_tx, mut scan_rx) = tokio::sync::mpsc::channel::<()>(8);
+    registry.inner.lock().await.native.scan_trigger = Some(scan_tx);
     let task_registry = registry.clone();
     let task_paths = paths.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(3));
         let mut buffer = [0u8; 2048];
         loop {
-            let packet = match futures_util::future::select(
-                Box::pin(interval.tick()),
-                Box::pin(socket.recv_from(&mut buffer)),
-            )
-            .await
-            {
-                futures_util::future::Either::Left((_, pending)) => {
-                    drop(pending);
-                    let _ = socket
-                        .send_to(
-                            &announcement,
-                            SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT)),
-                        )
-                        .await;
+            let packet = futures_util::select! {
+                _ = interval.tick().fuse() => {
+                    let should_broadcast = {
+                        let runtime = task_registry.inner.lock().await;
+                        runtime.native.config.auto_discovery
+                    };
+                    if should_broadcast {
+                        let _ = socket
+                            .send_to(
+                                &announcement,
+                                SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT)),
+                            )
+                            .await;
+                    }
                     {
                         let mut runtime = task_registry.inner.lock().await;
                         runtime.native.nearby.retain(|_, peer| {
@@ -276,19 +283,35 @@ pub(super) async fn start(
                     }
                     let _ = emit_state_changed(&app, &task_registry, &task_paths).await;
                     None
-                }
-                futures_util::future::Either::Right((packet, pending)) => {
-                    drop(pending);
-                    Some(packet)
+                },
+                scan_req = scan_rx.recv().fuse() => {
+                    if scan_req.is_some() {
+                        let _ = socket
+                            .send_to(
+                                &announcement,
+                                SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT)),
+                            )
+                            .await;
+                    }
+                    None
+                },
+                recv = socket.recv_from(&mut buffer).fuse() => {
+                    Some(recv)
                 }
             };
             if let Some(Ok((size, source))) = packet {
                 if let Some(peer) = discovery_peer(&buffer[..size], source, &own_id) {
-                    let mut runtime = task_registry.inner.lock().await;
-                    if runtime.native.nearby.len() < 100
-                        || runtime.native.nearby.contains_key(&peer.id)
-                    {
-                        runtime.native.nearby.insert(peer.id.clone(), peer);
+                    let is_trusted = {
+                        let mut runtime = task_registry.inner.lock().await;
+                        if runtime.native.nearby.len() < 100
+                            || runtime.native.nearby.contains_key(&peer.id)
+                        {
+                            runtime.native.nearby.insert(peer.id.clone(), peer.clone());
+                        }
+                        runtime.native.config.peers.iter().any(|t| t.peer.id == peer.id)
+                    };
+                    if is_trusted {
+                        deliver_pending_messages_for_peer(&app, &task_registry, &task_paths, &peer.id).await;
                     }
                 }
             }
@@ -296,6 +319,33 @@ pub(super) async fn start(
     });
     registry.inner.lock().await.native.handle = Some(handle);
     Ok(())
+}
+
+pub(super) async fn set_auto_discovery(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    enabled: bool,
+) -> Result<Value, ManagerError> {
+    let snapshot = {
+        let mut runtime = registry.inner.lock().await;
+        runtime.native.config.auto_discovery = enabled;
+        write_json(&paths.lan_share_files.config, &json!(runtime.native.config)).await?;
+        runtime.native.snapshot()
+    };
+    Ok(snapshot)
+}
+
+pub(super) async fn scan_nearby(
+    registry: &LanShareServerRegistry,
+) -> Result<Value, ManagerError> {
+    let scan_tx = {
+        let runtime = registry.inner.lock().await;
+        runtime.native.scan_trigger.clone()
+    };
+    if let Some(tx) = scan_tx {
+        let _ = tx.send(()).await;
+    }
+    Ok(json!(true))
 }
 
 async fn response_data(response: reqwest::Response) -> Result<Value, ManagerError> {

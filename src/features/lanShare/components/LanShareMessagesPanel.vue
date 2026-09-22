@@ -2,17 +2,25 @@
   <section
     ref="panelRef"
     class="lan-chat"
-    @dragover.prevent
-    @drop.prevent="dropFiles"
+    :class="{ 'is-panel-dragover': isDragOver }"
+    @dragenter="handleDragEnter"
+    @dragover="handleDragOver"
+    @dragleave="handleDragLeave"
+    @drop="handleDrop"
   >
     <div ref="messageListRef" class="chat-timeline" aria-label="聊天消息">
       <div v-if="!messages.length" class="chat-empty">
-        <MessagesSquare :size="34" :stroke-width="1.3" />
-        <span>从一句话或一个文件开始</span>
+        <div class="cyber-empty-hud">
+          <div class="cyber-empty-ring ring-1"></div>
+          <div class="cyber-empty-ring ring-2"></div>
+          <MessagesSquare :size="32" class="cyber-empty-icon" />
+        </div>
+        <span class="cyber-empty-title">WAITING FOR TRANSMISSION</span>
         <small class="chat-empty-hint"
-          >图片、文件和文字都在这里查看，无需切换页面。</small
+          >信道已建立。键入文字、拖拽图片或添加文件，直接启动局域网极速直连。</small
         >
       </div>
+
       <article
         v-for="message in messages"
         :key="message.id"
@@ -23,25 +31,55 @@
         }"
       >
         <div class="chat-message-meta">
-          <span>{{
+          <span class="chat-sender-name">{{
             message.direction === "desktop-to-mobile"
-              ? "我"
-              : message.deviceName || currentDevice?.name || "对方"
+              ? "本机节点"
+              : message.deviceName || currentDevice?.name || "目标节点"
           }}</span>
-          <time>{{ formatDateTime(message.createdAt) }}</time>
-          <span
+          <time class="chat-timestamp">{{
+            formatDateTime(message.createdAt)
+          }}</time>
+
+          <!-- 离线/待接收状态指示与重试操作 -->
+          <div
             v-if="
               message.direction === 'desktop-to-mobile' && !message.delivered
             "
-            class="chat-delivery"
-            >待对方接收</span
+            class="chat-offline-badge"
           >
+            <span class="cyber-pulse-dot cyber-pulse-dot--amber"></span>
+            <span class="chat-delivery-text">待对方接收 (离线)</span>
+            <button
+              class="chat-retry-btn"
+              type="button"
+              :disabled="retryingMessageId === message.id"
+              title="立即向对方重试发送"
+              @click="retryMessage(message.id)"
+            >
+              <RotateCw
+                :size="11"
+                :class="{ 'cyber-spin': retryingMessageId === message.id }"
+              />
+              <span>{{
+                retryingMessageId === message.id ? "重试中" : "重试"
+              }}</span>
+            </button>
+          </div>
+          <span
+            v-else-if="message.direction === 'desktop-to-mobile'"
+            class="chat-delivered-badge"
+          >
+            <span class="cyber-dot-emerald"></span>
+            <span>已送达</span>
+          </span>
         </div>
+
         <div class="chat-message-body">
           <div
             class="chat-bubble"
             :class="{
-              'chat-bubble-attachments': !message.content?.trim() && message.attachments?.length
+              'chat-bubble-attachments':
+                !message.content?.trim() && message.attachments?.length
             }"
           >
             <p v-if="message.content?.trim()" class="chat-text">
@@ -56,6 +94,7 @@
               @download="$emit('download-file', $event)"
             />
           </div>
+
           <div class="chat-message-actions">
             <button
               v-if="message.content"
@@ -81,6 +120,7 @@
       </article>
     </div>
 
+    <!-- 科技感底部输入区 -->
     <footer class="chat-composer" :aria-busy="sending">
       <div
         v-if="currentDraft.files.length"
@@ -98,15 +138,15 @@
             :src="item.previewUrl"
             :alt="item.name"
           />
-          <File v-else class="chat-draft-icon" :size="22" />
-          <span class="chat-draft-caption"
-            ><span class="chat-draft-name" :title="item.name">{{
+          <File v-else class="chat-draft-icon" :size="20" />
+          <span class="chat-draft-caption">
+            <span class="chat-draft-name" :title="item.name">{{
               item.name
-            }}</span
-            ><small class="chat-draft-size">{{
+            }}</span>
+            <small class="chat-draft-size">{{
               formatFileSize(item.size)
-            }}</small></span
-          >
+            }}</small>
+          </span>
           <button
             class="chat-icon-button"
             type="button"
@@ -118,17 +158,29 @@
           </button>
         </div>
       </div>
-      <textarea
-        ref="composerRef"
-        v-model="currentDraft.content"
-        class="chat-input"
-        :disabled="sending || !currentSessionId"
-        rows="2"
-        placeholder="输入消息，也可以直接粘贴图片、文件，或拖拽到这里…"
-        aria-label="聊天输入框"
-        @paste="pasteFiles"
-        @keydown="composerKeydown"
-      ></textarea>
+
+      <div
+        ref="inputWrapperRef"
+        class="chat-input-wrapper"
+        :class="{ 'is-dragover': isDragOver }"
+      >
+        <div v-if="isDragOver" class="chat-drag-overlay">
+          <CloudUpload :size="22" class="cyber-bounce-icon" />
+          <span class="chat-drag-text">释放以添加文件或图片</span>
+        </div>
+        <textarea
+          ref="composerRef"
+          v-model="currentDraft.content"
+          class="chat-input"
+          :disabled="sending || !currentSessionId"
+          rows="2"
+          placeholder="键入消息内容，或直接拖拽/粘贴文件、图片至此..."
+          aria-label="聊天输入框"
+          @paste="pasteFiles"
+          @keydown="composerKeydown"
+        ></textarea>
+      </div>
+
       <div class="chat-composer-footer">
         <div class="chat-compose-tools">
           <button
@@ -138,13 +190,14 @@
             title="添加文件或图片，可多选"
             @click="pickFiles"
           >
-            <Paperclip :size="17" /><span>添加附件</span>
+            <Paperclip :size="15" />
+            <span>添加附件</span>
           </button>
           <span class="chat-compose-hint">{{
             sending
               ? sendStatus
               : currentDraft.files.length
-                ? `${currentDraft.files.length} 个附件 · 合并为一条消息`
+                ? `${currentDraft.files.length} 个附件 · 合并发送`
                 : "Enter 发送 · Shift + Enter 换行"
           }}</span>
         </div>
@@ -159,7 +212,8 @@
           "
           @click="sendMessage"
         >
-          <Send :size="15" />{{ sending ? "发送中" : "发送" }}
+          <Send :size="14" />
+          <span>{{ sending ? "传输中..." : "发送" }}</span>
         </button>
       </div>
       <input
@@ -172,11 +226,13 @@
       />
     </footer>
 
+    <!-- 侧边记录搜索抽屉 -->
     <el-drawer
       v-model="searchOpen"
-      title="聊天记录"
+      title="聊天记录搜索"
       size="420px"
       append-to-body
+      class="cyber-drawer"
     >
       <div class="chat-search-drawer">
         <el-input
@@ -184,24 +240,27 @@
           placeholder="搜索文字或附件名称"
           clearable
         />
-        <el-select v-model="timeFilter" aria-label="消息时间范围"
-          ><el-option label="全部时间" value="all" /><el-option
-            label="今天"
-            value="today" /><el-option label="最近 7 天" value="week"
-        /></el-select>
+        <el-select v-model="timeFilter" aria-label="消息时间范围">
+          <el-option label="全部时间" value="all" />
+          <el-option label="今天" value="today" />
+          <el-option label="最近 7 天" value="week" />
+        </el-select>
         <div class="chat-search-actions">
-          <span>{{ filteredMessages.length }} 条记录</span
-          ><el-button size="small" @click="selectAll">{{
-            allSelected ? "取消全选" : "全选"
-          }}</el-button
-          ><el-button
-            size="small"
-            type="danger"
-            plain
-            :disabled="!selectedIds.length"
-            @click="deleteMessages(selectedIds)"
-            >删除所选</el-button
-          >
+          <span>匹配 {{ filteredMessages.length }} 条记录</span>
+          <div class="chat-search-btns">
+            <el-button size="small" @click="selectAll">
+              {{ allSelected ? "取消全选" : "全选" }}
+            </el-button>
+            <el-button
+              size="small"
+              type="danger"
+              plain
+              :disabled="!selectedIds.length"
+              @click="deleteMessages(selectedIds)"
+            >
+              删除所选
+            </el-button>
+          </div>
         </div>
         <div class="chat-search-results">
           <div
@@ -221,17 +280,17 @@
             >
               <small class="chat-search-time">{{
                 formatDateTime(message.createdAt)
-              }}</small
-              ><span>{{
+              }}</small>
+              <span>{{
                 message.content ||
                 message.attachments?.map((file) => file.name).join("、") ||
                 "文件消息"
               }}</span>
             </button>
           </div>
-          <span v-if="!filteredMessages.length" class="chat-search-empty"
-            >没有匹配的聊天记录</span
-          >
+          <span v-if="!filteredMessages.length" class="chat-search-empty">
+            没有匹配的聊天记录
+          </span>
         </div>
       </div>
     </el-drawer>
@@ -264,10 +323,12 @@ import "element-plus/es/components/select/style/css"
 import { isTauri } from "@tauri-apps/api/core"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import {
+  CloudUpload,
   Copy,
   File,
   MessagesSquare,
   Paperclip,
+  RotateCw,
   Send,
   Trash2,
   X
@@ -287,14 +348,19 @@ const props = defineProps({
   stateVersion: { type: Number, default: 0 }
 })
 const emit = defineEmits(["refresh-state", "preview-file", "download-file"])
+
 const panelRef = ref(null)
 const messageListRef = ref(null)
 const composerRef = ref(null)
+const inputWrapperRef = ref(null)
 const fileInputRef = ref(null)
+const isDragOver = ref(false)
+let dragDepth = 0
 const messages = ref([])
 const drafts = reactive({})
 const sending = ref(false)
 const sendStatus = ref("")
+const retryingMessageId = ref("")
 const searchOpen = ref(false)
 const keyword = ref("")
 const timeFilter = ref("all")
@@ -315,7 +381,12 @@ watch(
   },
   { immediate: true }
 )
-const currentDraft = computed(() => drafts[props.currentSessionId])
+
+const currentDraft = computed(
+  () =>
+    drafts[props.currentSessionId] || { content: "", files: [], messageId: "" }
+)
+
 const filteredMessages = computed(() => {
   const since =
     timeFilter.value === "today"
@@ -332,6 +403,7 @@ const filteredMessages = computed(() => {
         .includes(query)
   )
 })
+
 const allSelected = computed(
   () =>
     filteredMessages.value.length > 0 &&
@@ -339,6 +411,7 @@ const allSelected = computed(
       selectedIds.value.includes(message.id)
     )
 )
+
 watch(() => props.stateVersion, loadMessages)
 
 onMounted(async () => {
@@ -352,18 +425,33 @@ onMounted(async () => {
   if (isTauri()) {
     try {
       const unlisten = await getCurrentWebview().onDragDropEvent((event) => {
-        if (event.payload.type !== "drop") return
-        const bounds = panelRef.value?.getBoundingClientRect()
-        const position = event.payload.position
+        const payload = event.payload
+        if (payload.type === "leave") {
+          isDragOver.value = false
+          return
+        }
+
+        const position = payload.position
         const scale = window.devicePixelRatio || 1
-        if (
+        const x = position.x / scale
+        const y = position.y / scale
+
+        const bounds = panelRef.value?.getBoundingClientRect()
+        const isOverPanel =
           bounds &&
-          position.x / scale >= bounds.left &&
-          position.x / scale <= bounds.right &&
-          position.y / scale >= bounds.top &&
-          position.y / scale <= bounds.bottom
-        )
-          addPaths(event.payload.paths)
+          x >= bounds.left &&
+          x <= bounds.right &&
+          y >= bounds.top &&
+          y <= bounds.bottom
+
+        if (payload.type === "enter" || payload.type === "over") {
+          isDragOver.value = Boolean(isOverPanel)
+        } else if (payload.type === "drop") {
+          isDragOver.value = false
+          if (isOverPanel) {
+            addPaths(payload.paths)
+          }
+        }
       })
       if (disposed) unlisten()
       else stopDropListener = unlisten
@@ -425,6 +513,26 @@ async function loadMessages() {
   }
 }
 
+async function retryMessage(messageId) {
+  if (retryingMessageId.value) return
+  retryingMessageId.value = messageId
+  try {
+    const result = await lanShareApi.retryMessage({ messageId })
+    const data = unwrap(result)
+    if (data?.delivered) {
+      createMessage.success("消息已成功送达对方")
+    } else {
+      createMessage.info("已尝试重新投递，对方目前仍处于离线状态")
+    }
+    await loadMessages()
+    emit("refresh-state")
+  } catch (err) {
+    createMessage.error(err?.message || "重试发送失败")
+  } finally {
+    retryingMessageId.value = ""
+  }
+}
+
 function appendFiles(files) {
   if (sending.value || !props.currentSessionId) return
   const remaining = 100 - currentDraft.value.files.length
@@ -458,66 +566,93 @@ function addPaths(paths) {
     currentDraft.value.files.push({
       id: crypto.randomUUID(),
       path,
-      name: path.split(/[\\/]/).at(-1),
-      size: null
+      name: path.split(/[/\\]/).pop() || path,
+      size: 0
     })
   }
 }
 
-async function pickFiles() {
-  if (!isTauri()) {
-    fileInputRef.value?.click()
-    return
-  }
-  try {
-    addPaths(
-      (await systemApi.selectFiles({ title: "选择要发送的文件和图片" })) || []
-    )
-  } catch (error) {
-    createMessage.error(error?.message || String(error))
-  }
-}
-
 function chooseBrowserFiles(event) {
-  appendFiles([...event.target.files])
+  appendFiles(Array.from(event.target.files || []))
   event.target.value = ""
 }
-async function pasteFiles(event) {
-  const files = [...(event.clipboardData?.files || [])]
+
+async function pickFiles() {
+  if (sending.value || !props.currentSessionId) return
+  if (isTauri()) {
+    try {
+      const selected = await systemApi.selectFiles({
+        title: "选择快传文件",
+        multiple: true
+      })
+      if (Array.isArray(selected)) addPaths(selected)
+      else if (selected) addPaths([selected])
+    } catch (error) {
+      createMessage.error(`选择文件失败：${error?.message || error}`)
+    }
+    return
+  }
+  fileInputRef.value?.click()
+}
+
+function pasteFiles(event) {
+  const items = Array.from(event.clipboardData?.items || [])
+  const files = items
+    .filter((item) => item.kind === "file")
+    .map((item) => item.getAsFile())
+    .filter(Boolean)
   if (files.length) {
     event.preventDefault()
     appendFiles(files)
-    return
-  }
-  if (!isTauri() || event.clipboardData?.getData("text/plain") || sending.value)
-    return
-  const sessionId = props.currentSessionId
-  try {
-    const paths = unwrap(await lanShareApi.getClipboardFiles())
-    if (sessionId === props.currentSessionId && !disposed) addPaths(paths || [])
-  } catch (error) {
-    createMessage.error(error?.message || String(error))
   }
 }
+
+function handleDragEnter(event) {
+  event.preventDefault()
+  dragDepth++
+  isDragOver.value = true
+}
+
+function handleDragOver(event) {
+  event.preventDefault()
+  if (!isDragOver.value) isDragOver.value = true
+}
+
+function handleDragLeave(event) {
+  event.preventDefault()
+  dragDepth--
+  if (dragDepth <= 0) {
+    dragDepth = 0
+    isDragOver.value = false
+  }
+}
+
+function handleDrop(event) {
+  event.preventDefault()
+  dragDepth = 0
+  isDragOver.value = false
+  dropFiles(event)
+}
+
 function dropFiles(event) {
-  appendFiles([...event.dataTransfer.files])
+  const files = Array.from(event.dataTransfer?.files || [])
+  if (files.length) appendFiles(files)
 }
+
 function composerKeydown(event) {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+  if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault()
     sendMessage()
   }
 }
 
 async function discardUploads(files) {
-  const identifiers = files.map((file) => file.uploadedId).filter(Boolean)
-  if (identifiers.length) {
-    try {
-      await lanShareApi.discardUploads({ attachmentIds: identifiers })
-    } catch (error) {
-      if (!disposed)
-        createMessage.error(`临时附件清理失败：${error?.message || error}`)
-    }
+  const ids = files.map((file) => file.uploadedId).filter(Boolean)
+  if (!ids.length || !props.service.running) return
+  try {
+    await lanShareApi.discardUploads({ attachmentIds: ids })
+  } catch (error) {
+    console.error("discardUploads error:", error)
   }
 }
 
@@ -564,8 +699,8 @@ async function sendMessage() {
       item.uploadedId = payload.data.id
     }
     sendStatus.value = selected.length
-      ? `正在发送 ${selected.length} 个附件…`
-      : "正在发送…"
+      ? `正在传输 ${selected.length} 个附件…`
+      : "正在传输…"
     await lanShareApi.sendMessage({
       sessionId,
       deviceId,
@@ -642,6 +777,7 @@ function selectAll() {
     ? []
     : filteredMessages.value.map((message) => message.id)
 }
+
 async function jumpToMessage(id) {
   searchOpen.value = false
   await nextTick()
@@ -650,6 +786,7 @@ async function jumpToMessage(id) {
   ].find((element) => element.dataset.messageId === id)
   target?.scrollIntoView({ block: "center" })
 }
+
 defineExpose({
   openSearch: () => {
     searchOpen.value = true
@@ -666,38 +803,87 @@ defineExpose({
   flex: 1;
   flex-direction: column;
   overflow: hidden;
+  background: var(--color-panel-soft);
 
   .chat-timeline {
     display: flex;
     min-height: 0;
     flex: 1;
     flex-direction: column;
-    gap: 18px;
-    padding: 22px 24px;
+    gap: 20px;
+    padding: 24px;
     overflow-y: auto;
     background: var(--color-panel-soft);
     scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
 
     .chat-empty {
       display: flex;
-      min-height: 160px;
+      min-height: 200px;
       flex: 1;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       gap: 14px;
       color: var(--color-text-muted);
-      font-size: var(--font-size-base);
       text-align: center;
 
+      .cyber-empty-hud {
+        position: relative;
+        width: 80px;
+        height: 80px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
+        .cyber-empty-icon {
+          color: var(--color-primary);
+          z-index: 1;
+        }
+
+        .cyber-empty-ring {
+          position: absolute;
+          border-radius: 50%;
+          border: 1px solid var(--color-line);
+
+          &.ring-1 {
+            width: 58px;
+            height: 58px;
+            border-style: dashed;
+            border-color: var(--color-primary);
+            opacity: 0.55;
+            animation: cyberSpin 18s linear infinite;
+          }
+
+          &.ring-2 {
+            width: 78px;
+            height: 78px;
+            border-color: var(--color-line-strong);
+          }
+        }
+      }
+
+      .cyber-empty-title {
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
+        letter-spacing: 2px;
+        color: var(--color-primary);
+        font-weight: 600;
+      }
+
       .chat-empty-hint {
-        font-size: var(--font-size-sm);
+        max-width: 380px;
+        font-size: 13px;
+        color: var(--color-text-muted);
+        line-height: 1.6;
       }
     }
+
     .chat-message {
       position: relative;
       display: flex;
-      max-width: min(86%, 560px);
+      max-width: min(85%, 620px);
       min-width: 0;
       flex: none;
       flex-direction: column;
@@ -709,12 +895,73 @@ defineExpose({
         flex-wrap: wrap;
         align-items: center;
         gap: 8px;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
         color: var(--color-text-muted);
-        font-size: var(--font-size-sm);
-        .chat-delivery {
+
+        .chat-sender-name {
+          color: var(--color-text);
+          font-weight: 500;
+        }
+
+        .chat-timestamp {
+          color: var(--color-text-soft);
+        }
+
+        .chat-offline-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          padding: 2px 7px;
+          background: var(--color-warning-soft);
+          border: 1px solid var(--color-warning-line);
+          border-radius: 4px;
           color: var(--color-warning);
+
+          .chat-retry-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            padding: 1px 5px;
+            background: var(--color-panel);
+            border: 1px solid var(--color-warning-line);
+            border-radius: 3px;
+            color: var(--color-warning);
+            cursor: pointer;
+            font-size: 10px;
+            font-family: inherit;
+            transition: all 0.2s;
+
+            &:hover:not(:disabled) {
+              background: var(--color-warning-soft);
+              border-color: var(--color-warning);
+            }
+
+            &:disabled {
+              opacity: 0.6;
+              cursor: not-allowed;
+            }
+          }
+        }
+
+        .chat-delivered-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          color: var(--color-success);
+          font-size: 10px;
+
+          .cyber-dot-emerald {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--color-success);
+            box-shadow: 0 0 5px var(--color-success);
+          }
         }
       }
+
       .chat-message-body {
         display: flex;
         min-width: 0;
@@ -727,58 +974,91 @@ defineExpose({
           flex: 1;
           flex-direction: column;
           gap: 10px;
+          box-sizing: border-box;
+
           &.chat-bubble-attachments {
             flex: 0 1 auto;
           }
-          &:not(.chat-bubble-attachments) {
-            padding: 10px;
-            border: 1px solid var(--color-line);
-            border-radius: 0 12px 12px;
-            background: var(--color-panel);
-          }
 
-          .chat-text {
-            margin: 0;
-            padding: 1px 3px;
-            color: var(--color-text);
-            white-space: pre-wrap;
-            overflow-wrap: anywhere;
-            line-height: 1.7;
-            font-size: var(--font-size-base);
+          &:not(.chat-bubble-attachments) {
+            padding: 11px 14px;
+            border: 1px solid var(--color-line);
+            border-left: 3px solid var(--color-primary);
+            border-radius: 0 10px 10px 10px;
+            background: var(--color-panel);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+
+            .chat-text {
+              margin: 0;
+              padding: 0;
+              color: var(--color-text);
+              white-space: pre-wrap;
+              overflow-wrap: anywhere;
+              line-height: 1.65;
+              font-size: 13.5px;
+            }
           }
         }
+
         .chat-message-actions {
           display: flex;
           flex: none;
           gap: 4px;
           opacity: 0;
+          transition: opacity 0.15s;
+
           .chat-icon-button {
             display: grid;
             width: 24px;
-            height: 22px;
+            height: 24px;
             place-items: center;
             padding: 0;
-            border: 0;
-            background: transparent;
+            border: 1px solid var(--color-line);
+            border-radius: 4px;
+            background: var(--color-panel);
             color: var(--color-text-muted);
+            cursor: pointer;
+            transition: all 0.15s;
+
+            &:hover {
+              color: var(--color-primary);
+              border-color: var(--color-primary);
+              background: var(--color-primary-soft);
+            }
           }
         }
       }
+
       &:hover .chat-message-actions,
       &:focus-within .chat-message-actions {
         opacity: 1;
       }
+
       &.chat-message-self {
         align-self: flex-end;
+
         .chat-message-meta {
           justify-content: flex-end;
+
+          .chat-sender-name {
+            color: var(--color-primary);
+          }
         }
+
         .chat-message-body {
           flex-direction: row-reverse;
+
           .chat-bubble:not(.chat-bubble-attachments) {
-            border-radius: 12px 0 12px 12px;
+            border: 1px solid var(--color-info-line);
+            border-right: 3px solid var(--color-primary);
+            border-left: 1px solid var(--color-info-line);
+            border-radius: 10px 0 10px 10px;
             background: var(--color-primary-soft);
-            border-color: var(--color-info-line);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+
+            .chat-text {
+              color: var(--color-text);
+            }
           }
         }
       }
@@ -788,183 +1068,384 @@ defineExpose({
   .chat-composer {
     flex: none;
     min-width: 0;
-    padding: 12px 16px 10px;
+    padding: 12px 18px 14px;
     border-top: 1px solid var(--color-line);
     background: var(--color-panel);
 
     .chat-draft-files {
       display: flex;
       max-height: 140px;
-      gap: 8px;
-      padding-bottom: 10px;
-      overflow: auto;
+      gap: 10px;
+      padding-bottom: 12px;
+      overflow-x: auto;
+      scrollbar-width: thin;
 
       .chat-draft-file {
         display: flex;
-        width: 196px;
+        width: 200px;
         flex: none;
         align-items: center;
         gap: 8px;
-        padding: 7px;
+        padding: 8px 10px;
         border: 1px solid var(--color-line);
-        border-radius: 7px;
+        border-radius: 6px;
         background: var(--color-panel-soft);
+
         .chat-draft-thumbnail {
           width: 36px;
           height: 36px;
           flex: none;
           object-fit: cover;
           border-radius: 4px;
+          border: 1px solid var(--color-line);
         }
+
         .chat-draft-icon {
           flex: none;
           color: var(--color-primary);
         }
+
         .chat-draft-caption {
           display: flex;
           min-width: 0;
           flex: 1;
           flex-direction: column;
-          gap: 4px;
-          color: var(--color-text-muted);
-          font-size: var(--font-size-sm);
-          .chat-draft-size {
-            font-size: inherit;
-          }
+          gap: 3px;
+
           .chat-draft-name {
             overflow: hidden;
             color: var(--color-text);
             text-overflow: ellipsis;
             white-space: nowrap;
-            font-size: var(--font-size-base);
+            font-size: 12.5px;
+            font-weight: 500;
+          }
+
+          .chat-draft-size {
+            font-family:
+              ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 10.5px;
+            color: var(--color-text-soft);
           }
         }
+
         .chat-icon-button {
           display: grid;
           width: 22px;
-          height: 24px;
+          height: 22px;
           flex: none;
           place-items: center;
           padding: 0;
           border: 0;
-          background: transparent;
+          border-radius: 4px;
+          background: var(--color-panel);
           color: var(--color-text-muted);
+          cursor: pointer;
+
+          &:hover {
+            color: var(--color-danger);
+            background: var(--color-danger-soft);
+          }
         }
       }
     }
+
+    .chat-input-wrapper {
+      position: relative;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel-soft);
+      padding: 6px 12px;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+
+      &:focus-within {
+        border-color: var(--color-primary);
+        box-shadow: 0 0 0 2px var(--color-primary-soft);
+      }
+
+      &.is-dragover {
+        border-color: var(--color-primary);
+        border-style: dashed;
+        background: var(--color-primary-soft);
+        box-shadow:
+          0 0 0 2px var(--color-info-line),
+          0 0 16px var(--color-primary-soft);
+      }
+
+      .chat-drag-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        border-radius: 7px;
+        background: var(--color-panel);
+        border: 2px dashed var(--color-primary);
+        color: var(--color-primary);
+        pointer-events: none;
+        backdrop-filter: blur(4px);
+        animation: cyberFadeIn 0.15s ease-out;
+
+        .cyber-bounce-icon {
+          animation: cyberBounce 1.2s ease-in-out infinite;
+        }
+
+        .chat-drag-text {
+          font-size: 13.5px;
+          font-weight: 600;
+          letter-spacing: 0.5px;
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+      }
+    }
+
     .chat-input {
       display: block;
       width: 100%;
-      min-height: 58px;
-      max-height: 170px;
+      min-height: 52px;
+      max-height: 160px;
       resize: vertical;
-      padding: 3px 0;
+      padding: 4px 0;
       border: 0;
       outline: none;
       background: transparent;
       color: var(--color-text);
       font: inherit;
-      font-size: var(--font-size-base);
-      line-height: 1.7;
+      font-size: 13.5px;
+      line-height: 1.6;
+
+      &::placeholder {
+        color: var(--color-text-soft);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 12px;
+      }
     }
+
     .chat-composer-footer {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 10px;
+      gap: 12px;
+      margin-top: 10px;
+
       .chat-compose-tools {
         display: flex;
         min-width: 0;
         align-items: center;
-        gap: 10px;
+        gap: 12px;
+
         .chat-attach-button {
           display: inline-flex;
           flex: none;
           align-items: center;
-          gap: 5px;
-          padding: 5px 0;
-          border: 0;
-          background: transparent;
-          color: var(--color-text-muted);
-          font-size: var(--font-size-base);
+          gap: 6px;
+          padding: 5px 10px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          background: var(--color-panel-soft);
+          color: var(--color-text);
+          font-size: 12.5px;
+          cursor: pointer;
+          transition: all 0.2s;
+
+          &:hover:not(:disabled) {
+            color: var(--color-primary);
+            border-color: var(--color-primary);
+            background: var(--color-primary-soft);
+          }
+
+          &:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
         }
+
         .chat-compose-hint {
           overflow: hidden;
-          color: var(--color-text-soft);
+          color: var(--color-text-muted);
           text-overflow: ellipsis;
           white-space: nowrap;
-          font-size: var(--font-size-sm);
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 11px;
         }
       }
+
       .chat-send-button {
         display: inline-flex;
         height: 32px;
         flex: none;
         align-items: center;
-        gap: 6px;
-        padding: 0 14px;
-        border: 0;
+        gap: 7px;
+        padding: 0 16px;
         border-radius: 6px;
-        background: var(--color-primary);
-        color: var(--color-primary-contrast, #fff);
-        font-size: var(--font-size-base);
+        background: var(--color-primary-solid);
+        border: 1px solid var(--color-primary);
+        color: #ffffff;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+
+        &:hover:not(:disabled) {
+          background: var(--color-primary);
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+        }
+
+        &:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
       }
     }
+
     .chat-file-input {
       display: none;
     }
   }
 }
+
 .chat-search-drawer {
   display: flex;
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  color: var(--color-text);
+
   .chat-search-actions {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 6px;
+    gap: 8px;
+    font-size: 12px;
     color: var(--color-text-muted);
-    font-size: var(--font-size-base);
+
+    .chat-search-btns {
+      display: flex;
+      gap: 6px;
+    }
   }
+
   .chat-search-results {
     min-height: 0;
     flex: 1;
     overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
     .chat-search-result {
       display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 0;
-      border-bottom: 1px solid var(--color-line);
+      align-items: flex-start;
+      gap: 10px;
+      padding: 10px;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel-soft);
+
       .chat-search-jump {
         display: flex;
         min-width: 0;
         flex: 1;
         flex-direction: column;
-        gap: 6px;
-        padding: 5px 0;
+        gap: 4px;
+        padding: 0;
         border: 0;
         background: transparent;
         color: var(--color-text);
         text-align: left;
-        overflow-wrap: anywhere;
-        font-size: var(--font-size-base);
+        cursor: pointer;
 
         .chat-search-time {
-          font-size: var(--font-size-sm);
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 10.5px;
+          color: var(--color-text-soft);
+        }
+
+        span {
+          font-size: 12.5px;
+          line-height: 1.4;
+          word-break: break-all;
+        }
+
+        &:hover span {
+          color: var(--color-primary);
         }
       }
     }
+
     .chat-search-empty {
-      display: block;
-      padding: 24px;
-      color: var(--color-text-muted);
+      padding: 30px 0;
       text-align: center;
-      font-size: var(--font-size-base);
+      color: var(--color-text-muted);
+      font-size: 13px;
     }
+  }
+}
+
+.cyber-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &--amber {
+    background: var(--color-warning);
+    box-shadow: 0 0 6px var(--color-warning);
+    animation: cyberPulse 1.6s ease-in-out infinite;
+  }
+}
+
+@keyframes cyberSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.cyber-spin {
+  animation: cyberSpin 0.9s linear infinite;
+}
+
+@keyframes cyberPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.85);
+  }
+}
+
+@keyframes cyberBounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes cyberFadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 </style>
