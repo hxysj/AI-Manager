@@ -2877,6 +2877,7 @@ const codexAuthUpdateAccountId = ref("")
 const codexAccountProxyDrafts = reactive({})
 const codexAccountRefreshingMap = reactive({})
 const googleAccountRefreshingMap = reactive({})
+const initialCodexRefreshDone = ref(false)
 const editingCodexAccountId = ref("")
 const editingCodexProxy = ref("")
 const codexAccountDetail = ref(null)
@@ -3038,7 +3039,10 @@ const mixedItems = computed(() => {
           "providers-view__provider-card--runtime-warning":
             showRuntimeWarning.value &&
             profileMap.value[activeCli.value]?.providerId === provider.id,
-          "providers-view__provider-card--disabled": provider.enabled === false
+          "providers-view__provider-card--disabled": provider.enabled === false,
+          "providers-view__provider-card--refreshing":
+            provider.type === "google-account" &&
+            Boolean(googleAccountRefreshingMap[provider.id])
         }
       ],
       createdAt: provider.createdAt || 0
@@ -3322,6 +3326,20 @@ onMounted(() => {
   countdownTimer = window.setInterval(() => {
     countdownNow.value = Date.now()
   }, 1000)
+
+  if (activeCli.value === "codex") {
+    const hasCodexAccounts = props.codexAccounts.some((a) => !a.disabled)
+    const hasGoogleAccounts = props.providers.some(
+      (p) =>
+        p.type === "google-account" &&
+        p.enabled !== false &&
+        (p.cli === "codex" || !p.cli)
+    )
+    if (hasCodexAccounts || hasGoogleAccounts) {
+      initialCodexRefreshDone.value = true
+      triggerAutoRefresh()
+    }
+  }
 })
 
 onBeforeUnmount(() => {
@@ -3389,7 +3407,12 @@ function ensureActiveCli() {
     return
   }
 
-  activeCli.value = visibleCliTargets.value[0]?.id || ""
+  const nextCli = visibleCliTargets.value[0]?.id || ""
+  if (nextCli) {
+    selectCli(nextCli)
+  } else {
+    activeCli.value = ""
+  }
 }
 
 function selectCli(cli) {
@@ -3403,7 +3426,8 @@ function selectCli(cli) {
   clearDraft()
 
   if (cli === "codex" && previousCli !== "codex") {
-    refreshCodexAccounts()
+    initialCodexRefreshDone.value = true
+    triggerAutoRefresh()
   }
 }
 
@@ -3414,18 +3438,49 @@ function openGoogleAccount(provider = null) {
 }
 
 // 刷新接口会推送应用状态，使列表和已打开的账号弹窗同步更新。
-async function refreshGoogleAccount(provider) {
+async function refreshGoogleAccount(provider, options = {}) {
   if (provider.enabled === false || googleAccountRefreshingMap[provider.id]) return
   googleAccountRefreshingMap[provider.id] = true
   try {
     const result = await googleAccountApi.refresh(provider.id)
-    if (result.google?.quotaWarning) createMessage.error(result.google.quotaWarning)
-    else createMessage.success("Google 模型与分组配额已刷新。")
+    if (result.google?.quotaWarning) {
+      if (options.showWarning !== false) {
+        createMessage.error(result.google.quotaWarning)
+      }
+    } else if (options.showSuccess !== false) {
+      createMessage.success("Google 模型与分组配额已刷新。")
+    }
   } catch (error) {
-    createMessage.error(error.message || String(error))
+    if (options.showError !== false) {
+      createMessage.error(error.message || String(error))
+    }
   } finally {
     googleAccountRefreshingMap[provider.id] = false
   }
+}
+
+function refreshGoogleAccounts() {
+  props.providers.forEach((provider) => {
+    if (provider.type !== "google-account" || provider.enabled === false) {
+      return
+    }
+
+    if (provider.cli && provider.cli !== activeCli.value) {
+      return
+    }
+
+    refreshGoogleAccount(provider, {
+      showSuccess: false,
+      showWarning: false,
+      showError: false
+    })
+  })
+}
+
+function triggerAutoRefresh() {
+  if (activeCli.value !== "codex") return
+  refreshCodexAccounts()
+  refreshGoogleAccounts()
 }
 
 function editProvider(provider) {
@@ -4663,6 +4718,26 @@ watch(
 )
 
 watch(
+  () => [props.codexAccounts, props.providers],
+  () => {
+    if (activeCli.value === "codex" && !initialCodexRefreshDone.value) {
+      const hasCodexAccounts = props.codexAccounts.some((a) => !a.disabled)
+      const hasGoogleAccounts = props.providers.some(
+        (p) =>
+          p.type === "google-account" &&
+          p.enabled !== false &&
+          (p.cli === "codex" || !p.cli)
+      )
+      if (hasCodexAccounts || hasGoogleAccounts) {
+        initialCodexRefreshDone.value = true
+        triggerAutoRefresh()
+      }
+    }
+  },
+  { deep: true }
+)
+
+watch(
   () => props.usage,
   (usage) => {
     if (!usageStatsLoading.value) {
@@ -5252,6 +5327,7 @@ watch(
       transform 0.18s ease;
   }
 
+  &__provider-card,
   &__account-card {
     position: relative;
   }
@@ -5315,11 +5391,14 @@ watch(
     transform: translateY(-1px);
   }
 
+  &__provider-card--refreshing,
+  &__provider-card--refreshing:hover,
   &__account-card--refreshing,
   &__account-card--refreshing:hover {
     transform: none;
   }
 
+  &__provider-card--refreshing:not(.providers-view__provider-card--active):hover,
   &__account-card--refreshing:not(.providers-view__account-card--active):not(
       .providers-view__account-card--error
     ):hover {
@@ -5328,6 +5407,7 @@ watch(
     box-shadow: 0 3px 12px rgba(15, 23, 42, 0.06);
   }
 
+  &__provider-card--refreshing::after,
   &__account-card--refreshing::after {
     content: "";
     position: absolute;
