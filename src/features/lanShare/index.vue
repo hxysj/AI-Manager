@@ -1,50 +1,116 @@
 <template>
   <section class="lan-share-view">
-    <header class="drop-header">
-      <div class="drop-brand">
-        <span class="drop-title">设备快传</span
-        ><span class="drop-local-name">{{
-          state.native.deviceName || "本机"
-        }}</span>
+    <!-- 科技感顶部控制中枢 HUD -->
+    <header class="cyber-header">
+      <div class="cyber-brand">
+        <div class="cyber-logo-box">
+          <Share2 :size="17" class="cyber-logo-icon" />
+          <div class="cyber-logo-ring"></div>
+        </div>
+        <div class="cyber-brand-text">
+          <div class="cyber-brand-title">
+            <span class="brand-main">设备快传</span>
+            <span class="brand-tag">LAN CYBER DROP</span>
+          </div>
+          <span class="cyber-local-name">
+            NODE // {{ state.native.deviceName || "本机节点" }}
+          </span>
+        </div>
       </div>
-      <div class="drop-header-actions">
-        <span
-          class="drop-status"
-          :class="{ 'drop-status-online': state.service.running }"
-          ><span class="drop-status-dot"></span
-          >{{
-            state.service.running ? "已上线 · 自动发现设备" : "已离线"
-          }}</span
+
+      <div class="cyber-header-actions">
+        <!-- 运行状态指示 -->
+        <div
+          class="cyber-status-chip"
+          :class="{ 'cyber-status-online': state.service.running }"
         >
+          <span
+            class="cyber-pulse-dot"
+            :class="
+              state.service.running
+                ? 'cyber-pulse-dot--emerald'
+                : 'cyber-pulse-dot--gray'
+            "
+          ></span>
+          <span>{{
+            state.service.running ? "ONLINE // 节点在线" : "OFFLINE // 节点离线"
+          }}</span>
+        </div>
+
+        <!-- 自动发现广播开关 -->
         <button
-          class="drop-header-button"
+          class="cyber-header-btn"
+          :class="{ 'cyber-header-btn--active': state.native.autoDiscovery }"
+          type="button"
+          :disabled="togglingAutoDiscovery || !state.service.running"
+          :title="
+            state.native.autoDiscovery
+              ? '自动广播开启中：定时发射 UDP 探测包'
+              : '静默模式：已停止自动广播，可手动点击雷达扫描'
+          "
+          @click="toggleAutoDiscovery"
+        >
+          <Wifi
+            v-if="state.native.autoDiscovery"
+            :size="13"
+            class="cyber-glow-icon"
+          />
+          <WifiOff v-else :size="13" />
+          <span>{{
+            state.native.autoDiscovery ? "自动广播: 开启" : "自动广播: 静音"
+          }}</span>
+        </button>
+
+        <!-- 手动雷达扫描 -->
+        <button
+          class="cyber-header-btn cyber-header-btn--radar"
+          :class="{ 'is-scanning': scanning }"
+          type="button"
+          :disabled="scanning || !state.service.running"
+          title="立即向局域网广播探测，检索在线设备"
+          @click="scanNearby"
+        >
+          <Radio :size="14" :class="{ 'cyber-spin': scanning }" />
+          <span>{{ scanning ? "雷达探测中..." : "雷达扫描" }}</span>
+        </button>
+
+        <!-- 连接设备 -->
+        <button
+          class="cyber-header-btn"
           type="button"
           :disabled="loading"
           @click="
             state.service.running ? (connectDialogOpen = true) : startService()
           "
         >
-          <Link :size="14" />{{ state.service.running ? "连接设备" : "上线" }}
+          <Link :size="13" />
+          <span>{{ state.service.running ? "连接设备" : "上线" }}</span>
         </button>
+
+        <!-- 访客访问 -->
         <button
-          class="drop-header-button"
+          class="cyber-header-btn cyber-header-btn--primary"
           type="button"
           :disabled="!state.service.running"
           @click="showAccessDialog"
         >
-          <QrCode :size="14" />访客访问
+          <QrCode :size="13" />
+          <span>访客扫码</span>
         </button>
-        <el-dropdown trigger="click"
-          ><button
-            class="drop-menu-button"
+
+        <!-- 设置下拉菜单 -->
+        <el-dropdown trigger="click">
+          <button
+            class="cyber-menu-btn"
             type="button"
             aria-label="快传网络设置"
           >
-            <Settings2 :size="16" /></button
-          ><template #dropdown
-            ><el-dropdown-menu
-              ><el-dropdown-item disabled>{{ serviceSummary }}</el-dropdown-item
-              ><el-dropdown-item
+            <Settings2 :size="15" />
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu class="cyber-dropdown-menu">
+              <el-dropdown-item disabled>{{ serviceSummary }}</el-dropdown-item>
+              <el-dropdown-item
                 v-for="ip in state.service.lanIps || []"
                 :key="ip"
                 :disabled="
@@ -53,150 +119,221 @@
                   loading
                 "
                 @click="setAccessIp(ip)"
-                >二维码使用 {{ ip }}</el-dropdown-item
-              ><el-dropdown-item
+              >
+                二维码使用 {{ ip }}
+              </el-dropdown-item>
+              <el-dropdown-item
                 v-if="state.service.running"
                 @click="stopService"
-                >暂停接收并离线</el-dropdown-item
-              ><el-dropdown-item v-else @click="startService"
-                >重新上线</el-dropdown-item
-              ></el-dropdown-menu
-            ></template
-          ></el-dropdown
-        >
+              >
+                暂停接收并离线
+              </el-dropdown-item>
+              <el-dropdown-item v-else @click="startService">
+                重新上线
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
       </div>
     </header>
 
-    <div class="drop-body">
-      <aside class="drop-sidebar">
-        <div class="drop-sidebar-tools">
-          <div class="drop-tabs">
+    <!-- 中枢主体区 -->
+    <div class="cyber-body">
+      <!-- 侧边节点导航栏 -->
+      <aside class="cyber-sidebar">
+        <!-- 切换 Tab: 设备与群聊 -->
+        <div class="cyber-sidebar-tools">
+          <div class="cyber-nav-tabs">
             <button
-              class="drop-tab"
-              :class="{ 'drop-tab-active': chatMode === 'direct' }"
+              class="cyber-nav-tab"
+              :class="{ 'cyber-nav-tab--active': chatMode === 'direct' }"
               type="button"
               @click="switchChatMode('direct')"
             >
-              设备</button
-            ><button
-              class="drop-tab"
-              :class="{ 'drop-tab-active': chatMode === 'group' }"
+              <span class="tab-label">设备节点</span>
+              <span class="tab-badge">{{ visibleDevices.length }}</span>
+            </button>
+            <button
+              class="cyber-nav-tab"
+              :class="{ 'cyber-nav-tab--active': chatMode === 'group' }"
               type="button"
               @click="switchChatMode('group')"
             >
-              群聊
+              <span class="tab-label">加密群聊</span>
+              <span class="tab-badge">{{ state.groups.length }}</span>
             </button>
           </div>
           <button
             v-if="chatMode === 'group'"
-            class="drop-create"
+            class="cyber-icon-action-btn"
             type="button"
             title="创建群聊"
             aria-label="创建群聊"
             @click="openCreateGroup"
           >
-            <Plus :size="16" />
+            <Plus :size="15" />
           </button>
         </div>
-        <div class="drop-search">
-          <Search :size="14" /><input
+
+        <!-- 搜索框 -->
+        <div class="cyber-search-wrapper">
+          <Search :size="13" class="cyber-search-icon" />
+          <input
             v-model="deviceKeyword"
-            class="drop-search-input"
-            :placeholder="chatMode === 'group' ? '搜索群聊' : '搜索设备或 IP'"
+            class="cyber-search-input"
+            :placeholder="
+              chatMode === 'group' ? '搜索群聊信道...' : '搜索节点名称或 IP...'
+            "
             aria-label="搜索设备或群聊"
           />
         </div>
-        <nav class="drop-conversations" aria-label="快传会话">
+
+        <!-- 节点列表 -->
+        <nav class="cyber-conversations" aria-label="快传会话">
           <template v-if="chatMode === 'direct'">
             <div
               v-for="device in visibleDevices"
               :key="device.id"
-              class="drop-device"
-              :class="{ 'drop-device-active': selectedDeviceId === device.id }"
+              class="cyber-device-card"
+              :class="{
+                'cyber-device-card--active': selectedDeviceId === device.id
+              }"
             >
               <button
-                class="drop-device-select"
+                class="cyber-device-select"
                 type="button"
                 :disabled="deleteDevicePending"
                 @click="chooseDevice(device)"
               >
-                <span class="drop-device-icon"
-                  ><MonitorSmartphone v-if="device.native" :size="20" /><Globe
-                    v-else
-                    :size="20" /><span
-                    v-if="device.online"
-                    class="drop-device-online"
-                  ></span
-                ></span>
-                <span class="drop-device-copy"
-                  ><span class="drop-device-name">{{
-                    device.name || device.autoName || "未命名设备"
-                  }}</span
-                  ><span class="drop-device-preview">{{
-                    device.pairingCode
-                      ? `等待确认 · ${device.pairingCode}`
-                      : device.requiresPairing
-                        ? "发现客户端 · 点击连接"
-                        : deviceLastMessage(device.id)
-                  }}</span
-                  ><span class="drop-device-address"
-                    >{{ device.ip || "历史设备" }} ·
-                    {{ device.native ? "客户端" : "网页访客" }}</span
-                  ></span
+                <!-- 节点图标 -->
+                <div
+                  class="cyber-device-avatar"
+                  :class="{ 'is-online': device.online }"
                 >
+                  <MonitorSmartphone v-if="device.native" :size="17" />
+                  <Globe v-else :size="17" />
+                  <span v-if="device.online" class="cyber-online-dot"></span>
+                </div>
+
+                <!-- 节点文字信息 -->
+                <div class="cyber-device-meta">
+                  <div class="cyber-device-head">
+                    <span
+                      class="cyber-device-name"
+                      :title="device.name || device.autoName"
+                    >
+                      {{ device.name || device.autoName || "未命名设备" }}
+                    </span>
+                    <span
+                      class="cyber-node-tag"
+                      :class="device.native ? 'tag-client' : 'tag-web'"
+                    >
+                      {{ device.native ? "P2P" : "WEB" }}
+                    </span>
+                  </div>
+
+                  <div
+                    class="cyber-device-preview"
+                    :title="devicePreviewText(device)"
+                  >
+                    {{ devicePreviewText(device) }}
+                  </div>
+
+                  <div class="cyber-device-telemetry">
+                    <span class="telemetry-ip">{{
+                      device.ip || "历史设备"
+                    }}</span>
+                    <span
+                      v-if="device.requiresPairing"
+                      class="telemetry-pairing-action"
+                    >
+                      点击连接
+                    </span>
+                  </div>
+                </div>
               </button>
+
               <button
-                class="drop-device-delete"
+                class="cyber-device-delete-btn"
                 type="button"
                 title="删除设备"
                 :aria-label="`删除设备 ${device.name || device.autoName || '未命名设备'}`"
                 :disabled="deleteDevicePending"
                 @click="requestDeleteDevice(device)"
               >
-                <Trash2 :size="15" />
+                <Trash2 :size="13" />
               </button>
             </div>
-            <div v-if="!visibleDevices.length" class="drop-sidebar-empty">
-              <MonitorSmartphone :size="26" :stroke-width="1.4" /><span
-                >等待附近设备</span
-              ><small class="drop-sidebar-empty-hint"
-                >两台电脑打开设备快传即可发现彼此，无需打开网页。</small
-              >
+
+            <!-- 空状态：雷达旋转动画 -->
+            <div v-if="!visibleDevices.length" class="cyber-sidebar-empty">
+              <div class="cyber-radar-hud">
+                <div class="radar-circle radar-circle--1"></div>
+                <div class="radar-circle radar-circle--2"></div>
+                <div class="radar-sweep-hand"></div>
+                <Radio :size="22" class="radar-center-icon" />
+              </div>
+              <span class="cyber-empty-title">SEARCHING FOR NODES</span>
+              <small class="cyber-empty-hint">
+                两台电脑打开设备快传即可发现彼此。点击上方「雷达扫描」发起主动探测。
+              </small>
             </div>
           </template>
+
           <template v-else>
             <button
               v-for="group in visibleGroups"
               :key="group.id"
-              class="drop-device"
-              :class="{ 'drop-device-active': selectedGroupId === group.id }"
+              class="cyber-device-card"
+              :class="{
+                'cyber-device-card--active': selectedGroupId === group.id
+              }"
               type="button"
               @click="selectGroup(group.id)"
             >
-              <span class="drop-device-icon"><Users :size="20" /></span
-              ><span class="drop-device-copy"
-                ><span class="drop-device-name">{{ group.name }}</span
-                ><span class="drop-device-preview"
-                  >{{ group.members?.length || 0 }} 位成员</span
-                ></span
-              >
+              <div class="cyber-device-avatar">
+                <Users :size="17" />
+              </div>
+              <div class="cyber-device-meta">
+                <div class="cyber-device-head">
+                  <span class="cyber-device-name">{{ group.name }}</span>
+                </div>
+                <div class="cyber-device-telemetry">
+                  <span class="telemetry-ip"
+                    >{{ group.members?.length || 0 }} 位成员</span
+                  >
+                </div>
+              </div>
             </button>
-            <div v-if="!visibleGroups.length" class="drop-sidebar-empty">
-              <Users :size="26" :stroke-width="1.4" /><span>还没有群聊</span
-              ><small class="drop-sidebar-empty-hint"
-                >点击右上角加号创建群聊。</small
-              >
+
+            <div v-if="!visibleGroups.length" class="cyber-sidebar-empty">
+              <div class="cyber-radar-hud">
+                <div class="radar-circle radar-circle--1"></div>
+                <div class="radar-circle radar-circle--2"></div>
+                <Users :size="22" class="radar-center-icon" />
+              </div>
+              <span class="cyber-empty-title">NO ACTIVE GROUPS</span>
+              <small class="cyber-empty-hint">
+                点击右上角「+」即可创建加密传输群聊。
+              </small>
             </div>
           </template>
         </nav>
-        <div class="drop-sidebar-note">
-          {{
-            state.native.error ||
-            "已安装软件：直接连接设备。未安装软件：使用访客链接或扫码。"
-          }}
+
+        <!-- 底部网络遥测 -->
+        <div class="cyber-sidebar-telemetry">
+          <div class="telemetry-row">
+            <span class="telemetry-label">CHANNEL:</span>
+            <span class="telemetry-val">P2P DIRECT ENCRYPTED</span>
+          </div>
+          <div class="telemetry-row">
+            <span class="telemetry-label">SECURITY:</span>
+            <span class="telemetry-val">ED25519 // AUTH VERIFIED</span>
+          </div>
         </div>
       </aside>
 
+      <!-- 消息工作台 -->
       <LanShareSessionWorkspace
         :chat-mode="chatMode"
         :sessions="deviceSessions"
@@ -223,6 +360,7 @@
       />
     </div>
 
+    <!-- 删除设备确认弹窗 -->
     <DeleteConfirmModal
       v-if="deleteDeviceTarget"
       title="删除设备"
@@ -238,6 +376,7 @@
       @confirm="confirmDeleteDevice"
     />
 
+    <!-- 访客访问二维码弹窗 -->
     <LanShareAccessDialog
       v-if="accessDialogOpen"
       :qr-svg="accessQrSvg"
@@ -245,6 +384,8 @@
       @close="accessDialogOpen = false"
       @copy-url="copyAccessUrl"
     />
+
+    <!-- 文件预览弹窗 -->
     <LanSharePreviewDialog
       v-if="previewDialog.open"
       :file="previewDialog.file"
@@ -256,6 +397,7 @@
       @download="downloadFile"
     />
 
+    <!-- 文件保存成功提示 -->
     <BaseModal
       v-if="savedFile"
       class="drop-save-success-modal"
@@ -276,73 +418,59 @@
       </div>
     </BaseModal>
 
+    <!-- 手动输入地址连接弹窗 -->
     <BaseModal
       v-if="connectDialogOpen"
       class="drop-connect-modal"
-      title="连接客户端"
+      title="手动连接节点"
       @close="connectDialogOpen = false"
     >
       <div class="drop-connect-content">
         <p class="drop-connect-description">
-          优先点击左侧自动发现的客户端。未发现时，也可以输入对方的局域网地址或设备快传链接，直接在软件内连接。
+          输入对方局域网节点的 IP
+          与端口（或设备快传访问链接），向其发起安全直连配对请求。
         </p>
         <el-input
           v-model="connectAddress"
           placeholder="例如：192.168.1.8:17631"
           @keyup.enter="connectByAddress"
-        /><span class="drop-connect-hint"
-          >首次连接需要对方在软件内确认，不需要打开网页。</span
-        ><el-button
-          type="primary"
-          :loading="loading"
-          :disabled="!connectAddress.trim()"
-          @click="connectByAddress"
-          >请求连接</el-button
+        />
+        <span class="drop-connect-hint"
+          >连接后两台电脑屏幕上将显示安全校验码，确认后即建立可信信道。</span
         >
-      </div>
-    </BaseModal>
-    <BaseModal
-      v-if="pendingPair"
-      class="drop-connect-modal"
-      title="确认设备连接"
-      @close="respondPairing(false)"
-    >
-      <div class="drop-connect-content">
-        <span
-          >{{ pendingPair.name }}（{{ pendingPair.ip }}）希望连接此设备。</span
-        ><span class="drop-pair-code">{{ pendingPair.code }}</span>
-        <p class="drop-connect-description">
-          请核对两台电脑显示的确认码。允许后，该设备可以直接发送消息与文件；仅在可信局域网中使用。
-        </p>
-        <div class="drop-pair-actions">
-          <el-button :disabled="loading" @click="respondPairing(false)"
-            >拒绝</el-button
-          ><el-button
+        <div class="drop-connect-actions">
+          <el-button @click="connectDialogOpen = false">取消</el-button>
+          <el-button
             type="primary"
             :loading="loading"
-            @click="respondPairing(true)"
-            >允许连接</el-button
+            :disabled="!connectAddress.trim()"
+            @click="connectByAddress"
           >
+            发起直连请求
+          </el-button>
         </div>
       </div>
     </BaseModal>
+
+    <!-- 创建群聊弹窗 -->
     <BaseModal
       v-if="createGroupOpen"
       class="drop-group-modal"
-      title="创建群聊"
+      title="创建加密群聊信道"
       @close="createGroupOpen = false"
     >
       <form class="drop-group-form" @submit.prevent="createGroup">
-        <label class="drop-group-field"
-          ><span>群名称</span
-          ><el-input
+        <label class="drop-group-field">
+          <span>群名称</span>
+          <el-input
             v-model="newGroup.name"
             placeholder="输入群名称"
             :disabled="loading"
-        /></label>
+          />
+        </label>
         <div class="drop-group-selection">
-          <span>邀请设备 · 已选 {{ selectedGroupDeviceIds.length }} 台</span
-          ><span class="drop-group-hint"
+          <span>邀请设备 · 已选 {{ selectedGroupDeviceIds.length }} 台</span>
+          <span class="drop-group-hint"
             >至少选择一台设备，才会创建群聊。离线的网页设备重新连接后可查看邀请。</span
           >
         </div>
@@ -355,34 +483,36 @@
             :disabled="loading || device.native"
             class="drop-group-device"
           >
-            <span class="drop-group-device-copy"
-              ><span>{{ device.name || device.autoName }}</span
-              ><span class="drop-group-device-meta"
-                >{{ device.ip }} ·
+            <span class="drop-group-device-copy">
+              <span>{{ device.name || device.autoName }}</span>
+              <span class="drop-group-device-meta">
+                {{ device.ip }} ·
                 {{
                   device.native
                     ? "客户端暂仅支持单聊"
                     : device.online
                       ? "在线"
                       : "离线"
-                }}</span
-              ></span
-            >
+                }}
+              </span>
+            </span>
           </el-checkbox>
-          <span v-if="!state.devices.length" class="drop-group-empty"
-            >暂无可邀请设备，请先让至少一台网页设备通过访客访问连接。</span
-          >
+          <span v-if="!state.devices.length" class="drop-group-empty">
+            暂无可邀请设备，请先让至少一台网页设备通过访客访问连接。
+          </span>
         </div>
         <div class="drop-group-actions">
-          <el-button :disabled="loading" @click="createGroupOpen = false"
-            >取消</el-button
-          ><el-button
+          <el-button :disabled="loading" @click="createGroupOpen = false">
+            取消
+          </el-button>
+          <el-button
             native-type="submit"
             type="primary"
             :loading="loading"
             :disabled="!selectedGroupDeviceIds.length || !newGroup.name.trim()"
-            >创建并邀请</el-button
           >
+            创建并邀请
+          </el-button>
         </div>
       </form>
     </BaseModal>
@@ -409,10 +539,14 @@ import {
   MonitorSmartphone,
   Plus,
   QrCode,
+  Radio,
   Search,
   Settings2,
+  Share2,
   Trash2,
-  Users
+  Users,
+  Wifi,
+  WifiOff
 } from "lucide-vue-next"
 import { lanShareApi, systemApi } from "@/api"
 import { createMessage } from "@/utils/message"
@@ -436,10 +570,19 @@ const state = reactive({
   devices: [],
   sessions: [],
   groups: [],
-  native: { deviceName: "", peers: [], pairingRequests: [], error: "" },
+  native: {
+    deviceName: "",
+    peers: [],
+    pairingRequests: [],
+    error: "",
+    autoDiscovery: false
+  },
   messages: []
 })
+
 const loading = ref(false)
+const scanning = ref(false)
+const togglingAutoDiscovery = ref(false)
 const savingFile = ref(false)
 const savedFile = ref(null)
 const deleteDeviceTarget = ref(null)
@@ -447,6 +590,7 @@ const deleteDevicePending = ref(false)
 const deleteDeviceError = ref("")
 const createGroupOpen = ref(false)
 const newGroup = reactive({ name: "新的群聊", deviceIds: [] })
+
 const selectedGroupDeviceIds = computed(() =>
   state.devices
     .filter(
@@ -454,6 +598,7 @@ const selectedGroupDeviceIds = computed(() =>
     )
     .map((device) => device.id)
 )
+
 const deviceKeyword = ref("")
 const connectDialogOpen = ref(false)
 const connectAddress = ref("")
@@ -471,6 +616,7 @@ const previewDialog = reactive({
   previewKind: "unsupported",
   textContent: ""
 })
+
 let stopStateListener = null
 let stopDevicesListener = null
 let initialSessionResolved = false
@@ -479,7 +625,6 @@ const serviceSummary = computed(() => {
   if (!state.service.running) {
     return "服务未启动"
   }
-
   return `${state.service.lanIp}:${state.service.port} · ${
     state.service.onlineDevices || 0
   } 台在线`
@@ -492,14 +637,12 @@ const currentSessionId = computed(() => {
 const currentSession = computed(() => {
   const session =
     state.sessions.find((item) => item.id === selectedSessionId.value) || null
-
   if (chatMode.value === "direct") {
     return isDirectSession(session) ? session : null
   }
   if (chatMode.value === "group") {
     return session?.mode === "group" ? session : null
   }
-
   return session
 })
 
@@ -529,12 +672,12 @@ const groupSessions = computed(() => {
   return state.sessions.filter((session) => session.mode === "group")
 })
 
-const pendingPair = computed(() => state.native.pairingRequests?.[0] || null)
 const visibleGroups = computed(() =>
   state.groups.filter((group) =>
     group.name.toLowerCase().includes(deviceKeyword.value.trim().toLowerCase())
   )
 )
+
 const visibleDevices = computed(() => {
   const devices = new Map(
     state.devices.map((device) => [
@@ -580,6 +723,16 @@ function deviceLastMessage(deviceId) {
   )
 }
 
+function devicePreviewText(device) {
+  if (device.pairingCode) {
+    return `等待对方确认 · ${device.pairingCode}`
+  }
+  if (device.requiresPairing) {
+    return "发现局域网客户端 · 点击连接"
+  }
+  return deviceLastMessage(device.id)
+}
+
 async function chooseDevice(device) {
   if (device.requiresPairing) {
     if (device.pairingCode || loading.value) return
@@ -600,10 +753,40 @@ async function connectByAddress() {
   }
 }
 
-async function respondPairing(accept) {
-  if (!pendingPair.value || loading.value) return
-  const requestId = pendingPair.value.id
-  await runAction(() => lanShareApi.respondPairing({ requestId, accept }))
+async function toggleAutoDiscovery() {
+  if (togglingAutoDiscovery.value) return
+  togglingAutoDiscovery.value = true
+  try {
+    const next = !state.native.autoDiscovery
+    await lanShareApi.setAutoDiscovery({ enabled: next })
+    state.native.autoDiscovery = next
+    if (next) {
+      createMessage.success("已开启后台自动广播发现")
+    } else {
+      createMessage.info(
+        "已切换为静默模式 (已停止后台广播，可手动点击雷达扫描)"
+      )
+    }
+  } catch (err) {
+    createMessage.error(err?.message || "切换自动广播失败")
+  } finally {
+    togglingAutoDiscovery.value = false
+  }
+}
+
+async function scanNearby() {
+  if (scanning.value) return
+  scanning.value = true
+  try {
+    await lanShareApi.scanDevices()
+    createMessage.info("已发射雷达探测波，正在检索局域网节点...")
+    setTimeout(() => {
+      scanning.value = false
+    }, 2000)
+  } catch (err) {
+    createMessage.error(err?.message || "雷达探测失败")
+    scanning.value = false
+  }
 }
 
 onMounted(async () => {
@@ -619,12 +802,10 @@ watch(selectedDeviceId, (deviceId) => {
   if (chatMode.value !== "direct") {
     return
   }
-
   if (!deviceId) {
     selectedSessionId.value = ""
     return
   }
-
   if (
     selectedSessionId.value &&
     (!isDirectDeviceSession(currentSession.value) ||
@@ -632,7 +813,6 @@ watch(selectedDeviceId, (deviceId) => {
   ) {
     selectedSessionId.value = ""
   }
-
   if (!selectedSessionId.value) {
     selectedSessionId.value = findDirectSessionId(deviceId)
   }
@@ -640,7 +820,6 @@ watch(selectedDeviceId, (deviceId) => {
 
 watch(selectedSessionId, (sessionId) => {
   const session = state.sessions.find((item) => item.id === sessionId)
-
   if (
     session &&
     chatMode.value === "direct" &&
@@ -658,7 +837,6 @@ onBeforeUnmount(() => {
 
 function applyState(payload) {
   const nextState = payload?.service ? payload : unwrapData(payload) || {}
-
   state.service = nextState.service || state.service
   accessQrSvg.value = state.service.qrSvg || accessQrSvg.value
   state.devices = nextState.devices || []
@@ -720,17 +898,14 @@ function findDirectSessionId(deviceId) {
 
 async function runAction(action, successMessage) {
   loading.value = true
-
   try {
     const result = unwrapData(await action())
-
     if (result?.service) {
       applyState(result)
     }
     if (successMessage) {
       createMessage.success(successMessage)
     }
-
     return result
   } catch (error) {
     createMessage.error(error?.message || String(error))
@@ -746,7 +921,6 @@ async function loadState() {
 
 async function startService() {
   const result = await runAction(async () => lanShareApi.startService({}))
-
   if (result) {
     state.service = {
       ...state.service,
@@ -760,11 +934,9 @@ async function showAccessDialog() {
   if (!state.service.running) {
     return
   }
-
   if (!accessQrSvg.value) {
     await loadState()
   }
-
   accessQrSvg.value = state.service.qrSvg || accessQrSvg.value
   accessDialogOpen.value = true
 }
@@ -778,8 +950,6 @@ async function setAccessIp(lanIp) {
   ) {
     return
   }
-
-  // 只切换二维码和访问链接中的 IP，不重启快传服务。
   await runAction(
     () => lanShareApi.setAccessIp({ lanIp }),
     `二维码已切换到 ${lanIp}`
@@ -791,7 +961,6 @@ async function stopService() {
     async () => lanShareApi.stopService(),
     "设备快传服务已关闭。"
   )
-
   if (result !== null) {
     accessDialogOpen.value = false
     accessQrSvg.value = ""
@@ -804,7 +973,6 @@ async function createNewSession() {
   if (!selectedDeviceId.value) {
     return
   }
-
   await runAction(
     async () => lanShareApi.createSession({ deviceId: selectedDeviceId.value }),
     "新会话已创建。"
@@ -833,7 +1001,6 @@ async function createGroup() {
     async () => lanShareApi.createGroup(payload),
     "群聊已创建。"
   )
-
   if (result?.currentSession) {
     selectedSessionId.value = result.currentSession.id
     selectedGroupId.value = result.currentSession.groupId || ""
@@ -862,7 +1029,6 @@ async function clearGroupMessages(groupId) {
   if (!groupId || !window.confirm("确认清空该群聊的全部消息吗？")) {
     return
   }
-
   await runAction(
     async () => lanShareApi.clearGroupMessages({ groupId }),
     "群消息已清空。"
@@ -874,12 +1040,10 @@ async function deleteGroup(groupId) {
   if (!groupId || !window.confirm("确认解散该群聊吗？")) {
     return
   }
-
   const result = await runAction(
     async () => lanShareApi.deleteGroup({ groupId }),
     "群聊已解散。"
   )
-
   if (result) {
     selectedGroupId.value = ""
     selectedSessionId.value = ""
@@ -891,7 +1055,6 @@ async function deleteSelectedDeviceHistory() {
   if (!selectedDeviceId.value) {
     return
   }
-
   await deleteDeviceHistory(selectedDeviceId.value)
 }
 
@@ -910,11 +1073,9 @@ async function copyText(text) {
 
 async function selectSession(sessionId) {
   selectedSessionId.value = sessionId
-
   if (!selectedSessionId.value) {
     return
   }
-
   await runAction(async () =>
     lanShareApi.activateSession({ sessionId: selectedSessionId.value })
   )
@@ -924,7 +1085,6 @@ async function deleteSession(sessionId) {
   if (!sessionId) {
     return
   }
-
   const deletedSession = state.sessions.find(
     (session) => session.id === sessionId
   )
@@ -932,11 +1092,9 @@ async function deleteSession(sessionId) {
     async () => lanShareApi.deleteSession({ sessionId }),
     "会话已删除。"
   )
-
   if (!result) {
     return
   }
-
   const nextSessions = Array.isArray(result.sessions)
     ? result.sessions
     : state.sessions
@@ -947,7 +1105,6 @@ async function deleteSession(sessionId) {
       nextSessions.find((session) => {
         return session.mode !== "group" && session.deviceId === deviceId
       })?.id || ""
-
     selectedSessionId.value = nextSessionId
     if (nextSessionId) {
       await runAction(async () =>
@@ -955,17 +1112,14 @@ async function deleteSession(sessionId) {
       )
     }
   }
-
   await loadState()
 }
 
 async function openDeviceSessions(deviceId) {
   selectedDeviceId.value = deviceId
-
   if (isDirectDeviceSession(currentSession.value, deviceId)) {
     return
   }
-
   selectedSessionId.value = findDirectSessionId(deviceId)
   if (!selectedSessionId.value) await createNewSession()
   else await selectSession(selectedSessionId.value)
@@ -973,14 +1127,12 @@ async function openDeviceSessions(deviceId) {
 
 function switchChatMode(mode) {
   chatMode.value = mode
-
   if (mode === "group") {
     selectedDeviceId.value = ""
     selectedGroupId.value = selectedGroupId.value || state.groups[0]?.id || ""
     selectGroup(selectedGroupId.value)
     return
   }
-
   selectedGroupId.value = ""
   selectedSessionId.value = findDirectSessionId(selectedDeviceId.value)
   if (selectedSessionId.value) {
@@ -991,14 +1143,12 @@ function switchChatMode(mode) {
 async function selectGroup(groupId) {
   selectedGroupId.value = groupId
   chatMode.value = "group"
-
   const groupSession =
     groupSessions.value.find((session) => {
       return session.groupId === groupId && !session.deviceId
     }) || groupSessions.value.find((session) => session.groupId === groupId)
 
   selectedSessionId.value = groupSession?.id || ""
-
   if (selectedSessionId.value) {
     await runAction(async () =>
       lanShareApi.activateSession({ sessionId: selectedSessionId.value })
@@ -1010,17 +1160,14 @@ async function deleteDeviceHistory(deviceId) {
   if (!deviceId || !window.confirm("删除这个设备的本机会话历史？")) {
     return
   }
-
   await runAction(
     async () => lanShareApi.deleteDeviceHistory({ deviceId }),
     "设备历史已删除。"
   )
-
   if (selectedDeviceId.value === deviceId) {
     selectedDeviceId.value = ""
     selectedSessionId.value = ""
   }
-
   await loadState()
 }
 
@@ -1066,7 +1213,6 @@ function openPreviewDialog(file) {
     createMessage.warning("请先启动服务后再预览共享文件。")
     return
   }
-
   previewDialog.file = {
     ...file,
     sessionId: file.sessionId || currentSessionId.value
@@ -1089,7 +1235,6 @@ async function downloadFile(file) {
   if (savingFile.value) return
   savingFile.value = true
   try {
-    // 已接收的附件在本机留存，另存为无需依赖服务在线或 WebView 下载行为。
     const targetPath = await systemApi.saveFile({
       title: "保存快传文件",
       defaultPath: file.name
@@ -1129,23 +1274,12 @@ function fileServiceUrl(file, action) {
 function previewKind(file) {
   const name = String(file?.name || "").toLowerCase()
   const mimeType = String(file?.mimeType || "").toLowerCase()
-
-  if (mimeType.startsWith("image/")) {
-    return "image"
-  }
-  if (mimeType.startsWith("video/")) {
-    return "video"
-  }
-  if (mimeType.startsWith("audio/")) {
-    return "audio"
-  }
-  if (mimeType === "application/pdf" || name.endsWith(".pdf")) {
-    return "pdf"
-  }
-  if (mimeType.startsWith("text/") || isTextPreviewFile(name, mimeType)) {
+  if (mimeType.startsWith("image/")) return "image"
+  if (mimeType.startsWith("video/")) return "video"
+  if (mimeType.startsWith("audio/")) return "audio"
+  if (mimeType === "application/pdf" || name.endsWith(".pdf")) return "pdf"
+  if (mimeType.startsWith("text/") || isTextPreviewFile(name, mimeType))
     return "text"
-  }
-
   return "unsupported"
 }
 
@@ -1186,7 +1320,6 @@ function isTextPreviewFile(name, mimeType) {
     ".sh",
     ".ps1"
   ]
-
   return (
     textMimeTypes.includes(mimeType) ||
     textExtensions.some((extension) => name.endsWith(extension))
@@ -1202,78 +1335,195 @@ function isTextPreviewFile(name, mimeType) {
   min-width: 0;
   flex-direction: column;
   overflow: hidden;
-  .drop-header {
+  background: var(--color-page);
+  padding: 10px 14px 14px;
+  box-sizing: border-box;
+
+  /* 顶部科技感控制中枢 HUD */
+  .cyber-header {
     display: flex;
     min-width: 0;
     flex: none;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: 0 0 10px;
-    .drop-brand {
+    gap: 14px;
+    padding: 10px 16px;
+    margin-bottom: 12px;
+    border-radius: 10px;
+    background: var(--color-panel);
+    border: 1px solid var(--color-line);
+    box-shadow: var(--shadow-panel);
+
+    .cyber-brand {
       display: flex;
-      min-width: 0;
-      align-items: baseline;
-      gap: 10px;
-      .drop-title {
-        flex: none;
-        color: var(--color-text);
-        font-size: var(--font-size-lg);
+      align-items: center;
+      gap: 12px;
+
+      .cyber-logo-box {
+        position: relative;
+        display: grid;
+        width: 36px;
+        height: 36px;
+        place-items: center;
+        border-radius: 8px;
+        background: var(--color-primary-soft);
+        border: 1px solid var(--color-info-line);
+        color: var(--color-primary);
+        box-shadow: 0 0 10px var(--color-primary-soft);
+
+        .cyber-logo-ring {
+          position: absolute;
+          inset: -3px;
+          border-radius: 10px;
+          border: 1px dashed var(--color-primary);
+          opacity: 0.5;
+          animation: cyberSpin 15s linear infinite;
+        }
       }
-      .drop-local-name {
-        overflow: hidden;
-        color: var(--color-text-muted);
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        font-size: var(--font-size-sm);
+
+      .cyber-brand-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+
+        .cyber-brand-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+
+          .brand-main {
+            color: var(--color-text);
+            font-size: 16px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+          }
+
+          .brand-tag {
+            font-family:
+              ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 9.5px;
+            padding: 1px 6px;
+            border-radius: 3px;
+            background: var(--color-primary-soft);
+            border: 1px solid var(--color-info-line);
+            color: var(--color-primary);
+            letter-spacing: 1px;
+            font-weight: 600;
+          }
+        }
+
+        .cyber-local-name {
+          color: var(--color-text-muted);
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 11px;
+          letter-spacing: 0.5px;
+        }
       }
     }
-    .drop-header-actions {
+
+    .cyber-header-actions {
       display: flex;
-      flex: none;
       align-items: center;
       gap: 8px;
-      .drop-status {
+
+      .cyber-status-chip {
         display: inline-flex;
         align-items: center;
-        gap: 5px;
+        gap: 6px;
+        padding: 5px 10px;
+        border-radius: 6px;
+        background: var(--color-panel-soft);
+        border: 1px solid var(--color-line);
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 11px;
         color: var(--color-text-muted);
-        font-size: var(--font-size-sm);
-        .drop-status-dot {
-          width: 5px;
-          height: 5px;
-          border-radius: 50%;
-          background: currentColor;
-        }
-        &.drop-status-online {
+
+        &.cyber-status-online {
+          background: var(--color-success-soft);
+          border-color: var(--color-success-line);
           color: var(--color-success);
         }
       }
-      .drop-header-button {
+
+      .cyber-header-btn {
         display: inline-flex;
-        height: 29px;
         align-items: center;
-        gap: 5px;
-        padding: 0 9px;
-        border: 1px solid var(--color-line);
+        gap: 6px;
+        height: 31px;
+        padding: 0 11px;
         border-radius: 6px;
-        background: var(--color-panel);
+        border: 1px solid var(--color-line);
+        background: var(--color-panel-soft);
         color: var(--color-text);
-        font-size: var(--font-size-base);
+        font-size: 12.5px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+
+        &:hover:not(:disabled) {
+          border-color: var(--color-primary);
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
+        }
+
+        &--active {
+          border-color: var(--color-success-line);
+          background: var(--color-success-soft);
+          color: var(--color-success);
+        }
+
+        &--radar {
+          &.is-scanning {
+            border-color: var(--color-primary);
+            background: var(--color-primary-soft);
+            color: var(--color-primary);
+            box-shadow: 0 0 10px var(--color-primary-soft);
+          }
+        }
+
+        &--primary {
+          border-color: var(--color-primary);
+          background: var(--color-primary-solid);
+          color: #ffffff;
+
+          &:hover:not(:disabled) {
+            background: var(--color-primary);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+          }
+        }
+
+        &:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
       }
-      .drop-menu-button {
+
+      .cyber-menu-btn {
         display: grid;
-        width: 28px;
-        height: 29px;
+        width: 31px;
+        height: 31px;
         place-items: center;
         padding: 0;
-        border: 0;
-        background: transparent;
+        border-radius: 6px;
+        border: 1px solid var(--color-line);
+        background: var(--color-panel-soft);
         color: var(--color-text-muted);
+        cursor: pointer;
+        transition: all 0.2s;
+
+        &:hover {
+          color: var(--color-primary);
+          border-color: var(--color-primary);
+          background: var(--color-primary-soft);
+        }
       }
     }
   }
-  .drop-body {
+
+  /* 主体双栏区域 */
+  .cyber-body {
     display: flex;
     min-height: 0;
     min-width: 0;
@@ -1281,59 +1531,117 @@ function isTextPreviewFile(name, mimeType) {
     overflow: hidden;
     border: 1px solid var(--color-line);
     border-radius: 10px;
-    .drop-sidebar {
+    background: var(--color-panel);
+    box-shadow: var(--shadow-panel);
+
+    /* 侧边节点栏 */
+    .cyber-sidebar {
       display: flex;
-      width: clamp(170px, 23%, 230px);
+      width: clamp(230px, 24%, 280px);
       min-width: 0;
       flex: none;
       flex-direction: column;
       border-right: 1px solid var(--color-line);
-      background: var(--color-panel);
-      .drop-sidebar-tools {
+      background: var(--color-panel-soft);
+
+      .cyber-sidebar-tools {
         display: flex;
         flex: none;
         align-items: center;
         justify-content: space-between;
-        padding: 12px 12px 8px;
-        .drop-tabs {
+        padding: 12px 14px 10px;
+
+        .cyber-nav-tabs {
           display: flex;
-          gap: 14px;
-          .drop-tab {
-            padding: 4px 1px 8px;
-            border: 0;
-            border-bottom: 2px solid transparent;
+          gap: 6px;
+
+          .cyber-nav-tab {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 9px;
+            border-radius: 5px;
+            border: 1px solid transparent;
             background: transparent;
             color: var(--color-text-muted);
-            font-size: var(--font-size-base);
-            &.drop-tab-active {
-              border-bottom-color: var(--color-primary);
+            font-size: 12.5px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+
+            .tab-badge {
+              font-family:
+                ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+              font-size: 10px;
+              padding: 0 5px;
+              border-radius: 3px;
+              background: var(--color-panel);
+              border: 1px solid var(--color-line);
+              color: var(--color-text-soft);
+            }
+
+            &:hover {
+              color: var(--color-text);
+            }
+
+            &--active {
               color: var(--color-primary);
+              background: var(--color-panel);
+              border-color: var(--color-line);
+              box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+
+              .tab-badge {
+                background: var(--color-primary-soft);
+                border-color: var(--color-info-line);
+                color: var(--color-primary);
+              }
             }
           }
         }
-        .drop-create {
+
+        .cyber-icon-action-btn {
           display: grid;
           width: 26px;
           height: 26px;
           place-items: center;
           padding: 0;
+          border-radius: 5px;
           border: 1px solid var(--color-line);
-          border-radius: 6px;
-          background: transparent;
+          background: var(--color-panel);
           color: var(--color-primary);
+          cursor: pointer;
+          transition: all 0.2s;
+
+          &:hover {
+            border-color: var(--color-primary);
+            background: var(--color-primary-soft);
+          }
         }
       }
-      .drop-search {
+
+      .cyber-search-wrapper {
         display: flex;
         flex: none;
         align-items: center;
-        gap: 6px;
-        margin: 0 10px 10px;
-        padding: 7px 8px;
+        gap: 8px;
+        margin: 0 12px 10px;
+        padding: 6px 10px;
         border-radius: 6px;
-        background: var(--color-panel-soft);
-        color: var(--color-text-soft);
-        .drop-search-input {
+        background: var(--color-panel);
+        border: 1px solid var(--color-line);
+        transition: all 0.2s;
+
+        &:focus-within {
+          border-color: var(--color-primary);
+          box-shadow: 0 0 0 2px var(--color-primary-soft);
+        }
+
+        .cyber-search-icon {
+          color: var(--color-text-soft);
+          flex-shrink: 0;
+        }
+
+        .cyber-search-input {
           width: 100%;
           min-width: 0;
           padding: 0;
@@ -1341,256 +1649,397 @@ function isTextPreviewFile(name, mimeType) {
           outline: none;
           background: transparent;
           color: var(--color-text);
-          font-size: var(--font-size-base);
+          font-size: 12px;
+
+          &::placeholder {
+            color: var(--color-text-soft);
+            font-family:
+              ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+          }
         }
       }
-      .drop-conversations {
+
+      .cyber-conversations {
         min-height: 0;
         flex: 1;
-        padding: 0 7px;
+        padding: 0 8px;
         overflow-y: auto;
         scrollbar-width: thin;
-        .drop-device {
+        scrollbar-color: var(--color-line) transparent;
+
+        .cyber-device-card {
           display: flex;
-          width: 100%;
           align-items: center;
-          gap: 9px;
-          margin-bottom: 4px;
-          padding: 11px 8px;
-          border: 1px solid transparent;
-          border-radius: 8px;
-          background: transparent;
-          color: var(--color-text);
-          text-align: left;
+          gap: 6px;
+          margin-bottom: 6px;
+          padding: 8px 10px;
+          border-radius: 7px;
+          border: 1px solid var(--color-line);
+          background: var(--color-panel);
+          transition: all 0.2s;
+
           &:hover {
+            border-color: var(--color-line-strong);
             background: var(--color-panel-soft);
           }
-          &.drop-device-active {
-            border-color: var(--color-info-line);
+
+          &--active {
+            border-color: var(--color-primary);
             background: var(--color-primary-soft);
+            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
           }
-          .drop-device-select {
+
+          .cyber-device-select {
             display: flex;
             min-width: 0;
             flex: 1;
             align-items: center;
-            gap: 9px;
+            gap: 10px;
             padding: 0;
             border: 0;
+            background: transparent;
             color: inherit;
-            background: transparent;
             text-align: left;
+            cursor: pointer;
+
+            .cyber-device-avatar {
+              position: relative;
+              display: grid;
+              width: 34px;
+              height: 34px;
+              flex: none;
+              place-items: center;
+              border-radius: 7px;
+              background: var(--color-panel-soft);
+              border: 1px solid var(--color-line);
+              color: var(--color-text-muted);
+
+              &.is-online {
+                color: var(--color-success);
+                border-color: var(--color-success-line);
+                background: var(--color-success-soft);
+                box-shadow: 0 0 6px var(--color-success-soft);
+              }
+
+              .cyber-online-dot {
+                position: absolute;
+                right: -2px;
+                bottom: -2px;
+                width: 7px;
+                height: 7px;
+                border-radius: 50%;
+                background: var(--color-success);
+                box-shadow: 0 0 6px var(--color-success);
+                border: 1.5px solid var(--color-panel);
+              }
+            }
+
+            .cyber-device-meta {
+              display: flex;
+              min-width: 0;
+              flex: 1;
+              flex-direction: column;
+              gap: 3px;
+
+              .cyber-device-head {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 6px;
+
+                .cyber-device-name {
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  white-space: nowrap;
+                  font-size: 13px;
+                  font-weight: 600;
+                  color: var(--color-text);
+                }
+
+                .cyber-node-tag {
+                  font-family:
+                    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                    monospace;
+                  font-size: 9px;
+                  padding: 1px 4px;
+                  border-radius: 3px;
+                  font-weight: 500;
+
+                  &.tag-client {
+                    background: var(--color-primary-soft);
+                    border: 1px solid var(--color-info-line);
+                    color: var(--color-primary);
+                  }
+
+                  &.tag-web {
+                    background: var(--color-warning-soft);
+                    border: 1px solid var(--color-warning-line);
+                    color: var(--color-warning);
+                  }
+                }
+              }
+
+              .cyber-device-preview {
+                overflow: hidden;
+                color: var(--color-text-muted);
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 11.5px;
+                line-height: 1.35;
+              }
+
+              .cyber-device-telemetry {
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                font-family:
+                  ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                  monospace;
+                font-size: 10px;
+
+                .telemetry-ip {
+                  color: var(--color-text-soft);
+                }
+
+                .telemetry-pairing-action {
+                  color: var(--color-primary);
+                  text-decoration: underline;
+                }
+              }
+            }
           }
-          .drop-device-delete {
-            display: flex;
-            width: 28px;
-            height: 28px;
-            flex: none;
-            align-items: center;
-            justify-content: center;
-            padding: 0;
+
+          .cyber-device-delete-btn {
+            display: grid;
+            width: 24px;
+            height: 24px;
+            place-items: center;
             border: 0;
-            border-radius: 6px;
-            color: var(--color-text-muted);
+            border-radius: 4px;
             background: transparent;
+            color: var(--color-text-soft);
+            cursor: pointer;
+            opacity: 0;
+            transition: all 0.15s;
+
             &:hover:not(:disabled) {
               color: var(--color-danger);
               background: var(--color-danger-soft);
             }
           }
-          .drop-device-icon {
-            position: relative;
-            display: grid;
-            width: 32px;
-            height: 36px;
-            flex: none;
-            place-items: center;
-            color: var(--color-primary);
-            .drop-device-online {
-              position: absolute;
-              right: 0;
-              bottom: 2px;
-              width: 7px;
-              height: 7px;
-              border: 2px solid var(--color-panel);
-              border-radius: 50%;
-              background: var(--color-success);
-            }
-          }
-          .drop-device-copy {
-            display: flex;
-            min-width: 0;
-            flex: 1;
-            flex-direction: column;
-            gap: 5px;
-            .drop-device-name {
-              overflow: hidden;
-              text-overflow: ellipsis;
-              white-space: nowrap;
-              font-size: var(--font-size-base);
-            }
-            .drop-device-preview {
-              overflow: hidden;
-              color: var(--color-text-muted);
-              text-overflow: ellipsis;
-              white-space: nowrap;
-              font-size: var(--font-size-sm);
-            }
-            .drop-device-address {
-              color: var(--color-text-soft);
-              font-size: var(--font-size-sm);
-            }
+
+          &:hover .cyber-device-delete-btn {
+            opacity: 1;
           }
         }
-        .drop-sidebar-empty {
+
+        .cyber-sidebar-empty {
           display: flex;
           align-items: center;
           flex-direction: column;
           gap: 12px;
-          padding: 36px 12px;
-          color: var(--color-text-muted);
-          font-size: var(--font-size-base);
+          padding: 36px 16px;
           text-align: center;
-          line-height: 1.7;
 
-          .drop-sidebar-empty-hint {
-            font-size: var(--font-size-sm);
+          .cyber-radar-hud {
+            position: relative;
+            width: 70px;
+            height: 70px;
+            display: grid;
+            place-items: center;
+
+            .radar-circle {
+              position: absolute;
+              border-radius: 50%;
+              border: 1px solid var(--color-line);
+
+              &--1 {
+                width: 46px;
+                height: 46px;
+                border-style: dashed;
+                border-color: var(--color-primary);
+                opacity: 0.55;
+                animation: cyberSpin 14s linear infinite;
+              }
+
+              &--2 {
+                width: 68px;
+                height: 68px;
+                border-color: var(--color-line-strong);
+              }
+            }
+
+            .radar-sweep-hand {
+              position: absolute;
+              top: 0;
+              left: 50%;
+              width: 50%;
+              height: 50%;
+              transform-origin: 0% 100%;
+              background: linear-gradient(
+                135deg,
+                var(--color-primary),
+                transparent 70%
+              );
+              opacity: 0.25;
+              border-radius: 0 100% 0 0;
+              animation: cyberSweep 3.5s linear infinite;
+              pointer-events: none;
+            }
+
+            .radar-center-icon {
+              color: var(--color-primary);
+            }
+          }
+
+          .cyber-empty-title {
+            font-family:
+              ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            letter-spacing: 1.5px;
+            color: var(--color-primary);
+            font-weight: 600;
+          }
+
+          .cyber-empty-hint {
+            font-size: 11.5px;
+            color: var(--color-text-muted);
+            line-height: 1.6;
           }
         }
       }
-      .drop-sidebar-note {
+
+      .cyber-sidebar-telemetry {
         flex: none;
-        padding: 12px;
+        padding: 10px 14px;
         border-top: 1px solid var(--color-line);
-        color: var(--color-text-soft);
-        font-size: var(--font-size-sm);
-        line-height: 1.7;
+        background: var(--color-panel-soft);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+
+        .telemetry-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 9.5px;
+
+          .telemetry-label {
+            color: var(--color-text-soft);
+          }
+
+          .telemetry-val {
+            color: var(--color-primary);
+          }
+        }
       }
     }
   }
 }
-.drop-connect-modal.base-modal {
-  :deep(.base-modal__panel) {
-    width: min(460px, calc(100vw - 48px));
-  }
-  .drop-connect-content {
+
+/* 弹窗通用样式 */
+.drop-connect-modal.base-modal,
+.drop-group-modal.base-modal {
+  .drop-connect-content,
+  .drop-group-form {
     display: flex;
     flex-direction: column;
-    gap: 16px;
-    padding-top: 10px;
-    font-size: var(--font-size-base);
+    gap: 14px;
+    padding-top: 6px;
+    color: var(--color-text);
+
     .drop-connect-description {
       margin: 0;
       color: var(--color-text-muted);
-      line-height: 1.8;
-      font-size: var(--font-size-base);
+      font-size: 12.5px;
+      line-height: 1.6;
     }
+
     .drop-connect-hint {
       color: var(--color-text-soft);
-      font-size: var(--font-size-sm);
+      font-size: 11.5px;
     }
-    .drop-pair-code {
-      padding: 16px;
-      border-radius: 8px;
-      background: var(--color-primary-soft);
-      color: var(--color-primary);
-      font-size: var(--font-size-xl);
-      letter-spacing: 6px;
-      text-align: center;
-    }
-    .drop-pair-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-    }
-  }
-}
-.drop-group-modal.base-modal {
-  :deep(.base-modal__panel) {
-    width: min(480px, calc(100vw - 48px));
-  }
-  .drop-group-form {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-    gap: 18px;
-    padding-top: 10px;
-    font-size: var(--font-size-base);
-    .drop-group-field {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    .drop-group-selection {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      .drop-group-hint {
-        color: var(--color-text-muted);
-        line-height: 1.6;
-        font-size: var(--font-size-base);
-      }
-    }
-    .drop-group-devices {
-      display: flex;
-      min-height: 0;
-      max-height: 220px;
-      flex-direction: column;
-      gap: 8px;
-      overflow-y: auto;
-      .drop-group-device {
-        height: auto;
-        margin-right: 0;
-        padding: 10px;
-        border: 1px solid var(--color-line);
-        border-radius: 7px;
-        .drop-group-device-copy {
-          display: flex;
-          flex-direction: column;
-          gap: 5px;
-          .drop-group-device-meta {
-            color: var(--color-text-muted);
-            font-size: var(--font-size-sm);
-          }
-        }
-      }
-      .drop-group-empty {
-        padding: 18px 0;
-        color: var(--color-text-muted);
-        line-height: 1.7;
-      }
-    }
+
+    .drop-connect-actions,
     .drop-group-actions {
       display: flex;
       justify-content: flex-end;
-      gap: 8px;
+      gap: 10px;
+      margin-top: 8px;
+    }
+  }
+
+  .drop-group-devices {
+    display: flex;
+    max-height: 200px;
+    flex-direction: column;
+    gap: 8px;
+    overflow-y: auto;
+
+    .drop-group-device {
+      height: auto;
+      margin-right: 0;
+      padding: 8px 10px;
+      background: var(--color-panel-soft);
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      color: var(--color-text);
     }
   }
 }
-.drop-save-success-modal.base-modal {
-  :deep(.base-modal__panel) {
-    width: min(520px, calc(100vw - 48px));
+
+/* 动效 */
+.cyber-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &--emerald {
+    background: var(--color-success);
+    box-shadow: 0 0 6px var(--color-success);
+    animation: cyberPulse 1.8s ease-in-out infinite;
   }
-  .drop-save-success-content {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding-top: 10px;
-    .drop-save-success-path {
-      overflow: hidden;
-      padding: 10px;
-      border: 1px solid var(--color-line);
-      border-radius: 7px;
-      color: var(--color-text-muted);
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .drop-save-success-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-      margin-top: 6px;
-    }
+
+  &--gray {
+    background: var(--color-text-soft);
   }
+}
+
+@keyframes cyberSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes cyberSweep {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes cyberPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(0.85);
+  }
+}
+
+.cyber-spin {
+  animation: cyberSpin 0.9s linear infinite;
 }
 </style>

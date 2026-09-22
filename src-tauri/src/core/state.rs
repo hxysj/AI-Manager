@@ -623,6 +623,26 @@ impl ManagerState {
                 )
                 .await
             }
+            "lan-share:retry-message" => {
+                lan_share::retry_message(
+                    app.clone(),
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:set-auto-discovery" => {
+                lan_share::set_auto_discovery(
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "lan-share:scan-devices" => {
+                lan_share::scan_devices(&self.lan_share_registry).await
+            }
             "lan-share:create-session" => {
                 lan_share::create_session(
                     &self.lan_share_registry,

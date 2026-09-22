@@ -281,7 +281,9 @@
               class="cloud-backup-modal__head"
             >
               <div>
-                <span data-emphasis>{{ selectedCloudBackupEntry.typeName }}</span>
+                <span data-emphasis>{{
+                  selectedCloudBackupEntry.typeName
+                }}</span>
                 <span>{{ selectedCloudBackupEntry.path }}</span>
               </div>
               <small>{{
@@ -369,6 +371,13 @@
       :active-view="activeView"
       :settings="state.appSettings?.agents?.translation"
     />
+    <LanShareGlobalPairModal
+      v-if="pendingPairingRequest"
+      :request="pendingPairingRequest"
+      :loading="pairingLoading"
+      @accept="handleGlobalPairingResponse(true)"
+      @reject="handleGlobalPairingResponse(false)"
+    />
     <GlobalLoading />
   </div>
 </template>
@@ -409,6 +418,7 @@ import {
   accountApi,
   appApi,
   dataApi,
+  lanShareApi,
   providerApi,
   proxyApi,
   repoApi,
@@ -422,6 +432,9 @@ import {
 import { useGlobalLoading } from "@/utils/global-loading"
 import { createMessage } from "@/utils/message"
 
+const LanShareGlobalPairModal = defineAsyncComponent(
+  () => import("@/features/lanShare/components/LanShareGlobalPairModal.vue")
+)
 const ProvidersView = defineAsyncComponent(
   () => import("@/features/providers/index.vue")
 )
@@ -2042,6 +2055,35 @@ async function uninstallWithoutTrace() {
   }
 }
 
+const pendingPairingRequest = ref(null)
+const pairingLoading = ref(false)
+let unsubscribeLanShare = null
+
+async function handleGlobalPairingResponse(accept) {
+  if (!pendingPairingRequest.value || pairingLoading.value) return
+  pairingLoading.value = true
+  try {
+    await lanShareApi.respondPairing({
+      requestId: pendingPairingRequest.value.id,
+      accept
+    })
+    if (accept) {
+      createMessage.success(
+        `已允许与设备「${pendingPairingRequest.value.name}」建立连接`
+      )
+    } else {
+      createMessage.info(
+        `已拒绝与设备「${pendingPairingRequest.value.name}」的连接请求`
+      )
+    }
+    pendingPairingRequest.value = null
+  } catch (err) {
+    createMessage.error(err?.message || "处理连接请求失败")
+  } finally {
+    pairingLoading.value = false
+  }
+}
+
 onMounted(() => {
   window.addEventListener("storage", handleStoredThemeChange)
 
@@ -2051,6 +2093,13 @@ onMounted(() => {
   }
 
   bootstrap()
+
+  // 启动后台快传服务并监听全局设备连接配对请求
+  lanShareApi.startService({}).catch(() => {})
+  unsubscribeLanShare = lanShareApi.onStateChanged((payload) => {
+    const data = payload?.service ? payload : payload?.data || {}
+    pendingPairingRequest.value = data?.native?.pairingRequests?.[0] || null
+  })
 
   // 视图切换按需加载
   watch(activeView, async (view) => {
@@ -2092,6 +2141,10 @@ onBeforeUnmount(() => {
 
   if (typeof unsubscribeUpdate === "function") {
     unsubscribeUpdate()
+  }
+
+  if (typeof unsubscribeLanShare === "function") {
+    unsubscribeLanShare()
   }
 
   if (isQuickSwitchPanel) {

@@ -27,6 +27,9 @@ function showMessage(type, message) {
 }
 
 export const createMessage = {
+  info(message) {
+    showMessage("info", message)
+  },
   success(message) {
     showMessage("success", message)
   },
