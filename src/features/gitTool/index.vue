@@ -1,65 +1,90 @@
 <template>
   <section class="git-tool" @click="closeContextMenus">
     <section class="git-tool-top">
-      <div class="git-tool-command-row">
-        <label class="git-tool-picker">
-          <span class="git-tool-label">项目</span>
-          <select
-            class="git-tool-select"
-            :value="selectedRepoId"
-            :disabled="repos.length === 0"
-            @change="handleRepoChange"
-          >
-            <option value="" disabled>请选择项目</option>
-            <option v-for="repo in repos" :key="repo.id" :value="repo.id">
-              {{ repo.name }}
-            </option>
-          </select>
-        </label>
+      <div class="git-tool-top-card">
+        <span class="git-tool-project-label">项目</span>
+        <div class="git-tool-command-row">
+          <div class="git-tool-picker-box">
+            <FolderGit2 :size="16" class="git-tool-picker-icon" />
+            <span class="git-tool-picker-name">{{
+              selectedRepo?.name || "请选择项目"
+            }}</span>
+            <ChevronDown :size="15" class="git-tool-picker-arrow" />
+            <select
+              class="git-tool-select-native"
+              :value="selectedRepoId"
+              :disabled="repos.length === 0"
+              @change="handleRepoChange"
+            >
+              <option value="" disabled>请选择项目</option>
+              <option v-for="repo in repos" :key="repo.id" :value="repo.id">
+                {{ repo.name }}
+              </option>
+            </select>
+          </div>
 
-        <span class="git-tool-repo-path">{{
-          selectedRepo?.localPath || "未选择项目"
-        }}</span>
+          <div class="git-tool-repo-path-box">
+            <Folder :size="15" class="git-tool-path-icon" />
+            <span
+              class="git-tool-repo-path-text"
+              :title="selectedRepo?.localPath || ''"
+            >
+              {{ selectedRepo?.localPath || "未选择项目" }}
+            </span>
+            <button
+              v-if="selectedRepo?.localPath"
+              class="git-tool-path-copy"
+              type="button"
+              title="复制路径"
+              @click.stop="copyRepoPath"
+            >
+              <Copy :size="14" />
+            </button>
+          </div>
 
-        <div class="git-tool-tabs">
+          <div class="git-tool-tabs">
+            <button
+              :class="[
+                'git-tool-tab',
+                { 'git-tool-tab-active': gitWorkspace === 'branch' }
+              ]"
+              type="button"
+              @click="selectGitWorkspace('branch')"
+            >
+              <GitBranchIcon :size="14" />
+              <span>分支</span>
+            </button>
+            <button
+              :class="[
+                'git-tool-tab',
+                { 'git-tool-tab-active': gitWorkspace === 'stash' }
+              ]"
+              type="button"
+              @click="selectGitWorkspace('stash')"
+            >
+              <Database :size="14" />
+              <span>Stash</span>
+            </button>
+          </div>
+
           <button
-            :class="[
-              'git-tool-tab',
-              { 'git-tool-tab-active': gitWorkspace === 'branch' }
-            ]"
+            class="git-tool-action git-tool-action-primary"
             type="button"
-            @click="selectGitWorkspace('branch')"
+            :disabled="gitLoading || !selectedRepo"
+            @click="refreshGitProject"
           >
-            分支
+            <RefreshCw :size="14" />
+            <span>刷新</span>
           </button>
           <button
-            :class="[
-              'git-tool-tab',
-              { 'git-tool-tab-active': gitWorkspace === 'stash' }
-            ]"
+            class="git-tool-action git-tool-action-outline"
             type="button"
-            @click="selectGitWorkspace('stash')"
+            @click="$emit('add-repo')"
           >
-            Stash
+            <Plus :size="14" />
+            <span>添加项目</span>
           </button>
         </div>
-        <button
-          class="git-tool-action git-tool-action-primary"
-          type="button"
-          :disabled="gitLoading || !selectedRepo"
-          @click="refreshGitProject"
-        >
-          <RefreshCw :size="14" />
-          刷新
-        </button>
-        <button
-          class="git-tool-action"
-          type="button"
-          @click="$emit('add-repo')"
-        >
-          <Plus :size="14" />
-          添加项目
-        </button>
       </div>
     </section>
 
@@ -76,7 +101,9 @@
 
     <section v-else-if="gitLoading" class="git-tool-loading">
       <RefreshCw class="git-tool-loading-icon" :size="22" />
-      <span data-emphasis class="git-tool-loading-title">正在加载 Git 数据</span>
+      <span data-emphasis class="git-tool-loading-title"
+        >正在加载 Git 数据</span
+      >
       <span class="git-tool-loading-desc">{{
         selectedRepo?.name || "当前项目"
       }}</span>
@@ -86,39 +113,57 @@
       <aside class="git-tool-branch-panel">
         <div class="git-tool-branch-head">
           <div class="git-tool-branch-title-row">
-            <span data-emphasis>本地分支</span>
-            <span>{{ currentBranch || "-" }}</span>
-          </div>
-          <div class="git-tool-branch-summary-row">
-            <span>
-              已选 {{ selectedBranchNames.length }}/{{
-                archivableBranches.length
-              }}
-            </span>
-            <div class="git-tool-branch-toolbar">
-              <button
-                class="git-tool-branch-toolbar-button"
-                type="button"
-                :disabled="!archivableBranches.length"
-                @click="selectAllBranches"
-              >
-                全选
-              </button>
-              <button
-                class="git-tool-branch-toolbar-button"
-                type="button"
-                :disabled="!selectedBranchNames.length"
-                @click="archiveSelectedBranches"
-              >
-                归档选中
-              </button>
+            <div class="git-tool-branch-title-wrap">
+              <span data-emphasis class="git-tool-branch-title">本地分支</span>
+              <span class="git-tool-branch-count-badge">{{
+                branches.length
+              }}</span>
             </div>
+          </div>
+          <div class="git-tool-branch-search">
+            <Search :size="13" class="git-tool-branch-search-icon" />
+            <input
+              v-model="branchSearchKeyword"
+              type="text"
+              class="git-tool-branch-search-input"
+              placeholder="搜索分支..."
+            />
+            <button
+              v-if="branchSearchKeyword"
+              class="git-tool-branch-search-clear"
+              type="button"
+              title="清空"
+              @click="branchSearchKeyword = ''"
+            >
+              <X :size="12" />
+            </button>
+          </div>
+          <div class="git-tool-branch-action-row">
+            <label class="git-tool-branch-select-all">
+              <input
+                type="checkbox"
+                class="git-tool-branch-check"
+                :checked="isAllArchivableBranchesSelected"
+                :disabled="!archivableBranches.length"
+                @change="toggleSelectAllBranches"
+              />
+              <span>全选</span>
+            </label>
+            <button
+              class="git-tool-branch-archive-btn"
+              type="button"
+              :disabled="!selectedBranchNames.length"
+              @click="archiveSelectedBranches"
+            >
+              <Archive :size="13" />
+              <span>归档选中</span>
+            </button>
           </div>
         </div>
 
         <div class="git-tool-branch-list">
           <section
-            v-for="group in branchGroups"
+            v-for="group in filteredBranchGroups"
             :key="group.id"
             class="git-tool-branch-group"
           >
@@ -131,8 +176,12 @@
                 :is="isBranchGroupClosed(group.id) ? ChevronRight : ChevronDown"
                 :size="13"
               />
-              <span data-emphasis>{{ group.label }}</span>
-              <span>{{ group.branches.length }}</span>
+              <span data-emphasis class="git-tool-branch-group-label">{{
+                group.label
+              }}</span>
+              <span class="git-tool-branch-group-badge">{{
+                group.branches.length
+              }}</span>
             </button>
             <div
               v-if="!isBranchGroupClosed(group.id)"
@@ -163,7 +212,7 @@
                   type="button"
                   @click="selectBranch(branch.name)"
                 >
-                  <GitBranchIcon :size="14" />
+                  <GitBranchIcon :size="14" class="git-tool-branch-icon" />
                   <span class="git-tool-branch-name" :title="branch.name">{{
                     branch.name
                   }}</span>
@@ -174,18 +223,24 @@
               </article>
             </div>
           </section>
+          <div v-if="!filteredBranchGroups.length" class="git-tool-list-empty">
+            {{ branchSearchKeyword ? "未找到匹配的分支" : "暂无分支" }}
+          </div>
         </div>
       </aside>
 
       <section class="git-tool-commit-panel">
         <div class="git-tool-panel-head">
-          <div>
-            <span data-emphasis class="git-tool-panel-title">{{
-              selectedBranch || "提交记录"
-            }}</span>
-            <span class="git-tool-panel-subtitle"
-              >{{ commits.length }} 条提交</span
-            >
+          <div class="git-tool-panel-title-group">
+            <GitBranchIcon :size="20" class="git-tool-panel-branch-icon" />
+            <div class="git-tool-panel-title-text">
+              <span data-emphasis class="git-tool-panel-title">{{
+                selectedBranch || "提交记录"
+              }}</span>
+              <span class="git-tool-panel-subtitle"
+                >{{ commits.length }} 条提交</span
+              >
+            </div>
           </div>
           <div class="git-tool-panel-actions">
             <select
@@ -215,13 +270,13 @@
               <RotateCcw :size="14" />
             </button>
             <button
-              class="git-tool-action"
+              class="git-tool-action git-tool-action-outline"
               type="button"
               :disabled="!selectedRepo"
               @click="openArchiveListDrawer"
             >
               <Archive :size="14" />
-              归档
+              <span>归档</span>
             </button>
           </div>
         </div>
@@ -303,9 +358,12 @@
                 >
                   +{{ getHiddenCommitRefBadgeCount(commit) }}
                 </span>
-                <span data-emphasis class="git-tool-commit-title" :title="commit.subject">{{
-                  commit.subject
-                }}</span>
+                <span
+                  data-emphasis
+                  class="git-tool-commit-title"
+                  :title="commit.subject"
+                  >{{ commit.subject }}</span
+                >
                 <span
                   v-if="commit.checkStatus !== 'none'"
                   :class="[
@@ -323,7 +381,21 @@
                 {{ commit.isGraphOnly ? "" : commit.author }}
               </span>
               <span class="git-tool-commit-hash">
-                {{ commit.isGraphOnly ? "" : commit.shortHash }}
+                <span
+                  v-if="!commit.isGraphOnly"
+                  class="git-tool-commit-hash-text"
+                >
+                  {{ commit.shortHash }}
+                </span>
+                <button
+                  v-if="!commit.isGraphOnly && commit.shortHash"
+                  class="git-tool-commit-hash-copy"
+                  type="button"
+                  title="复制提交哈希"
+                  @click.stop="copyCommitHash(commit)"
+                >
+                  <Copy :size="13" />
+                </button>
               </span>
             </button>
             <div v-if="commitsLoading" class="git-tool-list-empty">
@@ -343,11 +415,18 @@
     <section v-else class="git-tool-stash-workbench">
       <section class="git-tool-stash-panel">
         <div class="git-tool-panel-head">
-          <div>
-            <span data-emphasis class="git-tool-panel-title">当前 Stash</span>
-            <span class="git-tool-panel-subtitle"
-              >{{ stashes.length }} 条记录</span
+          <div class="git-tool-stash-panel-header-left">
+            <div
+              class="git-tool-stash-panel-badge git-tool-stash-panel-badge--blue"
             >
+              <Database :size="18" />
+            </div>
+            <div class="git-tool-stash-panel-header-info">
+              <span data-emphasis class="git-tool-panel-title">当前 Stash</span>
+              <span class="git-tool-panel-subtitle"
+                >{{ stashes.length }} 条记录</span
+              >
+            </div>
           </div>
           <div class="git-tool-panel-actions">
             <button
@@ -363,18 +442,20 @@
         </div>
 
         <div class="git-tool-stash-summary-row">
-          <span>已选 {{ selectedStashHashes.length }}/{{ stashes.length }}</span>
+          <span class="git-tool-stash-selected-text">
+            已选 {{ selectedStashHashes.length }}/{{ stashes.length }}
+          </span>
           <div class="git-tool-stash-toolbar">
             <button
-              class="git-tool-branch-toolbar-button"
+              class="git-tool-stash-btn git-tool-stash-btn-white"
               type="button"
               :disabled="!stashes.length"
-              @click="selectAllStashes"
+              @click="toggleSelectAllStashes"
             >
-              全选
+              {{ isAllStashesSelected ? "取消全选" : "全选" }}
             </button>
             <button
-              class="git-tool-branch-toolbar-button"
+              class="git-tool-stash-btn git-tool-stash-btn-white"
               type="button"
               :disabled="!selectedStashHashes.length"
               @click="archiveSelectedStashes"
@@ -392,7 +473,7 @@
             <article
               v-for="stash in stashes"
               :key="stash.hash"
-              class="git-tool-stash"
+              class="git-tool-stash-card"
             >
               <input
                 class="git-tool-stash-check"
@@ -401,12 +482,18 @@
                 @click.stop
                 @change="toggleStashChecked(stash, $event)"
               />
+              <div
+                class="git-tool-stash-item-icon git-tool-stash-item-icon--blue"
+              >
+                <GitBranchIcon :size="15" />
+              </div>
               <button
                 class="git-tool-stash-main"
                 type="button"
                 @click="openStashDetail(stash)"
               >
-                <span data-emphasis
+                <span
+                  data-emphasis
                   class="git-tool-stash-name"
                   :title="`${stash.stashRef} ${stash.subject}`"
                 >
@@ -418,11 +505,11 @@
                 </span>
               </button>
               <button
-                class="git-tool-action"
+                class="git-tool-stash-btn-archive"
                 type="button"
                 @click="archiveStash(stash)"
               >
-                <ArchiveRestore :size="14" />
+                <ArchiveRestore :size="13" />
                 归档
               </button>
             </article>
@@ -435,15 +522,22 @@
 
       <section class="git-tool-stash-panel">
         <div class="git-tool-panel-head">
-          <div>
-            <span data-emphasis class="git-tool-panel-title">Stash 归档</span>
-            <span class="git-tool-panel-subtitle"
-              >{{ stashArchives.length }} 条记录</span
+          <div class="git-tool-stash-panel-header-left">
+            <div
+              class="git-tool-stash-panel-badge git-tool-stash-panel-badge--green"
             >
+              <Archive :size="18" />
+            </div>
+            <div class="git-tool-stash-panel-header-info">
+              <span data-emphasis class="git-tool-panel-title">Stash 归档</span>
+              <span class="git-tool-panel-subtitle"
+                >{{ stashArchives.length }} 条记录</span
+              >
+            </div>
           </div>
         </div>
 
-        <div class="git-tool-stash-list">
+        <div class="git-tool-stash-list git-tool-stash-list--archives">
           <div v-if="stashLoading" class="git-tool-list-empty">
             正在读取 Stash 归档
           </div>
@@ -451,14 +545,20 @@
             <article
               v-for="archive in stashArchives"
               :key="archive.stashArchiveId"
-              class="git-tool-stash"
+              class="git-tool-stash-card"
             >
+              <div
+                class="git-tool-stash-item-icon git-tool-stash-item-icon--green"
+              >
+                <Archive :size="15" />
+              </div>
               <button
                 class="git-tool-stash-main"
                 type="button"
                 @click="openStashArchiveDetail(archive)"
               >
-                <span data-emphasis
+                <span
+                  data-emphasis
                   class="git-tool-stash-name"
                   :title="`${archive.stashRef} ${archive.message}`"
                 >
@@ -471,7 +571,7 @@
               </button>
               <div class="git-tool-stash-actions">
                 <button
-                  class="git-tool-icon-button"
+                  class="git-tool-icon-button git-tool-stash-action-restore"
                   type="button"
                   title="恢复 stash"
                   @click="restoreStashArchive(archive)"
@@ -479,7 +579,7 @@
                   <RotateCcw :size="14" />
                 </button>
                 <button
-                  class="git-tool-icon-button git-tool-icon-danger"
+                  class="git-tool-icon-button git-tool-stash-action-delete"
                   type="button"
                   title="删除 stash 归档"
                   @click="deleteStashArchive(archive)"
@@ -511,9 +611,20 @@
         @click.stop
       >
         <header class="git-tool-drawer-head">
-          <div>
+          <div
+            v-if="detailDrawerType === 'archives'"
+            class="git-tool-drawer-title-box"
+          >
+            <span data-emphasis class="git-tool-drawer-main-title">分支归档</span>
+            <span class="git-tool-drawer-main-subtitle"
+              >{{ archives.length }} 条记录</span
+            >
+          </div>
+          <div
+            v-else-if="detailDrawerType === 'archive'"
+            class="git-tool-drawer-title-box"
+          >
             <button
-              v-if="detailDrawerType === 'archive'"
               class="git-tool-drawer-back"
               type="button"
               @click="backToArchiveList"
@@ -521,7 +632,12 @@
               <ChevronRight class="git-tool-drawer-back-icon" :size="14" />
               <span class="git-tool-drawer-back-text">返回归档列表</span>
             </button>
-            <span v-else class="git-tool-label">{{ detailDrawerEyebrow }}</span>
+            <span data-emphasis class="git-tool-drawer-main-title">{{
+              selectedArchive?.branchName || "归档"
+            }}</span>
+          </div>
+          <div v-else class="git-tool-drawer-title-box">
+            <span class="git-tool-label">{{ detailDrawerEyebrow }}</span>
             <span data-emphasis class="git-tool-drawer-title">{{
               detailDrawerTitle
             }}</span>
@@ -534,12 +650,12 @@
               {{ formatHash(selectedArchive?.commitHash) }}
             </span>
             <button
-              class="git-tool-icon-button"
+              class="git-tool-icon-button git-tool-drawer-close-btn"
               type="button"
               title="关闭"
               @click="closeDetailDrawer"
             >
-              <X :size="14" />
+              <X :size="16" />
             </button>
           </div>
         </header>
@@ -549,20 +665,20 @@
         >
           <div class="git-tool-drawer-archives">
             <div v-if="archives.length" class="git-tool-archive-tools">
-              <span>
+              <span class="git-tool-archive-selected-text">
                 已选 {{ selectedArchiveIds.length }}/{{ archives.length }}
               </span>
               <div class="git-tool-archive-toolbar">
                 <button
-                  class="git-tool-branch-toolbar-button"
+                  class="git-tool-archive-btn git-tool-archive-btn-white"
                   type="button"
                   :disabled="!archives.length"
-                  @click="selectAllArchives"
+                  @click="toggleSelectAllArchives"
                 >
-                  全选
+                  {{ isAllArchivesSelected ? "取消全选" : "全选" }}
                 </button>
                 <button
-                  class="git-tool-branch-toolbar-button"
+                  class="git-tool-archive-btn git-tool-archive-btn-white"
                   type="button"
                   :disabled="!selectedArchives.length"
                   @click="restoreArchives(selectedArchives)"
@@ -570,8 +686,9 @@
                   恢复选中
                 </button>
                 <button
-                  class="git-tool-branch-toolbar-button"
+                  class="git-tool-archive-btn git-tool-archive-btn-primary"
                   type="button"
+                  :disabled="!archives.length"
                   @click="restoreArchives(archives)"
                 >
                   全部恢复
@@ -595,13 +712,21 @@
                         ? ChevronRight
                         : ChevronDown
                     "
-                    :size="13"
+                    :size="15"
+                    class="git-tool-archive-group-chevron"
                   />
-                  <span data-emphasis>{{ group.label }}</span>
-                  <span>{{ group.archives.length }}</span>
+                  <span class="git-tool-archive-group-branch-icon">
+                    <GitBranchIcon :size="14" />
+                  </span>
+                  <span data-emphasis class="git-tool-archive-group-name">{{
+                    group.label
+                  }}</span>
+                  <span class="git-tool-archive-group-badge">{{
+                    group.archives.length
+                  }}</span>
                 </button>
                 <button
-                  class="git-tool-branch-toolbar-button"
+                  class="git-tool-archive-btn-group-restore"
                   type="button"
                   @click="restoreArchives(group.archives)"
                 >
@@ -615,7 +740,7 @@
                 <article
                   v-for="archive in group.archives"
                   :key="archive.archiveId"
-                  class="git-tool-archive"
+                  class="git-tool-archive-card"
                 >
                   <input
                     class="git-tool-archive-check"
@@ -625,39 +750,54 @@
                     @change="toggleArchiveChecked(archive, $event)"
                   />
                   <button
-                    class="git-tool-archive-main"
+                    class="git-tool-archive-card-main"
                     type="button"
                     @click="openArchiveDetail(archive)"
                   >
-                    <span data-emphasis
-                      class="git-tool-archive-name"
+                    <span
+                      data-emphasis
+                      class="git-tool-archive-card-name"
                       :title="archive.branchName"
                       >{{ archive.branchName }}</span
                     >
-                    <span class="git-tool-archive-path">{{
-                      archive.projectPath
-                    }}</span>
-                    <span class="git-tool-archive-meta">
-                      <code>{{ formatHash(archive.commitHash) }}</code>
-                      <span>{{ formatDate(archive.archivedAt) }}</span>
+                    <span
+                      class="git-tool-archive-card-path"
+                      :title="archive.projectPath"
+                    >
+                      <Folder
+                        :size="13"
+                        class="git-tool-archive-card-folder"
+                      />
+                      <span>{{ archive.projectPath }}</span>
+                    </span>
+                    <span class="git-tool-archive-card-meta">
+                      <code class="git-tool-archive-hash-badge">{{
+                        formatHash(archive.commitHash)
+                      }}</code>
+                      <span class="git-tool-archive-meta-divider">|</span>
+                      <span class="git-tool-archive-date">{{
+                        formatDate(archive.archivedAt)
+                      }}</span>
                     </span>
                   </button>
-                  <div class="git-tool-archive-actions">
+                  <div class="git-tool-archive-card-actions">
                     <button
-                      class="git-tool-icon-button"
+                      class="git-tool-archive-action-btn git-tool-archive-action-restore"
                       type="button"
                       title="恢复归档"
-                      @click="restoreArchive(archive)"
+                      @click.stop="restoreArchive(archive)"
                     >
-                      <RotateCcw :size="14" />
+                      <RotateCcw :size="12" />
+                      <span>恢复</span>
                     </button>
                     <button
-                      class="git-tool-icon-button git-tool-icon-danger"
+                      class="git-tool-archive-action-btn git-tool-archive-action-delete"
                       type="button"
                       title="删除归档"
-                      @click="deleteArchive(archive)"
+                      @click.stop="deleteArchive(archive)"
                     >
-                      <Trash2 :size="14" />
+                      <Trash2 :size="12" />
+                      <span>删除</span>
                     </button>
                   </div>
                 </article>
@@ -674,7 +814,9 @@
         >
           <div class="git-tool-archive-detail-meta">
             <span>{{ selectedArchive?.projectPath || "" }}</span>
-            <span data-emphasis>{{ formatFullDate(selectedArchive?.archivedAt) }}</span>
+            <span data-emphasis>{{
+              formatFullDate(selectedArchive?.archivedAt)
+            }}</span>
           </div>
 
           <div class="git-tool-archive-commit-table">
@@ -861,13 +1003,16 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Database,
   FileText,
   Folder,
+  FolderGit2,
   GitBranch as GitBranchIcon,
   Hash,
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Tag,
   Trash2,
   X
@@ -1341,6 +1486,59 @@ const branchGroups = computed(() => {
   ].filter((item) => item.branches.length)
 })
 
+const branchSearchKeyword = ref("")
+
+const filteredBranchGroups = computed(() => {
+  const keyword = branchSearchKeyword.value.trim().toLowerCase()
+  if (!keyword) return branchGroups.value
+  return branchGroups.value
+    .map((group) => ({
+      ...group,
+      branches: group.branches.filter((branch) =>
+        branch.name.toLowerCase().includes(keyword)
+      )
+    }))
+    .filter((group) => group.branches.length > 0)
+})
+
+const isAllArchivableBranchesSelected = computed(() => {
+  return (
+    archivableBranches.value.length > 0 &&
+    selectedBranchNames.value.length === archivableBranches.value.length
+  )
+})
+
+function toggleSelectAllBranches() {
+  if (isAllArchivableBranchesSelected.value) {
+    selectedBranchNames.value = []
+  } else {
+    selectedBranchNames.value = archivableBranches.value.map(
+      (item) => item.name
+    )
+  }
+}
+
+async function copyRepoPath() {
+  if (!selectedRepo.value?.localPath) return
+  try {
+    await navigator.clipboard.writeText(selectedRepo.value.localPath)
+    createMessage.success("已复制到剪贴板")
+  } catch {
+    createMessage.error("复制路径失败")
+  }
+}
+
+async function copyCommitHash(commit) {
+  const hash = commit.hash || commit.shortHash
+  if (!hash) return
+  try {
+    await navigator.clipboard.writeText(hash)
+    createMessage.success("已复制提交哈希")
+  } catch {
+    createMessage.error("复制提交哈希失败")
+  }
+}
+
 const archiveGroups = computed(() => {
   const groupMap = new Map()
   const baseArchives = []
@@ -1650,8 +1848,7 @@ async function loadCommits(options = {}) {
 
     commits.value = quickCommits
     commitsHasMore.value =
-      quickCommits.filter((item) => !item.isGraphOnly).length ===
-      commitPageSize
+      quickCommits.filter((item) => !item.isGraphOnly).length === commitPageSize
 
     if (
       options.checkCommits === false ||
@@ -1749,10 +1946,7 @@ async function loadMoreCommits() {
     commitsHasMore.value =
       moreCommits.filter((item) => !item.isGraphOnly).length === commitPageSize
 
-    if (
-      !moreCommits.length ||
-      !commitsCheckEnabled.value
-    ) {
+    if (!moreCommits.length || !commitsCheckEnabled.value) {
       return
     }
 
@@ -2031,8 +2225,22 @@ function toggleArchiveChecked(archive, event) {
   )
 }
 
+const isAllArchivesSelected = computed(
+  () =>
+    archives.value.length > 0 &&
+    selectedArchiveIds.value.length === archives.value.length
+)
+
+function toggleSelectAllArchives() {
+  if (isAllArchivesSelected.value) {
+    selectedArchiveIds.value = []
+  } else {
+    selectedArchiveIds.value = archives.value.map((item) => item.archiveId)
+  }
+}
+
 function selectAllArchives() {
-  selectedArchiveIds.value = archives.value.map((item) => item.archiveId)
+  toggleSelectAllArchives()
 }
 
 function isStashChecked(stashHash) {
@@ -2050,8 +2258,22 @@ function toggleStashChecked(stash, event) {
   )
 }
 
+const isAllStashesSelected = computed(
+  () =>
+    stashes.value.length > 0 &&
+    selectedStashHashes.value.length === stashes.value.length
+)
+
+function toggleSelectAllStashes() {
+  if (isAllStashesSelected.value) {
+    selectedStashHashes.value = []
+  } else {
+    selectedStashHashes.value = stashes.value.map((item) => item.hash)
+  }
+}
+
 function selectAllStashes() {
-  selectedStashHashes.value = stashes.value.map((item) => item.hash)
+  toggleSelectAllStashes()
 }
 
 function confirmGitAction(options) {
@@ -2851,8 +3073,9 @@ function getDiffLineClass(line) {
 }
 
 function showErrorMessage(error) {
-  console.error('[GitTool] 操作失败:', error)
-  const message = error?.data?.message || error?.message || error?.toString() || "操作失败"
+  console.error("[GitTool] 操作失败:", error)
+  const message =
+    error?.data?.message || error?.message || error?.toString() || "操作失败"
   createMessage.error(message)
 }
 </script>
@@ -3089,87 +3312,218 @@ function showErrorMessage(error) {
 }
 
 .git-tool-top {
-  display: flex;
   flex: none;
+}
+
+.git-tool-top-card {
+  display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 0 0 8px;
-  border-bottom: 1px solid var(--color-line);
+  gap: 6px;
+  padding: 10px 14px 12px;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
+  background: var(--color-panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.git-tool-project-label {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
 }
 
 .git-tool-command-row {
   display: flex;
-  align-items: flex-end;
-  gap: 7px;
-  min-height: 40px;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
 }
 
-.git-tool-picker {
+.git-tool-picker-box {
+  position: relative;
   display: flex;
-  width: 260px;
-  flex: 0 0 260px;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.git-tool-label {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.git-tool-repo-path {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  padding: 0 7px 7px;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-base);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.git-tool-select,
-.git-tool-mini-select {
-  min-width: 0;
-  height: 34px;
-  padding: 0 10px;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
   border: 1px solid var(--color-line);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--color-panel);
-  color: var(--color-text);
-  font-size: var(--font-size-base);
+  cursor: pointer;
+  min-width: 170px;
+  transition: border-color 0.15s ease;
+
+  &:hover {
+    border-color: var(--color-line-strong);
+  }
+
+  .git-tool-picker-icon {
+    color: #2563eb;
+    flex-shrink: 0;
+  }
+
+  .git-tool-picker-name {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 13.5px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-tool-picker-arrow {
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+  }
+
+  .git-tool-select-native {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+  }
+}
+
+.git-tool-repo-path-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px 0 12px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel-soft);
+  flex: 1;
+  min-width: 0;
+
+  .git-tool-path-icon {
+    color: var(--color-text-muted);
+    flex-shrink: 0;
+  }
+
+  .git-tool-repo-path-text {
+    min-width: 0;
+    flex: 1;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 13px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-tool-path-copy {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: all 0.15s ease;
+
+    &:hover {
+      background: var(--color-line);
+      color: var(--color-text);
+    }
+  }
 }
 
 .git-tool-tabs {
   display: flex;
-  flex: none;
   align-items: center;
   gap: 3px;
-  height: 32px;
+  height: 36px;
   padding: 3px;
   border: 1px solid var(--color-line);
-  border-radius: 17px;
+  border-radius: 8px;
   background: var(--color-panel-soft);
+  flex-shrink: 0;
 
   .git-tool-tab {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 68px;
-    height: 26px;
-    padding: 0 12px;
+    gap: 6px;
+    height: 28px;
+    padding: 0 14px;
     border: 0;
-    border-radius: 14px;
+    border-radius: 6px;
     background: transparent;
     color: var(--color-text-muted);
     cursor: pointer;
-    font-size: var(--font-size-base);
+    font-size: 13px;
+    font-weight: 500;
+    transition: all 0.15s ease;
+
+    &:hover {
+      color: var(--color-text);
+    }
+
+    &.git-tool-tab-active {
+      background: #2563eb;
+      color: #ffffff;
+      box-shadow: 0 1px 3px rgba(37, 99, 235, 0.25);
+    }
+  }
+}
+
+.git-tool-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 15px;
+  border: 1px solid var(--color-line);
+  border-radius: 8px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 500;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+
+  &:hover {
+    border-color: var(--color-line-strong);
+    background: var(--color-panel-soft);
   }
 
-  .git-tool-tab-active {
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.52;
+  }
+
+  &.git-tool-action-primary {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: #ffffff;
+
+    &:hover:not(:disabled) {
+      background: #1d4ed8;
+      border-color: #1d4ed8;
+    }
+  }
+
+  &.git-tool-action-outline {
+    border-color: var(--color-line-strong);
     background: var(--color-panel);
-    color: var(--color-primary);
-    box-shadow: 0 1px 4px rgba(47, 95, 145, 0.12);
+    color: var(--color-text);
+
+    &:hover:not(:disabled) {
+      border-color: #2563eb;
+      color: #2563eb;
+      background: var(--color-panel-soft);
+    }
   }
 }
 
@@ -3206,13 +3560,14 @@ function showErrorMessage(error) {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--color-line);
-  border-radius: 7px;
+  border-radius: 10px;
   background: var(--color-panel);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
 }
 
 .git-tool-branch-panel {
-  width: 240px;
-  flex: 0 0 240px;
+  width: 250px;
+  flex: 0 0 250px;
   background: var(--color-panel);
 }
 
@@ -3223,44 +3578,85 @@ function showErrorMessage(error) {
 
 .git-tool-panel-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  min-height: 56px;
-  padding: 11px 12px;
+  gap: 12px;
+  min-height: 52px;
+  padding: 10px 14px;
   border-bottom: 1px solid var(--color-line);
   background: var(--color-panel);
-}
 
-.git-tool-panel-title {
-  display: block;
-  color: var(--color-text);
-  font-size: var(--font-size-lg);
-}
+  .git-tool-panel-title-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
 
-.git-tool-panel-subtitle {
-  display: block;
-  max-width: 260px;
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+    .git-tool-panel-branch-icon {
+      color: #2563eb;
+      flex-shrink: 0;
+    }
 
-.git-tool-panel-actions {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
+    .git-tool-panel-title-text {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
 
-.git-tool-mini-select {
-  width: 150px;
-}
+      .git-tool-panel-title {
+        color: var(--color-text);
+        font-size: 16px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
 
-.git-tool-icon-button {
-  width: 32px;
-  padding: 0;
+      .git-tool-panel-subtitle {
+        color: var(--color-text-muted);
+        font-size: 12px;
+        line-height: 1.2;
+      }
+    }
+  }
+
+  .git-tool-panel-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .git-tool-mini-select {
+      width: 120px;
+      height: 32px;
+      padding: 0 8px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: var(--color-panel);
+      color: var(--color-text);
+      font-size: 12.5px;
+    }
+
+    .git-tool-icon-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: var(--color-panel);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+
+      &:hover:not(:disabled) {
+        border-color: var(--color-line-strong);
+        background: var(--color-panel-soft);
+        color: var(--color-text);
+      }
+
+      &:disabled {
+        opacity: 0.48;
+        cursor: not-allowed;
+      }
+    }
+  }
 }
 
 .git-tool-icon-danger {
@@ -3284,66 +3680,141 @@ function showErrorMessage(error) {
   display: flex;
   flex: none;
   flex-direction: column;
-  gap: 7px;
-  padding: 12px 10px 9px;
+  gap: 8px;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--color-line);
   background: var(--color-panel);
-}
 
-.git-tool-branch-title-row,
-.git-tool-branch-summary-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
+  .git-tool-branch-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
 
-.git-tool-branch-title-row [data-emphasis] {
-  color: var(--color-text);
-  font-size: var(--font-size-base);
-}
+    .git-tool-branch-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 7px;
 
-.git-tool-branch-title-row span:not([data-emphasis]) {
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+      .git-tool-branch-title {
+        color: var(--color-text);
+        font-size: 15px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
 
-.git-tool-branch-path {
-  display: block;
-  overflow: hidden;
-  color: var(--color-primary);
-  font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+      .git-tool-branch-count-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1px 7px;
+        border-radius: 10px;
+        background: var(--color-panel-soft);
+        border: 1px solid var(--color-line);
+        color: var(--color-text-muted);
+        font-size: 11.5px;
+        font-weight: 600;
+      }
+    }
+  }
 
-.git-tool-branch-summary-row {
-  color: var(--color-primary);
-  font-size: var(--font-size-base);
-}
+  .git-tool-branch-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    width: 100%;
 
-.git-tool-branch-toolbar {
-  display: flex;
-  flex: none;
-  gap: 5px;
-}
+    .git-tool-branch-search-icon {
+      position: absolute;
+      left: 9px;
+      color: var(--color-text-muted);
+      pointer-events: none;
+    }
 
-.git-tool-branch-toolbar-button {
-  height: 28px;
-  padding: 0 9px;
-  border: 1px solid var(--color-info-line);
-  border-radius: 7px;
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-  cursor: pointer;
-  font-size: var(--font-size-base);
-}
+    .git-tool-branch-search-input {
+      width: 100%;
+      height: 32px;
+      padding: 0 24px 0 28px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: var(--color-panel-soft);
+      color: var(--color-text);
+      font-size: 12.5px;
+      transition: all 0.15s ease;
 
-.git-tool-branch-toolbar-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.54;
+      &::placeholder {
+        color: var(--color-text-muted);
+      }
+
+      &:focus {
+        border-color: #2563eb;
+        background: var(--color-panel);
+        outline: none;
+      }
+    }
+
+    .git-tool-branch-search-clear {
+      position: absolute;
+      right: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--color-text-muted);
+      cursor: pointer;
+
+      &:hover {
+        background: var(--color-line);
+        color: var(--color-text);
+      }
+    }
+  }
+
+  .git-tool-branch-action-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-top: 2px;
+
+    .git-tool-branch-select-all {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--color-text-muted);
+      font-size: 12.5px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .git-tool-branch-archive-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 26px;
+      padding: 0 9px;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel-soft);
+      color: var(--color-text-muted);
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+
+      &:hover:not(:disabled) {
+        border-color: #2563eb;
+        color: #2563eb;
+        background: #eff6ff;
+      }
+
+      &:disabled {
+        opacity: 0.48;
+        cursor: not-allowed;
+      }
+    }
+  }
 }
 
 .git-tool-branch-list {
@@ -3351,58 +3822,59 @@ function showErrorMessage(error) {
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: 7px;
+  gap: 4px;
   overflow: auto;
-  padding: 0 8px 10px;
+  padding: 8px;
 }
 
 .git-tool-branch-group {
   display: flex;
   flex-direction: column;
-}
+  gap: 2px;
 
-.git-tool-branch-group-head {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  gap: 6px;
-  height: 28px;
-  padding: 0 8px;
-  border: 1px solid var(--color-line-strong);
-  border-radius: 7px;
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-  cursor: pointer;
-  text-align: left;
-}
+  .git-tool-branch-group-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    height: 28px;
+    padding: 0 6px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text);
+    cursor: pointer;
+    font-size: 12.5px;
+    transition: background 0.15s ease;
 
-.git-tool-branch-group-head:hover {
-  border-color: var(--color-info-line);
-  background: var(--color-primary-soft);
-}
+    &:hover {
+      background: var(--color-panel-soft);
+    }
 
-.git-tool-branch-group-head [data-emphasis] {
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-  color: var(--color-text);
-  font-size: var(--font-size-base);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+    .git-tool-branch-group-label {
+      font-weight: 600;
+      color: var(--color-text);
+    }
 
-.git-tool-branch-group-head span:not([data-emphasis]) {
-  flex: none;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
+    .git-tool-branch-group-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1px 6px;
+      margin-left: auto;
+      border-radius: 10px;
+      background: var(--color-panel-soft);
+      color: var(--color-text-muted);
+      font-size: 11px;
+    }
+  }
 
-.git-tool-branch-group-body {
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--color-line-strong);
-  margin-left: 8px;
-  padding-top: 4px;
+  .git-tool-branch-group-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-left: 6px;
+  }
 }
 
 .git-tool-branch {
@@ -3410,81 +3882,85 @@ function showErrorMessage(error) {
   min-height: 32px;
   align-items: center;
   gap: 6px;
-  padding: 2px 0 2px 8px;
-  color: var(--color-text);
-}
-
-.git-tool-branch-check {
-  width: 14px;
-  height: 14px;
-  flex: none;
-  margin: 0;
-  accent-color: var(--color-primary);
-}
-
-.git-tool-branch-main {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  align-items: center;
-  gap: 7px;
-  height: 28px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--color-text);
-  cursor: pointer;
-  text-align: left;
-}
-
-.git-tool-branch-main:hover {
-  background: var(--color-panel-soft);
-}
-
-.git-tool-branch-active .git-tool-branch-main {
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-}
-
-.git-tool-branch-current .git-tool-branch-main {
-  background: var(--color-primary-solid);
-  color: #ffffff;
-}
-
-.git-tool-branch-current .git-tool-branch-main:hover {
-  background: var(--color-primary-solid);
-}
-
-.git-tool-branch-name,
-.git-tool-archive-name,
-.git-tool-stash-name,
-.git-tool-commit-title,
-.git-change-view-title {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.git-tool-branch-name {
-  min-width: 0;
-  flex: 1;
-  color: var(--color-primary);
-  font-size: var(--font-size-base);
-}
-
-.git-tool-branch-current .git-tool-branch-name {
-  color: #ffffff;
-}
-
-.git-tool-branch-badge {
-  flex: none;
   padding: 2px 6px;
-  border-radius: 999px;
-  background: var(--color-warning-soft);
-  color: var(--color-warning);
-  font-size: var(--font-size-sm);
+  border-radius: 6px;
+  color: var(--color-text);
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: var(--color-panel-soft);
+  }
+
+  &.git-tool-branch-active {
+    background: #eff6ff;
+
+    .git-tool-branch-main .git-tool-branch-name {
+      color: #2563eb;
+      font-weight: 600;
+    }
+  }
+
+  &.git-tool-branch-current {
+    .git-tool-branch-main {
+      .git-tool-branch-icon {
+        color: #2563eb;
+      }
+
+      .git-tool-branch-name {
+        color: #2563eb;
+        font-weight: 600;
+      }
+    }
+  }
+
+  .git-tool-branch-check {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    margin: 0;
+    accent-color: #2563eb;
+    cursor: pointer;
+  }
+
+  .git-tool-branch-main {
+    display: flex;
+    min-width: 0;
+    flex: 1;
+    align-items: center;
+    gap: 7px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text);
+    cursor: pointer;
+    text-align: left;
+
+    .git-tool-branch-icon {
+      color: var(--color-text-muted);
+      flex-shrink: 0;
+    }
+
+    .git-tool-branch-name {
+      min-width: 0;
+      flex: 1;
+      overflow: hidden;
+      color: var(--color-text);
+      font-size: 13px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .git-tool-branch-badge {
+      flex: none;
+      padding: 1px 7px;
+      border-radius: 10px;
+      background: #e0effe;
+      color: #1d4ed8;
+      font-size: 11px;
+      font-weight: 600;
+    }
+  }
 }
 
 .git-tool-commit-layout {
@@ -3493,13 +3969,11 @@ function showErrorMessage(error) {
   flex: 1;
 }
 
-.git-tool-commit-list {
+.git-tool-commit-table {
   width: 100%;
   flex: 1;
-}
-
-.git-tool-commit-table {
-  gap: 0;
+  min-height: 0;
+  overflow: auto;
   padding: 0;
   background: var(--color-panel);
 
@@ -3508,15 +3982,16 @@ function showErrorMessage(error) {
     top: 0;
     z-index: 2;
     display: grid;
-    grid-template-columns: 156px minmax(420px, 1fr) 150px 86px 78px;
+    grid-template-columns: 76px minmax(360px, 1fr) 150px 90px 105px;
     flex: none;
     align-items: center;
-    min-width: 890px;
-    height: 28px;
+    min-width: 780px;
+    height: 32px;
     border-bottom: 1px solid var(--color-line);
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
+    font-size: 12px;
+    font-weight: 600;
 
     .git-tool-commit-table-head-cell {
       min-width: 0;
@@ -3529,23 +4004,32 @@ function showErrorMessage(error) {
 
   .git-tool-commit {
     display: grid;
-    grid-template-columns: 156px minmax(420px, 1fr) 150px 86px 78px;
-    min-width: 890px;
-    min-height: 34px;
+    grid-template-columns: 76px minmax(360px, 1fr) 150px 90px 105px;
+    min-width: 780px;
+    min-height: 36px;
     gap: 0;
     padding: 0;
     border: 0;
     border-bottom: 1px solid var(--color-line);
     border-radius: 0;
     background: var(--color-panel);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease;
 
     &:hover {
-      background: var(--color-primary-soft);
+      background: var(--color-panel-soft);
+    }
+
+    &.git-tool-commit-active {
+      background: #eff6ff;
     }
 
     .git-tool-commit-graph-cell {
       position: relative;
-      display: block;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       min-width: 0;
       height: 100%;
       overflow: visible;
@@ -3553,10 +4037,9 @@ function showErrorMessage(error) {
 
       .git-tool-commit-graph-svg {
         display: block;
-        width: 144px;
+        width: 72px;
         height: calc(100% + 2px);
         margin-top: -1px;
-        margin-left: 4px;
         overflow: visible;
 
         .git-tool-commit-graph-line {
@@ -3575,42 +4058,26 @@ function showErrorMessage(error) {
       }
     }
 
-    .git-tool-commit-description,
-    .git-tool-commit-date,
-    .git-tool-commit-author,
-    .git-tool-commit-hash {
+    .git-tool-commit-description {
       display: flex;
-      min-width: 0;
       align-items: center;
+      gap: 6px;
+      min-width: 0;
       height: 100%;
       overflow: hidden;
       padding: 0 10px;
-      color: var(--color-primary);
-      font-size: var(--font-size-base);
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .git-tool-commit-description {
-      gap: 5px;
       color: var(--color-text);
 
       .git-tool-commit-ref {
         display: inline-flex;
-        max-width: 150px;
-        height: 18px;
-        flex: none;
         align-items: center;
         gap: 3px;
-        overflow: hidden;
+        height: 20px;
+        flex: none;
         padding: 0 6px;
-        border: 1px solid var(--color-info-line);
         border-radius: 4px;
-        background: var(--color-primary-soft);
-        color: var(--color-primary);
-        font-size: var(--font-size-sm);
-        line-height: 18px;
-        text-overflow: ellipsis;
+        font-size: 11px;
+        line-height: 20px;
         white-space: nowrap;
 
         .git-tool-commit-ref-icon {
@@ -3625,26 +4092,34 @@ function showErrorMessage(error) {
         }
 
         &.git-tool-commit-ref-current {
-          border-color: var(--color-info-line);
-          background: var(--color-primary-solid);
+          background: #2563eb;
           color: #ffffff;
+          font-weight: 600;
+        }
+
+        &.git-tool-commit-ref-branch {
+          background: #eff6ff;
+          border: 1px solid #bfdbfe;
+          color: #1d4ed8;
+          font-weight: 500;
         }
 
         &.git-tool-commit-ref-remote {
-          border-color: var(--color-info-line);
           background: var(--color-panel-soft);
-          color: var(--color-primary);
+          border: 1px solid var(--color-line);
+          color: var(--color-text-muted);
         }
 
         &.git-tool-commit-ref-tag {
-          border-color: var(--color-info-line);
-          background: var(--color-primary-soft);
-          color: var(--color-primary);
+          background: #fef3c7;
+          border: 1px solid #fde68a;
+          color: #b45309;
+          font-weight: 500;
         }
 
         &.git-tool-commit-ref-more {
-          border-color: var(--color-line);
           background: var(--color-panel-soft);
+          border: 1px solid var(--color-line);
           color: var(--color-text-muted);
         }
       }
@@ -3654,17 +4129,60 @@ function showErrorMessage(error) {
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        color: var(--color-text);
+        font-size: 13px;
       }
     }
 
-    .git-tool-commit-hash {
-      color: var(--color-primary);
-      font-family: "JetBrains Mono", "Consolas", monospace;
-      font-size: var(--font-size-sm);
+    .git-tool-commit-date,
+    .git-tool-commit-author {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      height: 100%;
+      overflow: hidden;
+      padding: 0 10px;
+      color: var(--color-text-muted);
+      font-size: 12.5px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
-    &.git-tool-commit-active {
-      background: var(--color-primary-soft);
+    .git-tool-commit-hash {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      justify-content: space-between;
+      height: 100%;
+      padding: 0 10px;
+
+      .git-tool-commit-hash-text {
+        color: #2563eb;
+        font-family: "JetBrains Mono", "Consolas", monospace;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .git-tool-commit-hash-copy {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        opacity: 0.65;
+        transition: all 0.15s ease;
+
+        &:hover {
+          opacity: 1;
+          background: var(--color-line);
+          color: #2563eb;
+        }
+      }
     }
 
     &.git-tool-commit-graph {
@@ -3674,37 +4192,234 @@ function showErrorMessage(error) {
   }
 }
 
-.git-tool-commit {
-  display: flex;
-  min-height: 52px;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: var(--color-panel-soft);
-  color: var(--color-text);
-  cursor: pointer;
-  text-align: left;
-}
+:global(:root[data-theme="dark"]) {
+  .git-tool {
+    .git-tool-branch.git-tool-branch-active {
+      background: rgba(37, 99, 235, 0.16);
 
-.git-tool-commit:disabled {
-  cursor: default;
-}
+      .git-tool-branch-main .git-tool-branch-name {
+        color: #60a5fa;
+      }
+    }
 
-.git-tool-commit:hover {
-  border-color: var(--color-line-strong);
-  background: var(--color-panel);
-}
+    .git-tool-branch.git-tool-branch-current {
+      .git-tool-branch-main {
+        .git-tool-branch-icon,
+        .git-tool-branch-name {
+          color: #60a5fa;
+        }
+      }
+    }
 
-.git-tool-commit-active {
-  border-color: var(--color-info-line);
-  background: var(--color-primary-soft);
-}
+    .git-tool-branch .git-tool-branch-main .git-tool-branch-badge {
+      background: rgba(37, 99, 235, 0.25);
+      color: #93c5fd;
+    }
 
-.git-tool-commit-graph {
-  min-height: 28px;
-  color: var(--color-text-soft);
+    .git-tool-branch-archive-btn:hover:not(:disabled) {
+      background: rgba(37, 99, 235, 0.16);
+      border-color: #60a5fa;
+      color: #60a5fa;
+    }
+
+    .git-tool-commit-table .git-tool-commit {
+      &.git-tool-commit-active {
+        background: rgba(37, 99, 235, 0.16);
+      }
+
+      .git-tool-commit-graph-cell .git-tool-commit-graph-svg .git-tool-commit-graph-node {
+        stroke: var(--color-panel);
+      }
+
+      .git-tool-commit-description .git-tool-commit-ref {
+        &.git-tool-commit-ref-branch {
+          background: rgba(37, 99, 235, 0.2);
+          border-color: rgba(96, 165, 250, 0.4);
+          color: #93c5fd;
+        }
+
+        &.git-tool-commit-ref-tag {
+          background: rgba(245, 158, 11, 0.16);
+          border-color: rgba(245, 158, 11, 0.3);
+          color: #fcd34d;
+        }
+      }
+
+      .git-tool-commit-hash {
+        .git-tool-commit-hash-text {
+          color: #60a5fa;
+        }
+
+        .git-tool-commit-hash-copy:hover {
+          color: #60a5fa;
+        }
+      }
+    }
+
+    .git-tool-stash-workbench {
+      .git-tool-stash-panel-badge--blue {
+        background: rgba(37, 99, 235, 0.16);
+        color: #60a5fa;
+      }
+
+      .git-tool-stash-panel-badge--green {
+        background: rgba(13, 148, 104, 0.16);
+        color: #34d399;
+      }
+
+      .git-tool-stash-selected-text {
+        color: #60a5fa;
+      }
+
+      .git-tool-stash-btn-white {
+        background: var(--color-panel);
+        border-color: var(--color-line-strong);
+        color: var(--color-text);
+
+        &:hover:not(:disabled) {
+          background: var(--color-panel-soft);
+        }
+      }
+
+      .git-tool-stash-item-icon--blue {
+        background: rgba(37, 99, 235, 0.16);
+        color: #60a5fa;
+      }
+
+      .git-tool-stash-item-icon--green {
+        background: rgba(13, 148, 104, 0.16);
+        color: #34d399;
+      }
+
+      .git-tool-stash-btn-archive {
+        background: var(--color-panel);
+        border-color: rgba(37, 99, 235, 0.35);
+        color: #60a5fa;
+
+        &:hover {
+          background: rgba(37, 99, 235, 0.16);
+          border-color: #60a5fa;
+        }
+      }
+
+      .git-tool-stash-action-restore {
+        color: #34d399;
+
+        &:hover {
+          background: rgba(13, 148, 104, 0.16);
+          border-color: rgba(52, 211, 153, 0.4);
+        }
+      }
+
+      .git-tool-stash-action-delete {
+        color: #f87171;
+
+        &:hover {
+          background: rgba(239, 68, 68, 0.16);
+          border-color: rgba(248, 113, 113, 0.4);
+        }
+      }
+    }
+
+    .git-tool-drawer-panel-archives {
+      .git-tool-drawer-archives {
+        background: var(--color-page);
+      }
+
+      .git-tool-archive-tools {
+        background: rgba(37, 99, 235, 0.12);
+        border-color: rgba(37, 99, 235, 0.28);
+        color: #60a5fa;
+      }
+
+      .git-tool-archive-selected-text {
+        color: #60a5fa;
+      }
+
+      .git-tool-archive-btn-white {
+        background: var(--color-panel);
+        border-color: var(--color-line-strong);
+        color: var(--color-text);
+
+        &:hover:not(:disabled) {
+          background: var(--color-panel-soft);
+        }
+      }
+
+      .git-tool-archive-group {
+        background: var(--color-panel);
+        border-color: var(--color-line);
+      }
+
+      .git-tool-archive-group-branch-icon {
+        background: rgba(37, 99, 235, 0.16);
+        color: #60a5fa;
+      }
+
+      .git-tool-archive-group-badge {
+        background: var(--color-panel-soft);
+        color: var(--color-text-muted);
+      }
+
+      .git-tool-archive-btn-group-restore {
+        background: var(--color-panel);
+        border-color: rgba(37, 99, 235, 0.35);
+        color: #60a5fa;
+
+        &:hover {
+          background: rgba(37, 99, 235, 0.16);
+          border-color: #60a5fa;
+        }
+      }
+
+      .git-tool-archive-group-body {
+        border-top-color: var(--color-line);
+      }
+
+      .git-tool-archive-card {
+        background: var(--color-panel-soft);
+        border-color: var(--color-line);
+
+        &:hover {
+          background: var(--color-panel);
+          border-color: rgba(96, 165, 250, 0.4);
+        }
+      }
+
+      .git-tool-archive-hash-badge {
+        background: rgba(37, 99, 235, 0.16);
+        border-color: rgba(37, 99, 235, 0.3);
+        color: #60a5fa;
+      }
+
+      .git-tool-archive-action-btn {
+        background: var(--color-panel);
+        border-color: var(--color-line);
+
+        &:hover {
+          background: var(--color-panel-soft);
+        }
+      }
+
+      .git-tool-archive-action-restore {
+        color: #60a5fa;
+
+        &:hover {
+          background: rgba(37, 99, 235, 0.16);
+          border-color: rgba(96, 165, 250, 0.4);
+        }
+      }
+
+      .git-tool-archive-action-delete {
+        color: #f87171;
+
+        &:hover {
+          background: rgba(239, 68, 68, 0.16);
+          border-color: rgba(248, 113, 113, 0.4);
+        }
+      }
+    }
+  }
 }
 
 .git-tool-commit-main {
@@ -3858,11 +4573,50 @@ function showErrorMessage(error) {
   min-width: 0;
   min-height: 0;
   flex: 1;
-  gap: 12px;
+  gap: 16px;
 
   .git-tool-stash-panel {
+    display: flex;
+    flex-direction: column;
     flex: 1;
     min-width: 0;
+    min-height: 0;
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: var(--color-panel);
+    overflow: hidden;
+  }
+
+  .git-tool-stash-panel-header-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .git-tool-stash-panel-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    flex: none;
+
+    &--blue {
+      background: #eff6ff;
+      color: #2563eb;
+    }
+
+    &--green {
+      background: #ecfdf5;
+      color: #0d9468;
+    }
+  }
+
+  .git-tool-stash-panel-header-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
   .git-tool-stash-summary-row {
@@ -3872,29 +4626,210 @@ function showErrorMessage(error) {
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 8px 12px;
+    padding: 8px 14px;
     border-bottom: 1px solid var(--color-line);
     background: var(--color-panel-soft);
-    color: var(--color-primary);
+    color: var(--color-text);
     font-size: var(--font-size-base);
+  }
+
+  .git-tool-stash-selected-text {
+    font-size: 13px;
+    font-weight: 600;
+    color: #2563eb;
   }
 
   .git-tool-stash-toolbar {
     display: flex;
     flex: none;
-    gap: 7px;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .git-tool-stash-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+  }
+
+  .git-tool-stash-btn-white {
+    border: 1px solid var(--color-line-strong);
+    background: var(--color-panel);
+    color: var(--color-text);
+
+    &:hover:not(:disabled) {
+      border-color: #94a3b8;
+      background: var(--color-panel-soft);
+    }
   }
 
   .git-tool-stash-list {
+    display: flex;
+    flex-direction: column;
     flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .git-tool-stash-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 9px;
+    background: var(--color-panel);
+    transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+
+    &:hover {
+      border-color: var(--color-line-strong);
+      background: var(--color-panel-soft);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    }
   }
 
   .git-tool-stash-check {
-    width: 14px;
-    height: 14px;
+    width: 15px;
+    height: 15px;
     flex: none;
     margin: 0;
-    accent-color: var(--color-primary);
+    accent-color: #2563eb;
+    cursor: pointer;
+  }
+
+  .git-tool-stash-item-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    flex: none;
+
+    &--blue {
+      background: #eff6ff;
+      color: #2563eb;
+    }
+
+    &--green {
+      background: #ecfdf5;
+      color: #0d9468;
+    }
+  }
+
+  .git-tool-stash-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    gap: 3px;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .git-tool-stash-name {
+    width: 100%;
+    overflow: hidden;
+    color: var(--color-text);
+    font-size: 13.5px;
+    font-weight: 600;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-tool-stash-meta {
+    width: 100%;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 11.5px;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .git-tool-stash-btn-archive {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid #bfdbfe;
+    border-radius: 6px;
+    background: var(--color-panel);
+    color: #2563eb;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover {
+      border-color: #2563eb;
+      background: #eff6ff;
+    }
+  }
+
+  .git-tool-stash-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: none;
+  }
+
+  .git-tool-stash-action-restore,
+  .git-tool-stash-action-delete {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background: var(--color-panel);
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    svg {
+      flex: none;
+    }
+  }
+
+  .git-tool-stash-action-restore {
+    color: #0d9468;
+
+    &:hover {
+      border-color: #a7f3d0;
+      background: #ecfdf5;
+      color: #059669;
+    }
+  }
+
+  .git-tool-stash-action-delete {
+    color: #ef4444;
+
+    &:hover {
+      border-color: #fecaca;
+      background: #fef2f2;
+      color: #dc2626;
+    }
   }
 }
 
@@ -3904,7 +4839,8 @@ function showErrorMessage(error) {
   z-index: 70;
   display: flex;
   justify-content: flex-end;
-  background: rgba(15, 23, 42, 0.18);
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(2px);
 }
 
 .git-tool-drawer-panel {
@@ -3914,6 +4850,398 @@ function showErrorMessage(error) {
   border-left: 1px solid var(--color-line);
   background: var(--color-panel);
   box-shadow: -16px 0 38px rgba(15, 23, 42, 0.16);
+
+  &.git-tool-drawer-panel-archives {
+    width: 560px;
+    max-width: 92vw;
+
+    .git-tool-drawer-head {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--color-line);
+      background: var(--color-panel);
+    }
+
+    .git-tool-drawer-title-box {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .git-tool-drawer-main-title {
+      color: var(--color-text);
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .git-tool-drawer-main-subtitle {
+      color: var(--color-text-muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .git-tool-drawer-close-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: all 0.15s ease;
+
+      &:hover {
+        border-color: var(--color-line-strong);
+        background: var(--color-panel-soft);
+        color: var(--color-text);
+      }
+    }
+
+    .git-tool-drawer-body {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .git-tool-drawer-archives {
+      width: 100%;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow-y: auto;
+      padding: 16px;
+      background: #f8fafc;
+    }
+
+    .git-tool-archive-tools {
+      display: flex;
+      min-height: 46px;
+      flex: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 9px 14px;
+      border: 1px solid #bfdbfe;
+      border-radius: 10px;
+      background: #f1f7fe;
+      color: #2563eb;
+    }
+
+    .git-tool-archive-selected-text {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: #2563eb;
+    }
+
+    .git-tool-archive-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .git-tool-archive-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 6px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+
+      &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    }
+
+    .git-tool-archive-btn-white {
+      border: 1px solid var(--color-line-strong, #cbd5e1);
+      background: #ffffff;
+      color: var(--color-text, #334155);
+
+      &:hover:not(:disabled) {
+        border-color: #94a3b8;
+        background: #f8fafc;
+      }
+    }
+
+    .git-tool-archive-btn-primary {
+      border: 1px solid #2563eb;
+      background: #2563eb;
+      color: #ffffff;
+
+      &:hover:not(:disabled) {
+        background: #1d4ed8;
+        border-color: #1d4ed8;
+      }
+    }
+
+    .git-tool-archive-group {
+      display: flex;
+      flex-direction: column;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      background: #ffffff;
+      padding: 14px 16px;
+      margin-bottom: 4px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .git-tool-archive-group-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .git-tool-archive-group-toggle {
+      display: flex;
+      min-width: 0;
+      flex: 1;
+      align-items: center;
+      gap: 8px;
+      height: 32px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--color-text);
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .git-tool-archive-group-chevron {
+      color: var(--color-text-muted);
+      flex: none;
+      transition: transform 0.2s ease;
+    }
+
+    .git-tool-archive-group-branch-icon {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      flex: none;
+      border-radius: 6px;
+      background: #eff6ff;
+      color: #2563eb;
+    }
+
+    .git-tool-archive-group-name {
+      min-width: 0;
+      overflow: hidden;
+      color: var(--color-text);
+      font-size: 15px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .git-tool-archive-group-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 10px;
+      background: var(--color-panel-soft, #f1f5f9);
+      color: var(--color-text-muted);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    .git-tool-archive-btn-group-restore {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 26px;
+      padding: 0 10px;
+      border: 1px solid #bfdbfe;
+      border-radius: 6px;
+      background: #ffffff;
+      color: #2563eb;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+
+      &:hover {
+        border-color: #2563eb;
+        background: #eff6ff;
+      }
+    }
+
+    .git-tool-archive-group-body {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid #f1f5f9;
+    }
+
+    .git-tool-archive-card {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 14px;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      background: #ffffff;
+      transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+
+      &:hover {
+        border-color: #93c5fd;
+        box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+      }
+    }
+
+    .git-tool-archive-check {
+      width: 15px;
+      height: 15px;
+      flex: none;
+      margin: 0;
+      accent-color: #2563eb;
+      cursor: pointer;
+    }
+
+    .git-tool-archive-card-main {
+      display: flex;
+      min-width: 0;
+      flex: 1;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .git-tool-archive-card-name {
+      width: 100%;
+      overflow: hidden;
+      color: var(--color-text);
+      font-size: 14.5px;
+      font-weight: 700;
+      line-height: 1.35;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .git-tool-archive-card-path {
+      display: inline-flex;
+      max-width: 100%;
+      align-items: center;
+      gap: 5px;
+      color: var(--color-text-muted);
+      font-size: 12px;
+      line-height: 1.3;
+
+      span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+    }
+
+    .git-tool-archive-card-folder {
+      flex: none;
+      color: var(--color-text-muted);
+    }
+
+    .git-tool-archive-card-meta {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--color-text-muted);
+      font-size: 11.5px;
+      margin-top: 1px;
+    }
+
+    .git-tool-archive-hash-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border: 1px solid #dbeafe;
+      border-radius: 4px;
+      background: #eff6ff;
+      color: #2563eb;
+      font-family: "JetBrains Mono", "Consolas", monospace;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    .git-tool-archive-meta-divider {
+      color: var(--color-line-strong, #cbd5e1);
+      font-size: 11px;
+    }
+
+    .git-tool-archive-date {
+      color: var(--color-text-muted);
+      font-size: 11.5px;
+    }
+
+    .git-tool-archive-card-actions {
+      display: flex;
+      flex: none;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .git-tool-archive-action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      height: 26px;
+      padding: 0 9px;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+
+      svg {
+        flex: none;
+      }
+    }
+
+    .git-tool-archive-action-restore {
+      color: #2563eb;
+
+      &:hover {
+        border-color: #bfdbfe;
+        background: #eff6ff;
+        color: #1d4ed8;
+      }
+    }
+
+    .git-tool-archive-action-delete {
+      color: #ef4444;
+
+      &:hover {
+        border-color: #fecaca;
+        background: #fef2f2;
+        color: #dc2626;
+      }
+    }
+  }
 }
 
 .git-tool-drawer-head {
@@ -4001,135 +5329,6 @@ function showErrorMessage(error) {
   width: 300px;
   flex: 0 0 300px;
   border-right: 1px solid var(--color-line);
-}
-
-.git-tool-drawer-archives {
-  width: 520px;
-  min-height: 0;
-  flex: 0 0 520px;
-  gap: 8px;
-  overflow: auto;
-  padding: 10px;
-  background: var(--color-panel-soft);
-
-  .git-tool-archive-tools {
-    display: flex;
-    min-height: 38px;
-    flex: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 0 2px 2px;
-    color: var(--color-primary);
-    font-size: var(--font-size-base);
-  }
-
-  .git-tool-archive-toolbar {
-    display: flex;
-    flex: none;
-    gap: 7px;
-  }
-
-  .git-tool-archive-check {
-    width: 14px;
-    height: 14px;
-    flex: none;
-    margin: 0;
-    accent-color: var(--color-primary);
-  }
-
-  .git-tool-archive-group {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-  }
-
-  .git-tool-archive-group-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .git-tool-archive-group-toggle {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    align-items: center;
-    gap: 7px;
-    height: 32px;
-    padding: 0 9px;
-    border: 1px solid var(--color-line-strong);
-    border-radius: 7px;
-    background: var(--color-primary-soft);
-    color: var(--color-primary);
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .git-tool-archive-group-toggle:hover {
-    border-color: var(--color-info-line);
-    background: var(--color-primary-soft);
-  }
-
-  .git-tool-archive-group-toggle [data-emphasis] {
-    min-width: 0;
-    flex: 1;
-    overflow: hidden;
-    color: var(--color-text);
-    font-size: var(--font-size-base);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .git-tool-archive-group-toggle span:not([data-emphasis]) {
-    flex: none;
-    color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
-  }
-
-  .git-tool-archive-group-body {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    border-left: 1px solid var(--color-line-strong);
-    margin-left: 8px;
-    padding-left: 8px;
-  }
-
-  .git-tool-archive {
-    min-height: 66px;
-    padding: 10px 11px;
-    border-color: var(--color-line);
-    background: var(--color-panel);
-  }
-
-  .git-tool-archive:hover {
-    border-color: var(--color-info-line);
-    background: var(--color-primary-soft);
-  }
-
-  .git-tool-archive-main {
-    gap: 5px;
-  }
-
-  .git-tool-archive-name {
-    font-size: var(--font-size-lg);
-  }
-
-  .git-tool-archive-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    code {
-      padding: 2px 6px;
-      border-radius: 5px;
-      background: var(--color-primary-soft);
-      color: var(--color-primary);
-      font-family: "JetBrains Mono", "Consolas", monospace;
-      font-size: var(--font-size-sm);
-    }
-  }
 }
 
 .git-tool-archive-detail-meta {
