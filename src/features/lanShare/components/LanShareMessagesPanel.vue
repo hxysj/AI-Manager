@@ -9,7 +9,7 @@
     @drop="handleDrop"
   >
     <div ref="messageListRef" class="chat-timeline" aria-label="聊天消息">
-      <div v-if="!messages.length" class="chat-empty">
+      <div v-if="!displayMessages.length" class="chat-empty">
         <div class="cyber-empty-hud">
           <div class="cyber-empty-ring ring-1"></div>
           <div class="cyber-empty-ring ring-2"></div>
@@ -22,12 +22,14 @@
       </div>
 
       <article
-        v-for="message in messages"
+        v-for="message in displayMessages"
         :key="message.id"
         :data-message-id="message.id"
         class="chat-message"
         :class="{
-          'chat-message-self': message.direction === 'desktop-to-mobile'
+          'chat-message-self': message.direction === 'desktop-to-mobile',
+          'chat-message-pending': message.isPending,
+          'chat-message-error': message.status === 'error'
         }"
       >
         <div class="chat-message-meta">
@@ -40,38 +42,80 @@
             formatDateTime(message.createdAt)
           }}</time>
 
-          <!-- 离线/待接收状态指示与重试操作 -->
-          <div
-            v-if="
-              message.direction === 'desktop-to-mobile' && !message.delivered
-            "
-            class="chat-offline-badge"
-          >
-            <span class="cyber-pulse-dot cyber-pulse-dot--amber"></span>
-            <span class="chat-delivery-text">待对方接收 (离线)</span>
-            <button
-              class="chat-retry-btn"
-              type="button"
-              :disabled="retryingMessageId === message.id"
-              title="立即向对方重试发送"
-              @click="retryMessage(message.id)"
+          <!-- 如果是后台正在发送的任务 -->
+          <template v-if="message.isPending">
+            <div
+              v-if="message.status === 'error'"
+              class="chat-task-status chat-task-status--error"
             >
-              <RotateCw
-                :size="11"
-                :class="{ 'cyber-spin': retryingMessageId === message.id }"
-              />
-              <span>{{
-                retryingMessageId === message.id ? "重试中" : "重试"
+              <AlertCircle :size="12" />
+              <span class="chat-task-status-text">发送失败</span>
+              <button
+                class="chat-task-action-btn"
+                type="button"
+                title="重新发送"
+                @click="retryTask(message)"
+              >
+                <RotateCw :size="10" />
+                <span>重试</span>
+              </button>
+              <button
+                class="chat-task-action-btn"
+                type="button"
+                title="取消并移除"
+                @click="cancelTask(message.id)"
+              >
+                <X :size="10" />
+              </button>
+            </div>
+            <div v-else class="chat-task-status chat-task-status--sending">
+              <LoaderCircle :size="12" class="cyber-spin" />
+              <span class="chat-task-status-text">{{
+                message.statusText || "正在发送..."
               }}</span>
-            </button>
-          </div>
-          <span
-            v-else-if="message.direction === 'desktop-to-mobile'"
-            class="chat-delivered-badge"
-          >
-            <span class="cyber-dot-emerald"></span>
-            <span>已送达</span>
-          </span>
+              <span
+                v-if="message.progress > 0 && message.progress < 100"
+                class="chat-task-percent"
+              >
+                {{ Math.round(message.progress) }}%
+              </span>
+            </div>
+          </template>
+
+          <!-- 离线/待接收状态指示与重试操作 (服务端已存储消息) -->
+          <template v-else>
+            <div
+              v-if="
+                message.direction === 'desktop-to-mobile' && !message.delivered
+              "
+              class="chat-offline-badge"
+            >
+              <span class="cyber-pulse-dot cyber-pulse-dot--amber"></span>
+              <span class="chat-delivery-text">待对方接收 (离线)</span>
+              <button
+                class="chat-retry-btn"
+                type="button"
+                :disabled="retryingMessageId === message.id"
+                title="立即向对方重试发送"
+                @click="retryMessage(message.id)"
+              >
+                <RotateCw
+                  :size="11"
+                  :class="{ 'cyber-spin': retryingMessageId === message.id }"
+                />
+                <span>{{
+                  retryingMessageId === message.id ? "重试中" : "重试"
+                }}</span>
+              </button>
+            </div>
+            <span
+              v-else-if="message.direction === 'desktop-to-mobile'"
+              class="chat-delivered-badge"
+            >
+              <span class="cyber-dot-emerald"></span>
+              <span>已送达</span>
+            </span>
+          </template>
         </div>
 
         <div class="chat-message-body">
@@ -79,23 +123,121 @@
             class="chat-bubble"
             :class="{
               'chat-bubble-attachments':
-                !message.content?.trim() && message.attachments?.length
+                !message.content?.trim() &&
+                (message.attachments?.length || message.files?.length),
+              'chat-bubble-pending': message.isPending
             }"
           >
+            <!-- 文本内容 -->
             <p v-if="message.content?.trim()" class="chat-text">
               {{ message.content }}
             </p>
+
+            <!-- 服务端已确认存储的附件 -->
             <LanShareAttachmentGallery
-              v-if="message.attachments?.length"
+              v-if="!message.isPending && message.attachments?.length"
               :files="message.attachments"
               :service="service"
               :session-id="currentSessionId"
               @preview="$emit('preview-file', $event)"
               @download="$emit('download-file', $event)"
             />
+
+            <!-- 后台正在发送的文件与进度卡片 -->
+            <div
+              v-if="message.isPending && message.files?.length"
+              class="chat-sending-attachments"
+            >
+              <div class="chat-sending-files-list">
+                <div
+                  v-for="file in message.files"
+                  :key="file.id"
+                  class="chat-sending-file-item"
+                >
+                  <div class="sending-file-preview">
+                    <img
+                      v-if="file.previewUrl"
+                      :src="file.previewUrl"
+                      :alt="file.name"
+                      class="sending-file-thumb"
+                    />
+                    <div v-else class="sending-file-icon">
+                      <File :size="18" />
+                    </div>
+                  </div>
+                  <div class="sending-file-meta">
+                    <span class="sending-file-name" :title="file.name">{{
+                      file.name
+                    }}</span>
+                    <span class="sending-file-size">{{
+                      formatFileSize(file.size)
+                    }}</span>
+                  </div>
+                  <div class="sending-file-state">
+                    <span
+                      v-if="file.uploadedId || file.path"
+                      class="state-done"
+                      title="已准备完成"
+                    >
+                      <Check :size="13" />
+                    </span>
+                    <span
+                      v-else-if="message.status === 'error'"
+                      class="state-error"
+                      title="失败"
+                    >
+                      <AlertCircle :size="13" />
+                    </span>
+                    <span v-else class="state-uploading" title="传输中">
+                      <LoaderCircle :size="13" class="cyber-spin" />
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 传输进度条 -->
+              <div class="chat-sending-progress-shell">
+                <div class="progress-bar-track">
+                  <div
+                    class="progress-bar-fill"
+                    :class="{
+                      'is-error': message.status === 'error',
+                      'is-indeterminate':
+                        message.status !== 'error' && message.progress === 0
+                    }"
+                    :style="{
+                      width: `${Math.max(4, Math.min(100, message.progress))}%`
+                    }"
+                  ></div>
+                </div>
+                <div class="progress-info-row">
+                  <span class="progress-status-desc">
+                    {{
+                      message.status === "error"
+                        ? message.errorMessage || "发送失败"
+                        : message.statusText || "正在发送附件..."
+                    }}
+                  </span>
+                  <span class="progress-ratio">
+                    <template
+                      v-if="message.totalBytes > 0 && message.loadedBytes > 0"
+                    >
+                      {{ formatFileSize(message.loadedBytes) }} /
+                      {{ formatFileSize(message.totalBytes) }} ({{
+                        Math.round(message.progress)
+                      }}%)
+                    </template>
+                    <template v-else-if="message.progress > 0">
+                      {{ Math.round(message.progress) }}%
+                    </template>
+                  </span>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div class="chat-message-actions">
+          <!-- 消息操作按钮 -->
+          <div v-if="!message.isPending" class="chat-message-actions">
             <button
               v-if="message.content"
               class="chat-icon-button"
@@ -112,6 +254,27 @@
               title="删除本机消息"
               aria-label="删除本机消息"
               @click="deleteMessages([message.id])"
+            >
+              <Trash2 :size="12" />
+            </button>
+          </div>
+          <div v-else class="chat-message-actions">
+            <button
+              v-if="message.status === 'error'"
+              class="chat-icon-button"
+              type="button"
+              title="重新发送"
+              aria-label="重新发送"
+              @click="retryTask(message)"
+            >
+              <RotateCw :size="12" />
+            </button>
+            <button
+              class="chat-icon-button"
+              type="button"
+              title="取消发送"
+              aria-label="取消发送"
+              @click="cancelTask(message.id)"
             >
               <Trash2 :size="12" />
             </button>
@@ -150,7 +313,6 @@
           <button
             class="chat-icon-button"
             type="button"
-            :disabled="sending"
             :aria-label="`移除 ${item.name}`"
             @click="removeAttachment(item)"
           >
@@ -172,7 +334,7 @@
           ref="composerRef"
           v-model="currentDraft.content"
           class="chat-input"
-          :disabled="sending || !currentSessionId"
+          :disabled="!currentSessionId"
           rows="2"
           placeholder="输入消息内容，或直接拖拽/粘贴文件、图片至此..."
           aria-label="聊天输入框"
@@ -186,7 +348,7 @@
           <button
             class="chat-attach-button"
             type="button"
-            :disabled="sending || !currentSessionId"
+            :disabled="!currentSessionId"
             title="添加文件或图片，可多选"
             @click="pickFiles"
           >
@@ -194,8 +356,8 @@
             <span>添加附件</span>
           </button>
           <span class="chat-compose-hint">{{
-            sending
-              ? sendStatus
+            activeSendingCount > 0
+              ? `后台正在发送 ${activeSendingCount} 条消息...`
               : currentDraft.files.length
                 ? `${currentDraft.files.length} 个附件 · 合并发送`
                 : "Enter 发送 • Shift + Enter 换行"
@@ -205,7 +367,6 @@
           class="chat-send-button"
           type="button"
           :disabled="
-            sending ||
             !service.running ||
             !currentSessionId ||
             (!currentDraft.content.trim() && !currentDraft.files.length)
@@ -213,7 +374,7 @@
           @click="sendMessage"
         >
           <Send :size="14" />
-          <span>{{ sending ? "传输中..." : "发送" }}</span>
+          <span>发送</span>
         </button>
       </div>
       <input
@@ -323,9 +484,12 @@ import "element-plus/es/components/select/style/css"
 import { isTauri } from "@tauri-apps/api/core"
 import { getCurrentWebview } from "@tauri-apps/api/webview"
 import {
+  AlertCircle,
+  Check,
   CloudUpload,
   Copy,
   File,
+  LoaderCircle,
   MessagesSquare,
   Paperclip,
   RotateCw,
@@ -358,7 +522,7 @@ const isDragOver = ref(false)
 let dragDepth = 0
 const messages = ref([])
 const drafts = reactive({})
-const sending = ref(false)
+const sendingTasks = ref([])
 const sendStatus = ref("")
 const retryingMessageId = ref("")
 const searchOpen = ref(false)
@@ -369,6 +533,28 @@ let stopMessageListener = null
 let stopDropListener = null
 let disposed = false
 let loadSeed = 0
+
+const activeSendingCount = computed(
+  () =>
+    sendingTasks.value.filter(
+      (task) =>
+        task.sessionId === props.currentSessionId &&
+        (task.status === "uploading" || task.status === "sending")
+    ).length
+)
+const sending = computed(() => activeSendingCount.value > 0)
+
+const displayMessages = computed(() => {
+  const serverList = messages.value
+  const serverIds = new Set(serverList.map((m) => m.id))
+  const pendingTasks = sendingTasks.value.filter(
+    (task) =>
+      task.sessionId === props.currentSessionId && !serverIds.has(task.id)
+  )
+  return [...serverList, ...pendingTasks].sort(
+    (left, right) => left.createdAt - right.createdAt
+  )
+})
 
 watch(
   () => props.currentSessionId,
@@ -469,7 +655,17 @@ onBeforeUnmount(() => {
   for (const draft of Object.values(drafts)) {
     for (const file of draft.files)
       if (file.previewUrl) URL.revokeObjectURL(file.previewUrl)
-    if (!sending.value) discardUploads(draft.files)
+    discardUploads(draft.files)
+  }
+  for (const task of sendingTasks.value) {
+    if (task.activeXhr) {
+      try {
+        task.activeXhr.abort()
+      } catch {}
+    }
+    for (const file of task.files) {
+      if (file.previewUrl) URL.revokeObjectURL(file.previewUrl)
+    }
   }
 })
 
@@ -502,6 +698,19 @@ async function loadMessages() {
     selectedIds.value = selectedIds.value.filter((id) =>
       nextMessages.some((message) => message.id === id)
     )
+
+    // 清理并在服务端已确认的消息中对齐后台发送任务
+    const serverIdSet = new Set(nextMessages.map((m) => m.id))
+    sendingTasks.value = sendingTasks.value.filter((task) => {
+      if (serverIdSet.has(task.id)) {
+        for (const item of task.files) {
+          if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+        }
+        return false
+      }
+      return true
+    })
+
     if (changed && shouldFollow) {
       await nextTick()
       if (messageListRef.value)
@@ -534,7 +743,7 @@ async function retryMessage(messageId) {
 }
 
 function appendFiles(files) {
-  if (sending.value || !props.currentSessionId) return
+  if (!props.currentSessionId) return
   const remaining = 100 - currentDraft.value.files.length
   if (files.length > remaining)
     createMessage.warning("一条消息最多添加 100 个附件。")
@@ -556,7 +765,7 @@ function appendFiles(files) {
 }
 
 function addPaths(paths) {
-  if (sending.value || !props.currentSessionId) return
+  if (!props.currentSessionId) return
   for (const path of paths) {
     if (currentDraft.value.files.some((item) => item.path === path)) continue
     if (currentDraft.value.files.length >= 100) {
@@ -578,7 +787,7 @@ function chooseBrowserFiles(event) {
 }
 
 async function pickFiles() {
-  if (sending.value || !props.currentSessionId) return
+  if (!props.currentSessionId) return
   if (isTauri()) {
     try {
       const selected = await systemApi.selectFiles({
@@ -657,7 +866,6 @@ async function discardUploads(files) {
 }
 
 function removeAttachment(item) {
-  if (sending.value) return
   currentDraft.value.files = currentDraft.value.files.filter(
     (file) => file.id !== item.id
   )
@@ -665,71 +873,245 @@ function removeAttachment(item) {
   discardUploads([item])
 }
 
-async function sendMessage() {
-  if (sending.value || !props.service.running || !props.currentSessionId) return
-  const draft = currentDraft.value
-  if (!draft.content.trim() && !draft.files.length) return
-  const sessionId = props.currentSessionId
-  const deviceId =
-    props.chatMode === "direct" ? props.currentDevice?.id || "" : ""
-  const selected = [...draft.files]
-  const fingerprint = JSON.stringify([
-    draft.content,
-    selected.map((item) => item.id)
-  ])
-  if (draft.fingerprint !== fingerprint || !draft.messageId)
-    draft.messageId = crypto.randomUUID()
-  draft.fingerprint = fingerprint
-  sending.value = true
-  try {
-    const access = new URL(props.service.accessUrl)
-    for (const [index, item] of selected.entries()) {
-      sendStatus.value = `准备附件 ${index + 1} / ${selected.length}`
-      if (item.path || item.uploadedId) continue
-      const url = new URL("/api/files/upload", access.origin)
-      url.search = new URLSearchParams({
-        token: access.searchParams.get("token") || "",
-        sessionId,
-        name: item.name
-      }).toString()
-      const response = await fetch(url, { method: "PUT", body: item.file })
-      const payload = await response.json()
-      if (!response.ok || payload.status !== "success")
-        throw new Error(payload.message || "附件上传失败")
-      item.uploadedId = payload.data.id
+function scrollToBottom() {
+  nextTick(() => {
+    if (messageListRef.value) {
+      messageListRef.value.scrollTop = messageListRef.value.scrollHeight
     }
-    sendStatus.value = selected.length
-      ? `正在传输 ${selected.length} 个附件…`
-      : "正在传输…"
+  })
+}
+
+function uploadFileWithProgress(url, file, onProgress, onXhrCreated) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    onXhrCreated?.(xhr)
+    xhr.open("PUT", url, true)
+
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(event.loaded, event.total)
+        }
+      }
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const payload = JSON.parse(xhr.responseText)
+          if (payload.status === "success") {
+            resolve(payload.data)
+          } else {
+            reject(new Error(payload.message || "上传失败"))
+          }
+        } catch {
+          reject(new Error("解析上传响应失败"))
+        }
+      } else {
+        try {
+          const payload = JSON.parse(xhr.responseText)
+          reject(new Error(payload.message || `HTTP ${xhr.status}`))
+        } catch {
+          reject(new Error(`上传失败 (HTTP ${xhr.status})`))
+        }
+      }
+    }
+
+    xhr.onerror = () => {
+      reject(new Error("网络连接失败，上传中断"))
+    }
+
+    xhr.onabort = () => {
+      reject(new Error("已取消上传"))
+    }
+
+    xhr.ontimeout = () => {
+      reject(new Error("上传请求超时"))
+    }
+
+    xhr.send(file)
+  })
+}
+
+async function executeSendingTask(task) {
+  task.status = "uploading"
+  task.errorMessage = ""
+  task.progress = 0
+
+  try {
+    const filesNeedingUpload = task.files.filter(
+      (item) => !item.path && !item.uploadedId && item.file
+    )
+
+    if (filesNeedingUpload.length > 0) {
+      if (!props.service.accessUrl) {
+        throw new Error("局域网服务未就绪，缺少接入地址")
+      }
+      const access = new URL(props.service.accessUrl)
+      const fileProgressMap = new Map()
+
+      for (const item of task.files) {
+        if (item.path || item.uploadedId) {
+          fileProgressMap.set(item.id, item.size || 0)
+        } else {
+          fileProgressMap.set(item.id, 0)
+        }
+      }
+
+      for (let i = 0; i < filesNeedingUpload.length; i++) {
+        const item = filesNeedingUpload[i]
+        task.statusText = `正在上传附件 (${i + 1}/${filesNeedingUpload.length})...`
+
+        const url = new URL("/api/files/upload", access.origin)
+        url.search = new URLSearchParams({
+          token: access.searchParams.get("token") || "",
+          sessionId: task.sessionId,
+          name: item.name
+        }).toString()
+
+        const uploaded = await uploadFileWithProgress(
+          url.toString(),
+          item.file,
+          (loaded) => {
+            fileProgressMap.set(item.id, loaded)
+            const overallLoaded = Array.from(fileProgressMap.values()).reduce(
+              (sum, b) => sum + b,
+              0
+            )
+            task.loadedBytes = overallLoaded
+            if (task.totalBytes > 0) {
+              task.progress = Math.min(
+                88,
+                Math.round((overallLoaded / task.totalBytes) * 88)
+              )
+            }
+          },
+          (xhr) => {
+            task.activeXhr = xhr
+          }
+        )
+
+        task.activeXhr = null
+        item.uploadedId = uploaded.id
+        fileProgressMap.set(item.id, item.size || 0)
+      }
+    }
+
+    // 所有待上传文件处理完成，发送消息与本地路径至后端
+    task.status = "sending"
+    task.statusText = task.files.length
+      ? "正在投递文件与消息..."
+      : "正在发送..."
+    task.progress = Math.max(task.progress, 90)
+
     await lanShareApi.sendMessage({
-      sessionId,
-      deviceId,
-      messageId: draft.messageId,
-      content: draft.content.trim(),
-      paths: selected.map((item) => item.path).filter(Boolean),
-      attachmentIds: selected.map((item) => item.uploadedId).filter(Boolean),
-      attachmentOrder: selected.map((item) =>
+      sessionId: task.sessionId,
+      deviceId: task.deviceId,
+      messageId: task.id,
+      content: task.content,
+      paths: task.files.map((item) => item.path).filter(Boolean),
+      attachmentIds: task.files.map((item) => item.uploadedId).filter(Boolean),
+      attachmentOrder: task.files.map((item) =>
         item.path ? { path: item.path } : { id: item.uploadedId }
       )
     })
-    for (const item of selected)
-      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
-    draft.files = []
-    draft.content = ""
-    draft.messageId = ""
+
+    task.status = "success"
+    task.progress = 100
+    task.statusText = "已送达"
+
     if (!disposed) {
       emit("refresh-state")
       await loadMessages()
-      await nextTick()
-      composerRef.value?.focus()
+      // 如果服务端已刷新包含此消息，从临时队列移除
+      const foundInServer = messages.value.some((m) => m.id === task.id)
+      if (foundInServer) {
+        for (const item of task.files) {
+          if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+        }
+        sendingTasks.value = sendingTasks.value.filter((t) => t.id !== task.id)
+      }
     }
   } catch (error) {
-    if (!disposed)
-      createMessage.error(`发送失败，草稿已保留：${error?.message || error}`)
+    if (disposed) return
+    task.status = "error"
+    task.errorMessage = error?.message || String(error)
+    task.statusText = "发送失败"
+    createMessage.error(`发送失败：${task.errorMessage}`)
   } finally {
-    sending.value = false
-    sendStatus.value = ""
+    task.activeXhr = null
   }
+}
+
+function sendMessage() {
+  if (!props.service.running || !props.currentSessionId) return
+  const draft = currentDraft.value
+  const content = draft.content.trim()
+  const files = [...draft.files]
+  if (!content && !files.length) return
+
+  // 立即清空输入框和草稿，后台异步发送，完全不阻碍用户继续输入
+  draft.content = ""
+  draft.files = []
+  draft.messageId = ""
+  draft.fingerprint = ""
+
+  // 保持输入框焦点，用户可立即键入下一条内容
+  nextTick(() => {
+    composerRef.value?.focus()
+  })
+
+  // 创建乐观后台发送任务并在时间轴中立即展示
+  const taskId = crypto.randomUUID()
+  const totalBytes = files.reduce((acc, f) => acc + (f.size || 0), 0)
+  const task = reactive({
+    id: taskId,
+    sessionId: props.currentSessionId,
+    deviceId: props.chatMode === "direct" ? props.currentDevice?.id || "" : "",
+    direction: "desktop-to-mobile",
+    content,
+    createdAt: Date.now(),
+    files,
+    isPending: true,
+    status: "uploading",
+    progress: 0,
+    loadedBytes: 0,
+    totalBytes,
+    statusText: files.length
+      ? `准备发送 ${files.length} 个文件...`
+      : "正在发送...",
+    errorMessage: "",
+    activeXhr: null
+  })
+
+  sendingTasks.value.push(task)
+  scrollToBottom()
+  executeSendingTask(task)
+}
+
+function retryTask(task) {
+  task.status = "uploading"
+  task.errorMessage = ""
+  task.progress = 0
+  task.statusText = "正在重新发送..."
+  executeSendingTask(task)
+}
+
+function cancelTask(taskId) {
+  const task = sendingTasks.value.find((t) => t.id === taskId)
+  if (!task) return
+  if (task.activeXhr) {
+    try {
+      task.activeXhr.abort()
+    } catch (e) {
+      console.warn("abort xhr error:", e)
+    }
+  }
+  for (const item of task.files) {
+    if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+  }
+  discardUploads(task.files)
+  sendingTasks.value = sendingTasks.value.filter((t) => t.id !== taskId)
 }
 
 async function copyMessage(message) {
@@ -765,6 +1147,11 @@ async function clearCurrentSession() {
     return
   try {
     await lanShareApi.clearSession({ sessionId: props.currentSessionId })
+    for (const task of sendingTasks.value.filter(
+      (t) => t.sessionId === props.currentSessionId
+    )) {
+      cancelTask(task.id)
+    }
     await loadMessages()
     emit("refresh-state")
   } catch (error) {
@@ -909,6 +1296,61 @@ defineExpose({
           color: var(--color-text-soft);
         }
 
+        .chat-task-status {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          padding: 2px 7px;
+          border-radius: 4px;
+          font-size: 11px;
+          line-height: 1.2;
+
+          &--sending {
+            background: var(--color-primary-soft);
+            border: 1px solid var(--color-info-line);
+            color: var(--color-primary);
+
+            .chat-task-percent {
+              font-weight: 700;
+              margin-left: 2px;
+            }
+          }
+
+          &--error {
+            background: var(--color-danger-soft);
+            border: 1px solid var(--color-danger-line);
+            color: var(--color-danger);
+          }
+
+          .chat-task-status-text {
+            max-width: 140px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .chat-task-action-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            padding: 1px 5px;
+            background: var(--color-panel);
+            border: 1px solid currentColor;
+            border-radius: 3px;
+            color: inherit;
+            cursor: pointer;
+            font-size: 10px;
+            line-height: 1.2;
+            font-family: inherit;
+            transition: all 0.15s ease;
+
+            &:hover {
+              opacity: 0.85;
+              transform: scale(1.04);
+            }
+          }
+        }
+
         .chat-offline-badge {
           display: inline-flex;
           align-items: center;
@@ -980,6 +1422,10 @@ defineExpose({
             flex: 0 1 auto;
           }
 
+          &.chat-bubble-pending {
+            opacity: 0.96;
+          }
+
           &:not(.chat-bubble-attachments) {
             padding: 11px 14px;
             border: 1px solid var(--color-line);
@@ -987,6 +1433,11 @@ defineExpose({
             border-radius: 0 10px 10px 10px;
             background: var(--color-panel);
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+
+            &.chat-bubble-pending {
+              border-style: dashed;
+              border-left-style: solid;
+            }
 
             .chat-text {
               margin: 0;
@@ -996,6 +1447,168 @@ defineExpose({
               overflow-wrap: anywhere;
               line-height: 1.65;
               font-size: 13.5px;
+            }
+          }
+
+          .chat-sending-attachments {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            width: 320px;
+            max-width: 100%;
+            padding: 8px;
+            border-radius: 8px;
+            background: var(--color-panel-soft);
+            border: 1px solid var(--color-line);
+
+            .chat-sending-files-list {
+              display: flex;
+              flex-direction: column;
+              gap: 6px;
+              max-height: 220px;
+              overflow-y: auto;
+              scrollbar-width: thin;
+
+              .chat-sending-file-item {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                padding: 6px 8px;
+                border-radius: 6px;
+                background: var(--color-panel);
+                border: 1px solid var(--color-line);
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+
+                .sending-file-preview {
+                  width: 34px;
+                  height: 34px;
+                  flex-shrink: 0;
+                  border-radius: 6px;
+                  overflow: hidden;
+                  background: var(--color-panel-soft);
+                  display: grid;
+                  place-items: center;
+                  border: 1px solid var(--color-line);
+
+                  .sending-file-thumb {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: cover;
+                  }
+
+                  .sending-file-icon {
+                    display: grid;
+                    place-items: center;
+                    color: var(--color-primary);
+                  }
+                }
+
+                .sending-file-meta {
+                  display: flex;
+                  flex-direction: column;
+                  min-width: 0;
+                  flex: 1;
+                  gap: 2px;
+
+                  .sending-file-name {
+                    font-size: 12px;
+                    font-weight: 500;
+                    color: var(--color-text);
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                    white-space: nowrap;
+                  }
+
+                  .sending-file-size {
+                    font-size: 11px;
+                    color: var(--color-text-soft);
+                    font-family:
+                      ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                      monospace;
+                  }
+                }
+
+                .sending-file-state {
+                  display: grid;
+                  place-items: center;
+                  flex-shrink: 0;
+                  width: 20px;
+                  height: 20px;
+
+                  .state-done {
+                    color: var(--color-success);
+                  }
+
+                  .state-error {
+                    color: var(--color-danger);
+                  }
+
+                  .state-uploading {
+                    color: var(--color-primary);
+                  }
+                }
+              }
+            }
+
+            .chat-sending-progress-shell {
+              display: flex;
+              flex-direction: column;
+              gap: 5px;
+              padding: 4px 2px 2px;
+
+              .progress-bar-track {
+                position: relative;
+                width: 100%;
+                height: 5px;
+                border-radius: 9999px;
+                background: var(--color-line);
+                overflow: hidden;
+
+                .progress-bar-fill {
+                  height: 100%;
+                  border-radius: 9999px;
+                  background: var(--color-primary);
+                  transition: width 0.2s ease;
+
+                  &.is-error {
+                    background: var(--color-danger);
+                  }
+
+                  &.is-indeterminate {
+                    position: absolute;
+                    top: 0;
+                    bottom: 0;
+                    width: 35% !important;
+                    animation: progressIndeterminate 1.4s infinite ease-in-out;
+                  }
+                }
+              }
+
+              .progress-info-row {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                gap: 8px;
+                font-size: 11px;
+                font-family:
+                  ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                  monospace;
+
+                .progress-status-desc {
+                  color: var(--color-text-muted);
+                  overflow: hidden;
+                  text-overflow: ellipsis;
+                  white-space: nowrap;
+                  font-size: 11px;
+                }
+
+                .progress-ratio {
+                  flex-shrink: 0;
+                  color: var(--color-primary);
+                  font-weight: 600;
+                  font-size: 11px;
+                }
+              }
             }
           }
         }
@@ -1055,6 +1668,11 @@ defineExpose({
             border-radius: 10px 0 10px 10px;
             background: var(--color-primary-soft);
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+
+            &.chat-bubble-pending {
+              border-style: dashed;
+              border-right-style: solid;
+            }
 
             .chat-text {
               color: var(--color-text);
@@ -1447,6 +2065,18 @@ defineExpose({
   to {
     opacity: 1;
     transform: scale(1);
+  }
+}
+
+@keyframes progressIndeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  50% {
+    transform: translateX(120%);
+  }
+  100% {
+    transform: translateX(300%);
   }
 }
 </style>
