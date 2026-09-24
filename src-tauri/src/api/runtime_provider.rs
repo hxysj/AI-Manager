@@ -16,6 +16,21 @@ static PROVIDER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+const DEFAULT_CODEX_MODEL_LIST: &[&str] = &[
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex",
+    "gpt-5.3-codex-spark",
+    "gpt-5.2",
+];
+
+const CODEX_MODEL_SHELL_POOL: &[&str] = DEFAULT_CODEX_MODEL_LIST;
+const CODEX_MODEL_COMP_HASH: &str = "3000";
+
 pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
     let mut providers = provider_store::read_providers(paths)?;
     let mut models = provider_store::read_models(paths)?;
@@ -99,34 +114,49 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
         update_active_provider_key(&mut keys, &provider_id, string_value(payload.get("apiKey")))?;
     }
 
-    let model_name = string_value(payload.get("model"));
+    if provider.get("cli").and_then(Value::as_str) == Some("codex") {
+        models.retain(|item| {
+            item.get("providerId").and_then(Value::as_str) != Some(provider_id.as_str())
+        });
+        for model_name in codex_model_list(&provider) {
+            models.push(normalize_model(
+                &json!({
+                  "id": format!("{}:{}", provider_id, model_name),
+                  "providerId": provider_id,
+                  "name": model_name
+                }),
+                None,
+            )?);
+        }
+    } else {
+        let model_name = string_value(payload.get("model"));
+        if !model_name.is_empty() {
+            let model_id = format!("{}:{}", provider_id, model_name);
+            let model = normalize_model(
+                &json!({
+                  "id": model_id,
+                  "providerId": provider_id,
+                  "name": model_name
+                }),
+                models
+                    .iter()
+                    .find(|item| item.get("id").and_then(Value::as_str) == Some(model_id.as_str())),
+            )?;
 
-    if !model_name.is_empty() {
-        let model_id = format!("{}:{}", provider_id, model_name);
-        let model = normalize_model(
-            &json!({
-              "id": model_id,
-              "providerId": provider_id,
-              "name": model_name
-            }),
-            models
-                .iter()
-                .find(|item| item.get("id").and_then(Value::as_str) == Some(model_id.as_str())),
-        )?;
-
-        if models.iter().any(|item| item.get("id") == model.get("id")) {
-            models = models
-                .into_iter()
-                .map(|item| {
-                    if item.get("id") == model.get("id") {
-                        model.clone()
-                    } else {
-                        item
-                    }
-                })
-                .collect();
-        } else {
-            models.push(model);
+            if models.iter().any(|item| item.get("id") == model.get("id")) {
+                models = models
+                    .into_iter()
+                    .map(|item| {
+                        if item.get("id") == model.get("id") {
+                            model.clone()
+                        } else {
+                            item
+                        }
+                    })
+                    .collect();
+            } else {
+                models.push(model);
+            }
         }
     }
 
@@ -241,9 +271,25 @@ pub async fn switch_runtime(
     payload: Value,
     cli_targets: &Value,
 ) -> Result<(), ManagerError> {
-    let cli = string_value(payload.get("cli"));
+    switch_runtime_inner(paths, payload, cli_targets, None).await
+}
 
-    ensure_proxy_disabled(paths, &cli)?;
+pub async fn switch_runtime_with_proxy(
+    paths: &AppPaths,
+    payload: Value,
+    cli_targets: &Value,
+    proxy_server_registry: &proxy::ProxyServerRegistry,
+) -> Result<(), ManagerError> {
+    switch_runtime_inner(paths, payload, cli_targets, Some(proxy_server_registry)).await
+}
+
+async fn switch_runtime_inner(
+    paths: &AppPaths,
+    payload: Value,
+    cli_targets: &Value,
+    proxy_server_registry: Option<&proxy::ProxyServerRegistry>,
+) -> Result<(), ManagerError> {
+    let cli = string_value(payload.get("cli"));
 
     let providers = provider_store::read_providers(paths)?;
     let mut profiles = provider_store::read_profiles(paths)?;
@@ -264,6 +310,14 @@ pub async fn switch_runtime(
         return Err(ManagerError::System(
             "Runtime Profile 不能使用其他 CLI 的 Provider".to_string(),
         ));
+    }
+
+    let needs_model_proxy = cli == "codex"
+        && codex_model_aliases(&provider)
+            .iter()
+            .any(|(client_model, upstream_model)| client_model != upstream_model);
+    if !needs_model_proxy {
+        ensure_proxy_disabled(paths, &cli)?;
     }
 
     // 启用前先确认本地监听成功，端口占用时不改变当前 Runtime。
@@ -290,7 +344,23 @@ pub async fn switch_runtime(
     }
 
     provider_store::write_profiles(paths, &profiles)?;
-    write_cli_config(paths, &cli, find_cli_target(cli_targets, &cli)?).await?;
+
+    if needs_model_proxy {
+        if let Some(proxy_server_registry) = proxy_server_registry {
+            proxy::ensure_provider_model_proxy(
+                proxy_server_registry,
+                paths,
+                cli_targets,
+                &cli,
+                &provider_id,
+            )
+            .await?;
+        } else {
+            write_cli_config(paths, &cli, find_cli_target(cli_targets, &cli)?).await?;
+        }
+    } else {
+        write_cli_config(paths, &cli, find_cli_target(cli_targets, &cli)?).await?;
+    }
 
     if cli == "codex" {
         provider_store::write_active_codex_account_id(paths, "")?;
@@ -464,6 +534,7 @@ pub async fn launch_codex_provider_instance(
     let target_type;
     let model;
     let mut runtime_config = json!({});
+    let mut catalog_provider = None;
 
     if !account_id.is_empty() {
         let auth = codex_account::get_proxy_auth(paths, &account_id, &cli_target).await?;
@@ -533,6 +604,7 @@ pub async fn launch_codex_provider_instance(
             .get("runtimeConfig")
             .cloned()
             .unwrap_or_else(|| json!({}));
+        catalog_provider = Some(provider.clone());
 
         model = first_string(
             runtime_config.get("mainModel"),
@@ -568,9 +640,13 @@ pub async fn launch_codex_provider_instance(
             slugify_name(&target_id).if_empty_then(|| target_id.clone())
         ));
     let token = proxy::create_provider_instance_token(&target_id);
+    let client_model = catalog_provider
+        .as_ref()
+        .and_then(|provider| codex_model_aliases(provider).first().map(|item| item.0.clone()))
+        .unwrap_or_else(|| model.clone());
     let mut config_lines = vec![
         "model_provider = \"custom\"".to_string(),
-        format!("model = {}", to_toml_string(model.clone())),
+        format!("model = {}", to_toml_string(client_model)),
         format!(
             "model_reasoning_effort = {}",
             to_toml_string(first_string(
@@ -580,6 +656,10 @@ pub async fn launch_codex_provider_instance(
         ),
         "disable_response_storage = true".to_string(),
     ];
+
+    if catalog_provider.is_some() {
+        config_lines.push("model_catalog_json = \".cockpit_model_catalog.json\"".to_string());
+    }
 
     if runtime_config
         .get("serviceTierFast")
@@ -625,6 +705,14 @@ pub async fn launch_codex_provider_instance(
         format!("{}\n", config_lines.join("\n")),
     )
     .await?;
+
+    if let Some(provider) = catalog_provider.as_ref() {
+        tokio::fs::write(
+            profile_dir.join(".cockpit_model_catalog.json"),
+            format!("{}\n", serde_json::to_string_pretty(&codex_model_catalog(provider))?),
+        )
+        .await?;
+    }
 
     let sessions_path = profile_dir.join("sessions");
     tokio::fs::create_dir_all(&sessions_path).await?;
@@ -1142,10 +1230,11 @@ pub fn runtime_config_schemas() -> Value {
         "authFields": ["OPENAI_API_KEY"],
         "modelFields": [
           {
-            "key": "mainModel",
-            "label": "模型名称",
-            "configKey": "model",
-            "description": "指定使用的模型，将自动更新到 config.toml 中"
+            "key": "modelList",
+            "label": "模型列表",
+            "type": "textarea",
+            "configKey": "model_catalog_json",
+            "description": "每行或用逗号填写一个上游模型；留空时使用内置默认列表"
           }
         ],
         "optionFields": [
@@ -1165,7 +1254,13 @@ pub fn runtime_config_schemas() -> Value {
             "name": "config.toml",
             "format": "TOML",
             "description": "Codex config.toml 配置内容",
-            "template": "model_provider = \"custom\"\nmodel = \"{{mainModel}}\"\nmodel_reasoning_effort = \"{{modelReasoningEffort}}\"\ndisable_response_storage = true\n{{#serviceTierFast}}\nservice_tier = \"fast\"\n{{/serviceTierFast}}\n{{#modelContextWindowEnabled}}\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = {{modelAutoCompactTokenLimit}}\n{{/modelContextWindowEnabled}}\n\n[model_providers]\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"{{baseUrl}}\""
+            "template": "model_provider = \"custom\"\nmodel = \"{{mainModel}}\"\nmodel_reasoning_effort = \"{{modelReasoningEffort}}\"\nmodel_catalog_json = \".cockpit_model_catalog.json\"\ndisable_response_storage = true\n{{#serviceTierFast}}\nservice_tier = \"fast\"\n{{/serviceTierFast}}\n{{#modelContextWindowEnabled}}\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = {{modelAutoCompactTokenLimit}}\n{{/modelContextWindowEnabled}}\n\n[model_providers]\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"{{baseUrl}}\""
+          },
+          {
+            "name": ".cockpit_model_catalog.json",
+            "format": "JSON",
+            "description": "Codex 模型列表目录",
+            "template": "{{modelCatalog}}"
           }
         ]
       },
@@ -1247,7 +1342,10 @@ fn normalize_provider(input: &Value, previous: Option<&Value>) -> Result<Value, 
       "baseUrl": optional_string(input.get("baseUrl"), None),
       "proxy": optional_string(input.get("proxy"), None),
       "authField": optional_string(input.get("authField"), previous.and_then(|item| item.get("authField"))),
-      "runtimeConfig": normalize_runtime_config(input.get("runtimeConfig").or_else(|| previous.and_then(|item| item.get("runtimeConfig")))),
+      "runtimeConfig": normalize_runtime_config(
+        input.get("runtimeConfig").or_else(|| previous.and_then(|item| item.get("runtimeConfig"))),
+        &cli,
+      ),
       "headers": normalize_headers(input.get("headers")),
       "enabled": input.get("enabled").and_then(Value::as_bool).unwrap_or_else(|| previous.and_then(|item| item.get("enabled")).and_then(Value::as_bool).unwrap_or(true)),
       "createdAt": previous.and_then(|item| item.get("createdAt")).and_then(Value::as_u64).unwrap_or_else(now_millis),
@@ -1553,16 +1651,29 @@ fn build_codex_config_files(
 ) -> Result<Vec<Value>, ManagerError> {
     let api_key = get_provider_api_key(paths, &string_value(provider.get("id")))?;
     let values = create_template_values(provider, profile, &api_key);
+    let model_aliases = codex_model_aliases(provider);
+    let selected_model = first_string(profile.get("model"), values.get("mainModel"));
+    let client_model = model_aliases
+        .first()
+        .and_then(|fallback| {
+            model_aliases
+                .iter()
+                .find(|item| item.1 == selected_model)
+                .or(Some(fallback))
+                .map(|item| item.0.clone())
+        })
+        .unwrap_or_else(|| string_value(values.get("mainModel")));
     let mut config_lines = vec![
         "model_provider = \"custom\"".to_string(),
         format!(
             "model = {}",
-            to_toml_string(string_value(values.get("mainModel")))
+            to_toml_string(client_model)
         ),
         format!(
             "model_reasoning_effort = {}",
             to_toml_string(string_value(values.get("modelReasoningEffort")))
         ),
+        "model_catalog_json = \".cockpit_model_catalog.json\"".to_string(),
         "disable_response_storage = true".to_string(),
     ];
 
@@ -1606,6 +1717,10 @@ fn build_codex_config_files(
           "name": "config.toml",
           "content": format!("{}\n", config_lines.join("\n"))
         }),
+        json!({
+          "name": ".cockpit_model_catalog.json",
+          "content": format!("{}\n", serde_json::to_string_pretty(&codex_model_catalog(provider))?)
+        }),
     ])
 }
 
@@ -1637,6 +1752,7 @@ fn merge_codex_config_toml(existing_content: &str, managed_content: &str) -> Str
         "model_provider",
         "model",
         "model_reasoning_effort",
+        "model_catalog_json",
         "disable_response_storage",
     ] {
         if let Some(value) = root.get(key) {
@@ -2169,6 +2285,19 @@ fn normalize_codex_config_file(file: &Value) -> Result<Value, ManagerError> {
         }));
     }
 
+    if name == ".cockpit_model_catalog.json" {
+        let catalog = if content.trim().is_empty() {
+            json!({ "models": [] })
+        } else {
+            serde_json::from_str(&content)?
+        };
+
+        return Ok(json!({
+          "name": name,
+          "content": format!("{}\n", serde_json::to_string_pretty(&catalog)? )
+        }));
+    }
+
     if name != "config.toml" {
         return Ok(file.clone());
     }
@@ -2200,6 +2329,13 @@ fn normalize_codex_config_file(file: &Value) -> Result<Value, ManagerError> {
         format!(
             "model = {}",
             to_toml_string(first_string(root.get("model"), Some(&json!(""))))
+        ),
+        format!(
+            "model_catalog_json = {}",
+            to_toml_string(first_string(
+                root.get("model_catalog_json"),
+                Some(&json!(".cockpit_model_catalog.json"))
+            ))
         ),
         format!(
             "disable_response_storage = {}",
@@ -2361,9 +2497,9 @@ async fn sync_codex_runtime_to_manager(
     profile: Value,
 ) -> Result<(), ManagerError> {
     let auth_path = Path::new(config_path).join("auth.json");
-    let config_path = Path::new(config_path).join("config.toml");
+    let config_file = Path::new(config_path).join("config.toml");
     let auth: Value = serde_json::from_str(&tokio::fs::read_to_string(auth_path).await?)?;
-    let config = parse_simple_toml(&tokio::fs::read_to_string(config_path).await?);
+    let config = parse_simple_toml(&tokio::fs::read_to_string(config_file).await?);
     let root = config
         .get("root")
         .and_then(Value::as_object)
@@ -2379,7 +2515,44 @@ async fn sync_codex_runtime_to_manager(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let model = first_string(root.get("model"), profile.get("model"));
+    let catalog_path = Path::new(&config_path).join(".cockpit_model_catalog.json");
+    let catalog = match tokio::fs::read_to_string(catalog_path).await {
+        Ok(content) => serde_json::from_str::<Value>(&content).unwrap_or_else(|_| json!({})),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(error) => return Err(ManagerError::Io(error)),
+    };
+    let model_aliases = catalog
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some((
+                string_value(item.get("slug")),
+                first_string(item.get("display_name"), item.get("slug")),
+            ))
+        })
+        .filter(|(client, upstream)| !client.is_empty() && !upstream.is_empty())
+        .collect::<std::collections::HashMap<_, _>>();
+    let client_model = first_string(root.get("model"), profile.get("model"));
+    let model = model_aliases
+        .get(&client_model)
+        .cloned()
+        .unwrap_or_else(|| client_model.clone());
+    let mut model_list = catalog
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| first_string(item.get("display_name"), item.get("slug")))
+                .filter(|item| !item.is_empty())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if model_list.is_empty() && !model.is_empty() {
+        model_list.push(model.clone());
+    }
     let api_key = first_string(
         auth.get("OPENAI_API_KEY"),
         auth.get("tokens")
@@ -2400,6 +2573,7 @@ async fn sync_codex_runtime_to_manager(
           "apiKey": api_key,
           "runtimeConfig": {
             "mainModel": model,
+            "modelList": model_list,
             "modelReasoningEffort": first_string(root.get("model_reasoning_effort"), Some(&json!("low"))),
             "serviceTierFast": root.get("service_tier").and_then(Value::as_str) == Some("fast"),
             "modelContextWindowEnabled": root.get("model_context_window").is_some(),
@@ -2555,12 +2729,38 @@ fn sha256_text(content: &str) -> String {
     format!("{:x}", Sha256::digest(content.as_bytes()))
 }
 
-fn normalize_runtime_config(value: Option<&Value>) -> Value {
+fn normalize_runtime_config(value: Option<&Value>, cli: &str) -> Value {
     let input = value.and_then(Value::as_object);
     let model_reasoning_effort = string_from_map(input, "modelReasoningEffort", "low");
+    let requested_model_list = input
+        .and_then(|item| item.get("modelList"))
+        .map(parse_model_list)
+        .unwrap_or_default();
+    let has_model_list_field = input.and_then(|item| item.get("modelList")).is_some();
+    let legacy_main_model = string_value(input.and_then(|item| item.get("mainModel")));
+    let model_list = if cli == "codex" {
+        if !requested_model_list.is_empty() {
+            requested_model_list
+        } else if !has_model_list_field && !legacy_main_model.is_empty() {
+            vec![legacy_main_model.clone()]
+        } else {
+            DEFAULT_CODEX_MODEL_LIST
+                .iter()
+                .map(|item| (*item).to_string())
+                .collect()
+        }
+    } else {
+        Vec::new()
+    };
+    let main_model = if cli == "codex" {
+        model_list.first().cloned().unwrap_or_default()
+    } else {
+        legacy_main_model
+    };
 
     json!({
-      "mainModel": optional_string_from_map(input, "mainModel"),
+      "mainModel": main_model,
+      "modelList": model_list,
       "haikuModel": optional_string_from_map(input, "haikuModel"),
       "sonnetModel": optional_string_from_map(input, "sonnetModel"),
       "opusModel": optional_string_from_map(input, "opusModel"),
@@ -2574,6 +2774,135 @@ fn normalize_runtime_config(value: Option<&Value>) -> Value {
       "modelReasoningEffort": model_reasoning_effort,
       "modelAutoCompactTokenLimit": number_from_map(input, "modelAutoCompactTokenLimit", 900000)
     })
+}
+
+fn parse_model_list(value: &Value) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut append = |item: &str| {
+        let model = item.trim();
+        if model.is_empty() {
+            return;
+        }
+        let key = model.to_ascii_lowercase();
+        if seen.insert(key) {
+            result.push(model.to_string());
+        }
+    };
+
+    if let Some(items) = value.as_array() {
+        for item in items {
+            if let Some(text) = item.as_str() {
+                for part in text.split([',', '\n', '\r', ';']) {
+                    append(part);
+                }
+            }
+        }
+    } else if let Some(text) = value.as_str() {
+        for part in text.split([',', '\n', '\r', ';']) {
+            append(part);
+        }
+    }
+
+    result
+}
+
+pub(crate) fn codex_model_list(provider: &Value) -> Vec<String> {
+    let runtime_config = provider.get("runtimeConfig");
+    let models = runtime_config
+        .and_then(Value::as_object)
+        .and_then(|item| item.get("modelList"))
+        .map(parse_model_list)
+        .unwrap_or_default();
+
+    if !models.is_empty() {
+        return models;
+    }
+
+    let main_model = runtime_config
+        .and_then(Value::as_object)
+        .map(|item| string_value(item.get("mainModel")))
+        .unwrap_or_default();
+
+    if !main_model.is_empty() {
+        return vec![main_model];
+    }
+
+    DEFAULT_CODEX_MODEL_LIST
+        .iter()
+        .map(|item| (*item).to_string())
+        .collect()
+}
+
+pub(crate) fn codex_model_aliases(provider: &Value) -> Vec<(String, String)> {
+    let model_list = codex_model_list(provider);
+    let mut used_shells = model_list
+        .iter()
+        .filter(|model| CODEX_MODEL_SHELL_POOL.contains(&model.as_str()))
+        .cloned()
+        .collect::<std::collections::HashSet<_>>();
+    let mut next_shell_index = 0;
+    let mut aliases = Vec::new();
+
+    for upstream in model_list {
+        let client = if CODEX_MODEL_SHELL_POOL.contains(&upstream.as_str()) {
+            upstream.clone()
+        } else {
+            while next_shell_index < CODEX_MODEL_SHELL_POOL.len()
+                && used_shells.contains(CODEX_MODEL_SHELL_POOL[next_shell_index])
+            {
+                next_shell_index += 1;
+            }
+            let client = CODEX_MODEL_SHELL_POOL
+                .get(next_shell_index)
+                .copied()
+                .unwrap_or(upstream.as_str())
+                .to_string();
+            used_shells.insert(client.clone());
+            next_shell_index += 1;
+            client
+        };
+        aliases.push((client, upstream));
+    }
+
+    aliases
+}
+
+fn codex_model_catalog(provider: &Value) -> Value {
+    let models = codex_model_aliases(provider)
+        .into_iter()
+        .map(|(client_model, upstream_model)| {
+            json!({
+              "slug": client_model,
+              "display_name": upstream_model,
+              "description": format!("上游模型：{}", upstream_model),
+              "visibility": "list",
+              "comp_hash": CODEX_MODEL_COMP_HASH,
+              "default_reasoning_level": "low",
+              "supported_reasoning_levels": ["low", "medium", "high", "xhigh"]
+            })
+        })
+        .collect::<Vec<_>>();
+
+    json!({ "models": models })
+}
+
+pub(crate) async fn write_codex_model_catalog(
+    config_path: &str,
+    provider: &Value,
+) -> Result<(), ManagerError> {
+    if config_path.is_empty() {
+        return Err(ManagerError::System("CLI 配置目录不存在".to_string()));
+    }
+
+    let config_dir = Path::new(config_path);
+    tokio::fs::create_dir_all(config_dir).await?;
+    tokio::fs::write(
+        config_dir.join(".cockpit_model_catalog.json"),
+        format!("{}\n", serde_json::to_string_pretty(&codex_model_catalog(provider))?),
+    )
+    .await?;
+    Ok(())
 }
 
 fn normalize_headers(value: Option<&Value>) -> Value {
@@ -3092,6 +3421,31 @@ mod tests {
     use crate::core::paths::{resolve_app_paths, AppPaths};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn codex_model_list_uses_defaults_and_assigns_shell_slots() {
+        let default_provider = json!({ "runtimeConfig": {} });
+        assert_eq!(codex_model_list(&default_provider).len(), DEFAULT_CODEX_MODEL_LIST.len());
+
+        let provider = json!({
+          "runtimeConfig": { "modelList": "deepseek-v3\nqwen-max, deepseek-v3" }
+        });
+        let aliases = codex_model_aliases(&provider);
+        assert_eq!(aliases.len(), 2);
+        assert_eq!(aliases[0], ("gpt-5.6-sol".to_string(), "deepseek-v3".to_string()));
+        assert_eq!(aliases[1], ("gpt-5.6-terra".to_string(), "qwen-max".to_string()));
+
+        let provider_with_native_model = json!({
+          "runtimeConfig": { "modelList": "deepseek-v3,gpt-5.6-sol" }
+        });
+        assert_eq!(
+            codex_model_aliases(&provider_with_native_model),
+            vec![
+                ("gpt-5.6-terra".to_string(), "deepseek-v3".to_string()),
+                ("gpt-5.6-sol".to_string(), "gpt-5.6-sol".to_string())
+            ]
+        );
+    }
 
     #[test]
     fn reads_legacy_provider_key_as_default_key() {
