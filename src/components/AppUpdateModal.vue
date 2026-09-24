@@ -80,15 +80,15 @@
           type="button"
           @click="emit('install')"
         >
-          打开安装向导
+          立即重启更新
         </button>
         <button
           v-else-if="dialog.phase === 'installer-opened'"
           class="app-update-button app-update-primary-button"
           type="button"
-          @click="emit('close')"
+          disabled
         >
-          关闭
+          正在重启
         </button>
         <button
           v-else-if="dialog.phase === 'downloading'"
@@ -124,7 +124,12 @@ const props = defineProps({
 
 const emit = defineEmits(["close", "download", "install"])
 
-const runningPhases = ["checking", "downloading", "installing"]
+const runningPhases = [
+  "checking",
+  "downloading",
+  "installing",
+  "installer-opened"
+]
 const settledPhases = [
   "available",
   "downloaded",
@@ -141,7 +146,7 @@ const updateTitle = computed(() => {
     downloading: "正在下载更新",
     downloaded: "更新已下载",
     installing: "正在安装更新",
-    "installer-opened": "安装程序已打开",
+    "installer-opened": "正在静默安装",
     "not-available": "当前已是最新版本",
     unconfigured: "缺少更新配置",
     "dev-disabled": "开发模式无法完整检查更新",
