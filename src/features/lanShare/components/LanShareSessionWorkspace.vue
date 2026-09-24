@@ -4,9 +4,11 @@
       <div class="workspace-identity">
         <div
           class="workspace-avatar"
-          :class="{ 'workspace-avatar-online': currentDevice?.online }"
+          :class="{
+            'workspace-avatar-online': currentDevice?.online,
+            'workspace-avatar-group': chatMode === 'group'
+          }"
         >
-          <div v-if="currentDevice?.online" class="cyber-avatar-ring"></div>
           <Users
             v-if="chatMode === 'group'"
             :size="18"
@@ -18,7 +20,13 @@
           <div class="workspace-title-row">
             <span class="workspace-name">{{ title }}</span>
             <span
-              v-if="currentDevice"
+              v-if="chatMode === 'group'"
+              class="cyber-node-badge cyber-node-group"
+            >
+              ENCRYPTED // 加密信道
+            </span>
+            <span
+              v-else-if="currentDevice"
               class="cyber-node-badge"
               :class="{ 'cyber-node-online': currentDevice.online }"
             >
@@ -381,7 +389,7 @@ const subtitle = computed(() =>
   props.chatMode === "group"
     ? `${props.currentGroup?.members?.length || 0} 位成员 · 文件与消息集中传输信道`
     : props.currentDevice
-      ? `IP: ${props.currentDevice.ip || "局域网未知"} · 传输模式: ${props.currentDevice.native ? "P2P 客户端" : "HTTP 访客端"}`
+      ? `IP: ${props.currentDevice.ip || "局域网未知"} • 传输模式: ${props.currentDevice.native ? "P2P 客户端" : "HTTP 访客端"}`
       : "选择左侧设备节点开启安全直连"
 )
 
@@ -437,7 +445,10 @@ function deleteGroup() {
   flex: 1;
   flex-direction: column;
   overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: 10px;
   background: var(--color-panel);
+  box-shadow: var(--shadow-panel);
 
   .workspace-header {
     display: flex;
@@ -448,7 +459,7 @@ function deleteGroup() {
     gap: 14px;
     padding: 12px 20px;
     border-bottom: 1px solid var(--color-line);
-    background: var(--color-panel-soft);
+    background: var(--color-panel);
 
     .workspace-identity {
       display: flex;
@@ -458,40 +469,26 @@ function deleteGroup() {
 
       .workspace-avatar {
         position: relative;
-        display: flex;
+        display: grid;
         width: 38px;
         height: 38px;
         flex: none;
-        align-items: center;
-        justify-content: center;
+        place-items: center;
         border-radius: 8px;
-        background: var(--color-primary-soft);
-        border: 1px solid var(--color-info-line);
-        color: var(--color-primary);
-
-        .cyber-avatar-icon {
-          z-index: 1;
-        }
-
-        .cyber-avatar-ring {
-          position: absolute;
-          inset: -3px;
-          border-radius: 11px;
-          border: 1px dashed var(--color-primary);
-          opacity: 0.55;
-          animation: cyberSpin 12s linear infinite;
-        }
+        background: var(--color-panel-soft);
+        border: 1px solid var(--color-line);
+        color: var(--color-text-muted);
 
         &.workspace-avatar-online {
-          box-shadow: 0 0 10px var(--color-success-soft);
-          color: var(--color-success);
-          border-color: var(--color-success-line);
-          background: var(--color-success-soft);
+          color: #10b981;
+          border-color: #86efac;
+          background: #dcfce7;
+        }
 
-          .cyber-avatar-ring {
-            border-color: var(--color-success);
-            opacity: 0.6;
-          }
+        &.workspace-avatar-group {
+          color: var(--color-primary);
+          border-color: var(--color-info-line);
+          background: var(--color-primary-soft);
         }
       }
 
@@ -499,7 +496,7 @@ function deleteGroup() {
         display: flex;
         min-width: 0;
         flex-direction: column;
-        gap: 4px;
+        gap: 3px;
 
         .workspace-title-row {
           display: flex;
@@ -512,24 +509,32 @@ function deleteGroup() {
             text-overflow: ellipsis;
             white-space: nowrap;
             font-size: 15px;
-            font-weight: 600;
-            letter-spacing: 0.3px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
           }
 
           .cyber-node-badge {
             font-family:
               ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            font-size: 10px;
-            padding: 1px 6px;
-            border-radius: 3px;
-            background: var(--color-panel);
+            font-size: 10.5px;
+            padding: 1.5px 7px;
+            border-radius: 4px;
+            background: var(--color-panel-soft);
             border: 1px solid var(--color-line);
             color: var(--color-text-muted);
 
             &.cyber-node-online {
-              background: var(--color-success-soft);
-              border-color: var(--color-success-line);
-              color: var(--color-success);
+              background: #ecfdf5;
+              border-color: #a7f3d0;
+              color: #10b981;
+              font-weight: 600;
+            }
+
+            &.cyber-node-group {
+              background: var(--color-primary-soft);
+              border-color: var(--color-info-line);
+              color: var(--color-primary);
+              font-weight: 600;
             }
           }
         }
@@ -554,8 +559,8 @@ function deleteGroup() {
 
       .workspace-icon {
         display: grid;
-        width: 30px;
-        height: 30px;
+        width: 32px;
+        height: 32px;
         place-items: center;
         padding: 0;
         border: 1px solid var(--color-line);
@@ -566,9 +571,9 @@ function deleteGroup() {
         transition: all 0.2s;
 
         &:hover:not(:disabled) {
-          color: var(--color-primary);
-          border-color: var(--color-primary);
-          background: var(--color-primary-soft);
+          color: var(--color-text);
+          border-color: var(--color-line-strong);
+          background: var(--color-panel-soft);
         }
 
         &:disabled {

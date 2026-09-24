@@ -39,6 +39,12 @@
         <div v-if="activeTool === 'git'" class="tools-view-git-badge">
           <GitBranchIcon :size="20" class="tools-view-git-badge-icon" />
         </div>
+        <div
+          v-else-if="activeTool === 'image-workbench'"
+          class="tools-view-image-badge"
+        >
+          <ImageIcon :size="20" class="tools-view-image-badge-icon" />
+        </div>
         <div class="tools-view-detail-title">
           <span data-emphasis class="tools-view-detail-name">{{
             activeToolMeta?.label || "工具"
@@ -72,20 +78,33 @@
         </div>
         <div
           v-if="activeTool === 'image-workbench'"
-          class="image-generation-modes"
-          role="group"
-          aria-label="生图调用模式"
+          class="image-workbench-header-actions"
         >
-          <button
-            v-for="mode in imageGenerationModes"
-            :key="mode.value"
-            class="image-generation-mode"
-            :class="{ active: imageGenerationMode === mode.value }"
-            type="button"
-            :aria-pressed="imageGenerationMode === mode.value"
-            @click="imageGenerationMode = mode.value"
+          <div
+            class="image-generation-modes"
+            role="group"
+            aria-label="生图调用模式"
           >
-            {{ mode.label }}
+            <button
+              v-for="mode in imageGenerationModes"
+              :key="mode.value"
+              class="image-generation-mode"
+              :class="{ active: imageGenerationMode === mode.value }"
+              type="button"
+              :aria-pressed="imageGenerationMode === mode.value"
+              @click="imageGenerationMode = mode.value"
+            >
+              {{ mode.label }}
+            </button>
+          </div>
+          <button
+            class="tools-view-icon-btn"
+            type="button"
+            title="刷新工作台"
+            aria-label="刷新工作台"
+            @click="imageWorkbenchRef?.refreshAll?.()"
+          >
+            <RefreshCw :size="16" />
           </button>
         </div>
         <button
@@ -116,6 +135,7 @@
       <ImageLinkExtractor v-else-if="activeTool === 'image-link-extractor'" />
       <ImageWorkbench
         v-else-if="activeTool === 'image-workbench'"
+        ref="imageWorkbenchRef"
         v-model:generation-mode="imageGenerationMode"
       />
       <JsonAgentTool
@@ -148,6 +168,7 @@ import {
   Moon,
   Network,
   PawPrint,
+  RefreshCw,
   Share2,
   Sun
 } from "lucide-vue-next"
@@ -198,6 +219,7 @@ const emit = defineEmits(["add-repo", "detail-change", "toggle-theme"])
 
 const activeTool = ref("")
 const gitToolStatus = ref([])
+const imageWorkbenchRef = ref(null)
 
 function getGitStatusIcon(label) {
   if (label === "当前分支" || label === "本地分支") return GitBranchIcon
@@ -494,6 +516,28 @@ onBeforeUnmount(() => emit("detail-change", false))
       color: #60a5fa;
     }
   }
+
+  .tools-view-image-badge {
+    background: #3b82f6;
+  }
+
+  .image-generation-modes {
+    background: var(--color-panel);
+    border-color: var(--color-line);
+
+    .image-generation-mode {
+      color: var(--color-text-muted);
+
+      &.active {
+        color: #ffffff;
+        background: #2563eb;
+      }
+
+      &:hover:not(.active) {
+        color: var(--color-text);
+      }
+    }
+  }
 }
 
 .tools-view-tool-icon {
@@ -576,29 +620,63 @@ onBeforeUnmount(() => emit("detail-change", false))
     padding-bottom: 8px;
     border-bottom: 1px solid var(--color-line);
 
+    .image-workbench-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .tools-view-icon-btn {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        flex: 0 0 34px;
+        place-items: center;
+        border: 1px solid var(--color-line);
+        border-radius: 50%;
+        background: var(--color-panel);
+        color: var(--color-text-muted);
+        cursor: pointer;
+        transition: all 0.2s ease;
+
+        &:hover {
+          border-color: var(--color-primary);
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
+        }
+      }
+    }
+
     .image-generation-modes {
       display: flex;
       flex: none;
-      gap: 3px;
+      align-items: center;
+      gap: 4px;
       padding: 3px;
-      border: 1px solid var(--color-line);
-      border-radius: 7px;
-      background: var(--color-panel-soft);
+      border: 1px solid #bfdbfe;
+      border-radius: 9999px;
+      background: #ffffff;
 
       .image-generation-mode {
         height: 28px;
-        padding: 0 8px;
+        padding: 0 16px;
         border: 0;
-        border-radius: 5px;
-        color: var(--color-text-muted);
+        border-radius: 9999px;
+        color: #4b5563;
         background: transparent;
         cursor: pointer;
         white-space: nowrap;
-        font-size: var(--font-size-sm);
+        font-size: 13px;
+        font-weight: 500;
+        transition: all 0.2s ease;
 
         &.active {
-          color: #fff;
-          background: var(--color-primary-solid);
+          color: #ffffff;
+          background: #2563eb;
+          box-shadow: 0 1px 3px rgba(37, 99, 235, 0.25);
+        }
+
+        &:hover:not(.active) {
+          color: #1e293b;
         }
       }
     }
@@ -686,6 +764,23 @@ onBeforeUnmount(() => emit("detail-change", false))
       transform: rotate(-45deg);
       color: #ffffff;
       stroke-width: 2.2;
+    }
+  }
+
+  .tools-view-image-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    background: #2563eb;
+    border-radius: 10px;
+    margin: 0 6px 0 2px;
+
+    .tools-view-image-badge-icon {
+      color: #ffffff;
+      stroke-width: 2.1;
     }
   }
 

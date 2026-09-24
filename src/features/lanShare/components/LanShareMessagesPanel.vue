@@ -174,7 +174,7 @@
           class="chat-input"
           :disabled="sending || !currentSessionId"
           rows="2"
-          placeholder="键入消息内容，或直接拖拽/粘贴文件、图片至此..."
+          placeholder="输入消息内容，或直接拖拽/粘贴文件、图片至此..."
           aria-label="聊天输入框"
           @paste="pasteFiles"
           @keydown="composerKeydown"
@@ -198,7 +198,7 @@
               ? sendStatus
               : currentDraft.files.length
                 ? `${currentDraft.files.length} 个附件 · 合并发送`
-                : "Enter 发送 · Shift + Enter 换行"
+                : "Enter 发送 • Shift + Enter 换行"
           }}</span>
         </div>
         <button
@@ -803,7 +803,7 @@ defineExpose({
   flex: 1;
   flex-direction: column;
   overflow: hidden;
-  background: var(--color-panel-soft);
+  background: var(--color-panel);
 
   .chat-timeline {
     display: flex;
@@ -813,7 +813,7 @@ defineExpose({
     gap: 20px;
     padding: 24px;
     overflow-y: auto;
-    background: var(--color-panel-soft);
+    background: var(--color-panel);
     scrollbar-width: thin;
     scrollbar-color: var(--color-line) transparent;
 
@@ -1154,8 +1154,8 @@ defineExpose({
       position: relative;
       border: 1px solid var(--color-line);
       border-radius: 8px;
-      background: var(--color-panel-soft);
-      padding: 6px 12px;
+      background: var(--color-panel);
+      padding: 8px 12px;
       transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 
       &:focus-within {
@@ -1205,23 +1205,22 @@ defineExpose({
     .chat-input {
       display: block;
       width: 100%;
-      min-height: 52px;
+      min-height: 60px;
       max-height: 160px;
       resize: vertical;
-      padding: 4px 0;
+      padding: 2px 0;
       border: 0;
       outline: none;
       background: transparent;
       color: var(--color-text);
       font: inherit;
-      font-size: 13.5px;
+      font-size: 13px;
       line-height: 1.6;
 
       &::placeholder {
         color: var(--color-text-soft);
-        font-family:
-          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-        font-size: 12px;
+        font-family: inherit;
+        font-size: 12.5px;
       }
     }
 
@@ -1243,19 +1242,21 @@ defineExpose({
           flex: none;
           align-items: center;
           gap: 6px;
-          padding: 5px 10px;
+          height: 30px;
+          padding: 0 12px;
           border: 1px solid var(--color-line);
           border-radius: 6px;
-          background: var(--color-panel-soft);
+          background: var(--color-panel);
           color: var(--color-text);
-          font-size: 12.5px;
+          font-size: 12px;
+          font-weight: 500;
           cursor: pointer;
           transition: all 0.2s;
 
           &:hover:not(:disabled) {
-            color: var(--color-primary);
-            border-color: var(--color-primary);
-            background: var(--color-primary-soft);
+            color: var(--color-text);
+            border-color: var(--color-line-strong);
+            background: var(--color-panel-soft);
           }
 
           &:disabled {
@@ -1286,18 +1287,18 @@ defineExpose({
         background: var(--color-primary-solid);
         border: 1px solid var(--color-primary);
         color: #ffffff;
-        font-size: 13px;
+        font-size: 12.5px;
         font-weight: 500;
         cursor: pointer;
         transition: all 0.2s;
 
         &:hover:not(:disabled) {
           background: var(--color-primary);
-          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+          box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
         }
 
         &:disabled {
-          opacity: 0.4;
+          opacity: 0.45;
           cursor: not-allowed;
           box-shadow: none;
         }
