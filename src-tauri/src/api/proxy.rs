@@ -50,6 +50,7 @@ struct ProxyTarget {
     base_url: String,
     proxy: String,
     model: String,
+    model_aliases: HashMap<String, String>,
     provider: Option<Value>,
 }
 
@@ -210,6 +211,11 @@ where
         string_value(item.get("providerId")) == provider_id
             && [string_value(item.get("id")), string_value(item.get("name"))].contains(&model)
     });
+    let upstream_model = target
+        .model_aliases
+        .get(&model)
+        .cloned()
+        .unwrap_or_else(|| model.clone());
 
     if model.is_empty() {
         return Err(ManagerError::System(
@@ -217,13 +223,17 @@ where
         ));
     }
 
-    if model != active_model && model != target.model && !model_belongs_to_provider {
+    if model != active_model
+        && model != target.model
+        && !model_belongs_to_provider
+        && !target.model_aliases.contains_key(&model)
+    {
         return Err(ManagerError::System(
             "所选模型不属于当前 Codex Provider".to_string(),
         ));
     }
 
-    request_body.insert("model".to_string(), json!(model));
+    request_body.insert("model".to_string(), json!(upstream_model));
     request_body.insert("stream".to_string(), json!(true));
 
     let upstream_url = build_upstream_url(&target.base_url, &endpoint, "")?;
@@ -491,10 +501,15 @@ pub async fn enable_proxy(
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let config = read_proxy_config(paths, cli)?;
-    let active_provider_id = get_forward_provider_ids(paths, cli, &config)?
-        .into_iter()
-        .next()
-        .unwrap_or_default();
+    let requested_target_id = target_id_from_payload(payload.clone());
+    let active_provider_id = if requested_target_id.is_empty() {
+        get_forward_provider_ids(paths, cli, &config)?
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    } else {
+        requested_target_id
+    };
 
     if active_provider_id.is_empty() {
         return Err(ManagerError::System(
@@ -517,7 +532,7 @@ pub async fn enable_proxy(
     let config_model = if active_target.model.is_empty() {
         read_toml_root_value(&string_value(live_config.get("config")), "model")
     } else {
-        active_target.model.clone()
+        target_client_model(&active_target, cli)
     };
     let next_live_config = if cli == "claude" {
         json!({
@@ -534,13 +549,18 @@ pub async fn enable_proxy(
             .cloned()
             .unwrap_or_default();
         auth.insert("OPENAI_API_KEY".to_string(), json!(PROXY_MANAGED_API_KEY));
-        json!({
-          "auth": auth,
-          "config": set_codex_proxy_config_toml(
+        let mut codex_config = set_codex_proxy_config_toml(
             &string_value(live_config.get("config")),
             &local_base_url,
-            &config_model
-          )
+            &config_model,
+        );
+        codex_config = set_codex_model_catalog_config(
+            &codex_config,
+            active_target.provider.is_some(),
+        );
+        json!({
+          "auth": auth,
+          "config": codex_config
         })
     };
     let live_backup = merge_object(
@@ -553,6 +573,15 @@ pub async fn enable_proxy(
         }),
     );
 
+    if cli == "codex" {
+        if let Some(provider) = active_target.provider.as_ref() {
+            runtime_provider::write_codex_model_catalog(
+                &string_value(cli_target.get("configPath")),
+                provider,
+            )
+            .await?;
+        }
+    }
     write_live_backup(paths, cli, &live_backup).await?;
     write_live_config_atomic(cli, &cli_target, &next_live_config).await?;
     write_proxy_config(
@@ -572,6 +601,55 @@ pub async fn enable_proxy(
     )
     .await?;
     Ok(read_proxy_state(paths, cli)?)
+}
+
+pub async fn ensure_provider_model_proxy(
+    registry: &ProxyServerRegistry,
+    paths: &AppPaths,
+    cli_targets: &Value,
+    cli: &str,
+    provider_id: &str,
+) -> Result<(), ManagerError> {
+    let config = read_proxy_config(paths, cli)?;
+    if !string_array(config.get("failoverProviderIds")).contains(&provider_id.to_string()) {
+        add_provider(
+            paths,
+            cli_targets,
+            cli,
+            json!({ "providerId": provider_id }),
+        )
+        .await?;
+    }
+
+    let config = read_proxy_config(paths, cli)?;
+    if config.get("enabled").and_then(Value::as_bool) == Some(true) {
+        activate_provider(
+            paths,
+            cli_targets,
+            cli,
+            json!({ "providerId": provider_id }),
+        )
+        .await?;
+        registry.ensure_started(paths, cli_targets, cli).await?;
+        return Ok(());
+    }
+
+    activate_provider(
+        paths,
+        cli_targets,
+        cli,
+        json!({ "providerId": provider_id }),
+    )
+    .await?;
+    enable_proxy(
+        registry,
+        paths,
+        cli_targets,
+        cli,
+        json!({ "providerId": provider_id }),
+    )
+    .await?;
+    Ok(())
 }
 
 pub async fn disable_proxy(
@@ -741,20 +819,32 @@ pub async fn activate_provider(
             .await?;
         } else {
             let live_backup = read_live_backup(paths, cli)?;
+            let mut codex_config = set_codex_proxy_config_toml(
+                &string_value(live_config.get("config")),
+                &build_local_base_url(&config),
+                &if target.model.is_empty() {
+                    read_toml_root_value(&string_value(live_backup.get("config")), "model")
+                } else {
+                    target_client_model(&target, cli)
+                },
+            );
+            codex_config = set_codex_model_catalog_config(&codex_config, target.provider.is_some());
+            if cli == "codex" {
+                if let Some(provider) = target.provider.as_ref() {
+                    runtime_provider::write_codex_model_catalog(
+                        &string_value(cli_target.get("configPath")),
+                        provider,
+                    )
+                    .await?;
+                }
+            }
+
             write_live_config_atomic(
                 cli,
                 &cli_target,
                 &json!({
                   "auth": live_config.get("auth").cloned().unwrap_or(Value::Null),
-                  "config": set_codex_proxy_config_toml(
-                    &string_value(live_config.get("config")),
-                    &build_local_base_url(&config),
-                    &if target.model.is_empty() {
-                      read_toml_root_value(&string_value(live_backup.get("config")), "model")
-                    } else {
-                      target.model
-                    }
-                  )
+                  "config": codex_config
                 }),
             )
             .await?;
@@ -1140,8 +1230,22 @@ async fn forward_request(
 
     if method != hyper::Method::GET && method != hyper::Method::HEAD && !model.is_empty() {
         let mut payload: Value = serde_json::from_slice(&request_body)?;
-
-        payload["model"] = json!(model);
+        let requested_model = string_value(payload.get("model"));
+        let upstream_model = target
+            .model_aliases
+            .get(&requested_model)
+            .cloned()
+            .unwrap_or_else(|| {
+                if requested_model.is_empty()
+                    || target.model_aliases.is_empty()
+                    || !target.model_aliases.values().any(|item| item == &requested_model)
+                {
+                    model.clone()
+                } else {
+                    requested_model
+                }
+            });
+        payload["model"] = json!(upstream_model);
         request_body = format!("{}\n", serde_json::to_string(&payload)?).into_bytes();
     }
 
@@ -1324,6 +1428,21 @@ async fn assert_target_ready(
     Ok(())
 }
 
+fn target_client_model(target: &ProxyTarget, cli: &str) -> String {
+    if cli == "codex" {
+        if let Some(provider) = target.provider.as_ref() {
+            if let Some((client_model, _)) = runtime_provider::codex_model_aliases(provider)
+                .into_iter()
+                .find(|(_, upstream_model)| upstream_model == &target.model)
+            {
+                return client_model;
+            }
+        }
+    }
+
+    target.model.clone()
+}
+
 fn get_target(
     paths: &AppPaths,
     cli: &str,
@@ -1355,6 +1474,7 @@ fn get_target(
             base_url: CODEX_OFFICIAL_BASE_URL.to_string(),
             proxy: string_value(account.get("proxy")),
             model: string_value(config.get("accountModel")),
+            model_aliases: HashMap::new(),
             provider: None,
         });
     }
@@ -1380,12 +1500,29 @@ fn get_target(
         .cloned()
         .unwrap_or_else(|| json!({}));
 
+    let model_aliases = if cli == "codex" {
+        runtime_provider::codex_model_aliases(&provider)
+            .into_iter()
+            .collect::<HashMap<_, _>>()
+    } else {
+        HashMap::new()
+    };
+    let model = first_string(
+        runtime_config.get("mainModel"),
+        provider_store::read_models(paths)?
+            .iter()
+            .find(|item| item.get("providerId").and_then(Value::as_str) == Some(target_id))
+            .and_then(|item| item.get("name")),
+        "",
+    );
+
     Ok(ProxyTarget {
         target_type: "provider".to_string(),
         name: string_value(provider.get("name")),
         base_url: string_value(provider.get("baseUrl")),
         proxy: string_value(provider.get("proxy")),
-        model: string_value(runtime_config.get("mainModel")),
+        model,
+        model_aliases,
         provider: Some(provider),
     })
 }
@@ -1832,6 +1969,14 @@ fn set_codex_proxy_config_toml(content: &str, local_base_url: &str, model: &str)
         "wire_api",
         "responses",
     )
+}
+
+fn set_codex_model_catalog_config(content: &str, enabled: bool) -> String {
+    if enabled {
+        set_toml_root_value(content, "model_catalog_json", ".cockpit_model_catalog.json")
+    } else {
+        remove_toml_root_value(content, "model_catalog_json")
+    }
 }
 
 fn read_toml_root_value(content: &str, key: &str) -> String {

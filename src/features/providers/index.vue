@@ -1148,7 +1148,7 @@
           <div class="providers-view__section-title">
             <div>
               <h2>模型映射</h2>
-              <p>仅在需要将请求映射到不同模型名称时填写。</p>
+              <p>每行填写一个上游模型，Codex 会自动生成可选模型列表。</p>
             </div>
             <!-- <div class="providers-view__section-actions">
               <button type="button">获取模型列表</button>
@@ -1162,7 +1162,13 @@
               class="providers-view__field"
             >
               <span>{{ field.label }}</span>
-              <input v-model.trim="modelDrafts[field.key]" type="text" />
+              <textarea
+                v-if="field.type === 'textarea'"
+                v-model="modelDrafts[field.key]"
+                rows="5"
+                placeholder="每行一个模型，也支持逗号分隔"
+              />
+              <input v-else v-model.trim="modelDrafts[field.key]" type="text" />
               <small v-if="field.description">{{ field.description }}</small>
             </label>
           </div>
@@ -1445,7 +1451,7 @@
           <div class="providers-view__section-title">
             <div>
               <h2>模型映射</h2>
-              <p>仅在需要将请求映射到不同模型名称时填写。</p>
+              <p>每行填写一个上游模型，Codex 会自动生成可选模型列表。</p>
             </div>
             <!-- <div class="providers-view__section-actions">
               <button type="button">获取模型列表</button>
@@ -1459,7 +1465,13 @@
               class="providers-view__field"
             >
               <span>{{ field.label }}</span>
-              <input v-model.trim="modelDrafts[field.key]" type="text" />
+              <textarea
+                v-if="field.type === 'textarea'"
+                v-model="modelDrafts[field.key]"
+                rows="5"
+                placeholder="每行一个模型，也支持逗号分隔"
+              />
+              <input v-else v-model.trim="modelDrafts[field.key]" type="text" />
               <small v-if="field.description">{{ field.description }}</small>
             </label>
           </div>
@@ -2837,10 +2849,75 @@ const desktopConfigStatus = reactive({ mode: "official", port: 15723 })
 
 const modelDrafts = reactive({
   mainModel: "",
+  modelList: "",
   haikuModel: "",
   sonnetModel: "",
   opusModel: ""
 })
+
+const defaultCodexModelList = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex",
+  "gpt-5.3-codex-spark",
+  "gpt-5.2"
+]
+
+// 预览配置与后端保持同一套默认模型和壳位分配顺序。
+function getCodexDraftModels() {
+  const models = String(modelDrafts.modelList || "")
+    .split(/[\n,;]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  const seenModels = new Set()
+  const uniqueModels = models.filter((model) => {
+    const key = model.toLowerCase()
+    if (seenModels.has(key)) {
+      return false
+    }
+    seenModels.add(key)
+    return true
+  })
+
+  return uniqueModels.length ? uniqueModels : defaultCodexModelList
+}
+
+function getCodexDraftCatalog() {
+  const models = getCodexDraftModels()
+  const usedShells = new Set(
+    models.filter((model) => defaultCodexModelList.includes(model))
+  )
+  let nextShellIndex = 0
+  return {
+    models: models.map((model) => {
+      let slug = model
+      if (!defaultCodexModelList.includes(model)) {
+        while (
+          nextShellIndex < defaultCodexModelList.length &&
+          usedShells.has(defaultCodexModelList[nextShellIndex])
+        ) {
+          nextShellIndex += 1
+        }
+        slug = defaultCodexModelList[nextShellIndex] || model
+        nextShellIndex += 1
+      }
+      usedShells.add(slug)
+      return {
+        slug,
+        display_name: model,
+        description: `上游模型：${model}`,
+        visibility: "list",
+        comp_hash: "3000",
+        default_reasoning_level: "low",
+        supported_reasoning_levels: ["low", "medium", "high", "xhigh"]
+      }
+    })
+  }
+}
 
 const activeCli = ref("")
 const viewMode = ref("list")
@@ -2948,7 +3025,9 @@ function runtimeFieldOptions(field) {
   if (
     activeCli.value === "codex" &&
     field.key === "modelReasoningEffort" &&
-    isCodexFiveSixSolOrTerraModel(modelDrafts.mainModel)
+    isCodexFiveSixSolOrTerraModel(
+      modelDrafts.mainModel || getCodexDraftModels()[0]
+    )
   ) {
     return ["low", "medium", "high", "xhigh", "ultra"]
   }
@@ -3362,14 +3441,19 @@ function formatConfigPreview(file, content) {
 
 function applyConfigTemplate(template) {
   const activeApiKey = activeDraftApiKey.value?.apiKey || draft.apiKey
+  const codexModels = getCodexDraftModels()
+  const codexMainModel =
+    activeCli.value === "codex" ? codexModels[0] : modelDrafts.mainModel
   const values = {
     authField: draft.authField,
     apiKey: activeApiKey,
     hasApiKey: Boolean(activeApiKey || activeDraftApiKey.value?.masked),
     baseUrl: draft.baseUrl,
     hasBaseUrl: Boolean(draft.baseUrl),
-    mainModel: modelDrafts.mainModel,
-    hasMainModel: Boolean(modelDrafts.mainModel),
+    mainModel: codexMainModel,
+    hasMainModel: Boolean(codexMainModel),
+    modelList: codexModels.join("\n"),
+    modelCatalog: JSON.stringify(getCodexDraftCatalog(), null, 2),
     haikuModel: modelDrafts.haikuModel,
     hasHaikuModel: Boolean(modelDrafts.haikuModel),
     sonnetModel: modelDrafts.sonnetModel,
@@ -3511,6 +3595,9 @@ function editProvider(provider) {
   draft.authField = provider.authField || "ANTHROPIC_AUTH_TOKEN"
   draft.enabled = provider.enabled !== false
   modelDrafts.mainModel = provider.runtimeConfig?.mainModel || ""
+  modelDrafts.modelList = Array.isArray(provider.runtimeConfig?.modelList)
+    ? provider.runtimeConfig.modelList.join("\n")
+    : provider.runtimeConfig?.modelList || modelDrafts.mainModel
   modelDrafts.haikuModel = provider.runtimeConfig?.haikuModel || ""
   modelDrafts.sonnetModel = provider.runtimeConfig?.sonnetModel || ""
   modelDrafts.opusModel = provider.runtimeConfig?.opusModel || ""
@@ -4247,6 +4334,7 @@ function clearDraft() {
   draft.modelReasoningEffort = "low"
   draft.modelAutoCompactTokenLimit = 900000
   modelDrafts.mainModel = ""
+  modelDrafts.modelList = ""
   modelDrafts.haikuModel = ""
   modelDrafts.sonnetModel = ""
   modelDrafts.opusModel = ""
@@ -4334,6 +4422,7 @@ async function submitProvider() {
     model: modelDrafts.mainModel,
     runtimeConfig: {
       mainModel: modelDrafts.mainModel,
+      modelList: modelDrafts.modelList,
       haikuModel: modelDrafts.haikuModel,
       sonnetModel: modelDrafts.sonnetModel,
       opusModel: modelDrafts.opusModel,
@@ -4345,7 +4434,7 @@ async function submitProvider() {
       modelContextWindowEnabled: draft.modelContextWindowEnabled,
       serviceTierFast: draft.serviceTierFast,
       modelReasoningEffort: normalizeModelReasoningEffort(
-        modelDrafts.mainModel,
+        modelDrafts.mainModel || getCodexDraftModels()[0],
         draft.modelReasoningEffort
       ),
       modelAutoCompactTokenLimit: draft.modelAutoCompactTokenLimit
@@ -4749,14 +4838,14 @@ watch(
 )
 
 watch(
-  () => modelDrafts.mainModel,
-  (model) => {
+  () => [modelDrafts.mainModel, modelDrafts.modelList],
+  ([mainModel]) => {
     if (activeCli.value !== "codex") {
       return
     }
 
     draft.modelReasoningEffort = normalizeModelReasoningEffort(
-      model,
+      mainModel || getCodexDraftModels()[0],
       draft.modelReasoningEffort
     )
   }
@@ -6129,7 +6218,8 @@ watch(
   }
 
   &__field input,
-  &__field select {
+  &__field select,
+  &__field textarea {
     min-width: 0;
     height: 38px;
     padding: 0 12px;
@@ -6137,6 +6227,13 @@ watch(
     border-radius: 8px;
     background: var(--color-panel);
     color: var(--color-text);
+  }
+
+  &__field textarea {
+    min-height: 118px;
+    padding: 10px 12px;
+    line-height: 1.5;
+    resize: vertical;
   }
 
   &__api-keys {
