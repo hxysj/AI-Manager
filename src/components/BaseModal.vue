@@ -2,14 +2,16 @@
   <div class="base-modal">
     <div class="base-modal__backdrop" @click="$emit('close')"></div>
     <section class="base-modal__panel">
-      <header class="base-modal__header">
-        <div>
-          <h2>{{ title }}</h2>
-          <p v-if="description">{{ description }}</p>
-        </div>
-        <button class="base-modal__close" type="button" @click="$emit('close')">
-          ×
-        </button>
+      <header v-if="$slots.header || title" class="base-modal__header">
+        <slot name="header">
+          <div>
+            <h2>{{ title }}</h2>
+            <p v-if="description">{{ description }}</p>
+          </div>
+          <button class="base-modal__close" type="button" @click="$emit('close')">
+            ×
+          </button>
+        </slot>
       </header>
       <div class="base-modal__content">
         <slot></slot>
@@ -22,7 +24,7 @@
 defineProps({
   title: {
     type: String,
-    required: true
+    default: ""
   },
   description: {
     type: String,

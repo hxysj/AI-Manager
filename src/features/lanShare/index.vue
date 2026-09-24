@@ -4,8 +4,7 @@
     <header class="cyber-header">
       <div class="cyber-brand">
         <div class="cyber-logo-box">
-          <Share2 :size="17" class="cyber-logo-icon" />
-          <div class="cyber-logo-ring"></div>
+          <Share2 :size="18" class="cyber-logo-icon" />
         </div>
         <div class="cyber-brand-text">
           <div class="cyber-brand-title">
@@ -71,7 +70,7 @@
           @click="scanNearby"
         >
           <Radio :size="14" :class="{ 'cyber-spin': scanning }" />
-          <span>{{ scanning ? "雷达探测中..." : "雷达扫描" }}</span>
+          <span>{{ scanning ? "直达探测中..." : "直达扫描" }}</span>
         </button>
 
         <!-- 连接设备 -->
@@ -212,7 +211,6 @@
                 >
                   <MonitorSmartphone v-if="device.native" :size="17" />
                   <Globe v-else :size="17" />
-                  <span v-if="device.online" class="cyber-online-dot"></span>
                 </div>
 
                 <!-- 节点文字信息 -->
@@ -281,30 +279,55 @@
           </template>
 
           <template v-else>
-            <button
+            <div
               v-for="group in visibleGroups"
               :key="group.id"
               class="cyber-device-card"
               :class="{
                 'cyber-device-card--active': selectedGroupId === group.id
               }"
-              type="button"
-              @click="selectGroup(group.id)"
             >
-              <div class="cyber-device-avatar">
-                <Users :size="17" />
-              </div>
-              <div class="cyber-device-meta">
-                <div class="cyber-device-head">
-                  <span class="cyber-device-name">{{ group.name }}</span>
+              <button
+                class="cyber-device-select"
+                type="button"
+                @click="selectGroup(group.id)"
+              >
+                <div class="cyber-device-avatar cyber-device-avatar--group">
+                  <Users :size="17" />
                 </div>
-                <div class="cyber-device-telemetry">
-                  <span class="telemetry-ip"
-                    >{{ group.members?.length || 0 }} 位成员</span
+                <div class="cyber-device-meta">
+                  <div class="cyber-device-head">
+                    <span class="cyber-device-name" :title="group.name">{{
+                      group.name
+                    }}</span>
+                    <span class="cyber-node-tag tag-group">GROUP</span>
+                  </div>
+
+                  <div
+                    class="cyber-device-preview"
+                    :title="groupLastMessage(group.id)"
                   >
+                    {{ groupLastMessage(group.id) }}
+                  </div>
+
+                  <div class="cyber-device-telemetry">
+                    <span class="telemetry-ip"
+                      >{{ group.members?.length || 0 }} 位成员</span
+                    >
+                  </div>
                 </div>
-              </div>
-            </button>
+              </button>
+
+              <button
+                class="cyber-device-delete-btn"
+                type="button"
+                title="解散群聊"
+                :aria-label="`解散群聊 ${group.name}`"
+                @click="deleteGroup(group.id)"
+              >
+                <Trash2 :size="13" />
+              </button>
+            </div>
 
             <div v-if="!visibleGroups.length" class="cyber-sidebar-empty">
               <div class="cyber-radar-hud">
@@ -324,11 +347,17 @@
         <div class="cyber-sidebar-telemetry">
           <div class="telemetry-row">
             <span class="telemetry-label">CHANNEL:</span>
-            <span class="telemetry-val">P2P DIRECT ENCRYPTED</span>
+            <span class="telemetry-val">
+              <Lock :size="12" class="telemetry-icon" />
+              <span>P2P DIRECT ENCRYPTED</span>
+            </span>
           </div>
           <div class="telemetry-row">
             <span class="telemetry-label">SECURITY:</span>
-            <span class="telemetry-val">ED25519 // AUTH VERIFIED</span>
+            <span class="telemetry-val">
+              <ShieldCheck :size="12" class="telemetry-icon" />
+              <span>ED25519 // AUTH VERIFIED</span>
+            </span>
           </div>
         </div>
       </aside>
@@ -536,6 +565,7 @@ import "element-plus/es/components/input/style/css"
 import {
   Globe,
   Link,
+  Lock,
   MonitorSmartphone,
   Plus,
   QrCode,
@@ -543,6 +573,7 @@ import {
   Search,
   Settings2,
   Share2,
+  ShieldCheck,
   Trash2,
   Users,
   Wifi,
@@ -715,6 +746,19 @@ function deviceLastMessage(deviceId) {
     sessionIds.has(message.sessionId)
   )
   if (!message) return "发送文件或消息"
+  return (
+    message.content ||
+    (message.attachments?.length
+      ? `[${message.attachments.length} 个附件] ${message.attachments[0].name}`
+      : "文件消息")
+  )
+}
+
+function groupLastMessage(groupId) {
+  const session = groupSessions.value.find((item) => item.groupId === groupId)
+  if (!session) return "群聊传输信道"
+  const message = state.messages.find((item) => item.sessionId === session.id)
+  if (!message) return "发送群文件或消息"
   return (
     message.content ||
     (message.attachments?.length
@@ -1529,55 +1573,68 @@ function isTextPreviewFile(name, mimeType) {
     min-width: 0;
     flex: 1;
     overflow: hidden;
-    border: 1px solid var(--color-line);
-    border-radius: 10px;
-    background: var(--color-panel);
-    box-shadow: var(--shadow-panel);
+    gap: 12px;
 
-    /* 侧边节点栏 */
+    /* 侧边节点栏独立卡片 */
     .cyber-sidebar {
       display: flex;
       width: clamp(230px, 24%, 280px);
       min-width: 0;
       flex: none;
       flex-direction: column;
-      border-right: 1px solid var(--color-line);
-      background: var(--color-panel-soft);
+      border: 1px solid var(--color-line);
+      border-radius: 10px;
+      background: var(--color-panel);
+      box-shadow: var(--shadow-panel);
+      overflow: hidden;
 
       .cyber-sidebar-tools {
         display: flex;
         flex: none;
         align-items: center;
         justify-content: space-between;
-        padding: 12px 14px 10px;
+        padding: 0 14px;
+        height: 44px;
+        border-bottom: 1px solid var(--color-line);
 
         .cyber-nav-tabs {
           display: flex;
-          gap: 6px;
+          gap: 16px;
+          height: 100%;
 
           .cyber-nav-tab {
+            position: relative;
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 5px 9px;
-            border-radius: 5px;
-            border: 1px solid transparent;
+            height: 100%;
+            padding: 0 2px;
+            margin-bottom: -1px;
+            border: 0;
+            border-bottom: 2.5px solid transparent;
             background: transparent;
             color: var(--color-text-muted);
-            font-size: 12.5px;
+            font-size: 13px;
             font-weight: 500;
             cursor: pointer;
             transition: all 0.2s;
+
+            .tab-label {
+              line-height: 1;
+            }
 
             .tab-badge {
               font-family:
                 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
               font-size: 10px;
-              padding: 0 5px;
-              border-radius: 3px;
-              background: var(--color-panel);
+              line-height: 1.2;
+              padding: 1px 6px;
+              border-radius: 4px;
+              background: var(--color-panel-soft);
               border: 1px solid var(--color-line);
               color: var(--color-text-soft);
+              font-weight: 500;
+              transition: all 0.2s;
             }
 
             &:hover {
@@ -1586,14 +1643,14 @@ function isTextPreviewFile(name, mimeType) {
 
             &--active {
               color: var(--color-primary);
-              background: var(--color-panel);
-              border-color: var(--color-line);
-              box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+              font-weight: 600;
+              border-bottom-color: var(--color-primary);
 
               .tab-badge {
                 background: var(--color-primary-soft);
                 border-color: var(--color-info-line);
                 color: var(--color-primary);
+                font-weight: 600;
               }
             }
           }
@@ -1624,9 +1681,9 @@ function isTextPreviewFile(name, mimeType) {
         flex: none;
         align-items: center;
         gap: 8px;
-        margin: 0 12px 10px;
+        margin: 12px 12px 8px;
         padding: 6px 10px;
-        border-radius: 6px;
+        border-radius: 7px;
         background: var(--color-panel);
         border: 1px solid var(--color-line);
         transition: all 0.2s;
@@ -1653,9 +1710,8 @@ function isTextPreviewFile(name, mimeType) {
 
           &::placeholder {
             color: var(--color-text-soft);
-            font-family:
-              ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-            font-size: 11px;
+            font-family: inherit;
+            font-size: 12px;
           }
         }
       }
@@ -1663,18 +1719,20 @@ function isTextPreviewFile(name, mimeType) {
       .cyber-conversations {
         min-height: 0;
         flex: 1;
-        padding: 0 8px;
+        padding: 4px 10px 10px;
         overflow-y: auto;
         scrollbar-width: thin;
         scrollbar-color: var(--color-line) transparent;
 
         .cyber-device-card {
           display: flex;
+          width: 100%;
+          box-sizing: border-box;
           align-items: center;
           gap: 6px;
           margin-bottom: 6px;
           padding: 8px 10px;
-          border-radius: 7px;
+          border-radius: 8px;
           border: 1px solid var(--color-line);
           background: var(--color-panel);
           transition: all 0.2s;
@@ -1686,8 +1744,8 @@ function isTextPreviewFile(name, mimeType) {
 
           &--active {
             border-color: var(--color-primary);
-            background: var(--color-primary-soft);
-            box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+            background: #f8fafc;
+            box-shadow: 0 1px 4px rgba(37, 99, 235, 0.06);
           }
 
           .cyber-device-select {
@@ -1706,32 +1764,25 @@ function isTextPreviewFile(name, mimeType) {
             .cyber-device-avatar {
               position: relative;
               display: grid;
-              width: 34px;
-              height: 34px;
+              width: 38px;
+              height: 38px;
               flex: none;
               place-items: center;
-              border-radius: 7px;
+              border-radius: 8px;
               background: var(--color-panel-soft);
               border: 1px solid var(--color-line);
               color: var(--color-text-muted);
 
               &.is-online {
-                color: var(--color-success);
-                border-color: var(--color-success-line);
-                background: var(--color-success-soft);
-                box-shadow: 0 0 6px var(--color-success-soft);
+                color: #10b981;
+                border-color: #86efac;
+                background: #dcfce7;
               }
 
-              .cyber-online-dot {
-                position: absolute;
-                right: -2px;
-                bottom: -2px;
-                width: 7px;
-                height: 7px;
-                border-radius: 50%;
-                background: var(--color-success);
-                box-shadow: 0 0 6px var(--color-success);
-                border: 1.5px solid var(--color-panel);
+              &--group {
+                color: var(--color-primary);
+                border-color: var(--color-info-line);
+                background: var(--color-primary-soft);
               }
             }
 
@@ -1761,10 +1812,10 @@ function isTextPreviewFile(name, mimeType) {
                   font-family:
                     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
                     monospace;
-                  font-size: 9px;
-                  padding: 1px 4px;
+                  font-size: 9.5px;
+                  padding: 1px 5px;
                   border-radius: 3px;
-                  font-weight: 500;
+                  font-weight: 600;
 
                   &.tag-client {
                     background: var(--color-primary-soft);
@@ -1776,6 +1827,12 @@ function isTextPreviewFile(name, mimeType) {
                     background: var(--color-warning-soft);
                     border: 1px solid var(--color-warning-line);
                     color: var(--color-warning);
+                  }
+
+                  &.tag-group {
+                    background: var(--color-primary-soft);
+                    border: 1px solid var(--color-info-line);
+                    color: var(--color-primary);
                   }
                 }
               }
@@ -1796,7 +1853,7 @@ function isTextPreviewFile(name, mimeType) {
                 font-family:
                   ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
                   monospace;
-                font-size: 10px;
+                font-size: 10.5px;
 
                 .telemetry-ip {
                   color: var(--color-text-soft);
@@ -1914,10 +1971,10 @@ function isTextPreviewFile(name, mimeType) {
         flex: none;
         padding: 10px 14px;
         border-top: 1px solid var(--color-line);
-        background: var(--color-panel-soft);
+        background: var(--color-panel);
         display: flex;
         flex-direction: column;
-        gap: 4px;
+        gap: 5px;
 
         .telemetry-row {
           display: flex;
@@ -1925,14 +1982,23 @@ function isTextPreviewFile(name, mimeType) {
           justify-content: space-between;
           font-family:
             ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-          font-size: 9.5px;
+          font-size: 10px;
 
           .telemetry-label {
             color: var(--color-text-soft);
+            font-weight: 500;
           }
 
           .telemetry-val {
-            color: var(--color-primary);
+            color: var(--color-text);
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+
+            .telemetry-icon {
+              color: var(--color-text-muted);
+              flex-shrink: 0;
+            }
           }
         }
       }

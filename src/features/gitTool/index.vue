@@ -1786,7 +1786,7 @@ async function refreshGitProject() {
     }
 
     if (gitWorkspace.value === "branch" && selectedBranch.value) {
-      loadCommits({ checkCommits: false })
+      loadCommits()
     }
 
     if (gitWorkspace.value === "stash") {

@@ -142,8 +142,10 @@
           aria-label="打开附件"
           @click="$emit('preview', currentFile)"
         >
-          <ImageOff v-if="kind === 'image'" :size="30" :stroke-width="1.4" />
-          <FileText v-else :size="30" :stroke-width="1.4" />
+          <div class="attachment-document-icon-box">
+            <ImageOff v-if="kind === 'image'" :size="24" :stroke-width="1.8" />
+            <FileText v-else :size="24" :stroke-width="1.8" />
+          </div>
           <span class="attachment-document-copy">
             <span
               class="attachment-document-name"
@@ -426,40 +428,66 @@ function scrollImages(event) {
     }
     .attachment-document {
       display: flex;
-      width: 100%;
+      width: 380px;
+      max-width: 100%;
       min-width: 0;
       align-items: center;
-      gap: 12px;
-      padding: 16px 48px 16px 16px;
+      gap: 14px;
+      padding: 14px 18px;
       border: 1px solid var(--color-line);
-      border-radius: 10px;
-      color: var(--color-primary);
+      border-radius: 12px;
       background: var(--color-panel);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
       text-align: left;
       cursor: pointer;
+      transition: all 0.2s ease;
+
+      &:hover:not(:disabled) {
+        border-color: var(--color-line-strong);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+      }
+
       &:disabled {
         cursor: default;
       }
+
+      .attachment-document-icon-box {
+        display: grid;
+        width: 48px;
+        height: 48px;
+        flex: 0 0 48px;
+        place-items: center;
+        border-radius: 10px;
+        background: #eff6ff;
+        color: #2563eb;
+      }
+
       .attachment-document-copy {
         display: flex;
         min-width: 0;
         flex: 1;
         flex-direction: column;
-        gap: 5px;
+        gap: 3px;
+
         .attachment-document-name {
           overflow: hidden;
           color: var(--color-text);
-          font-size: var(--font-size-base);
+          font-size: 14px;
+          font-weight: 600;
           text-overflow: ellipsis;
           white-space: nowrap;
         }
+
         .attachment-document-kind {
-          color: var(--color-text);
-          font-size: var(--font-size-base);
-        }
-        .attachment-document-size {
           color: var(--color-text-muted);
-          font-size: var(--font-size-sm);
+          font-size: 12px;
+        }
+
+        .attachment-document-size {
+          color: var(--color-text-soft);
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 11.5px;
         }
       }
     }

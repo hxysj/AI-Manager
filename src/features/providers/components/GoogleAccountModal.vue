@@ -15,9 +15,12 @@
             account?.google?.email || "通过浏览器授权登录，无需填写 API Key"
           }}</span>
         </div>
-        <span v-if="account?.google?.plan" class="google-plan" :title="account.google.plan">{{
-          planLabel
-        }}</span>
+        <span
+          v-if="account?.google?.plan"
+          class="google-plan"
+          :title="account.google.plan"
+          >{{ planLabel }}</span
+        >
       </div>
 
       <label class="google-field">
@@ -110,16 +113,28 @@
             >
               <div class="google-bucket-heading">
                 <span>{{ quotaWindowLabel(bucket) }}</span>
-                <span>{{ bucket.remainingFraction == null ? "额度未知" : `剩余 ${Math.round(bucket.remainingFraction * 1000) / 10}%` }}</span>
+                <span>{{
+                  bucket.remainingFraction == null
+                    ? "额度未知"
+                    : `剩余 ${Math.round(bucket.remainingFraction * 1000) / 10}%`
+                }}</span>
               </div>
               <div class="google-quota-track">
                 <span
                   class="google-quota-fill"
-                  :class="{ 'google-quota-low': bucket.remainingFraction != null && bucket.remainingFraction <= 0.1 }"
-                  :style="{ width: `${(bucket.remainingFraction ?? 0) * 100}%` }"
+                  :class="{
+                    'google-quota-low':
+                      bucket.remainingFraction != null &&
+                      bucket.remainingFraction <= 0.1
+                  }"
+                  :style="{
+                    width: `${(bucket.remainingFraction ?? 0) * 100}%`
+                  }"
                 ></span>
               </div>
-              <span class="google-muted" :title="bucket.resetTime || ''">{{ resetLabel(bucket.resetTime) }}</span>
+              <span class="google-muted" :title="bucket.resetTime || ''">{{
+                resetLabel(bucket.resetTime)
+              }}</span>
             </div>
           </div>
         </div>
@@ -129,7 +144,10 @@
             >{{ models.length }} 个 · 选择一个作为默认模型</span
           >
         </div>
-        <p v-if="account.google?.quotaGroups?.length" class="google-model-note google-muted">
+        <p
+          v-if="account.google?.quotaGroups?.length"
+          class="google-model-note google-muted"
+        >
           以下为单模型额度，使用时还受上方共享额度限制。
         </p>
         <div
@@ -218,12 +236,15 @@ const failed = ref(false)
 const models = computed(() => account.value?.google?.models || [])
 const waiting = computed(() => loginState.value.status === "pending")
 // 保留原始等级作为提示，将 Google 已知的订阅标识转换成可读名称。
-const planLabel = computed(() => ({
-  "g1-pro-tier": "Google AI Pro",
-  "g1-ultra-tier": "Google AI Ultra",
-  "free-tier": "免费版",
-  "FREE": "免费版"
-})[account.value?.google?.plan] || account.value?.google?.plan)
+const planLabel = computed(
+  () =>
+    ({
+      "g1-pro-tier": "Google AI Pro",
+      "g1-ultra-tier": "Google AI Ultra",
+      "free-tier": "免费版",
+      FREE: "免费版"
+    })[account.value?.google?.plan] || account.value?.google?.plan
+)
 let pollTimer = null
 let stopped = false
 
@@ -331,8 +352,15 @@ async function copyLink() {
 
 // 兼容当前接口与参考文档中的两种窗口命名，未知窗口保留接口名称。
 function quotaWindowLabel(bucket) {
-  const window = String(bucket.window || "").replace(/^WINDOW_/i, "").toLowerCase()
-  return ({ "5h": "5 小时额度", "weekly": "周额度" })[window] || bucket.displayName || bucket.window || "额度"
+  const window = String(bucket.window || "")
+    .replace(/^WINDOW_/i, "")
+    .toLowerCase()
+  return (
+    { "5h": "5 小时额度", weekly: "周额度" }[window] ||
+    bucket.displayName ||
+    bucket.window ||
+    "额度"
+  )
 }
 
 function formatDateTime(value) {
@@ -497,7 +525,6 @@ onBeforeUnmount(() => {
         gap: 6px;
         width: 255px;
         flex-shrink: 0;
-
       }
     }
   }

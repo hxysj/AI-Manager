@@ -1,13 +1,36 @@
 <template>
   <section class="image-prompt-library">
-    <BaseModal
-      title="提示词库"
-      :description="`按分类发现画面灵感 · ${catalog.count || 0} 条社区收录提示词`"
-      @close="$emit('close')"
-    >
+    <BaseModal @close="$emit('close')">
+      <!-- 弹窗顶栏：左侧图标徽章、标题与副标题；右侧关闭按钮 -->
+      <template #header>
+        <div class="library-modal-header">
+          <div class="header-left">
+            <div class="header-icon-box">
+              <Layers :size="20" />
+            </div>
+            <div class="header-info">
+              <h2 class="header-title">提示词库</h2>
+              <p class="header-desc">
+                按分类发现画面灵感，{{ catalog.count || 0 }} 条社区提示词
+              </p>
+            </div>
+          </div>
+          <button
+            class="header-close-btn"
+            type="button"
+            title="关闭"
+            aria-label="关闭"
+            @click="$emit('close')"
+          >
+            <X :size="15" />
+          </button>
+        </div>
+      </template>
+
+      <!-- 检索与工具栏：搜索框、状态胶囊、文件源与导入按钮 -->
       <div class="library-toolbar">
         <div class="search-box">
-          <Search :size="15" class="search-icon" />
+          <Search :size="14" class="search-icon" />
           <input
             v-model="search"
             class="search-input"
@@ -23,38 +46,40 @@
             title="清空搜索"
             @click="clearSearch"
           >
-            <X :size="13" />
+            <X :size="12" />
           </button>
         </div>
 
-        <div class="library-meta-chips">
-          <span
-            class="meta-chip database-chip"
-            :title="`收录文件: ${catalog.filename}`"
+        <div class="library-meta-actions">
+          <div
+            class="meta-pill library-count-pill"
+            :title="`收录文件: ${catalog.filename || '未知'}`"
           >
-            <Database :size="12" />
-            <span class="tech-dot"></span>
+            <span class="status-dot"></span>
+            <Database :size="13" class="pill-icon" />
             <span>{{ catalog.count || 0 }} 灵感库</span>
-          </span>
-          <span
+          </div>
+
+          <div
             v-if="catalog.filename"
-            class="meta-chip source-file-chip"
+            class="meta-pill filename-pill"
             :title="catalog.filename"
           >
-            <Terminal :size="12" />
+            <Code2 :size="13" class="pill-icon" />
             <span class="filename-text">{{ catalog.filename }}</span>
-          </span>
-        </div>
+          </div>
 
-        <button
-          class="library-button import-btn"
-          type="button"
-          :disabled="initializing || importing"
-          @click="importLibrary"
-        >
-          <Upload :size="14" :class="{ 'spinning-icon': importing }" />
-          <span>{{ importing ? "导入中…" : "导入 JSON" }}</span>
-        </button>
+          <button
+            class="import-json-btn"
+            type="button"
+            :disabled="initializing || importing"
+            title="导入自定义 JSON 提示词库"
+            @click="importLibrary"
+          >
+            <Upload :size="14" :class="{ 'spinning-icon': importing }" />
+            <span>{{ importing ? "导入中…" : "导入 JSON" }}</span>
+          </button>
+        </div>
       </div>
 
       <p v-if="error" class="library-error" role="alert">
@@ -64,86 +89,89 @@
         </button>
       </p>
 
+      <!-- 加载提示 -->
       <div v-if="initializing" class="library-loading">
-        <div class="tech-loader">
+        <div class="loading-icon-box">
           <LoaderCircle class="spinning" :size="26" />
         </div>
         <span>正在加载本地提示词库，首次打开需要建立索引…</span>
       </div>
 
+      <!-- 主体区域：左侧分类导航 + 右侧列表/详情 -->
       <div v-else class="library-body">
-        <nav class="category-sidebar" aria-label="提示词分类">
-          <div class="sidebar-header">
-            <span class="sidebar-title">// 分类导航</span>
-            <span class="sidebar-count">{{
-              catalog.categories?.length || 0
-            }}</span>
-          </div>
-
-          <button
-            class="category-button all-category-btn"
-            :class="{ active: !category }"
-            type="button"
-            @click="selectCategory('')"
-          >
-            <span class="cat-left">
-              <Layers :size="14" class="cat-icon" />
-              <span class="category-name">全部提示词</span>
-            </span>
-            <span class="category-count">{{ catalog.count }}</span>
-          </button>
+        <!-- 左侧分类侧边栏 -->
+        <nav class="category-sidebar" aria-label="提示词分类导航">
+          <header class="sidebar-header">
+            <AlignLeft :size="14" class="sidebar-head-icon" />
+            <span class="sidebar-title">分类导航</span>
+          </header>
 
           <div class="category-scroll-container">
-            <section
-              v-for="group in categoryGroups"
-              :key="group.name"
-              class="category-group"
+            <!-- 全部提示词 (始终置顶) -->
+            <button
+              class="category-item-btn"
+              :class="{ active: !category }"
+              type="button"
+              @click="selectCategory('')"
             >
-              <div class="category-heading">
-                <span class="group-prefix">//</span>
-                <span class="group-name">{{ group.name }}</span>
+              <div class="cat-left">
+                <LayoutGrid :size="16" class="cat-icon" />
+                <span class="category-name">全部提示词</span>
               </div>
-              <button
-                v-for="item in group.items"
-                :key="item.id"
-                class="category-button"
-                :class="{ active: category === item.id }"
-                type="button"
-                :title="item.originalTitle"
-                @click="selectCategory(item.id)"
-              >
-                <span class="cat-left">
-                  <span class="active-indicator"></span>
-                  <span class="category-name">{{ item.title }}</span>
-                </span>
-                <span class="category-count">{{ item.count }}</span>
-              </button>
-            </section>
+              <span class="category-badge">{{ catalog.count || 0 }}</span>
+            </button>
+
+            <!-- 分类项列表 -->
+            <button
+              v-for="item in catalog.categories"
+              :key="item.id"
+              class="category-item-btn"
+              :class="{ active: category === item.id }"
+              type="button"
+              :title="item.originalTitle || item.title"
+              @click="selectCategory(item.id)"
+            >
+              <div class="cat-left">
+                <component
+                  :is="getCategoryIcon(item.title)"
+                  :size="16"
+                  class="cat-icon"
+                />
+                <span class="category-name">{{ item.title }}</span>
+              </div>
+              <span class="category-badge">{{ item.count }}</span>
+            </button>
           </div>
         </nav>
 
+        <!-- 右侧主内容区 -->
         <section class="library-main">
+          <!-- 模式一：图库卡片列表 -->
           <template v-if="!detail">
             <header class="gallery-heading">
               <div class="heading-left">
                 <span class="heading-title">{{ activeCategory }}</span>
-                <span class="result-count-badge">
-                  <span class="live-dot"></span>
+                <span class="match-count-pill">
+                  <span class="dot-indicator"></span>
                   <span>{{ total }} 条匹配</span>
                 </span>
               </div>
               <div class="heading-right">
                 <span v-if="loading" class="loading-label">
-                  <LoaderCircle :size="13" class="spinning" />
+                  <LoaderCircle :size="12" class="spinning" />
                   <span>加载中…</span>
                 </span>
                 <span class="page-quick-tag">
-                  PAGE {{ String(page).padStart(2, "0") }} /
-                  {{ String(totalPages).padStart(2, "0") }}
+                  <FileText :size="12" class="tag-file-icon" />
+                  <span>
+                    PAGE {{ String(page).padStart(2, "0") }} /
+                    {{ String(totalPages).padStart(2, "0") }}
+                  </span>
                 </span>
               </div>
             </header>
 
+            <!-- 卡片网格滚动区 -->
             <div
               ref="galleryScrollRef"
               class="prompt-gallery-scroll"
@@ -151,8 +179,8 @@
               @scroll.passive="onGalleryScroll"
             >
               <div v-if="!items.length && !loading" class="library-empty">
-                <div class="empty-icon-wrapper">
-                  <Search :size="30" />
+                <div class="empty-icon-box">
+                  <Search :size="28" />
                 </div>
                 <span class="empty-title">没有找到匹配的提示词</span>
                 <span class="empty-hint">试试其他分类或换个关键词搜索</span>
@@ -167,21 +195,21 @@
               </div>
 
               <div v-else class="prompt-gallery">
-                <div
+                <article
                   v-for="item in items"
                   :key="item.id"
                   class="prompt-card"
-                  :class="{ 'is-edit-mode': isEditMode(item.inputMode) }"
                   role="button"
                   tabindex="0"
                   :aria-disabled="detailLoading || importing"
                   @click="openDetail(item.id)"
                   @keydown.enter="openDetail(item.id)"
                 >
-                  <div class="card-image">
+                  <!-- 顶部封面图与模式角标 -->
+                  <div class="card-image-box">
                     <el-image
                       v-if="item.previewImageUrl || item.highQualityImageUrl"
-                      class="preview-image"
+                      class="preview-img"
                       :src="item.previewImageUrl || item.highQualityImageUrl"
                       fit="cover"
                       lazy
@@ -189,64 +217,56 @@
                       referrerpolicy="no-referrer"
                     >
                       <template #placeholder>
-                        <div class="image-placeholder">
-                          <Image :size="22" />
+                        <div class="card-placeholder-box">
+                          <LoaderCircle class="spinning" :size="20" />
                         </div>
                       </template>
                       <template #error>
-                        <div class="image-placeholder error-placeholder">
-                          <ImageOff :size="22" />
-                          <span>预览图不可用</span>
+                        <div class="card-placeholder-box error-box">
+                          <ImageIcon :size="24" class="soft-icon" />
+                          <span class="placeholder-text">预览图暂不可用</span>
                         </div>
                       </template>
                     </el-image>
-                    <div v-else class="image-placeholder">
-                      <ImageOff :size="22" />
-                      <span>暂无预览图</span>
+
+                    <!-- 无图时的默认质感占位 -->
+                    <div v-else class="card-placeholder-box default-box">
+                      <ImageIcon :size="28" class="soft-icon" />
                     </div>
 
-                    <div class="image-overlay-gradient"></div>
-
-                    <div class="badge-row">
+                    <!-- 模式标签胶囊 (如: 文生图 / 图片编辑) -->
+                    <div class="card-badge-tag">
                       <span
-                        class="mode-badge"
-                        :class="{ 'mode-edit': isEditMode(item.inputMode) }"
+                        class="mode-pill"
+                        :class="{
+                          'mode-pill-edit': isEditMode(item.inputMode)
+                        }"
                       >
                         <span class="badge-dot"></span>
                         <span>{{ modeLabel(item.inputMode) }}</span>
                       </span>
                     </div>
-
-                    <div class="card-hover-overlay">
-                      <span class="hover-inspect-btn">
-                        <Sparkles :size="12" />
-                        <span>查看详情</span>
-                      </span>
-                    </div>
                   </div>
 
+                  <!-- 底部标题与标签信息 -->
                   <div class="card-content">
-                    <div class="card-title-row">
-                      <span class="card-title" :title="item.title">
-                        {{ item.title }}
-                      </span>
-                    </div>
+                    <h3 class="card-title" :title="item.title">
+                      {{ item.title }}
+                    </h3>
                     <div class="card-footer-row">
-                      <span class="card-category-pill">
-                        # {{ categoryTitle(item.categoryIds?.[0]) }}
-                      </span>
-                      <span
-                        v-if="item.categoryIds?.length > 1"
-                        class="more-tags-indicator"
-                      >
-                        +{{ item.categoryIds.length - 1 }}
+                      <Tag :size="12" class="tag-icon" />
+                      <span class="card-tag-name">
+                        ·
+                        {{
+                          item.tags?.[0] || categoryTitle(item.categoryIds?.[0])
+                        }}
                       </span>
                     </div>
                   </div>
-                </div>
+                </article>
               </div>
 
-              <!-- 回到顶部浮动按钮 -->
+              <!-- 回到顶部悬浮按钮 -->
               <button
                 v-if="showBackToTop"
                 class="floating-back-to-top"
@@ -254,19 +274,31 @@
                 title="回到顶部"
                 @click="scrollToTop('smooth')"
               >
-                <ArrowUp :size="14" />
+                <ArrowUp :size="13" />
                 <span>顶部</span>
               </button>
             </div>
 
+            <!-- 底部来源注明与翻页器 -->
             <footer class="gallery-footer">
-              <span class="footer-hint">
-                <ExternalLink :size="12" />
-                <span>图片来自公开收录链接 · 点击卡片查看完整提示词与参数</span>
-              </span>
-              <div class="pagination-controls">
+              <div class="footer-left">
+                <BookOpen :size="14" class="footer-book-icon" />
+                <span class="footer-hint-text">提示词整理自社区项目 ·</span>
+                <a
+                  class="footer-source-link"
+                  :href="sourceRepositoryUrl"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  @click.prevent="openSource(sourceRepositoryUrl)"
+                >
+                  <span>Toolcentral-ai / Image Prompt Gallery</span>
+                  <ExternalLink :size="11" />
+                </a>
+              </div>
+
+              <div class="footer-right">
                 <button
-                  class="page-nav-button"
+                  class="page-nav-btn"
                   type="button"
                   title="上一页"
                   :disabled="page <= 1 || loading"
@@ -274,17 +306,17 @@
                 >
                   <ChevronLeft :size="14" />
                 </button>
-                <div class="page-indicator">
-                  <span class="current-page">{{
+                <div class="page-indicator-box">
+                  <span class="curr-page">{{
                     String(page).padStart(2, "0")
                   }}</span>
-                  <span class="page-separator">/</span>
-                  <span class="total-pages">{{
+                  <span class="sep">/</span>
+                  <span class="total-page">{{
                     String(totalPages).padStart(2, "0")
                   }}</span>
                 </div>
                 <button
-                  class="page-nav-button"
+                  class="page-nav-btn"
                   type="button"
                   title="下一页"
                   :disabled="page >= totalPages || loading"
@@ -296,6 +328,7 @@
             </footer>
           </template>
 
+          <!-- 模式二：详情与快速填入视图 -->
           <template v-else>
             <header class="detail-heading">
               <button class="back-button" type="button" @click="closeDetail">
@@ -340,14 +373,10 @@
                       </div>
                     </template>
                   </el-image>
-                  <div class="corner-bracket top-left"></div>
-                  <div class="corner-bracket top-right"></div>
-                  <div class="corner-bracket bottom-left"></div>
-                  <div class="corner-bracket bottom-right"></div>
                 </div>
 
                 <div class="detail-tags-box">
-                  <div class="tags-header">// 标签分类</div>
+                  <div class="tags-header">标签分类</div>
                   <div class="detail-tags">
                     <span
                       v-for="id in detail.categoryIds"
@@ -375,7 +404,7 @@
                   <div class="editor-heading">
                     <div class="console-title">
                       <Terminal :size="14" class="console-icon" />
-                      <span>PROMPT CONSOLE // 提示词</span>
+                      <span>提示词内容</span>
                     </div>
 
                     <div class="editor-controls">
@@ -426,9 +455,7 @@
 
                 <div v-if="detail.variables?.length" class="tech-hint-card">
                   <Sparkles :size="14" class="hint-icon" />
-                  <span
-                    >此模板含可替换内容，可直接在上方控制台修改占位参数。</span
-                  >
+                  <span>此模板含可替换内容，可直接在上方修改占位参数。</span>
                 </div>
 
                 <div class="template-meta-strip">
@@ -452,7 +479,7 @@
                   v-if="detail.inputMode !== 'text_to_image'"
                   class="tech-hint-card edit-hint-card"
                 >
-                  <Image :size="14" class="hint-icon" />
+                  <ImageIcon :size="14" class="hint-icon" />
                   <span
                     >图片编辑模式：载入工作台后需提供参考图，示例预览图不会作为输入。</span
                   >
@@ -478,18 +505,6 @@
           </template>
         </section>
       </div>
-
-      <footer class="library-attribution">
-        <span class="attribution-label">// 提示词整理自社区项目：</span>
-        <a
-          class="attribution-link"
-          :href="sourceRepositoryUrl"
-          @click.prevent="openSource(sourceRepositoryUrl)"
-        >
-          Toolcentral-ai / Image Prompt Gallery
-          <ExternalLink :size="11" />
-        </a>
-      </footer>
     </BaseModal>
   </section>
 </template>
@@ -497,23 +512,45 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
+  AlignLeft,
   ArrowLeft,
   ArrowUp,
+  BookOpen,
+  Box,
+  Briefcase,
+  Building,
+  Camera,
   Check,
   ChevronLeft,
   ChevronRight,
+  Code2,
   Copy,
   Cpu,
   Database,
   ExternalLink,
-  Image,
+  FileText,
+  Flame,
+  Gamepad2,
+  Gem,
+  Home,
+  Image as ImageIcon,
   ImageOff,
   Layers,
+  LayoutGrid,
   LoaderCircle,
+  Mountain,
+  Palette,
   Search,
+  Smile,
   Sparkles,
+  Tag,
   Terminal,
+  Trees,
   Upload,
+  User,
+  Utensils,
+  Wand2,
+  Waves,
   X
 } from "lucide-vue-next"
 import { ElImage, ElMessageBox } from "element-plus"
@@ -524,9 +561,11 @@ import { systemApi, toolboxApi } from "@/api"
 import { createMessage } from "@/utils/message"
 
 const emit = defineEmits(["close", "select"])
-// 保留词库整理来源，桌面端统一通过系统浏览器打开外链。
+
+// 提示词整理来源
 const sourceRepositoryUrl =
   "https://github.com/Toolcentral-ai/awesome-gpt-image-2-prompts"
+
 const catalog = ref({ count: 0, categories: [], filename: "" })
 const category = ref("")
 const search = ref("")
@@ -554,27 +593,17 @@ let disposed = false
 const categoryMap = computed(
   () => new Map(catalog.value.categories.map((item) => [item.id, item]))
 )
-const categoryGroups = computed(() => {
-  const groups = new Map()
-  for (const item of catalog.value.categories) {
-    const name =
-      { Category: "分类", Style: "风格", Scene: "场景", "Use Case": "用途" }[
-        item.group
-      ] ||
-      item.group ||
-      "分类"
-    if (!groups.has(name)) groups.set(name, [])
-    groups.get(name).push(item)
-  }
-  return [...groups].map(([name, entries]) => ({ name, items: entries }))
-})
+
 const activeCategory = computed(
   () => categoryMap.value.get(category.value)?.title || "全部提示词"
 )
+
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / 24)))
+
 const promptByteLength = computed(
   () => new TextEncoder().encode(prompt.value).length
 )
+
 const promptTooLong = computed(() => promptByteLength.value > 32000)
 
 const sourceUrl = computed(() => {
@@ -588,6 +617,142 @@ const sourceUrl = computed(() => {
     return ""
   }
 })
+
+// 根据分类名称语义动态返回适配的图标
+function getCategoryIcon(title = "") {
+  const t = String(title).toLowerCase()
+  if (
+    t.includes("动漫") ||
+    t.includes("游戏") ||
+    t.includes("anime") ||
+    t.includes("game")
+  )
+    return Gamepad2
+  if (
+    t.includes("时尚") ||
+    t.includes("美妆") ||
+    t.includes("fashion") ||
+    t.includes("beauty")
+  )
+    return Gem
+  if (
+    t.includes("食物") ||
+    t.includes("饮品") ||
+    t.includes("food") ||
+    t.includes("drink") ||
+    t.includes("beverage")
+  )
+    return Utensils
+  if (
+    t.includes("海报") ||
+    t.includes("平面") ||
+    t.includes("poster") ||
+    t.includes("banner")
+  )
+    return ImageIcon
+  if (
+    t.includes("插画") ||
+    t.includes("卡通") ||
+    t.includes("绘本") ||
+    t.includes("illustration") ||
+    t.includes("cartoon")
+  )
+    return Smile
+  if (
+    t.includes("角色") ||
+    t.includes("人物") ||
+    t.includes("肖像") ||
+    t.includes("character") ||
+    t.includes("portrait") ||
+    t.includes("person")
+  )
+    return User
+  if (
+    t.includes("摄影") ||
+    t.includes("写实") ||
+    t.includes("photo") ||
+    t.includes("realistic")
+  )
+    return Camera
+  if (t.includes("3d") || t.includes("渲染") || t.includes("render")) return Box
+  if (
+    t.includes("家居") ||
+    t.includes("室内") ||
+    t.includes("home") ||
+    t.includes("interior") ||
+    t.includes("room")
+  )
+    return Home
+  if (
+    t.includes("建筑") ||
+    t.includes("空间") ||
+    t.includes("城市") ||
+    t.includes("architecture") ||
+    t.includes("building")
+  )
+    return Building
+  if (
+    t.includes("商业") ||
+    t.includes("电商") ||
+    t.includes("产品") ||
+    t.includes("product") ||
+    t.includes("commerce") ||
+    t.includes("business")
+  )
+    return Briefcase
+  if (
+    t.includes("森林") ||
+    t.includes("植物") ||
+    t.includes("树木") ||
+    t.includes("forest") ||
+    t.includes("tree") ||
+    t.includes("plant")
+  )
+    return Trees
+  if (
+    t.includes("海洋") ||
+    t.includes("沙滩") ||
+    t.includes("水") ||
+    t.includes("ocean") ||
+    t.includes("sea") ||
+    t.includes("beach") ||
+    t.includes("wave") ||
+    t.includes("water")
+  )
+    return Waves
+  if (
+    t.includes("奇幻") ||
+    t.includes("魔法") ||
+    t.includes("fantasy") ||
+    t.includes("magic")
+  )
+    return Wand2
+  if (
+    t.includes("科幻") ||
+    t.includes("赛博") ||
+    t.includes("科技") ||
+    t.includes("sci-fi") ||
+    t.includes("cyberpunk") ||
+    t.includes("tech")
+  )
+    return Flame
+  if (
+    t.includes("艺术") ||
+    t.includes("绘画") ||
+    t.includes("art") ||
+    t.includes("painting")
+  )
+    return Palette
+  if (
+    t.includes("风景") ||
+    t.includes("自然") ||
+    t.includes("landscape") ||
+    t.includes("nature")
+  )
+    return Mountain
+  if (t.includes("general") || t.includes("通用")) return FileText
+  return Tag
+}
 
 function categoryTitle(id) {
   return categoryMap.value.get(id)?.title || "未分类"
@@ -633,7 +798,6 @@ async function loadList() {
       query: search.value.trim(),
       page: page.value
     })
-    // 搜索和分类切换只应用最新结果，避免旧请求覆盖新列表。
     if (disposed || version !== requestVersion) return
     items.value = result.items
     total.value = result.total
@@ -714,7 +878,6 @@ async function openDetail(id) {
 }
 
 function usePrompt() {
-  // 只填入草稿，由用户确认后提交，预览图片不作为上传图片。
   emit("select", {
     prompt: prompt.value,
     model: detail.value.model,
@@ -823,62 +986,116 @@ onBeforeUnmount(() => {
   font-size: var(--font-size-base);
 
   :deep(.base-modal__panel) {
-    width: calc(100vw - 44px);
-    max-width: 1260px;
-    height: calc(100vh - 44px);
-    max-height: 900px;
-    border-radius: 12px;
-    border: 1px solid
-      color-mix(in srgb, var(--color-line-strong) 80%, var(--color-primary));
+    width: min(990px, calc(100vw - 36px));
+    height: min(720px, calc(100vh - 44px));
+    max-height: 740px;
+    border-radius: 16px;
+    border: 1px solid var(--color-line);
+    background: var(--color-panel);
     box-shadow:
-      0 20px 50px rgba(0, 0, 0, 0.28),
-      0 0 0 1px color-mix(in srgb, var(--color-primary) 20%, transparent);
+      0 20px 48px rgba(0, 0, 0, 0.12),
+      0 1px 3px rgba(0, 0, 0, 0.04);
   }
 
   :deep(.base-modal__header) {
-    padding: 16px 22px 14px;
-    border-bottom: 1px solid
-      color-mix(in srgb, var(--color-line) 85%, var(--color-primary));
-    background: linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--color-panel) 94%, var(--color-primary-soft)) 0%,
-      var(--color-panel) 100%
-    );
-  }
-
-  :deep(.base-modal__title) {
-    font-weight: 700;
-    letter-spacing: 0.5px;
-  }
-
-  :deep(.base-modal__description) {
-    font-family: var(--font-family-mono, inherit);
-    font-size: var(--font-size-sm);
-    color: var(--color-text-muted);
+    padding: 16px 20px 12px;
+    border-bottom: 0;
+    background: transparent;
+    display: block;
   }
 
   :deep(.base-modal__content) {
-    padding: 14px 20px 14px;
+    padding: 0 20px 18px;
     display: flex;
     flex-direction: column;
     min-height: 0;
+    flex: 1;
+    overflow: hidden;
   }
 
-  // --- Toolbar Deck ---
+  /* 弹窗头部：精致图标、不夸张的标题 */
+  .library-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+
+      .header-icon-box {
+        display: grid;
+        width: 40px;
+        height: 40px;
+        place-items: center;
+        border-radius: 10px;
+        background: #eff6ff;
+        color: #2563eb;
+        flex-shrink: 0;
+      }
+
+      .header-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+
+        .header-title {
+          margin: 0;
+          font-size: 16px;
+          font-weight: 700;
+          color: var(--color-text);
+          letter-spacing: 0.1px;
+          line-height: 1.3;
+        }
+
+        .header-desc {
+          margin: 0;
+          font-size: 12px;
+          color: var(--color-text-muted);
+          line-height: 1.4;
+        }
+      }
+    }
+
+    .header-close-btn {
+      display: grid;
+      width: 32px;
+      height: 32px;
+      place-items: center;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: all 0.2s;
+
+      &:hover {
+        border-color: var(--color-line-strong);
+        color: var(--color-text);
+        background: var(--color-panel-soft);
+      }
+    }
+  }
+
+  /* 检索与操作工具栏 */
   .library-toolbar {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 12px;
-    padding-bottom: 14px;
+    padding-bottom: 12px;
     flex: none;
 
     .search-box {
       display: flex;
       flex: 1;
+      max-width: 380px;
       align-items: center;
       gap: 8px;
       padding: 0 12px;
-      height: 38px;
+      height: 34px;
       border: 1px solid var(--color-line);
       border-radius: 8px;
       background: var(--color-panel-soft);
@@ -886,14 +1103,13 @@ onBeforeUnmount(() => {
       transition: all 0.2s ease;
 
       &:focus-within {
-        border-color: var(--color-primary);
-        box-shadow: 0 0 0 2px
-          color-mix(in srgb, var(--color-primary) 25%, transparent);
+        border-color: #2563eb;
         background: var(--color-panel);
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
       }
 
       .search-icon {
-        color: var(--color-primary);
+        color: var(--color-text-muted);
         flex: none;
       }
 
@@ -904,7 +1120,7 @@ onBeforeUnmount(() => {
         outline: none;
         color: var(--color-text);
         background: transparent;
-        font-size: var(--font-size-sm);
+        font-size: 12.5px;
 
         &::placeholder {
           color: var(--color-text-soft);
@@ -912,121 +1128,130 @@ onBeforeUnmount(() => {
       }
 
       .clear-search-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        width: 20px;
-        height: 20px;
+        display: grid;
+        place-items: center;
+        width: 18px;
+        height: 18px;
         padding: 0;
         border: 0;
         border-radius: 4px;
         background: var(--color-line);
         color: var(--color-text-muted);
         cursor: pointer;
-        transition: all 0.15s ease;
+        transition: all 0.15s;
 
         &:hover {
-          background: color-mix(
-            in srgb,
-            var(--color-primary) 30%,
-            var(--color-line)
-          );
           color: var(--color-text);
+          background: var(--color-line-strong);
         }
       }
     }
 
-    .library-meta-chips {
+    .library-meta-actions {
       display: flex;
       align-items: center;
       gap: 8px;
-      flex: none;
+      flex-shrink: 0;
 
-      .meta-chip {
+      .meta-pill {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        height: 34px;
-        padding: 0 10px;
+        height: 32px;
+        padding: 0 12px;
         border: 1px solid var(--color-line);
-        border-radius: 6px;
-        background: var(--color-panel-soft);
-        color: var(--color-text-muted);
-        font-size: var(--font-size-xs);
-        font-family: var(--font-family-mono, monospace);
+        background: var(--color-panel);
+        color: var(--color-text);
+        font-size: 12px;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        white-space: nowrap;
+        flex-shrink: 0;
 
-        .tech-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: #10b981;
-          box-shadow: 0 0 6px #10b981;
+        &.library-count-pill {
+          border-radius: 9999px;
+
+          .status-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #10b981;
+            flex-shrink: 0;
+          }
+
+          .pill-icon {
+            color: var(--color-text-muted);
+          }
         }
 
-        &.source-file-chip {
-          max-width: 210px;
+        &.filename-pill {
+          border-radius: 8px;
+          color: var(--color-text);
+
+          .pill-icon {
+            color: #2563eb;
+          }
 
           .filename-text {
+            max-width: 180px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
           }
         }
       }
-    }
 
-    .library-button {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 7px;
-      height: 38px;
-      padding: 0 14px;
-      border: 1px solid var(--color-line);
-      border-radius: 8px;
-      background: var(--color-panel);
-      color: var(--color-text);
-      cursor: pointer;
-      font-size: var(--font-size-sm);
-      font-weight: 500;
-      transition: all 0.18s ease;
+      .import-json-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 14px;
+        border-radius: 8px;
+        border: 1px solid #bfdbfe;
+        background: #eff6ff;
+        color: #2563eb;
+        font-size: 12.5px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        flex-shrink: 0;
+        transition: all 0.2s ease;
 
-      &:hover:not(:disabled) {
-        border-color: var(--color-primary);
-        color: var(--color-primary);
-        box-shadow: 0 2px 8px
-          color-mix(in srgb, var(--color-primary) 18%, transparent);
-      }
+        &:hover:not(:disabled) {
+          background: #dbeafe;
+          border-color: #93c5fd;
+        }
 
-      &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-      }
+        &:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
 
-      .spinning-icon {
-        animation: tech-spin 1.4s linear infinite;
+        .spinning-icon {
+          animation: library-spin 1.4s linear infinite;
+        }
       }
     }
   }
 
-  // --- Error & Loading ---
+  /* 错误与加载 */
   .library-error {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin: 0 0 12px;
-    padding: 10px 14px;
-    border: 1px solid var(--color-danger-line);
-    border-radius: 6px;
-    background: var(--color-danger-soft);
-    color: var(--color-danger);
-    font-size: var(--font-size-sm);
-    overflow-wrap: anywhere;
+    margin: 0 0 10px;
+    padding: 8px 12px;
+    border: 1px solid #fecaca;
+    border-radius: 8px;
+    background: #fef2f2;
+    color: #b91c1c;
+    font-size: 12px;
 
     .retry-button {
       border: 0;
       background: transparent;
-      color: var(--color-primary);
+      color: #2563eb;
       text-decoration: underline;
       cursor: pointer;
       font-weight: 600;
@@ -1039,80 +1264,61 @@ onBeforeUnmount(() => {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 14px;
+    gap: 12px;
     color: var(--color-text-muted);
-    font-size: var(--font-size-base);
+    font-size: 13px;
 
-    .tech-loader {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      width: 48px;
-      height: 48px;
-      border-radius: 50%;
-      background: color-mix(in srgb, var(--color-primary) 12%, transparent);
-      border: 1px solid
-        color-mix(in srgb, var(--color-primary) 25%, transparent);
-
-      .spinning {
-        animation: tech-spin 1.2s linear infinite;
-        color: var(--color-primary);
-      }
+    .loading-icon-box {
+      color: #2563eb;
     }
   }
 
-  // --- Main Body Layout ---
+  /* 主体卡片边框容器 (带圆角和内外边框) */
   .library-body {
     display: flex;
     flex: 1;
-    gap: 18px;
     min-height: 0;
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: var(--color-panel);
+    overflow: hidden;
 
-    // --- Left Sidebar ---
+    /* 左侧分类导航 */
     .category-sidebar {
       display: flex;
       flex-direction: column;
-      flex: 0 0 210px;
+      flex: 0 0 220px;
       border-right: 1px solid var(--color-line);
-      padding-right: 10px;
       min-height: 0;
+      background: var(--color-panel);
 
       .sidebar-header {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        padding: 4px 6px 10px;
-        border-bottom: 1px dashed var(--color-line);
-        margin-bottom: 8px;
+        gap: 6px;
+        padding: 14px 16px 12px;
+        color: var(--color-text);
+        font-size: 13px;
+        font-weight: 600;
+        border-bottom: 1px solid var(--color-line);
 
-        .sidebar-title {
-          font-size: var(--font-size-xs);
-          font-family: var(--font-family-mono, monospace);
-          font-weight: 600;
-          color: var(--color-text-soft);
-          letter-spacing: 0.8px;
-        }
-
-        .sidebar-count {
-          padding: 1px 6px;
-          border-radius: 10px;
-          background: var(--color-panel-soft);
-          border: 1px solid var(--color-line);
-          font-size: 11px;
-          font-family: var(--font-family-mono, monospace);
+        .sidebar-head-icon {
           color: var(--color-text-muted);
         }
-      }
 
-      .all-category-btn {
-        margin-bottom: 6px;
+        .sidebar-title {
+          font-weight: 600;
+        }
       }
 
       .category-scroll-container {
         flex: 1;
         overflow-y: auto;
         min-height: 0;
-        padding-right: 4px;
+        padding: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
 
         &::-webkit-scrollbar {
           width: 4px;
@@ -1123,132 +1329,100 @@ onBeforeUnmount(() => {
         }
       }
 
-      .category-button {
+      .category-item-btn {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 6px;
+        gap: 8px;
         width: 100%;
-        min-height: 36px;
-        padding: 7px 10px;
-        margin-bottom: 3px;
+        height: 40px;
+        padding: 0 12px;
         border: 1px solid transparent;
-        border-radius: 6px;
+        border-radius: 8px;
         text-align: left;
         background: transparent;
-        color: var(--color-text-muted);
-        font-size: var(--font-size-sm);
+        color: var(--color-text);
+        font-size: 13px;
         cursor: pointer;
         transition: all 0.16s ease;
-        position: relative;
 
         .cat-left {
           display: flex;
           align-items: center;
-          gap: 7px;
+          gap: 9px;
           min-width: 0;
 
           .cat-icon {
-            flex: none;
-            opacity: 0.8;
-          }
-
-          .active-indicator {
-            width: 4px;
-            height: 12px;
-            border-radius: 2px;
-            background: transparent;
-            transition: all 0.16s ease;
+            flex-shrink: 0;
+            color: var(--color-text-muted);
+            transition: color 0.16s;
           }
 
           .category-name {
             overflow: hidden;
             white-space: nowrap;
             text-overflow: ellipsis;
+            font-weight: 500;
           }
         }
 
-        .category-count {
-          font-family: var(--font-family-mono, monospace);
-          font-size: 11px;
-          padding: 1px 6px;
-          border-radius: 4px;
+        .category-badge {
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 11.5px;
+          font-weight: 500;
+          padding: 1px 7px;
+          border-radius: 9999px;
           background: var(--color-panel-soft);
-          color: var(--color-text-soft);
-          transition: all 0.16s ease;
+          color: var(--color-text-muted);
+          transition: all 0.16s;
+          flex-shrink: 0;
         }
 
         &:hover {
           background: var(--color-panel-soft);
+          border-color: var(--color-line);
           color: var(--color-text);
-          transform: translateX(2px);
+
+          .cat-left .cat-icon {
+            color: var(--color-text);
+          }
         }
 
         &.active {
-          background: color-mix(
-            in srgb,
-            var(--color-primary-soft) 85%,
-            var(--color-panel)
-          );
-          border-color: color-mix(
-            in srgb,
-            var(--color-primary) 35%,
-            transparent
-          );
-          color: var(--color-primary);
+          background: #eff6ff;
+          border-color: #bfdbfe;
+          color: #2563eb;
           font-weight: 600;
 
-          .cat-left .active-indicator {
-            background: var(--color-primary);
-            box-shadow: 0 0 6px var(--color-primary);
+          .cat-left .cat-icon {
+            color: #2563eb;
           }
 
-          .category-count {
-            background: color-mix(
-              in srgb,
-              var(--color-primary) 20%,
-              transparent
-            );
-            color: var(--color-primary);
-          }
-        }
-      }
-
-      .category-group {
-        margin-top: 14px;
-
-        .category-heading {
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          padding: 3px 6px 6px;
-          color: var(--color-text-soft);
-          font-size: 11px;
-          font-family: var(--font-family-mono, monospace);
-          text-transform: uppercase;
-          letter-spacing: 0.8px;
-
-          .group-prefix {
-            color: var(--color-primary);
-            opacity: 0.7;
+          .category-badge {
+            background: #dbeafe;
+            color: #1d4ed8;
+            font-weight: 600;
           }
         }
       }
     }
 
-    // --- Main Right Content Area ---
+    /* 右侧展示区 */
     .library-main {
       display: flex;
       flex-direction: column;
       flex: 1;
       min-width: 0;
       min-height: 0;
+      background: var(--color-panel);
 
       .gallery-heading {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 0 0 12px;
+        padding: 12px 18px 10px;
+        border-bottom: 1px solid var(--color-line);
         flex: none;
 
         .heading-left {
@@ -1257,30 +1431,27 @@ onBeforeUnmount(() => {
           gap: 10px;
 
           .heading-title {
-            font-size: var(--font-size-lg);
+            font-size: 14.5px;
             font-weight: 700;
             color: var(--color-text);
           }
 
-          .result-count-badge {
+          .match-count-pill {
             display: inline-flex;
             align-items: center;
             gap: 6px;
             padding: 2px 8px;
-            border-radius: 12px;
+            border-radius: 9999px;
             background: var(--color-panel-soft);
             border: 1px solid var(--color-line);
-            font-size: var(--font-size-xs);
-            font-family: var(--font-family-mono, monospace);
+            font-size: 11.5px;
             color: var(--color-text-muted);
 
-            .live-dot {
+            .dot-indicator {
               width: 6px;
               height: 6px;
               border-radius: 50%;
-              background: var(--color-primary);
-              box-shadow: 0 0 5px var(--color-primary);
-              animation: tech-pulse 2s infinite ease-in-out;
+              background: #2563eb;
             }
           }
         }
@@ -1288,42 +1459,49 @@ onBeforeUnmount(() => {
         .heading-right {
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 8px;
 
           .loading-label {
             display: inline-flex;
             align-items: center;
-            gap: 5px;
-            color: var(--color-primary);
-            font-size: var(--font-size-xs);
-            font-family: var(--font-family-mono, monospace);
+            gap: 4px;
+            color: #2563eb;
+            font-size: 11.5px;
           }
 
           .page-quick-tag {
-            font-family: var(--font-family-mono, monospace);
-            font-size: var(--font-size-xs);
-            color: var(--color-text-soft);
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            font-family:
+              ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            color: var(--color-text-muted);
             background: var(--color-panel-soft);
             padding: 2px 8px;
-            border-radius: 4px;
+            border-radius: 5px;
             border: 1px solid var(--color-line);
+
+            .tag-file-icon {
+              color: var(--color-text-soft);
+            }
           }
         }
       }
 
-      // --- Prompt Cards Gallery (Scrollable) ---
+      /* 图库卡片列表滚动容器 */
       .prompt-gallery-scroll {
         flex: 1;
         min-height: 0;
         overflow-y: auto;
-        padding-right: 6px;
+        padding: 14px 18px;
         position: relative;
 
         &::-webkit-scrollbar {
-          width: 6px;
+          width: 5px;
         }
         &::-webkit-scrollbar-thumb {
-          background: var(--color-line-strong);
+          background: var(--color-line);
           border-radius: 3px;
         }
 
@@ -1332,17 +1510,16 @@ onBeforeUnmount(() => {
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          gap: 12px;
+          gap: 10px;
           height: 100%;
-          min-height: 320px;
+          min-height: 240px;
           color: var(--color-text-muted);
 
-          .empty-icon-wrapper {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 64px;
-            height: 64px;
+          .empty-icon-box {
+            display: grid;
+            width: 52px;
+            height: 52px;
+            place-items: center;
             border-radius: 50%;
             background: var(--color-panel-soft);
             border: 1px solid var(--color-line);
@@ -1350,190 +1527,121 @@ onBeforeUnmount(() => {
           }
 
           .empty-title {
-            font-size: var(--font-size-base);
+            font-size: 14px;
             font-weight: 600;
             color: var(--color-text);
           }
 
           .empty-hint {
-            color: var(--color-text-soft);
-            font-size: var(--font-size-sm);
+            color: var(--color-text-muted);
+            font-size: 12px;
           }
 
           .empty-reset-button {
-            margin-top: 6px;
-            padding: 6px 14px;
+            margin-top: 4px;
+            padding: 5px 12px;
             border: 1px solid var(--color-line);
             border-radius: 6px;
             background: var(--color-panel);
-            color: var(--color-primary);
-            font-size: var(--font-size-sm);
+            color: #2563eb;
+            font-size: 12px;
             cursor: pointer;
             transition: all 0.15s ease;
 
             &:hover {
-              border-color: var(--color-primary);
-              background: var(--color-primary-soft);
+              border-color: #2563eb;
+              background: #eff6ff;
             }
           }
         }
 
+        /* 双列网格 (精准贴合截图比例) */
         .prompt-gallery {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+          grid-template-columns: repeat(2, minmax(0, 1fr));
           gap: 14px;
-          padding-bottom: 8px;
+
+          @media (max-width: 680px) {
+            grid-template-columns: 1fr;
+          }
 
           .prompt-card {
             display: flex;
             flex-direction: column;
             border: 1px solid var(--color-line);
-            border-radius: 9px;
+            border-radius: 12px;
             background: var(--color-panel);
-            color: var(--color-text);
-            text-align: left;
-            cursor: pointer;
             overflow: hidden;
-            position: relative;
-            transition:
-              transform 0.2s ease,
-              border-color 0.2s ease,
-              box-shadow 0.2s ease;
-
-            &::before {
-              content: "";
-              position: absolute;
-              top: 0;
-              left: 0;
-              right: 0;
-              height: 2px;
-              background: linear-gradient(
-                90deg,
-                transparent,
-                var(--color-primary),
-                transparent
-              );
-              opacity: 0;
-              transition: opacity 0.25s ease;
-              z-index: 2;
-            }
+            cursor: pointer;
+            transition: all 0.2s ease;
 
             &:hover {
-              transform: translateY(-3px);
-              border-color: color-mix(
-                in srgb,
-                var(--color-primary) 70%,
-                var(--color-line)
-              );
-              box-shadow:
-                0 10px 24px -4px rgba(0, 0, 0, 0.18),
-                0 0 0 1px
-                  color-mix(in srgb, var(--color-primary) 28%, transparent);
-
-              &::before {
-                opacity: 1;
-              }
-
-              .card-image .card-hover-overlay {
-                opacity: 1;
-              }
+              border-color: #bfdbfe;
+              box-shadow: 0 6px 18px rgba(37, 99, 235, 0.08);
+              transform: translateY(-2px);
             }
 
-            &:focus-visible {
-              outline: 2px solid var(--color-primary);
-              outline-offset: 1px;
-            }
-
-            .card-image {
+            .card-image-box {
               position: relative;
               width: 100%;
-              height: 156px;
-              background: var(--color-panel-soft);
+              height: 160px;
+              background: #f1f5f9;
               overflow: hidden;
 
-              .preview-image {
+              .preview-img {
                 width: 100%;
                 height: 100%;
                 display: block;
-                transition: transform 0.3s ease;
               }
 
-              .image-overlay-gradient {
-                position: absolute;
-                inset: 0;
-                background: linear-gradient(
-                  180deg,
-                  rgba(0, 0, 0, 0.05) 0%,
-                  rgba(0, 0, 0, 0.45) 100%
-                );
-                pointer-events: none;
+              .card-placeholder-box {
+                width: 100%;
+                height: 100%;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                gap: 6px;
+                background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+                color: #94a3b8;
+
+                &.error-box {
+                  .placeholder-text {
+                    font-size: 11px;
+                    color: #94a3b8;
+                  }
+                }
               }
 
-              .badge-row {
+              .card-badge-tag {
                 position: absolute;
                 bottom: 8px;
                 left: 8px;
-                display: flex;
-                align-items: center;
-                gap: 6px;
                 z-index: 1;
 
-                .mode-badge {
+                .mode-pill {
                   display: inline-flex;
                   align-items: center;
                   gap: 5px;
-                  padding: 3px 8px;
-                  border-radius: 4px;
-                  background: rgba(15, 23, 42, 0.78);
-                  backdrop-filter: blur(8px);
-                  border: 1px solid rgba(255, 255, 255, 0.16);
+                  padding: 2px 8px;
+                  border-radius: 6px;
+                  background: rgba(15, 23, 42, 0.72);
+                  backdrop-filter: blur(4px);
                   color: #ffffff;
                   font-size: 11px;
                   font-weight: 500;
-                  line-height: 1;
+                  line-height: 1.3;
 
                   .badge-dot {
                     width: 5px;
                     height: 5px;
                     border-radius: 50%;
-                    background: #06b6d4;
-                    box-shadow: 0 0 5px #06b6d4;
+                    background: #3b82f6;
                   }
 
-                  &.mode-edit .badge-dot {
+                  &.mode-pill-edit .badge-dot {
                     background: #f59e0b;
-                    box-shadow: 0 0 5px #f59e0b;
                   }
-                }
-              }
-
-              .card-hover-overlay {
-                position: absolute;
-                inset: 0;
-                background: color-mix(
-                  in srgb,
-                  var(--color-primary) 20%,
-                  rgba(0, 0, 0, 0.38)
-                );
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                opacity: 0;
-                transition: opacity 0.2s ease;
-                z-index: 2;
-
-                .hover-inspect-btn {
-                  display: inline-flex;
-                  align-items: center;
-                  gap: 5px;
-                  padding: 6px 12px;
-                  border-radius: 20px;
-                  background: rgba(15, 23, 42, 0.88);
-                  border: 1px solid rgba(255, 255, 255, 0.3);
-                  color: #ffffff;
-                  font-size: var(--font-size-xs);
-                  font-weight: 600;
-                  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
                 }
               }
             }
@@ -1541,54 +1649,43 @@ onBeforeUnmount(() => {
             .card-content {
               display: flex;
               flex-direction: column;
-              gap: 8px;
-              padding: 12px;
+              gap: 6px;
+              padding: 12px 14px 14px;
               background: var(--color-panel);
 
-              .card-title-row {
-                .card-title {
-                  display: -webkit-box;
-                  -webkit-line-clamp: 2;
-                  line-clamp: 2;
-                  -webkit-box-orient: vertical;
-                  overflow: hidden;
-                  min-height: 2.8em;
-                  line-height: 1.45;
-                  font-size: var(--font-size-sm);
-                  font-weight: 600;
-                  color: var(--color-text);
-                }
+              .card-title {
+                margin: 0;
+                font-size: 13.5px;
+                font-weight: 700;
+                color: var(--color-text);
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                line-height: 1.4;
               }
 
               .card-footer-row {
                 display: flex;
                 align-items: center;
-                justify-content: space-between;
-                gap: 6px;
+                gap: 5px;
+                color: var(--color-text-muted);
+                font-size: 11.5px;
 
-                .card-category-pill {
+                .tag-icon {
                   color: var(--color-text-soft);
-                  font-size: 11px;
+                  flex-shrink: 0;
+                }
+
+                .card-tag-name {
                   overflow: hidden;
                   text-overflow: ellipsis;
                   white-space: nowrap;
-                  font-family: var(--font-family-mono, monospace);
-                }
-
-                .more-tags-indicator {
-                  color: var(--color-text-soft);
-                  font-size: 10px;
-                  font-family: var(--font-family-mono, monospace);
-                  padding: 1px 4px;
-                  border-radius: 3px;
-                  background: var(--color-panel-soft);
                 }
               }
             }
           }
         }
 
-        // --- Back to Top Button ---
         .floating-back-to-top {
           position: sticky;
           bottom: 12px;
@@ -1596,19 +1693,14 @@ onBeforeUnmount(() => {
           margin-right: 12px;
           display: inline-flex;
           align-items: center;
-          gap: 5px;
-          padding: 6px 12px;
+          gap: 4px;
+          padding: 5px 10px;
           border-radius: 20px;
-          border: 1px solid
-            color-mix(in srgb, var(--color-primary) 50%, var(--color-line));
-          background: color-mix(
-            in srgb,
-            var(--color-panel) 90%,
-            var(--color-primary-soft)
-          );
-          color: var(--color-primary);
-          box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
-          font-size: var(--font-size-xs);
+          border: 1px solid #bfdbfe;
+          background: #eff6ff;
+          color: #2563eb;
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+          font-size: 11.5px;
           font-weight: 600;
           cursor: pointer;
           transition: all 0.18s ease;
@@ -1616,42 +1708,61 @@ onBeforeUnmount(() => {
 
           &:hover {
             transform: translateY(-2px);
-            background: var(--color-primary);
+            background: #2563eb;
             color: #ffffff;
-            border-color: var(--color-primary);
+            border-color: #2563eb;
           }
         }
       }
 
-      // --- Pagination Footer ---
+      /* 底部页脚：开源标注 + 翻页控件 */
       .gallery-footer {
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding-top: 12px;
+        padding: 10px 18px;
         border-top: 1px solid var(--color-line);
+        background: var(--color-panel);
         flex: none;
 
-        .footer-hint {
-          display: inline-flex;
+        .footer-left {
+          display: flex;
           align-items: center;
-          gap: 5px;
-          color: var(--color-text-soft);
-          font-size: var(--font-size-xs);
+          gap: 6px;
+          font-size: 11.5px;
+          color: var(--color-text-muted);
+
+          .footer-book-icon {
+            color: var(--color-text-muted);
+            flex-shrink: 0;
+          }
+
+          .footer-source-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            color: var(--color-text-muted);
+            text-decoration: none;
+            transition: color 0.15s;
+
+            &:hover {
+              color: #2563eb;
+              text-decoration: underline;
+            }
+          }
         }
 
-        .pagination-controls {
+        .footer-right {
           display: flex;
           align-items: center;
           gap: 6px;
 
-          .page-nav-button {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 32px;
-            height: 32px;
+          .page-nav-btn {
+            display: grid;
+            place-items: center;
+            width: 28px;
+            height: 28px;
             border: 1px solid var(--color-line);
             border-radius: 6px;
             background: var(--color-panel);
@@ -1660,9 +1771,9 @@ onBeforeUnmount(() => {
             transition: all 0.15s ease;
 
             &:hover:not(:disabled) {
-              border-color: var(--color-primary);
-              color: var(--color-primary);
-              background: var(--color-primary-soft);
+              border-color: #2563eb;
+              color: #2563eb;
+              background: #eff6ff;
             }
 
             &:disabled {
@@ -1671,63 +1782,63 @@ onBeforeUnmount(() => {
             }
           }
 
-          .page-indicator {
+          .page-indicator-box {
             display: inline-flex;
             align-items: center;
             gap: 4px;
             padding: 0 10px;
-            height: 32px;
+            height: 28px;
             border: 1px solid var(--color-line);
             border-radius: 6px;
             background: var(--color-panel-soft);
-            font-family: var(--font-family-mono, monospace);
-            font-size: var(--font-size-xs);
+            font-family:
+              ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11.5px;
 
-            .current-page {
-              color: var(--color-primary);
+            .curr-page {
+              color: #2563eb;
               font-weight: 700;
             }
 
-            .page-separator {
+            .sep {
               color: var(--color-text-soft);
-              opacity: 0.6;
             }
 
-            .total-pages {
+            .total-page {
               color: var(--color-text-muted);
             }
           }
         }
       }
 
-      // --- Detail View ---
+      /* 详情页模式 */
       .detail-heading {
         display: flex;
         align-items: center;
-        gap: 14px;
-        padding: 0 0 14px;
+        gap: 12px;
+        padding: 12px 18px;
         border-bottom: 1px solid var(--color-line);
         flex: none;
 
         .back-button {
           display: inline-flex;
           align-items: center;
-          gap: 6px;
-          padding: 6px 12px;
+          gap: 5px;
+          padding: 5px 11px;
           border: 1px solid var(--color-line);
           border-radius: 6px;
           background: var(--color-panel-soft);
           color: var(--color-text);
-          font-size: var(--font-size-xs);
-          font-weight: 600;
+          font-size: 12px;
+          font-weight: 500;
           cursor: pointer;
           transition: all 0.15s ease;
-          flex: none;
+          flex-shrink: 0;
 
           &:hover {
-            border-color: var(--color-primary);
-            color: var(--color-primary);
-            background: var(--color-primary-soft);
+            border-color: #2563eb;
+            color: #2563eb;
+            background: #eff6ff;
           }
         }
 
@@ -1738,21 +1849,20 @@ onBeforeUnmount(() => {
           min-width: 0;
 
           .detail-category-badge {
-            padding: 2px 8px;
+            padding: 2px 7px;
             border-radius: 4px;
             background: var(--color-panel-soft);
             border: 1px solid var(--color-line);
             color: var(--color-text-muted);
             font-size: 11px;
-            font-family: var(--font-family-mono, monospace);
-            flex: none;
+            flex-shrink: 0;
           }
 
           .detail-title {
             overflow: hidden;
             white-space: nowrap;
             text-overflow: ellipsis;
-            font-size: var(--font-size-base);
+            font-size: 14px;
             font-weight: 700;
             color: var(--color-text);
           }
@@ -1762,30 +1872,22 @@ onBeforeUnmount(() => {
       .prompt-detail {
         display: flex;
         flex: 1;
-        gap: 20px;
+        gap: 18px;
         min-height: 0;
         overflow-y: auto;
-        padding-top: 14px;
-
-        &::-webkit-scrollbar {
-          width: 5px;
-        }
-        &::-webkit-scrollbar-thumb {
-          background: var(--color-line);
-          border-radius: 2px;
-        }
+        padding: 16px 18px;
 
         .detail-visual {
           display: flex;
           flex-direction: column;
-          width: 42%;
-          gap: 14px;
-          flex: none;
+          width: 40%;
+          gap: 12px;
+          flex-shrink: 0;
 
           .detail-image-wrapper {
             position: relative;
             width: 100%;
-            height: 300px;
+            height: 260px;
             background: var(--color-panel-soft);
             border: 1px solid var(--color-line);
             border-radius: 8px;
@@ -1796,40 +1898,6 @@ onBeforeUnmount(() => {
               height: 100%;
               display: block;
             }
-
-            .corner-bracket {
-              position: absolute;
-              width: 8px;
-              height: 8px;
-              border-color: var(--color-primary);
-              pointer-events: none;
-              opacity: 0.8;
-
-              &.top-left {
-                top: 4px;
-                left: 4px;
-                border-top: 2px solid;
-                border-left: 2px solid;
-              }
-              &.top-right {
-                top: 4px;
-                right: 4px;
-                border-top: 2px solid;
-                border-right: 2px solid;
-              }
-              &.bottom-left {
-                bottom: 4px;
-                left: 4px;
-                border-bottom: 2px solid;
-                border-left: 2px solid;
-              }
-              &.bottom-right {
-                bottom: 4px;
-                right: 4px;
-                border-bottom: 2px solid;
-                border-right: 2px solid;
-              }
-            }
           }
 
           .detail-tags-box {
@@ -1839,8 +1907,8 @@ onBeforeUnmount(() => {
 
             .tags-header {
               font-size: 11px;
-              font-family: var(--font-family-mono, monospace);
-              color: var(--color-text-soft);
+              color: var(--color-text-muted);
+              font-weight: 500;
             }
 
             .detail-tags {
@@ -1849,13 +1917,12 @@ onBeforeUnmount(() => {
               gap: 6px;
 
               .category-tag {
-                padding: 3px 8px;
+                padding: 2px 7px;
                 background: var(--color-panel-soft);
                 border: 1px solid var(--color-line);
                 color: var(--color-text-muted);
                 border-radius: 4px;
-                font-size: var(--font-size-xs);
-                font-family: var(--font-family-mono, monospace);
+                font-size: 11px;
               }
             }
           }
@@ -1863,20 +1930,20 @@ onBeforeUnmount(() => {
           .source-link-button {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
+            gap: 5px;
             align-self: flex-start;
             padding: 4px 8px;
             border: 1px solid var(--color-line);
             border-radius: 5px;
             background: transparent;
-            color: var(--color-primary);
-            font-size: var(--font-size-xs);
+            color: #2563eb;
+            font-size: 11.5px;
             cursor: pointer;
             transition: all 0.15s ease;
 
             &:hover {
-              background: var(--color-primary-soft);
-              border-color: var(--color-primary);
+              background: #eff6ff;
+              border-color: #bfdbfe;
             }
           }
         }
@@ -1886,13 +1953,13 @@ onBeforeUnmount(() => {
           flex: 1;
           min-width: 0;
           flex-direction: column;
-          gap: 12px;
+          gap: 10px;
 
           .console-box {
             display: flex;
             flex-direction: column;
             flex: 1;
-            min-height: 220px;
+            min-height: 200px;
             border: 1px solid var(--color-line);
             border-radius: 8px;
             overflow: hidden;
@@ -1903,24 +1970,19 @@ onBeforeUnmount(() => {
               justify-content: space-between;
               align-items: center;
               padding: 8px 12px;
-              background: color-mix(
-                in srgb,
-                var(--color-panel) 85%,
-                var(--color-line)
-              );
+              background: var(--color-panel);
               border-bottom: 1px solid var(--color-line);
 
               .console-title {
                 display: flex;
                 align-items: center;
                 gap: 6px;
-                color: var(--color-text-muted);
-                font-family: var(--font-family-mono, monospace);
-                font-size: var(--font-size-xs);
+                color: var(--color-text);
+                font-size: 12px;
                 font-weight: 600;
 
                 .console-icon {
-                  color: var(--color-primary);
+                  color: #2563eb;
                 }
               }
 
@@ -1936,22 +1998,18 @@ onBeforeUnmount(() => {
 
                   .lang-label {
                     font-size: 11px;
-                    color: var(--color-text-soft);
+                    color: var(--color-text-muted);
                   }
 
                   .language-select {
                     padding: 2px 6px;
                     border: 1px solid var(--color-line);
                     border-radius: 4px;
-                    background: var(--color-panel);
+                    background: var(--color-panel-soft);
                     color: var(--color-text);
-                    font-size: var(--font-size-xs);
+                    font-size: 11px;
                     outline: none;
                     cursor: pointer;
-
-                    &:focus {
-                      border-color: var(--color-primary);
-                    }
                   }
                 }
 
@@ -1962,21 +2020,21 @@ onBeforeUnmount(() => {
                   padding: 3px 8px;
                   border: 1px solid var(--color-line);
                   border-radius: 4px;
-                  background: var(--color-panel);
+                  background: var(--color-panel-soft);
                   color: var(--color-text);
-                  font-size: var(--font-size-xs);
+                  font-size: 11px;
                   cursor: pointer;
                   transition: all 0.15s ease;
 
                   &:hover {
-                    border-color: var(--color-primary);
-                    color: var(--color-primary);
+                    border-color: #2563eb;
+                    color: #2563eb;
                   }
 
                   &.copied {
                     border-color: #10b981;
                     color: #10b981;
-                    background: color-mix(in srgb, #10b981 12%, transparent);
+                    background: rgba(16, 185, 129, 0.1);
                   }
                 }
               }
@@ -1990,23 +2048,25 @@ onBeforeUnmount(() => {
 
               .prompt-text {
                 flex: 1;
-                min-height: 160px;
+                min-height: 140px;
                 resize: none;
-                padding: 12px;
+                padding: 10px 12px;
                 border: 0;
                 outline: none;
                 background: transparent;
                 color: var(--color-text);
                 font-family: inherit;
-                font-size: var(--font-size-sm);
-                line-height: 1.65;
+                font-size: 12.5px;
+                line-height: 1.6;
               }
 
               .prompt-metrics-bar {
                 display: flex;
                 justify-content: flex-end;
-                padding: 4px 10px 8px;
-                font-family: var(--font-family-mono, monospace);
+                padding: 4px 10px 6px;
+                font-family:
+                  ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                  monospace;
                 font-size: 11px;
                 color: var(--color-text-soft);
 
@@ -2021,32 +2081,28 @@ onBeforeUnmount(() => {
           .tech-hint-card {
             display: flex;
             align-items: flex-start;
-            gap: 8px;
-            padding: 8px 12px;
+            gap: 7px;
+            padding: 7px 10px;
             border-radius: 6px;
-            background: color-mix(
-              in srgb,
-              var(--color-primary-soft) 70%,
-              transparent
-            );
-            border: 1px solid
-              color-mix(in srgb, var(--color-primary) 30%, transparent);
-            color: var(--color-text-muted);
-            font-size: var(--font-size-xs);
-            line-height: 1.5;
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #1e40af;
+            font-size: 11.5px;
+            line-height: 1.4;
 
             .hint-icon {
-              color: var(--color-primary);
-              flex: none;
+              color: #2563eb;
+              flex-shrink: 0;
               margin-top: 1px;
             }
 
             &.edit-hint-card {
-              background: color-mix(in srgb, #f59e0b 8%, var(--color-panel));
-              border-color: color-mix(in srgb, #f59e0b 28%, transparent);
+              background: #fffbeb;
+              border-color: #fde68a;
+              color: #b45309;
 
               .hint-icon {
-                color: #f59e0b;
+                color: #d97706;
               }
             }
           }
@@ -2056,16 +2112,16 @@ onBeforeUnmount(() => {
             align-items: center;
             justify-content: space-between;
             gap: 8px;
-            padding: 8px 12px;
+            padding: 7px 10px;
             border: 1px solid var(--color-line);
             border-radius: 6px;
-            background: var(--color-panel);
+            background: var(--color-panel-soft);
 
             .meta-strip-item {
               display: flex;
               align-items: center;
               gap: 6px;
-              font-size: var(--font-size-xs);
+              font-size: 11.5px;
               color: var(--color-text-muted);
 
               .meta-strip-label {
@@ -2073,7 +2129,9 @@ onBeforeUnmount(() => {
               }
 
               .meta-strip-value {
-                font-family: var(--font-family-mono, monospace);
+                font-family:
+                  ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+                  monospace;
                 font-weight: 600;
                 color: var(--color-text);
               }
@@ -2083,44 +2141,35 @@ onBeforeUnmount(() => {
           .detail-error {
             margin: 0;
             color: var(--color-danger);
-            font-size: var(--font-size-xs);
+            font-size: 11.5px;
           }
 
           .detail-action-bar {
-            margin-top: 4px;
+            margin-top: 2px;
 
             .use-button {
               display: flex;
               align-items: center;
               justify-content: center;
-              gap: 8px;
+              gap: 7px;
               width: 100%;
-              height: 40px;
+              height: 38px;
               border: 0;
               border-radius: 8px;
-              background: linear-gradient(
-                135deg,
-                var(--color-primary) 0%,
-                color-mix(in srgb, var(--color-primary) 80%, #000) 100%
-              );
-              box-shadow: 0 4px 14px
-                color-mix(in srgb, var(--color-primary) 35%, transparent);
+              background: #2563eb;
               color: #ffffff;
               font-weight: 600;
-              font-size: var(--font-size-sm);
+              font-size: 13px;
               cursor: pointer;
               transition: all 0.2s ease;
 
               &:hover:not(:disabled) {
-                transform: translateY(-1px);
-                box-shadow: 0 6px 18px
-                  color-mix(in srgb, var(--color-primary) 45%, transparent);
+                background: #1d4ed8;
               }
 
               &:disabled {
                 opacity: 0.5;
                 cursor: not-allowed;
-                box-shadow: none;
               }
             }
           }
@@ -2129,71 +2178,140 @@ onBeforeUnmount(() => {
     }
   }
 
-  // --- Image Placeholder ---
+  /* 图片加载占位 */
   .image-placeholder {
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: 6px;
     width: 100%;
     height: 100%;
     color: var(--color-text-soft);
-    font-size: var(--font-size-xs);
-
-    &.error-placeholder {
-      opacity: 0.75;
-    }
+    font-size: 11px;
   }
 
-  // --- Attribution Footer ---
-  .library-attribution {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 1px solid var(--color-line);
-    color: var(--color-text-soft);
-    font-size: var(--font-size-xs);
-
-    .attribution-label {
-      font-family: var(--font-family-mono, monospace);
+  /* 暗色模式适配 */
+  :global(:root[data-theme="dark"]),
+  .tools-view--dark & {
+    :deep(.base-modal__panel) {
+      box-shadow:
+        0 20px 50px rgba(0, 0, 0, 0.5),
+        0 0 0 1px rgba(255, 255, 255, 0.08);
     }
 
-    .attribution-link {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      color: var(--color-primary);
-      text-decoration: none;
-      font-weight: 500;
+    .library-modal-header {
+      .header-left .header-icon-box {
+        background: rgba(37, 99, 235, 0.16);
+        color: #60a5fa;
+      }
+    }
 
-      &:hover {
-        text-decoration: underline;
+    .library-toolbar .library-meta-actions {
+      .meta-pill {
+        background: var(--color-panel-soft);
+        border-color: var(--color-line);
+
+        &.filename-pill .pill-icon {
+          color: #60a5fa;
+        }
+      }
+
+      .import-json-btn {
+        background: rgba(37, 99, 235, 0.16);
+        border-color: rgba(96, 165, 250, 0.35);
+        color: #60a5fa;
+
+        &:hover:not(:disabled) {
+          background: rgba(37, 99, 235, 0.24);
+          border-color: #60a5fa;
+        }
+      }
+    }
+
+    .library-body {
+      .category-sidebar .category-item-btn {
+        &:hover {
+          background: rgba(255, 255, 255, 0.05);
+          border-color: rgba(255, 255, 255, 0.1);
+        }
+
+        &.active {
+          background: rgba(37, 99, 235, 0.16);
+          border-color: rgba(96, 165, 250, 0.35);
+          color: #60a5fa;
+
+          .cat-left .cat-icon {
+            color: #60a5fa;
+          }
+
+          .category-badge {
+            background: rgba(37, 99, 235, 0.25);
+            color: #93c5fd;
+          }
+        }
+      }
+
+      .library-main {
+        .gallery-heading .heading-left .match-count-pill .dot-indicator {
+          background: #60a5fa;
+        }
+
+        .prompt-gallery-scroll .prompt-gallery .prompt-card {
+          &:hover {
+            border-color: rgba(96, 165, 250, 0.4);
+            box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+          }
+
+          .card-image-box {
+            background: rgba(15, 23, 42, 0.6);
+
+            .card-placeholder-box {
+              background: rgba(30, 41, 59, 0.7);
+              color: #64748b;
+            }
+          }
+        }
+
+        .gallery-footer {
+          .footer-right .page-indicator-box .curr-page {
+            color: #60a5fa;
+          }
+
+          .footer-left .footer-source-link:hover {
+            color: #60a5fa;
+          }
+        }
+
+        .prompt-detail .detail-editor {
+          .tech-hint-card {
+            background: rgba(37, 99, 235, 0.14);
+            border-color: rgba(96, 165, 250, 0.3);
+            color: #93c5fd;
+
+            .hint-icon {
+              color: #60a5fa;
+            }
+
+            &.edit-hint-card {
+              background: rgba(245, 158, 11, 0.14);
+              border-color: rgba(245, 158, 11, 0.3);
+              color: #fbbf24;
+
+              .hint-icon {
+                color: #f59e0b;
+              }
+            }
+          }
+        }
       }
     }
   }
 }
 
-// --- Keyframes ---
-@keyframes tech-spin {
+@keyframes library-spin {
   to {
     transform: rotate(360deg);
-  }
-}
-
-@keyframes tech-pulse {
-  0%,
-  100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.4;
-    transform: scale(0.85);
   }
 }
 </style>

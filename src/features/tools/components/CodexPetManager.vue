@@ -1,12 +1,17 @@
 <template>
   <section class="codex-pet-manager">
+    <!-- 顶部主标题栏 -->
     <header class="codex-pet-manager-head">
-      <div class="codex-pet-manager-title">
-        <p class="codex-pet-manager-mark">Codex Pets</p>
-        <h2 class="codex-pet-manager-title-text">宠物管理</h2>
-        <span class="codex-pet-manager-title-desc">
-          {{ pets.length }} 只宠物，已启用 {{ enabledCount }} 只
-        </span>
+      <div class="codex-pet-manager-head-left">
+        <div class="codex-pet-manager-badge">
+          <PawPrint :size="22" :stroke-width="2.1" />
+        </div>
+        <div class="codex-pet-manager-title-group">
+          <h2 class="codex-pet-manager-title-text">宠物管理</h2>
+          <span class="codex-pet-manager-title-desc">
+            {{ pets.length }} 只宠物，已启用 {{ enabledCount }} 只
+          </span>
+        </div>
       </div>
       <div class="codex-pet-manager-head-actions">
         <button
@@ -30,102 +35,169 @@
       </div>
     </header>
 
+    <!-- 路径卡片区域（2列网格） -->
     <section class="codex-pet-manager-paths">
-      <button
-        class="codex-pet-manager-path"
-        type="button"
-        :disabled="!disabledPetsPath"
+      <div
+        class="codex-pet-path-card"
+        role="button"
+        tabindex="0"
+        title="点击打开目录"
         @click="openPath(disabledPetsPath)"
+        @keydown.enter.self="openPath(disabledPetsPath)"
       >
-        <span class="codex-pet-manager-path-label">已禁用</span>
-        <span class="codex-pet-manager-path-value">{{ disabledPetsPath }}</span>
-      </button>
-      <button
-        class="codex-pet-manager-path"
-        type="button"
-        :disabled="!codexPetsPath"
+        <div class="codex-pet-path-icon-box">
+          <Folder :size="18" :stroke-width="1.8" />
+        </div>
+        <div class="codex-pet-path-info">
+          <span class="codex-pet-path-label">已禁用宠物文件夹</span>
+          <span class="codex-pet-path-value" :title="disabledPetsPath">
+            {{ disabledPetsPath || "未设置" }}
+          </span>
+        </div>
+        <button
+          class="codex-pet-path-copy-btn"
+          type="button"
+          title="复制路径"
+          aria-label="复制已禁用宠物文件夹路径"
+          @click.stop="copyPath(disabledPetsPath, '已禁用宠物文件夹路径')"
+        >
+          <Copy :size="13" />
+        </button>
+      </div>
+
+      <div
+        class="codex-pet-path-card"
+        role="button"
+        tabindex="0"
+        title="点击打开目录"
         @click="openPath(codexPetsPath)"
+        @keydown.enter.self="openPath(codexPetsPath)"
       >
-        <span class="codex-pet-manager-path-label">Codex</span>
-        <span class="codex-pet-manager-path-value">{{ codexPetsPath }}</span>
-      </button>
+        <div class="codex-pet-path-icon-box">
+          <Folder :size="18" :stroke-width="1.8" />
+        </div>
+        <div class="codex-pet-path-info">
+          <span class="codex-pet-path-label">Codex 宠物文件夹</span>
+          <span class="codex-pet-path-value" :title="codexPetsPath">
+            {{ codexPetsPath || "未设置" }}
+          </span>
+        </div>
+        <button
+          class="codex-pet-path-copy-btn"
+          type="button"
+          title="复制路径"
+          aria-label="复制 Codex 宠物文件夹路径"
+          @click.stop="copyPath(codexPetsPath, 'Codex 宠物文件夹路径')"
+        >
+          <Copy :size="13" />
+        </button>
+      </div>
     </section>
 
+    <!-- 加载与空状态 -->
     <section v-if="loading" class="codex-pet-manager-state">
-      正在读取 Codex 宠物...
+      <RefreshCw class="spinning" :size="24" />
+      <span>正在读取 Codex 宠物...</span>
     </section>
     <section v-else-if="!pets.length" class="codex-pet-manager-empty">
-      <PawPrint :size="26" />
-      <span data-emphasis class="codex-pet-manager-empty-title">暂无可管理宠物</span>
+      <div class="codex-empty-icon-box">
+        <PawPrint :size="32" />
+      </div>
+      <span class="codex-pet-manager-empty-title">暂无可管理宠物</span>
       <span class="codex-pet-manager-empty-desc">
-        在 Codex pets 目录中放入包含 pet.json 和 spritesheet.webp 的宠物目录后，刷新即可显示。
+        在 Codex pets 目录中放入包含 pet.json 和 spritesheet.webp
+        的宠物目录后，刷新即可显示。
       </span>
     </section>
-    <section v-else class="codex-pet-manager-list">
+
+    <!-- 宠物卡片双列网格 -->
+    <section v-else class="codex-pet-manager-grid">
       <article
         v-for="pet in pets"
         :key="pet.id"
-        :class="['codex-pet-manager-item', { disabled: !pet.enabled }]"
-        role="button"
-        tabindex="0"
-        @click="openPreview(pet)"
-        @keydown.enter.self="openPreview(pet)"
-        @keydown.space.prevent.self="openPreview(pet)"
+        class="codex-pet-card"
+        :class="{ 'is-enabled': pet.enabled }"
       >
-        <div
-          class="codex-pet-manager-preview"
-          :style="{ backgroundImage: `url('${pet.spritesheetData}')` }"
-          role="img"
-          :aria-label="`${pet.displayName || pet.id} 动画预览`"
-        ></div>
-        <div class="codex-pet-manager-item-main">
-          <div class="codex-pet-manager-item-title-row">
-            <span data-emphasis class="codex-pet-manager-item-name" :title="pet.displayName || pet.id">
-              {{ pet.displayName || pet.id }}
-            </span>
-            <span :class="['codex-pet-manager-status', { disabled: !pet.enabled }]">
-              {{ pet.enabled ? '已启用' : '已禁用' }}
-            </span>
+        <div class="codex-pet-card-body">
+          <!-- 左侧精灵预览图 -->
+          <div
+            class="codex-pet-preview"
+            :class="{ disabled: !pet.enabled }"
+            :style="{ backgroundImage: `url('${pet.spritesheetData}')` }"
+            role="button"
+            tabindex="0"
+            title="点击查看精灵动画图谱"
+            :aria-label="`${pet.displayName || pet.id} 动画预览`"
+            @click="openPreview(pet)"
+            @keydown.enter.self="openPreview(pet)"
+          ></div>
+
+          <!-- 右侧信息 -->
+          <div class="codex-pet-info">
+            <div class="codex-pet-header-row">
+              <span class="codex-pet-name" :title="pet.displayName || pet.id">
+                {{ pet.displayName || pet.id }}
+              </span>
+              <span
+                class="codex-pet-status-pill"
+                :class="{ 'is-enabled': pet.enabled }"
+              >
+                <span class="status-dot"></span>
+                <span>{{ pet.enabled ? "已启用" : "已禁用" }}</span>
+              </span>
+            </div>
+
+            <span class="codex-pet-id">{{ pet.id }}</span>
+
+            <p class="codex-pet-desc" :title="pet.description">
+              {{ pet.description || "暂无描述信息。" }}
+            </p>
+
+            <div class="codex-pet-shape-tag">
+              <ImageIcon :size="12" />
+              <span>{{ pet.shape || "8×9 动画精灵" }}</span>
+            </div>
           </div>
-          <span class="codex-pet-manager-item-id">{{ pet.id }}</span>
-          <p v-if="pet.description" class="codex-pet-manager-item-desc">
-            {{ pet.description }}
-          </p>
-          <span class="codex-pet-manager-shape">{{ pet.shape }}</span>
         </div>
-        <div class="codex-pet-manager-item-actions">
+
+        <!-- 底部三个操作按钮 -->
+        <div class="codex-pet-card-actions">
           <button
-            class="codex-pet-manager-icon-button"
+            class="codex-pet-action-btn"
             type="button"
             title="修改名称"
             :disabled="actionPending"
-            @click.stop="openRenameDialog(pet)"
+            @click="openRenameDialog(pet)"
           >
-            <Pencil :size="15" />
+            <Pencil :size="13" />
+            <span>编辑</span>
           </button>
           <button
-            :class="['codex-pet-manager-icon-button', { active: !pet.enabled }]"
+            class="codex-pet-action-btn codex-pet-action-btn--toggle"
             type="button"
             :title="pet.enabled ? '禁用宠物' : '启用宠物'"
             :disabled="actionPending"
-            @click.stop="togglePet(pet)"
+            @click="togglePet(pet)"
           >
-            <PowerOff v-if="pet.enabled" :size="15" />
-            <Power v-else :size="15" />
+            <Ban v-if="pet.enabled" :size="13" />
+            <Power v-else :size="13" />
+            <span>{{ pet.enabled ? "禁用" : "启用" }}</span>
           </button>
           <button
-            class="codex-pet-manager-icon-button danger"
+            class="codex-pet-action-btn codex-pet-action-btn--delete"
             type="button"
             title="删除宠物"
             :disabled="actionPending"
-            @click.stop="deletePet(pet)"
+            @click="deletePet(pet)"
           >
-            <Trash2 :size="15" />
+            <Trash2 :size="13" />
+            <span>删除</span>
           </button>
         </div>
       </article>
     </section>
 
+    <!-- 动画图谱全览弹窗 -->
     <BaseModal
       v-if="selectedPet"
       :title="`${selectedPet.displayName || selectedPet.id} 动画图谱`"
@@ -152,7 +224,9 @@
             :aria-label="`${row.label}动画预览`"
           ></div>
           <div class="codex-pet-manager-animation-row-info">
-            <span data-emphasis class="codex-pet-manager-animation-row-name">{{ row.label }}</span>
+            <span data-emphasis class="codex-pet-manager-animation-row-name">{{
+              row.label
+            }}</span>
             <span class="codex-pet-manager-animation-row-meta">
               {{ row.frameCount }} 帧 · {{ row.duration }} ms
             </span>
@@ -161,13 +235,17 @@
       </section>
     </BaseModal>
 
+    <!-- 修改名称弹窗 -->
     <BaseModal
       v-if="renamePet"
       title="修改宠物名称"
       description="仅更新 pet.json 中的显示名称，不改变 Codex 使用的目录标识。"
       @close="closeRenameDialog"
     >
-      <form class="codex-pet-manager-rename-form" @submit.prevent="renamePetName">
+      <form
+        class="codex-pet-manager-rename-form"
+        @submit.prevent="renamePetName"
+      >
         <label class="codex-pet-manager-name-field">
           <span class="codex-pet-manager-name-label">显示名称</span>
           <input
@@ -201,43 +279,60 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from "vue"
 import {
+  Ban,
+  Copy,
+  Folder,
   FolderOpen,
+  Image as ImageIcon,
   PawPrint,
   Pencil,
   Power,
-  PowerOff,
   RefreshCw,
   Trash2
-} from 'lucide-vue-next'
-import BaseModal from '@/components/BaseModal.vue'
-import { systemApi, toolboxApi } from '@/api'
-import { createMessage } from '@/utils/message'
+} from "lucide-vue-next"
+import BaseModal from "@/components/BaseModal.vue"
+import { systemApi, toolboxApi } from "@/api"
+import { createMessage } from "@/utils/message"
 
 const pets = ref([])
 const loading = ref(false)
 const actionPending = ref(false)
-const disabledPetsPath = ref('')
-const codexPetsPath = ref('')
+const disabledPetsPath = ref("")
+const codexPetsPath = ref("")
 const renamePet = ref(null)
-const renameName = ref('')
+const renameName = ref("")
 const selectedPet = ref(null)
 
 // Codex 的 9 行精灵图状态与每行可用帧数。
 const animationRows = [
-  { id: 'idle', label: '待机', index: 0, frameCount: 6, duration: 1100 },
-  { id: 'running-right', label: '向右移动', index: 1, frameCount: 8, duration: 1060 },
-  { id: 'running-left', label: '向左移动', index: 2, frameCount: 8, duration: 1060 },
-  { id: 'waving', label: '挥手', index: 3, frameCount: 4, duration: 700 },
-  { id: 'jumping', label: '跳跃', index: 4, frameCount: 5, duration: 840 },
-  { id: 'failed', label: '失败', index: 5, frameCount: 8, duration: 1220 },
-  { id: 'waiting', label: '等待', index: 6, frameCount: 6, duration: 1010 },
-  { id: 'running', label: '工作中', index: 7, frameCount: 6, duration: 820 },
-  { id: 'review', label: '检查', index: 8, frameCount: 6, duration: 1010 }
+  { id: "idle", label: "待机", index: 0, frameCount: 6, duration: 1100 },
+  {
+    id: "running-right",
+    label: "向右移动",
+    index: 1,
+    frameCount: 8,
+    duration: 1060
+  },
+  {
+    id: "running-left",
+    label: "向左移动",
+    index: 2,
+    frameCount: 8,
+    duration: 1060
+  },
+  { id: "waving", label: "挥手", index: 3, frameCount: 4, duration: 700 },
+  { id: "jumping", label: "跳跃", index: 4, frameCount: 5, duration: 840 },
+  { id: "failed", label: "失败", index: 5, frameCount: 8, duration: 1220 },
+  { id: "waiting", label: "等待", index: 6, frameCount: 6, duration: 1010 },
+  { id: "running", label: "工作中", index: 7, frameCount: 6, duration: 820 },
+  { id: "review", label: "检查", index: 8, frameCount: 6, duration: 1010 }
 ]
 
-const enabledCount = computed(() => pets.value.filter(pet => pet.enabled).length)
+const enabledCount = computed(
+  () => pets.value.filter((pet) => pet.enabled).length
+)
 
 // 直接读取 Codex 宠物目录与应用数据目录中的已禁用宠物。
 async function loadPets() {
@@ -246,8 +341,8 @@ async function loadPets() {
   try {
     const result = await toolboxApi.listCodexPets()
     pets.value = result.pets || []
-    disabledPetsPath.value = result.disabledPetsPath || ''
-    codexPetsPath.value = result.codexPetsPath || ''
+    disabledPetsPath.value = result.disabledPetsPath || ""
+    codexPetsPath.value = result.codexPetsPath || ""
   } catch (error) {
     createMessage.error(error.message || String(error))
   } finally {
@@ -256,12 +351,20 @@ async function loadPets() {
 }
 
 async function openPath(targetPath) {
-  if (!targetPath) {
-    return
-  }
+  if (!targetPath) return
 
   try {
     await systemApi.openPath({ targetPath })
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  }
+}
+
+async function copyPath(path, label = "路径") {
+  if (!path) return
+  try {
+    await navigator.clipboard.writeText(path)
+    createMessage.success(`已复制${label}`)
   } catch (error) {
     createMessage.error(error.message || String(error))
   }
@@ -274,7 +377,7 @@ function openRenameDialog(pet) {
 
 function closeRenameDialog() {
   renamePet.value = null
-  renameName.value = ''
+  renameName.value = ""
 }
 
 function openPreview(pet) {
@@ -303,9 +406,7 @@ async function runPetAction(action, successMessage) {
 }
 
 async function renamePetName() {
-  if (!renamePet.value || !renameName.value) {
-    return
-  }
+  if (!renamePet.value || !renameName.value) return
 
   const renamed = await runPetAction(
     () =>
@@ -313,7 +414,7 @@ async function renamePetName() {
         id: renamePet.value.id,
         displayName: renameName.value
       }),
-    '宠物名称已更新。'
+    "宠物名称已更新。"
   )
 
   if (renamed) {
@@ -324,18 +425,22 @@ async function renamePetName() {
 function togglePet(pet) {
   return runPetAction(
     () => toolboxApi.toggleCodexPet({ id: pet.id, enabled: !pet.enabled }),
-    pet.enabled ? '宠物已禁用。' : '宠物已启用。'
+    pet.enabled ? "宠物已禁用。" : "宠物已启用。"
   )
 }
 
 async function deletePet(pet) {
-  if (!window.confirm(`确定删除宠物「${pet.displayName || pet.id}」吗？此操作不可恢复。`)) {
+  if (
+    !window.confirm(
+      `确定删除宠物「${pet.displayName || pet.id}」吗？此操作不可恢复。`
+    )
+  ) {
     return
   }
 
   await runPetAction(
     () => toolboxApi.deleteCodexPet({ id: pet.id }),
-    '宠物已删除。'
+    "宠物已删除。"
   )
 }
 
@@ -348,281 +453,442 @@ onMounted(loadPets)
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: 12px;
   overflow: hidden;
+  background: var(--color-panel);
+  border: 1px solid var(--color-line);
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+  padding: 20px 22px;
+  box-sizing: border-box;
 
+  /* 顶部控制头 */
   .codex-pet-manager-head {
     display: flex;
     flex: none;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 2px 2px 0;
+
+    .codex-pet-manager-head-left {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+
+      .codex-pet-manager-badge {
+        display: grid;
+        width: 44px;
+        height: 44px;
+        flex: none;
+        place-items: center;
+        border-radius: 50%;
+        background: #eff6ff;
+        color: #2563eb;
+      }
+
+      .codex-pet-manager-title-group {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+
+        .codex-pet-manager-title-text {
+          margin: 0;
+          color: var(--color-text);
+          font-size: 18px;
+          font-weight: 700;
+          line-height: 1.25;
+          letter-spacing: 0.2px;
+        }
+
+        .codex-pet-manager-title-desc {
+          color: var(--color-text-muted);
+          font-size: 13px;
+        }
+      }
+    }
+
+    .codex-pet-manager-head-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+
+      .codex-pet-manager-icon-button {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        padding: 0;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        background: var(--color-panel);
+        color: var(--color-text-muted);
+        cursor: pointer;
+        transition: all 0.2s;
+
+        &:hover:not(:disabled) {
+          border-color: var(--color-primary);
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
+        }
+
+        &:disabled {
+          cursor: not-allowed;
+          opacity: 0.45;
+        }
+      }
+    }
   }
 
-  .codex-pet-manager-title {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .codex-pet-manager-mark {
-    margin: 0;
-    color: var(--color-text-soft);
-    font-size: var(--font-size-sm);
-    letter-spacing: 0;
-    text-transform: uppercase;
-  }
-
-  .codex-pet-manager-title-text {
-    margin: 0;
-    color: var(--color-text);
-    font-size: var(--font-size-lg);
-    line-height: 1.2;
-  }
-
-  .codex-pet-manager-title-desc {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-base);
-  }
-
-  .codex-pet-manager-head-actions,
-  .codex-pet-manager-item-actions,
-  .codex-pet-manager-modal-actions {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: 7px;
-  }
-
-  .codex-pet-manager-icon-button,
-  .codex-pet-manager-button {
-    display: inline-grid;
-    height: 32px;
-    place-items: center;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
-    cursor: pointer;
-  }
-
-  .codex-pet-manager-icon-button {
-    width: 32px;
-  }
-
-  .codex-pet-manager-button {
-    padding: 0 12px;
-    color: var(--color-primary);
-    font-size: var(--font-size-base);
-  }
-
-  .codex-pet-manager-icon-button:hover,
-  .codex-pet-manager-icon-button.active,
-  .codex-pet-manager-button:hover {
-    border-color: var(--color-line-strong);
-    background: var(--color-panel-soft);
-    color: var(--color-primary);
-  }
-
-  .codex-pet-manager-icon-button.danger:hover {
-    border-color: var(--color-danger-line);
-    background: var(--color-danger-soft);
-    color: var(--color-danger);
-  }
-
-  .codex-pet-manager-icon-button:disabled,
-  .codex-pet-manager-button:disabled {
-    cursor: not-allowed;
-    opacity: 0.52;
-  }
-
-  .codex-pet-manager-button.primary {
-    border-color: var(--color-primary);
-    background: var(--color-primary-solid);
-    color: #ffffff;
-  }
-
+  /* 路径双卡片区域 */
   .codex-pet-manager-paths {
-    display: flex;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin: 16px 0 18px;
     flex: none;
-    gap: 8px;
+
+    .codex-pet-path-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      background: var(--color-panel-soft);
+      border: 1px solid var(--color-line);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: all 0.2s;
+
+      &:hover {
+        border-color: var(--color-line-strong);
+        background: var(--color-panel-soft);
+      }
+
+      .codex-pet-path-icon-box {
+        display: grid;
+        width: 36px;
+        height: 36px;
+        flex: none;
+        place-items: center;
+        border-radius: 8px;
+        background: #eff6ff;
+        color: #2563eb;
+      }
+
+      .codex-pet-path-info {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        gap: 3px;
+
+        .codex-pet-path-label {
+          color: var(--color-text-muted);
+          font-size: 12px;
+          font-weight: 500;
+        }
+
+        .codex-pet-path-value {
+          overflow: hidden;
+          color: var(--color-text);
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 12px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+
+      .codex-pet-path-copy-btn {
+        display: grid;
+        width: 28px;
+        height: 28px;
+        flex: none;
+        place-items: center;
+        padding: 0;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        background: var(--color-panel);
+        color: var(--color-text-muted);
+        cursor: pointer;
+        transition: all 0.2s;
+
+        &:hover {
+          border-color: var(--color-primary);
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
+        }
+      }
+    }
   }
 
-  .codex-pet-manager-path {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 10px;
-    overflow: hidden;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel-soft);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    text-align: left;
-  }
-
-  .codex-pet-manager-path:hover {
-    border-color: var(--color-line-strong);
-    background: var(--color-panel-soft);
-  }
-
-  .codex-pet-manager-path:disabled {
-    cursor: default;
-  }
-
-  .codex-pet-manager-path-label {
-    flex: none;
-    color: var(--color-primary);
-    font-size: var(--font-size-sm);
-  }
-
-  .codex-pet-manager-path-value {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--color-text-soft);
-    font-size: var(--font-size-sm);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .codex-pet-manager-list {
-    display: flex;
+  /* 宠物双列网格 */
+  .codex-pet-manager-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
     min-height: 0;
     flex: 1;
-    flex-direction: column;
-    gap: 8px;
-    overflow: auto;
+    overflow-y: auto;
     padding-right: 2px;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line) transparent;
+
+    .codex-pet-card {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 16px;
+      border: 1px solid var(--color-line);
+      border-radius: 12px;
+      background: var(--color-panel);
+      transition: all 0.2s ease;
+
+      &:hover {
+        border-color: var(--color-line-strong);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.04);
+      }
+
+      &.is-enabled {
+        border-color: #93c5fd;
+        box-shadow: 0 2px 10px rgba(37, 99, 235, 0.05);
+
+        &:hover {
+          border-color: #60a5fa;
+          box-shadow: 0 4px 16px rgba(37, 99, 235, 0.08);
+        }
+      }
+
+      .codex-pet-card-body {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+      }
+
+      .codex-pet-preview {
+        width: 90px;
+        height: 98px;
+        flex: 0 0 90px;
+        overflow: hidden;
+        border: 1px solid var(--color-line);
+        border-radius: 10px;
+        background-color: var(--color-panel-soft);
+        background-position: 0 0;
+        background-repeat: no-repeat;
+        background-size: 800% auto;
+        cursor: zoom-in;
+        animation: codex-pet-manager-idle 1.1s steps(1, end) infinite;
+        transition: transform 0.2s;
+
+        &:hover {
+          transform: scale(1.03);
+        }
+
+        &.disabled {
+          animation-play-state: paused;
+          filter: grayscale(1);
+          opacity: 0.5;
+        }
+      }
+
+      .codex-pet-info {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        gap: 3px;
+
+        .codex-pet-header-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+
+          .codex-pet-name {
+            overflow: hidden;
+            color: var(--color-text);
+            font-size: 16px;
+            font-weight: 700;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .codex-pet-status-pill {
+            display: inline-flex;
+            flex: none;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 11px;
+            font-weight: 500;
+            background: #f1f5f9;
+            border: 1px solid #e2e8f0;
+            color: #64748b;
+
+            .status-dot {
+              width: 6px;
+              height: 6px;
+              border-radius: 50%;
+              background: #94a3b8;
+            }
+
+            &.is-enabled {
+              background: #ecfdf5;
+              border-color: #a7f3d0;
+              color: #10b981;
+              font-weight: 600;
+
+              .status-dot {
+                background: #10b981;
+                box-shadow: 0 0 5px rgba(16, 185, 129, 0.4);
+              }
+            }
+          }
+        }
+
+        .codex-pet-id {
+          overflow: hidden;
+          color: var(--color-text-soft);
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 12px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .codex-pet-desc {
+          margin: 4px 0 6px;
+          overflow: hidden;
+          color: var(--color-text-muted);
+          font-size: 12px;
+          line-height: 1.5;
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          -webkit-box-orient: vertical;
+          min-height: 36px;
+        }
+
+        .codex-pet-shape-tag {
+          display: inline-flex;
+          width: fit-content;
+          align-items: center;
+          gap: 5px;
+          padding: 2px 8px;
+          border-radius: 5px;
+          background: var(--color-panel-soft);
+          border: 1px solid var(--color-line);
+          color: var(--color-text-muted);
+          font-size: 11px;
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        }
+      }
+
+      /* 底部操作按钮栏 */
+      .codex-pet-card-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 14px;
+
+        .codex-pet-action-btn {
+          display: inline-flex;
+          height: 31px;
+          flex: 1;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          padding: 0 8px;
+          border: 1px solid var(--color-line);
+          border-radius: 7px;
+          background: var(--color-panel);
+          color: var(--color-text);
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.2s;
+
+          &:hover:not(:disabled) {
+            border-color: var(--color-line-strong);
+            background: var(--color-panel-soft);
+          }
+
+          &--toggle {
+            color: #2563eb;
+
+            &:hover:not(:disabled) {
+              border-color: #93c5fd;
+              background: #eff6ff;
+              color: #1d4ed8;
+            }
+          }
+
+          &--delete {
+            color: #ef4444;
+
+            &:hover:not(:disabled) {
+              border-color: #fca5a5;
+              background: #fef2f2;
+              color: #dc2626;
+            }
+          }
+
+          &:disabled {
+            cursor: not-allowed;
+            opacity: 0.45;
+          }
+        }
+      }
+    }
   }
 
-  .codex-pet-manager-item {
+  /* 加载与空状态 */
+  .codex-pet-manager-state,
+  .codex-pet-manager-empty {
     display: flex;
-    min-height: 126px;
-    align-items: center;
-    gap: 13px;
-    padding: 10px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    cursor: pointer;
-    transition:
-      border-color 0.18s ease,
-      background-color 0.18s ease;
-  }
-
-  .codex-pet-manager-item:hover,
-  .codex-pet-manager-item:focus-visible {
-    border-color: var(--color-line-strong);
-    background: var(--color-panel-soft);
-    outline: none;
-  }
-
-  .codex-pet-manager-item.disabled {
-    background: var(--color-panel-soft);
-  }
-
-  .codex-pet-manager-preview {
-    width: 88px;
-    aspect-ratio: 192 / 208;
-    flex: 0 0 88px;
-    overflow: hidden;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background-color: var(--color-panel);
-    background-position: 0 0;
-    background-repeat: no-repeat;
-    background-size: 800% auto;
-    animation: codex-pet-manager-idle 1.1s steps(1, end) infinite;
-  }
-
-  .codex-pet-manager-item.disabled .codex-pet-manager-preview {
-    animation-play-state: paused;
-    filter: grayscale(1);
-    opacity: 0.48;
-  }
-
-  .codex-pet-manager-item-main {
-    display: flex;
-    min-width: 0;
+    min-height: 240px;
     flex: 1;
     flex-direction: column;
-    gap: 5px;
-  }
-
-  .codex-pet-manager-item-title-row {
-    display: flex;
-    min-width: 0;
     align-items: center;
-    gap: 8px;
-  }
-
-  .codex-pet-manager-item-name {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--color-text);
-    font-size: var(--font-size-lg);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .codex-pet-manager-status,
-  .codex-pet-manager-shape {
-    display: inline-flex;
-    width: fit-content;
-    flex: none;
-    align-items: center;
-    min-height: 22px;
-    padding: 0 8px;
-    border-radius: 999px;
-    font-size: var(--font-size-sm);
-  }
-
-  .codex-pet-manager-status {
-    background: var(--color-success-soft);
-    color: var(--color-success);
-  }
-
-  .codex-pet-manager-status.disabled {
-    background: var(--color-panel-soft);
-    color: var(--color-text-soft);
-  }
-
-  .codex-pet-manager-item-id {
-    overflow: hidden;
-    color: var(--color-text-soft);
-    font-size: var(--font-size-sm);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .codex-pet-manager-item-desc {
-    display: -webkit-box;
-    margin: 0;
-    overflow: hidden;
+    justify-content: center;
+    gap: 12px;
     color: var(--color-text-muted);
-    font-size: var(--font-size-base);
-    line-height: 1.45;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    font-size: 13.5px;
+    text-align: center;
+
+    .codex-empty-icon-box {
+      display: grid;
+      width: 60px;
+      height: 60px;
+      place-items: center;
+      border-radius: 50%;
+      background: var(--color-panel-soft);
+      border: 1px solid var(--color-line);
+      color: var(--color-text-soft);
+    }
+
+    .codex-pet-manager-empty-title {
+      color: var(--color-text);
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .codex-pet-manager-empty-desc {
+      max-width: 420px;
+      font-size: 13px;
+      color: var(--color-text-muted);
+      line-height: 1.6;
+    }
   }
 
-  .codex-pet-manager-shape {
-    border: 1px solid var(--color-line);
-    background: var(--color-panel-soft);
-    color: var(--color-text-soft);
-  }
-
+  /* 动画全览网格 */
   .codex-pet-manager-animation-grid {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 10px;
-    overflow: auto;
-    padding: 2px;
+    max-height: 480px;
+    overflow-y: auto;
+    padding: 4px 2px;
   }
 
   .codex-pet-manager-animation-row {
@@ -630,16 +896,16 @@ onMounted(loadPets)
     min-width: 0;
     align-items: center;
     gap: 10px;
-    padding: 9px;
+    padding: 10px;
     border: 1px solid var(--color-line);
-    border-radius: 7px;
+    border-radius: 8px;
     background: var(--color-panel-soft);
   }
 
   .codex-pet-manager-row-preview {
-    width: 72px;
-    aspect-ratio: 192 / 208;
-    flex: 0 0 72px;
+    width: 68px;
+    height: 74px;
+    flex: 0 0 68px;
     border: 1px solid var(--color-line);
     border-radius: 6px;
     background-color: var(--color-panel);
@@ -672,49 +938,25 @@ onMounted(loadPets)
     flex: 1;
     flex-direction: column;
     gap: 4px;
+
+    .codex-pet-manager-animation-row-name {
+      overflow: hidden;
+      color: var(--color-text);
+      font-size: 13px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .codex-pet-manager-animation-row-meta {
+      color: var(--color-text-muted);
+      font-size: 11.5px;
+      font-family:
+        ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
   }
 
-  .codex-pet-manager-animation-row-name {
-    overflow: hidden;
-    color: var(--color-text);
-    font-size: var(--font-size-base);
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .codex-pet-manager-animation-row-meta {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
-  }
-
-  .codex-pet-manager-state,
-  .codex-pet-manager-empty {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    border: 1px dashed var(--color-line-strong);
-    border-radius: 8px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-base);
-    text-align: center;
-  }
-
-  .codex-pet-manager-empty-title {
-    color: var(--color-text);
-    font-size: var(--font-size-lg);
-  }
-
-  .codex-pet-manager-empty-desc {
-    max-width: 440px;
-    font-size: var(--font-size-base);
-    line-height: 1.5;
-  }
-
+  /* 弹窗表单样式 */
   .codex-pet-manager-rename-form {
     display: flex;
     flex-direction: column;
@@ -729,28 +971,67 @@ onMounted(loadPets)
 
   .codex-pet-manager-name-label {
     color: var(--color-text-muted);
-    font-size: var(--font-size-base);
+    font-size: 13px;
   }
 
   .codex-pet-manager-name-input {
     height: 38px;
-    padding: 0 10px;
+    padding: 0 12px;
     border: 1px solid var(--color-line);
     border-radius: 7px;
     background: var(--color-panel-soft);
     color: var(--color-text);
     font: inherit;
-    font-size: var(--font-size-base);
+    font-size: 13.5px;
     outline: none;
-  }
+    transition: all 0.2s;
 
-  .codex-pet-manager-name-input:focus {
-    border-color: var(--color-info-line);
-    box-shadow: 0 0 0 3px rgba(47, 95, 145, 0.1);
+    &:focus {
+      border-color: var(--color-primary);
+      box-shadow: 0 0 0 2px var(--color-primary-soft);
+    }
   }
 
   .codex-pet-manager-modal-actions {
+    display: flex;
     justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .codex-pet-manager-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    padding: 0 14px;
+    border: 1px solid var(--color-line);
+    border-radius: 7px;
+    background: var(--color-panel);
+    color: var(--color-text);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover:not(:disabled) {
+      border-color: var(--color-line-strong);
+      background: var(--color-panel-soft);
+    }
+
+    &.primary {
+      border-color: var(--color-primary);
+      background: var(--color-primary-solid);
+      color: #ffffff;
+
+      &:hover:not(:disabled) {
+        background: var(--color-primary);
+      }
+    }
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
   }
 
   .spinning {
@@ -758,6 +1039,7 @@ onMounted(loadPets)
   }
 }
 
+/* 动效 */
 @keyframes codex-pet-manager-idle {
   0%,
   100% {
@@ -892,6 +1174,69 @@ onMounted(loadPets)
 @keyframes codex-pet-manager-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* 适配暗色模式特殊颜色 */
+:global(:root[data-theme="dark"]),
+.tools-view--dark {
+  .codex-pet-manager {
+    .codex-pet-manager-badge,
+    .codex-pet-path-icon-box {
+      background: rgba(59, 130, 246, 0.16);
+      color: #60a5fa;
+    }
+
+    .codex-pet-card.is-enabled {
+      border-color: rgba(96, 165, 250, 0.4);
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+
+      &:hover {
+        border-color: rgba(96, 165, 250, 0.6);
+      }
+    }
+
+    .codex-pet-card .codex-pet-status-pill.is-enabled {
+      background: rgba(16, 185, 129, 0.16);
+      border-color: rgba(16, 185, 129, 0.35);
+      color: #34d399;
+
+      .status-dot {
+        background: #34d399;
+      }
+    }
+
+    .codex-pet-card .codex-pet-action-btn--toggle {
+      color: #60a5fa;
+
+      &:hover:not(:disabled) {
+        border-color: rgba(96, 165, 250, 0.4);
+        background: rgba(96, 165, 250, 0.12);
+        color: #93c5fd;
+      }
+    }
+
+    .codex-pet-card .codex-pet-action-btn--delete {
+      color: #f87171;
+
+      &:hover:not(:disabled) {
+        border-color: rgba(248, 113, 113, 0.4);
+        background: rgba(239, 68, 68, 0.15);
+        color: #fca5a5;
+      }
+    }
+  }
+}
+
+@media (max-width: 900px) {
+  .codex-pet-manager {
+    .codex-pet-manager-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .codex-pet-manager-paths {
+      grid-template-columns: 1fr;
+    }
   }
 }
 </style>
