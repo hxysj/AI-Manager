@@ -205,7 +205,7 @@
                     <div class="quota-remaining-row">
                       <span class="quota-label">剩余</span>
                       <span class="quota-value">{{
-                        webQuota?.remaining ?? (loadingQuota ? "…" : "105")
+                        webQuota?.remaining ?? (loadingQuota ? "…" : "—")
                       }}</span>
                       <span class="quota-unit">次</span>
                     </div>
@@ -222,7 +222,7 @@
                     额度恢复:
                     {{
                       quotaResetLabel ||
-                      (webQuota ? "次日重置" : "2026/09/24 22:36")
+                      (loadingQuota ? "查询中" : "—")
                     }}
                   </span>
                   <span class="quota-meta-line">
@@ -230,7 +230,9 @@
                     {{
                       webQuota
                         ? formatDateTime(webQuota.updatedAt)
-                        : "2026/09/24 07:49"
+                        : loadingQuota
+                          ? "查询中"
+                          : "—"
                     }}
                   </span>
                 </div>
@@ -2368,7 +2370,7 @@ const quotaResetLabel = computed(() => {
 })
 
 const quotaProgressPercent = computed(() => {
-  if (!webQuota.value || typeof webQuota.value.remaining !== "number") return 70
+  if (!webQuota.value || typeof webQuota.value.remaining !== "number") return 0
   const max = webQuota.value.total || Math.max(150, webQuota.value.remaining)
   return Math.min(
     100,

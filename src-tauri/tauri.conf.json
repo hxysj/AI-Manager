@@ -37,6 +37,7 @@
     },
     "windows": {
       "nsis": {
+        "installMode": "currentUser",
         "installerIcon": "../build/icon.ico",
         "uninstallerIcon": "../build/icon.ico",
         "installerHooks": "../build/installer.nsh"

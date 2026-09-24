@@ -26,16 +26,6 @@ const QUICK_SWITCH_COLLAPSED_WIDTH: u32 = 44;
 const QUICK_SWITCH_COLLAPSED_HEIGHT: u32 = 44;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
-#[cfg(windows)]
-#[allow(dead_code)]
-const AI_MANAGER_UNINSTALL_ROOT: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
-#[cfg(windows)]
-#[allow(dead_code)]
-const AI_MANAGER_UNINSTALL_KEYS: [&str; 3] = [
-    "a178c25c-9e1d-5bca-9cea-7f005c2da482",
-    "Monkey Thief",
-    "com.monkeythief.desktop",
-];
 
 struct DownloadedUpdate {
     update: Update,
@@ -230,7 +220,7 @@ pub async fn install_update(
     app: &tauri::AppHandle,
     _payload: Value,
 ) -> Result<Value, ManagerError> {
-    let _guard = begin_update_task(app, "installing", "正在打开更新安装程序。")?;
+    let _guard = begin_update_task(app, "installing", "正在准备静默安装更新。")?;
     let downloaded_update = DOWNLOADED_UPDATE.lock().await.take();
     let Some(downloaded_update) = downloaded_update else {
         let error = ManagerError::System("更新安装包未下载完成".to_string());
@@ -250,7 +240,7 @@ pub async fn install_update(
                 app,
                 json!({
                   "phase": "downloaded",
-                  "message": format!("新版本 {} 已下载完成，可重新打开安装向导。", version),
+                  "message": format!("新版本 {} 已下载完成，可重试静默安装。", version),
                   "version": version,
                   "releaseNotes": release_notes,
                   "manual": true,
@@ -265,12 +255,11 @@ pub async fn install_update(
             return Err(error);
         }
 
-        *DOWNLOADED_UPDATE.lock().await = Some(downloaded_update);
-        return emit_update_status(
+        let status = emit_update_status(
             app,
             json!({
               "phase": "installer-opened",
-              "message": "安装程序已打开，请在安装程序中完成升级。",
+              "message": "正在静默安装更新，完成后将自动重启应用。",
               "version": version,
               "releaseNotes": release_notes,
               "manual": true,
@@ -281,7 +270,9 @@ pub async fn install_update(
               "total": transferred,
               "bytesPerSecond": 0
             }),
-        );
+        )?;
+        app.exit(0);
+        return Ok(status);
     }
 
     #[cfg(not(windows))]
@@ -843,17 +834,35 @@ async fn install_update_on_windows(
         &downloaded_update.bytes,
     )
     .await?;
-    std::process::Command::new(&installer_path)
+    let current_exe_path = std::env::current_exe()?;
+    let temp_dir = installer_path
+        .parent()
+        .ok_or_else(|| ManagerError::Path("无法解析更新临时目录".to_string()))?;
+    let script_path = temp_dir.join("install-update.ps1");
+    let script = build_windows_silent_update_script(
+        std::process::id(),
+        &current_exe_path,
+        &installer_path,
+        &script_path,
+    );
+    tokio::fs::write(&script_path, script).await?;
+
+    let mut command = std::process::Command::new("powershell.exe");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-WindowStyle",
+            "Hidden",
+            "-File",
+            &script_path.to_string_lossy(),
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map_err(|error| ManagerError::System(error.to_string()))?;
     Ok(())
-}
-
-#[cfg(windows)]
-#[allow(dead_code)]
-struct InstalledWindowsApp {
-    uninstall_string: String,
-    install_location: String,
 }
 
 #[cfg(windows)]
@@ -923,110 +932,32 @@ fn safe_file_part(value: &str) -> String {
 }
 
 #[cfg(windows)]
-#[allow(dead_code)]
-fn build_windows_update_script(
+fn build_windows_silent_update_script(
     current_process_id: u32,
     current_exe_path: &Path,
     installer_path: &Path,
-    install_info: Option<&InstalledWindowsApp>,
+    script_path: &Path,
 ) -> String {
-    let uninstall_string = install_info
-        .map(|info| info.uninstall_string.as_str())
-        .unwrap_or("");
-    let install_location = install_info
-        .map(|info| info.install_location.as_str())
-        .unwrap_or("");
-    let registry_checks = AI_MANAGER_UNINSTALL_KEYS
-        .iter()
-        .map(|key| {
-            format!(
-                "    if (Test-Path -LiteralPath \"HKCU:\\$UninstallRoot\\{key}\") {{ return $true }}\n    if (Test-Path -LiteralPath \"HKLM:\\$UninstallRoot\\{key}\") {{ return $true }}",
-                key = key.replace('`', "``")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
     format!(
         r#"$ErrorActionPreference = 'Stop'
 $ProcessId = {process_id}
 $CurrentExePath = {current_exe_path}
 $InstallerPath = {installer_path}
-$UninstallString = {uninstall_string}
-$InstallLocation = {install_location}
-$UninstallRoot = {uninstall_root}
-
-function Test-OldVersionExists {{
-{registry_checks}
-  if (-not [string]::IsNullOrWhiteSpace($InstallLocation)) {{
-    if (Test-Path -LiteralPath (Join-Path $InstallLocation 'Monkey Thief.exe')) {{ return $true }}
-    if (Test-Path -LiteralPath (Join-Path $InstallLocation 'monkey-thief.exe')) {{ return $true }}
-  }}
-  if (-not [string]::IsNullOrWhiteSpace($CurrentExePath)) {{
-    if (Test-Path -LiteralPath $CurrentExePath) {{ return $true }}
-  }}
-  return $false
-}}
-
-function Split-CommandLine {{
-  param([string]$CommandLine)
-  $trimmed = $CommandLine.Trim()
-  if ($trimmed.StartsWith('"')) {{
-    $end = $trimmed.IndexOf('"', 1)
-    if ($end -gt 0) {{
-      return @($trimmed.Substring(1, $end - 1), $trimmed.Substring($end + 1).Trim())
-    }}
-  }}
-  $parts = $trimmed.Split(' ', 2)
-  if ($parts.Count -eq 1) {{
-    return @($parts[0], '')
-  }}
-  return @($parts[0], $parts[1])
-}}
+$ScriptPath = {script_path}
 
 Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
-
-if (-not [string]::IsNullOrWhiteSpace($UninstallString)) {{
-  $parts = Split-CommandLine $UninstallString
-  $uninstallerPath = $parts[0]
-  $uninstallerArgs = $parts[1]
-  if ($uninstallerArgs -notmatch '(^|\s)/S(\s|$)') {{
-    $uninstallerArgs = ($uninstallerArgs + ' /S').Trim()
-  }}
-  if (-not [string]::IsNullOrWhiteSpace($InstallLocation) -and $uninstallerArgs -notmatch '(^|\s)_\?=') {{
-    # NSIS 原目录模式不会派生临时卸载器，-Wait 可以等待实际卸载彻底结束。
-    $uninstallerArgs = ($uninstallerArgs + " _?=$InstallLocation").Trim()
-  }}
-  $process = Start-Process -FilePath $uninstallerPath -ArgumentList $uninstallerArgs -Wait -PassThru
-  if ($process.ExitCode -ne 0) {{
-    Add-Type -AssemblyName PresentationFramework
-    [System.Windows.MessageBox]::Show('旧版本卸载失败，安装已取消。', 'Monkey Thief 更新', 'OK', 'Warning') | Out-Null
-    exit 1
-  }}
+Start-Sleep -Milliseconds 300
+$installer = Start-Process -FilePath $InstallerPath -ArgumentList '/S' -Wait -PassThru
+if ($installer.ExitCode -ne 0) {{ exit $installer.ExitCode }}
+if (Test-Path -LiteralPath $CurrentExePath) {{
+  Start-Process -FilePath $CurrentExePath
 }}
-
-for ($index = 0; $index -lt 120; $index++) {{
-  if (-not (Test-OldVersionExists)) {{
-    break
-  }}
-  Start-Sleep -Seconds 1
-}}
-
-if (Test-OldVersionExists) {{
-  Add-Type -AssemblyName PresentationFramework
-  [System.Windows.MessageBox]::Show('旧版本未卸载完成，安装已取消。', 'Monkey Thief 更新', 'OK', 'Warning') | Out-Null
-  exit 1
-}}
-
-Start-Process -FilePath $InstallerPath
+Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
 "#,
         process_id = current_process_id,
         current_exe_path = to_powershell_literal(&current_exe_path.to_string_lossy()),
         installer_path = to_powershell_literal(&installer_path.to_string_lossy()),
-        uninstall_string = to_powershell_literal(uninstall_string),
-        install_location = to_powershell_literal(install_location),
-        uninstall_root = to_powershell_literal(AI_MANAGER_UNINSTALL_ROOT),
-        registry_checks = registry_checks
+        script_path = to_powershell_literal(&script_path.to_string_lossy())
     )
 }
 
