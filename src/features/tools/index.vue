@@ -36,11 +36,15 @@
           <ArrowLeft :size="15" />
           工具列表
         </button>
+        <div
+          v-if="activeTool === 'port-monitor'"
+          class="tools-view-header-divider"
+        />
         <div v-if="activeTool === 'git'" class="tools-view-git-badge">
           <GitBranchIcon :size="20" class="tools-view-git-badge-icon" />
         </div>
         <div
-          v-else-if="activeTool === 'image-workbench'"
+          v-else-if="activeTool === 'image-workbench' || activeTool === 'image-link-extractor'"
           class="tools-view-image-badge"
         >
           <ImageIcon :size="20" class="tools-view-image-badge-icon" />
@@ -75,6 +79,33 @@
               class="tools-view-git-status-divider"
             />
           </template>
+        </div>
+        <div
+          v-if="activeTool === 'port-monitor'"
+          class="port-monitor-header-actions"
+        >
+          <label class="port-auto-refresh-toggle">
+            <input
+              v-model="portAutoRefresh"
+              type="checkbox"
+              class="port-toggle-input"
+            />
+            <span class="port-toggle-slider" />
+            <span class="port-toggle-text">自动刷新</span>
+          </label>
+          <button
+            class="tools-view-icon-btn tools-view-icon-btn--square"
+            type="button"
+            title="刷新端口列表"
+            aria-label="刷新端口列表"
+            :disabled="portMonitorRef?.loading || portMonitorRef?.terminating"
+            @click="portMonitorRef?.loadPorts?.()"
+          >
+            <RefreshCw
+              :size="16"
+              :class="{ spinning: portMonitorRef?.loading }"
+            />
+          </button>
         </div>
         <div
           v-if="activeTool === 'image-workbench'"
@@ -130,7 +161,11 @@
       />
       <LanShareView v-else-if="activeTool === 'lan-share'" />
       <CodexPetManager v-else-if="activeTool === 'codex-pets'" />
-      <PortMonitor v-else-if="activeTool === 'port-monitor'" />
+      <PortMonitor
+        v-else-if="activeTool === 'port-monitor'"
+        ref="portMonitorRef"
+        v-model:auto-refresh="portAutoRefresh"
+      />
       <StringDiff v-else-if="activeTool === 'string-diff'" />
       <ImageLinkExtractor v-else-if="activeTool === 'image-link-extractor'" />
       <ImageWorkbench
@@ -220,6 +255,8 @@ const emit = defineEmits(["add-repo", "detail-change", "toggle-theme"])
 const activeTool = ref("")
 const gitToolStatus = ref([])
 const imageWorkbenchRef = ref(null)
+const portMonitorRef = ref(null)
+const portAutoRefresh = ref(false)
 
 function getGitStatusIcon(label) {
   if (label === "当前分支" || label === "本地分支") return GitBranchIcon
@@ -538,6 +575,16 @@ onBeforeUnmount(() => emit("detail-change", false))
       }
     }
   }
+
+  .port-auto-refresh-toggle {
+    .port-toggle-slider {
+      background: #334155;
+    }
+
+    .port-toggle-input:checked + .port-toggle-slider {
+      background: #2563eb;
+    }
+  }
 }
 
 .tools-view-tool-icon {
@@ -620,30 +667,106 @@ onBeforeUnmount(() => emit("detail-change", false))
     padding-bottom: 8px;
     border-bottom: 1px solid var(--color-line);
 
+    .tools-view-header-divider {
+      width: 1px;
+      height: 22px;
+      background: var(--color-line);
+      margin: 0 4px 0 2px;
+      flex-shrink: 0;
+    }
+
+    .tools-view-icon-btn {
+      display: grid;
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      place-items: center;
+      border: 1px solid var(--color-line);
+      border-radius: 50%;
+      background: var(--color-panel);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: all 0.2s ease;
+
+      &:hover:not(:disabled) {
+        border-color: var(--color-primary);
+        background: var(--color-primary-soft);
+        color: var(--color-primary);
+      }
+
+      &:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      &--square {
+        border-radius: 8px;
+      }
+    }
+
+    .port-monitor-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+
+      .port-auto-refresh-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        user-select: none;
+
+        .port-toggle-input {
+          position: absolute;
+          opacity: 0;
+          width: 0;
+          height: 0;
+          pointer-events: none;
+        }
+
+        .port-toggle-slider {
+          position: relative;
+          display: inline-block;
+          width: 36px;
+          height: 20px;
+          border-radius: 9999px;
+          background: #e2e8f0;
+          transition: background-color 0.2s ease;
+
+          &::before {
+            content: "";
+            position: absolute;
+            left: 2px;
+            top: 2px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #ffffff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+            transition: transform 0.2s ease;
+          }
+        }
+
+        .port-toggle-input:checked + .port-toggle-slider {
+          background: #2563eb;
+
+          &::before {
+            transform: translateX(16px);
+          }
+        }
+
+        .port-toggle-text {
+          font-size: 13px;
+          font-weight: 500;
+          color: var(--color-text);
+        }
+      }
+    }
+
     .image-workbench-header-actions {
       display: flex;
       align-items: center;
       gap: 8px;
-
-      .tools-view-icon-btn {
-        display: grid;
-        width: 34px;
-        height: 34px;
-        flex: 0 0 34px;
-        place-items: center;
-        border: 1px solid var(--color-line);
-        border-radius: 50%;
-        background: var(--color-panel);
-        color: var(--color-text-muted);
-        cursor: pointer;
-        transition: all 0.2s ease;
-
-        &:hover {
-          border-color: var(--color-primary);
-          background: var(--color-primary-soft);
-          color: var(--color-primary);
-        }
-      }
     }
 
     .image-generation-modes {
@@ -834,6 +957,16 @@ onBeforeUnmount(() => emit("detail-change", false))
       background: var(--color-line);
       flex-shrink: 0;
     }
+  }
+
+  .spinning {
+    animation: tools-spin 0.8s linear infinite;
+  }
+}
+
+@keyframes tools-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>
