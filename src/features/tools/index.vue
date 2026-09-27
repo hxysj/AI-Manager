@@ -44,10 +44,19 @@
           <GitBranchIcon :size="20" class="tools-view-git-badge-icon" />
         </div>
         <div
-          v-else-if="activeTool === 'image-workbench' || activeTool === 'image-link-extractor'"
+          v-else-if="
+            activeTool === 'image-workbench' ||
+            activeTool === 'image-link-extractor' ||
+            activeTool === 'coordinate-overlay'
+          "
           class="tools-view-image-badge"
         >
-          <ImageIcon :size="20" class="tools-view-image-badge-icon" />
+          <ScanLine
+            v-if="activeTool === 'coordinate-overlay'"
+            :size="20"
+            class="tools-view-image-badge-icon"
+          />
+          <ImageIcon v-else :size="20" class="tools-view-image-badge-icon" />
         </div>
         <div class="tools-view-detail-title">
           <span data-emphasis class="tools-view-detail-name">{{
@@ -168,6 +177,7 @@
       />
       <StringDiff v-else-if="activeTool === 'string-diff'" />
       <ImageLinkExtractor v-else-if="activeTool === 'image-link-extractor'" />
+      <CoordinateOverlayTool v-else-if="activeTool === 'coordinate-overlay'" />
       <ImageWorkbench
         v-else-if="activeTool === 'image-workbench'"
         ref="imageWorkbenchRef"
@@ -204,12 +214,14 @@ import {
   Network,
   PawPrint,
   RefreshCw,
+  ScanLine,
   Share2,
   Sun
 } from "lucide-vue-next"
 import GitToolView from "@/features/gitTool/index.vue"
 import LanShareView from "@/features/lanShare/index.vue"
 import CodexPetManager from "@/features/tools/components/CodexPetManager.vue"
+import CoordinateOverlayTool from "@/features/tools/components/CoordinateOverlayTool.vue"
 import ImageLinkExtractor from "@/features/tools/components/ImageLinkExtractor.vue"
 import PortMonitor from "@/features/tools/components/PortMonitor.vue"
 import StringDiff from "@/features/tools/components/StringDiff.vue"
@@ -310,6 +322,14 @@ const toolItems = computed(() => {
       meta: "图片 / 导出",
       icon: ImageIcon,
       theme: "orange"
+    },
+    {
+      id: "coordinate-overlay",
+      label: "坐标框预览",
+      summary: "载入题目接口 JSON，在原图上查看题框与作答框并控制单框显隐。",
+      meta: "题框 / 作答框",
+      icon: ScanLine,
+      theme: "blue"
     },
     {
       // 端口监测直接使用桌面端系统权限，不依赖浏览器工具服务。
