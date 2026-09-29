@@ -271,23 +271,13 @@ pub async fn switch_runtime(
     payload: Value,
     cli_targets: &Value,
 ) -> Result<(), ManagerError> {
-    switch_runtime_inner(paths, payload, cli_targets, None).await
-}
-
-pub async fn switch_runtime_with_proxy(
-    paths: &AppPaths,
-    payload: Value,
-    cli_targets: &Value,
-    proxy_server_registry: &proxy::ProxyServerRegistry,
-) -> Result<(), ManagerError> {
-    switch_runtime_inner(paths, payload, cli_targets, Some(proxy_server_registry)).await
+    switch_runtime_inner(paths, payload, cli_targets).await
 }
 
 async fn switch_runtime_inner(
     paths: &AppPaths,
     payload: Value,
     cli_targets: &Value,
-    proxy_server_registry: Option<&proxy::ProxyServerRegistry>,
 ) -> Result<(), ManagerError> {
     let cli = string_value(payload.get("cli"));
 
@@ -312,13 +302,7 @@ async fn switch_runtime_inner(
         ));
     }
 
-    let needs_model_proxy = cli == "codex"
-        && codex_model_aliases(&provider)
-            .iter()
-            .any(|(client_model, upstream_model)| client_model != upstream_model);
-    if !needs_model_proxy {
-        ensure_proxy_disabled(paths, &cli)?;
-    }
+    ensure_proxy_disabled(paths, &cli)?;
 
     // 启用前先确认本地监听成功，端口占用时不改变当前 Runtime。
     google_gateway::ensure_started(paths, &provider).await?;
@@ -345,22 +329,7 @@ async fn switch_runtime_inner(
 
     provider_store::write_profiles(paths, &profiles)?;
 
-    if needs_model_proxy {
-        if let Some(proxy_server_registry) = proxy_server_registry {
-            proxy::ensure_provider_model_proxy(
-                proxy_server_registry,
-                paths,
-                cli_targets,
-                &cli,
-                &provider_id,
-            )
-            .await?;
-        } else {
-            write_cli_config(paths, &cli, find_cli_target(cli_targets, &cli)?).await?;
-        }
-    } else {
-        write_cli_config(paths, &cli, find_cli_target(cli_targets, &cli)?).await?;
-    }
+    write_cli_config(paths, &cli, find_cli_target(cli_targets, &cli)?).await?;
 
     if cli == "codex" {
         provider_store::write_active_codex_account_id(paths, "")?;
@@ -522,19 +491,18 @@ pub async fn launch_codex_provider_instance(
         ));
     }
 
-    proxy::start_provider_instance_server(proxy_server_registry, paths, cli_targets, "codex")
-        .await?;
-
     let account_id = string_value(payload.get("accountId"));
     let provider_id = string_value(payload.get("providerId"));
     let proxy_state = proxy::read_proxy_state(paths, "codex")?;
-    let local_base_url = string_value(proxy_state.get("localBaseUrl"));
     let mut target_id = provider_id.clone();
     let target_name;
     let target_type;
     let model;
     let mut runtime_config = json!({});
     let mut catalog_provider = None;
+    let mut instance_api_key = String::new();
+    let mut instance_proxy = String::new();
+    let mut use_instance_proxy = !account_id.is_empty();
 
     if !account_id.is_empty() {
         let auth = codex_account::get_proxy_auth(paths, &account_id, &cli_target).await?;
@@ -600,11 +568,21 @@ pub async fn launch_codex_provider_instance(
             ));
         }
 
+        instance_api_key = api_key;
+        instance_proxy = string_value(provider.get("proxy"));
         runtime_config = provider
             .get("runtimeConfig")
             .cloned()
             .unwrap_or_else(|| json!({}));
         catalog_provider = Some(provider.clone());
+        use_instance_proxy = provider["type"] == "google-account"
+            || provider
+                .get("headers")
+                .and_then(Value::as_object)
+                .is_some_and(|headers| !headers.is_empty())
+            || codex_model_aliases(&provider)
+                .iter()
+                .any(|(client_model, upstream_model)| client_model != upstream_model);
 
         model = first_string(
             runtime_config.get("mainModel"),
@@ -626,6 +604,13 @@ pub async fn launch_codex_provider_instance(
         target_type = string_value(provider.get("type"));
     }
 
+    let local_base_url = if use_instance_proxy {
+        proxy::start_provider_instance_server(proxy_server_registry, paths, cli_targets, "codex")
+            .await?
+    } else {
+        string_value(catalog_provider.as_ref().and_then(|provider| provider.get("baseUrl")))
+    };
+
     let profile_dir = Path::new(&paths.workspace_root)
         .join("codex-instances")
         .join(format!(
@@ -639,9 +624,14 @@ pub async fn launch_codex_provider_instance(
             }),
             slugify_name(&target_id).if_empty_then(|| target_id.clone())
         ));
-    let token = proxy::create_provider_instance_token(&target_id);
+    let token = if use_instance_proxy {
+        proxy::create_provider_instance_token(&target_id)
+    } else {
+        instance_api_key.clone()
+    };
     let client_model = catalog_provider
         .as_ref()
+        .filter(|_| use_instance_proxy)
         .and_then(|provider| codex_model_aliases(provider).first().map(|item| item.0.clone()))
         .unwrap_or_else(|| model.clone());
     let mut config_lines = vec![
@@ -657,7 +647,7 @@ pub async fn launch_codex_provider_instance(
         "disable_response_storage = true".to_string(),
     ];
 
-    if catalog_provider.is_some() {
+    if use_instance_proxy && catalog_provider.is_some() {
         config_lines.push("model_catalog_json = \".cockpit_model_catalog.json\"".to_string());
     }
 
@@ -706,12 +696,17 @@ pub async fn launch_codex_provider_instance(
     )
     .await?;
 
-    if let Some(provider) = catalog_provider.as_ref() {
-        tokio::fs::write(
-            profile_dir.join(".cockpit_model_catalog.json"),
-            format!("{}\n", serde_json::to_string_pretty(&codex_model_catalog(provider))?),
-        )
-        .await?;
+    if use_instance_proxy {
+        if let Some(provider) = catalog_provider.as_ref() {
+            tokio::fs::write(
+                profile_dir.join(".cockpit_model_catalog.json"),
+                format!(
+                    "{}\n",
+                    serde_json::to_string_pretty(&codex_model_catalog(provider))?
+                ),
+            )
+            .await?;
+        }
     }
 
     let sessions_path = profile_dir.join("sessions");
@@ -765,24 +760,30 @@ pub async fn launch_codex_provider_instance(
     let launcher_path = profile_dir.join("launch.cmd");
     let codex_run_command = codex_run_command(&codex_executable_path);
 
-    tokio::fs::write(
-        &launcher_path,
-        [
-            "@echo off".to_string(),
-            "title Codex 实例".to_string(),
-            format!("set \"CODEX_HOME={}\"", profile_dir.to_string_lossy()),
-            format!("set \"OPENAI_API_KEY={}\"", token),
-            format!("set \"OPENAI_BASE_URL={}\"", local_base_url),
-            format!("set \"OPENAI_MODEL={}\"", model),
-            format!("cd /d \"{}\"", paths.workspace_root),
-            codex_run_command,
-            String::new(),
-        ]
-        .join("\r\n"),
-    )
+    let mut launcher_lines = vec![
+        "@echo off".to_string(),
+        "title Codex 实例".to_string(),
+        format!("set \"CODEX_HOME={}\"", profile_dir.to_string_lossy()),
+        format!("set \"OPENAI_API_KEY={}\"", token),
+        format!("set \"OPENAI_BASE_URL={}\"", local_base_url),
+        format!("set \"OPENAI_MODEL={}\"", model),
+    ];
+    if !use_instance_proxy && !instance_proxy.is_empty() {
+        launcher_lines.extend([
+            format!("set \"HTTP_PROXY={}\"", instance_proxy),
+            format!("set \"HTTPS_PROXY={}\"", instance_proxy),
+        ]);
+    }
+    launcher_lines.extend([
+        format!("cd /d \"{}\"", paths.workspace_root),
+        codex_run_command,
+        String::new(),
+    ]);
+    tokio::fs::write(&launcher_path, launcher_lines.join("\r\n"))
     .await?;
 
-    std::process::Command::new("cmd.exe")
+    let mut command = std::process::Command::new("cmd.exe");
+    command
         .args([
             "/d",
             "/c",
@@ -797,7 +798,12 @@ pub async fn launch_codex_provider_instance(
         .env("CODEX_HOME", &profile_dir)
         .env("OPENAI_API_KEY", &token)
         .env("OPENAI_BASE_URL", &local_base_url)
-        .env("OPENAI_MODEL", &model)
+        .env("OPENAI_MODEL", &model);
+    if !use_instance_proxy && !instance_proxy.is_empty() {
+        command.env("HTTP_PROXY", &instance_proxy);
+        command.env("HTTPS_PROXY", &instance_proxy);
+    }
+    command
         .spawn()
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
@@ -822,9 +828,6 @@ pub async fn launch_claude_provider_instance(
             "未检测到 Claude CLI 可执行文件".to_string(),
         ));
     }
-
-    proxy::start_provider_instance_server(proxy_server_registry, paths, cli_targets, "claude")
-        .await?;
 
     let provider_id = string_value(payload.get("providerId"));
     let provider = provider_store::read_providers(paths)?
@@ -853,8 +856,16 @@ pub async fn launch_claude_provider_instance(
         ));
     }
 
-    let proxy_state = proxy::read_proxy_state(paths, "claude")?;
-    let local_base_url = string_value(proxy_state.get("localBaseUrl"));
+    let use_instance_proxy = provider
+        .get("headers")
+        .and_then(Value::as_object)
+        .is_some_and(|headers| !headers.is_empty());
+    let local_base_url = if use_instance_proxy {
+        proxy::start_provider_instance_server(proxy_server_registry, paths, cli_targets, "claude")
+            .await?
+    } else {
+        string_value(provider.get("baseUrl"))
+    };
     let target_name = string_value(provider.get("name"));
     let target_type = string_value(provider.get("type"));
     let runtime_config = provider
@@ -868,10 +879,22 @@ pub async fn launch_claude_provider_instance(
             slugify_name(&target_name).if_empty_then(|| "provider".to_string()),
             slugify_name(&provider_id).if_empty_then(|| provider_id.clone())
         ));
-    let token = proxy::create_provider_instance_token(&provider_id);
+    let token = if use_instance_proxy {
+        proxy::create_provider_instance_token(&provider_id)
+    } else {
+        api_key.clone()
+    };
+    let auth_field = if use_instance_proxy {
+        "ANTHROPIC_AUTH_TOKEN".to_string()
+    } else {
+        first_string(
+            provider.get("authField"),
+            Some(&json!("ANTHROPIC_AUTH_TOKEN")),
+        )
+    };
     let mut env = Map::new();
 
-    env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), json!(token));
+    env.insert(auth_field.clone(), json!(token));
     env.insert(
         "ANTHROPIC_BASE_URL".to_string(),
         json!(local_base_url.clone()),
@@ -897,6 +920,13 @@ pub async fn launch_claude_provider_instance(
         == Some(true)
     {
         env.insert("DISABLE_AUTOUPDATER".to_string(), json!("1"));
+    }
+    if !use_instance_proxy {
+        let provider_proxy = string_value(provider.get("proxy"));
+        if !provider_proxy.is_empty() {
+            env.insert("HTTP_PROXY".to_string(), json!(provider_proxy.clone()));
+            env.insert("HTTPS_PROXY".to_string(), json!(provider_proxy));
+        }
     }
 
     let mut settings = Map::new();
@@ -988,7 +1018,7 @@ pub async fn launch_claude_provider_instance(
             "set \"CLAUDE_CONFIG_DIR={}\"",
             profile_dir.to_string_lossy()
         ),
-        format!("set \"ANTHROPIC_AUTH_TOKEN={}\"", token),
+        format!("set \"{}={}\"", auth_field, token),
         format!("set \"ANTHROPIC_BASE_URL={}\"", local_base_url),
     ];
 
@@ -999,6 +1029,8 @@ pub async fn launch_claude_provider_instance(
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
         "ENABLE_TOOL_SEARCH",
         "DISABLE_AUTOUPDATER",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
     ] {
         let value = string_value(env.get(key));
 
@@ -1028,7 +1060,7 @@ pub async fn launch_claude_provider_instance(
         ])
         .current_dir(&paths.workspace_root)
         .env("CLAUDE_CONFIG_DIR", &profile_dir)
-        .env("ANTHROPIC_AUTH_TOKEN", &token)
+        .env(&auth_field, &token)
         .env("ANTHROPIC_BASE_URL", &local_base_url)
         .spawn()
         .map_err(|error| ManagerError::System(error.to_string()))?;
@@ -1653,16 +1685,21 @@ fn build_codex_config_files(
     let values = create_template_values(provider, profile, &api_key);
     let model_aliases = codex_model_aliases(provider);
     let selected_model = first_string(profile.get("model"), values.get("mainModel"));
-    let client_model = model_aliases
-        .first()
-        .and_then(|fallback| {
-            model_aliases
-                .iter()
-                .find(|item| item.1 == selected_model)
-                .or(Some(fallback))
-                .map(|item| item.0.clone())
-        })
-        .unwrap_or_else(|| string_value(values.get("mainModel")));
+    let proxy_enabled = proxy::is_proxy_enabled(paths, "codex")?;
+    let client_model = if proxy_enabled {
+        model_aliases
+            .first()
+            .and_then(|fallback| {
+                model_aliases
+                    .iter()
+                    .find(|item| item.1 == selected_model)
+                    .or(Some(fallback))
+                    .map(|item| item.0.clone())
+            })
+            .unwrap_or_else(|| string_value(values.get("mainModel")))
+    } else {
+        selected_model.clone()
+    };
     let mut config_lines = vec![
         "model_provider = \"custom\"".to_string(),
         format!(
@@ -1673,9 +1710,12 @@ fn build_codex_config_files(
             "model_reasoning_effort = {}",
             to_toml_string(string_value(values.get("modelReasoningEffort")))
         ),
-        "model_catalog_json = \".cockpit_model_catalog.json\"".to_string(),
         "disable_response_storage = true".to_string(),
     ];
+
+    if proxy_enabled {
+        config_lines.push("model_catalog_json = \".cockpit_model_catalog.json\"".to_string());
+    }
 
     if values.get("serviceTierFast").and_then(Value::as_bool) == Some(true) {
         config_lines.push("service_tier = \"fast\"".to_string());
@@ -1706,7 +1746,7 @@ fn build_codex_config_files(
         ),
     ]);
 
-    Ok(vec![
+    let mut files = vec![
         json!({
           "name": "auth.json",
           "content": format!("{}\n", serde_json::to_string_pretty(&json!({
@@ -1717,11 +1757,14 @@ fn build_codex_config_files(
           "name": "config.toml",
           "content": format!("{}\n", config_lines.join("\n"))
         }),
-        json!({
+    ];
+    if proxy_enabled {
+        files.push(json!({
           "name": ".cockpit_model_catalog.json",
           "content": format!("{}\n", serde_json::to_string_pretty(&codex_model_catalog(provider))?)
-        }),
-    ])
+        }));
+    }
+    Ok(files)
 }
 
 fn merge_codex_config_toml(existing_content: &str, managed_content: &str) -> String {
@@ -1757,6 +1800,8 @@ fn merge_codex_config_toml(existing_content: &str, managed_content: &str) -> Str
     ] {
         if let Some(value) = root.get(key) {
             content = set_toml_root_line(&content, key, &format_toml_line(key, value));
+        } else if key == "model_catalog_json" {
+            content = remove_toml_root_line(&content, key);
         }
     }
 
@@ -2188,9 +2233,16 @@ pub(crate) fn combine_managed_config_contents(
     cli: &str,
     files: &[Value],
 ) -> Result<String, ManagerError> {
+    // 模型目录只供 Codex 运行时读取，不参与 Provider 与配置文件差异判断。
+    let comparable_files = files
+        .iter()
+        .filter(|file| string_value(file.get("name")) != ".cockpit_model_catalog.json")
+        .cloned()
+        .collect::<Vec<_>>();
+
     if cli == "claude" {
         return Ok(combine_config_contents(
-            &files
+            &comparable_files
                 .iter()
                 .map(|file| -> Result<Value, ManagerError> {
                     if file.get("name").and_then(Value::as_str) != Some("settings.json") {
@@ -2207,11 +2259,11 @@ pub(crate) fn combine_managed_config_contents(
     }
 
     if cli != "codex" {
-        return Ok(combine_config_contents(files));
+        return Ok(combine_config_contents(&comparable_files));
     }
 
     Ok(combine_config_contents(
-        &files
+        &comparable_files
             .iter()
             .map(|file| normalize_codex_config_file(file))
             .collect::<Result<Vec<_>, ManagerError>>()?,
@@ -3721,6 +3773,36 @@ web_search = true
         assert_eq!(low_normalized, max_normalized);
         assert!(!string_value(low_normalized.get("content")).contains("model_reasoning_effort"));
         assert!(!string_value(low_normalized.get("content")).contains("approvals_reviewer"));
+    }
+
+    #[test]
+    fn codex_managed_compare_ignores_model_catalog_file() {
+        let config = json!({
+          "name": "config.toml",
+          "content": "model_provider = \"custom\"\nmodel = \"gpt-5.6-sol\"\ndisable_response_storage = true\n\n[model_providers]\n[model_providers.custom]\nbase_url = \"https://llmp.readboy.com\"\n"
+        });
+        let manager = vec![
+            config.clone(),
+            json!({
+              "name": ".cockpit_model_catalog.json",
+              "content": "{\"models\":[{\"slug\":\"gpt-5.6-sol\",\"display_name\":\"gpt-6-astra\"}]}"
+            }),
+        ];
+        let runtime = vec![
+            config,
+            json!({
+              "name": ".cockpit_model_catalog.json",
+              "content": "{\"models\":[{\"slug\":\"gpt-5.6-sol\",\"display_name\":\"another-model\"}]}"
+            }),
+        ];
+
+        assert_eq!(
+            combine_managed_config_contents("codex", &manager).unwrap(),
+            combine_managed_config_contents("codex", &runtime).unwrap()
+        );
+        assert!(!combine_managed_config_contents("codex", &manager)
+            .unwrap()
+            .contains("### .cockpit_model_catalog.json"));
     }
 
     fn create_codex_runtime_fixture() -> (PathBuf, AppPaths, PathBuf) {

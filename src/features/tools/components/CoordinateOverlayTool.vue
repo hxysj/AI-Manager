@@ -45,8 +45,8 @@
       <div class="coordinate-tool-input-note">
         <Crosshair :size="15" />
         <span
-          >支持多题输入；每道题有 sub_question 时只显示 sub_answer_area*，否则显示
-          answer_area*。</span
+          >支持多题输入；每道题有 sub_question 时只显示
+          sub_answer_area*，否则显示 answer_area*。</span
         >
       </div>
     </section>
@@ -71,10 +71,7 @@
         </div>
       </header>
 
-      <div
-        v-if="!questionViews.length"
-        class="coordinate-tool-preview-empty"
-      >
+      <div v-if="!questionViews.length" class="coordinate-tool-preview-empty">
         <ScanLine :size="28" />
         <span>解析后将在这里显示每道题的题目图片和坐标框</span>
       </div>
@@ -151,10 +148,7 @@
                       )
                     "
                   >
-                    <Eye
-                      v-if="allVisible(question, 'question')"
-                      :size="14"
-                    />
+                    <Eye v-if="allVisible(question, 'question')" :size="14" />
                     <EyeOff v-else :size="14" />
                   </button>
                 </div>
@@ -181,10 +175,7 @@
                       )
                     "
                   >
-                    <Eye
-                      v-if="allVisible(question, 'answer')"
-                      :size="14"
-                    />
+                    <Eye v-if="allVisible(question, 'answer')" :size="14" />
                     <EyeOff v-else :size="14" />
                   </button>
                 </div>
@@ -224,9 +215,7 @@
                   <button
                     type="button"
                     :title="
-                      isVisible(question.id, box.id)
-                        ? '隐藏此框'
-                        : '显示此框'
+                      isVisible(question.id, box.id) ? '隐藏此框' : '显示此框'
                     "
                     :aria-label="
                       isVisible(question.id, box.id)
@@ -235,10 +224,7 @@
                     "
                     @click="toggleVisible(question.id, box.id)"
                   >
-                    <Eye
-                      v-if="isVisible(question.id, box.id)"
-                      :size="15"
-                    />
+                    <Eye v-if="isVisible(question.id, box.id)" :size="15" />
                     <EyeOff v-else :size="15" />
                   </button>
                 </div>
@@ -493,7 +479,9 @@ function findQuestionSegment(box, frame) {
 
   const pageMatches = frame.segments.filter(
     (segment) =>
-      box.page === "" || segment.page === "" || String(box.page) === String(segment.page)
+      box.page === "" ||
+      segment.page === "" ||
+      String(box.page) === String(segment.page)
   )
   const candidates = pageMatches.length ? pageMatches : frame.segments
   const centerX = box.x + box.width / 2
@@ -533,7 +521,8 @@ function normalizeQuestionItems(data) {
   if (
     numericKeys.length &&
     numericKeys.every(
-      (key) => data[key] && typeof data[key] === "object" && !Array.isArray(data[key])
+      (key) =>
+        data[key] && typeof data[key] === "object" && !Array.isArray(data[key])
     )
   ) {
     return numericKeys.map((key) => data[key])
@@ -642,13 +631,20 @@ const questionViews = computed(() =>
   })
 )
 const questionCount = computed(() =>
-  questionViews.value.reduce((count, question) => count + question.questionBoxes.length, 0)
+  questionViews.value.reduce(
+    (count, question) => count + question.questionBoxes.length,
+    0
+  )
 )
 const answerCount = computed(() =>
-  questionViews.value.reduce((count, question) => count + question.answerBoxes.length, 0)
+  questionViews.value.reduce(
+    (count, question) => count + question.answerBoxes.length,
+    0
+  )
 )
 const loadedImageCount = computed(
-  () => questionViews.value.filter((question) => question.imageSize.width).length
+  () =>
+    questionViews.value.filter((question) => question.imageSize.width).length
 )
 const parseStatus = computed(() => {
   if (!parsedItems.value.length) return "等待输入 JSON"
@@ -671,7 +667,9 @@ function toggleVisible(viewId, boxId) {
 
 function allVisible(question, type) {
   const boxes = question.allBoxes.filter((box) => box.type === type)
-  return boxes.length > 0 && boxes.every((box) => isVisible(question.id, box.id))
+  return (
+    boxes.length > 0 && boxes.every((box) => isVisible(question.id, box.id))
+  )
 }
 
 function setGroupVisible(question, type, visible) {

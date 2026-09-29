@@ -33,7 +33,7 @@ const JSON_AGENT_STREAM_EVENT: &str = "tools:json-agent-stream";
 #[derive(Clone)]
 pub struct ProxyServerRegistry {
     inner: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
-    provider_instance_required: Arc<Mutex<HashMap<String, bool>>>,
+    provider_instance_inner: Arc<Mutex<HashMap<String, (SocketAddr, tauri::async_runtime::JoinHandle<()>)>>>,
 }
 
 #[derive(Clone)]
@@ -370,7 +370,7 @@ impl ProxyServerRegistry {
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
-            provider_instance_required: Arc::new(Mutex::new(HashMap::new())),
+            provider_instance_inner: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -401,50 +401,74 @@ impl ProxyServerRegistry {
             cli_targets: cli_targets.clone(),
             cli: cli.to_string(),
         };
-        let handle = tauri::async_runtime::spawn(async move {
-            loop {
-                let Ok((stream, _)) = listener.accept().await else {
-                    break;
-                };
-                let io = TokioIo::new(stream);
-                let context = context.clone();
-
-                tauri::async_runtime::spawn(async move {
-                    let service =
-                        service_fn(move |request| handle_proxy_request(request, context.clone()));
-
-                    if let Err(error) = http1::Builder::new().serve_connection(io, service).await {
-                        eprintln!("{error}");
-                    }
-                });
-            }
-        });
+        let handle = spawn_proxy_listener(listener, context);
 
         self.inner.lock().await.insert(cli.to_string(), handle);
         Ok(())
     }
 
     pub async fn stop(&self, cli: &str) {
-        if *self
-            .provider_instance_required
-            .lock()
-            .await
-            .get(cli)
-            .unwrap_or(&false)
-        {
-            return;
-        }
-
         if let Some(handle) = self.inner.lock().await.remove(cli) {
             handle.abort();
         }
     }
 
-    pub async fn require_provider_instance_server(&self, cli: &str) {
-        self.provider_instance_required
+    pub async fn ensure_provider_instance_started(
+        &self,
+        paths: &AppPaths,
+        cli_targets: &Value,
+        cli: &str,
+    ) -> Result<String, ManagerError> {
+        if let Some((address, _)) = self.provider_instance_inner.lock().await.get(cli) {
+            return Ok(provider_instance_base_url(cli, *address));
+        }
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let address = listener.local_addr()?;
+        let context = ProxyContext {
+            paths: paths.clone(),
+            cli_targets: cli_targets.clone(),
+            cli: cli.to_string(),
+        };
+        let handle = spawn_proxy_listener(listener, context);
+
+        self.provider_instance_inner
             .lock()
             .await
-            .insert(cli.to_string(), true);
+            .insert(cli.to_string(), (address, handle));
+        Ok(provider_instance_base_url(cli, address))
+    }
+}
+
+fn spawn_proxy_listener(
+    listener: TcpListener,
+    context: ProxyContext,
+) -> tauri::async_runtime::JoinHandle<()> {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            let io = TokioIo::new(stream);
+            let context = context.clone();
+
+            tauri::async_runtime::spawn(async move {
+                let service =
+                    service_fn(move |request| handle_proxy_request(request, context.clone()));
+
+                if let Err(error) = http1::Builder::new().serve_connection(io, service).await {
+                    eprintln!("{error}");
+                }
+            });
+        }
+    })
+}
+
+fn provider_instance_base_url(cli: &str, address: SocketAddr) -> String {
+    if cli == "claude" {
+        format!("http://127.0.0.1:{}", address.port())
+    } else {
+        format!("http://127.0.0.1:{}/v1", address.port())
     }
 }
 
@@ -601,55 +625,6 @@ pub async fn enable_proxy(
     )
     .await?;
     Ok(read_proxy_state(paths, cli)?)
-}
-
-pub async fn ensure_provider_model_proxy(
-    registry: &ProxyServerRegistry,
-    paths: &AppPaths,
-    cli_targets: &Value,
-    cli: &str,
-    provider_id: &str,
-) -> Result<(), ManagerError> {
-    let config = read_proxy_config(paths, cli)?;
-    if !string_array(config.get("failoverProviderIds")).contains(&provider_id.to_string()) {
-        add_provider(
-            paths,
-            cli_targets,
-            cli,
-            json!({ "providerId": provider_id }),
-        )
-        .await?;
-    }
-
-    let config = read_proxy_config(paths, cli)?;
-    if config.get("enabled").and_then(Value::as_bool) == Some(true) {
-        activate_provider(
-            paths,
-            cli_targets,
-            cli,
-            json!({ "providerId": provider_id }),
-        )
-        .await?;
-        registry.ensure_started(paths, cli_targets, cli).await?;
-        return Ok(());
-    }
-
-    activate_provider(
-        paths,
-        cli_targets,
-        cli,
-        json!({ "providerId": provider_id }),
-    )
-    .await?;
-    enable_proxy(
-        registry,
-        paths,
-        cli_targets,
-        cli,
-        json!({ "providerId": provider_id }),
-    )
-    .await?;
-    Ok(())
 }
 
 pub async fn disable_proxy(
@@ -926,9 +901,10 @@ pub async fn start_provider_instance_server(
     paths: &AppPaths,
     cli_targets: &Value,
     cli: &str,
-) -> Result<(), ManagerError> {
-    registry.require_provider_instance_server(cli).await;
-    registry.ensure_started(paths, cli_targets, cli).await
+) -> Result<String, ManagerError> {
+    registry
+        .ensure_provider_instance_started(paths, cli_targets, cli)
+        .await
 }
 
 pub fn create_provider_instance_token(provider_id: &str) -> String {

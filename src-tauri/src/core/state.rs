@@ -1314,11 +1314,10 @@ impl ManagerState {
                 Ok(self.state.clone())
             }
             "runtime:switch" => {
-                runtime_provider::switch_runtime_with_proxy(
+                runtime_provider::switch_runtime(
                     &self.paths,
                     payload.unwrap_or_else(|| json!({})),
                     &self.state["cliTargets"],
-                    &self.proxy_server_registry,
                 )
                 .await?;
                 self.refresh_state().await?;
@@ -1908,7 +1907,7 @@ impl ManagerState {
                     codex_account::clear_account(&self.paths).await?;
                 }
                 let model = self.tray_runtime_model(provider_id, cli);
-                runtime_provider::switch_runtime_with_proxy(
+                runtime_provider::switch_runtime(
                     &self.paths,
                     json!({
                       "cli": *cli,
@@ -1916,7 +1915,6 @@ impl ManagerState {
                       "model": model
                     }),
                     &self.state["cliTargets"],
-                    &self.proxy_server_registry,
                 )
                 .await?;
             }
