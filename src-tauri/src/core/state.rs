@@ -1,6 +1,7 @@
 use crate::api::{
-    app, app_logs, claude_desktop, codex_account, data, git_tool, google_account, image_workbench, lan_share, proxy, repos, rules,
-    runtime_provider, sessions, settings, skills, system, tools, translation, usage,
+    app, app_logs, claude_desktop, codex_account, data, git_tool, google_account, image_workbench,
+    lan_share, network_quality, proxy, repos, rules, runtime_provider, sessions, settings, skills,
+    system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
@@ -51,6 +52,11 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        // 网络诊断不持有应用状态锁，避免慢端点阻塞其他页面。
+        if let Some(action) = channel.strip_prefix("network-quality:") {
+            return network_quality::dispatch(&app, action, payload.unwrap_or_else(|| json!({})))
+                .await;
+        }
         // Google 额度刷新释放应用锁，外部接口较慢时不阻塞其他页面。
         if channel == "google-account:refresh" {
             let paths = self.manager.lock().await.paths.clone();

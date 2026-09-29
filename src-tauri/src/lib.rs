@@ -20,7 +20,7 @@ async fn dispatch_api(
     channel: String,
     payload: Option<Value>,
 ) -> Result<Value, String> {
-    if channel.starts_with("app-log:") {
+    if channel.starts_with("app-log:") || channel.starts_with("network-quality:") {
         return state
             .dispatch(app.clone(), &channel, payload)
             .await

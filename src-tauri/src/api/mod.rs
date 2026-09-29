@@ -12,6 +12,7 @@ pub(crate) mod google_session;
 pub mod image_workbench;
 pub mod lan_share;
 pub mod llm_proxy;
+pub mod network_quality;
 pub mod proxy;
 pub mod repos;
 pub mod rules;

@@ -169,6 +169,7 @@
         @status-change="gitToolStatus = $event"
       />
       <LanShareView v-else-if="activeTool === 'lan-share'" />
+      <NetworkQualityView v-else-if="activeTool === 'network-quality'" />
       <CodexPetManager v-else-if="activeTool === 'codex-pets'" />
       <PortMonitor
         v-else-if="activeTool === 'port-monitor'"
@@ -202,6 +203,7 @@ import {
   watch
 } from "vue"
 import {
+  Activity,
   Archive,
   ArrowLeft,
   Braces,
@@ -228,6 +230,11 @@ import StringDiff from "@/features/tools/components/StringDiff.vue"
 
 const JsonAgentTool = defineAsyncComponent(
   () => import("@/features/tools/components/JsonAgentTool.vue")
+)
+
+// 网络诊断包含多组明细表，进入工具后再加载页面代码。
+const NetworkQualityView = defineAsyncComponent(
+  () => import("@/features/networkQuality/index.vue")
 )
 
 // 图片工作台按需加载，进入工具后再读取任务和官方账号。
@@ -339,6 +346,14 @@ const toolItems = computed(() => {
       meta: "本机进程",
       icon: Network,
       theme: "blue"
+    },
+    {
+      id: "network-quality",
+      label: "网络质量监测",
+      summary: "检测公网出口、地理位置、系统连通性、服务可用性与目标连接质量。",
+      meta: "延迟 / 丢包 / 路径",
+      icon: Activity,
+      theme: "green"
     },
     {
       id: "git",
