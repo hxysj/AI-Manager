@@ -82,7 +82,7 @@ impl AppState {
                 .await.map_err(|error| ManagerError::System(error.to_string()))?;
         }
         // 图片读取与导出只需路径快照，不占用整个应用的状态锁。
-        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-export") {
+        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-cancel" | "tools:image-export") {
             let paths = self.manager.lock().await.paths.clone();
             let payload = payload.unwrap_or_else(|| json!({}));
             return match channel {
@@ -92,6 +92,10 @@ impl AppState {
                 "tools:image-inputs" => crate::core::image_store::inputs(&paths, payload["id"].as_str().unwrap_or("")),
                 "tools:image-clear-results" => crate::core::image_store::clear_results(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
                 "tools:image-delete" => crate::core::image_store::delete(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
+                "tools:image-cancel" => {
+                    let ids = serde_json::from_value::<Vec<String>>(payload["ids"].clone())?;
+                    crate::core::image_store::cancel(&paths, &ids, payload["recoverable"] == true)
+                }
                 _ => image_workbench::export(&paths, payload).await,
             };
         }

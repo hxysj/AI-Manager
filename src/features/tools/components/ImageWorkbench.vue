@@ -46,6 +46,16 @@
           <Plus :size="14" />
           <span>新建对话</span>
         </button>
+        <button
+          class="conversation-button conversation-batch-btn"
+          type="button"
+          title="导入表格并批量生成图片"
+          :disabled="batchRunning"
+          @click="openBatchDialog"
+        >
+          <Plus :size="14" />
+          <span>批量生成</span>
+        </button>
       </div>
     </header>
     <aside v-if="historyOpen" class="conversation-sidebar">
@@ -110,6 +120,7 @@
       :class="{ 'is-resizing': resizing }"
     >
       <form
+        v-if="!batchRunning"
         id="image-create-panel"
         class="create-panel"
         :style="{
@@ -188,7 +199,7 @@
               class="step-action-link"
               type="button"
               :disabled="loadingQuota || !form.accountId || submitting"
-              @click="loadQuota"
+              @click="refreshQuota"
             >
               <RefreshCw :size="12" :class="{ spinning: loadingQuota }" />
               <span>刷新额度</span>
@@ -220,10 +231,7 @@
                 <div class="quota-telemetry-meta">
                   <span class="quota-meta-line">
                     额度恢复:
-                    {{
-                      quotaResetLabel ||
-                      (loadingQuota ? "查询中" : "—")
-                    }}
+                    {{ quotaResetLabel || (loadingQuota ? "查询中" : "—") }}
                   </span>
                   <span class="quota-meta-line">
                     更新于
@@ -570,6 +578,109 @@
           </p>
         </div>
       </form>
+      <section
+        v-else
+        class="batch-queue-panel"
+        :style="{
+          flexBasis: `calc(${leftWidth}% - ${(18 * leftWidth) / 100}px)`
+        }"
+      >
+        <header class="batch-queue-head">
+          <div class="batch-queue-progress-info">
+            <span class="batch-queue-progress-count"
+              >{{ batchQueueCompletedCount }} /
+              {{ batchQueueTasks.length }} 已完成</span
+            >
+            <span class="batch-queue-sub"
+              >{{ batchQueueProcessingCount }} 进行中 ·
+              {{ batchQueueQueuedCount }} 排队</span
+            >
+          </div>
+          <div class="batch-queue-actions">
+            <button
+              class="batch-queue-action"
+              type="button"
+              :disabled="
+                (batchPaused
+                  ? !batchQueueResumableTasks.length
+                  : !batchQueueActiveTasks.length) || batchQueueStopping
+              "
+              :title="batchPaused ? '继续批量任务' : '暂停批量任务'"
+              @click="toggleBatchPause"
+            >
+              <Play v-if="batchPaused" :size="13" />
+              <Pause v-else :size="13" />
+              <span>{{ batchPaused ? "继续任务" : "暂停任务" }}</span>
+            </button>
+            <button
+              class="batch-queue-action"
+              type="button"
+              :disabled="
+                !batchQueueCancellableSelected.length || batchQueueStopping
+              "
+              title="取消选中的排队或生成任务"
+              @click="cancelSelectedBatchTasks()"
+            >
+              <X :size="13" />
+              <span>取消选中任务</span>
+            </button>
+            <button
+              class="batch-queue-action danger"
+              type="button"
+              :disabled="!batchQueueSelected.length || deleting"
+              title="删除选中的批量任务"
+              @click="deleteBatchQueueTasks"
+            >
+              <Trash2 :size="13" />
+              <span>删除选中任务</span>
+            </button>
+          </div>
+        </header>
+        <div class="batch-queue-list">
+          <article
+            v-for="task in batchQueueTasks"
+            :key="task.id"
+            class="batch-queue-item"
+          >
+            <input
+              v-model="batchQueueSelected"
+              type="checkbox"
+              :value="task.id"
+            />
+            <div class="batch-queue-item-main">
+              <span class="batch-queue-item-name">{{
+                task.request.batchName || "未命名任务"
+              }}</span>
+              <span class="batch-queue-item-prompt">{{
+                task.request.prompt
+              }}</span>
+            </div>
+            <span class="batch-queue-item-status" :class="task.status">
+              {{ statusLabels[task.status] || task.status }}
+            </span>
+            <button
+              v-if="['queued', 'processing'].includes(task.status)"
+              class="batch-queue-stop"
+              type="button"
+              title="取消生成任务"
+              :disabled="batchQueueStopping"
+              @click="cancelSelectedBatchTasks([task.id])"
+            >
+              <X :size="13" />
+            </button>
+            <button
+              v-else-if="canResumeImageTask(task)"
+              class="batch-queue-stop batch-queue-resume"
+              type="button"
+              title="恢复任务"
+              :disabled="resuming.includes(task.id)"
+              @click="resumeTask(task)"
+            >
+              <RotateCcw :size="13" />
+            </button>
+          </article>
+        </div>
+      </section>
       <div
         ref="panelDivider"
         class="panel-divider"
@@ -590,7 +701,7 @@
         @keydown="resizePanelByKeyboard"
         @dblclick="leftWidth = 45"
       ></div>
-      <section id="image-tasks-panel" class="tasks-panel">
+      <section v-if="!batchRunning" id="image-tasks-panel" class="tasks-panel">
         <header class="tasks-head">
           <div class="tasks-head-left">
             <div class="tasks-head-icon-box">
@@ -766,6 +877,11 @@
                       <el-dropdown-item command="regenerate"
                         >全部重新生成</el-dropdown-item
                       >
+                      <el-dropdown-item
+                        v-if="roundCanResume(round)"
+                        command="resume"
+                        >恢复未完成</el-dropdown-item
+                      >
                       <el-dropdown-item command="deletePrompt"
                         >删除提示词</el-dropdown-item
                       >
@@ -788,6 +904,12 @@
               "
               class="round-prompt-box"
             >
+              <span
+                v-if="round.tasks[0]?.request.batchName"
+                class="round-batch-name"
+              >
+                {{ round.tasks[0].request.batchName }}
+              </span>
               <p
                 class="round-prompt-text"
                 :class="{
@@ -1053,7 +1175,7 @@
                 <footer
                   v-if="
                     !task.imageCount ||
-                    task.canResume ||
+                    canResumeImageTask(task) ||
                     (task.error?.message &&
                       !roundState[round.id]?.ignored?.includes(task.id))
                   "
@@ -1074,10 +1196,7 @@
                     <span>重新生成</span>
                   </button>
                   <button
-                    v-if="
-                      task.canResume &&
-                      ['failed', 'interrupted'].includes(task.status)
-                    "
+                    v-if="canResumeImageTask(task)"
                     class="task-btn task-btn-warning"
                     type="button"
                     :disabled="resuming.includes(task.id)"
@@ -1152,6 +1271,75 @@
             </button>
           </div>
         </footer>
+      </section>
+      <section v-else class="batch-results-panel">
+        <header class="batch-results-head">
+          <div class="batch-results-title-wrap">
+            <span class="batch-results-title">批量生成结果</span>
+            <span class="batch-results-meta"
+              >{{ batchQueueCompletedCount }} /
+              {{ batchQueueTasks.length }} 已完成</span
+            >
+          </div>
+          <span class="batch-results-meta"
+            >{{ batchQueueTasks.length }} 项</span
+          >
+        </header>
+        <div class="batch-results-list">
+          <article
+            v-for="task in batchQueueTasks"
+            :key="task.id"
+            class="batch-result-item"
+            :class="task.status"
+          >
+            <div class="batch-result-thumb">
+              <el-image
+                v-if="task.thumbnail && task.imageCount"
+                :src="task.thumbnail"
+                fit="cover"
+                lazy
+                @click="showDetail(task, 'images')"
+              />
+              <LoaderCircle
+                v-else-if="['queued', 'processing'].includes(task.status)"
+                :size="22"
+                class="batch-result-spinner spinning"
+              />
+              <ImageOff v-else :size="20" />
+            </div>
+            <div class="batch-result-main">
+              <div class="batch-result-name-row">
+                <span class="batch-result-name">{{
+                  task.request.batchName || "未命名任务"
+                }}</span>
+                <span class="batch-result-status" :class="task.status">{{
+                  statusLabels[task.status] || task.status
+                }}</span>
+              </div>
+              <span class="batch-result-prompt">{{ task.request.prompt }}</span>
+            </div>
+            <button
+              v-if="['queued', 'processing'].includes(task.status)"
+              class="batch-result-action"
+              type="button"
+              title="取消生成任务"
+              :disabled="batchQueueStopping"
+              @click="cancelSelectedBatchTasks([task.id])"
+            >
+              <X :size="13" />
+            </button>
+            <button
+              v-else-if="canResumeImageTask(task)"
+              class="batch-result-action"
+              type="button"
+              title="恢复任务"
+              :disabled="resuming.includes(task.id)"
+              @click="resumeTask(task)"
+            >
+              <RotateCcw :size="13" />
+            </button>
+          </article>
+        </div>
       </section>
     </div>
 
@@ -1705,6 +1893,17 @@
         </div>
       </footer>
     </BaseModal>
+    <ImageBatchDialog
+      v-if="batchDialogOpen || batchRunning"
+      :visible="batchDialogOpen"
+      :conversation-id="batchConversationId"
+      :settings="batchSettings"
+      :models="displayModels"
+      :size-presets="sizePresets"
+      @close="closeBatchDialog"
+      @session-created="createBatchConversation"
+      @finished="handleBatchFinished"
+    />
   </section>
 </template>
 
@@ -1742,8 +1941,10 @@ import {
   Maximize2,
   MessageSquare,
   MoreVertical,
+  Pause,
   Paintbrush,
   Pencil,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -1780,6 +1981,9 @@ const generationMode = defineModel("generationMode", {
 // 词库按需加载，打开时才读取分类和分页内容。
 const ImagePromptLibrary = defineAsyncComponent(
   () => import("@/features/tools/components/ImagePromptLibrary.vue")
+)
+const ImageBatchDialog = defineAsyncComponent(
+  () => import("./ImageBatchDialog.vue")
 )
 const promptLibraryOpen = ref(false)
 const workbenchLayout = ref(null)
@@ -1858,6 +2062,12 @@ const statusLabels = {
   partial: "部分完成",
   failed: "失败",
   interrupted: "已中断"
+}
+function canResumeImageTask(task) {
+  // 中断通常代表应用退出或暂停；明确取消的任务保持不可恢复。
+  if (task.status === "interrupted")
+    return task.error?.message !== "任务已由用户取消"
+  return task.status === "failed" && Boolean(task.canResume)
 }
 const fields = [
   {
@@ -1940,8 +2150,57 @@ const roundState = ref(savedHistory.rounds || {})
 const activeConversationId = ref(savedHistory.active || "")
 const historyIndex = ref([])
 const resuming = ref([])
+const batchDialogOpen = ref(false)
+const batchConversationId = ref("")
+const batchRunning = ref(false)
+const batchPaused = ref(false)
+const batchQueueSelected = ref([])
+const batchQueueStopping = ref(false)
 const currentConversation = computed(() =>
   conversations.value.find((item) => item.id === activeConversationId.value)
+)
+const batchSettings = computed(() => ({
+  accountId: form.accountId,
+  generationMode: form.generationMode,
+  model: form.model,
+  size: `${width.value}x${height.value}`,
+  quality: form.quality,
+  outputFormat: form.outputFormat,
+  background: form.background,
+  responseFormat: form.responseFormat,
+  ratio: ratio.value,
+  tier: tier.value
+}))
+const batchQueueTasks = computed(() => tasks.value)
+const batchQueueCompletedCount = computed(
+  () =>
+    batchQueueTasks.value.filter((task) =>
+      ["completed", "partial", "failed", "interrupted"].includes(task.status)
+    ).length
+)
+const batchQueueActiveTasks = computed(() =>
+  batchQueueTasks.value.filter((task) =>
+    ["queued", "processing"].includes(task.status)
+  )
+)
+const batchQueueResumableTasks = computed(() =>
+  batchQueueTasks.value.filter(
+    (task) => canResumeImageTask(task) && task.status === "interrupted"
+  )
+)
+const batchQueueCancellableSelected = computed(() =>
+  batchQueueSelected.value.filter((id) =>
+    batchQueueTasks.value.some(
+      (task) => task.id === id && ["queued", "processing"].includes(task.status)
+    )
+  )
+)
+const batchQueueProcessingCount = computed(
+  () =>
+    batchQueueTasks.value.filter((task) => task.status === "processing").length
+)
+const batchQueueQueuedCount = computed(
+  () => batchQueueTasks.value.filter((task) => task.status === "queued").length
 )
 const sizePresets = [
   ["1:1", "1k", 1024, 1024],
@@ -2048,6 +2307,50 @@ function ensureConversation() {
   return currentConversation.value
 }
 ensureConversation()
+
+function openBatchDialog() {
+  // 打开弹框只准备批量配置，点击开始后才创建独立会话。
+  batchConversationId.value = ""
+  batchPaused.value = false
+  batchDialogOpen.value = true
+}
+
+function createBatchConversation(id) {
+  const item = {
+    id,
+    title: `批量生成 · ${formatDateTime(Date.now())}`,
+    updatedAt: Date.now(),
+    renamed: true
+  }
+  conversations.value.unshift(item)
+  batchConversationId.value = id
+  batchRunning.value = true
+  batchPaused.value = false
+  activeConversationId.value = id
+  status.value = ""
+  page.value = 1
+  saveHistory()
+  loadTasks()
+}
+
+function closeBatchDialog() {
+  batchDialogOpen.value = false
+  if (batchConversationId.value) loadTasks()
+}
+
+async function handleBatchFinished({ total: batchTotal, failed }) {
+  // 批量完成后同步会话索引和当前列表，保留可恢复的失败任务。
+  if (currentConversation.value?.id === batchConversationId.value) {
+    currentConversation.value.updatedAt = Date.now()
+    currentConversation.value.title = `批量生成 · ${batchTotal - failed}/${batchTotal} 完成`
+  }
+  saveHistory()
+  await loadHistory()
+  await loadTasks()
+  batchRunning.value = failed > 0
+  if (!batchRunning.value) batchPaused.value = false
+  batchQueueSelected.value = []
+}
 
 function conversationStats(id) {
   const items = historyIndex.value.filter(
@@ -2344,6 +2647,70 @@ async function resumeTask(task) {
   }
 }
 
+async function resumeRound(round) {
+  const pending = round.tasks.filter((task) => canResumeImageTask(task))
+  for (const task of pending) await resumeTask(task)
+}
+
+async function cancelSelectedBatchTasks(
+  ids = batchQueueCancellableSelected.value
+) {
+  const targets = [...ids]
+  if (!targets.length || batchQueueStopping.value) return
+  batchQueueStopping.value = true
+  try {
+    // 用户取消的任务保留记录，但不再进入恢复队列。
+    await toolboxApi.cancelImageTasks({ ids: targets, recoverable: false })
+    batchQueueSelected.value = batchQueueSelected.value.filter(
+      (id) => !targets.includes(id)
+    )
+    await loadTasks()
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    batchQueueStopping.value = false
+  }
+}
+
+async function toggleBatchPause() {
+  if (batchQueueStopping.value) return
+  const targets = batchPaused.value
+    ? batchQueueTasks.value
+        .filter(
+          (task) => canResumeImageTask(task) && task.status === "interrupted"
+        )
+        .map((task) => task.id)
+    : batchQueueActiveTasks.value.map((task) => task.id)
+  if (!targets.length) return
+  batchQueueStopping.value = true
+  try {
+    if (batchPaused.value) {
+      for (const id of targets) await toolboxApi.resumeImageTask({ id })
+      batchPaused.value = false
+    } else {
+      // 暂停使用可恢复中断，避免排队任务被取消后丢失。
+      await toolboxApi.cancelImageTasks({ ids: targets, recoverable: true })
+      batchPaused.value = true
+    }
+    await loadTasks()
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    batchQueueStopping.value = false
+  }
+}
+
+async function deleteBatchQueueTasks() {
+  if (!batchQueueSelected.value.length) return
+  try {
+    await toolboxApi.deleteImageTasks({ ids: batchQueueSelected.value })
+    batchQueueSelected.value = []
+    await loadTasks()
+  } catch (error) {
+    createMessage.error(String(error))
+  }
+}
+
 const accounts = ref([])
 const fallbackModels = [
   "gpt-image-2.5-sunburst",
@@ -2405,11 +2772,17 @@ function handleRoundMenuCommand(command, round) {
     reuseTask(round.tasks[0], true)
   } else if (command === "regenerate") {
     regenerateRound(round)
+  } else if (command === "resume") {
+    resumeRound(round)
   } else if (command === "deletePrompt") {
     removeRoundPrompt(round)
   } else if (command === "delete") {
     removeRoundResults(round)
   }
+}
+
+function roundCanResume(round) {
+  return round.tasks.some((task) => canResumeImageTask(task))
 }
 const references = ref([])
 const mask = ref(null)
@@ -2594,7 +2967,13 @@ async function loadModels() {
   }
 }
 
-async function loadQuota() {
+async function refreshQuota() {
+  if (loadingQuota.value || submitting.value || !form.accountId) return
+  webQuota.value = null
+  await loadQuota(true)
+}
+
+async function loadQuota(forceRefresh = false) {
   const version = ++quotaRequestVersion
   const accountId = form.accountId
   const enabled = form.generationMode === "web" && Boolean(accountId)
@@ -2604,7 +2983,9 @@ async function loadQuota() {
   if (!enabled) return
 
   try {
-    const result = await toolboxApi.imageQuota({ accountId })
+    const payload = { accountId }
+    if (forceRefresh) payload.refreshToken = Date.now()
+    const result = await toolboxApi.imageQuota(payload)
     // 账号切换或退出 Web 后，旧请求不能覆盖当前额度。
     if (version === quotaRequestVersion && !disposed) webQuota.value = result
   } catch (error) {
@@ -2612,6 +2993,27 @@ async function loadQuota() {
       quotaError.value = String(error)
   } finally {
     if (version === quotaRequestVersion && !disposed) loadingQuota.value = false
+  }
+}
+
+function applyQuotaSnapshotFromTasks(items) {
+  if (form.generationMode !== "web" || !form.accountId) return
+  const task = (items || []).find(
+    (item) => typeof item.usage?.web_remaining === "number"
+  )
+  if (!task) return
+  const snapshotAt = Number(task.finishedAt || task.updatedAt || 0)
+  const currentAt = Number(webQuota.value?.updatedAt || 0)
+  if (currentAt && snapshotAt && snapshotAt < currentAt) return
+  // 任务结果中的上游额度快照优先于同一时刻仍在返回的旧查询。
+  quotaRequestVersion += 1
+  loadingQuota.value = false
+  webQuota.value = {
+    ...(webQuota.value || {}),
+    accountId: form.accountId,
+    remaining: task.usage.web_remaining,
+    resetAfter: task.usage.web_reset_after || webQuota.value?.resetAfter || "",
+    updatedAt: snapshotAt || Date.now()
   }
 }
 
@@ -2624,11 +3026,24 @@ async function loadTasks() {
       page: page.value,
       status: status.value,
       conversationId: activeConversationId.value,
-      pageSize: pageSize.value,
+      pageSize: batchRunning.value ? 100 : pageSize.value,
       groupByRound: true
     })
     if (version !== requestVersion || disposed) return
     tasks.value = result.items
+    applyQuotaSnapshotFromTasks(result.items)
+    // 恢复后的批量任务全部成功时自动回到普通结果面板。
+    if (
+      batchRunning.value &&
+      !batchPaused.value &&
+      batchQueueTasks.value.length &&
+      batchQueueTasks.value.every((task) =>
+        ["completed", "partial"].includes(task.status)
+      )
+    ) {
+      batchRunning.value = false
+      batchQueueSelected.value = []
+    }
     await loadHistory()
     if (version !== requestVersion || disposed) return
     total.value = result.total
@@ -2989,9 +3404,13 @@ watch(page, () => {
   loadTasks()
 })
 const unsubscribe = subscribe("images:changed", (event) => {
-  if (autoRefresh.value) loadTasks()
+  if (autoRefresh.value || batchRunning.value) loadTasks()
   // 任务结束后向上游重查额度，不根据生成数量在本地扣减。
-  if (event.accountId === form.accountId && event.generationMode === "web")
+  if (
+    form.generationMode === "web" &&
+    (!event.accountId || event.accountId === form.accountId) &&
+    (!event.generationMode || event.generationMode === "web")
+  )
     loadQuota()
 })
 const unsubscribeError = subscribe("images:storage-error", (event) => {
@@ -3000,7 +3419,12 @@ const unsubscribeError = subscribe("images:storage-error", (event) => {
 onMounted(() => {
   refreshAll()
   timer = window.setInterval(() => {
-    if (autoRefresh.value && !refreshing.value && !document.hidden) loadTasks()
+    if (
+      (autoRefresh.value || batchRunning.value) &&
+      !refreshing.value &&
+      !document.hidden
+    )
+      loadTasks()
   }, 3000)
 })
 onBeforeUnmount(() => {
@@ -3092,6 +3516,18 @@ defineExpose({
           background: #1d4ed8;
           border-color: #1d4ed8;
           color: #ffffff;
+        }
+      }
+
+      &.conversation-batch-btn {
+        border-color: #0f766e;
+        background: #f0fdfa;
+        color: #0f766e;
+
+        &:hover {
+          border-color: #0d9488;
+          background: #ccfbf1;
+          color: #115e59;
         }
       }
     }
@@ -4125,6 +4561,231 @@ defineExpose({
       }
     }
 
+    .batch-queue-panel,
+    .batch-results-panel {
+      display: flex;
+      min-width: 0;
+      min-height: 0;
+      flex: 0 0 auto;
+      flex-direction: column;
+      gap: 12px;
+      overflow: hidden;
+      padding: 20px;
+      border: 1px solid var(--color-line);
+      border-radius: 12px;
+      background: var(--color-panel);
+    }
+
+    .batch-queue-list {
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .batch-queue-item,
+    .batch-queue-head,
+    .batch-queue-actions,
+    .batch-results-head,
+    .batch-results-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .batch-queue-head,
+    .batch-results-head {
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+
+    .batch-queue-actions {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .batch-queue-progress-info,
+    .batch-results-title-wrap {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .batch-queue-progress-count,
+    .batch-results-title {
+      color: var(--color-text);
+      font-size: 15px;
+    }
+
+    .batch-results-panel {
+      flex: 1 1 auto;
+    }
+
+    .batch-results-head {
+      flex-shrink: 0;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--color-line);
+    }
+
+    .batch-results-meta {
+      color: var(--color-text-muted);
+      font-size: 12px;
+    }
+
+    .batch-results-list {
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .batch-result-item {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--color-line);
+    }
+
+    .batch-result-thumb {
+      display: grid;
+      width: 58px;
+      height: 58px;
+      flex: 0 0 58px;
+      place-items: center;
+      overflow: hidden;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel-soft);
+      color: var(--color-text-muted);
+      cursor: pointer;
+
+      :deep(.el-image) {
+        width: 100%;
+        height: 100%;
+      }
+    }
+
+    .batch-result-main {
+      display: flex;
+      min-width: 0;
+      flex: 1;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .batch-result-name-row {
+      display: flex;
+      min-width: 0;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .batch-result-name,
+    .batch-result-prompt {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .batch-result-name {
+      min-width: 0;
+      flex: 1;
+      color: var(--color-text);
+      font-size: 13px;
+    }
+
+    .batch-result-prompt {
+      color: var(--color-text-muted);
+      font-size: 11px;
+    }
+
+    .batch-result-status {
+      flex: 0 0 auto;
+      color: var(--color-text-muted);
+      font-size: 11px;
+    }
+
+    .batch-result-status.completed,
+    .batch-result-status.partial {
+      color: var(--color-success);
+    }
+
+    .batch-result-status.processing,
+    .batch-result-status.queued {
+      color: var(--color-primary);
+    }
+
+    .batch-result-status.failed,
+    .batch-result-status.interrupted {
+      color: var(--color-danger);
+    }
+
+    .batch-result-action {
+      display: grid;
+      width: 26px;
+      height: 26px;
+      flex: 0 0 26px;
+      place-items: center;
+      border: 1px solid var(--color-line);
+      border-radius: 5px;
+      background: var(--color-panel-soft);
+      color: var(--color-text-muted);
+      cursor: pointer;
+    }
+
+    .batch-result-action:hover:not(:disabled),
+    .batch-queue-stop:hover:not(:disabled) {
+      border-color: var(--color-line-strong);
+      color: var(--color-text);
+    }
+
+    .batch-result-action:disabled,
+    .batch-queue-stop:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    .batch-queue-item {
+      padding: 10px 0;
+      border-bottom: 1px solid var(--color-line);
+    }
+
+    .batch-queue-item-main {
+      display: flex;
+      min-width: 0;
+      flex: 1;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .batch-queue-item-prompt {
+      overflow: hidden;
+      color: var(--color-text-muted);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .batch-queue-action,
+    .batch-queue-stop {
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel-soft);
+      color: var(--color-text);
+      cursor: pointer;
+    }
+
+    .batch-queue-action {
+      height: 30px;
+      padding: 0 9px;
+    }
+
+    .batch-queue-stop {
+      display: grid;
+      width: 26px;
+      height: 26px;
+      place-items: center;
+    }
+
     /* 右侧任务列表面板 */
     .tasks-panel {
       flex: 1;
@@ -4529,6 +5190,13 @@ defineExpose({
             border-left: 3px solid #2563eb;
             border-radius: 8px;
             padding: 12px 14px;
+
+            .round-batch-name {
+              display: block;
+              margin-bottom: 5px;
+              color: #2563eb;
+              font-size: 12px;
+            }
 
             .round-prompt-text {
               margin: 0;
@@ -5114,6 +5782,136 @@ defineExpose({
           }
         }
       }
+    }
+
+    .batch-queue-panel {
+      display: flex;
+      min-width: 0;
+      min-height: 0;
+      flex: 0 0 auto;
+      flex-direction: column;
+      gap: 12px;
+      overflow: hidden;
+      padding: 20px;
+      border: 1px solid var(--color-line);
+      border-radius: 12px;
+      background: var(--color-panel);
+    }
+
+    .batch-queue-head,
+    .batch-queue-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .batch-queue-head > .batch-queue-progress-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .batch-queue-head > .batch-queue-actions {
+      flex-direction: row;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .batch-queue-sub {
+      color: var(--color-text-muted);
+      font-size: 12px;
+    }
+
+    .batch-queue-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 9px;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel-soft);
+      color: var(--color-text);
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .batch-queue-action.danger {
+      color: var(--color-danger);
+    }
+
+    .batch-queue-action:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    .batch-queue-list {
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .batch-queue-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--color-line);
+    }
+
+    .batch-queue-item-main {
+      display: flex;
+      min-width: 0;
+      flex: 1;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .batch-queue-item-name,
+    .batch-queue-item-prompt {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .batch-queue-item-name {
+      font-size: 13px;
+    }
+
+    .batch-queue-item-prompt {
+      color: var(--color-text-muted);
+      font-size: 11px;
+    }
+
+    .batch-queue-item-status {
+      flex: 0 0 auto;
+      color: var(--color-text-muted);
+      font-size: 11px;
+    }
+
+    .batch-queue-item-status.completed {
+      color: var(--color-success);
+    }
+
+    .batch-queue-item-status.processing,
+    .batch-queue-item-status.queued {
+      color: var(--color-primary);
+    }
+
+    .batch-queue-stop {
+      display: inline-grid;
+      width: 26px;
+      height: 26px;
+      place-items: center;
+      border: 1px solid var(--color-line);
+      border-radius: 5px;
+      background: var(--color-panel);
+      color: var(--color-danger);
+      cursor: pointer;
+    }
+
+    .batch-results-panel {
+      flex: 1 1 auto;
     }
 
     .tasks-panel {

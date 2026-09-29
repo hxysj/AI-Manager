@@ -576,7 +576,7 @@
                           {{ stateLabel(item.state) }}
                         </span>
                       </td>
-                      <td>{{ item.region || "--" }}</td>
+                      <td>{{ localizedServiceRegion(item.region) || "--" }}</td>
                       <td>{{ formatRtt(item.rttMs) }}</td>
                     </tr>
                   </tbody>
@@ -846,6 +846,32 @@ const countryCodeZh = Object.freeze({
   SE: "瑞典",
   CH: "瑞士",
   ES: "西班牙"
+})
+
+// Gemini 返回三字母国家码，服务区域单独映射，避免误传给两字母地区格式化器。
+const serviceRegionCodeZh = Object.freeze({
+  USA: "美国",
+  CHN: "中国",
+  JPN: "日本",
+  KOR: "韩国",
+  SGP: "新加坡",
+  HKG: "中国香港",
+  MAC: "中国澳门",
+  TWN: "中国台湾",
+  CAN: "加拿大",
+  AUS: "澳大利亚",
+  DEU: "德国",
+  FRA: "法国",
+  GBR: "英国",
+  IND: "印度",
+  RUS: "俄罗斯",
+  BRA: "巴西",
+  MEX: "墨西哥",
+  BLR: "白俄罗斯",
+  CUB: "古巴",
+  IRN: "伊朗",
+  PRK: "朝鲜",
+  SYR: "叙利亚"
 })
 
 const regionNameZh = Object.freeze({
@@ -1651,24 +1677,28 @@ function geoLookupKey(value) {
 
 function localizedCountryName(name, code) {
   const normalizedCode = normalizedGeoText(code).toUpperCase()
-  if (/^[A-Z]{2}$/.test(normalizedCode)) {
+  const normalizedName = normalizedGeoText(name)
+  const nameAsCode = normalizedName.toUpperCase()
+  const displayCode = /^[A-Z]{2}$/.test(normalizedCode)
+    ? normalizedCode
+    : nameAsCode
+  if (/^[A-Z]{2}$/.test(displayCode)) {
     try {
       chineseRegionDisplayNames ||= new Intl.DisplayNames(["zh-CN"], {
         type: "region"
       })
-      const localized = chineseRegionDisplayNames.of(normalizedCode)
-      if (localized && localized !== normalizedCode) return localized
+      const localized = chineseRegionDisplayNames.of(displayCode)
+      if (localized && localized !== displayCode) return localized
     } catch {
       // 某些旧版 WebView 没有 Intl.DisplayNames，继续使用本地别名表。
     }
   }
-  const normalizedName = normalizedGeoText(name)
   return (
     countryCodeZh[normalizedCode] ||
-    countryCodeZh[normalizedName.toUpperCase()] ||
+    countryCodeZh[nameAsCode] ||
     countryNameZh[geoLookupKey(normalizedName)] ||
     normalizedName ||
-    (/^[A-Z]{2}$/.test(normalizedCode) ? normalizedCode : "")
+    (/^[A-Z]{2}$/.test(displayCode) ? displayCode : "")
   )
 }
 
@@ -1694,6 +1724,18 @@ function localizedCityName(value) {
 
   const withoutSuffix = key.replace(/\s+(city|municipality)$/i, "")
   return cityNameZh[withoutSuffix] || normalized
+}
+
+function localizedServiceRegion(value) {
+  const normalized = normalizedGeoText(value)
+  if (!normalized) return ""
+  const code = normalized.toUpperCase()
+  return (
+    serviceRegionCodeZh[code] ||
+    localizedCountryName("", code) ||
+    localizedRegionName(normalized) ||
+    normalized
+  )
 }
 
 function identityLocation(item) {

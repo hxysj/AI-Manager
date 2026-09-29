@@ -37,7 +37,7 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
     // 重启后不能确认上游是否已消耗额度，不自动重放请求。
     open(paths)?.execute(
         "UPDATE image_tasks SET status = 'interrupted', payload_json = json_set(payload_json,
-         '$.status', 'interrupted', '$.error.message', '应用已退出，生成结果未知；请确认后重新提交')
+         '$.status', 'interrupted', '$.canResume', json('true'), '$.error.message', '应用已退出，生成结果未知；请恢复后继续')
          WHERE status IN ('processing', 'queued')",
         [],
     )?;
@@ -80,8 +80,9 @@ pub fn requeue(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
     let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let raw: String = transaction.query_row("SELECT payload_json FROM image_tasks WHERE id = ?1 AND status IN ('failed', 'interrupted')", [id], |row| row.get(0))?;
     let mut task: Value = serde_json::from_str(&raw)?;
+    // 有 Web 恢复上下文时继续查询原会话，否则从原请求重新排队。
     if task["request"]["generationMode"] != "web" || !task["recovery"]["conversationId"].is_string() {
-        return Err(ManagerError::System("此任务没有可继续查询的 Web 会话".into()));
+        task["recovery"] = Value::Null;
     }
     task["status"] = json!("queued");
     task["error"] = Value::Null;
@@ -274,6 +275,27 @@ pub fn delete(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
     transaction.execute("DELETE FROM image_inputs WHERE task_id NOT IN (SELECT COALESCE(json_extract(payload_json, '$.inputId'), id) FROM image_tasks)", [])?;
     transaction.commit()?;
     Ok(json!({ "deleted": ids.len() }))
+}
+
+pub fn cancel(paths: &AppPaths, ids: &[String], recoverable: bool) -> Result<Value, ManagerError> {
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(ManagerError::System("请选取 1–10000 个任务".into()));
+    }
+    let connection = open(paths)?;
+    let error_message = if recoverable {
+        "批量任务已暂停"
+    } else {
+        "任务已由用户取消"
+    };
+    let changed = connection.execute(
+        "UPDATE image_tasks SET status = 'interrupted', payload_json = json_set(payload_json, '$.status', 'interrupted', '$.canResume', json(?2), '$.error.message', ?3) WHERE id IN (SELECT value FROM json_each(?1)) AND status IN ('queued', 'processing')",
+        rusqlite::params![
+            serde_json::to_string(ids)?,
+            if recoverable { "true" } else { "false" },
+            error_message
+        ],
+    )?;
+    Ok(json!({ "cancelled": changed }))
 }
 
 pub fn clear_results(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {

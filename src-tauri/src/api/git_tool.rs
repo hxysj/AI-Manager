@@ -341,7 +341,20 @@ pub async fn archive_branch(
         return Err(ManagerError::System("归档提交校验失败".to_string()));
     }
 
-    run_git(&["branch", "-D", &branch_name], &project_path).await?;
+    if let Err(error) = run_git(&["branch", "-D", &branch_name], &project_path).await {
+        let _ = run_git(
+            &[
+                "--git-dir",
+                &archive_git_dir,
+                "update-ref",
+                "-d",
+                &archive_ref,
+            ],
+            &data_dir,
+        )
+        .await;
+        return Err(error);
+    }
 
     let archive = json!({
       "archiveId": archive_id,

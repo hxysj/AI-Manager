@@ -17,6 +17,7 @@ export const toolboxApi = {
   submitImageTask: (payload) => request("tools:image-submit", payload),
   imageHistory: () => request("tools:image-history"),
   resumeImageTask: (payload) => request("tools:image-resume", payload),
+  cancelImageTasks: (payload) => request("tools:image-cancel", payload),
   listImageTasks: (payload) => request("tools:image-list", payload),
   imageTaskDetail: (payload) => request("tools:image-detail", payload),
   imageTaskInputs: (payload) => request("tools:image-inputs", payload),

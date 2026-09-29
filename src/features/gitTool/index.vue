@@ -2344,21 +2344,51 @@ async function archiveSelectedBranches() {
   }
 
   gitLoading.value = true
+  const successBranches = []
+  const failedBranches = []
 
   try {
     for (const branchName of branchNames) {
-      await gitToolApi.archiveGitToolBranch({
-        repoId: selectedRepoId.value,
-        branchName
-      })
+      try {
+        await gitToolApi.archiveGitToolBranch({
+          repoId: selectedRepoId.value,
+          branchName
+        })
+        successBranches.push(branchName)
+      } catch (error) {
+        failedBranches.push({
+          branchName,
+          error
+        })
+      }
     }
 
-    createMessage.success("选中分支已归档。")
-    selectedBranchNames.value = []
-    selectedBranch.value = ""
+    selectedBranchNames.value = failedBranches.map((item) => item.branchName)
     await refreshGitProject()
-  } catch (error) {
-    showErrorMessage(error)
+
+    if (successBranches.length) {
+      createMessage.success(
+        failedBranches.length
+          ? `成功归档 ${successBranches.length} 个分支，${failedBranches.length} 个分支归档失败。`
+          : `成功归档 ${successBranches.length} 个分支。`
+      )
+    }
+
+    if (failedBranches.length) {
+      console.error("[GitTool] 批量归档失败:", failedBranches)
+      const firstError = failedBranches[0].error
+      const firstMessage =
+        firstError?.data?.message ||
+        firstError?.message ||
+        firstError?.toString() ||
+        "操作失败"
+
+      createMessage.error(
+        `归档失败：${failedBranches
+          .map((item) => item.branchName)
+          .join("、")}；${firstMessage}`
+      )
+    }
   } finally {
     gitLoading.value = false
   }

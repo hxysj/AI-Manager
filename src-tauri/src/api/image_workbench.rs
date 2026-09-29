@@ -46,6 +46,8 @@ pub struct ImageRequest {
     background: String,
     response_format: String,
     #[serde(default)]
+    batch_name: String,
+    #[serde(default)]
     images: Vec<String>,
     #[serde(default)]
     mask: String,
@@ -79,6 +81,7 @@ impl ImageRequest {
             || !(matches!(self.quality.as_str(), "auto" | "low" | "medium" | "high")
                 || (self.model.contains("image-2.5") && matches!(self.quality.as_str(), "xhigh" | "max")))
             || !(1..=100).contains(&self.n)
+            || self.batch_name.len() > 200
             || self.conversation_id.len() > 128 || self.round_id.len() > 128
             || self.ratio.len() > 32 || self.tier.len() > 16
             || !matches!(self.output_format.as_str(), "png" | "jpeg" | "webp")
@@ -3236,7 +3239,8 @@ mod tests {
         let recovered = image_store::requeue(&paths, "task-1").unwrap();
         assert_eq!(recovered["recovery"]["conversationId"], "upstream");
         assert!(image_store::requeue(&paths, "task-1").is_err());
-        assert!(image_store::requeue(&paths, "task-99").is_err());
+        let recovered_queued = image_store::requeue(&paths, "task-99").unwrap();
+        assert_eq!(recovered_queued["status"], "queued");
         assert!(image_store::start(&paths, "task-1").unwrap());
         assert!(image_store::clear_results(&paths, &["task-1".into()]).is_err());
         let mut finished = recovered;
