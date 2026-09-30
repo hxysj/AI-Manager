@@ -4440,12 +4440,18 @@ defineExpose({
   /* 面板遮罩层 (Panel Loading Overlay) */
   .workbench-loading-overlay {
     position: absolute;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
     z-index: 60;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    text-align: center;
     gap: 12px;
     background: color-mix(
       in srgb,
@@ -4463,6 +4469,7 @@ defineExpose({
       font-size: 13px;
       font-weight: 500;
       color: var(--color-text-muted);
+      text-align: center;
     }
   }
 
@@ -5635,6 +5642,7 @@ defineExpose({
        ========================================================================= */
     .batch-queue-panel,
     .batch-results-panel {
+      position: relative;
       display: flex;
       min-width: 0;
       min-height: 0;
@@ -6947,6 +6955,7 @@ defineExpose({
 
     /* 右侧任务列表面板 */
     .tasks-panel {
+      position: relative;
       flex: 1;
       display: flex;
       flex-direction: column;
