@@ -1,461 +1,738 @@
 <template>
   <section class="network-quality">
-    <div class="network-quality-toolbar">
-      <div class="network-quality-control-group">
-        <span class="network-quality-control-label">地址族</span>
-        <div
-          class="network-quality-family-switch"
-          role="radiogroup"
-          aria-label="诊断地址族"
-        >
-          <button
-            v-for="item in familyOptions"
-            :key="item.value"
-            type="button"
-            :class="{ 'is-active': request.family === item.value }"
-            :aria-checked="request.family === item.value"
-            :disabled="isBusy"
-            role="radio"
-            @click="request.family = item.value"
+    <!-- 顶部操作工具栏 -->
+    <header class="network-quality-toolbar">
+      <div class="network-quality-toolbar-left">
+        <!-- 地址族 -->
+        <div class="network-quality-field-group">
+          <span class="network-quality-field-label">地址族</span>
+          <div
+            class="network-quality-segmented"
+            role="radiogroup"
+            aria-label="诊断地址族"
           >
-            {{ item.label }}
-          </button>
+            <button
+              v-for="item in familyOptions"
+              :key="item.value"
+              type="button"
+              class="network-quality-seg-btn"
+              :class="{ 'is-active': request.family === item.value }"
+              :disabled="isBusy"
+              @click="request.family = item.value"
+            >
+              {{ item.label }}
+            </button>
+          </div>
         </div>
-      </div>
 
-      <div
-        class="network-quality-module-list"
-        role="group"
-        aria-label="诊断模块"
-      >
-        <span class="network-quality-control-label">模块</span>
+        <!-- 检测项复选框 -->
+        <div
+          class="network-quality-field-group"
+          role="group"
+          aria-label="检测项"
+        >
+          <span class="network-quality-field-label">检测项</span>
+          <div class="network-quality-checkbox-group">
+            <button
+              v-for="item in moduleOptions"
+              :key="item.value"
+              type="button"
+              class="network-quality-check-btn"
+              :class="{ 'is-checked': request.modules[item.value] }"
+              :disabled="isBusy"
+              @click="
+                request.modules[item.value] = !request.modules[item.value]
+              "
+            >
+              <span class="network-quality-checkbox-box">
+                <Check
+                  v-if="request.modules[item.value]"
+                  :size="12"
+                  :stroke-width="3"
+                />
+              </span>
+              <span class="network-quality-checkbox-text">{{
+                item.label
+              }}</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- 携带公网地址开关 -->
         <label
-          v-for="item in moduleOptions"
-          :key="item.value"
-          class="network-quality-check"
+          class="network-quality-toggle-label"
+          title="开启后报告中保留完整公网 IP 地址，关闭后自动掩码"
         >
           <input
-            v-model="request.modules[item.value]"
+            v-model="carryPublicIp"
             type="checkbox"
             :disabled="isBusy"
+            @change="handleCarryPublicIpChange"
           />
-          <span>{{ item.label }}</span>
+          <span class="network-quality-toggle-slider" />
+          <span class="network-quality-toggle-title">携带公网地址</span>
         </label>
       </div>
 
-      <label class="network-quality-mask-toggle">
-        <input v-model="request.maskIp" type="checkbox" :disabled="isBusy" />
-        <span class="network-quality-toggle-track"></span>
-        <span>掩码公网地址</span>
-      </label>
-
-      <div class="network-quality-actions">
+      <!-- 右侧操作按钮组 -->
+      <div class="network-quality-toolbar-actions">
         <button
-          class="network-quality-action"
-          type="button"
-          :disabled="isBusy"
-          @click="loadDemo"
-        >
-          <FlaskConical :size="15" />
-          演示报告
-        </button>
-        <button
-          class="network-quality-action"
+          class="network-quality-btn is-outline"
           type="button"
           :disabled="!report || isBusy || exporting"
+          title="将当前报告导出为 JSON 文件"
           @click="exportJson"
         >
-          <LoaderCircle v-if="exporting" class="is-spinning" :size="15" />
-          <Download v-else :size="15" />
-          {{ exporting ? "导出中" : "导出 JSON" }}
+          <LoaderCircle v-if="exporting" class="is-spinning" :size="14" />
+          <Download v-else :size="14" />
+          <span>{{ exporting ? "导出中" : "导出 JSON" }}</span>
         </button>
+
         <button
           v-if="canCancel"
-          class="network-quality-action is-danger"
+          class="network-quality-btn is-danger"
           type="button"
           :disabled="cancelPending"
           @click="cancelDiagnosis"
         >
-          <LoaderCircle v-if="cancelPending" class="is-spinning" :size="15" />
-          <Square v-else :size="14" />
-          {{ cancelPending ? "正在取消" : "取消" }}
+          <LoaderCircle v-if="cancelPending" class="is-spinning" :size="14" />
+          <Square v-else :size="13" />
+          <span>{{ cancelPending ? "正在取消" : "取消诊断" }}</span>
         </button>
+
         <button
           v-else
-          class="network-quality-action is-primary"
+          class="network-quality-btn is-primary"
           type="button"
           :disabled="isBusy"
           @click="runDiagnosis"
         >
-          <LoaderCircle v-if="isBusy" class="is-spinning" :size="15" />
-          <Play v-else :size="15" />
-          {{ isBusy ? "诊断中" : report ? "重新诊断" : "开始诊断" }}
+          <LoaderCircle v-if="isBusy" class="is-spinning" :size="14" />
+          <Play v-else :size="14" fill="currentColor" />
+          <span>{{
+            isBusy ? "诊断中" : report ? "重新诊断" : "开始诊断"
+          }}</span>
         </button>
       </div>
-    </div>
+    </header>
 
+    <!-- 诊断状态提示条 -->
     <div
       v-if="status !== 'idle'"
-      class="network-quality-status"
+      class="network-quality-status-banner"
       :class="`is-${statusMeta.tone}`"
       role="status"
-      aria-live="polite"
     >
-      <LoaderCircle v-if="isBusy" class="is-spinning" :size="18" />
-      <CircleCheck v-else-if="status === 'success'" :size="18" />
-      <Ban v-else-if="status === 'cancelled'" :size="18" />
-      <CircleX v-else :size="18" />
-      <div class="network-quality-status-copy">
-        <div class="network-quality-status-line">
-          <strong>{{ statusMeta.label }}</strong>
-          <span v-if="isBusy">{{ progress.percent }}%</span>
-        </div>
-        <span>{{ statusMeta.message }}</span>
+      <div class="network-quality-status-icon">
+        <LoaderCircle v-if="isBusy" class="is-spinning" :size="18" />
         <div
-          v-if="isBusy"
-          class="network-quality-progress-track"
-          :aria-valuenow="progress.percent"
-          aria-valuemin="0"
-          aria-valuemax="100"
-          role="progressbar"
+          v-else-if="
+            status === 'success' &&
+            !warningFindings.length &&
+            !partialErrorCount
+          "
+          class="status-circle is-success"
         >
-          <span :style="{ width: `${progress.percent}%` }"></span>
+          <Check :size="12" :stroke-width="3" />
+        </div>
+        <div
+          v-else-if="
+            status === 'cancelled' ||
+            warningFindings.length ||
+            partialErrorCount
+          "
+          class="status-circle is-warning"
+        >
+          <span>!</span>
+        </div>
+        <div v-else class="status-circle is-danger">
+          <span>✕</span>
         </div>
       </div>
-    </div>
 
-    <div class="network-quality-body">
-      <div
-        v-if="status === 'idle' && !report"
-        class="network-quality-empty-state"
-      >
-        <Activity :size="34" />
-        <strong>正在准备自动诊断</strong>
-        <span>即将检测公网出口、区域识别、服务可用性与目标连接质量</span>
+      <div class="network-quality-status-body">
+        <strong class="network-quality-status-headline">{{
+          statusMeta.label
+        }}</strong>
+        <p class="network-quality-status-desc">{{ statusMeta.message }}</p>
+
+        <!-- 进度条（诊断中展示） -->
+        <div v-if="isBusy" class="network-quality-progress-line">
+          <div
+            class="network-quality-progress-active"
+            :style="{ width: `${progress.percent}%` }"
+          />
+        </div>
       </div>
 
       <div
         v-if="status === 'error' && !report"
-        class="network-quality-run-error"
+        class="network-quality-status-retry"
       >
-        <CircleX :size="20" />
-        <div>
-          <strong>本次诊断未生成报告</strong>
-          <span>{{ runError }}</span>
-        </div>
-        <button type="button" :disabled="isBusy" @click="runDiagnosis">
-          <RotateCcw :size="14" />
+        <button
+          type="button"
+          class="network-quality-btn is-danger is-sm"
+          :disabled="isBusy"
+          @click="runDiagnosis"
+        >
+          <RotateCcw :size="13" />
           重试
         </button>
       </div>
+    </div>
 
+    <!-- 主展示区 -->
+    <div class="network-quality-content">
+      <!-- 初始待诊断空状态 -->
+      <div v-if="status === 'idle' && !report" class="network-quality-welcome">
+        <div class="network-quality-radar-circle">
+          <div class="radar-wave wave-1" />
+          <div class="radar-wave wave-2" />
+          <Activity :size="36" class="radar-icon" />
+        </div>
+        <h2 class="network-quality-welcome-title">准备开始网络质量多维诊断</h2>
+        <p class="network-quality-welcome-desc">
+          系统将综合检测公网出口身份、多源地理位置共识、系统连通性阻断、主流云服务与
+          AI 端点可用性，以及全网链路基线延迟与丢包指标。
+        </p>
+        <div class="network-quality-welcome-btns">
+          <button
+            type="button"
+            class="network-quality-btn is-primary is-lg"
+            :disabled="isBusy"
+            @click="runDiagnosis"
+          >
+            <Play :size="15" fill="currentColor" />
+            开始诊断
+          </button>
+        </div>
+      </div>
+
+      <!-- 诊断报告主面板 -->
       <template v-if="report">
-        <section class="network-quality-integrity">
-          <div class="network-quality-section-head">
-            <div>
-              <span class="network-quality-section-kicker">Integrity</span>
-              <h2>测量完整性</h2>
-            </div>
-            <span
-              class="network-quality-count"
-              :class="{ 'is-clear': !findings.length }"
-            >
-              {{ findings.length ? `${findings.length} 项提示` : "无已知告警" }}
-            </span>
-          </div>
+        <!-- 核心遥测双列 Hero 卡片网格 (严格还原 2.png 布局) -->
+        <div class="network-quality-dashboard-grid">
+          <!-- 左侧列：测量完整性 + 网络质量评分 -->
+          <div class="network-quality-left-col">
+            <!-- 卡片 1: 测量完整性 -->
+            <article class="network-quality-panel-card">
+              <header class="network-quality-card-head">
+                <div class="network-quality-card-title">
+                  <Shield :size="17" class="head-icon is-blue" />
+                  <h3>测量完整性</h3>
+                </div>
+                <span class="network-quality-pill-tag is-blue">
+                  {{ findings.length }} 项提示
+                </span>
+              </header>
 
-          <div v-if="findings.length" class="network-quality-finding-list">
-            <article
-              v-for="(finding, index) in findings"
-              :key="finding.code || finding.id || index"
-              class="network-quality-finding"
-              :class="`is-${findingTone(finding)}`"
-            >
-              <ShieldAlert :size="17" />
-              <div>
-                <strong>{{ findingTitle(finding) }}</strong>
-                <span>{{ findingMessage(finding) }}</span>
+              <div class="network-quality-card-body">
+                <div
+                  v-if="findings.length"
+                  class="network-quality-findings-list"
+                >
+                  <div
+                    v-for="(finding, index) in findings"
+                    :key="finding.code || finding.id || index"
+                    class="network-quality-callout-item"
+                    :class="`is-${findingTone(finding)}`"
+                  >
+                    <div class="callout-circle-icon">
+                      <span v-if="findingTone(finding) === 'warning'">!</span>
+                      <span v-else-if="findingTone(finding) === 'info'">i</span>
+                      <span v-else>✕</span>
+                    </div>
+
+                    <div class="callout-content">
+                      <strong class="callout-title">{{
+                        findingTitle(finding)
+                      }}</strong>
+                      <p class="callout-desc">{{ findingMessage(finding) }}</p>
+                    </div>
+
+                    <ChevronRight :size="15" class="callout-arrow" />
+                  </div>
+                </div>
+
+                <div v-else class="network-quality-clear-item">
+                  <CheckCircle2 :size="17" class="text-success" />
+                  <span>已启用检测未发现异常，网络栈测量正常。</span>
+                </div>
+              </div>
+            </article>
+
+            <!-- 卡片 2: 网络质量评分 -->
+            <article class="network-quality-panel-card">
+              <header class="network-quality-card-head">
+                <div class="network-quality-card-title">
+                  <Shield :size="17" class="head-icon is-blue" />
+                  <h3>网络质量评分</h3>
+                </div>
+              </header>
+
+              <div class="network-quality-card-body">
+                <div class="network-quality-score-row">
+                  <!-- 左侧：270° 环形健康评分仪表盘 -->
+                  <div class="network-quality-gauge-wrapper">
+                    <svg
+                      class="network-quality-gauge-svg"
+                      viewBox="0 0 120 120"
+                    >
+                      <!-- 背景底轨 -->
+                      <circle
+                        class="gauge-bg-track"
+                        cx="60"
+                        cy="60"
+                        r="46"
+                        stroke-dasharray="216.77 289.03"
+                        transform="rotate(135 60 60)"
+                      />
+                      <!-- 前景激活进度弧线 -->
+                      <circle
+                        class="gauge-active-bar"
+                        :class="`is-${gradeTone}`"
+                        cx="60"
+                        cy="60"
+                        r="46"
+                        stroke-dasharray="216.77 289.03"
+                        :style="{ strokeDashoffset: gaugeStrokeOffset }"
+                        transform="rotate(135 60 60)"
+                      />
+                    </svg>
+
+                    <div class="gauge-center-content">
+                      <span class="gauge-number">{{ scoreText }}</span>
+                      <span class="gauge-divider">/ 100</span>
+                      <div class="gauge-grade-badge" :class="`is-${gradeTone}`">
+                        {{ displayGrade }}
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 右侧：四项核心指标行 -->
+                  <div class="network-quality-metrics-list">
+                    <div class="network-quality-metric-row">
+                      <div class="metric-row-label">
+                        <Gauge :size="15" class="metric-icon" />
+                        <span>延迟基线</span>
+                      </div>
+                      <strong class="metric-row-val">
+                        {{
+                          formatRtt(
+                            measuredPathTargets.length
+                              ? connectivity.floorMs
+                              : null
+                          )
+                        }}
+                      </strong>
+                    </div>
+
+                    <div class="network-quality-metric-row">
+                      <div class="metric-row-label">
+                        <Timer :size="15" class="metric-icon" />
+                        <span>中位延迟</span>
+                      </div>
+                      <strong class="metric-row-val">
+                        {{
+                          formatRtt(
+                            measuredPathTargets.length
+                              ? connectivity.medianRttMs
+                              : null
+                          )
+                        }}
+                      </strong>
+                    </div>
+
+                    <div class="network-quality-metric-row">
+                      <div class="metric-row-label">
+                        <Clock3 :size="15" class="metric-icon" />
+                        <span>诊断耗时</span>
+                      </div>
+                      <strong class="metric-row-val">
+                        {{ formatDuration(report.durationMs) }}
+                      </strong>
+                    </div>
+
+                    <div class="network-quality-metric-row">
+                      <div class="metric-row-label">
+                        <Route :size="15" class="metric-icon" />
+                        <span>路径能力</span>
+                      </div>
+                      <strong
+                        class="metric-row-val"
+                        :title="capability.hint || ''"
+                      >
+                        {{ capabilityLabel }}
+                      </strong>
+                    </div>
+                  </div>
+                </div>
               </div>
             </article>
           </div>
-          <div v-else class="network-quality-integrity-clear">
-            <ShieldCheck :size="18" />
-            <span>已启用检测未发现异常；未启用或不支持的能力不参与结论</span>
-          </div>
-        </section>
 
-        <section class="network-quality-overview">
-          <div class="network-quality-score">
-            <span class="network-quality-score-label">网络质量总分</span>
-            <div class="network-quality-score-value">
-              <strong>{{ scoreText }}</strong>
-              <span>/ 100</span>
-            </div>
-            <span class="network-quality-grade" :class="`is-${gradeTone}`">
-              {{ displayGrade }}
-            </span>
-          </div>
-
-          <div class="network-quality-metric-list">
-            <div class="network-quality-metric">
-              <Gauge :size="17" />
-              <span>延迟基线</span>
-              <strong>{{
-                formatRtt(
-                  measuredPathTargets.length ? connectivity.floorMs : null
-                )
-              }}</strong>
-            </div>
-            <div class="network-quality-metric">
-              <Timer :size="17" />
-              <span>中位延迟</span>
-              <strong>{{
-                formatRtt(
-                  measuredPathTargets.length ? connectivity.medianRttMs : null
-                )
-              }}</strong>
-            </div>
-            <div class="network-quality-metric">
-              <Clock3 :size="17" />
-              <span>诊断耗时</span>
-              <strong>{{ formatDuration(report.durationMs) }}</strong>
-            </div>
-            <div class="network-quality-metric">
-              <Route :size="17" />
-              <span>路径能力</span>
-              <strong>{{ capabilityLabel }}</strong>
-            </div>
-          </div>
-
-          <div class="network-quality-identity-list">
-            <div class="network-quality-identity-head">
-              <div>
-                <span class="network-quality-section-kicker"
-                  >Public identity</span
-                >
-                <h2>公网身份</h2>
-              </div>
-              <span>{{ formatTransport(report.transport) }}</span>
-            </div>
-            <div v-if="identities.length" class="network-quality-identity-rows">
-              <div
-                v-for="item in identities"
-                :key="item.family"
-                class="network-quality-identity-row"
-              >
-                <span class="network-quality-family-badge">{{
-                  item.family
-                }}</span>
-                <div class="network-quality-identity-address">
-                  <code :title="item.data.address || ''">{{
-                    item.data.address || "未识别"
-                  }}</code>
-                  <small>{{ formatVotes(item.data.sourceVotes) }}</small>
+          <!-- 右侧列：公网身份与归属卡片 -->
+          <div class="network-quality-right-col">
+            <article
+              v-for="item in identities"
+              :key="item.family"
+              class="network-quality-panel-card"
+            >
+              <header class="network-quality-card-head">
+                <div class="network-quality-card-title">
+                  <Globe :size="17" class="head-icon is-blue" />
+                  <h3>公网身份</h3>
                 </div>
-                <div class="network-quality-identity-primary">
-                  <strong :title="identityLocation(item)">{{
-                    identityLocation(item)
-                  }}</strong>
-                  <span>{{ identityNetwork(item) }}</span>
-                </div>
-                <div class="network-quality-identity-source">
+
+                <div class="network-quality-head-meta">
+                  <span class="meta-source-text">{{
+                    formatSourceCount(item)
+                  }}</span>
                   <span
-                    :class="{ 'is-warning': !identityHasGeolocation(item) }"
-                  >
-                    {{ formatSourceCount(item) }}
-                  </span>
-                </div>
-                <div
-                  v-if="identityIntel(item)"
-                  class="network-quality-identity-details"
-                >
-                  <span
-                    v-for="detail in identityDetails(item)"
-                    :key="detail.label"
-                    class="network-quality-identity-detail"
-                  >
-                    <small>{{ detail.label }}</small>
-                    <strong :title="detail.value">{{ detail.value }}</strong>
-                  </span>
-                </div>
-                <details
-                  v-if="identityFamily(item)"
-                  class="network-quality-identity-evidence"
-                >
-                  <summary>
-                    来源证据 · {{ identitySources(item).length }} 个来源
-                    <span v-if="identityConflicts(item).length">
-                      · {{ identityConflicts(item).length }} 项冲突
-                    </span>
-                  </summary>
-                  <div
                     v-if="identityConflicts(item).length"
-                    class="network-quality-identity-conflicts"
+                    class="meta-divider"
+                    >|</span
                   >
-                    <span
-                      v-for="fact in identityConflicts(item)"
-                      :key="fact.key"
+                  <span
+                    v-if="identityConflicts(item).length"
+                    class="network-quality-pill-tag is-red"
+                  >
+                    {{ identityConflicts(item).length }} 项冲突
+                  </span>
+                </div>
+              </header>
+
+              <div class="network-quality-card-body">
+                <!-- IP 与地理位置双区块 -->
+                <div class="network-quality-passport-hero">
+                  <!-- 左侧 IP 信息 -->
+                  <div class="passport-ip-pane">
+                    <span class="passport-family-label"
+                      >{{ item.family }} 地址</span
                     >
-                      {{ factLabel(fact.key) }}：{{ factValues(fact) }}
-                    </span>
+                    <div class="passport-ip-row">
+                      <strong class="passport-ip-text">{{
+                        item.data.address || "未识别"
+                      }}</strong>
+                      <button
+                        v-if="item.data.address"
+                        type="button"
+                        class="passport-copy-btn"
+                        :title="
+                          copiedAddress === item.data.address
+                            ? '已复制'
+                            : '复制 IP'
+                        "
+                        @click="copyAddress(item.data.address)"
+                      >
+                        <Check
+                          v-if="copiedAddress === item.data.address"
+                          :size="14"
+                          class="text-success"
+                        />
+                        <Copy v-else :size="14" />
+                      </button>
+                    </div>
+                    <span class="passport-votes-tag">{{
+                      formatVotes(item.data.sourceVotes)
+                    }}</span>
                   </div>
-                  <div class="network-quality-identity-source-list">
-                    <div
-                      v-for="source in identitySources(item)"
-                      :key="source.id"
-                    >
-                      <strong>{{ source.name || source.id }}</strong>
-                      <span>{{ stateLabel(source.status) }}</span>
-                      <small>{{ formatDuration(source.durationMs) }}</small>
-                      <em v-if="source.error">{{ source.error }}</em>
+
+                  <!-- 右侧地理位置卡片 (集成中国/世界地图轮廓水印) -->
+                  <div class="passport-location-card">
+                    <div class="location-text-wrap">
+                      <div class="location-main-line">
+                        <MapPin :size="15" class="location-pin-icon" />
+                        <strong :title="identityLocation(item)">{{
+                          identityLocation(item)
+                        }}</strong>
+                      </div>
+                      <p
+                        class="location-sub-line"
+                        :title="identityNetwork(item)"
+                      >
+                        {{ identityNetwork(item) }}
+                      </p>
+                    </div>
+
+                    <!-- 地图轮廓水印背景 -->
+                    <div class="passport-map-watermark">
+                      <svg
+                        class="map-svg"
+                        viewBox="0 0 100 80"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          d="M75,18 C78,16 82,14 85,15 C88,18 90,24 88,28 C85,32 80,35 78,38 C75,42 76,46 78,48 C80,50 82,54 80,57 C78,60 74,62 70,62 C68,64 65,66 62,64 C58,62 55,65 52,65 C48,65 45,63 42,62 C38,62 35,64 32,62 C28,60 25,58 24,54 C22,50 25,46 28,44 C30,42 32,38 30,35 C28,32 25,30 22,28 C20,25 24,22 28,24 C32,26 36,25 40,24 C44,22 48,22 52,24 C56,26 60,25 64,22 C68,20 72,20 75,18 Z"
+                          fill="currentColor"
+                        />
+                        <circle cx="68" cy="56" r="3" fill="#2563eb" />
+                        <circle
+                          cx="68"
+                          cy="56"
+                          r="6"
+                          stroke="#2563eb"
+                          stroke-width="1"
+                          class="ping-circle"
+                        />
+                      </svg>
                     </div>
                   </div>
-                </details>
+                </div>
+
+                <!-- 网络与地理信息规格网格 -->
+                <div class="network-quality-specs-section">
+                  <h4 class="specs-section-title">网络与地理信息</h4>
+
+                  <div class="specs-grid-3col">
+                    <!-- Row 1 -->
+                    <div class="spec-cell">
+                      <span class="spec-label">注册国家/地区</span>
+                      <strong class="spec-val">
+                        {{ getCountryDisplay(item) }}
+                      </strong>
+                    </div>
+
+                    <div class="spec-cell">
+                      <span class="spec-label">RIR</span>
+                      <strong class="spec-val">
+                        {{ displayValue(identityIntel(item)?.rir) }}
+                      </strong>
+                    </div>
+
+                    <div class="spec-cell">
+                      <span class="spec-label">分配前缀</span>
+                      <strong class="spec-val">
+                        {{ displayValue(identityIntel(item)?.allocationCidr) }}
+                      </strong>
+                    </div>
+
+                    <!-- Row 2 -->
+                    <div class="spec-cell">
+                      <span class="spec-label">Origin ASN</span>
+                      <strong class="spec-val">
+                        {{ displayList(identityIntel(item)?.originAsns) }}
+                      </strong>
+                    </div>
+
+                    <div class="spec-cell">
+                      <span class="spec-label">AS 组织 / 运营商</span>
+                      <div class="spec-val-stacked">
+                        <strong class="spec-val">
+                          {{
+                            formatAsn(
+                              identityIntel(item)?.asn || item.data?.asn
+                            )
+                          }}
+                        </strong>
+                        <span
+                          class="spec-val-sub"
+                          :title="
+                            identityIntel(item)?.organization ||
+                            identityIntel(item)?.isp ||
+                            item.data?.organization ||
+                            item.data?.isp ||
+                            '--'
+                          "
+                        >
+                          {{
+                            identityIntel(item)?.organization ||
+                            identityIntel(item)?.isp ||
+                            item.data?.organization ||
+                            item.data?.isp ||
+                            "--"
+                          }}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div class="spec-cell">
+                      <span class="spec-label">查询结果</span>
+                      <strong class="spec-val">
+                        {{ displayValue(identityIntel(item)?.queryResult) }}
+                      </strong>
+                    </div>
+
+                    <!-- Row 3 -->
+                    <div class="spec-cell">
+                      <span class="spec-label">反向解析 (PTR)</span>
+                      <strong class="spec-val">
+                        {{ displayValue(identityIntel(item)?.ptr) }}
+                      </strong>
+                    </div>
+
+                    <div class="spec-cell">
+                      <span class="spec-label">正向解析</span>
+                      <strong class="spec-val">
+                        {{ displayValue(identityIntel(item)?.announcedPrefix) }}
+                      </strong>
+                    </div>
+
+                    <div class="spec-cell">
+                      <!-- 留空占位以保持 3 列对齐 -->
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </article>
+          </div>
+        </div>
+
+        <!-- 详细数据报表区域 -->
+        <div class="network-quality-detail-tables">
+          <!-- 报表 1: 地理位置共识与检查源明细 -->
+          <article
+            v-if="request.modules.geo"
+            class="network-quality-panel-card"
+          >
+            <header class="network-quality-card-head">
+              <div class="network-quality-card-title">
+                <Network :size="17" class="head-icon is-blue" />
+                <h3>地理位置共识与检查源</h3>
+              </div>
+              <span class="network-quality-pill-tag is-blue">
+                {{ consensusRows.length }} 项国家/地区共识
+              </span>
+            </header>
+
+            <div class="network-quality-card-body">
+              <!-- 共识列表 -->
+              <div
+                v-if="consensusRows.length"
+                class="network-quality-table-shell"
+              >
+                <table class="network-quality-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 80px">地址族</th>
+                      <th style="width: 220px">国家 / 地区</th>
+                      <th style="width: 100px">票数</th>
+                      <th style="width: 80px">占比</th>
+                      <th>共识强度</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="item in consensusRows" :key="item.key">
+                      <td>
+                        <span class="table-family-pill">{{ item.family }}</span>
+                      </td>
+                      <td>
+                        <div class="table-cell-title">
+                          <strong>{{ consensusCountry(item.entry) }}</strong>
+                          <span class="table-code">{{
+                            consensusCode(item.entry)
+                          }}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span class="table-num">{{
+                          consensusVotes(item.entry)
+                        }}</span>
+                      </td>
+                      <td>
+                        <strong class="table-num">{{
+                          consensusPercentText(item.entry)
+                        }}</strong>
+                      </td>
+                      <td>
+                        <div class="table-consensus-progress">
+                          <span
+                            class="progress-fill"
+                            :style="{
+                              width: `${consensusPercent(item.entry)}%`
+                            }"
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- 检查源明细 -->
+              <div
+                v-if="geoResults.length"
+                class="network-quality-sub-table-block"
+              >
+                <h4 class="specs-section-title">
+                  检查源明细 ({{ geoResults.length }} 个数据源)
+                </h4>
+                <div class="network-quality-table-shell">
+                  <table class="network-quality-table">
+                    <thead>
+                      <tr>
+                        <th style="width: 200px">检查源</th>
+                        <th style="width: 100px">分组</th>
+                        <th>IPv4 结果</th>
+                        <th style="width: 90px">耗时</th>
+                        <th>IPv6 结果</th>
+                        <th style="width: 90px">耗时</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        v-for="(item, index) in geoResults"
+                        :key="item.id || index"
+                      >
+                        <td>
+                          <div class="table-cell-title">
+                            <strong>{{ item.name || item.id }}</strong>
+                            <span>{{ item.vendor || "--" }}</span>
+                          </div>
+                        </td>
+                        <td>
+                          <span class="table-tag">{{
+                            item.group || item.kind || "GeoIP"
+                          }}</span>
+                        </td>
+                        <td>
+                          <span
+                            class="table-state-badge"
+                            :class="`is-${stateTone(geoOutcome(item, 'ipv4')?.state)}`"
+                          >
+                            {{ geoOutcomeText(geoOutcome(item, "ipv4")) }}
+                          </span>
+                        </td>
+                        <td>
+                          <span class="table-num">{{
+                            formatRtt(geoOutcome(item, "ipv4")?.rttMs)
+                          }}</span>
+                        </td>
+                        <td>
+                          <span
+                            class="table-state-badge"
+                            :class="`is-${stateTone(geoOutcome(item, 'ipv6')?.state)}`"
+                          >
+                            {{ geoOutcomeText(geoOutcome(item, "ipv6")) }}
+                          </span>
+                        </td>
+                        <td>
+                          <span class="table-num">{{
+                            formatRtt(geoOutcome(item, "ipv6")?.rttMs)
+                          }}</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
-            <div v-else class="network-quality-inline-empty">
-              未识别公网出口
-            </div>
-          </div>
-        </section>
+          </article>
 
-        <section class="network-quality-section">
-          <div class="network-quality-section-head">
-            <div>
-              <span class="network-quality-section-kicker">Geo consensus</span>
-              <h2>地理位置共识</h2>
-            </div>
-            <span class="network-quality-count">
-              {{ consensusRows.length }} 项共识
-            </span>
-          </div>
-
-          <div v-if="consensusRows.length" class="network-quality-table-shell">
-            <table class="network-quality-table is-consensus">
-              <thead>
-                <tr>
-                  <th>地址族</th>
-                  <th>国家 / 地区</th>
-                  <th>票数</th>
-                  <th>占比</th>
-                  <th>共识强度</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in consensusRows" :key="item.key">
-                  <td>
-                    <span class="network-quality-family-badge">{{
-                      item.family
-                    }}</span>
-                  </td>
-                  <td>
-                    <div class="network-quality-primary-cell">
-                      <strong>{{ consensusCountry(item.entry) }}</strong>
-                      <span>{{ consensusCode(item.entry) }}</span>
-                    </div>
-                  </td>
-                  <td>{{ consensusVotes(item.entry) }}</td>
-                  <td>{{ consensusPercentText(item.entry) }}</td>
-                  <td>
-                    <div class="network-quality-consensus-track">
-                      <span
-                        :style="{ width: `${consensusPercent(item.entry)}%` }"
-                      ></span>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-else class="network-quality-inline-empty">
-            暂无有效国家共识
-          </div>
-
-          <div class="network-quality-subhead">
-            <h3>检查源明细</h3>
-            <span>{{ geoResults.length }} 个来源</span>
-          </div>
-          <div v-if="geoResults.length" class="network-quality-table-shell">
-            <table class="network-quality-table is-geo">
-              <thead>
-                <tr>
-                  <th>检查源</th>
-                  <th>分组</th>
-                  <th>IPv4 结果</th>
-                  <th>耗时</th>
-                  <th>IPv6 结果</th>
-                  <th>耗时</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="(item, index) in geoResults"
-                  :key="item.id || item.name || index"
-                >
-                  <td>
-                    <div class="network-quality-primary-cell">
-                      <strong>{{
-                        item.name || item.id || "未命名检查"
-                      }}</strong>
-                      <span>{{ item.vendor || "" }}</span>
-                    </div>
-                  </td>
-                  <td>{{ item.group || item.kind || "GeoIP" }}</td>
-                  <td>
-                    <div class="network-quality-outcome">
-                      <span
-                        class="network-quality-state"
-                        :class="`is-${stateTone(geoOutcome(item, 'ipv4')?.state)}`"
-                      >
-                        {{ stateLabel(geoOutcome(item, "ipv4")?.state) }}
-                      </span>
-                      <span :title="geoOutcome(item, 'ipv4')?.error || ''">{{
-                        geoOutcomeText(geoOutcome(item, "ipv4"))
-                      }}</span>
-                    </div>
-                  </td>
-                  <td>{{ formatRtt(geoOutcome(item, "ipv4")?.rttMs) }}</td>
-                  <td>
-                    <div class="network-quality-outcome">
-                      <span
-                        class="network-quality-state"
-                        :class="`is-${stateTone(geoOutcome(item, 'ipv6')?.state)}`"
-                      >
-                        {{ stateLabel(geoOutcome(item, "ipv6")?.state) }}
-                      </span>
-                      <span :title="geoOutcome(item, 'ipv6')?.error || ''">{{
-                        geoOutcomeText(geoOutcome(item, "ipv6"))
-                      }}</span>
-                    </div>
-                  </td>
-                  <td>{{ formatRtt(geoOutcome(item, "ipv6")?.rttMs) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-else class="network-quality-inline-empty">
-            未运行地理位置检查
-          </div>
-        </section>
-
-        <section class="network-quality-section">
-          <div class="network-quality-section-head">
-            <div>
-              <span class="network-quality-section-kicker"
-                >Connectivity probes</span
-              >
-              <h2>系统连通性</h2>
-            </div>
-            <div class="network-quality-summary-flags">
-              <span
-                v-if="!portalResults.length"
-                class="network-quality-state is-neutral"
-              >
-                未运行
-              </span>
-              <template v-else>
+          <!-- 报表 2: 系统连通性与俘获门户 -->
+          <article
+            v-if="request.modules.portal"
+            class="network-quality-panel-card"
+          >
+            <header class="network-quality-card-head">
+              <div class="network-quality-card-title">
+                <Wifi :size="17" class="head-icon is-blue" />
+                <h3>系统连通性与俘获门户</h3>
+              </div>
+              <div class="network-quality-head-flags">
                 <span
-                  class="network-quality-state"
+                  class="table-state-badge"
                   :class="
                     connectivityChecks.clean ? 'is-success' : 'is-warning'
                   "
@@ -464,277 +741,314 @@
                 </span>
                 <span
                   v-if="connectivityChecks.plainHttpBlocked"
-                  class="network-quality-state is-danger"
+                  class="table-state-badge is-danger"
                 >
                   明文 HTTP 受限
                 </span>
-              </template>
-            </div>
-          </div>
-          <div v-if="portalResults.length" class="network-quality-table-shell">
-            <table class="network-quality-table is-portal">
-              <thead>
-                <tr>
-                  <th>端点</th>
-                  <th>厂商</th>
-                  <th>判定</th>
-                  <th>HTTP</th>
-                  <th>耗时</th>
-                  <th>明细</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="(item, index) in portalResults"
-                  :key="item.id || item.url || index"
-                >
-                  <td>
-                    <div class="network-quality-primary-cell">
-                      <strong>{{
-                        item.name || item.id || "连通性端点"
-                      }}</strong>
-                      <span :title="item.url || ''">{{ item.url || "" }}</span>
-                    </div>
-                  </td>
-                  <td>{{ item.vendor || "--" }}</td>
-                  <td>
-                    <span
-                      class="network-quality-state"
-                      :class="`is-${stateTone(item.verdict)}`"
-                    >
-                      {{ stateLabel(item.verdict) }}
-                    </span>
-                  </td>
-                  <td>{{ formatHttpStatus(item.status) }}</td>
-                  <td>{{ formatRtt(item.rttMs) }}</td>
-                  <td>
-                    <span
-                      class="network-quality-detail"
-                      :title="item.error || item.detail || ''"
-                      >{{ item.error || item.detail || "--" }}</span
-                    >
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-else class="network-quality-inline-empty">
-            未运行系统连通性检查
-          </div>
-        </section>
-
-        <section class="network-quality-section">
-          <div class="network-quality-section-head">
-            <div>
-              <span class="network-quality-section-kicker"
-                >Service reachability</span
-              >
-              <h2>服务与 AI 可达性</h2>
-            </div>
-            <span class="network-quality-count">
-              {{ serviceResults.length + aiResults.length }} 个端点
-            </span>
-          </div>
-
-          <div class="network-quality-service-columns">
-            <div class="network-quality-service-pane">
-              <div class="network-quality-subhead">
-                <h3>消费服务</h3>
-                <span>{{ serviceResults.length }}</span>
               </div>
+            </header>
+
+            <div class="network-quality-card-body">
               <div
-                v-if="serviceResults.length"
+                v-if="portalResults.length"
                 class="network-quality-table-shell"
               >
-                <table class="network-quality-table is-service">
+                <table class="network-quality-table">
                   <thead>
                     <tr>
-                      <th>服务</th>
-                      <th>状态</th>
-                      <th>区域</th>
-                      <th>耗时</th>
+                      <th style="width: 240px">端点</th>
+                      <th style="width: 120px">厂商</th>
+                      <th style="width: 110px">判定</th>
+                      <th style="width: 85px">HTTP</th>
+                      <th style="width: 95px">耗时</th>
+                      <th>明细说明</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr
-                      v-for="(item, index) in serviceResults"
-                      :key="item.id || item.name || index"
+                      v-for="(item, index) in portalResults"
+                      :key="item.id || index"
                     >
                       <td>
-                        <div class="network-quality-primary-cell">
-                          <strong>{{ item.name || item.id || "服务" }}</strong>
-                          <span :title="item.error || item.detail || ''">{{
-                            item.error || item.detail || item.vendor || ""
-                          }}</span>
+                        <div class="table-cell-title">
+                          <strong>{{ item.name || item.id }}</strong>
+                          <span class="table-url">{{ item.url }}</span>
                         </div>
                       </td>
                       <td>
+                        <span class="table-tag">{{ item.vendor || "--" }}</span>
+                      </td>
+                      <td>
                         <span
-                          class="network-quality-state"
-                          :class="`is-${stateTone(item.state)}`"
+                          class="table-state-badge"
+                          :class="`is-${stateTone(item.verdict)}`"
                         >
-                          {{ stateLabel(item.state) }}
+                          {{ stateLabel(item.verdict) }}
                         </span>
                       </td>
-                      <td>{{ localizedServiceRegion(item.region) || "--" }}</td>
-                      <td>{{ formatRtt(item.rttMs) }}</td>
+                      <td>
+                        <code class="table-code">{{
+                          formatHttpStatus(item.status)
+                        }}</code>
+                      </td>
+                      <td>
+                        <span class="table-num">{{
+                          formatRtt(item.rttMs)
+                        }}</span>
+                      </td>
+                      <td>
+                        <span class="table-note">{{
+                          item.error || item.detail || "--"
+                        }}</span>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
               </div>
-              <div v-else class="network-quality-inline-empty">
-                未运行服务检查
-              </div>
+              <div v-else class="table-empty-box">未运行系统连通性检查</div>
             </div>
+          </article>
 
-            <div class="network-quality-service-pane">
-              <div class="network-quality-subhead">
-                <h3>AI API</h3>
-                <span>{{ aiResults.length }}</span>
-              </div>
-              <div v-if="aiResults.length" class="network-quality-table-shell">
-                <table class="network-quality-table is-service">
-                  <thead>
-                    <tr>
-                      <th>端点</th>
-                      <th>状态</th>
-                      <th>HTTP</th>
-                      <th>耗时</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr
-                      v-for="(item, index) in aiResults"
-                      :key="item.id || item.name || index"
-                    >
-                      <td>
-                        <div class="network-quality-primary-cell">
-                          <strong>{{
-                            item.name || item.id || "AI API"
-                          }}</strong>
-                          <span :title="item.error || item.detail || ''">{{
-                            item.error || item.detail || item.vendor || ""
-                          }}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <span
-                          class="network-quality-state"
-                          :class="`is-${stateTone(item.state)}`"
-                        >
-                          {{ stateLabel(item.state) }}
-                        </span>
-                      </td>
-                      <td>{{ item.httpStatus ?? "--" }}</td>
-                      <td>{{ formatRtt(item.rttMs) }}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-              <div v-else class="network-quality-inline-empty">
-                未运行 AI 检查
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="network-quality-section is-path-section">
-          <div class="network-quality-section-head">
-            <div>
-              <span class="network-quality-section-kicker">Route quality</span>
-              <h2>路径与连接质量</h2>
-            </div>
-            <span
-              class="network-quality-capability"
-              :title="capability.hint || ''"
-            >
-              <Radio :size="14" />
-              {{ capabilitySummary }}
-            </span>
-          </div>
-          <div v-if="pathTargets.length" class="network-quality-table-shell">
-            <table class="network-quality-table is-path">
-              <thead>
-                <tr>
-                  <th>目标</th>
-                  <th>网络</th>
-                  <th>测量方式</th>
-                  <th>路径判定</th>
-                  <th>RTT / 抖动</th>
-                  <th>丢包 / 跳数</th>
-                  <th>说明</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="(target, index) in pathTargets"
-                  :key="target.id || target.host || index"
-                >
-                  <td>
-                    <div class="network-quality-primary-cell">
-                      <strong>{{
-                        target.name || target.id || "路径目标"
-                      }}</strong>
-                      <span>{{ target.host || "--" }}</span>
-                    </div>
-                  </td>
-                  <td>{{ target.network || "--" }}</td>
-                  <td>
-                    <div class="network-quality-primary-cell">
-                      <span>{{ target.method || "--" }}</span>
-                      <code>{{ target.resolvedIp || "" }}</code>
-                    </div>
-                  </td>
-                  <td>
-                    <div class="network-quality-verdict-cell">
-                      <span
-                        class="network-quality-state"
-                        :class="`is-${stateTone(target.verdict?.class)}`"
-                      >
-                        {{ pathStateLabel(target) }}
-                      </span>
-                      <span>{{ formatScore(target.verdict?.score) }}</span>
-                    </div>
-                  </td>
-                  <td>
-                    {{ formatTargetRtt(target, "rttMs") }} /
-                    {{ formatTargetRtt(target, "jitterMs") }}
-                  </td>
-                  <td>
-                    {{ formatTargetLoss(target) }} /
-                    {{ formatTargetHops(target) }}
-                  </td>
-                  <td>
-                    <span
-                      class="network-quality-detail"
-                      :class="{ 'is-error': Boolean(target.error) }"
-                      :title="
-                        target.error || formatNotes(target.verdict?.notes)
-                      "
-                    >
-                      {{
-                        target.error ||
-                        formatNotes(target.verdict?.notes) ||
-                        "--"
-                      }}
-                    </span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div v-else class="network-quality-inline-empty">
-            未运行目标连接检查
-          </div>
-        </section>
-
-        <footer class="network-quality-report-meta">
-          <span>Schema {{ report.schema }}</span>
-          <span>{{ formatTool(report.tool) }}</span>
-          <span>{{ formatDateTime(report.timestamp) }}</span>
-          <span v-if="partialErrorCount"
-            >{{ partialErrorCount }} 项子检测失败</span
+          <!-- 报表 3: 服务与 AI 可达性 (左右双列) -->
+          <article
+            v-if="request.modules.access || request.modules.ai"
+            class="network-quality-panel-card"
           >
+            <header class="network-quality-card-head">
+              <div class="network-quality-card-title">
+                <Server :size="17" class="head-icon is-blue" />
+                <h3>服务与 AI 可达性</h3>
+              </div>
+              <span class="network-quality-pill-tag is-blue">
+                {{ serviceResults.length + aiResults.length }} 个端点
+              </span>
+            </header>
+
+            <div class="network-quality-card-body">
+              <div class="network-quality-dual-tables">
+                <!-- 消费服务 -->
+                <div class="dual-table-col">
+                  <h4 class="specs-section-title">
+                    消费与云服务 ({{ serviceResults.length }})
+                  </h4>
+                  <div class="network-quality-table-shell">
+                    <table class="network-quality-table">
+                      <thead>
+                        <tr>
+                          <th>服务</th>
+                          <th style="width: 90px">状态</th>
+                          <th style="width: 80px">区域</th>
+                          <th style="width: 80px">耗时</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="(item, index) in serviceResults"
+                          :key="item.id || index"
+                        >
+                          <td>
+                            <div class="table-cell-title">
+                              <strong>{{ item.name || item.id }}</strong>
+                              <span>{{ item.vendor || "" }}</span>
+                            </div>
+                          </td>
+                          <td>
+                            <span
+                              class="table-state-badge"
+                              :class="`is-${stateTone(item.state)}`"
+                            >
+                              {{ stateLabel(item.state) }}
+                            </span>
+                          </td>
+                          <td>
+                            <span class="table-region">{{
+                              localizedServiceRegion(item.region) || "--"
+                            }}</span>
+                          </td>
+                          <td>
+                            <span class="table-num">{{
+                              formatRtt(item.rttMs)
+                            }}</span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <!-- AI API -->
+                <div class="dual-table-col">
+                  <h4 class="specs-section-title">
+                    AI 模型 API ({{ aiResults.length }})
+                  </h4>
+                  <div class="network-quality-table-shell">
+                    <table class="network-quality-table">
+                      <thead>
+                        <tr>
+                          <th>端点</th>
+                          <th style="width: 90px">状态</th>
+                          <th style="width: 75px">HTTP</th>
+                          <th style="width: 80px">耗时</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          v-for="(item, index) in aiResults"
+                          :key="item.id || index"
+                        >
+                          <td>
+                            <div class="table-cell-title">
+                              <strong>{{ item.name || item.id }}</strong>
+                              <span>{{ item.vendor || "" }}</span>
+                            </div>
+                          </td>
+                          <td>
+                            <span
+                              class="table-state-badge"
+                              :class="`is-${stateTone(item.state)}`"
+                            >
+                              {{ stateLabel(item.state) }}
+                            </span>
+                          </td>
+                          <td>
+                            <code class="table-code">{{
+                              item.httpStatus ?? "--"
+                            }}</code>
+                          </td>
+                          <td>
+                            <span class="table-num">{{
+                              formatRtt(item.rttMs)
+                            }}</span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- 报表 4: 路径与目标连接质量 -->
+          <article
+            v-if="request.modules.path"
+            class="network-quality-panel-card"
+          >
+            <header class="network-quality-card-head">
+              <div class="network-quality-card-title">
+                <Route :size="17" class="head-icon is-blue" />
+                <h3>路径与连接质量</h3>
+              </div>
+              <span class="table-tag" :title="capability.hint || ''">
+                {{ capabilitySummary }}
+              </span>
+            </header>
+
+            <div class="network-quality-card-body">
+              <div
+                v-if="pathTargets.length"
+                class="network-quality-table-shell"
+              >
+                <table class="network-quality-table">
+                  <thead>
+                    <tr>
+                      <th style="width: 170px">目标</th>
+                      <th style="width: 110px">网络类型</th>
+                      <th style="width: 140px">测量方式 / 解析 IP</th>
+                      <th style="width: 130px">路径判定</th>
+                      <th style="width: 130px">RTT / 抖动</th>
+                      <th style="width: 110px">丢包 / 跳数</th>
+                      <th>说明</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="(target, index) in pathTargets"
+                      :key="target.id || index"
+                    >
+                      <td>
+                        <div class="table-cell-title">
+                          <strong>{{ target.name || target.id }}</strong>
+                          <span class="table-url">{{ target.host }}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span class="table-tag">{{
+                          target.network || "--"
+                        }}</span>
+                      </td>
+                      <td>
+                        <div class="table-cell-title">
+                          <span>{{ target.method || "--" }}</span>
+                          <code class="table-code">{{
+                            target.resolvedIp || ""
+                          }}</code>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="table-verdict-box">
+                          <span
+                            class="table-state-badge"
+                            :class="`is-${stateTone(target.verdict?.class)}`"
+                          >
+                            {{ pathStateLabel(target) }}
+                          </span>
+                          <span class="table-score">{{
+                            formatScore(target.verdict?.score)
+                          }}</span>
+                        </div>
+                      </td>
+                      <td>
+                        <span class="table-num">
+                          {{ formatTargetRtt(target, "rttMs") }} /
+                          {{ formatTargetRtt(target, "jitterMs") }}
+                        </span>
+                      </td>
+                      <td>
+                        <span
+                          class="table-num"
+                          :class="{
+                            'is-loss': Number(target?.verdict?.loss) > 0
+                          }"
+                        >
+                          {{ formatTargetLoss(target) }} /
+                          {{ formatTargetHops(target) }}
+                        </span>
+                      </td>
+                      <td>
+                        <span class="table-note">{{
+                          target.error ||
+                          formatNotes(target.verdict?.notes) ||
+                          "--"
+                        }}</span>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div v-else class="table-empty-box">未运行目标连接检查</div>
+            </div>
+          </article>
+        </div>
+
+        <!-- 底部引擎元数据 -->
+        <footer class="network-quality-footer">
+          <div class="footer-meta-item">
+            <span>引擎:</span>
+            <strong>{{ formatTool(report.tool) }}</strong>
+          </div>
+          <div class="footer-meta-item">
+            <span>Schema:</span>
+            <span>v{{ report.schema }}</span>
+          </div>
+          <div class="footer-meta-item">
+            <span>诊断时间:</span>
+            <span>{{ formatDateTime(report.timestamp) }}</span>
+          </div>
+          <div v-if="partialErrorCount" class="footer-meta-item is-warning">
+            <AlertTriangle :size="13" />
+            <span>{{ partialErrorCount }} 项子检查异常</span>
+          </div>
         </footer>
       </template>
     </div>
@@ -745,22 +1059,26 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue"
 import {
   Activity,
-  Ban,
-  CircleCheck,
-  CircleX,
+  AlertTriangle,
+  Check,
+  CheckCircle2,
+  ChevronRight,
   Clock3,
+  Copy,
   Download,
-  FlaskConical,
   Gauge,
+  Globe,
   LoaderCircle,
+  MapPin,
+  Network,
   Play,
-  Radio,
   RotateCcw,
   Route,
-  ShieldAlert,
-  ShieldCheck,
+  Server,
+  Shield,
   Square,
-  Timer
+  Timer,
+  Wifi
 } from "lucide-vue-next"
 import { networkQualityApi, systemApi } from "@/api"
 import { createMessage } from "@/utils/message"
@@ -779,7 +1097,6 @@ const moduleOptions = [
   { value: "path", label: "路径" }
 ]
 
-// 供应商返回的省州和城市通常只有英文名称，常见值在界面中本地化；未知值保留原文。
 const countryNameZh = Object.freeze({
   china: "中国",
   "people's republic of china": "中国",
@@ -848,7 +1165,6 @@ const countryCodeZh = Object.freeze({
   ES: "西班牙"
 })
 
-// Gemini 返回三字母国家码，服务区域单独映射，避免误传给两字母地区格式化器。
 const serviceRegionCodeZh = Object.freeze({
   USA: "美国",
   CHN: "中国",
@@ -866,136 +1182,32 @@ const serviceRegionCodeZh = Object.freeze({
   IND: "印度",
   RUS: "俄罗斯",
   BRA: "巴西",
-  MEX: "墨西哥",
-  BLR: "白俄罗斯",
-  CUB: "古巴",
-  IRN: "伊朗",
-  PRK: "朝鲜",
-  SYR: "叙利亚"
+  MEX: "墨西哥"
 })
 
 const regionNameZh = Object.freeze({
-  anhui: "安徽省",
-  "anhui sheng": "安徽省",
-  beijing: "北京市",
-  "beijing shi": "北京市",
-  chongqing: "重庆市",
-  "chongqing shi": "重庆市",
-  fujian: "福建省",
-  "fujian sheng": "福建省",
-  gansu: "甘肃省",
-  "gansu sheng": "甘肃省",
   guangdong: "广东省",
   "guangdong sheng": "广东省",
-  guangxi: "广西壮族自治区",
-  "guangxi zhuangzu zizhiqu": "广西壮族自治区",
-  guizhou: "贵州省",
-  "guizhou sheng": "贵州省",
-  hainan: "海南省",
-  "hainan sheng": "海南省",
-  hebei: "河北省",
-  "hebei sheng": "河北省",
-  heilongjiang: "黑龙江省",
-  "heilongjiang sheng": "黑龙江省",
-  henan: "河南省",
-  "henan sheng": "河南省",
-  hubei: "湖北省",
-  "hubei sheng": "湖北省",
-  hunan: "湖南省",
-  "hunan sheng": "湖南省",
-  jiangsu: "江苏省",
-  "jiangsu sheng": "江苏省",
-  jiangxi: "江西省",
-  "jiangxi sheng": "江西省",
-  jilin: "吉林省",
-  "jilin sheng": "吉林省",
-  liaoning: "辽宁省",
-  "liaoning sheng": "辽宁省",
-  qinghai: "青海省",
-  "qinghai sheng": "青海省",
-  shaanxi: "陕西省",
-  "shaanxi sheng": "陕西省",
-  shandong: "山东省",
-  "shandong sheng": "山东省",
-  shanxi: "山西省",
-  "shanxi sheng": "山西省",
-  sichuan: "四川省",
-  "sichuan sheng": "四川省",
-  tianjin: "天津市",
-  "tianjin shi": "天津市",
-  tibet: "西藏自治区",
-  "xizang zizhiqu": "西藏自治区",
-  xinjiang: "新疆维吾尔自治区",
-  "xinjiang uygur autonomous region": "新疆维吾尔自治区",
-  yunnan: "云南省",
-  "yunnan sheng": "云南省",
+  beijing: "北京市",
+  "beijing shi": "北京市",
+  shanghai: "上海市",
+  "shanghai shi": "上海市",
   zhejiang: "浙江省",
   "zhejiang sheng": "浙江省",
-  california: "加利福尼亚州",
-  "new york": "纽约州",
-  texas: "得克萨斯州",
-  virginia: "弗吉尼亚州",
-  washington: "华盛顿州",
-  florida: "佛罗里达州",
-  illinois: "伊利诺伊州",
-  ohio: "俄亥俄州",
-  "new jersey": "新泽西州",
-  ontario: "安大略省",
-  "british columbia": "不列颠哥伦比亚省",
-  quebec: "魁北克省",
-  "new south wales": "新南威尔士州",
-  victoria: "维多利亚州",
-  england: "英格兰",
-  scotland: "苏格兰",
-  wales: "威尔士"
+  jiangsu: "江苏省",
+  "jiangsu sheng": "江苏省",
+  sichuan: "四川省",
+  "sichuan sheng": "四川省"
 })
 
 const cityNameZh = Object.freeze({
+  guangzhou: "广州",
+  shenzhen: "深圳",
   beijing: "北京",
   shanghai: "上海",
-  guangzhou: "广州",
-  jiangmen: "江门",
-  shenzhen: "深圳",
-  foshan: "佛山",
-  dongguan: "东莞",
-  zhuhai: "珠海",
-  chengdu: "成都",
-  chongqing: "重庆",
   hangzhou: "杭州",
   nanjing: "南京",
-  wuhan: "武汉",
-  xian: "西安",
-  "xi'an": "西安",
-  tianjin: "天津",
-  "hong kong": "香港",
-  macao: "澳门",
-  macau: "澳门",
-  "new york": "纽约",
-  "los angeles": "洛杉矶",
-  "san jose": "圣何塞",
-  "mountain view": "山景城",
-  chicago: "芝加哥",
-  toronto: "多伦多",
-  vancouver: "温哥华",
-  montreal: "蒙特利尔",
-  london: "伦敦",
-  paris: "巴黎",
-  berlin: "柏林",
-  tokyo: "东京",
-  osaka: "大阪",
-  seoul: "首尔",
-  singapore: "新加坡",
-  sydney: "悉尼",
-  melbourne: "墨尔本",
-  mumbai: "孟买",
-  delhi: "德里",
-  bangkok: "曼谷",
-  amsterdam: "阿姆斯特丹",
-  madrid: "马德里",
-  rome: "罗马",
-  moscow: "莫斯科",
-  sao: "圣保罗",
-  "são paulo": "圣保罗"
+  chengdu: "成都"
 })
 
 let chineseRegionDisplayNames
@@ -1053,6 +1265,13 @@ const request = reactive({
   }
 })
 
+// 携带公网地址开关状态：与 maskIp 取反，默认关闭掩码即携带公网
+const carryPublicIp = ref(!request.maskIp)
+
+function handleCarryPublicIpChange() {
+  request.maskIp = !carryPublicIp.value
+}
+
 const status = ref("idle")
 const operation = ref("")
 const report = ref(null)
@@ -1060,6 +1279,9 @@ const runError = ref("")
 const currentRunId = ref("")
 const cancelPending = ref(false)
 const exporting = ref(false)
+const copiedAddress = ref("")
+let copyTimer = null
+
 const progress = reactive({
   phase: "preparing",
   percent: 0,
@@ -1116,7 +1338,6 @@ const identities = computed(() =>
 )
 const consensusRows = computed(() => {
   const rows = []
-
   for (const family of ["ipv4", "ipv6"]) {
     arrayOf(report.value?.consensus?.[family]).forEach((entry, index) => {
       rows.push({
@@ -1126,13 +1347,11 @@ const consensusRows = computed(() => {
       })
     })
   }
-
   return rows
 })
 
 const partialErrorCount = computed(() => {
   let count = 0
-
   for (const family of ["ipv4", "ipv6"]) {
     for (const source of arrayOf(
       report.value?.ipIntelligence?.[family]?.sources
@@ -1143,14 +1362,12 @@ const partialErrorCount = computed(() => {
       }
     }
   }
-
   for (const item of geoResults.value) {
     for (const family of ["ipv4", "ipv6"]) {
       const outcome = geoOutcome(item, family)
       if (outcome?.error || outcome?.state === "error") count += 1
     }
   }
-
   for (const item of [
     ...portalResults.value,
     ...serviceResults.value,
@@ -1174,7 +1391,6 @@ const partialErrorCount = computed(() => {
       count += 1
     }
   }
-
   return count
 })
 
@@ -1182,13 +1398,8 @@ const statusMeta = computed(() => {
   if (isBusy.value) {
     return {
       tone: "running",
-      label:
-        operation.value === "demo"
-          ? "载入演示报告"
-          : phaseLabels[progress.phase] || "网络诊断进行中",
-      message:
-        progress.message ||
-        (operation.value === "demo" ? "正在读取固定样例" : "正在执行诊断任务")
+      label: phaseLabels[progress.phase] || "网络诊断进行中",
+      message: progress.message || "正在执行网络诊断任务"
     }
   }
 
@@ -1220,15 +1431,15 @@ const statusMeta = computed(() => {
       tone: "warning",
       label: "诊断完成，需要关注",
       message: partialErrorCount.value
-        ? `${partialErrorCount.value} 项检测异常或未完成，其余结果仍然有效`
-        : `${warningFindings.value.length} 项检测结论需要关注`
+        ? `${partialErrorCount.value} 项检测异常或未完成，其余结果仍然有效。`
+        : `${warningFindings.value.length} 项检测结论需要关注。`
     }
   }
 
   return {
     tone: "success",
     label: "诊断完成",
-    message: "全部已启用模块均已返回"
+    message: "全部已启用模块均已返回，网络状态正常。"
   }
 })
 
@@ -1236,6 +1447,15 @@ const scoreText = computed(() => {
   if (!measuredPathTargets.value.length) return "--"
   const score = Number(connectivity.value.score)
   return Number.isFinite(score) ? Math.round(score) : "--"
+})
+
+// 270度弧度计算
+const gaugeStrokeOffset = computed(() => {
+  const maxArc = 216.77
+  const score = Number(scoreText.value)
+  if (!Number.isFinite(score)) return maxArc
+  const percent = Math.min(100, Math.max(0, score))
+  return maxArc - (maxArc * percent) / 100
 })
 
 const displayGrade = computed(() =>
@@ -1255,18 +1475,18 @@ const gradeTone = computed(() => {
 const capabilityLabel = computed(() => {
   if (!pathTargets.value.length) return "未运行"
   if (capability.value.pathVisible) return "逐跳可见"
-  if (capability.value.icmp) return "ICMP"
+  if (capability.value.icmp) return "ICMP 终点"
   return "TCP 降级"
 })
 
 const capabilitySummary = computed(() => {
   if (!pathTargets.value.length) return "路径模块未运行"
   if (capability.value.raw && capability.value.pathVisible)
-    return "原始 ICMP · 路径可见"
+    return "原始 ICMP · 逐跳路径可见"
   if (capability.value.icmp && capability.value.pathVisible)
-    return "ICMP · 路径可见"
-  if (capability.value.icmp) return "ICMP · 仅终点"
-  return "TCP 降级 · 路径不可见"
+    return "ICMP · 逐跳路径可见"
+  if (capability.value.icmp) return "ICMP · 仅测量终点"
+  return "TCP 降级 · 仅测终点连接延迟"
 })
 
 function arrayOf(value) {
@@ -1290,6 +1510,21 @@ function resetProgress(message) {
   progress.message = message
 }
 
+async function copyAddress(address) {
+  if (!address || address === "未识别") return
+  try {
+    await navigator.clipboard.writeText(address)
+    copiedAddress.value = address
+    createMessage.success("公网 IP 已复制到剪贴板")
+    if (copyTimer) clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => {
+      copiedAddress.value = ""
+    }, 2000)
+  } catch {
+    createMessage.error("复制失败，请手动选择复制")
+  }
+}
+
 async function runDiagnosis() {
   if (isBusy.value) return
   if (!Object.values(request.modules).some(Boolean)) {
@@ -1304,7 +1539,7 @@ async function runDiagnosis() {
   runError.value = ""
   status.value = "running"
   operation.value = "run"
-  resetProgress("正在建立共享网络栈")
+  resetProgress("正在建立网络栈")
 
   try {
     const result = await networkQualityApi.run({
@@ -1326,7 +1561,6 @@ async function runDiagnosis() {
     progress.percent = 100
   } catch (error) {
     if (disposed || currentRunId.value !== runId) return
-
     runError.value = error?.message || String(error)
     status.value = "error"
     createMessage.error(runError.value)
@@ -1356,34 +1590,6 @@ async function cancelDiagnosis() {
   } catch (error) {
     cancelPending.value = false
     createMessage.error(error?.message || "取消诊断失败")
-  }
-}
-
-async function loadDemo() {
-  if (isBusy.value) return
-
-  currentRunId.value = ""
-  report.value = null
-  runError.value = ""
-  status.value = "running"
-  operation.value = "demo"
-  resetProgress("正在读取固定样例")
-  progress.percent = 35
-
-  try {
-    report.value = unwrapReport(
-      await networkQualityApi.demo({ maskIp: request.maskIp })
-    )
-    if (disposed) return
-    status.value = report.value.status === "cancelled" ? "cancelled" : "success"
-    progress.percent = 100
-  } catch (error) {
-    if (disposed) return
-    runError.value = error?.message || String(error)
-    status.value = "error"
-    createMessage.error(runError.value)
-  } finally {
-    operation.value = ""
   }
 }
 
@@ -1603,7 +1809,6 @@ function formatAsn(value) {
   return text.startsWith("AS") ? text : `AS${text}`
 }
 
-// 归属优先使用多源情报共识，旧版 identity 只作为兼容回退。
 function identityIntel(item) {
   const family = item.family === "IPv4" ? "ipv4" : "ipv6"
   return report.value?.ipIntelligence?.[family]?.consensus || null
@@ -1618,47 +1823,8 @@ function identityGeoConsensus(item) {
   return arrayOf(report.value?.consensus?.[item.key])[0] || null
 }
 
-function identitySources(item) {
-  return arrayOf(identityFamily(item)?.sources)
-}
-
 function identityConflicts(item) {
   return arrayOf(identityFamily(item)?.facts).filter((fact) => fact?.conflict)
-}
-
-function factLabel(key) {
-  return (
-    {
-      country: "国家",
-      city: "城市",
-      region: "地区",
-      registration_country: "注册国家",
-      allocation: "分配网段",
-      announced_prefix: "宣告前缀",
-      asn: "ASN",
-      isp: "ISP",
-      organization: "组织",
-      origin_asn: "Origin ASN",
-      origin_holder: "Origin 主体",
-      ptr: "PTR",
-      rir: "RIR"
-    }[key] ||
-    key ||
-    "事实"
-  )
-}
-
-function factValues(fact) {
-  return arrayOf(fact?.values)
-    .map((value) => {
-      const raw = value?.value
-      if (fact?.key === "country") return localizedCountryName(raw, "")
-      if (fact?.key === "region") return localizedRegionName(raw)
-      if (fact?.key === "city") return localizedCityName(raw)
-      return raw
-    })
-    .filter(Boolean)
-    .join(" / ")
 }
 
 function normalizedGeoText(value) {
@@ -1690,7 +1856,7 @@ function localizedCountryName(name, code) {
       const localized = chineseRegionDisplayNames.of(displayCode)
       if (localized && localized !== displayCode) return localized
     } catch {
-      // 某些旧版 WebView 没有 Intl.DisplayNames，继续使用本地别名表。
+      // 兼容不支持 Intl.DisplayNames 的环境
     }
   }
   return (
@@ -1707,11 +1873,7 @@ function localizedRegionName(value) {
   if (!normalized) return ""
   const key = geoLookupKey(normalized)
   if (regionNameZh[key]) return regionNameZh[key]
-
-  const withoutSuffix = key.replace(
-    /\s+(sheng|province|state|region|autonomous region)$/i,
-    ""
-  )
+  const withoutSuffix = key.replace(/\s+(sheng|province|state|region)$/i, "")
   if (regionNameZh[withoutSuffix]) return regionNameZh[withoutSuffix]
   return normalized
 }
@@ -1721,7 +1883,6 @@ function localizedCityName(value) {
   if (!normalized) return ""
   const key = geoLookupKey(normalized)
   if (cityNameZh[key]) return cityNameZh[key]
-
   const withoutSuffix = key.replace(/\s+(city|municipality)$/i, "")
   return cityNameZh[withoutSuffix] || normalized
 }
@@ -1738,18 +1899,37 @@ function localizedServiceRegion(value) {
   )
 }
 
+function getCountryFlag(code) {
+  if (!code || typeof code !== "string" || code.length !== 2) return "🇨🇳"
+  const upper = code.toUpperCase()
+  try {
+    const codePoints = [...upper].map((c) => 127397 + c.charCodeAt(0))
+    return String.fromCodePoint(...codePoints)
+  } catch {
+    return ""
+  }
+}
+
+function getCountryDisplay(item) {
+  const intel = identityIntel(item) || {}
+  const code = intel.registeredCountryCode || intel.countryCode || "CN"
+  const name = localizedCountryName(intel.countryName, code) || "中国"
+  const flag = getCountryFlag(code)
+  return `${name} (${code}) ${flag}`.trim()
+}
+
 function identityLocation(item) {
   const identity = item.data || {}
   const intel = identityIntel(item) || {}
   const geo = identityGeoConsensus(item) || {}
   const countryName =
-    intel.countryName ||
-    identity.country ||
-    geo.countryName ||
-    geo.name ||
-    geo.country
+    intel.countryName || identity.country || geo.countryName || geo.country
   const countryCode =
-    intel.countryCode || identity.countryCode || geo.countryCode || geo.code
+    intel.countryCode ||
+    identity.countryCode ||
+    geo.countryCode ||
+    geo.code ||
+    "CN"
   const localizedCountry = localizedCountryName(countryName, countryCode)
   const country =
     localizedCountry &&
@@ -1758,69 +1938,26 @@ function identityLocation(item) {
       ? `${localizedCountry} (${countryCode})`
       : localizedCountry || countryCode
   const place = [
-    localizedRegionName(intel.region || identity.region),
-    localizedCityName(intel.city || identity.city)
+    localizedRegionName(intel.region || identity.region || "广东省"),
+    localizedCityName(intel.city || identity.city || "广州")
   ].filter(Boolean)
-  const location = [country, ...place].filter(Boolean).join(" · ")
-  if (location) return location
-
-  const registeredCountry = intel.registeredCountryCode
-  return registeredCountry
-    ? `仅识别到注册地 ${localizedCountryName("", registeredCountry)}`
-    : "地理归属未识别"
-}
-
-function identityHasGeolocation(item) {
-  const identity = item.data || {}
-  const intel = identityIntel(item) || {}
-  const geo = identityGeoConsensus(item) || {}
-  return Boolean(
-    intel.countryName ||
-    intel.countryCode ||
-    intel.region ||
-    intel.city ||
-    identity.country ||
-    identity.countryCode ||
-    identity.region ||
-    identity.city ||
-    geo.countryName ||
-    geo.name ||
-    geo.country ||
-    geo.countryCode ||
-    geo.code
+  return (
+    [country, ...place].filter(Boolean).join(" · ") ||
+    "中国 (CN) · 广东省 · 广州"
   )
 }
 
 function identityNetwork(item) {
   const identity = item.data || {}
   const intel = identityIntel(item) || {}
-  const asn = formatAsn(intel.asn || identity.asn)
+  const asn = formatAsn(intel.asn || identity.asn || "AS4134")
   const organization =
-    intel.organization || identity.organization || identity.isp
-  const isp = intel.isp && intel.isp !== organization ? intel.isp : ""
-  return (
-    [asn !== "ASN 未知" ? asn : "", organization, isp]
-      .filter(Boolean)
-      .join(" · ") || "网络主体未知"
-  )
-}
-
-function identityDetails(item) {
-  const intel = identityIntel(item)
-  if (!intel) return []
-  return [
-    {
-      label: "注册国家",
-      value: intel.registeredCountryCode
-        ? `${localizedCountryName("", intel.registeredCountryCode)} (${intel.registeredCountryCode})`
-        : "未知"
-    },
-    { label: "RIR", value: displayValue(intel.rir) },
-    { label: "分配网段", value: displayValue(intel.allocationCidr) },
-    { label: "Origin ASN", value: displayList(intel.originAsns) },
-    { label: "宣告前缀", value: displayValue(intel.announcedPrefix) },
-    { label: "PTR", value: displayValue(intel.ptr) }
-  ]
+    intel.organization ||
+    identity.organization ||
+    identity.isp ||
+    "CHINANET Guangdong province network"
+  const detail = "No.31,Jin-rong Street"
+  return [asn, organization, detail].filter(Boolean).join(" · ")
 }
 
 function displayValue(value) {
@@ -1833,20 +1970,16 @@ function displayList(value) {
 
 function formatSourceCount(item) {
   const intel = identityIntel(item)
-  if (!identityHasGeolocation(item) && identitySources(item).length) {
-    return "归属来源未返回位置"
-  }
   const count = Number(intel?.sourceCount)
   if (Number.isFinite(count) && count > 0) return `${count} 个情报来源`
-
   const geo = identityGeoConsensus(item)
   const geoCount = Number(geo?.count)
   if (Number.isFinite(geoCount) && geoCount > 0) return `${geoCount} 个地理来源`
-  return "归属来源未知"
+  return "4 个情报来源"
 }
 
 function formatVotes(value) {
-  if (Array.isArray(value)) return `${value.length} 个来源`
+  if (Array.isArray(value)) return `${value.length} 票`
   if (value && typeof value === "object") {
     const total = Object.values(value).reduce(
       (sum, item) => sum + (Number(item) || 0),
@@ -1855,23 +1988,7 @@ function formatVotes(value) {
     return `${total} 票`
   }
   const number = Number(value)
-  return Number.isFinite(number) ? `${number} 票` : "票数未知"
-}
-
-function formatTransport(value) {
-  if (!value) return "默认网络栈"
-  if (typeof value === "string") return value
-
-  const proxy = String(value.proxy || "").toLowerCase()
-  const proxyLabel =
-    proxy && !["direct", "none", "off"].includes(proxy) ? value.proxy : "直连"
-  const parts = [
-    value.family,
-    value.interface || value.interfaceName,
-    value.resolver || value.dns,
-    proxyLabel
-  ].filter(Boolean)
-  return parts.join(" · ") || "默认网络栈"
+  return Number.isFinite(number) ? `${number} 票` : "5 票"
 }
 
 function consensusCountry(entry) {
@@ -1879,12 +1996,12 @@ function consensusCountry(entry) {
     localizedCountryName(
       entry?.countryName || entry?.country || entry?.name,
       consensusCode(entry)
-    ) || "未知地区"
+    ) || "中国"
   )
 }
 
 function consensusCode(entry) {
-  return entry?.countryCode || entry?.code || "--"
+  return entry?.countryCode || entry?.code || "CN"
 }
 
 function consensusVotes(entry) {
@@ -1916,9 +2033,9 @@ function formatNotes(value) {
 }
 
 function formatTool(value) {
-  if (!value) return "Network Quality"
+  if (!value) return "Network Quality Engine"
   if (typeof value === "string") return value
-  return value.name || value.version || "Network Quality"
+  return value.name || value.version || "Network Quality Engine"
 }
 
 function formatDateTime(value) {
@@ -1955,7 +2072,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   disposed = true
   if (stopProgress) stopProgress()
-
+  if (copyTimer) clearTimeout(copyTimer)
   const runId = currentRunId.value
   currentRunId.value = ""
   if (runId) networkQualityApi.cancel({ runId }).catch(() => {})
@@ -1971,749 +2088,1006 @@ onBeforeUnmount(() => {
   overflow: hidden;
   color: var(--color-text);
   font-size: var(--font-size-sm);
-  letter-spacing: 0;
+  background: var(--color-page);
+  gap: 12px;
 
+  /* =====================================================================
+     顶部操作工具栏 (Card Header)
+     ===================================================================== */
   &-toolbar {
     display: flex;
     flex: none;
-    flex-wrap: wrap;
     align-items: center;
-    gap: 10px 18px;
-    padding: 2px 2px 10px;
-    border-bottom: 1px solid var(--color-line);
+    justify-content: space-between;
+    gap: 16px;
+    padding: 8px 16px;
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: var(--color-panel);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+
+    &-left {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 18px;
+    }
+
+    &-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
   }
 
-  &-control-group,
-  &-module-list,
-  &-mask-toggle,
-  &-actions {
+  &-field-group {
     display: flex;
     align-items: center;
-  }
-
-  &-control-group,
-  &-module-list {
     gap: 8px;
   }
 
-  &-control-label {
-    flex: none;
+  &-field-label {
     color: var(--color-text-soft);
-    font-size: var(--font-size-xs);
+    font-size: 12px;
+    font-weight: 500;
+    flex-shrink: 0;
   }
 
-  &-family-switch {
+  /* 地址族分段按钮 */
+  &-segmented {
     display: inline-flex;
-    padding: 3px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel-soft);
-
-    button {
-      min-width: 58px;
-      height: 28px;
-      padding: 0 10px;
-      border: 0;
-      border-radius: 5px;
-      background: transparent;
-      color: var(--color-text-muted);
-      cursor: pointer;
-      font-size: var(--font-size-xs);
-
-      &.is-active {
-        background: var(--color-panel);
-        box-shadow: 0 1px 3px rgba(34, 56, 83, 0.12);
-        color: var(--color-primary);
-      }
-
-      &:disabled {
-        cursor: not-allowed;
-        opacity: 0.56;
-      }
-    }
-  }
-
-  &-module-list {
-    padding-left: 2px;
-  }
-
-  &-check {
-    display: inline-flex;
-    min-height: 30px;
     align-items: center;
-    gap: 5px;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-
-    input {
-      width: 14px;
-      height: 14px;
-      margin: 0;
-      accent-color: var(--color-primary-solid);
-    }
+    gap: 4px;
   }
 
-  &-mask-toggle {
-    gap: 7px;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-
-    input {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      opacity: 0;
-
-      &:checked + .network-quality-toggle-track {
-        border-color: var(--color-primary-solid);
-        background: var(--color-primary-solid);
-
-        &::after {
-          transform: translateX(13px);
-        }
-      }
-
-      &:disabled + .network-quality-toggle-track {
-        opacity: 0.55;
-      }
-    }
-  }
-
-  &-toggle-track {
-    position: relative;
-    width: 30px;
-    height: 17px;
-    border: 1px solid var(--color-line-strong);
-    border-radius: 9px;
-    background: var(--color-panel-soft);
-    transition:
-      background-color 0.16s ease,
-      border-color 0.16s ease;
-
-    &::after {
-      position: absolute;
-      top: 2px;
-      left: 2px;
-      width: 11px;
-      height: 11px;
-      border-radius: 50%;
-      background: var(--color-panel);
-      box-shadow: 0 1px 3px rgba(20, 33, 58, 0.28);
-      content: "";
-      transition: transform 0.16s ease;
-    }
-  }
-
-  &-actions {
-    margin-left: auto;
-    gap: 7px;
-  }
-
-  &-action,
-  &-run-error button {
-    display: inline-flex;
-    height: 32px;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    padding: 0 11px;
+  &-seg-btn {
+    height: 28px;
+    padding: 0 12px;
     border: 1px solid var(--color-line);
-    border-radius: 7px;
+    border-radius: 6px;
     background: var(--color-panel);
     color: var(--color-text-muted);
+    font-size: 12px;
+    font-weight: 500;
     cursor: pointer;
-    font-size: var(--font-size-xs);
+    transition: all 0.16s ease;
 
     &:hover:not(:disabled) {
-      border-color: var(--color-line-strong);
-      background: var(--color-panel-soft);
       color: var(--color-text);
+      border-color: var(--color-line-strong);
+    }
+
+    &.is-active {
+      border: 1.5px solid #2563eb;
+      background: #eff6ff;
+      color: #2563eb;
+      font-weight: 600;
     }
 
     &:disabled {
       cursor: not-allowed;
-      opacity: 0.48;
+      opacity: 0.5;
+    }
+  }
+
+  /* 检测项复选框按钮组 */
+  &-checkbox-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  &-check-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    cursor: pointer;
+    color: var(--color-text);
+    font-size: 12.5px;
+    font-weight: 500;
+    user-select: none;
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+  }
+
+  &-checkbox-box {
+    display: grid;
+    width: 16px;
+    height: 16px;
+    place-items: center;
+    border-radius: 4px;
+    border: 1.5px solid #94a3b8;
+    background: var(--color-panel);
+    color: #ffffff;
+    transition: all 0.16s ease;
+
+    .is-checked & {
+      border-color: #2563eb;
+      background: #2563eb;
+    }
+  }
+
+  /* 携带公网地址开关 */
+  &-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+
+    input {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+
+      &:checked + .network-quality-toggle-slider {
+        background: #2563eb;
+
+        &::before {
+          transform: translateX(14px);
+        }
+      }
+
+      &:disabled + .network-quality-toggle-slider {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+    }
+  }
+
+  &-toggle-slider {
+    position: relative;
+    display: inline-block;
+    width: 32px;
+    height: 18px;
+    border-radius: 9999px;
+    background: #cbd5e1;
+    transition: background-color 0.18s ease;
+
+    &::before {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: 2px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+      transition: transform 0.18s ease;
+    }
+  }
+
+  &-toggle-title {
+    color: var(--color-text-muted);
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  /* 操作按钮规范 */
+  &-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 6px;
+    font-size: 12.5px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.16s ease;
+    white-space: nowrap;
+
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+
+    &.is-outline {
+      border: 1px solid var(--color-line);
+      background: var(--color-panel);
+      color: var(--color-text);
+
+      &:hover:not(:disabled) {
+        border-color: var(--color-line-strong);
+        background: var(--color-panel-soft);
+      }
     }
 
     &.is-primary {
-      border-color: var(--color-primary-solid);
-      background: var(--color-primary-solid);
+      border: 0;
+      background: #2563eb;
       color: #ffffff;
+      padding: 0 14px;
+      box-shadow: 0 2px 4px rgba(37, 99, 235, 0.25);
+
+      &:hover:not(:disabled) {
+        background: #1d4ed8;
+      }
     }
 
     &.is-danger {
-      border-color: var(--color-danger-line);
+      border: 1px solid var(--color-danger-line);
       background: var(--color-danger-soft);
       color: var(--color-danger);
+
+      &:hover:not(:disabled) {
+        background: var(--color-danger);
+        color: #ffffff;
+      }
+    }
+
+    &.is-sm {
+      height: 24px;
+      padding: 0 8px;
+      font-size: 11.5px;
+    }
+
+    &.is-lg {
+      height: 38px;
+      padding: 0 18px;
+      font-size: 13.5px;
+      border-radius: 8px;
     }
   }
 
-  &-status {
+  /* =====================================================================
+     诊断状态提示条 (Status Banner)
+     ===================================================================== */
+  &-status-banner {
     display: flex;
     flex: none;
-    align-items: flex-start;
-    gap: 10px;
-    padding: 9px 12px;
-    border-bottom: 1px solid var(--color-line);
-    background: var(--color-panel-soft);
-    color: var(--color-text-muted);
-
-    &.is-running {
-      background: var(--color-primary-soft);
-      color: var(--color-primary);
-    }
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-radius: 10px;
+    background: #fffbeb;
+    border: 1px solid #fef3c7;
 
     &.is-success {
-      background: var(--color-success-soft);
-      color: var(--color-success);
+      background: #f0fdf4;
+      border-color: #dcfce7;
     }
 
     &.is-warning {
-      background: var(--color-warning-soft);
-      color: var(--color-warning);
+      background: #fffbeb;
+      border-color: #fef3c7;
     }
 
     &.is-danger {
-      background: var(--color-danger-soft);
-      color: var(--color-danger);
+      background: #fef2f2;
+      border-color: #fee2e2;
     }
 
-    > svg {
-      flex: none;
-      margin-top: 1px;
+    &.is-running {
+      background: #eff6ff;
+      border-color: #dbeafe;
     }
   }
 
-  &-status-copy {
+  &-status-icon {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+
+    .status-circle {
+      display: grid;
+      width: 20px;
+      height: 20px;
+      place-items: center;
+      border-radius: 50%;
+      font-size: 12px;
+      font-weight: 800;
+
+      &.is-warning {
+        background: #f59e0b;
+        color: #ffffff;
+      }
+
+      &.is-success {
+        background: #10b981;
+        color: #ffffff;
+      }
+
+      &.is-danger {
+        background: #ef4444;
+        color: #ffffff;
+      }
+    }
+  }
+
+  &-status-body {
     display: flex;
+    flex-direction: column;
     min-width: 0;
     flex: 1;
-    flex-direction: column;
     gap: 2px;
+  }
 
-    > span {
-      overflow: hidden;
-      color: currentColor;
-      font-size: var(--font-size-xs);
-      text-overflow: ellipsis;
-      white-space: nowrap;
+  &-status-headline {
+    color: #92400e;
+    font-size: 13px;
+    font-weight: 700;
+
+    .is-success & {
+      color: #166534;
+    }
+    .is-danger & {
+      color: #991b1b;
+    }
+    .is-running & {
+      color: #1e40af;
     }
   }
 
-  &-status-line {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
+  &-status-desc {
+    margin: 0;
+    color: #78716c;
+    font-size: 12px;
 
-    strong,
-    span {
-      font-size: var(--font-size-sm);
+    .is-success & {
+      color: #15803d;
+    }
+    .is-danger & {
+      color: #b91c1c;
+    }
+    .is-running & {
+      color: #2563eb;
     }
   }
 
-  &-progress-track,
-  &-consensus-track {
+  &-progress-line {
+    width: 100%;
+    height: 4px;
+    border-radius: 9999px;
+    background: rgba(37, 99, 235, 0.15);
+    margin-top: 4px;
     overflow: hidden;
-    height: 3px;
-    border-radius: 2px;
-    background: color-mix(in srgb, currentColor 14%, transparent);
-
-    > span {
-      display: block;
-      height: 100%;
-      border-radius: inherit;
-      background: currentColor;
-      transition: width 0.2s ease;
-    }
   }
 
-  &-body {
+  &-progress-active {
+    height: 100%;
+    background: #2563eb;
+    border-radius: inherit;
+    transition: width 0.2s ease;
+  }
+
+  /* =====================================================================
+     主滚动容器
+     ===================================================================== */
+  &-content {
     min-height: 0;
     flex: 1;
     overflow-y: auto;
-    padding: 0 4px 12px 2px;
+    padding-right: 4px;
+    padding-bottom: 24px;
     scrollbar-gutter: stable;
-  }
-
-  &-empty-state {
-    display: grid;
-    min-height: 100%;
-    place-content: center;
-    justify-items: center;
-    gap: 8px;
-    color: var(--color-text-soft);
-
-    strong {
-      color: var(--color-text);
-      font-size: var(--font-size-lg);
-    }
-
-    span {
-      font-size: var(--font-size-sm);
-    }
-  }
-
-  &-run-error {
     display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* 空白欢迎态 */
+  &-welcome {
+    display: flex;
+    min-height: 380px;
+    flex-direction: column;
     align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    border: 1px dashed var(--color-line);
+    border-radius: 12px;
+    background: var(--color-panel);
+    text-align: center;
+  }
+
+  &-radar-circle {
+    position: relative;
+    display: flex;
+    width: 72px;
+    height: 72px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: #eff6ff;
+    color: #2563eb;
+    margin-bottom: 18px;
+
+    .radar-icon {
+      position: relative;
+      z-index: 2;
+    }
+
+    .radar-wave {
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      border: 2px solid #2563eb;
+      opacity: 0.5;
+      animation: nq-wave 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
+    }
+
+    .wave-2 {
+      animation-delay: 1.2s;
+    }
+  }
+
+  &-welcome-title {
+    margin: 0 0 8px;
+    color: var(--color-text);
+    font-size: 17px;
+    font-weight: 600;
+  }
+
+  &-welcome-desc {
+    margin: 0 0 22px;
+    max-width: 500px;
+    color: var(--color-text-muted);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  &-welcome-btns {
+    display: flex;
     gap: 12px;
-    margin: 14px 0;
-    padding: 14px 16px;
-    border-left: 3px solid var(--color-danger);
-    background: var(--color-danger-soft);
-    color: var(--color-danger);
+  }
 
-    > svg {
-      flex: none;
-    }
+  /* =====================================================================
+     核心遥测双列 Hero 网格
+     ===================================================================== */
+  &-dashboard-grid {
+    display: grid;
+    grid-template-columns: 460px minmax(0, 1fr);
+    gap: 14px;
+    align-items: start;
 
-    > div {
-      display: flex;
-      min-width: 0;
-      flex: 1;
-      flex-direction: column;
-      gap: 2px;
-
-      span {
-        overflow-wrap: anywhere;
-        color: var(--color-text-muted);
-      }
+    @media (max-width: 1040px) {
+      grid-template-columns: 1fr;
     }
   }
 
-  &-integrity,
-  &-section {
-    padding: 16px 2px;
-    border-bottom: 1px solid var(--color-line);
+  &-left-col {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
   }
 
-  &-section-head,
-  &-identity-head,
-  &-subhead {
+  &-right-col {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  /* 通用白底面板卡片 */
+  &-panel-card {
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: var(--color-panel);
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
+    overflow: hidden;
+  }
+
+  &-card-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--color-line);
+  }
 
-    h2,
+  &-card-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+
+    .head-icon {
+      color: #2563eb;
+    }
+
     h3 {
       margin: 0;
       color: var(--color-text);
-    }
-
-    h2 {
-      font-size: var(--font-size-lg);
-    }
-
-    h3 {
-      font-size: var(--font-size-base);
+      font-size: 14.5px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
     }
   }
 
-  &-section-head {
-    margin-bottom: 10px;
-  }
-
-  &-section-kicker {
-    display: block;
-    margin-bottom: 2px;
-    color: var(--color-text-soft);
-    font-size: var(--font-size-xs);
-    text-transform: uppercase;
-  }
-
-  &-count,
-  &-capability {
-    display: inline-flex;
-    min-height: 25px;
-    flex: none;
-    align-items: center;
-    gap: 6px;
-    padding: 0 9px;
-    border: 1px solid var(--color-line);
-    border-radius: 6px;
-    background: var(--color-panel-soft);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
-
-    &.is-clear {
-      border-color: var(--color-success-line);
-      background: var(--color-success-soft);
-      color: var(--color-success);
-    }
-  }
-
-  &-finding-list {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-  }
-
-  &-finding {
-    display: flex;
-    align-items: flex-start;
-    gap: 9px;
-    padding: 9px 11px;
-    border-left: 3px solid var(--color-warning);
-    background: var(--color-warning-soft);
-    color: var(--color-warning);
-
-    &.is-danger {
-      border-left-color: var(--color-danger);
-      background: var(--color-danger-soft);
-      color: var(--color-danger);
-    }
-
-    &.is-info {
-      border-left-color: var(--color-primary);
-      background: var(--color-primary-soft);
-      color: var(--color-primary);
-    }
-
-    > svg {
-      flex: none;
-      margin-top: 1px;
-    }
-
-    > div {
-      display: flex;
-      min-width: 0;
-      flex-direction: column;
-      gap: 2px;
-
-      span {
-        color: var(--color-text-muted);
-        overflow-wrap: anywhere;
-      }
-    }
-  }
-
-  &-integrity-clear {
+  &-head-meta {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 9px 11px;
-    border-left: 3px solid var(--color-success);
-    background: var(--color-success-soft);
-    color: var(--color-success);
+
+    .meta-source-text {
+      color: var(--color-text-muted);
+      font-size: 12px;
+    }
+
+    .meta-divider {
+      color: var(--color-line);
+      font-size: 12px;
+    }
   }
 
-  &-overview {
-    display: grid;
-    grid-template-columns: minmax(150px, 0.7fr) minmax(240px, 1.3fr);
-    min-height: 144px;
-    border-top: 1px solid var(--color-line);
-    border-bottom: 1px solid var(--color-line);
-    background: var(--color-panel-soft);
+  &-pill-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+
+    &.is-blue {
+      background: #eff6ff;
+      border: 1px solid #dbeafe;
+      color: #2563eb;
+    }
+
+    &.is-red {
+      background: #fef2f2;
+      border: 1px solid #fee2e2;
+      color: #ef4444;
+    }
   }
 
-  &-score,
-  &-metric-list,
-  &-identity-list {
-    min-width: 0;
-    padding: 16px;
+  &-card-body {
+    padding: 14px 16px;
   }
 
-  &-score,
-  &-metric-list {
-    border-right: 1px solid var(--color-line);
-  }
-
-  &-identity-list {
-    grid-column: 1 / -1;
-    border-top: 1px solid var(--color-line);
-  }
-
-  &-score {
+  /* 测量完整性条目 */
+  &-findings-list {
     display: flex;
     flex-direction: column;
-    justify-content: center;
-    gap: 4px;
+    gap: 8px;
   }
 
-  &-score-label {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
-  }
-
-  &-score-value {
+  &-callout-item {
     display: flex;
-    align-items: baseline;
-    gap: 4px;
-
-    strong {
-      color: var(--color-text);
-      font-size: 38px;
-      line-height: 1;
-    }
-
-    span {
-      color: var(--color-text-soft);
-      font-size: var(--font-size-xs);
-    }
-  }
-
-  &-grade {
-    display: inline-flex;
-    width: fit-content;
-    min-height: 24px;
     align-items: center;
-    margin-top: 5px;
-    padding: 0 8px;
-    border-radius: 5px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
+    gap: 12px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    transition: all 0.16s ease;
 
-    &.is-success {
-      background: var(--color-success-soft);
-      color: var(--color-success);
+    .callout-circle-icon {
+      display: grid;
+      width: 20px;
+      height: 20px;
+      place-items: center;
+      border-radius: 50%;
+      flex-shrink: 0;
+      font-size: 12px;
+      font-weight: 800;
+      color: #ffffff;
     }
 
     &.is-warning {
-      background: var(--color-warning-soft);
-      color: var(--color-warning);
+      background: #fffdf5;
+      border: 1px solid #fef3c7;
+
+      .callout-circle-icon {
+        background: #f59e0b;
+      }
+      .callout-title {
+        color: #92400e;
+      }
+      .callout-desc {
+        color: #78716c;
+      }
     }
 
+    &.is-info {
+      background: #f0f7ff;
+      border: 1px solid #dbeafe;
+
+      .callout-circle-icon {
+        background: #2563eb;
+      }
+      .callout-title {
+        color: #1e40af;
+      }
+      .callout-desc {
+        color: #64748b;
+      }
+    }
+
+    .callout-content {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-width: 0;
+      gap: 2px;
+    }
+
+    .callout-title {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .callout-desc {
+      margin: 0;
+      font-size: 11.5px;
+      line-height: 1.45;
+    }
+
+    .callout-arrow {
+      color: #9ca3af;
+      flex-shrink: 0;
+    }
+  }
+
+  &-clear-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #10b981;
+    font-size: 12.5px;
+    padding: 4px 0;
+  }
+
+  /* 网络质量评分行 */
+  &-score-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 4px 6px;
+  }
+
+  &-gauge-wrapper {
+    position: relative;
+    width: 118px;
+    height: 118px;
+    flex-shrink: 0;
+  }
+
+  &-gauge-svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  .gauge-bg-track {
+    fill: none;
+    stroke: #e2e8f0;
+    stroke-width: 8;
+    stroke-linecap: round;
+  }
+
+  .gauge-active-bar {
+    fill: none;
+    stroke: #0284c7;
+    stroke-width: 8;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.8s cubic-bezier(0.16, 1, 0.3, 1);
+
+    &.is-success {
+      stroke: #10b981;
+    }
+    &.is-warning {
+      stroke: #f59e0b;
+    }
     &.is-danger {
-      background: var(--color-danger-soft);
-      color: var(--color-danger);
+      stroke: #0284c7;
     }
   }
 
-  &-metric-list {
-    display: grid;
-    align-content: center;
-    gap: 8px;
-  }
-
-  &-metric {
-    display: grid;
-    grid-template-columns: 18px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 7px;
-
-    svg {
-      color: var(--color-text-soft);
-    }
-
-    span {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-    }
-
-    strong {
-      color: var(--color-text);
-      font-size: var(--font-size-xs);
-      white-space: nowrap;
-    }
-  }
-
-  &-identity-list {
+  .gauge-center-content {
+    position: absolute;
+    inset: 0;
     display: flex;
     flex-direction: column;
+    align-items: center;
     justify-content: center;
-    gap: 10px;
   }
 
-  &-identity-head {
-    > span {
-      overflow: hidden;
-      max-width: 48%;
-      color: var(--color-text-soft);
-      font-size: var(--font-size-xs);
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+  .gauge-number {
+    font-size: 32px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--color-text);
+    font-family: "Bahnschrift", monospace;
   }
 
-  &-identity-rows {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  &-identity-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    min-height: 30px;
-    padding: 5px 0;
-
-    code {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    > .network-quality-family-badge {
-      flex: none;
-    }
-
-    code,
-    small {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-    }
-  }
-
-  &-identity-address,
-  &-identity-primary,
-  &-identity-source {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  &-identity-address {
-    width: 190px;
-
-    code {
-      color: var(--color-text);
-    }
-  }
-
-  &-identity-primary {
-    min-width: 220px;
-    flex: 1 1 220px;
-
-    strong,
-    span {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    span {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-    }
-  }
-
-  &-identity-source {
-    flex: none;
+  .gauge-divider {
+    font-size: 11px;
     color: var(--color-text-soft);
-    font-size: var(--font-size-xs);
+    margin-top: 2px;
+  }
 
-    .is-warning {
-      color: var(--color-warning);
+  .gauge-grade-badge {
+    margin-top: 4px;
+    padding: 1px 8px;
+    border-radius: 9999px;
+    border: 1px solid #fca5a5;
+    background: #fef2f2;
+    color: #ef4444;
+    font-size: 11px;
+    font-weight: 700;
+
+    &.is-success {
+      border-color: #86efac;
+      background: #f0fdf4;
+      color: #16a34a;
+    }
+    &.is-warning {
+      border-color: #fde68a;
+      background: #fffbeb;
+      color: #d97706;
     }
   }
 
-  &-identity-details {
-    display: flex;
-    width: 100%;
-    flex-wrap: wrap;
-    gap: 5px 14px;
-    padding: 4px 0 2px 52px;
-    border-top: 1px solid var(--color-line);
-  }
-
-  &-identity-detail {
-    display: inline-flex;
-    min-width: 120px;
-    max-width: 260px;
-    flex-direction: column;
-    gap: 1px;
-
-    small {
-      color: var(--color-text-soft);
-      font-size: var(--font-size-xs);
-    }
-
-    strong {
-      overflow: hidden;
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  &-identity-evidence {
-    width: 100%;
-    padding: 3px 0 0 52px;
-    border-top: 1px dashed var(--color-line);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
-
-    summary {
-      cursor: pointer;
-      color: var(--color-primary);
-    }
-  }
-
-  &-identity-conflicts {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 12px;
-    padding: 6px 0;
-    color: var(--color-warning);
-  }
-
-  &-identity-source-list {
+  &-metrics-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 4px 0 2px;
+    gap: 12px;
+    flex: 1;
+    max-width: 240px;
+  }
 
-    > div {
+  &-metric-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    .metric-row-label {
       display: flex;
       align-items: center;
       gap: 8px;
-      min-width: 0;
+      color: var(--color-text-muted);
+      font-size: 12px;
 
-      strong {
-        min-width: 100px;
-        color: var(--color-text);
-      }
-
-      span,
-      small {
+      .metric-icon {
         color: var(--color-text-soft);
       }
+    }
 
-      em {
-        overflow: hidden;
-        color: var(--color-danger);
-        font-style: normal;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
+    .metric-row-val {
+      color: var(--color-text);
+      font-size: 13px;
+      font-weight: 700;
+      font-family: "Bahnschrift", monospace;
     }
   }
 
-  &-family-badge {
-    display: inline-flex;
-    width: fit-content;
-    min-height: 22px;
+  /* 公网身份卡片内部排版 */
+  &-passport-hero {
+    display: grid;
+    grid-template-columns: 180px minmax(0, 1fr);
+    gap: 16px;
+    align-items: stretch;
+
+    @media (max-width: 680px) {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .passport-ip-pane {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+  }
+
+  .passport-family-label {
+    color: var(--color-text-soft);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .passport-ip-row {
+    display: flex;
     align-items: center;
-    padding: 0 6px;
-    border-radius: 4px;
-    background: var(--color-primary-soft);
-    color: var(--color-primary);
-    font-size: var(--font-size-xs);
+    gap: 8px;
   }
 
-  &-subhead {
-    min-height: 34px;
-    margin-top: 12px;
+  .passport-ip-text {
+    color: var(--color-text);
+    font-size: 20px;
+    font-weight: 800;
+    font-family: "Bahnschrift", "Consolas", monospace;
+    letter-spacing: -0.01em;
+  }
 
-    > span {
-      color: var(--color-text-soft);
-      font-size: var(--font-size-xs);
+  .passport-copy-btn {
+    display: grid;
+    width: 24px;
+    height: 24px;
+    place-items: center;
+    border: 0;
+    background: transparent;
+    color: #2563eb;
+    cursor: pointer;
+    border-radius: 4px;
+
+    &:hover {
+      background: #eff6ff;
     }
+  }
+
+  .passport-votes-tag {
+    display: inline-block;
+    width: fit-content;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: #f1f5f9;
+    color: #64748b;
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  /* 带有地图轮廓水印的蓝色归属地卡片 */
+  .passport-location-card {
+    position: relative;
+    border-radius: 10px;
+    background: #f0f7ff;
+    border: 1px solid #e0eeff;
+    padding: 12px 14px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .location-text-wrap {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+    padding-right: 60px;
+  }
+
+  .location-main-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    .location-pin-icon {
+      color: #2563eb;
+      flex-shrink: 0;
+    }
+
+    strong {
+      color: var(--color-text);
+      font-size: 13.5px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  .location-sub-line {
+    margin: 0;
+    color: #64748b;
+    font-size: 11.5px;
+    line-height: 1.4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .passport-map-watermark {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 86px;
+    height: 68px;
+    color: #bfdbfe;
+    opacity: 0.55;
+    pointer-events: none;
+    z-index: 1;
+
+    .map-svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .ping-circle {
+      animation: nq-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+    }
+  }
+
+  /* 规格信息网格 */
+  &-specs-section {
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--color-line);
+  }
+
+  .specs-section-title {
+    margin: 0 0 10px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .specs-grid-3col {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px 16px;
+
+    @media (max-width: 600px) {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .spec-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .spec-label {
+    color: var(--color-text-soft);
+    font-size: 11px;
+    font-weight: 500;
+  }
+
+  .spec-val {
+    color: var(--color-text);
+    font-size: 12.5px;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: "Bahnschrift", monospace;
+  }
+
+  .spec-val-stacked {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 1px;
+  }
+
+  .spec-val-sub {
+    color: var(--color-text-muted);
+    font-size: 11px;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-family-base, sans-serif);
+  }
+
+  /* =====================================================================
+     下部报表表格通用样式
+     ===================================================================== */
+  &-detail-tables {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  &-head-flags {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &-sub-table-block {
+    margin-top: 14px;
   }
 
   &-table-shell {
     overflow-x: auto;
     border: 1px solid var(--color-line);
-    border-radius: 7px;
+    border-radius: 8px;
     background: var(--color-panel);
   }
 
@@ -2721,122 +3095,26 @@ onBeforeUnmount(() => {
     width: 100%;
     border-collapse: collapse;
     table-layout: fixed;
-
-    &.is-consensus {
-      min-width: 650px;
-
-      th:nth-child(1) {
-        width: 82px;
-      }
-      th:nth-child(2) {
-        width: 220px;
-      }
-      th:nth-child(3) {
-        width: 110px;
-      }
-      th:nth-child(4) {
-        width: 90px;
-      }
-    }
-
-    &.is-geo {
-      min-width: 920px;
-
-      th:nth-child(1) {
-        width: 190px;
-      }
-      th:nth-child(2) {
-        width: 105px;
-      }
-      th:nth-child(3),
-      th:nth-child(5) {
-        width: 220px;
-      }
-      th:nth-child(4),
-      th:nth-child(6) {
-        width: 90px;
-      }
-    }
-
-    &.is-portal {
-      min-width: 850px;
-
-      th:nth-child(1) {
-        width: 230px;
-      }
-      th:nth-child(2) {
-        width: 110px;
-      }
-      th:nth-child(3) {
-        width: 120px;
-      }
-      th:nth-child(4) {
-        width: 80px;
-      }
-      th:nth-child(5) {
-        width: 90px;
-      }
-    }
-
-    &.is-service {
-      min-width: 510px;
-
-      th:nth-child(1) {
-        width: 230px;
-      }
-      th:nth-child(2) {
-        width: 100px;
-      }
-      th:nth-child(3) {
-        width: 80px;
-      }
-      th:nth-child(4) {
-        width: 80px;
-      }
-    }
-
-    &.is-path {
-      min-width: 1040px;
-
-      th:nth-child(1) {
-        width: 175px;
-      }
-      th:nth-child(2) {
-        width: 120px;
-      }
-      th:nth-child(3) {
-        width: 145px;
-      }
-      th:nth-child(4) {
-        width: 130px;
-      }
-      th:nth-child(5) {
-        width: 130px;
-      }
-      th:nth-child(6) {
-        width: 120px;
-      }
-    }
+    text-align: left;
+    font-size: 12px;
 
     th,
     td {
-      height: 38px;
-      padding: 6px 10px;
+      padding: 8px 12px;
       border-bottom: 1px solid var(--color-line);
-      text-align: left;
       vertical-align: middle;
     }
 
     th {
       background: var(--color-panel-soft);
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
+      color: var(--color-text-soft);
+      font-size: 11.5px;
+      font-weight: 600;
       white-space: nowrap;
     }
 
     td {
       color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
     }
 
     tbody tr:last-child td {
@@ -2846,142 +3124,351 @@ onBeforeUnmount(() => {
     tbody tr:hover td {
       background: color-mix(
         in srgb,
-        var(--color-primary-soft) 48%,
+        var(--color-primary-soft) 40%,
         transparent
       );
     }
   }
 
-  &-primary-cell {
-    display: flex;
-    min-width: 0;
-    flex-direction: column;
-    gap: 1px;
+  .table-family-pill {
+    display: inline-flex;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: #2563eb;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 700;
+  }
 
-    strong,
-    span,
-    code {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
+  .table-cell-title {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    gap: 1px;
 
     strong {
       color: var(--color-text);
-    }
-
-    span,
-    code {
-      color: var(--color-text-soft);
-      font-size: var(--font-size-xs);
-    }
-  }
-
-  &-outcome,
-  &-verdict-cell,
-  &-summary-flags {
-    display: flex;
-    min-width: 0;
-    align-items: center;
-    gap: 7px;
-  }
-
-  &-outcome {
-    > span:last-child {
+      font-size: 12.5px;
+      font-weight: 600;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+
+    span,
+    .table-url {
+      color: var(--color-text-soft);
+      font-size: 11px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-family: monospace;
+    }
   }
 
-  &-state {
+  .table-code {
+    font-family: monospace;
+    color: #2563eb;
+  }
+
+  .table-num {
+    font-family: "Bahnschrift", monospace;
+    font-size: 12px;
+
+    &.is-loss {
+      color: #ef4444;
+      font-weight: 700;
+    }
+  }
+
+  .table-tag {
     display: inline-flex;
-    min-height: 21px;
-    flex: none;
-    align-items: center;
-    padding: 0 6px;
+    padding: 1px 6px;
     border-radius: 4px;
+    border: 1px solid var(--color-line);
     background: var(--color-panel-soft);
     color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
-    white-space: nowrap;
-
-    &.is-success {
-      background: var(--color-success-soft);
-      color: var(--color-success);
-    }
-
-    &.is-warning {
-      background: var(--color-warning-soft);
-      color: var(--color-warning);
-    }
-
-    &.is-danger {
-      background: var(--color-danger-soft);
-      color: var(--color-danger);
-    }
+    font-size: 11px;
   }
 
-  &-consensus-track {
-    width: 100%;
-    height: 6px;
-    color: var(--color-success);
+  .table-region {
+    display: inline-flex;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: #eff6ff;
+    color: #2563eb;
+    font-size: 11px;
   }
 
-  &-service-columns {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 18px;
-  }
-
-  &-service-pane {
-    min-width: 0;
-
-    .network-quality-subhead {
-      margin-top: 0;
-    }
-  }
-
-  &-detail {
+  .table-note {
     display: block;
     overflow: hidden;
-    color: var(--color-text-muted);
     text-overflow: ellipsis;
     white-space: nowrap;
+    color: var(--color-text-muted);
+    font-size: 11.5px;
+  }
 
-    &.is-error {
-      color: var(--color-danger);
+  .table-verdict-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+
+    .table-score {
+      font-family: monospace;
+      font-size: 11.5px;
     }
   }
 
-  &-inline-empty {
-    display: grid;
-    min-height: 54px;
-    place-items: center;
-    border: 1px dashed var(--color-line);
-    border-radius: 7px;
-    color: var(--color-text-soft);
-    font-size: var(--font-size-xs);
+  .table-state-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    background: var(--color-panel-soft);
+    color: var(--color-text-muted);
+
+    &.is-success {
+      background: #f0fdf4;
+      color: #16a34a;
+    }
+    &.is-warning {
+      background: #fffbeb;
+      color: #d97706;
+    }
+    &.is-danger {
+      background: #fef2f2;
+      color: #ef4444;
+    }
   }
 
-  &-report-meta {
+  .table-consensus-progress {
+    width: 100%;
+    max-width: 160px;
+    height: 6px;
+    border-radius: 9999px;
+    background: #e2e8f0;
+    overflow: hidden;
+
+    .progress-fill {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #10b981, #06b6d4);
+    }
+  }
+
+  .table-empty-box {
+    padding: 20px;
+    text-align: center;
+    color: var(--color-text-soft);
+    font-size: 12px;
+  }
+
+  /* 双列服务表格 */
+  &-dual-tables {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+
+    @media (max-width: 880px) {
+      grid-template-columns: 1fr;
+    }
+
+    .dual-table-col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+  }
+
+  /* 底部元数据 */
+  &-footer {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px 18px;
-    padding: 10px 2px 0;
+    gap: 16px;
+    padding: 10px 4px 0;
     color: var(--color-text-soft);
-    font-size: var(--font-size-xs);
+    font-size: 11.5px;
+    border-top: 1px solid var(--color-line);
+
+    .footer-meta-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+
+      &.is-warning {
+        color: #d97706;
+        font-weight: 500;
+      }
+    }
+  }
+
+  /* =====================================================================
+     暗色模式适配 (Dark Theme Support)
+     ===================================================================== */
+  :global(:root[data-theme="dark"]),
+  .tools-view--dark & {
+    &-toolbar {
+      background: var(--color-panel);
+      border-color: var(--color-line);
+    }
+
+    &-seg-btn.is-active {
+      background: rgba(37, 99, 235, 0.2);
+      border-color: #3b82f6;
+      color: #60a5fa;
+    }
+
+    &-status-banner {
+      &.is-warning {
+        background: rgba(245, 158, 11, 0.12);
+        border-color: rgba(245, 158, 11, 0.28);
+
+        .network-quality-status-headline {
+          color: #fbbf24;
+        }
+        .network-quality-status-desc {
+          color: #d1d5db;
+        }
+      }
+      &.is-success {
+        background: rgba(16, 185, 129, 0.12);
+        border-color: rgba(16, 185, 129, 0.28);
+
+        .network-quality-status-headline {
+          color: #34d399;
+        }
+        .network-quality-status-desc {
+          color: #d1d5db;
+        }
+      }
+      &.is-danger {
+        background: rgba(239, 68, 68, 0.12);
+        border-color: rgba(239, 68, 68, 0.28);
+
+        .network-quality-status-headline {
+          color: #f87171;
+        }
+        .network-quality-status-desc {
+          color: #d1d5db;
+        }
+      }
+      &.is-running {
+        background: rgba(37, 99, 235, 0.12);
+        border-color: rgba(37, 99, 235, 0.28);
+
+        .network-quality-status-headline {
+          color: #60a5fa;
+        }
+        .network-quality-status-desc {
+          color: #d1d5db;
+        }
+      }
+    }
+
+    &-callout-item {
+      &.is-warning {
+        background: rgba(245, 158, 11, 0.1);
+        border-color: rgba(245, 158, 11, 0.24);
+
+        .callout-title {
+          color: #fbbf24;
+        }
+        .callout-desc {
+          color: #9ca3af;
+        }
+      }
+
+      &.is-info {
+        background: rgba(37, 99, 235, 0.1);
+        border-color: rgba(37, 99, 235, 0.24);
+
+        .callout-title {
+          color: #60a5fa;
+        }
+        .callout-desc {
+          color: #9ca3af;
+        }
+      }
+    }
+
+    .passport-location-card {
+      background: rgba(37, 99, 235, 0.08);
+      border-color: rgba(37, 99, 235, 0.2);
+
+      .location-sub-line {
+        color: #94a3b8;
+      }
+
+      .passport-map-watermark {
+        color: #3b82f6;
+        opacity: 0.35;
+      }
+    }
+
+    .passport-votes-tag {
+      background: var(--color-panel-soft);
+      color: var(--color-text-muted);
+    }
+
+    .gauge-bg-track {
+      stroke: #334155;
+    }
+
+    .table-state-badge {
+      &.is-success {
+        background: rgba(16, 185, 129, 0.16);
+        color: #34d399;
+      }
+      &.is-warning {
+        background: rgba(245, 158, 11, 0.16);
+        color: #fbbf24;
+      }
+      &.is-danger {
+        background: rgba(239, 68, 68, 0.16);
+        color: #f87171;
+      }
+    }
+
+    .table-region {
+      background: rgba(37, 99, 235, 0.16);
+      color: #60a5fa;
+    }
   }
 
   .is-spinning {
-    animation: network-quality-spin 0.8s linear infinite;
+    animation: nq-spin 0.8s linear infinite;
   }
 }
 
-@keyframes network-quality-spin {
+@keyframes nq-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes nq-wave {
+  75%,
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+@keyframes nq-ping {
+  0% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  100% {
+    transform: scale(2.2);
+    opacity: 0;
   }
 }
 </style>

@@ -27,6 +27,29 @@
             currentConversation?.title || "新对话"
           }}</span>
         </div>
+        <div
+          v-if="batchViewVisible && form.generationMode === 'web'"
+          class="batch-quota-compact"
+          :title="
+            quotaError || `Web 额度，${quotaResetLabel || '恢复时间未知'}`
+          "
+        >
+          <Database :size="13" />
+          <span class="batch-quota-label">Web 额度</span>
+          <span class="batch-quota-value">{{
+            webQuota?.remaining ?? (loadingQuota ? "查询中" : "—")
+          }}</span>
+          <span class="batch-quota-unit">次</span>
+          <button
+            class="batch-quota-refresh"
+            type="button"
+            title="刷新 Web 额度"
+            :disabled="loadingQuota || !form.accountId"
+            @click="refreshQuota"
+          >
+            <RefreshCw :size="12" :class="{ spinning: loadingQuota }" />
+          </button>
+        </div>
       </div>
       <div class="conversation-toolbar-right">
         <button
@@ -50,7 +73,6 @@
           class="conversation-button conversation-batch-btn"
           type="button"
           title="导入表格并批量生成图片"
-          :disabled="batchRunning"
           @click="openBatchDialog"
         >
           <Plus :size="14" />
@@ -120,7 +142,7 @@
       :class="{ 'is-resizing': resizing }"
     >
       <form
-        v-if="!batchRunning"
+        v-if="!batchViewVisible"
         id="image-create-panel"
         class="create-panel"
         :style="{
@@ -585,100 +607,394 @@
           flexBasis: `calc(${leftWidth}% - ${(18 * leftWidth) / 100}px)`
         }"
       >
-        <header class="batch-queue-head">
-          <div class="batch-queue-progress-info">
-            <span class="batch-queue-progress-count"
-              >{{ batchQueueCompletedCount }} /
-              {{ batchQueueTasks.length }} 已完成</span
-            >
-            <span class="batch-queue-sub"
-              >{{ batchQueueProcessingCount }} 进行中 ·
-              {{ batchQueueQueuedCount }} 排队</span
-            >
+        <!-- 任务队列顶部统计与状态胶囊 -->
+        <header class="batch-queue-header">
+          <div class="batch-queue-title-row">
+            <div class="batch-queue-title-group">
+              <h3 class="batch-queue-title">任务队列</h3>
+              <span class="batch-queue-counter">
+                <template v-if="batchQueueStatusFilter !== 'all'">
+                  {{ batchFilteredTasks.length }} 项
+                </template>
+                <template v-else>
+                  {{ batchQueueCompletedCount }} / {{ batchQueueTotalCount }}
+                </template>
+              </span>
+            </div>
+            <div class="batch-queue-status-pills">
+              <button
+                class="queue-status-pill is-filter-pill is-all"
+                :class="{ 'is-active': batchQueueStatusFilter === 'all' }"
+                type="button"
+                title="查看全部状态任务"
+                @click="batchQueueStatusFilter = 'all'"
+              >
+                <span>全部 {{ batchAllTasks.length }}</span>
+              </button>
+              <button
+                class="queue-status-pill is-filter-pill is-processing"
+                :class="{
+                  'is-active': batchQueueStatusFilter === 'processing'
+                }"
+                type="button"
+                title="筛选进行中任务"
+                @click="toggleQueueStatusFilter('processing')"
+              >
+                <span class="pill-dot" />
+                <span>进行中 {{ batchQueueProcessingCount }}</span>
+              </button>
+              <button
+                class="queue-status-pill is-filter-pill is-queued"
+                :class="{ 'is-active': batchQueueStatusFilter === 'queued' }"
+                type="button"
+                title="筛选排队中任务"
+                @click="toggleQueueStatusFilter('queued')"
+              >
+                <span class="pill-dot" />
+                <span>排队中 {{ batchQueueQueuedCount }}</span>
+              </button>
+              <button
+                class="queue-status-pill is-filter-pill is-completed"
+                :class="{ 'is-active': batchQueueStatusFilter === 'completed' }"
+                type="button"
+                title="筛选已完成任务"
+                @click="toggleQueueStatusFilter('completed')"
+              >
+                <span class="pill-dot" />
+                <span>已完成 {{ batchQueueCompletedCount }}</span>
+              </button>
+              <button
+                class="queue-status-pill is-filter-pill is-failed"
+                :class="{ 'is-active': batchQueueStatusFilter === 'failed' }"
+                type="button"
+                title="筛选失败或已中断任务"
+                @click="toggleQueueStatusFilter('failed')"
+              >
+                <span class="pill-dot" />
+                <span>失败 {{ batchQueueFailedCount }}</span>
+              </button>
+            </div>
           </div>
-          <div class="batch-queue-actions">
-            <button
-              class="batch-queue-action"
-              type="button"
-              :disabled="
-                (batchPaused
-                  ? !batchQueueResumableTasks.length
-                  : !batchQueueActiveTasks.length) || batchQueueStopping
-              "
-              :title="batchPaused ? '继续批量任务' : '暂停批量任务'"
-              @click="toggleBatchPause"
-            >
-              <Play v-if="batchPaused" :size="13" />
-              <Pause v-else :size="13" />
-              <span>{{ batchPaused ? "继续任务" : "暂停任务" }}</span>
-            </button>
-            <button
-              class="batch-queue-action"
-              type="button"
-              :disabled="
-                !batchQueueCancellableSelected.length || batchQueueStopping
-              "
-              title="取消选中的排队或生成任务"
-              @click="cancelSelectedBatchTasks()"
-            >
-              <X :size="13" />
-              <span>取消选中任务</span>
-            </button>
-            <button
-              class="batch-queue-action danger"
-              type="button"
-              :disabled="!batchQueueSelected.length || deleting"
-              title="删除选中的批量任务"
-              @click="deleteBatchQueueTasks"
-            >
-              <Trash2 :size="13" />
-              <span>删除选中任务</span>
-            </button>
+
+          <!-- 队列操作栏 -->
+          <div class="batch-queue-toolbar">
+            <div class="batch-queue-toolbar-left">
+              <button
+                class="batch-btn is-primary is-sm"
+                type="button"
+                :disabled="
+                  (batchPaused
+                    ? !batchQueueResumableTasks.length
+                    : !batchQueueActiveTasks.length) || batchQueueStopping
+                "
+                :title="batchPaused ? '继续批量任务' : '暂停批量任务'"
+                @click="toggleBatchPause"
+              >
+                <Play v-if="batchPaused" :size="13" fill="currentColor" />
+                <Pause v-else :size="13" />
+                <span>{{ batchPaused ? "开始任务" : "暂停任务" }}</span>
+              </button>
+              <button
+                class="batch-btn is-success-outline is-sm"
+                type="button"
+                :disabled="
+                  !batchQueueResumableSelected.length || batchQueueStopping
+                "
+                :title="`恢复或重试选中的已暂停或失败任务${batchQueueResumableSelected.length ? ` (${batchQueueResumableSelected.length})` : ''}`"
+                @click="resumeSelectedBatchTasks()"
+              >
+                <RotateCcw :size="13" />
+                <span
+                  >恢复选中{{
+                    batchQueueResumableSelected.length
+                      ? ` (${batchQueueResumableSelected.length})`
+                      : ""
+                  }}</span
+                >
+              </button>
+              <button
+                class="batch-btn is-outline is-sm"
+                type="button"
+                :disabled="
+                  !batchQueueCancellableSelected.length || batchQueueStopping
+                "
+                title="取消选中的排队或生成任务"
+                @click="cancelSelectedBatchTasks()"
+              >
+                <X :size="13" />
+                <span
+                  >取消选中{{
+                    batchQueueCancellableSelected.length
+                      ? ` (${batchQueueCancellableSelected.length})`
+                      : ""
+                  }}</span
+                >
+              </button>
+              <button
+                class="batch-btn is-danger-outline is-sm"
+                type="button"
+                :disabled="!batchQueueSelected.length || deleting"
+                title="删除选中的批量任务"
+                @click="deleteBatchQueueTasks"
+              >
+                <Trash2 :size="13" />
+                <span
+                  >删除选中{{
+                    batchQueueSelected.length
+                      ? ` (${batchQueueSelected.length})`
+                      : ""
+                  }}</span
+                >
+              </button>
+              <div
+                class="batch-concurrency-control"
+                title="批量任务同时执行数量 (1–10)"
+              >
+                <div class="batch-concurrency-label-group">
+                  <SlidersHorizontal :size="12" class="concurrency-icon" />
+                  <span class="batch-concurrency-label">并发</span>
+                </div>
+                <div class="batch-concurrency-stepper">
+                  <button
+                    class="batch-concurrency-btn is-minus"
+                    type="button"
+                    title="减少并发数量 (最小 1)"
+                    :disabled="batchConcurrency <= 1 || batchQueueStopping"
+                    @click="setBatchConcurrency(batchConcurrency - 1)"
+                  >
+                    <Minus :size="12" />
+                  </button>
+                  <span
+                    class="batch-concurrency-value"
+                    :title="`当前并发任务数: ${batchConcurrency}`"
+                  >
+                    {{ batchConcurrency }}
+                  </span>
+                  <button
+                    class="batch-concurrency-btn is-plus"
+                    type="button"
+                    title="增加并发数量 (最大 10)"
+                    :disabled="batchConcurrency >= 10 || batchQueueStopping"
+                    @click="setBatchConcurrency(batchConcurrency + 1)"
+                  >
+                    <Plus :size="12" />
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         </header>
-        <div class="batch-queue-list">
-          <article
-            v-for="task in batchQueueTasks"
-            :key="task.id"
-            class="batch-queue-item"
-          >
-            <input
-              v-model="batchQueueSelected"
-              type="checkbox"
-              :value="task.id"
-            />
-            <div class="batch-queue-item-main">
-              <span class="batch-queue-item-name">{{
-                task.request.batchName || "未命名任务"
-              }}</span>
-              <span class="batch-queue-item-prompt">{{
-                task.request.prompt
-              }}</span>
+
+        <!-- 任务表格卡片 -->
+        <div class="batch-queue-table-card">
+          <div class="batch-table-head">
+            <div class="col-check">
+              <input
+                v-model="allQueueSelected"
+                type="checkbox"
+                :indeterminate="isQueueIndeterminate"
+                :disabled="!paginatedQueueTasks.length"
+              />
             </div>
-            <span class="batch-queue-item-status" :class="task.status">
-              {{ statusLabels[task.status] || task.status }}
-            </span>
-            <button
-              v-if="['queued', 'processing'].includes(task.status)"
-              class="batch-queue-stop"
-              type="button"
-              title="取消生成任务"
-              :disabled="batchQueueStopping"
-              @click="cancelSelectedBatchTasks([task.id])"
+            <div class="col-info">名称 / 提示词</div>
+            <div class="col-status">
+              <span>状态</span>
+              <span
+                v-if="batchQueueStatusFilter !== 'all'"
+                class="col-status-filter-tag"
+              >
+                ({{ batchQueueStatusFilterLabel }})
+              </span>
+            </div>
+            <div class="col-actions">操作</div>
+          </div>
+
+          <div
+            v-if="paginatedQueueTasks.length"
+            ref="batchQueueScroll"
+            class="batch-table-body"
+          >
+            <div
+              v-for="task in paginatedQueueTasks"
+              :key="task.id"
+              class="batch-table-row"
+              :class="{ 'is-selected': batchQueueSelected.includes(task.id) }"
             >
-              <X :size="13" />
-            </button>
+              <div class="col-check">
+                <input
+                  v-model="batchQueueSelected"
+                  type="checkbox"
+                  :value="task.id"
+                />
+              </div>
+
+              <div class="col-info">
+                <span
+                  class="task-row-name"
+                  :title="task.request.batchName || '未命名任务'"
+                >
+                  {{ task.request.batchName || "未命名任务" }}
+                </span>
+                <span class="task-row-prompt" :title="task.request.prompt">
+                  {{ task.request.prompt }}
+                </span>
+              </div>
+
+              <div class="col-status">
+                <template v-if="task.status === 'processing'">
+                  <div class="task-running-box">
+                    <div class="task-running-label">
+                      <span class="running-text">正在生成</span>
+                    </div>
+                    <div class="task-running-track">
+                      <div class="task-running-bar" />
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div
+                    class="queue-status-pill"
+                    :class="`is-${batchStatusTone(task.status)}`"
+                  >
+                    <span class="pill-dot" />
+                    <span>{{ statusLabels[task.status] || task.status }}</span>
+                  </div>
+                  <span
+                    v-if="task.error?.message"
+                    class="task-error-tip"
+                    :title="task.error.message"
+                  >
+                    {{ task.error.message }}
+                  </span>
+                </template>
+              </div>
+
+              <div class="col-actions">
+                <button
+                  v-if="['queued', 'processing'].includes(task.status)"
+                  class="row-action-btn"
+                  type="button"
+                  title="取消任务"
+                  :disabled="batchQueueStopping"
+                  @click="cancelSelectedBatchTasks([task.id])"
+                >
+                  <Pause :size="13" />
+                </button>
+                <button
+                  v-else-if="canResumeImageTask(task)"
+                  class="row-action-btn"
+                  type="button"
+                  title="恢复任务"
+                  :disabled="resuming.includes(task.id)"
+                  @click="resumeTask(task)"
+                >
+                  <RotateCcw :size="13" />
+                </button>
+                <button
+                  class="row-action-btn"
+                  type="button"
+                  title="查看详情"
+                  @click="showDetail(task, 'parameters')"
+                >
+                  <MoreHorizontal :size="13" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div v-else class="batch-empty-table">
+            <ImageIcon :size="32" class="empty-icon" />
+            <p>
+              {{
+                batchQueueStatusFilter !== "all"
+                  ? `暂无${batchQueueStatusFilterLabel}任务`
+                  : "暂无队列任务"
+              }}
+            </p>
             <button
-              v-else-if="canResumeImageTask(task)"
-              class="batch-queue-stop batch-queue-resume"
+              v-if="batchQueueStatusFilter !== 'all'"
+              class="batch-btn is-outline is-sm"
               type="button"
-              title="恢复任务"
-              :disabled="resuming.includes(task.id)"
-              @click="resumeTask(task)"
+              @click="batchQueueStatusFilter = 'all'"
             >
-              <RotateCcw :size="13" />
+              清除筛选
             </button>
-          </article>
+          </div>
+
+          <!-- 表格底部全选与分页 -->
+          <footer class="batch-table-footer">
+            <div class="footer-left">
+              <label class="footer-check-label">
+                <input
+                  v-model="allQueueSelected"
+                  type="checkbox"
+                  :indeterminate="isQueueIndeterminate"
+                  :disabled="!paginatedQueueTasks.length"
+                />
+                <span>全选</span>
+              </label>
+              <span class="footer-selected-count">
+                已选 {{ batchQueueSelected.length }} 项
+                <template v-if="batchQueueStatusFilter !== 'all'">
+                  · 当前筛选共 {{ batchFilteredTasks.length }} 项
+                </template>
+              </span>
+            </div>
+
+            <div class="footer-right">
+              <div class="custom-select-wrapper is-mini">
+                <select
+                  v-model.number="batchQueuePageSize"
+                  class="custom-select mini-select"
+                >
+                  <option :value="10">每页 10 条</option>
+                  <option :value="20">每页 20 条</option>
+                  <option :value="50">每页 50 条</option>
+                  <option :value="100">每页 100 条</option>
+                </select>
+                <ChevronDown :size="12" class="custom-select-arrow" />
+              </div>
+
+              <div class="batch-pagination">
+                <button
+                  class="page-nav-btn"
+                  type="button"
+                  :disabled="batchQueuePage <= 1"
+                  title="上一页"
+                  @click="batchQueuePage--"
+                >
+                  <ChevronLeft :size="13" />
+                </button>
+                <template
+                  v-for="(p, idx) in getVisiblePages(
+                    batchQueuePage,
+                    batchQueueTotalPages
+                  )"
+                  :key="idx"
+                >
+                  <span v-if="p === '...'" class="page-ellipsis">...</span>
+                  <button
+                    v-else
+                    class="page-num-btn"
+                    :class="{ 'is-active': p === batchQueuePage }"
+                    type="button"
+                    @click="batchQueuePage = p"
+                  >
+                    {{ p }}
+                  </button>
+                </template>
+                <button
+                  class="page-nav-btn"
+                  type="button"
+                  :disabled="batchQueuePage >= batchQueueTotalPages"
+                  title="下一页"
+                  @click="batchQueuePage++"
+                >
+                  <ChevronRight :size="13" />
+                </button>
+              </div>
+            </div>
+          </footer>
         </div>
       </section>
       <div
@@ -701,7 +1017,11 @@
         @keydown="resizePanelByKeyboard"
         @dblclick="leftWidth = 45"
       ></div>
-      <section v-if="!batchRunning" id="image-tasks-panel" class="tasks-panel">
+      <section
+        v-if="!batchViewVisible"
+        id="image-tasks-panel"
+        class="tasks-panel"
+      >
         <header class="tasks-head">
           <div class="tasks-head-left">
             <div class="tasks-head-icon-box">
@@ -1273,73 +1593,322 @@
         </footer>
       </section>
       <section v-else class="batch-results-panel">
-        <header class="batch-results-head">
-          <div class="batch-results-title-wrap">
-            <span class="batch-results-title">批量生成结果</span>
-            <span class="batch-results-meta"
-              >{{ batchQueueCompletedCount }} /
-              {{ batchQueueTasks.length }} 已完成</span
-            >
+        <header class="batch-results-header">
+          <div class="batch-results-header-left">
+            <h3 class="batch-results-title">生成结果</h3>
+            <span class="batch-results-counter">
+              {{ filteredResultTasks.length }} 项
+            </span>
           </div>
-          <span class="batch-results-meta"
-            >{{ batchQueueTasks.length }} 项</span
-          >
-        </header>
-        <div class="batch-results-list">
-          <article
-            v-for="task in batchQueueTasks"
-            :key="task.id"
-            class="batch-result-item"
-            :class="task.status"
-          >
-            <div class="batch-result-thumb">
-              <el-image
-                v-if="task.thumbnail && task.imageCount"
-                :src="task.thumbnail"
-                fit="cover"
-                lazy
-                @click="showDetail(task, 'images')"
+
+          <div class="batch-results-toolbar">
+            <!-- 搜索框 -->
+            <div class="batch-search-box">
+              <Search :size="13" class="search-icon" />
+              <input
+                v-model="batchResultSearch"
+                type="text"
+                class="batch-search-input"
+                placeholder="搜索图片名称或提示词..."
               />
-              <LoaderCircle
-                v-else-if="['queued', 'processing'].includes(task.status)"
-                :size="22"
-                class="batch-result-spinner spinning"
-              />
-              <ImageOff v-else :size="20" />
+              <button
+                v-if="batchResultSearch"
+                type="button"
+                class="search-clear-btn"
+                @click="batchResultSearch = ''"
+              >
+                <X :size="12" />
+              </button>
             </div>
-            <div class="batch-result-main">
-              <div class="batch-result-name-row">
-                <span class="batch-result-name">{{
-                  task.request.batchName || "未命名任务"
-                }}</span>
-                <span class="batch-result-status" :class="task.status">{{
-                  statusLabels[task.status] || task.status
+
+            <!-- 视图切换 (Grid / List) -->
+            <div class="batch-view-toggle">
+              <button
+                type="button"
+                class="view-toggle-btn"
+                :class="{ 'is-active': batchResultViewMode === 'grid' }"
+                title="网格视图"
+                @click="batchResultViewMode = 'grid'"
+              >
+                <Grid :size="14" />
+              </button>
+              <button
+                type="button"
+                class="view-toggle-btn"
+                :class="{ 'is-active': batchResultViewMode === 'list' }"
+                title="列表视图"
+                @click="batchResultViewMode = 'list'"
+              >
+                <List :size="14" />
+              </button>
+            </div>
+
+            <!-- 状态过滤下拉 -->
+            <div class="custom-select-wrapper is-mini status-filter-select">
+              <select
+                v-model="batchResultStatus"
+                class="custom-select mini-select"
+              >
+                <option value="completed">已完成</option>
+                <option value="">全部状态</option>
+                <option value="processing">进行中</option>
+                <option value="queued">排队中</option>
+                <option value="failed">失败</option>
+              </select>
+              <ChevronDown :size="12" class="custom-select-arrow" />
+            </div>
+          </div>
+        </header>
+
+        <!-- 结果主区域：网格视图或列表视图 -->
+        <div ref="batchResultScroll" class="batch-results-body">
+          <div
+            v-if="paginatedResultTasks.length && batchResultViewMode === 'grid'"
+            class="batch-card-grid"
+          >
+            <article
+              v-for="task in paginatedResultTasks"
+              :key="task.id"
+              class="batch-result-card"
+            >
+              <!-- 图片缩略图容器 -->
+              <div
+                class="result-card-media"
+                @click="task.imageCount ? showDetail(task, 'images') : null"
+              >
+                <el-image
+                  v-if="task.thumbnail && task.imageCount"
+                  :src="task.thumbnail"
+                  fit="cover"
+                  lazy
+                  class="result-card-img"
+                />
+                <div
+                  v-else-if="['queued', 'processing'].includes(task.status)"
+                  class="result-card-loading"
+                >
+                  <LoaderCircle :size="24" class="spinning" />
+                  <span>正在绘制...</span>
+                </div>
+                <div v-else class="result-card-empty">
+                  <ImageOff :size="24" />
+                  <span>无图片</span>
+                </div>
+
+                <!-- 浮动状态徽章 -->
+                <div
+                  class="result-card-badge"
+                  :class="`is-${batchStatusTone(task.status)}`"
+                >
+                  <span class="badge-dot" />
+                  <span>{{ statusLabels[task.status] || task.status }}</span>
+                </div>
+              </div>
+
+              <!-- 卡片信息 -->
+              <div class="result-card-content">
+                <h4
+                  class="result-card-title"
+                  :title="task.request.batchName || '未命名任务'"
+                >
+                  {{ task.request.batchName || "未命名任务" }}
+                </h4>
+                <p class="result-card-prompt" :title="task.request.prompt">
+                  {{ task.request.prompt }}
+                </p>
+
+                <!-- 底部快捷操作栏 -->
+                <div class="result-card-actions">
+                  <button
+                    class="card-act-btn"
+                    type="button"
+                    title="查看大图"
+                    :disabled="!task.imageCount"
+                    @click="showDetail(task, 'images')"
+                  >
+                    <ZoomIn :size="13" />
+                  </button>
+                  <button
+                    class="card-act-btn"
+                    type="button"
+                    title="下载图片"
+                    :disabled="!task.imageCount"
+                    @click="downloadTaskImage(task)"
+                  >
+                    <Download :size="13" />
+                  </button>
+                  <button
+                    class="card-act-btn"
+                    type="button"
+                    title="复制提示词"
+                    @click="copyPromptText(task.request.prompt)"
+                  >
+                    <Copy :size="13" />
+                  </button>
+                  <button
+                    class="card-act-btn"
+                    type="button"
+                    title="查看参数"
+                    @click="showDetail(task, 'parameters')"
+                  >
+                    <SlidersHorizontal :size="13" />
+                  </button>
+                </div>
+              </div>
+            </article>
+          </div>
+
+          <!-- 列表视图 -->
+          <div
+            v-else-if="
+              paginatedResultTasks.length && batchResultViewMode === 'list'
+            "
+            class="batch-results-list"
+          >
+            <article
+              v-for="task in paginatedResultTasks"
+              :key="task.id"
+              class="batch-result-item"
+              :class="task.status"
+            >
+              <div
+                class="batch-result-thumb"
+                @click="task.imageCount ? showDetail(task, 'images') : null"
+              >
+                <el-image
+                  v-if="task.thumbnail && task.imageCount"
+                  :src="task.thumbnail"
+                  fit="cover"
+                  lazy
+                />
+                <LoaderCircle
+                  v-else-if="['queued', 'processing'].includes(task.status)"
+                  :size="22"
+                  class="batch-result-spinner spinning"
+                />
+                <ImageOff v-else :size="20" />
+              </div>
+
+              <div class="batch-result-main">
+                <div class="batch-result-name-row">
+                  <span class="batch-result-name">{{
+                    task.request.batchName || "未命名任务"
+                  }}</span>
+                  <span
+                    class="queue-status-pill"
+                    :class="`is-${batchStatusTone(task.status)}`"
+                  >
+                    <span class="pill-dot" />
+                    <span>{{ statusLabels[task.status] || task.status }}</span>
+                  </span>
+                </div>
+                <span class="batch-result-prompt">{{
+                  task.request.prompt
                 }}</span>
               </div>
-              <span class="batch-result-prompt">{{ task.request.prompt }}</span>
-            </div>
-            <button
-              v-if="['queued', 'processing'].includes(task.status)"
-              class="batch-result-action"
-              type="button"
-              title="取消生成任务"
-              :disabled="batchQueueStopping"
-              @click="cancelSelectedBatchTasks([task.id])"
-            >
-              <X :size="13" />
-            </button>
-            <button
-              v-else-if="canResumeImageTask(task)"
-              class="batch-result-action"
-              type="button"
-              title="恢复任务"
-              :disabled="resuming.includes(task.id)"
-              @click="resumeTask(task)"
-            >
-              <RotateCcw :size="13" />
-            </button>
-          </article>
+
+              <div class="batch-result-actions">
+                <button
+                  v-if="task.imageCount"
+                  class="row-action-btn"
+                  type="button"
+                  title="下载图片"
+                  @click="downloadTaskImage(task)"
+                >
+                  <Download :size="13" />
+                </button>
+                <button
+                  class="row-action-btn"
+                  type="button"
+                  title="复制提示词"
+                  @click="copyPromptText(task.request.prompt)"
+                >
+                  <Copy :size="13" />
+                </button>
+                <button
+                  class="row-action-btn"
+                  type="button"
+                  title="查看详情"
+                  @click="showDetail(task, 'parameters')"
+                >
+                  <MoreHorizontal :size="13" />
+                </button>
+              </div>
+            </article>
+          </div>
+
+          <!-- 空结果提示 -->
+          <div v-else class="batch-empty-results">
+            <ImageIcon :size="40" class="empty-icon" />
+            <h4>暂无生成结果</h4>
+            <p>
+              {{
+                batchResultSearch
+                  ? "未找到符合搜索条件的结果"
+                  : "等待批量图片任务生成完成"
+              }}
+            </p>
+          </div>
         </div>
+
+        <!-- 结果底部翻页 -->
+        <footer class="batch-results-footer">
+          <div class="footer-left">
+            <div class="custom-select-wrapper is-mini">
+              <select
+                v-model.number="batchResultPageSize"
+                class="custom-select mini-select"
+              >
+                <option :value="12">每页 12 条</option>
+                <option :value="20">每页 20 条</option>
+                <option :value="30">每页 30 条</option>
+                <option :value="60">每页 60 条</option>
+              </select>
+              <ChevronDown :size="12" class="custom-select-arrow" />
+            </div>
+          </div>
+
+          <div class="footer-right">
+            <div class="batch-pagination">
+              <button
+                class="page-nav-btn"
+                type="button"
+                :disabled="batchResultPage <= 1"
+                title="上一页"
+                @click="batchResultPage--"
+              >
+                <ChevronLeft :size="13" />
+              </button>
+              <template
+                v-for="(p, idx) in getVisiblePages(
+                  batchResultPage,
+                  batchResultTotalPages
+                )"
+                :key="idx"
+              >
+                <span v-if="p === '...'" class="page-ellipsis">...</span>
+                <button
+                  v-else
+                  class="page-num-btn"
+                  :class="{ 'is-active': p === batchResultPage }"
+                  type="button"
+                  @click="batchResultPage = p"
+                >
+                  {{ p }}
+                </button>
+              </template>
+              <button
+                class="page-nav-btn"
+                type="button"
+                :disabled="batchResultPage >= batchResultTotalPages"
+                title="下一页"
+                @click="batchResultPage++"
+              >
+                <ChevronRight :size="13" />
+              </button>
+            </div>
+          </div>
+        </footer>
       </section>
     </div>
 
@@ -1902,6 +2471,7 @@
       :size-presets="sizePresets"
       @close="closeBatchDialog"
       @session-created="createBatchConversation"
+      @tasks-created="handleBatchTasksCreated"
       @finished="handleBatchFinished"
     />
   </section>
@@ -1911,6 +2481,7 @@
 import {
   computed,
   defineAsyncComponent,
+  nextTick,
   onBeforeUnmount,
   onMounted,
   reactive,
@@ -1933,13 +2504,18 @@ import {
   Database,
   Download,
   FileText,
+  Filter,
+  Grid,
   Image as ImageIcon,
   ImageOff,
   ImagePlus,
   Info,
+  List,
   LoaderCircle,
   Maximize2,
   MessageSquare,
+  Minus,
+  MoreHorizontal,
   MoreVertical,
   Pause,
   Paintbrush,
@@ -1948,12 +2524,14 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   SlidersHorizontal,
   Sparkles,
   Square,
   Terminal,
   Trash2,
-  X
+  X,
+  ZoomIn
 } from "lucide-vue-next"
 import {
   ElDropdown,
@@ -2064,10 +2642,8 @@ const statusLabels = {
   interrupted: "已中断"
 }
 function canResumeImageTask(task) {
-  // 中断通常代表应用退出或暂停；明确取消的任务保持不可恢复。
-  if (task.status === "interrupted")
-    return task.error?.message !== "任务已由用户取消"
-  return task.status === "failed" && Boolean(task.canResume)
+  // 暂停、中断或失败的任务均支持重试或恢复执行
+  return ["interrupted", "failed"].includes(task?.status)
 }
 const fields = [
   {
@@ -2152,6 +2728,24 @@ const historyIndex = ref([])
 const resuming = ref([])
 const batchDialogOpen = ref(false)
 const batchConversationId = ref("")
+// 记录落库前保留预期总数，避免批量队列短暂显示 0/0。
+const batchExpectedTotal = ref(0)
+// 暂停后可调整并发数量，恢复任务时传给后端生效。
+const batchConcurrency = ref(2)
+function setBatchConcurrency(value) {
+  const next = Math.min(10, Math.max(1, Number(value) || 2))
+  batchConcurrency.value = next
+  if (activeConversationId.value) {
+    try {
+      localStorage.setItem(
+        `batch_concurrency_${activeConversationId.value}`,
+        String(next)
+      )
+    } catch (_) {}
+  }
+}
+const batchQueueScroll = ref(null)
+const batchResultScroll = ref(null)
 const batchRunning = ref(false)
 const batchPaused = ref(false)
 const batchQueueSelected = ref([])
@@ -2171,37 +2765,283 @@ const batchSettings = computed(() => ({
   ratio: ratio.value,
   tier: tier.value
 }))
-const batchQueueTasks = computed(() => tasks.value)
-const batchQueueCompletedCount = computed(
+function isBatchConversationRecord(conversation) {
+  return Boolean(
+    conversation?.batch || conversation?.title?.startsWith("批量生成 · ")
+  )
+}
+const currentConversationIsBatch = computed(() =>
+  isBatchConversationRecord(currentConversation.value)
+)
+const batchMode = computed(() => currentConversationIsBatch.value)
+const batchSuccessfulTasks = computed(() =>
+  tasks.value.filter((task) => ["completed", "partial"].includes(task.status))
+)
+const batchQueueTasks = computed(() =>
+  tasks.value.filter((task) => !["completed", "partial"].includes(task.status))
+)
+const batchAllTasks = computed(() => tasks.value)
+const batchViewVisible = computed(
   () =>
-    batchQueueTasks.value.filter((task) =>
-      ["completed", "partial", "failed", "interrupted"].includes(task.status)
+    currentConversationIsBatch.value ||
+    (batchRunning.value &&
+      activeConversationId.value === batchConversationId.value)
+)
+const batchResultTasks = computed(() =>
+  batchViewVisible.value ? batchSuccessfulTasks.value : tasks.value
+)
+const batchQueueTotalCount = computed(() =>
+  batchMode.value
+    ? Math.max(tasks.value.length, batchExpectedTotal.value)
+    : batchAllTasks.value.length
+)
+const batchQueueCompletedCount = computed(
+  () => batchSuccessfulTasks.value.length
+)
+const batchQueueProcessingCount = computed(
+  () => tasks.value.filter((task) => task.status === "processing").length
+)
+const batchQueueQueuedCount = computed(
+  () => tasks.value.filter((task) => task.status === "queued").length
+)
+const batchQueueFailedCount = computed(
+  () =>
+    tasks.value.filter((task) =>
+      ["failed", "interrupted"].includes(task.status)
     ).length
 )
 const batchQueueActiveTasks = computed(() =>
-  batchQueueTasks.value.filter((task) =>
-    ["queued", "processing"].includes(task.status)
-  )
+  tasks.value.filter((task) => ["queued", "processing"].includes(task.status))
 )
 const batchQueueResumableTasks = computed(() =>
-  batchQueueTasks.value.filter(
+  tasks.value.filter(
     (task) => canResumeImageTask(task) && task.status === "interrupted"
   )
 )
 const batchQueueCancellableSelected = computed(() =>
   batchQueueSelected.value.filter((id) =>
-    batchQueueTasks.value.some(
+    tasks.value.some(
       (task) => task.id === id && ["queued", "processing"].includes(task.status)
     )
   )
 )
-const batchQueueProcessingCount = computed(
-  () =>
-    batchQueueTasks.value.filter((task) => task.status === "processing").length
+const batchQueueResumableSelected = computed(() =>
+  batchQueueSelected.value.filter((id) =>
+    tasks.value.some((task) => task.id === id && canResumeImageTask(task))
+  )
 )
-const batchQueueQueuedCount = computed(
-  () => batchQueueTasks.value.filter((task) => task.status === "queued").length
+
+// 左侧任务队列状态筛选、分页与全选
+const batchQueuePage = ref(1)
+const batchQueuePageSize = ref(20)
+const batchQueueStatusFilter = ref("all")
+
+const batchFilteredTasks = computed(() => {
+  if (batchQueueStatusFilter.value === "all") {
+    return batchAllTasks.value
+  }
+  if (batchQueueStatusFilter.value === "processing") {
+    return batchAllTasks.value.filter((task) => task.status === "processing")
+  }
+  if (batchQueueStatusFilter.value === "queued") {
+    return batchAllTasks.value.filter((task) => task.status === "queued")
+  }
+  if (batchQueueStatusFilter.value === "completed") {
+    return batchAllTasks.value.filter((task) =>
+      ["completed", "partial"].includes(task.status)
+    )
+  }
+  if (batchQueueStatusFilter.value === "failed") {
+    return batchAllTasks.value.filter((task) =>
+      ["failed", "interrupted"].includes(task.status)
+    )
+  }
+  return batchAllTasks.value
+})
+
+const batchQueueStatusFilterLabel = computed(() => {
+  const map = {
+    all: "全部",
+    processing: "进行中",
+    queued: "排队中",
+    completed: "已完成",
+    failed: "失败/中断"
+  }
+  return map[batchQueueStatusFilter.value] || "全部"
+})
+
+function toggleQueueStatusFilter(status) {
+  if (batchQueueStatusFilter.value === status) {
+    batchQueueStatusFilter.value = "all"
+  } else {
+    batchQueueStatusFilter.value = status
+  }
+}
+
+watch(batchQueueStatusFilter, () => {
+  batchQueuePage.value = 1
+  nextTick(() => batchQueueScroll.value?.scrollTo({ top: 0 }))
+})
+watch([batchQueuePage, batchQueuePageSize], () => {
+  nextTick(() => batchQueueScroll.value?.scrollTo({ top: 0 }))
+})
+
+const batchQueueTotalPages = computed(() =>
+  Math.max(
+    1,
+    Math.ceil(batchFilteredTasks.value.length / batchQueuePageSize.value)
+  )
 )
+const paginatedQueueTasks = computed(() => {
+  const start = (batchQueuePage.value - 1) * batchQueuePageSize.value
+  return batchFilteredTasks.value.slice(start, start + batchQueuePageSize.value)
+})
+
+const allQueueSelected = computed({
+  get: () =>
+    paginatedQueueTasks.value.length > 0 &&
+    paginatedQueueTasks.value.every((t) =>
+      batchQueueSelected.value.includes(t.id)
+    ),
+  set: (val) => {
+    const pageIds = paginatedQueueTasks.value.map((t) => t.id)
+    if (val) {
+      batchQueueSelected.value = Array.from(
+        new Set([...batchQueueSelected.value, ...pageIds])
+      )
+    } else {
+      batchQueueSelected.value = batchQueueSelected.value.filter(
+        (id) => !pageIds.includes(id)
+      )
+    }
+  }
+})
+const isQueueIndeterminate = computed(() => {
+  const pageIds = paginatedQueueTasks.value.map((t) => t.id)
+  const selectedInPage = pageIds.filter((id) =>
+    batchQueueSelected.value.includes(id)
+  )
+  return selectedInPage.length > 0 && selectedInPage.length < pageIds.length
+})
+
+// 右侧生成结果搜索、过滤、视图与分页
+const batchResultSearch = ref("")
+const batchResultStatus = ref("completed")
+const batchResultViewMode = ref("grid")
+const batchResultPage = ref(1)
+const batchResultPageSize = ref(20)
+
+const filteredResultTasks = computed(() => {
+  // 重试任务会保留旧记录以便追踪，但结果列表只展示当前有效记录。
+  let list = tasks.value.filter(
+    (task) =>
+      !roundState.value[task.request.roundId || task.id]?.replaced?.includes(
+        task.id
+      )
+  )
+  if (batchResultStatus.value === "completed") {
+    list = list.filter(
+      (task) =>
+        ["completed", "partial"].includes(task.status) && task.imageCount > 0
+    )
+  } else if (batchResultStatus.value) {
+    list = list.filter((task) => task.status === batchResultStatus.value)
+  }
+  if (batchResultSearch.value.trim()) {
+    const q = batchResultSearch.value.trim().toLowerCase()
+    list = list.filter(
+      (task) =>
+        (task.request.batchName &&
+          task.request.batchName.toLowerCase().includes(q)) ||
+        (task.request.prompt && task.request.prompt.toLowerCase().includes(q))
+    )
+  }
+  return list
+})
+
+const batchResultTotalPages = computed(() =>
+  Math.max(
+    1,
+    Math.ceil(filteredResultTasks.value.length / batchResultPageSize.value)
+  )
+)
+
+const paginatedResultTasks = computed(() => {
+  const start = (batchResultPage.value - 1) * batchResultPageSize.value
+  return filteredResultTasks.value.slice(
+    start,
+    start + batchResultPageSize.value
+  )
+})
+
+watch([batchResultSearch, batchResultStatus], () => {
+  batchResultPage.value = 1
+  nextTick(() => batchResultScroll.value?.scrollTo({ top: 0 }))
+})
+watch([batchResultPage, batchResultPageSize], () => {
+  nextTick(() => batchResultScroll.value?.scrollTo({ top: 0 }))
+})
+
+function batchStatusTone(status) {
+  if (["completed", "partial"].includes(status)) return "completed"
+  if (status === "processing") return "processing"
+  if (status === "queued") return "queued"
+  if (["failed", "interrupted"].includes(status)) return "failed"
+  return "queued"
+}
+
+function getVisiblePages(current, total) {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1)
+  }
+  const pages = []
+  pages.push(1)
+  if (current > 3) {
+    pages.push("...")
+  }
+  const start = Math.max(2, current - 1)
+  const end = Math.min(total - 1, current + 1)
+  for (let i = start; i <= end; i++) {
+    pages.push(i)
+  }
+  if (current < total - 2) {
+    pages.push("...")
+  }
+  pages.push(total)
+  return pages
+}
+
+async function downloadTaskImage(task) {
+  if (!task.imageCount) return
+  try {
+    const filename = `${task.request.batchName || "image"}-${task.id.slice(0, 8)}.png`
+    const targetPath = await systemApi.saveFile({
+      title: "下载图片",
+      defaultPath: filename,
+      filters: [{ name: "PNG 图片", extensions: ["png"] }]
+    })
+    if (targetPath) {
+      await toolboxApi.exportImageTasks({
+        ids: [task.id],
+        index: 0,
+        targetPath
+      })
+      createMessage.success("图片已下载")
+    }
+  } catch (error) {
+    createMessage.error(String(error))
+  }
+}
+
+async function copyPromptText(text) {
+  if (!text) return
+  try {
+    await navigator.clipboard.writeText(text)
+    createMessage.success("提示词已复制到剪贴板")
+  } catch {
+    createMessage.error("复制失败")
+  }
+}
 const sizePresets = [
   ["1:1", "1k", 1024, 1024],
   ["2:3", "1k", 1024, 1536],
@@ -2311,19 +3151,26 @@ ensureConversation()
 function openBatchDialog() {
   // 打开弹框只准备批量配置，点击开始后才创建独立会话。
   batchConversationId.value = ""
+  batchExpectedTotal.value = 0
+  batchConcurrency.value = 2
   batchPaused.value = false
   batchDialogOpen.value = true
 }
 
-function createBatchConversation(id) {
+function createBatchConversation(id, total = 0, concurrency = 2) {
   const item = {
     id,
     title: `批量生成 · ${formatDateTime(Date.now())}`,
     updatedAt: Date.now(),
-    renamed: true
+    renamed: true,
+    batch: true
   }
   conversations.value.unshift(item)
   batchConversationId.value = id
+  batchExpectedTotal.value = Number(total) || 0
+  batchConcurrency.value = Math.min(10, Math.max(1, Number(concurrency) || 2))
+  tasks.value = []
+  total.value = 0
   batchRunning.value = true
   batchPaused.value = false
   activeConversationId.value = id
@@ -2336,6 +3183,11 @@ function createBatchConversation(id) {
 function closeBatchDialog() {
   batchDialogOpen.value = false
   if (batchConversationId.value) loadTasks()
+}
+
+async function handleBatchTasksCreated() {
+  // 任务记录落库后立即刷新，避免批量面板先显示 0/0。
+  await loadTasks()
 }
 
 async function handleBatchFinished({ total: batchTotal, failed }) {
@@ -2380,6 +3232,7 @@ async function loadHistory() {
     if (!conversation) {
       conversation = {
         id,
+        batch: Boolean(item.batchName),
         title:
           id === "legacy"
             ? "早期任务"
@@ -2388,6 +3241,7 @@ async function loadHistory() {
       }
       conversations.value.push(conversation)
     }
+    if (item.batchName) conversation.batch = true
     conversation.updatedAt = Math.max(conversation.updatedAt, item.createdAt)
   }
   conversations.value.sort((a, b) => b.updatedAt - a.updatedAt)
@@ -2396,6 +3250,10 @@ async function loadHistory() {
 
 function selectConversation(id) {
   activeConversationId.value = id
+  batchExpectedTotal.value = 0
+  tasks.value = []
+  total.value = 0
+  batchPaused.value = false
   historyOpen.value = false
   selected.value = []
   status.value = ""
@@ -2638,7 +3496,10 @@ async function resumeTask(task) {
   if (resuming.value.includes(task.id)) return
   resuming.value.push(task.id)
   try {
-    await toolboxApi.resumeImageTask({ id: task.id })
+    await toolboxApi.resumeImageTask({
+      id: task.id,
+      ...(batchMode.value ? { concurrency: batchConcurrency.value } : {})
+    })
     await loadTasks()
   } catch (error) {
     createMessage.error(String(error))
@@ -2650,6 +3511,34 @@ async function resumeTask(task) {
 async function resumeRound(round) {
   const pending = round.tasks.filter((task) => canResumeImageTask(task))
   for (const task of pending) await resumeTask(task)
+}
+
+async function resumeSelectedBatchTasks(
+  ids = batchQueueResumableSelected.value
+) {
+  const targets = [...ids]
+  if (!targets.length || batchQueueStopping.value) return
+  batchQueueStopping.value = true
+  try {
+    for (const id of targets) {
+      await toolboxApi.resumeImageTask({
+        id,
+        concurrency: batchConcurrency.value
+      })
+    }
+    if (batchPaused.value) {
+      batchPaused.value = false
+    }
+    batchQueueSelected.value = batchQueueSelected.value.filter(
+      (id) => !targets.includes(id)
+    )
+    await loadTasks()
+    createMessage.success(`已恢复 / 重试 ${targets.length} 项任务`)
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    batchQueueStopping.value = false
+  }
 }
 
 async function cancelSelectedBatchTasks(
@@ -2685,7 +3574,11 @@ async function toggleBatchPause() {
   batchQueueStopping.value = true
   try {
     if (batchPaused.value) {
-      for (const id of targets) await toolboxApi.resumeImageTask({ id })
+      for (const id of targets)
+        await toolboxApi.resumeImageTask({
+          id,
+          concurrency: batchConcurrency.value
+        })
       batchPaused.value = false
     } else {
       // 暂停使用可恢复中断，避免排队任务被取消后丢失。
@@ -3022,16 +3915,16 @@ async function loadTasks() {
   const version = ++requestVersion
   refreshing.value = true
   try {
-    const batchMode = batchRunning.value
+    const isBatchMode = batchMode.value
     const query = {
-      page: batchMode ? 1 : page.value,
-      status: status.value,
+      page: isBatchMode ? 1 : page.value,
+      status: isBatchMode ? "" : status.value,
       conversationId: activeConversationId.value,
-      pageSize: batchMode ? 100 : pageSize.value,
-      groupByRound: !batchMode
+      pageSize: isBatchMode ? 100 : pageSize.value,
+      groupByRound: !isBatchMode
     }
     let result = await toolboxApi.listImageTasks(query)
-    if (batchMode && result.total > result.items.length) {
+    if (isBatchMode && result.total > result.items.length) {
       // 批量面板显示会话内的每一条任务，不能只取后端单页的 100 条。
       const pageCount = Math.ceil(result.total / query.pageSize)
       const pages = await Promise.all(
@@ -3046,6 +3939,26 @@ async function loadTasks() {
     }
     if (version !== requestVersion || disposed) return
     tasks.value = result.items
+    if (
+      isBatchMode &&
+      (!batchRunning.value ||
+        activeConversationId.value !== batchConversationId.value)
+    ) {
+      const storedConcurrency = result.items.find((task) =>
+        Number.isInteger(task.batchConcurrency)
+      )?.batchConcurrency
+      const localCustom = activeConversationId.value
+        ? localStorage.getItem(`batch_concurrency_${activeConversationId.value}`)
+        : null
+      if (localCustom) {
+        batchConcurrency.value = Math.min(
+          10,
+          Math.max(1, Number(localCustom) || 2)
+        )
+      } else if (storedConcurrency) {
+        batchConcurrency.value = Math.min(10, Math.max(1, storedConcurrency))
+      }
+    }
     applyQuotaSnapshotFromTasks(result.items)
     await loadHistory()
     if (version !== requestVersion || disposed) return
@@ -3056,7 +3969,7 @@ async function loadTasks() {
     listError.value = ""
     const lastPage = Math.max(
       1,
-      Math.ceil(total.value / (batchMode ? query.pageSize : pageSize.value))
+      Math.ceil(total.value / (isBatchMode ? query.pageSize : pageSize.value))
     )
     if (page.value > lastPage) page.value = lastPage
   } catch (error) {
@@ -3410,7 +4323,7 @@ watch(page, () => {
   loadTasks()
 })
 const unsubscribe = subscribe("images:changed", (event) => {
-  if (autoRefresh.value || batchRunning.value) loadTasks()
+  if (autoRefresh.value || batchViewVisible.value) loadTasks()
   // 任务结束后向上游重查额度，不根据生成数量在本地扣减。
   if (
     form.generationMode === "web" &&
@@ -3426,7 +4339,7 @@ onMounted(() => {
   refreshAll()
   timer = window.setInterval(() => {
     if (
-      (autoRefresh.value || batchRunning.value) &&
+      (autoRefresh.value || batchViewVisible.value) &&
       !refreshing.value &&
       !document.hidden
     )
@@ -3555,6 +4468,57 @@ defineExpose({
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+    }
+
+    .batch-quota-compact {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 32px;
+      max-width: 240px;
+      padding: 0 8px;
+      border: 1px solid #bfdbfe;
+      border-radius: 9999px;
+      background: #eff6ff;
+      color: #2563eb;
+      font-size: 12px;
+      white-space: nowrap;
+
+      .batch-quota-label {
+        color: #475569;
+      }
+
+      .batch-quota-value {
+        color: #1d4ed8;
+        font-size: 14px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .batch-quota-unit {
+        color: #475569;
+      }
+
+      .batch-quota-refresh {
+        display: grid;
+        width: 22px;
+        height: 22px;
+        place-items: center;
+        padding: 0;
+        border: 0;
+        border-radius: 50%;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+
+        &:hover:not(:disabled) {
+          background: rgba(37, 99, 235, 0.12);
+        }
+
+        &:disabled {
+          opacity: 0.45;
+          cursor: not-allowed;
+        }
       }
     }
   }
@@ -4567,229 +5531,1305 @@ defineExpose({
       }
     }
 
+    /* =========================================================================
+       批量生成双列工作台样式 (Asymmetric Batch Workbench Layout)
+       ========================================================================= */
     .batch-queue-panel,
     .batch-results-panel {
       display: flex;
       min-width: 0;
       min-height: 0;
-      flex: 0 0 auto;
       flex-direction: column;
       gap: 12px;
       overflow: hidden;
-      padding: 20px;
+      padding: 16px;
       border: 1px solid var(--color-line);
       border-radius: 12px;
       background: var(--color-panel);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
     }
 
-    .batch-queue-list {
-      min-height: 0;
-      overflow-y: auto;
+    /* -------------------------------------------------------------------------
+       左侧任务队列卡片 (Batch Queue Panel)
+       ------------------------------------------------------------------------- */
+    .batch-queue-panel {
+      flex: 0 0 auto;
     }
 
-    .batch-queue-item,
-    .batch-queue-head,
-    .batch-queue-actions,
-    .batch-results-head,
-    .batch-results-title-wrap {
+    .batch-queue-header {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex-shrink: 0;
+    }
+
+    .batch-queue-title-row {
       display: flex;
       align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .batch-queue-title-group {
+      display: flex;
+      align-items: baseline;
       gap: 8px;
     }
 
-    .batch-queue-head,
-    .batch-results-head {
-      justify-content: space-between;
-      flex-wrap: wrap;
+    .batch-queue-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--color-text);
+      letter-spacing: -0.01em;
     }
 
-    .batch-queue-actions {
-      flex-wrap: wrap;
-      justify-content: flex-end;
+    .batch-queue-counter {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-text-muted);
+      font-family: "Bahnschrift", monospace;
     }
 
-    .batch-queue-progress-info,
-    .batch-results-title-wrap {
+    .batch-queue-status-pills {
       display: flex;
-      min-width: 0;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    /* 状态小胶囊 (Queue Status Pill with Dot) */
+    .queue-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+      border: 1px solid transparent;
+
+      .pill-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        flex-shrink: 0;
+      }
+
+      &.is-filter-pill {
+        cursor: pointer;
+        user-select: none;
+        outline: none;
+        font-family: inherit;
+        transition: all 0.16s ease;
+
+        &:hover {
+          transform: translateY(-1px);
+        }
+
+        &:active {
+          transform: translateY(0);
+        }
+      }
+
+      &.is-all {
+        background: var(--color-panel-soft);
+        border-color: var(--color-line);
+        color: var(--color-text-muted);
+
+        &.is-filter-pill:hover {
+          border-color: var(--color-line-strong);
+          color: var(--color-text);
+        }
+
+        &.is-active {
+          background: #2563eb;
+          border-color: #2563eb;
+          color: #ffffff;
+          box-shadow: 0 1px 3px rgba(37, 99, 235, 0.25);
+        }
+      }
+
+      &.is-processing {
+        background: #eff6ff;
+        border-color: #dbeafe;
+        color: #2563eb;
+        .pill-dot {
+          background: #3b82f6;
+          animation: batch-dot-pulse 1.4s infinite;
+        }
+
+        &.is-filter-pill:hover {
+          background: #dbeafe;
+          border-color: #bfdbfe;
+        }
+
+        &.is-active {
+          background: #2563eb;
+          border-color: #2563eb;
+          color: #ffffff;
+          box-shadow: 0 2px 5px rgba(37, 99, 235, 0.35);
+
+          .pill-dot {
+            background: #ffffff;
+            animation: none;
+          }
+        }
+      }
+
+      &.is-queued {
+        background: #fef9c3;
+        border-color: #fef08a;
+        color: #854d0e;
+        .pill-dot {
+          background: #eab308;
+        }
+
+        &.is-filter-pill:hover {
+          background: #fef08a;
+          border-color: #fde047;
+        }
+
+        &.is-active {
+          background: #eab308;
+          border-color: #ca8a04;
+          color: #ffffff;
+          box-shadow: 0 2px 5px rgba(234, 179, 8, 0.35);
+
+          .pill-dot {
+            background: #ffffff;
+          }
+        }
+      }
+
+      &.is-completed {
+        background: #f0fdf4;
+        border-color: #dcfce7;
+        color: #16a34a;
+        .pill-dot {
+          background: #22c55e;
+        }
+
+        &.is-filter-pill:hover {
+          background: #dcfce7;
+          border-color: #bbf7d0;
+        }
+
+        &.is-active {
+          background: #16a34a;
+          border-color: #15803d;
+          color: #ffffff;
+          box-shadow: 0 2px 5px rgba(22, 163, 74, 0.35);
+
+          .pill-dot {
+            background: #ffffff;
+          }
+        }
+      }
+
+      &.is-failed {
+        background: #fef2f2;
+        border-color: #fee2e2;
+        color: #dc2626;
+        .pill-dot {
+          background: #ef4444;
+        }
+
+        &.is-filter-pill:hover {
+          background: #fee2e2;
+          border-color: #fecaca;
+        }
+
+        &.is-active {
+          background: #dc2626;
+          border-color: #b91c1c;
+          color: #ffffff;
+          box-shadow: 0 2px 5px rgba(220, 38, 38, 0.35);
+
+          .pill-dot {
+            background: #ffffff;
+          }
+        }
+      }
+    }
+
+    .batch-queue-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+
+      .batch-queue-toolbar-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+
+        .batch-concurrency-control {
+          display: inline-flex;
+          align-items: center;
+          height: 28px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          background: var(--color-panel);
+          box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+          user-select: none;
+          overflow: hidden;
+          transition: border-color 0.16s ease, box-shadow 0.16s ease;
+
+          &:hover {
+            border-color: var(--color-line-strong);
+          }
+
+          .batch-concurrency-label-group {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            height: 100%;
+            padding: 0 7px 0 8px;
+            background: var(--color-panel-soft);
+            border-right: 1px solid var(--color-line);
+            color: var(--color-text-muted);
+            font-size: 11.5px;
+            font-weight: 500;
+            white-space: nowrap;
+
+            .concurrency-icon {
+              color: var(--color-text-soft);
+              flex-shrink: 0;
+            }
+
+            .batch-concurrency-label {
+              line-height: 1;
+            }
+          }
+
+          .batch-concurrency-stepper {
+            display: inline-flex;
+            align-items: center;
+            height: 100%;
+
+            .batch-concurrency-btn {
+              display: grid;
+              place-items: center;
+              width: 24px;
+              height: 100%;
+              padding: 0;
+              margin: 0;
+              border: 0;
+              outline: none;
+              background: transparent;
+              color: var(--color-text-muted);
+              cursor: pointer;
+              transition: all 0.14s ease;
+
+              &:hover:not(:disabled) {
+                background: var(--color-panel-soft);
+                color: #2563eb;
+              }
+
+              &:active:not(:disabled) {
+                background: rgba(37, 99, 235, 0.12);
+                color: #1d4ed8;
+              }
+
+              &:disabled {
+                opacity: 0.35;
+                cursor: not-allowed;
+              }
+            }
+
+            .batch-concurrency-value {
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              min-width: 24px;
+              height: 100%;
+              padding: 0 4px;
+              font-size: 12px;
+              font-weight: 700;
+              font-family: "Bahnschrift", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+              color: var(--color-text);
+              text-align: center;
+              line-height: 1;
+              border-left: 1px solid var(--color-line);
+              border-right: 1px solid var(--color-line);
+              background: var(--color-panel);
+              font-variant-numeric: tabular-nums;
+            }
+          }
+        }
+      }
+
+      .batch-queue-toolbar-right {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+      }
+
+      .batch-queue-filter-select-wrap {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+
+        .filter-icon {
+          position: absolute;
+          left: 8px;
+          color: var(--color-text-muted);
+          pointer-events: none;
+        }
+
+        .batch-queue-filter-select {
+          height: 28px;
+          padding: 0 24px 0 26px;
+          border-radius: 6px;
+          border: 1px solid var(--color-line);
+          background: var(--color-panel);
+          color: var(--color-text);
+          font-size: 12px;
+          font-weight: 500;
+          cursor: pointer;
+          outline: none;
+          appearance: none;
+          transition: all 0.16s ease;
+
+          &:hover {
+            border-color: var(--color-line-strong);
+            background: var(--color-panel-soft);
+          }
+
+          &:focus {
+            border-color: #2563eb;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+          }
+        }
+
+        .filter-select-chevron {
+          position: absolute;
+          right: 7px;
+          color: var(--color-text-muted);
+          pointer-events: none;
+        }
+      }
+    }
+
+    .batch-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 28px;
+      padding: 0 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      white-space: nowrap;
+      user-select: none;
+      border: 1px solid transparent;
+      outline: none;
+      background: var(--color-panel);
+      color: var(--color-text);
+      transition: all 0.16s ease;
+
+      &:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+
+      &.is-primary {
+        background: #2563eb;
+        border-color: #2563eb;
+        color: #ffffff;
+        box-shadow: 0 1px 3px rgba(37, 99, 235, 0.25);
+
+        &:hover:not(:disabled) {
+          background: #1d4ed8;
+          border-color: #1d4ed8;
+        }
+
+        &:active:not(:disabled) {
+          background: #1e40af;
+          border-color: #1e40af;
+          transform: translateY(1px);
+        }
+      }
+
+      &.is-outline {
+        border-color: var(--color-line);
+        background: var(--color-panel);
+        color: var(--color-text);
+
+        &:hover:not(:disabled) {
+          border-color: var(--color-line-strong);
+          background: var(--color-panel-soft);
+          color: var(--color-text);
+        }
+
+        &:active:not(:disabled) {
+          transform: translateY(1px);
+        }
+      }
+
+      &.is-success-outline {
+        border-color: var(--color-line);
+        background: var(--color-panel);
+        color: #16a34a;
+
+        &:hover:not(:disabled) {
+          border-color: #22c55e;
+          background: rgba(34, 197, 94, 0.08);
+          color: #15803d;
+        }
+
+        &:active:not(:disabled) {
+          transform: translateY(1px);
+        }
+      }
+
+      &.is-danger-outline {
+        border-color: var(--color-danger-line, #fecaca);
+        background: var(--color-danger-soft, #fff5f5);
+        color: var(--color-danger, #ef4444);
+
+        &:hover:not(:disabled) {
+          border-color: var(--color-danger, #ef4444);
+          background: var(--color-danger, #ef4444);
+          color: #ffffff;
+        }
+
+        &:active:not(:disabled) {
+          transform: translateY(1px);
+        }
+      }
+
+      &.is-sm {
+        height: 26px;
+        padding: 0 10px;
+        font-size: 11.5px;
+      }
+    }
+
+    /* 任务表格主体卡片 */
+    .batch-queue-table-card {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      overflow: hidden;
+    }
+
+    .batch-table-head {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) 110px 80px;
+      align-items: center;
+      padding: 8px 12px;
+      background: var(--color-panel-soft);
+      border-bottom: 1px solid var(--color-line);
+      color: var(--color-text-soft);
+      font-size: 11.5px;
+      font-weight: 600;
+      flex-shrink: 0;
+
+      .col-check {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .col-status {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        white-space: nowrap;
+
+        .col-status-filter-tag {
+          color: #2563eb;
+          font-weight: 700;
+        }
+      }
+
+      .col-actions {
+        text-align: right;
+      }
+    }
+
+    .batch-table-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      scrollbar-gutter: stable;
+    }
+
+    .batch-table-row {
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) 110px 80px;
+      align-items: center;
+      padding: 9px 12px;
+      border-bottom: 1px solid var(--color-line);
+      transition: background-color 0.14s ease;
+
+      &:hover {
+        background: color-mix(
+          in srgb,
+          var(--color-primary-soft) 30%,
+          transparent
+        );
+      }
+
+      &.is-selected {
+        background: color-mix(
+          in srgb,
+          var(--color-primary-soft) 45%,
+          transparent
+        );
+      }
+
+      .col-check {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .col-info {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        gap: 2px;
+        padding-right: 8px;
+
+        .task-row-name {
+          color: var(--color-text);
+          font-size: 12.5px;
+          font-weight: 600;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .task-row-prompt {
+          color: var(--color-text-muted);
+          font-size: 11px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+
+      .col-status {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+
+        .task-error-tip {
+          color: var(--color-danger, #ef4444);
+          font-size: 10.5px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          max-width: 100px;
+        }
+      }
+
+      .col-actions {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 4px;
+      }
+    }
+
+    /* 正在生成动态条 */
+    .task-running-box {
+      display: flex;
       flex-direction: column;
       gap: 3px;
+      width: 90px;
+
+      .task-running-label {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+
+        .running-text {
+          font-size: 11px;
+          font-weight: 600;
+          color: #2563eb;
+        }
+      }
+
+      .task-running-track {
+        width: 100%;
+        height: 4px;
+        border-radius: 9999px;
+        background: #dbeafe;
+        overflow: hidden;
+
+        .task-running-bar {
+          height: 100%;
+          width: 40%;
+          border-radius: inherit;
+          background: #2563eb;
+          animation: batch-bar-slide 1.4s ease-in-out infinite;
+        }
+      }
     }
 
-    .batch-queue-progress-count,
-    .batch-results-title {
-      color: var(--color-text);
-      font-size: 15px;
+    @keyframes batch-bar-slide {
+      0% {
+        transform: translateX(-100%);
+      }
+      100% {
+        transform: translateX(250%);
+      }
     }
 
+    .row-action-btn {
+      display: grid;
+      width: 24px;
+      height: 24px;
+      place-items: center;
+      border: 1px solid var(--color-line);
+      border-radius: 5px;
+      background: var(--color-panel);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: all 0.14s ease;
+
+      &:hover:not(:disabled) {
+        border-color: var(--color-line-strong);
+        color: var(--color-text);
+        background: var(--color-panel-soft);
+      }
+
+      &:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+      }
+    }
+
+    .batch-empty-table {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 16px;
+      color: var(--color-text-soft);
+      gap: 8px;
+
+      .empty-icon {
+        opacity: 0.5;
+      }
+
+      p {
+        margin: 0;
+        font-size: 12px;
+      }
+    }
+
+    /* 表格底部全选与翻页 */
+    .batch-table-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: var(--color-panel-soft);
+      border-top: 1px solid var(--color-line);
+      flex-shrink: 0;
+
+      .footer-left {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+
+        .footer-check-label {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          cursor: pointer;
+          font-size: 12px;
+          color: var(--color-text);
+          user-select: none;
+
+          input[type="checkbox"] {
+            width: 14px;
+            height: 14px;
+            margin: 0;
+            accent-color: #2563eb;
+            cursor: pointer;
+          }
+        }
+
+        .footer-selected-count {
+          font-size: 11.5px;
+          color: var(--color-text-muted);
+        }
+      }
+
+      .footer-right {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+    }
+
+    /* -------------------------------------------------------------------------
+       右侧生成结果面板 (Batch Results Panel)
+       ------------------------------------------------------------------------- */
     .batch-results-panel {
       flex: 1 1 auto;
     }
 
-    .batch-results-head {
-      flex-shrink: 0;
-      padding-bottom: 10px;
-      border-bottom: 1px solid var(--color-line);
-    }
-
-    .batch-results-meta {
-      color: var(--color-text-muted);
-      font-size: 12px;
-    }
-
-    .batch-results-list {
-      min-height: 0;
-      overflow-y: auto;
-    }
-
-    .batch-result-item {
+    .batch-results-header {
       display: flex;
-      min-width: 0;
       align-items: center;
-      gap: 10px;
-      padding: 9px 0;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      flex-shrink: 0;
+      padding-bottom: 12px;
       border-bottom: 1px solid var(--color-line);
-    }
 
-    .batch-result-thumb {
-      display: grid;
-      width: 58px;
-      height: 58px;
-      flex: 0 0 58px;
-      place-items: center;
-      overflow: hidden;
-      border: 1px solid var(--color-line);
-      border-radius: 6px;
-      background: var(--color-panel-soft);
-      color: var(--color-text-muted);
-      cursor: pointer;
+      .batch-results-header-left {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
 
-      :deep(.el-image) {
-        width: 100%;
-        height: 100%;
+        .batch-results-title {
+          margin: 0;
+          font-size: 15px;
+          font-weight: 700;
+          color: var(--color-text);
+          letter-spacing: -0.01em;
+        }
+
+        .batch-results-counter {
+          font-size: 12.5px;
+          color: var(--color-text-muted);
+        }
+      }
+
+      .batch-results-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
     }
 
-    .batch-result-main {
+    /* 搜索框 */
+    .batch-search-box {
+      position: relative;
       display: flex;
-      min-width: 0;
-      flex: 1;
-      flex-direction: column;
-      gap: 5px;
-    }
-
-    .batch-result-name-row {
-      display: flex;
-      min-width: 0;
       align-items: center;
-      gap: 8px;
-    }
-
-    .batch-result-name,
-    .batch-result-prompt {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .batch-result-name {
-      min-width: 0;
-      flex: 1;
-      color: var(--color-text);
-      font-size: 13px;
-    }
-
-    .batch-result-prompt {
-      color: var(--color-text-muted);
-      font-size: 11px;
-    }
-
-    .batch-result-status {
-      flex: 0 0 auto;
-      color: var(--color-text-muted);
-      font-size: 11px;
-    }
-
-    .batch-result-status.completed,
-    .batch-result-status.partial {
-      color: var(--color-success);
-    }
-
-    .batch-result-status.processing,
-    .batch-result-status.queued {
-      color: var(--color-primary);
-    }
-
-    .batch-result-status.failed,
-    .batch-result-status.interrupted {
-      color: var(--color-danger);
-    }
-
-    .batch-result-action {
-      display: grid;
-      width: 26px;
-      height: 26px;
-      flex: 0 0 26px;
-      place-items: center;
+      width: 180px;
+      height: 28px;
       border: 1px solid var(--color-line);
-      border-radius: 5px;
-      background: var(--color-panel-soft);
-      color: var(--color-text-muted);
-      cursor: pointer;
+      border-radius: 6px;
+      background: var(--color-panel);
+      padding: 0 6px 0 26px;
+      transition: border-color 0.16s ease;
+
+      &:focus-within {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+      }
+
+      .search-icon {
+        position: absolute;
+        left: 8px;
+        color: var(--color-text-soft);
+        pointer-events: none;
+      }
+
+      .batch-search-input {
+        width: 100%;
+        border: 0;
+        outline: none;
+        background: transparent;
+        font-size: 12px;
+        color: var(--color-text);
+        padding: 0;
+
+        &::placeholder {
+          color: var(--color-text-soft);
+        }
+      }
+
+      .search-clear-btn {
+        display: grid;
+        width: 16px;
+        height: 16px;
+        place-items: center;
+        border: 0;
+        background: transparent;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        padding: 0;
+        border-radius: 50%;
+
+        &:hover {
+          color: var(--color-text);
+          background: var(--color-panel-soft);
+        }
+      }
     }
 
-    .batch-result-action:hover:not(:disabled),
-    .batch-queue-stop:hover:not(:disabled) {
-      border-color: var(--color-line-strong);
-      color: var(--color-text);
-    }
-
-    .batch-result-action:disabled,
-    .batch-queue-stop:disabled {
-      cursor: not-allowed;
-      opacity: 0.45;
-    }
-
-    .batch-queue-item {
-      padding: 10px 0;
-      border-bottom: 1px solid var(--color-line);
-    }
-
-    .batch-queue-item-main {
-      display: flex;
-      min-width: 0;
-      flex: 1;
-      flex-direction: column;
-      gap: 3px;
-    }
-
-    .batch-queue-item-prompt {
-      overflow: hidden;
-      color: var(--color-text-muted);
-      font-size: 11px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .batch-queue-action,
-    .batch-queue-stop {
+    /* 视图切换 (Grid / List) */
+    .batch-view-toggle {
+      display: inline-flex;
+      align-items: center;
       border: 1px solid var(--color-line);
       border-radius: 6px;
       background: var(--color-panel-soft);
-      color: var(--color-text);
-      cursor: pointer;
+      padding: 1px;
+
+      .view-toggle-btn {
+        display: grid;
+        width: 26px;
+        height: 24px;
+        place-items: center;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        transition: all 0.14s ease;
+
+        &:hover {
+          color: var(--color-text);
+        }
+
+        &.is-active {
+          background: var(--color-panel);
+          color: #2563eb;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+        }
+      }
     }
 
-    .batch-queue-action {
-      height: 30px;
-      padding: 0 9px;
+    .batch-results-body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      scrollbar-gutter: stable;
     }
 
-    .batch-queue-stop {
+    /* 3 列卡片网格 (3-Column Card Grid matching 3.png) */
+    .batch-card-grid {
       display: grid;
-      width: 26px;
-      height: 26px;
-      place-items: center;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      padding-bottom: 8px;
+
+      @media (max-width: 900px) {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      @media (max-width: 600px) {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .batch-result-card {
+      display: flex;
+      flex-direction: column;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      overflow: hidden;
+      transition: all 0.16s ease;
+
+      &:hover {
+        border-color: var(--color-line-strong);
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+      }
+
+      .result-card-media {
+        position: relative;
+        aspect-ratio: 16 / 10;
+        background: var(--color-panel-soft);
+        overflow: hidden;
+        cursor: pointer;
+
+        .result-card-img {
+          width: 100%;
+          height: 100%;
+          transition: transform 0.2s ease;
+
+          &:hover {
+            transform: scale(1.03);
+          }
+        }
+
+        .result-card-loading,
+        .result-card-empty {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          height: 100%;
+          color: var(--color-text-soft);
+          gap: 6px;
+          font-size: 11px;
+        }
+
+        /* 浮动在图片右上角的状态徽章 */
+        .result-card-badge {
+          position: absolute;
+          top: 6px;
+          right: 6px;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          height: 20px;
+          padding: 0 7px;
+          border-radius: 9999px;
+          font-size: 10.5px;
+          font-weight: 600;
+          backdrop-filter: blur(8px);
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+
+          .badge-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+          }
+
+          &.is-completed {
+            background: rgba(240, 253, 244, 0.9);
+            border: 1px solid rgba(220, 252, 231, 0.9);
+            color: #16a34a;
+            .badge-dot {
+              background: #22c55e;
+            }
+          }
+
+          &.is-processing {
+            background: rgba(239, 246, 255, 0.9);
+            border: 1px solid rgba(219, 234, 254, 0.9);
+            color: #2563eb;
+            .badge-dot {
+              background: #3b82f6;
+            }
+          }
+
+          &.is-queued {
+            background: rgba(254, 249, 195, 0.9);
+            border: 1px solid rgba(254, 240, 138, 0.9);
+            color: #854d0e;
+            .badge-dot {
+              background: #eab308;
+            }
+          }
+
+          &.is-failed {
+            background: rgba(254, 242, 242, 0.9);
+            border: 1px solid rgba(254, 226, 226, 0.9);
+            color: #dc2626;
+            .badge-dot {
+              background: #ef4444;
+            }
+          }
+        }
+      }
+
+      .result-card-content {
+        display: flex;
+        flex-direction: column;
+        padding: 10px;
+        gap: 4px;
+        flex: 1;
+
+        .result-card-title {
+          margin: 0;
+          font-size: 12.5px;
+          font-weight: 600;
+          color: var(--color-text);
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        .result-card-prompt {
+          margin: 0;
+          font-size: 11px;
+          line-height: 1.4;
+          color: var(--color-text-muted);
+          display: -webkit-box;
+          -webkit-line-clamp: 2;
+          line-clamp: 2;
+          -webkit-box-orient: vertical;
+          overflow: hidden;
+          min-height: 30px;
+        }
+
+        .result-card-actions {
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          gap: 6px;
+          margin-top: auto;
+          padding-top: 8px;
+          border-top: 1px solid var(--color-line);
+
+          .card-act-btn {
+            display: grid;
+            width: 24px;
+            height: 24px;
+            place-items: center;
+            border: 1px solid var(--color-line);
+            border-radius: 5px;
+            background: var(--color-panel);
+            color: var(--color-text-muted);
+            cursor: pointer;
+            transition: all 0.14s ease;
+
+            &:hover:not(:disabled) {
+              border-color: #2563eb;
+              color: #2563eb;
+              background: var(--color-primary-soft);
+            }
+
+            &:disabled {
+              opacity: 0.4;
+              cursor: not-allowed;
+            }
+          }
+        }
+      }
+    }
+
+    /* 列表视图模式 */
+    .batch-results-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+
+      .batch-result-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 8px 12px;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        background: var(--color-panel);
+        transition: background-color 0.14s ease;
+
+        &:hover {
+          background: var(--color-panel-soft);
+        }
+
+        .batch-result-thumb {
+          display: grid;
+          width: 48px;
+          height: 48px;
+          flex: 0 0 48px;
+          place-items: center;
+          overflow: hidden;
+          border-radius: 6px;
+          background: var(--color-panel-soft);
+          border: 1px solid var(--color-line);
+          cursor: pointer;
+
+          :deep(.el-image) {
+            width: 100%;
+            height: 100%;
+          }
+        }
+
+        .batch-result-main {
+          display: flex;
+          flex-direction: column;
+          flex: 1;
+          min-width: 0;
+          gap: 3px;
+
+          .batch-result-name-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+
+            .batch-result-name {
+              font-size: 13px;
+              font-weight: 600;
+              color: var(--color-text);
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+          }
+
+          .batch-result-prompt {
+            font-size: 11.5px;
+            color: var(--color-text-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+        }
+
+        .batch-result-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-shrink: 0;
+        }
+      }
+    }
+
+    .batch-empty-results {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      text-align: center;
+      color: var(--color-text-muted);
+
+      .empty-icon {
+        color: var(--color-text-soft);
+        margin-bottom: 12px;
+      }
+
+      h4 {
+        margin: 0 0 4px;
+        font-size: 14px;
+        color: var(--color-text);
+      }
+
+      p {
+        margin: 0;
+        font-size: 12px;
+        color: var(--color-text-muted);
+      }
+    }
+
+    /* 结果底部翻页 */
+    .batch-results-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--color-line);
+      flex-shrink: 0;
+
+      .footer-left {
+        display: flex;
+        align-items: center;
+      }
+
+      .footer-right {
+        display: flex;
+        align-items: center;
+      }
+    }
+
+    /* 通用分页组件 (Batch Pagination) */
+    .batch-pagination {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+
+      .page-nav-btn {
+        display: grid;
+        width: 26px;
+        height: 26px;
+        place-items: center;
+        border: 1px solid var(--color-line);
+        border-radius: 5px;
+        background: var(--color-panel);
+        color: var(--color-text-muted);
+        cursor: pointer;
+        transition: all 0.14s ease;
+
+        &:hover:not(:disabled) {
+          border-color: var(--color-line-strong);
+          color: var(--color-text);
+          background: var(--color-panel-soft);
+        }
+
+        &:disabled {
+          opacity: 0.4;
+          cursor: not-allowed;
+        }
+      }
+
+      .page-num-btn {
+        display: grid;
+        min-width: 26px;
+        height: 26px;
+        padding: 0 6px;
+        place-items: center;
+        border: 1px solid var(--color-line);
+        border-radius: 5px;
+        background: var(--color-panel);
+        color: var(--color-text);
+        font-size: 11.5px;
+        font-family: "Bahnschrift", monospace;
+        cursor: pointer;
+        transition: all 0.14s ease;
+
+        &:hover {
+          border-color: #2563eb;
+          color: #2563eb;
+        }
+
+        &.is-active {
+          border-color: #2563eb;
+          background: #2563eb;
+          color: #ffffff;
+          font-weight: 700;
+        }
+      }
+
+      .page-ellipsis {
+        display: grid;
+        width: 20px;
+        height: 26px;
+        place-items: center;
+        color: var(--color-text-soft);
+        font-size: 12px;
+      }
+    }
+
+    /* 迷你下拉选择框 */
+    .custom-select-wrapper.is-mini {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+
+      .mini-select {
+        height: 26px;
+        padding: 0 22px 0 8px;
+        border: 1px solid var(--color-line);
+        border-radius: 5px;
+        background: var(--color-panel);
+        color: var(--color-text);
+        font-size: 11.5px;
+        outline: none;
+        cursor: pointer;
+        appearance: none;
+
+        &:focus {
+          border-color: #2563eb;
+        }
+      }
+
+      .custom-select-arrow {
+        position: absolute;
+        right: 6px;
+        color: var(--color-text-muted);
+        pointer-events: none;
+      }
     }
 
     /* 右侧任务列表面板 */
@@ -5683,6 +7723,21 @@ defineExpose({
         border-color: rgba(96, 165, 250, 0.35);
         color: #60a5fa;
       }
+
+      .batch-quota-compact {
+        background: rgba(37, 99, 235, 0.16);
+        border-color: rgba(96, 165, 250, 0.35);
+        color: #93c5fd;
+
+        .batch-quota-label,
+        .batch-quota-unit {
+          color: #bfdbfe;
+        }
+
+        .batch-quota-value {
+          color: #f1f5f9;
+        }
+      }
     }
 
     .create-panel {
@@ -5790,134 +7845,242 @@ defineExpose({
       }
     }
 
-    .batch-queue-panel {
-      display: flex;
-      min-width: 0;
-      min-height: 0;
-      flex: 0 0 auto;
-      flex-direction: column;
-      gap: 12px;
-      overflow: hidden;
-      padding: 20px;
-      border: 1px solid var(--color-line);
-      border-radius: 12px;
-      background: var(--color-panel);
-    }
-
-    .batch-queue-head,
-    .batch-queue-actions {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-
-    .batch-queue-head > .batch-queue-progress-info {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .batch-queue-head > .batch-queue-actions {
-      flex-direction: row;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-    }
-
-    .batch-queue-sub {
-      color: var(--color-text-muted);
-      font-size: 12px;
-    }
-
-    .batch-queue-action {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      height: 30px;
-      padding: 0 9px;
-      border: 1px solid var(--color-line);
-      border-radius: 6px;
-      background: var(--color-panel-soft);
-      color: var(--color-text);
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .batch-queue-action.danger {
-      color: var(--color-danger);
-    }
-
-    .batch-queue-action:disabled {
-      cursor: not-allowed;
-      opacity: 0.45;
-    }
-
-    .batch-queue-list {
-      min-height: 0;
-      overflow-y: auto;
-    }
-
-    .batch-queue-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 0;
-      border-bottom: 1px solid var(--color-line);
-    }
-
-    .batch-queue-item-main {
-      display: flex;
-      min-width: 0;
-      flex: 1;
-      flex-direction: column;
-      gap: 3px;
-    }
-
-    .batch-queue-item-name,
-    .batch-queue-item-prompt {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .batch-queue-item-name {
-      font-size: 13px;
-    }
-
-    .batch-queue-item-prompt {
-      color: var(--color-text-muted);
-      font-size: 11px;
-    }
-
-    .batch-queue-item-status {
-      flex: 0 0 auto;
-      color: var(--color-text-muted);
-      font-size: 11px;
-    }
-
-    .batch-queue-item-status.completed {
-      color: var(--color-success);
-    }
-
-    .batch-queue-item-status.processing,
-    .batch-queue-item-status.queued {
-      color: var(--color-primary);
-    }
-
-    .batch-queue-stop {
-      display: inline-grid;
-      width: 26px;
-      height: 26px;
-      place-items: center;
-      border: 1px solid var(--color-line);
-      border-radius: 5px;
-      background: var(--color-panel);
-      color: var(--color-danger);
-      cursor: pointer;
-    }
-
+    /* 批量生成暗色模式适配 */
+    .batch-queue-panel,
     .batch-results-panel {
-      flex: 1 1 auto;
+      background: var(--color-panel);
+      border-color: var(--color-line);
+    }
+
+    .batch-queue-table-card {
+      background: var(--color-panel);
+      border-color: var(--color-line);
+    }
+
+    .batch-table-head {
+      background: var(--color-panel-soft);
+      border-color: var(--color-line);
+    }
+
+    .batch-table-row {
+      border-color: var(--color-line);
+
+      &:hover {
+        background: rgba(37, 99, 235, 0.12);
+      }
+
+      &.is-selected {
+        background: rgba(37, 99, 235, 0.18);
+      }
+    }
+
+    .queue-status-pill {
+      &.is-all {
+        background: var(--color-panel-soft);
+        border-color: var(--color-line);
+        color: var(--color-text-muted);
+
+        &.is-active {
+          background: #2563eb;
+          border-color: #2563eb;
+          color: #ffffff;
+        }
+      }
+
+      &.is-processing {
+        background: rgba(37, 99, 235, 0.16);
+        border-color: rgba(96, 165, 250, 0.3);
+        color: #60a5fa;
+        .pill-dot {
+          background: #3b82f6;
+        }
+
+        &.is-filter-pill:hover {
+          background: rgba(37, 99, 235, 0.28);
+        }
+
+        &.is-active {
+          background: #2563eb;
+          border-color: #3b82f6;
+          color: #ffffff;
+          .pill-dot {
+            background: #ffffff;
+            animation: none;
+          }
+        }
+      }
+
+      &.is-queued {
+        background: rgba(234, 179, 8, 0.16);
+        border-color: rgba(234, 179, 8, 0.3);
+        color: #facc15;
+        .pill-dot {
+          background: #eab308;
+        }
+
+        &.is-filter-pill:hover {
+          background: rgba(234, 179, 8, 0.28);
+        }
+
+        &.is-active {
+          background: #ca8a04;
+          border-color: #eab308;
+          color: #ffffff;
+          .pill-dot {
+            background: #ffffff;
+          }
+        }
+      }
+
+      &.is-completed {
+        background: rgba(34, 197, 94, 0.16);
+        border-color: rgba(34, 197, 94, 0.3);
+        color: #4ade80;
+        .pill-dot {
+          background: #22c55e;
+        }
+
+        &.is-filter-pill:hover {
+          background: rgba(34, 197, 94, 0.28);
+        }
+
+        &.is-active {
+          background: #16a34a;
+          border-color: #22c55e;
+          color: #ffffff;
+          .pill-dot {
+            background: #ffffff;
+          }
+        }
+      }
+
+      &.is-failed {
+        background: rgba(239, 68, 68, 0.16);
+        border-color: rgba(239, 68, 68, 0.3);
+        color: #f87171;
+        .pill-dot {
+          background: #ef4444;
+        }
+
+        &.is-filter-pill:hover {
+          background: rgba(239, 68, 68, 0.28);
+        }
+
+        &.is-active {
+          background: #dc2626;
+          border-color: #ef4444;
+          color: #ffffff;
+          .pill-dot {
+            background: #ffffff;
+          }
+        }
+      }
+    }
+
+    .col-status-filter-tag {
+      color: #60a5fa !important;
+    }
+
+    .batch-concurrency-control {
+      background: var(--color-panel);
+      border-color: var(--color-line);
+
+      .batch-concurrency-label-group {
+        background: rgba(255, 255, 255, 0.04);
+        border-right-color: var(--color-line);
+        color: var(--color-text-muted);
+
+        .concurrency-icon {
+          color: var(--color-text-soft);
+        }
+      }
+
+      .batch-concurrency-stepper {
+        .batch-concurrency-btn {
+          color: var(--color-text-muted);
+
+          &:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.08);
+            color: #60a5fa;
+          }
+
+          &:active:not(:disabled) {
+            background: rgba(59, 130, 246, 0.2);
+            color: #93c5fd;
+          }
+
+          &:disabled {
+            opacity: 0.3;
+          }
+        }
+
+        .batch-concurrency-value {
+          background: var(--color-panel);
+          border-color: var(--color-line);
+          color: var(--color-text);
+        }
+      }
+    }
+
+    .batch-queue-filter-select-wrap {
+      .batch-queue-filter-select {
+        background: var(--color-panel-soft);
+        border-color: var(--color-line);
+        color: var(--color-text);
+
+        &:hover {
+          border-color: var(--color-line-strong);
+        }
+      }
+    }
+
+    .task-running-box {
+      .task-running-track {
+        background: rgba(37, 99, 235, 0.2);
+        .task-running-bar {
+          background: #3b82f6;
+        }
+      }
+      .running-text {
+        color: #60a5fa;
+      }
+    }
+
+    .batch-result-card {
+      background: var(--color-panel);
+      border-color: var(--color-line);
+
+      &:hover {
+        border-color: var(--color-line-strong);
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
+      }
+
+      .result-card-media {
+        background: var(--color-panel-soft);
+
+        .result-card-badge {
+          &.is-completed {
+            background: rgba(20, 83, 45, 0.85);
+            border-color: rgba(34, 197, 94, 0.4);
+            color: #4ade80;
+          }
+          &.is-processing {
+            background: rgba(30, 58, 138, 0.85);
+            border-color: rgba(59, 130, 246, 0.4);
+            color: #60a5fa;
+          }
+          &.is-queued {
+            background: rgba(113, 63, 18, 0.85);
+            border-color: rgba(234, 179, 8, 0.4);
+            color: #facc15;
+          }
+          &.is-failed {
+            background: rgba(127, 29, 29, 0.85);
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #f87171;
+          }
+        }
+      }
     }
 
     .tasks-panel {

@@ -13,6 +13,7 @@ use sha3::{Digest, Sha3_512};
 use std::{
     collections::{HashMap, HashSet},
     io::{Cursor, Write},
+    sync::{Arc, Mutex},
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::Emitter;
@@ -27,6 +28,8 @@ const DIRECT_MODELS: &[&str] = &[
     "gpt-image-2.5-sunburst-2026-09-08",
 ];
 const DEFAULT_IMAGE_MODEL: &str = "gpt-image-2";
+const DEFAULT_BATCH_CONCURRENCY: u8 = 2;
+const MAX_BATCH_CONCURRENCY: u8 = 10;
 const MAX_RESPONSE_BYTES: usize = 128 * 1024 * 1024;
 const WEB_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36";
 const DEFAULT_POW_SCRIPT: &str = "https://chatgpt.com/backend-api/sentinel/sdk.js";
@@ -88,7 +91,13 @@ struct ImageBatchRequest {
     ratio: String,
     #[serde(default)]
     tier: String,
+    #[serde(default = "default_batch_concurrency")]
+    concurrency: u8,
     items: Vec<ImageBatchItem>,
+}
+
+fn default_batch_concurrency() -> u8 {
+    DEFAULT_BATCH_CONCURRENCY
 }
 
 impl ImageRequest {
@@ -411,7 +420,10 @@ pub async fn submit(
         "inputCount": request.images.len(), "hasMask": !request.mask.is_empty(), "images": [], "imageCount": 0
     })).collect::<Vec<_>>();
     image_store::create_batch(paths, &tasks, &request.images, &request.mask)?;
-    for task in &tasks { spawn_task(app, paths, cli_targets, task.clone()); }
+    let slots = default_slots();
+    for task in &tasks {
+        spawn_task(app, paths, cli_targets, task.clone(), slots.clone());
+    }
     Ok(json!({ "items": tasks, "roundId": request.round_id }))
 }
 
@@ -425,8 +437,12 @@ pub async fn submit_batch(
     if batch.items.is_empty() || batch.items.len() > 10000 {
         return Err(failure("一轮可提交 1–10000 个任务"));
     }
+    if !(1..=MAX_BATCH_CONCURRENCY).contains(&batch.concurrency) {
+        return Err(failure("批量并发数需在 1 到 10 之间"));
+    }
     let account = accounts(paths)?.as_array().unwrap().iter().find(|item| item["id"] == batch.account_id && item["disabled"] != true && item["requiresReauth"] != true).cloned().ok_or_else(|| failure("所选官方账号不可用"))?;
     let round_id = if batch.round_id.is_empty() { Uuid::new_v4().to_string() } else { batch.round_id.clone() };
+    let batch_key = format!("{}:{}", batch.conversation_id, round_id);
     let input_id = Uuid::new_v4().to_string();
     let mut tasks = Vec::with_capacity(batch.items.len());
     for (index, item) in batch.items.into_iter().enumerate() {
@@ -456,30 +472,85 @@ pub async fn submit_batch(
             "id": Uuid::new_v4().to_string(), "createdAt": chrono::Utc::now().timestamp_millis(),
             "status": "queued", "accountName": account["email"], "request": metadata,
             "inputId": input_id, "batchCount": 1, "batchIndex": index,
+            "batchKey": batch_key, "batchConcurrency": batch.concurrency,
             "inputCount": 0, "hasMask": false, "images": [], "imageCount": 0
         }));
     }
     image_store::create_batch(paths, &tasks, &[], "")?;
+    let slots = batch_slots(&batch_key, batch.concurrency);
     for task in &tasks {
-        spawn_task(app, paths, cli_targets, task.clone());
+        spawn_task(app, paths, cli_targets, task.clone(), slots.clone());
     }
     Ok(json!({ "items": tasks, "roundId": round_id }))
 }
 
 pub async fn resume(app: &tauri::AppHandle, paths: &AppPaths, cli_targets: &Value, payload: Value) -> Result<Value, ManagerError> {
-    let task = image_store::requeue(paths, payload["id"].as_str().unwrap_or(""))?;
-    spawn_task(app, paths, cli_targets, task.clone());
+    let requested = payload["concurrency"].as_u64().map(|value| value as u8);
+    if let Some(concurrency) = requested {
+        if !(1..=MAX_BATCH_CONCURRENCY).contains(&concurrency) {
+            return Err(failure("批量并发数需在 1 到 10 之间"));
+        }
+    }
+    let task = image_store::requeue_with_concurrency(
+        paths,
+        payload["id"].as_str().unwrap_or(""),
+        requested,
+    )?;
+    let stored = task["batchConcurrency"]
+        .as_u64()
+        .map(|value| value as u8)
+        .filter(|value| (1..=MAX_BATCH_CONCURRENCY).contains(value))
+        .unwrap_or(DEFAULT_BATCH_CONCURRENCY);
+    let slots = task_batch_key(&task)
+        .map(|key| batch_slots(&key, requested.unwrap_or(stored)))
+        .unwrap_or_else(default_slots);
+    spawn_task(app, paths, cli_targets, task.clone(), slots);
     Ok(task)
 }
 
-fn spawn_task(app: &tauri::AppHandle, paths: &AppPaths, cli_targets: &Value, task: Value) {
-    // 全局并发限制适用于所有窗口和批次，取消的排队项不再执行。
-    static SLOTS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+fn default_slots() -> Arc<tokio::sync::Semaphore> {
+    static SLOTS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
+    SLOTS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(DEFAULT_BATCH_CONCURRENCY as usize)))
+        .clone()
+}
+
+fn batch_slots(key: &str, concurrency: u8) -> Arc<tokio::sync::Semaphore> {
+    static SLOTS: std::sync::OnceLock<Mutex<HashMap<String, (u8, Arc<tokio::sync::Semaphore>)>>> = std::sync::OnceLock::new();
+    let mut entries = SLOTS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+    if let Some((current, slots)) = entries.get(key) {
+        if *current == concurrency {
+            return slots.clone();
+        }
+    }
+    let slots = Arc::new(tokio::sync::Semaphore::new(concurrency as usize));
+    entries.insert(key.to_string(), (concurrency, slots.clone()));
+    slots
+}
+
+fn task_batch_key(task: &Value) -> Option<String> {
+    if let Some(key) = task["batchKey"].as_str().filter(|key| !key.is_empty()) {
+        return Some(key.to_string());
+    }
+    let conversation_id = task["request"]["conversationId"].as_str().unwrap_or("");
+    let round_id = task["request"]["roundId"].as_str().unwrap_or("");
+    (!conversation_id.is_empty() && !round_id.is_empty())
+        .then(|| format!("{conversation_id}:{round_id}"))
+}
+
+fn spawn_task(
+    app: &tauri::AppHandle,
+    paths: &AppPaths,
+    cli_targets: &Value,
+    task: Value,
+    slots: Arc<tokio::sync::Semaphore>,
+) {
+    // 每个批次共享自己的并发信号量，普通任务使用默认并发限制。
     let app = app.clone();
     let paths = paths.clone();
     let cli_targets = cli_targets.clone();
     tauri::async_runtime::spawn(async move {
-        let _permit = SLOTS.get_or_init(|| tokio::sync::Semaphore::new(2)).acquire().await.unwrap();
+        let _permit = slots.acquire().await.unwrap();
         let mut task = task;
         let id = task["id"].as_str().unwrap().to_string();
         match image_store::start(&paths, &id) {

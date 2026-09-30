@@ -147,6 +147,14 @@ pub fn run() {
             let app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Some(state) = app_handle.try_state::<AppState>() {
+                    if let Err(error) = state.start_lan_share_service(app_handle.clone()).await {
+                        eprintln!("设备快传后台服务启动失败：{error}");
+                    }
+                }
+            });
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Some(state) = app_handle.try_state::<AppState>() {
                     if let Err(error) = state.start_enabled_proxy_servers().await {
                         eprintln!("{error}");
                     }

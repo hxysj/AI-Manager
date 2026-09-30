@@ -8,6 +8,12 @@ const DISCOVERY_PORT: u16 = 17632;
 const DISCOVERY_PROTOCOL: &str = "monkey-thief-device-drop-v1";
 const PAIRING_LIFETIME: u64 = 90_000;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DiscoveryPacketKind {
+    Announce,
+    Probe,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Peer {
@@ -25,14 +31,41 @@ pub(super) struct TrustedPeer {
     pub(super) secret: String,
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub(super) struct Config {
     pub(super) id: String,
     pub(super) name: String,
+    #[serde(default = "default_auto_discovery")]
     pub(super) auto_discovery: bool,
+    #[serde(default)]
+    pub(super) discovery_configured: bool,
     pub(super) peers: Vec<TrustedPeer>,
     pub(super) ignored_peers: Vec<String>,
+}
+
+fn default_auto_discovery() -> bool {
+    true
+}
+
+fn migrate_discovery_config(config: &mut Config) {
+    if !config.discovery_configured {
+        config.auto_discovery = true;
+        config.discovery_configured = true;
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            auto_discovery: default_auto_discovery(),
+            discovery_configured: true,
+            peers: Vec::new(),
+            ignored_peers: Vec::new(),
+        }
+    }
 }
 
 pub(super) struct Pairing {
@@ -192,11 +225,21 @@ fn peer_origin(peer: &Peer) -> Result<String, ManagerError> {
     Ok(format!("http://{}:{}", ip, peer.port))
 }
 
-fn discovery_peer(bytes: &[u8], source: SocketAddr, own_id: &str) -> Option<Peer> {
+fn discovery_packet_kind(bytes: &[u8]) -> Option<DiscoveryPacketKind> {
     let payload: Value = serde_json::from_slice(bytes).ok()?;
     if payload.get("protocol")?.as_str()? != DISCOVERY_PROTOCOL {
         return None;
     }
+    match payload.get("kind").and_then(Value::as_str) {
+        None | Some("announce") => Some(DiscoveryPacketKind::Announce),
+        Some("probe") => Some(DiscoveryPacketKind::Probe),
+        Some(_) => None,
+    }
+}
+
+fn discovery_peer(bytes: &[u8], source: SocketAddr, own_id: &str) -> Option<Peer> {
+    let payload: Value = serde_json::from_slice(bytes).ok()?;
+    discovery_packet_kind(bytes)?;
     let mut peer: Peer = serde_json::from_value(payload.get("peer")?.clone()).ok()?;
     if peer.id == own_id || !is_native_id(&peer.id) || peer.id.len() > 80 || peer.name.len() > 128 {
         return None;
@@ -217,6 +260,7 @@ pub(super) async fn start(
         Err(error) if error.kind() == ErrorKind::NotFound => Config::default(),
         Err(error) => return Err(error.into()),
     };
+    migrate_discovery_config(&mut config);
     normalize_native_id(&mut config.id);
     if config.name.is_empty() {
         config.name = std::env::var("COMPUTERNAME")
@@ -248,8 +292,12 @@ pub(super) async fn start(
         }
     };
     socket.set_broadcast(true)?;
-    let announcement =
-        serde_json::to_vec(&json!({ "protocol": DISCOVERY_PROTOCOL, "peer": peer }))?;
+    let announcement = serde_json::to_vec(
+        &json!({ "protocol": DISCOVERY_PROTOCOL, "kind": "announce", "peer": peer }),
+    )?;
+    let probe = serde_json::to_vec(
+        &json!({ "protocol": DISCOVERY_PROTOCOL, "kind": "probe", "peer": peer }),
+    )?;
     let (scan_tx, mut scan_rx) = tokio::sync::mpsc::channel::<()>(8);
     registry.inner.lock().await.native.scan_trigger = Some(scan_tx);
     let task_registry = registry.clone();
@@ -288,7 +336,7 @@ pub(super) async fn start(
                     if scan_req.is_some() {
                         let _ = socket
                             .send_to(
-                                &announcement,
+                                &probe,
                                 SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT)),
                             )
                             .await;
@@ -300,18 +348,42 @@ pub(super) async fn start(
                 }
             };
             if let Some(Ok((size, source))) = packet {
+                let packet_kind = discovery_packet_kind(&buffer[..size]);
                 if let Some(peer) = discovery_peer(&buffer[..size], source, &own_id) {
-                    let is_trusted = {
+                    if packet_kind == Some(DiscoveryPacketKind::Probe) {
+                        let _ = socket.send_to(&announcement, source).await;
+                    }
+                    let (is_trusted, inserted) = {
                         let mut runtime = task_registry.inner.lock().await;
-                        if runtime.native.nearby.len() < 100
+                        let inserted = if runtime.native.nearby.len() < 100
                             || runtime.native.nearby.contains_key(&peer.id)
                         {
                             runtime.native.nearby.insert(peer.id.clone(), peer.clone());
-                        }
-                        runtime.native.config.peers.iter().any(|t| t.peer.id == peer.id)
+                            true
+                        } else {
+                            false
+                        };
+                        (
+                            runtime
+                                .native
+                                .config
+                                .peers
+                                .iter()
+                                .any(|t| t.peer.id == peer.id),
+                            inserted,
+                        )
                     };
+                    if inserted {
+                        let _ = emit_state_changed(&app, &task_registry, &task_paths).await;
+                    }
                     if is_trusted {
-                        deliver_pending_messages_for_peer(&app, &task_registry, &task_paths, &peer.id).await;
+                        deliver_pending_messages_for_peer(
+                            &app,
+                            &task_registry,
+                            &task_paths,
+                            &peer.id,
+                        )
+                        .await;
                     }
                 }
             }
@@ -329,6 +401,7 @@ pub(super) async fn set_auto_discovery(
     let snapshot = {
         let mut runtime = registry.inner.lock().await;
         runtime.native.config.auto_discovery = enabled;
+        runtime.native.config.discovery_configured = true;
         write_json(&paths.lan_share_files.config, &json!(runtime.native.config)).await?;
         runtime.native.snapshot()
     };
@@ -1146,6 +1219,19 @@ mod tests {
     #[test]
     fn discovery_uses_packet_source_and_does_not_publish_secrets() {
         let payload = json!({ "protocol": DISCOVERY_PROTOCOL, "peer": { "id": "native-other", "name": "另一台电脑", "ip": "8.8.8.8", "port": DEFAULT_PORT } });
+        let probe = json!({ "protocol": DISCOVERY_PROTOCOL, "kind": "probe", "peer": payload["peer"].clone() });
+        assert_eq!(
+            discovery_packet_kind(&serde_json::to_vec(&payload).unwrap()),
+            Some(DiscoveryPacketKind::Announce)
+        );
+        assert_eq!(
+            discovery_packet_kind(&serde_json::to_vec(&probe).unwrap()),
+            Some(DiscoveryPacketKind::Probe)
+        );
+        assert!(discovery_packet_kind(
+            br#"{"protocol":"monkey-thief-device-drop-v1","kind":"unknown"}"#
+        )
+        .is_none());
         let peer = discovery_peer(
             &serde_json::to_vec(&payload).unwrap(),
             "192.168.1.9:17632".parse().unwrap(),
@@ -1171,6 +1257,29 @@ mod tests {
             secret: "do-not-expose".into(),
         });
         assert!(!runtime.snapshot().to_string().contains("do-not-expose"));
+    }
+
+    #[test]
+    fn discovery_is_enabled_for_new_and_legacy_configs() {
+        assert!(Config::default().auto_discovery);
+        assert!(Config::default().discovery_configured);
+        let legacy = serde_json::from_value::<Config>(json!({
+            "id": "native-self",
+            "name": "本机"
+        }))
+        .unwrap();
+        let mut legacy = legacy;
+        migrate_discovery_config(&mut legacy);
+        assert!(legacy.auto_discovery);
+        assert!(legacy.discovery_configured);
+        assert!(!serde_json::from_value::<Config>(json!({
+            "id": "native-self",
+            "name": "本机",
+            "auto_discovery": false,
+            "discovery_configured": true
+        }))
+        .unwrap()
+        .auto_discovery);
     }
 
     #[test]

@@ -75,7 +75,16 @@ pub fn checkpoint(paths: &AppPaths, id: &str, recovery: &Value) -> Result<(), Ma
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn requeue(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
+    requeue_with_concurrency(paths, id, None)
+}
+
+pub fn requeue_with_concurrency(
+    paths: &AppPaths,
+    id: &str,
+    concurrency: Option<u8>,
+) -> Result<Value, ManagerError> {
     let mut connection = open(paths)?;
     let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let raw: String = transaction.query_row("SELECT payload_json FROM image_tasks WHERE id = ?1 AND status IN ('failed', 'interrupted')", [id], |row| row.get(0))?;
@@ -83,6 +92,9 @@ pub fn requeue(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
     // 有 Web 恢复上下文时继续查询原会话，否则从原请求重新排队。
     if task["request"]["generationMode"] != "web" || !task["recovery"]["conversationId"].is_string() {
         task["recovery"] = Value::Null;
+    }
+    if let Some(concurrency) = concurrency {
+        task["batchConcurrency"] = json!(concurrency);
     }
     task["status"] = json!("queued");
     task["error"] = Value::Null;
@@ -95,10 +107,10 @@ pub fn requeue(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
 // 历史索引只返回小型元数据；缩略图和原图仍按当前会话按需读取。
 pub fn history(paths: &AppPaths) -> Result<Value, ManagerError> {
     let connection = open(paths)?;
-    let mut statement = connection.prepare("SELECT id, created_at, status, json_extract(payload_json, '$.request.conversationId'), json_extract(payload_json, '$.request.roundId'), json_extract(payload_json, '$.request.prompt') FROM image_tasks ORDER BY created_at")?;
+    let mut statement = connection.prepare("SELECT id, created_at, status, json_extract(payload_json, '$.request.conversationId'), json_extract(payload_json, '$.request.roundId'), json_extract(payload_json, '$.request.prompt'), json_extract(payload_json, '$.request.batchName') FROM image_tasks ORDER BY created_at")?;
     let rows = statement.query_map([], |row| Ok(json!({
         "id": row.get::<_, String>(0)?, "createdAt": row.get::<_, i64>(1)?, "status": row.get::<_, String>(2)?,
-        "conversationId": row.get::<_, Option<String>>(3)?, "roundId": row.get::<_, Option<String>>(4)?, "prompt": row.get::<_, Option<String>>(5)?
+        "conversationId": row.get::<_, Option<String>>(3)?, "roundId": row.get::<_, Option<String>>(4)?, "prompt": row.get::<_, Option<String>>(5)?, "batchName": row.get::<_, Option<String>>(6)?
     })))?.collect::<Result<Vec<_>, _>>()?;
     Ok(json!(rows))
 }

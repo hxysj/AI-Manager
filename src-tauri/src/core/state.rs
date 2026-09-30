@@ -205,6 +205,15 @@ impl AppState {
         google_result
     }
 
+    pub async fn start_lan_share_service(&self, app: AppHandle) -> Result<(), ManagerError> {
+        let (registry, paths) = {
+            let manager = self.manager.lock().await;
+            (manager.lan_share_registry.clone(), manager.paths.clone())
+        };
+        let _ = lan_share::start_service(app, &registry, &paths, Value::Null).await?;
+        Ok(())
+    }
+
     pub async fn state_snapshot(&self) -> Value {
         let manager = self.manager.lock().await;
 

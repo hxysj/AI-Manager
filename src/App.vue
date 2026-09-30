@@ -2094,8 +2094,7 @@ onMounted(() => {
 
   bootstrap()
 
-  // 启动后台快传服务并监听全局设备连接配对请求
-  lanShareApi.startService({}).catch(() => {})
+  // 后端启动时已开启后台快传服务，这里只监听全局设备连接配对请求。
   unsubscribeLanShare = lanShareApi.onStateChanged((payload) => {
     const data = payload?.service ? payload : payload?.data || {}
     pendingPairingRequest.value = data?.native?.pairingRequests?.[0] || null
