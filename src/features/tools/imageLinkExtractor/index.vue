@@ -74,8 +74,12 @@
           <div class="card-title-group">
             <span class="card-title">图片内容</span>
             <span class="card-subtitle">
-              已提取 <strong class="stat-count">{{ links.length }}</strong> 个，已选择
-              <strong class="stat-count stat-count--blue">{{ selectedLinks.length }}</strong> 个
+              已提取
+              <strong class="stat-count">{{ links.length }}</strong> 个，已选择
+              <strong class="stat-count stat-count--blue">{{
+                selectedLinks.length
+              }}</strong>
+              个
             </span>
           </div>
         </div>
@@ -156,7 +160,8 @@
           </div>
           <span class="empty-title">未检测到图片链接</span>
           <span class="empty-desc">
-            未发现以 .png, .jpg, .jpeg, .webp, .gif, .svg, .bmp, .avif 结尾的合法图片地址
+            未发现以 .png, .jpg, .jpeg, .webp, .gif, .svg, .bmp, .avif
+            结尾的合法图片地址
           </span>
         </div>
 
@@ -165,10 +170,7 @@
           <article
             v-for="(link, index) in links"
             :key="link"
-            :class="[
-              'image-grid-card',
-              { 'is-selected': isSelected(link) }
-            ]"
+            :class="['image-grid-card', { 'is-selected': isSelected(link) }]"
           >
             <!-- 左上角勾选按钮 -->
             <button
@@ -280,10 +282,7 @@
             @pointerup="stopPreviewDrag"
             @wheel.prevent="handlePreviewWheel"
           >
-            <div
-              class="preview-zoom-stage"
-              :style="previewStageStyle"
-            >
+            <div class="preview-zoom-stage" :style="previewStageStyle">
               <img
                 class="preview-zoom-image"
                 :src="previewUrl"
@@ -307,11 +306,7 @@
           </button>
 
           <!-- 悬浮缩放控制栏 -->
-          <div
-            class="preview-zoom-bar"
-            role="toolbar"
-            aria-label="图片缩放"
-          >
+          <div class="preview-zoom-bar" role="toolbar" aria-label="图片缩放">
             <button
               class="zoom-action-btn"
               type="button"
@@ -968,7 +963,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
         .editor-gutter-line {
           height: 22px;
           padding-right: 12px;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           font-size: 13px;
           line-height: 22px;
           text-align: right;
@@ -986,7 +982,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
         resize: none;
         background: transparent;
         color: var(--color-text);
-        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
         font-size: 13px;
         line-height: 22px;
         tab-size: 2;
@@ -1155,9 +1152,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
               linear-gradient(45deg, #f1f5f9 25%, transparent 25%),
               linear-gradient(-45deg, #f1f5f9 25%, transparent 25%),
               linear-gradient(45deg, transparent 75%, #f1f5f9 75%),
-              linear-gradient(-45deg, transparent 75%, #f1f5f9 75%),
-              #ffffff;
-            background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+              linear-gradient(-45deg, transparent 75%, #f1f5f9 75%), #ffffff;
+            background-position:
+              0 0,
+              0 8px,
+              8px -8px,
+              -8px 0;
             background-size: 16px 16px;
             cursor: zoom-in;
 
@@ -1198,7 +1198,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
             .card-index-label {
               flex: none;
               color: #2563eb;
-              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+              font-family:
+                ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
               font-size: 13px;
               font-weight: 700;
             }
@@ -1208,7 +1209,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
               min-width: 0;
               overflow: hidden;
               color: var(--color-text-muted);
-              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+              font-family:
+                ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
               font-size: 12px;
               text-overflow: ellipsis;
               white-space: nowrap;
@@ -1307,7 +1309,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
             background: var(--color-panel-soft);
             border: 1px solid var(--color-line);
             color: var(--color-text-muted);
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-family:
+              ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             font-size: 12px;
           }
         }
@@ -1454,7 +1457,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           .zoom-value-label {
             width: 52px;
             color: #ffffff;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-family:
+              ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
             font-size: 12.5px;
             text-align: center;
           }
@@ -1486,7 +1490,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
           background: transparent;
           color: #2563eb;
           cursor: pointer;
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           text-align: left;
 
           &:hover {
@@ -1639,9 +1644,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", handleKeydown))
             linear-gradient(45deg, #1e293b 25%, transparent 25%),
             linear-gradient(-45deg, #1e293b 25%, transparent 25%),
             linear-gradient(45deg, transparent 75%, #1e293b 75%),
-            linear-gradient(-45deg, transparent 75%, #1e293b 75%),
-            #0f172a;
-          background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+            linear-gradient(-45deg, transparent 75%, #1e293b 75%), #0f172a;
+          background-position:
+            0 0,
+            0 8px,
+            8px -8px,
+            -8px 0;
           background-size: 16px 16px;
         }
 

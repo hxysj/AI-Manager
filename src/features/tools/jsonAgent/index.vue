@@ -548,14 +548,13 @@ import {
   Minus,
   Search,
   Send,
-  ShieldCheck,
   Trash2,
   Wrench,
   X
 } from "lucide-vue-next"
 import { toolboxApi } from "@/api"
 import { createMessage } from "@/utils/message"
-import JsonTreeNode from "@/features/tools/components/JsonTreeNode.vue"
+import JsonTreeNode from "./components/JsonTreeNode.vue"
 
 const props = defineProps({
   providers: {

@@ -232,14 +232,14 @@ import {
 } from "lucide-vue-next"
 import GitToolView from "@/features/gitTool/index.vue"
 import LanShareView from "@/features/lanShare/index.vue"
-import CodexPetManager from "@/features/tools/components/CodexPetManager.vue"
-import CoordinateOverlayTool from "@/features/tools/components/CoordinateOverlayTool.vue"
-import ImageLinkExtractor from "@/features/tools/components/ImageLinkExtractor.vue"
-import PortMonitor from "@/features/tools/components/PortMonitor.vue"
-import StringDiff from "@/features/tools/components/StringDiff.vue"
+import CodexPetManager from "@/features/tools/codexPetManager/index.vue"
+import CoordinateOverlayTool from "@/features/tools/coordinateOverlay/index.vue"
+import ImageLinkExtractor from "@/features/tools/imageLinkExtractor/index.vue"
+import PortMonitor from "@/features/tools/portMonitor/index.vue"
+import StringDiff from "@/features/tools/stringDiff/index.vue"
 
 const JsonAgentTool = defineAsyncComponent(
-  () => import("@/features/tools/components/JsonAgentTool.vue")
+  () => import("@/features/tools/jsonAgent/index.vue")
 )
 
 // 网络诊断包含多组明细表，进入工具后再加载页面代码。
@@ -249,7 +249,7 @@ const NetworkQualityView = defineAsyncComponent(
 
 // 图片工作台按需加载，进入工具后再读取任务和官方账号。
 const ImageWorkbench = defineAsyncComponent(
-  () => import("@/features/tools/components/ImageWorkbench.vue")
+  () => import("@/features/tools/imageWorkbench/index.vue")
 )
 
 const props = defineProps({
