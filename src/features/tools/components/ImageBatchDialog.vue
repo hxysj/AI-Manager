@@ -60,9 +60,7 @@
                     v-model="allRowsSelected"
                     type="checkbox"
                     aria-label="全选任务"
-                    :indeterminate="
-                      selectedRows.length > 0 && !allRowsSelected
-                    "
+                    :indeterminate="selectedRows.length > 0 && !allRowsSelected"
                     :disabled="running"
                   />
                 </span>
@@ -463,27 +461,35 @@ function buildQueue() {
 async function submitQueue(queue) {
   queue.status = "processing"
   const roundId = crypto.randomUUID()
-  for (const row of queue.rows) {
+  queue.rows.forEach((row) => {
     row.status = "queued"
-    try {
-      const result = await toolboxApi.submitImageTask({
-        ...props.settings,
-        mode: "generate",
-        prompt: row.prompt,
-        model: selectedModel.value,
-        size: selectedSize.value,
-        n: 1,
-        images: [],
-        mask: "",
-        conversationId: runningConversationId.value,
-        roundId,
-        batchName: row.name
-      })
-      row.taskId = result.items?.[0]?.id || ""
-    } catch (error) {
+    row.taskId = ""
+    row.error = ""
+  })
+  try {
+    const result = await toolboxApi.submitImageBatch({
+      ...props.settings,
+      model: selectedModel.value,
+      size: selectedSize.value,
+      conversationId: runningConversationId.value,
+      roundId,
+      items: queue.rows.map((row) => ({
+        batchName: row.name,
+        prompt: row.prompt
+      }))
+    })
+    queue.rows.forEach((row, index) => {
+      row.taskId = result.items?.[index]?.id || ""
+      if (!row.taskId) {
+        row.status = "failed"
+        row.error = "批量任务记录创建失败"
+      }
+    })
+  } catch (error) {
+    queue.rows.forEach((row) => {
       row.status = "failed"
       row.error = String(error)
-    }
+    })
   }
   const pending = queue.rows.filter((row) => row.taskId)
   if (pending.length) await waitForTasks(pending)

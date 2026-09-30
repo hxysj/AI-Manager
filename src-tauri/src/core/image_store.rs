@@ -46,7 +46,7 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
 
 // 一轮任务原子入队，共享输入图片，避免 100 张生成重复保存 100 份参考图。
 pub fn create_batch(paths: &AppPaths, tasks: &[Value], images: &[String], mask: &str) -> Result<(), ManagerError> {
-    if tasks.is_empty() || tasks.len() > 100 { return Err(ManagerError::System("一轮可提交 1–100 个任务".into())); }
+    if tasks.is_empty() || tasks.len() > 10000 { return Err(ManagerError::System("一轮可提交 1–10000 个任务".into())); }
     let mut connection = open(paths)?;
     let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     for task in tasks {

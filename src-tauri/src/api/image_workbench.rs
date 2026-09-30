@@ -61,6 +61,36 @@ pub struct ImageRequest {
     tier: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ImageBatchItem {
+    #[serde(default)]
+    batch_name: String,
+    prompt: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ImageBatchRequest {
+    account_id: String,
+    generation_mode: String,
+    model: String,
+    size: String,
+    quality: String,
+    output_format: String,
+    background: String,
+    response_format: String,
+    #[serde(default)]
+    conversation_id: String,
+    #[serde(default)]
+    round_id: String,
+    #[serde(default)]
+    ratio: String,
+    #[serde(default)]
+    tier: String,
+    items: Vec<ImageBatchItem>,
+}
+
 impl ImageRequest {
     fn validate(&self) -> Result<(), ManagerError> {
         if self.account_id.is_empty() || self.prompt.trim().is_empty() || self.prompt.len() > 32_000
@@ -383,6 +413,57 @@ pub async fn submit(
     image_store::create_batch(paths, &tasks, &request.images, &request.mask)?;
     for task in &tasks { spawn_task(app, paths, cli_targets, task.clone()); }
     Ok(json!({ "items": tasks, "roundId": request.round_id }))
+}
+
+pub async fn submit_batch(
+    app: &tauri::AppHandle,
+    paths: &AppPaths,
+    cli_targets: &Value,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let batch: ImageBatchRequest = serde_json::from_value(payload)?;
+    if batch.items.is_empty() || batch.items.len() > 10000 {
+        return Err(failure("一轮可提交 1–10000 个任务"));
+    }
+    let account = accounts(paths)?.as_array().unwrap().iter().find(|item| item["id"] == batch.account_id && item["disabled"] != true && item["requiresReauth"] != true).cloned().ok_or_else(|| failure("所选官方账号不可用"))?;
+    let round_id = if batch.round_id.is_empty() { Uuid::new_v4().to_string() } else { batch.round_id.clone() };
+    let input_id = Uuid::new_v4().to_string();
+    let mut tasks = Vec::with_capacity(batch.items.len());
+    for (index, item) in batch.items.into_iter().enumerate() {
+        let request = ImageRequest {
+            account_id: batch.account_id.clone(),
+            generation_mode: batch.generation_mode.clone(),
+            mode: "generate".into(),
+            prompt: item.prompt,
+            model: batch.model.clone(),
+            size: batch.size.clone(),
+            quality: batch.quality.clone(),
+            n: 1,
+            output_format: batch.output_format.clone(),
+            background: batch.background.clone(),
+            response_format: batch.response_format.clone(),
+            batch_name: item.batch_name,
+            images: Vec::new(),
+            mask: String::new(),
+            conversation_id: batch.conversation_id.clone(),
+            round_id: round_id.clone(),
+            ratio: batch.ratio.clone(),
+            tier: batch.tier.clone(),
+        };
+        request.validate()?;
+        let metadata = serde_json::to_value(&request)?;
+        tasks.push(json!({
+            "id": Uuid::new_v4().to_string(), "createdAt": chrono::Utc::now().timestamp_millis(),
+            "status": "queued", "accountName": account["email"], "request": metadata,
+            "inputId": input_id, "batchCount": 1, "batchIndex": index,
+            "inputCount": 0, "hasMask": false, "images": [], "imageCount": 0
+        }));
+    }
+    image_store::create_batch(paths, &tasks, &[], "")?;
+    for task in &tasks {
+        spawn_task(app, paths, cli_targets, task.clone());
+    }
+    Ok(json!({ "items": tasks, "roundId": round_id }))
 }
 
 pub async fn resume(app: &tauri::AppHandle, paths: &AppPaths, cli_targets: &Value, payload: Value) -> Result<Value, ManagerError> {
@@ -834,7 +915,11 @@ async fn web_execute_once(
     )
     .await?;
     let status = response.status();
-    let (_, bytes) = read_response_limited(response, "Web 生图 SSE").await?;
+    let input_ids = references
+        .iter()
+        .map(|item| item.file_id.clone())
+        .collect::<HashSet<_>>();
+    let (_, bytes) = read_web_sse_with_checkpoint(response, context, &input_ids).await?;
     if !status.is_success() {
         return Err(failure(&format!(
             "Web 生图提交失败：HTTP {}：{}",
@@ -852,17 +937,7 @@ async fn web_execute_once(
     if ids.conversation_id.is_empty() {
         return Err(failure("Web 生图响应缺少 conversation_id"));
     }
-    let input_ids = references
-        .iter()
-        .map(|item| item.file_id.clone())
-        .collect::<HashSet<_>>();
-    if let Some((paths, task_id)) = &context.task {
-        image_store::checkpoint(paths, task_id, &json!({
-            "conversationId": ids.conversation_id, "inputIds": input_ids,
-            "fileIds": ids.file_ids, "sedimentIds": ids.sediment_ids,
-            "deviceId": context.device_id, "sessionId": context.session_id
-        }))?;
-    }
+    save_web_recovery(context, &ids, &input_ids)?;
     web_finish_assets(client, auth, context, &input_ids, &mut ids).await
 }
 
@@ -941,6 +1016,84 @@ async fn read_response_limited(
             return Err(failure(&format!("{label} 超过 128 MB 限制")));
         }
         bytes.extend_from_slice(&chunk);
+    }
+    Ok((status, bytes))
+}
+
+fn save_web_recovery(
+    context: &WebContext,
+    ids: &WebAssetIds,
+    input_ids: &HashSet<String>,
+) -> Result<(), ManagerError> {
+    if let Some((paths, task_id)) = &context.task {
+        image_store::checkpoint(
+            paths,
+            task_id,
+            &json!({
+                "conversationId": ids.conversation_id,
+                "inputIds": input_ids,
+                "fileIds": ids.file_ids,
+                "sedimentIds": ids.sediment_ids,
+                "deviceId": context.device_id,
+                "sessionId": context.session_id
+            }),
+        )?;
+    }
+    Ok(())
+}
+
+fn web_sse_conversation_id(frame: &[u8]) -> Option<String> {
+    let data = String::from_utf8_lossy(frame)
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:").map(str::trim))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if data.is_empty() || data == "[DONE]" {
+        return None;
+    }
+    serde_json::from_str::<Value>(&data)
+        .ok()
+        .and_then(|payload| payload["conversation_id"].as_str().map(str::to_string))
+        .filter(|value| !value.is_empty())
+}
+
+async fn read_web_sse_with_checkpoint(
+    response: reqwest::Response,
+    context: &WebContext,
+    input_ids: &HashSet<String>,
+) -> Result<(reqwest::StatusCode, Vec<u8>), ManagerError> {
+    let status = response.status();
+    let mut bytes = Vec::new();
+    let mut pending = Vec::new();
+    let mut checkpointed = false;
+    let mut stream = response.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|error| failure(&format!("Web 生图 SSE 读取失败：{error}")))?;
+        if bytes.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            return Err(failure("Web 生图 SSE 超过 128 MB 限制"));
+        }
+        bytes.extend_from_slice(&chunk);
+        if !status.is_success() || checkpointed {
+            continue;
+        }
+        pending.extend_from_slice(&chunk);
+        while let Some(index) = pending
+            .windows(2)
+            .position(|window| window == b"\n\n")
+        {
+            let frame = pending.drain(..index + 2).collect::<Vec<_>>();
+            let Some(conversation_id) = web_sse_conversation_id(&frame) else {
+                continue;
+            };
+            let ids = WebAssetIds {
+                conversation_id,
+                ..Default::default()
+            };
+            // SSE 还未结束时先保存会话，进程中断后可以直接查询原会话。
+            save_web_recovery(context, &ids, input_ids)?;
+            checkpointed = true;
+            break;
+        }
     }
     Ok((status, bytes))
 }
@@ -2265,13 +2418,7 @@ async fn web_poll_assets(
                 }
             };
             web_collect_assets(&payload, input_ids, ids);
-            if let Some((paths, task_id)) = &context.task {
-                image_store::checkpoint(paths, task_id, &json!({
-                    "conversationId": ids.conversation_id, "inputIds": input_ids,
-                    "fileIds": ids.file_ids, "sedimentIds": ids.sediment_ids,
-                    "deviceId": context.device_id, "sessionId": context.session_id
-                }))?;
-            }
+            save_web_recovery(context, ids, input_ids)?;
             let current = (ids.file_ids.clone(), ids.sediment_ids.clone());
             if (!current.0.is_empty() || !current.1.is_empty()) && previous == current {
                 return Ok(());
@@ -3071,6 +3218,13 @@ mod tests {
         assert_eq!(ids.conversation_id, "conversation-1");
         assert_eq!(ids.file_ids, vec!["output-file"]);
         assert_eq!(ids.sediment_ids, vec!["output_attachment"]);
+    }
+
+    #[test]
+    fn web_sse_conversation_id_can_be_saved_before_stream_end() {
+        let frame = b"data: {\"conversation_id\":\"conversation-1\"}\r\n\r\n";
+        assert_eq!(web_sse_conversation_id(frame).as_deref(), Some("conversation-1"));
+        assert_eq!(web_sse_conversation_id(b"data: [DONE]\r\n\r\n"), None);
     }
 
     #[test]

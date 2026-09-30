@@ -3022,28 +3022,31 @@ async function loadTasks() {
   const version = ++requestVersion
   refreshing.value = true
   try {
-    const result = await toolboxApi.listImageTasks({
-      page: page.value,
+    const batchMode = batchRunning.value
+    const query = {
+      page: batchMode ? 1 : page.value,
       status: status.value,
       conversationId: activeConversationId.value,
-      pageSize: batchRunning.value ? 100 : pageSize.value,
-      groupByRound: true
-    })
+      pageSize: batchMode ? 100 : pageSize.value,
+      groupByRound: !batchMode
+    }
+    let result = await toolboxApi.listImageTasks(query)
+    if (batchMode && result.total > result.items.length) {
+      // 批量面板显示会话内的每一条任务，不能只取后端单页的 100 条。
+      const pageCount = Math.ceil(result.total / query.pageSize)
+      const pages = await Promise.all(
+        Array.from({ length: pageCount - 1 }, (_, index) =>
+          toolboxApi.listImageTasks({ ...query, page: index + 2 })
+        )
+      )
+      result = {
+        ...result,
+        items: [result.items, ...pages.map((page) => page.items)].flat()
+      }
+    }
     if (version !== requestVersion || disposed) return
     tasks.value = result.items
     applyQuotaSnapshotFromTasks(result.items)
-    // 恢复后的批量任务全部成功时自动回到普通结果面板。
-    if (
-      batchRunning.value &&
-      !batchPaused.value &&
-      batchQueueTasks.value.length &&
-      batchQueueTasks.value.every((task) =>
-        ["completed", "partial"].includes(task.status)
-      )
-    ) {
-      batchRunning.value = false
-      batchQueueSelected.value = []
-    }
     await loadHistory()
     if (version !== requestVersion || disposed) return
     total.value = result.total
@@ -3051,7 +3054,10 @@ async function loadTasks() {
       selectableTasks.value.some((task) => task.id === id)
     )
     listError.value = ""
-    const lastPage = Math.max(1, Math.ceil(total.value / pageSize.value))
+    const lastPage = Math.max(
+      1,
+      Math.ceil(total.value / (batchMode ? query.pageSize : pageSize.value))
+    )
     if (page.value > lastPage) page.value = lastPage
   } catch (error) {
     if (version === requestVersion) listError.value = String(error)

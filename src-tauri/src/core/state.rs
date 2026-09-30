@@ -100,7 +100,7 @@ impl AppState {
             };
         }
         // 模型请求可能持续较久，快照后释放状态锁，让其他页面和设置保持可用。
-        if matches!(channel, "tools:image-models" | "tools:image-quota" | "tools:image-submit" | "tools:image-resume") {
+        if matches!(channel, "tools:image-models" | "tools:image-quota" | "tools:image-submit" | "tools:image-submit-batch" | "tools:image-resume") {
             let manager = self.manager.lock().await;
             let paths = manager.paths.clone();
             let cli_targets = manager.state["cliTargets"].clone();
@@ -108,6 +108,7 @@ impl AppState {
             let payload = payload.unwrap_or_else(|| json!({}));
             return match channel {
                 "tools:image-submit" => image_workbench::submit(&app, &paths, &cli_targets, payload).await,
+                "tools:image-submit-batch" => image_workbench::submit_batch(&app, &paths, &cli_targets, payload).await,
                 "tools:image-resume" => image_workbench::resume(&app, &paths, &cli_targets, payload).await,
                 "tools:image-quota" => image_workbench::quota(&paths, &cli_targets, payload).await,
                 _ => image_workbench::models(&paths, payload).await,
