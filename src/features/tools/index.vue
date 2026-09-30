@@ -142,9 +142,19 @@
             type="button"
             title="刷新工作台"
             aria-label="刷新工作台"
+            :disabled="
+              imageWorkbenchRef?.refreshing || imageWorkbenchRef?.loadingTasks
+            "
             @click="imageWorkbenchRef?.refreshAll?.()"
           >
-            <RefreshCw :size="16" />
+            <RefreshCw
+              :size="16"
+              :class="{
+                spinning:
+                  imageWorkbenchRef?.refreshing ||
+                  imageWorkbenchRef?.loadingTasks
+              }"
+            />
           </button>
         </div>
         <button

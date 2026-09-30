@@ -636,7 +636,8 @@ fn spawn_task(
             json!({
                 "taskId": task["id"],
                 "accountId": request.account_id,
-                "generationMode": request.generation_mode
+                "generationMode": request.generation_mode,
+                "imageCount": task["imageCount"].as_u64().unwrap_or(0)
             }),
         );
     });
@@ -824,14 +825,9 @@ async fn execute_web(
             "message": "Web 生图未返回可下载的完整图片"
         });
     }
-    // 额度只使用上游快照，不能按会话数或图片数推算真实扣减。
-    let quota_after = web_quota(client, auth, &context).await.ok();
     Ok(GenerationResult {
         images,
         usage: json!({
-            "web_quota_before": {"remaining": remaining, "resetAfter": reset_after},
-            "web_remaining": quota_after.as_ref().map(|quota| quota.0),
-            "web_reset_after": quota_after.as_ref().map(|quota| &quota.1),
             "web_conversations": conversation_ids,
             "web_sentinel_diagnostics": sentinel_diagnostics
         }),
@@ -3640,11 +3636,11 @@ mod tests {
     #[test]
     fn web_image_flow_keeps_outputs_after_transient_poll_and_partial_download_failure() {
         tauri::async_runtime::block_on(async {
-            let (address, handle) = mock_http_responder(15, move |index, raw, address| {
+            let (address, handle) = mock_http_responder(14, move |index, raw, address| {
                 let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
                 let json_response = |value: Value| (200, "application/json".into(), serde_json::to_vec(&value).unwrap());
                 match index {
-                    0 | 14 => {
+                    0 => {
                         assert_eq!(path, "/backend-api/conversation/init");
                         json_response(json!({"limits_progress":[{"feature_name":"image_gen", "remaining": if index == 0 { 3 } else { 1 }}]}))
                     }
@@ -3720,7 +3716,6 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("部分图片下载失败"));
-            assert_eq!(result.usage["web_remaining"], 1);
             assert_eq!(result.usage["web_conversations"], json!(["conversation-1"]));
             assert_eq!(
                 result.usage["web_sentinel_diagnostics"]
@@ -3729,7 +3724,7 @@ mod tests {
                     .len(),
                 1
             );
-            assert_eq!(handle.join().unwrap().len(), 15);
+            assert_eq!(handle.join().unwrap().len(), 14);
         });
     }
 

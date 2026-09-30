@@ -1,5 +1,10 @@
 <template>
   <section class="image-workbench">
+    <div
+      v-if="refreshing || loadingTasks"
+      class="workbench-top-loader"
+      title="正在加载任务..."
+    />
     <header class="conversation-toolbar">
       <div class="conversation-toolbar-left">
         <button
@@ -607,6 +612,14 @@
           flexBasis: `calc(${leftWidth}% - ${(18 * leftWidth) / 100}px)`
         }"
       >
+        <!-- 遮罩层 (Loading Overlay) -->
+        <Transition name="workbench-fade">
+          <div v-if="loadingTasks" class="workbench-loading-overlay">
+            <LoaderCircle :size="32" class="spinning" />
+            <span class="overlay-text">正在加载任务队列...</span>
+          </div>
+        </Transition>
+
         <!-- 任务队列顶部统计与状态胶囊 -->
         <header class="batch-queue-header">
           <div class="batch-queue-title-row">
@@ -1022,6 +1035,14 @@
         id="image-tasks-panel"
         class="tasks-panel"
       >
+        <!-- 遮罩层 (Loading Overlay) -->
+        <Transition name="workbench-fade">
+          <div v-if="loadingTasks" class="workbench-loading-overlay">
+            <LoaderCircle :size="32" class="spinning" />
+            <span class="overlay-text">正在读取任务...</span>
+          </div>
+        </Transition>
+
         <header class="tasks-head">
           <div class="tasks-head-left">
             <div class="tasks-head-icon-box">
@@ -1593,6 +1614,14 @@
         </footer>
       </section>
       <section v-else class="batch-results-panel">
+        <!-- 遮罩层 (Loading Overlay) -->
+        <Transition name="workbench-fade">
+          <div v-if="loadingTasks" class="workbench-loading-overlay">
+            <LoaderCircle :size="32" class="spinning" />
+            <span class="overlay-text">正在加载生成结果...</span>
+          </div>
+        </Transition>
+
         <header class="batch-results-header">
           <div class="batch-results-header-left">
             <h3 class="batch-results-title">生成结果</h3>
@@ -3259,6 +3288,7 @@ function selectConversation(id) {
   status.value = ""
   page.value = 1
   saveHistory()
+  loadingTasks.value = true
   loadTasks()
 }
 
@@ -3734,6 +3764,7 @@ const detail = ref(null)
 const detailView = ref("images")
 const detailLoading = ref(false)
 const loadingAccounts = ref(true)
+const loadingTasks = ref(true)
 const refreshing = ref(false)
 const submitting = ref(false)
 const uploading = ref(false)
@@ -3889,24 +3920,23 @@ async function loadQuota(forceRefresh = false) {
   }
 }
 
-function applyQuotaSnapshotFromTasks(items) {
-  if (form.generationMode !== "web" || !form.accountId) return
-  const task = (items || []).find(
-    (item) => typeof item.usage?.web_remaining === "number"
+function consumeQuotaFromImageEvent(event) {
+  const imageCount = Number(event?.imageCount || 0)
+  if (
+    form.generationMode !== "web" ||
+    !form.accountId ||
+    !Number.isFinite(imageCount) ||
+    imageCount <= 0 ||
+    (event?.accountId && event.accountId !== form.accountId) ||
+    (event?.generationMode && event.generationMode !== "web") ||
+    typeof webQuota.value?.remaining !== "number" ||
+    loadingQuota.value
   )
-  if (!task) return
-  const snapshotAt = Number(task.finishedAt || task.updatedAt || 0)
-  const currentAt = Number(webQuota.value?.updatedAt || 0)
-  if (currentAt && snapshotAt && snapshotAt < currentAt) return
-  // 任务结果中的上游额度快照优先于同一时刻仍在返回的旧查询。
-  quotaRequestVersion += 1
-  loadingQuota.value = false
+    return
   webQuota.value = {
-    ...(webQuota.value || {}),
-    accountId: form.accountId,
-    remaining: task.usage.web_remaining,
-    resetAfter: task.usage.web_reset_after || webQuota.value?.resetAfter || "",
-    updatedAt: snapshotAt || Date.now()
+    ...webQuota.value,
+    remaining: Math.max(0, webQuota.value.remaining - imageCount),
+    updatedAt: Date.now()
   }
 }
 
@@ -3948,7 +3978,9 @@ async function loadTasks() {
         Number.isInteger(task.batchConcurrency)
       )?.batchConcurrency
       const localCustom = activeConversationId.value
-        ? localStorage.getItem(`batch_concurrency_${activeConversationId.value}`)
+        ? localStorage.getItem(
+            `batch_concurrency_${activeConversationId.value}`
+          )
         : null
       if (localCustom) {
         batchConcurrency.value = Math.min(
@@ -3959,7 +3991,6 @@ async function loadTasks() {
         batchConcurrency.value = Math.min(10, Math.max(1, storedConcurrency))
       }
     }
-    applyQuotaSnapshotFromTasks(result.items)
     await loadHistory()
     if (version !== requestVersion || disposed) return
     total.value = result.total
@@ -3975,11 +4006,15 @@ async function loadTasks() {
   } catch (error) {
     if (version === requestVersion) listError.value = String(error)
   } finally {
-    if (version === requestVersion) refreshing.value = false
+    if (version === requestVersion) {
+      refreshing.value = false
+      loadingTasks.value = false
+    }
   }
 }
 
 async function refreshAll() {
+  loadingTasks.value = true
   const results = await Promise.allSettled([loadAccounts(), loadTasks()])
   if (results[0].status === "rejected")
     listError.value = `账号读取失败：${results[0].reason}`
@@ -4311,7 +4346,10 @@ async function deleteTasks() {
 }
 
 watch([() => form.accountId, () => form.generationMode], loadModels)
-watch([() => form.accountId, () => form.generationMode], loadQuota)
+watch(
+  [() => form.accountId, () => form.generationMode, () => form.model],
+  loadQuota
+)
 // 切换条数与筛选都返回第一页，沿用页码监听完成实际查询。
 watch([status, pageSize], () => {
   selected.value = []
@@ -4324,13 +4362,7 @@ watch(page, () => {
 })
 const unsubscribe = subscribe("images:changed", (event) => {
   if (autoRefresh.value || batchViewVisible.value) loadTasks()
-  // 任务结束后向上游重查额度，不根据生成数量在本地扣减。
-  if (
-    form.generationMode === "web" &&
-    (!event.accountId || event.accountId === form.accountId) &&
-    (!event.generationMode || event.generationMode === "web")
-  )
-    loadQuota()
+  consumeQuotaFromImageEvent(event)
 })
 const unsubscribeError = subscribe("images:storage-error", (event) => {
   listError.value = `任务结果保存失败：${event.message}`
@@ -4359,7 +4391,9 @@ onBeforeUnmount(() => {
 })
 
 defineExpose({
-  refreshAll
+  refreshAll,
+  refreshing,
+  loadingTasks
 })
 </script>
 
@@ -4376,6 +4410,71 @@ defineExpose({
   font-size: var(--font-size-base);
 
   position: relative;
+
+  .workbench-top-loader {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2.5px;
+    z-index: 50;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      var(--color-primary, #2563eb) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: top-loader-slide 1.5s ease-in-out infinite;
+  }
+
+  @keyframes top-loader-slide {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+
+  /* 面板遮罩层 (Panel Loading Overlay) */
+  .workbench-loading-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: color-mix(
+      in srgb,
+      var(--color-panel, #ffffff) 82%,
+      transparent
+    );
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    color: var(--color-primary, #2563eb);
+    border-radius: inherit;
+    pointer-events: all;
+    user-select: none;
+
+    .overlay-text {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--color-text-muted);
+    }
+  }
+
+  .workbench-fade-enter-active,
+  .workbench-fade-leave-active {
+    transition: opacity 0.2s ease;
+  }
+
+  .workbench-fade-enter-from,
+  .workbench-fade-leave-to {
+    opacity: 0;
+  }
 
   .conversation-toolbar {
     display: flex;
@@ -5603,6 +5702,7 @@ defineExpose({
     .queue-status-pill {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 5px;
       height: 22px;
       padding: 0 8px;
@@ -5779,7 +5879,9 @@ defineExpose({
           box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
           user-select: none;
           overflow: hidden;
-          transition: border-color 0.16s ease, box-shadow 0.16s ease;
+          transition:
+            border-color 0.16s ease,
+            box-shadow 0.16s ease;
 
           &:hover {
             border-color: var(--color-line-strong);
@@ -5852,7 +5954,13 @@ defineExpose({
               padding: 0 4px;
               font-size: 12px;
               font-weight: 700;
-              font-family: "Bahnschrift", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+              font-family:
+                "Bahnschrift",
+                -apple-system,
+                BlinkMacSystemFont,
+                "Segoe UI",
+                Roboto,
+                monospace;
               color: var(--color-text);
               text-align: center;
               line-height: 1;
@@ -6218,6 +6326,8 @@ defineExpose({
 
     .batch-empty-table {
       display: flex;
+      flex: 1;
+      min-height: 0;
       flex-direction: column;
       align-items: center;
       justify-content: center;
@@ -6244,6 +6354,7 @@ defineExpose({
       background: var(--color-panel-soft);
       border-top: 1px solid var(--color-line);
       flex-shrink: 0;
+      margin-top: auto;
 
       .footer-left {
         display: flex;
@@ -6687,6 +6798,8 @@ defineExpose({
 
     .batch-empty-results {
       display: flex;
+      flex: 1;
+      min-height: 100%;
       flex-direction: column;
       align-items: center;
       justify-content: center;
