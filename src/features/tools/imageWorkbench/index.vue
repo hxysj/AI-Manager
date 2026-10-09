@@ -1235,332 +1235,21 @@
           </div>
         </footer>
       </section>
-      <section v-else class="batch-results-panel">
-        <!-- 遮罩层 (Loading Overlay) -->
-        <Transition name="workbench-fade">
-          <div v-if="loadingTasks" class="workbench-loading-overlay">
-            <LoaderCircle :size="32" class="spinning" />
-            <span class="overlay-text">正在加载生成结果...</span>
-          </div>
-        </Transition>
-
-        <header class="batch-results-header">
-          <div class="batch-results-header-left">
-            <h3 class="batch-results-title">生成结果</h3>
-            <span class="batch-results-counter">
-              {{ filteredResultTasks.length }} 项
-            </span>
-          </div>
-
-          <div class="batch-results-toolbar">
-            <!-- 搜索框 -->
-            <div class="batch-search-box">
-              <Search :size="13" class="search-icon" />
-              <input
-                v-model="batchResultSearch"
-                type="text"
-                class="batch-search-input"
-                placeholder="搜索图片名称或提示词..."
-              />
-              <button
-                v-if="batchResultSearch"
-                type="button"
-                class="search-clear-btn"
-                @click="batchResultSearch = ''"
-              >
-                <X :size="12" />
-              </button>
-            </div>
-
-            <!-- 视图切换 (Grid / List) -->
-            <div class="batch-view-toggle">
-              <button
-                type="button"
-                class="view-toggle-btn"
-                :class="{ 'is-active': batchResultViewMode === 'grid' }"
-                title="网格视图"
-                @click="batchResultViewMode = 'grid'"
-              >
-                <Grid :size="14" />
-              </button>
-              <button
-                type="button"
-                class="view-toggle-btn"
-                :class="{ 'is-active': batchResultViewMode === 'list' }"
-                title="列表视图"
-                @click="batchResultViewMode = 'list'"
-              >
-                <List :size="14" />
-              </button>
-            </div>
-
-            <!-- 状态过滤下拉 -->
-            <div class="custom-select-wrapper is-mini status-filter-select">
-              <select
-                v-model="batchResultStatus"
-                class="custom-select mini-select"
-              >
-                <option value="completed">已完成</option>
-                <option value="">全部状态</option>
-                <option value="processing">进行中</option>
-                <option value="queued">排队中</option>
-                <option value="failed">失败</option>
-              </select>
-              <ChevronDown :size="12" class="custom-select-arrow" />
-            </div>
-          </div>
-        </header>
-
-        <!-- 结果主区域：网格视图或列表视图 -->
-        <div ref="batchResultScroll" class="batch-results-body">
-          <div
-            v-if="paginatedResultTasks.length && batchResultViewMode === 'grid'"
-            class="batch-card-grid"
-          >
-            <article
-              v-for="task in paginatedResultTasks"
-              :key="task.id"
-              class="batch-result-card"
-            >
-              <!-- 图片缩略图容器 -->
-              <div
-                class="result-card-media"
-                @click="task.imageCount ? showDetail(task, 'images') : null"
-              >
-                <el-image
-                  v-if="task.thumbnail && task.imageCount"
-                  :src="task.thumbnail"
-                  fit="cover"
-                  lazy
-                  class="result-card-img"
-                />
-                <div
-                  v-else-if="['queued', 'processing'].includes(task.status)"
-                  class="result-card-loading"
-                >
-                  <LoaderCircle :size="24" class="spinning" />
-                  <span>正在绘制...</span>
-                </div>
-                <div v-else class="result-card-empty">
-                  <ImageOff :size="24" />
-                  <span>无图片</span>
-                </div>
-
-                <!-- 浮动状态徽章 -->
-                <div
-                  class="result-card-badge"
-                  :class="`is-${batchStatusTone(task.status)}`"
-                >
-                  <span class="badge-dot" />
-                  <span>{{ statusLabels[task.status] || task.status }}</span>
-                </div>
-              </div>
-
-              <!-- 卡片信息 -->
-              <div class="result-card-content">
-                <h4
-                  class="result-card-title"
-                  :title="task.request.batchName || '未命名任务'"
-                >
-                  {{ task.request.batchName || "未命名任务" }}
-                </h4>
-                <p class="result-card-prompt" :title="task.request.prompt">
-                  {{ task.request.prompt }}
-                </p>
-
-                <!-- 底部快捷操作栏 -->
-                <div class="result-card-actions">
-                  <button
-                    class="card-act-btn"
-                    type="button"
-                    title="查看大图"
-                    :disabled="!task.imageCount"
-                    @click="showDetail(task, 'images')"
-                  >
-                    <ZoomIn :size="13" />
-                  </button>
-                  <button
-                    class="card-act-btn"
-                    type="button"
-                    title="下载图片"
-                    :disabled="!task.imageCount"
-                    @click="downloadTaskImage(task)"
-                  >
-                    <Download :size="13" />
-                  </button>
-                  <button
-                    class="card-act-btn"
-                    type="button"
-                    title="复制提示词"
-                    @click="copyPromptText(task.request.prompt)"
-                  >
-                    <Copy :size="13" />
-                  </button>
-                  <button
-                    class="card-act-btn"
-                    type="button"
-                    title="查看参数"
-                    @click="showDetail(task, 'parameters')"
-                  >
-                    <SlidersHorizontal :size="13" />
-                  </button>
-                </div>
-              </div>
-            </article>
-          </div>
-
-          <!-- 列表视图 -->
-          <div
-            v-else-if="
-              paginatedResultTasks.length && batchResultViewMode === 'list'
-            "
-            class="batch-results-list"
-          >
-            <article
-              v-for="task in paginatedResultTasks"
-              :key="task.id"
-              class="batch-result-item"
-              :class="task.status"
-            >
-              <div
-                class="batch-result-thumb"
-                @click="task.imageCount ? showDetail(task, 'images') : null"
-              >
-                <el-image
-                  v-if="task.thumbnail && task.imageCount"
-                  :src="task.thumbnail"
-                  fit="cover"
-                  lazy
-                />
-                <LoaderCircle
-                  v-else-if="['queued', 'processing'].includes(task.status)"
-                  :size="22"
-                  class="batch-result-spinner spinning"
-                />
-                <ImageOff v-else :size="20" />
-              </div>
-
-              <div class="batch-result-main">
-                <div class="batch-result-name-row">
-                  <span class="batch-result-name">{{
-                    task.request.batchName || "未命名任务"
-                  }}</span>
-                  <span
-                    class="queue-status-pill"
-                    :class="`is-${batchStatusTone(task.status)}`"
-                  >
-                    <span class="pill-dot" />
-                    <span>{{ statusLabels[task.status] || task.status }}</span>
-                  </span>
-                </div>
-                <span class="batch-result-prompt">{{
-                  task.request.prompt
-                }}</span>
-              </div>
-
-              <div class="batch-result-actions">
-                <button
-                  v-if="task.imageCount"
-                  class="row-action-btn"
-                  type="button"
-                  title="下载图片"
-                  @click="downloadTaskImage(task)"
-                >
-                  <Download :size="13" />
-                </button>
-                <button
-                  class="row-action-btn"
-                  type="button"
-                  title="复制提示词"
-                  @click="copyPromptText(task.request.prompt)"
-                >
-                  <Copy :size="13" />
-                </button>
-                <button
-                  class="row-action-btn"
-                  type="button"
-                  title="查看详情"
-                  @click="showDetail(task, 'parameters')"
-                >
-                  <MoreHorizontal :size="13" />
-                </button>
-              </div>
-            </article>
-          </div>
-
-          <!-- 空结果提示 -->
-          <div v-else class="batch-empty-results">
-            <ImageIcon :size="40" class="empty-icon" />
-            <h4>暂无生成结果</h4>
-            <p>
-              {{
-                batchResultSearch
-                  ? "未找到符合搜索条件的结果"
-                  : "等待批量图片任务生成完成"
-              }}
-            </p>
-          </div>
-        </div>
-
-        <!-- 结果底部翻页 -->
-        <footer class="batch-results-footer">
-          <div class="footer-left">
-            <div class="custom-select-wrapper is-mini">
-              <select
-                v-model.number="batchResultPageSize"
-                class="custom-select mini-select"
-              >
-                <option :value="12">每页 12 条</option>
-                <option :value="20">每页 20 条</option>
-                <option :value="30">每页 30 条</option>
-                <option :value="60">每页 60 条</option>
-              </select>
-              <ChevronDown :size="12" class="custom-select-arrow" />
-            </div>
-          </div>
-
-          <div class="footer-right">
-            <div class="batch-pagination">
-              <button
-                class="page-nav-btn"
-                type="button"
-                :disabled="batchResultPage <= 1"
-                title="上一页"
-                @click="batchResultPage--"
-              >
-                <ChevronLeft :size="13" />
-              </button>
-              <template
-                v-for="(p, idx) in getVisiblePages(
-                  batchResultPage,
-                  batchResultTotalPages
-                )"
-                :key="idx"
-              >
-                <span v-if="p === '...'" class="page-ellipsis">...</span>
-                <button
-                  v-else
-                  class="page-num-btn"
-                  :class="{ 'is-active': p === batchResultPage }"
-                  type="button"
-                  @click="batchResultPage = p"
-                >
-                  {{ p }}
-                </button>
-              </template>
-              <button
-                class="page-nav-btn"
-                type="button"
-                :disabled="batchResultPage >= batchResultTotalPages"
-                title="下一页"
-                @click="batchResultPage++"
-              >
-                <ChevronRight :size="13" />
-              </button>
-            </div>
-          </div>
-        </footer>
-      </section>
+      <BatchResultsPanel
+        v-else
+        :tasks="tasks"
+        :round-state="roundState"
+        :loading="loadingTasks"
+        :status-labels="statusLabels"
+        v-model:search="batchResultSearch"
+        v-model:status="batchResultStatus"
+        v-model:view-mode="batchResultViewMode"
+        v-model:page="batchResultPage"
+        v-model:page-size="batchResultPageSize"
+        @show-detail="showDetail"
+        @download-task="downloadTaskImage"
+        @copy-prompt="copyPromptText"
+      />
     </div>
 
     <ImageDrawingDialog
@@ -1626,7 +1315,6 @@
 import {
   computed,
   defineAsyncComponent,
-  nextTick,
   onBeforeUnmount,
   onMounted,
   reactive,
@@ -1647,32 +1335,24 @@ import {
   Copy,
   Database,
   Download,
-  Grid,
   Image as ImageIcon,
   ImageOff,
   ImagePlus,
   Info,
-  List,
   LoaderCircle,
   Maximize2,
   MessageSquare,
-  Minus,
-  MoreHorizontal,
   MoreVertical,
-  Pause,
   Paintbrush,
   Pencil,
-  Play,
   Plus,
   RefreshCw,
   RotateCcw,
-  Search,
   SlidersHorizontal,
   Sparkles,
   Square,
   Trash2,
-  X,
-  ZoomIn
+  X
 } from "lucide-vue-next"
 import {
   ElDropdown,
@@ -1685,6 +1365,7 @@ import "element-plus/es/components/dropdown/style/css"
 import "element-plus/es/components/image/style/css"
 import "element-plus/es/components/message-box/style/css"
 import BatchQueuePanel from "./components/BatchQueuePanel.vue"
+import BatchResultsPanel from "./components/BatchResultsPanel.vue"
 import ImageDrawingDialog from "./components/ImageDrawingDialog.vue"
 import ImageSettingsModal from "./components/ImageSettingsModal.vue"
 import TaskDetailModal from "./components/TaskDetailModal.vue"
@@ -1871,7 +1552,6 @@ function setBatchConcurrency(value) {
     } catch (_) {}
   }
 }
-const batchResultScroll = ref(null)
 const batchRunning = ref(false)
 const batchPaused = ref(false)
 const batchQueueSelected = ref([])
@@ -1899,7 +1579,6 @@ function isBatchConversationRecord(conversation) {
 const currentConversationIsBatch = computed(() =>
   isBatchConversationRecord(currentConversation.value)
 )
-const batchMode = computed(() => currentConversationIsBatch.value)
 const batchViewVisible = computed(
   () =>
     currentConversationIsBatch.value ||
@@ -1916,86 +1595,6 @@ const batchResultStatus = ref("completed")
 const batchResultViewMode = ref("grid")
 const batchResultPage = ref(1)
 const batchResultPageSize = ref(20)
-
-const filteredResultTasks = computed(() => {
-  // 重试任务会保留旧记录以便追踪，但结果列表只展示当前有效记录。
-  let list = tasks.value.filter(
-    (task) =>
-      !roundState.value[task.request.roundId || task.id]?.replaced?.includes(
-        task.id
-      )
-  )
-  if (batchResultStatus.value === "completed") {
-    list = list.filter(
-      (task) =>
-        ["completed", "partial"].includes(task.status) && task.imageCount > 0
-    )
-  } else if (batchResultStatus.value) {
-    list = list.filter((task) => task.status === batchResultStatus.value)
-  }
-  if (batchResultSearch.value.trim()) {
-    const q = batchResultSearch.value.trim().toLowerCase()
-    list = list.filter(
-      (task) =>
-        (task.request.batchName &&
-          task.request.batchName.toLowerCase().includes(q)) ||
-        (task.request.prompt && task.request.prompt.toLowerCase().includes(q))
-    )
-  }
-  return list
-})
-
-const batchResultTotalPages = computed(() =>
-  Math.max(
-    1,
-    Math.ceil(filteredResultTasks.value.length / batchResultPageSize.value)
-  )
-)
-
-const paginatedResultTasks = computed(() => {
-  const start = (batchResultPage.value - 1) * batchResultPageSize.value
-  return filteredResultTasks.value.slice(
-    start,
-    start + batchResultPageSize.value
-  )
-})
-
-watch([batchResultSearch, batchResultStatus], () => {
-  batchResultPage.value = 1
-  nextTick(() => batchResultScroll.value?.scrollTo({ top: 0 }))
-})
-watch([batchResultPage, batchResultPageSize], () => {
-  nextTick(() => batchResultScroll.value?.scrollTo({ top: 0 }))
-})
-
-function batchStatusTone(status) {
-  if (["completed", "partial"].includes(status)) return "completed"
-  if (status === "processing") return "processing"
-  if (status === "queued") return "queued"
-  if (["failed", "interrupted"].includes(status)) return "failed"
-  return "queued"
-}
-
-function getVisiblePages(current, total) {
-  if (total <= 7) {
-    return Array.from({ length: total }, (_, i) => i + 1)
-  }
-  const pages = []
-  pages.push(1)
-  if (current > 3) {
-    pages.push("...")
-  }
-  const start = Math.max(2, current - 1)
-  const end = Math.min(total - 1, current + 1)
-  for (let i = start; i <= end; i++) {
-    pages.push(i)
-  }
-  if (current < total - 2) {
-    pages.push("...")
-  }
-  pages.push(total)
-  return pages
-}
 
 async function downloadTaskImage(task) {
   if (!task.imageCount) return
@@ -2485,7 +2084,9 @@ async function resumeTask(task) {
   try {
     await toolboxApi.resumeImageTask({
       id: task.id,
-      ...(batchMode.value ? { concurrency: batchConcurrency.value } : {})
+      ...(currentConversationIsBatch.value
+        ? { concurrency: batchConcurrency.value }
+        : {})
     })
     await loadTasks()
   } catch (error) {
@@ -2886,7 +2487,7 @@ async function loadTasks() {
   const version = ++requestVersion
   refreshing.value = true
   try {
-    const isBatchMode = batchMode.value
+    const isBatchMode = currentConversationIsBatch.value
     const query = {
       page: isBatchMode ? 1 : page.value,
       status: isBatchMode ? "" : status.value,
@@ -4506,577 +4107,6 @@ defineExpose({
       }
     }
 
-    /* =========================================================================
-       批量生成双列工作台样式 (Asymmetric Batch Workbench Layout)
-       ========================================================================= */
-    .batch-results-panel {
-      position: relative;
-      display: flex;
-      min-width: 0;
-      min-height: 0;
-      flex-direction: column;
-      gap: 12px;
-      overflow: hidden;
-      padding: 16px;
-      border: 1px solid var(--color-line);
-      border-radius: 12px;
-      background: var(--color-panel);
-      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
-    }
-
-    /* -------------------------------------------------------------------------
-       右侧生成结果面板 (Batch Results Panel)
-       ------------------------------------------------------------------------- */
-    .batch-results-panel {
-      flex: 1 1 auto;
-    }
-
-    .batch-results-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      flex-wrap: wrap;
-      flex-shrink: 0;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--color-line);
-
-      .batch-results-header-left {
-        display: flex;
-        align-items: baseline;
-        gap: 8px;
-
-        .batch-results-title {
-          margin: 0;
-          font-size: 15px;
-          font-weight: 700;
-          color: var(--color-text);
-          letter-spacing: -0.01em;
-        }
-
-        .batch-results-counter {
-          font-size: 12.5px;
-          color: var(--color-text-muted);
-        }
-      }
-
-      .batch-results-toolbar {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-    }
-
-    /* 搜索框 */
-    .batch-search-box {
-      position: relative;
-      display: flex;
-      align-items: center;
-      width: 180px;
-      height: 28px;
-      border: 1px solid var(--color-line);
-      border-radius: 6px;
-      background: var(--color-panel);
-      padding: 0 6px 0 26px;
-      transition: border-color 0.16s ease;
-
-      &:focus-within {
-        border-color: #2563eb;
-        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
-      }
-
-      .search-icon {
-        position: absolute;
-        left: 8px;
-        color: var(--color-text-soft);
-        pointer-events: none;
-      }
-
-      .batch-search-input {
-        width: 100%;
-        border: 0;
-        outline: none;
-        background: transparent;
-        font-size: 12px;
-        color: var(--color-text);
-        padding: 0;
-
-        &::placeholder {
-          color: var(--color-text-soft);
-        }
-      }
-
-      .search-clear-btn {
-        display: grid;
-        width: 16px;
-        height: 16px;
-        place-items: center;
-        border: 0;
-        background: transparent;
-        color: var(--color-text-muted);
-        cursor: pointer;
-        padding: 0;
-        border-radius: 50%;
-
-        &:hover {
-          color: var(--color-text);
-          background: var(--color-panel-soft);
-        }
-      }
-    }
-
-    /* 视图切换 (Grid / List) */
-    .batch-view-toggle {
-      display: inline-flex;
-      align-items: center;
-      border: 1px solid var(--color-line);
-      border-radius: 6px;
-      background: var(--color-panel-soft);
-      padding: 1px;
-
-      .view-toggle-btn {
-        display: grid;
-        width: 26px;
-        height: 24px;
-        place-items: center;
-        border: 0;
-        border-radius: 4px;
-        background: transparent;
-        color: var(--color-text-muted);
-        cursor: pointer;
-        transition: all 0.14s ease;
-
-        &:hover {
-          color: var(--color-text);
-        }
-
-        &.is-active {
-          background: var(--color-panel);
-          color: #2563eb;
-          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
-        }
-      }
-    }
-
-    .batch-results-body {
-      flex: 1;
-      min-height: 0;
-      overflow-y: auto;
-      scrollbar-gutter: stable;
-    }
-
-    /* 3 列卡片网格 (3-Column Card Grid matching 3.png) */
-    .batch-card-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-      padding-bottom: 8px;
-
-      @media (max-width: 900px) {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-      }
-
-      @media (max-width: 600px) {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    .batch-result-card {
-      display: flex;
-      flex-direction: column;
-      border: 1px solid var(--color-line);
-      border-radius: 8px;
-      background: var(--color-panel);
-      overflow: hidden;
-      transition: all 0.16s ease;
-
-      &:hover {
-        border-color: var(--color-line-strong);
-        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
-      }
-
-      .result-card-media {
-        position: relative;
-        aspect-ratio: 16 / 10;
-        background: var(--color-panel-soft);
-        overflow: hidden;
-        cursor: pointer;
-
-        .result-card-img {
-          width: 100%;
-          height: 100%;
-          transition: transform 0.2s ease;
-
-          &:hover {
-            transform: scale(1.03);
-          }
-        }
-
-        .result-card-loading,
-        .result-card-empty {
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          height: 100%;
-          color: var(--color-text-soft);
-          gap: 6px;
-          font-size: 11px;
-        }
-
-        /* 浮动在图片右上角的状态徽章 */
-        .result-card-badge {
-          position: absolute;
-          top: 6px;
-          right: 6px;
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          height: 20px;
-          padding: 0 7px;
-          border-radius: 9999px;
-          font-size: 10.5px;
-          font-weight: 600;
-          backdrop-filter: blur(8px);
-          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
-
-          .badge-dot {
-            width: 5px;
-            height: 5px;
-            border-radius: 50%;
-          }
-
-          &.is-completed {
-            background: rgba(240, 253, 244, 0.9);
-            border: 1px solid rgba(220, 252, 231, 0.9);
-            color: #16a34a;
-            .badge-dot {
-              background: #22c55e;
-            }
-          }
-
-          &.is-processing {
-            background: rgba(239, 246, 255, 0.9);
-            border: 1px solid rgba(219, 234, 254, 0.9);
-            color: #2563eb;
-            .badge-dot {
-              background: #3b82f6;
-            }
-          }
-
-          &.is-queued {
-            background: rgba(254, 249, 195, 0.9);
-            border: 1px solid rgba(254, 240, 138, 0.9);
-            color: #854d0e;
-            .badge-dot {
-              background: #eab308;
-            }
-          }
-
-          &.is-failed {
-            background: rgba(254, 242, 242, 0.9);
-            border: 1px solid rgba(254, 226, 226, 0.9);
-            color: #dc2626;
-            .badge-dot {
-              background: #ef4444;
-            }
-          }
-        }
-      }
-
-      .result-card-content {
-        display: flex;
-        flex-direction: column;
-        padding: 10px;
-        gap: 4px;
-        flex: 1;
-
-        .result-card-title {
-          margin: 0;
-          font-size: 12.5px;
-          font-weight: 600;
-          color: var(--color-text);
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-
-        .result-card-prompt {
-          margin: 0;
-          font-size: 11px;
-          line-height: 1.4;
-          color: var(--color-text-muted);
-          display: -webkit-box;
-          -webkit-line-clamp: 2;
-          line-clamp: 2;
-          -webkit-box-orient: vertical;
-          overflow: hidden;
-          min-height: 30px;
-        }
-
-        .result-card-actions {
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          gap: 6px;
-          margin-top: auto;
-          padding-top: 8px;
-          border-top: 1px solid var(--color-line);
-
-          .card-act-btn {
-            display: grid;
-            width: 24px;
-            height: 24px;
-            place-items: center;
-            border: 1px solid var(--color-line);
-            border-radius: 5px;
-            background: var(--color-panel);
-            color: var(--color-text-muted);
-            cursor: pointer;
-            transition: all 0.14s ease;
-
-            &:hover:not(:disabled) {
-              border-color: #2563eb;
-              color: #2563eb;
-              background: var(--color-primary-soft);
-            }
-
-            &:disabled {
-              opacity: 0.4;
-              cursor: not-allowed;
-            }
-          }
-        }
-      }
-    }
-
-    /* 列表视图模式 */
-    .batch-results-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-
-      .batch-result-item {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 8px 12px;
-        border: 1px solid var(--color-line);
-        border-radius: 8px;
-        background: var(--color-panel);
-        transition: background-color 0.14s ease;
-
-        &:hover {
-          background: var(--color-panel-soft);
-        }
-
-        .batch-result-thumb {
-          display: grid;
-          width: 48px;
-          height: 48px;
-          flex: 0 0 48px;
-          place-items: center;
-          overflow: hidden;
-          border-radius: 6px;
-          background: var(--color-panel-soft);
-          border: 1px solid var(--color-line);
-          cursor: pointer;
-
-          :deep(.el-image) {
-            width: 100%;
-            height: 100%;
-          }
-        }
-
-        .batch-result-main {
-          display: flex;
-          flex-direction: column;
-          flex: 1;
-          min-width: 0;
-          gap: 3px;
-
-          .batch-result-name-row {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-
-            .batch-result-name {
-              font-size: 13px;
-              font-weight: 600;
-              color: var(--color-text);
-              overflow: hidden;
-              text-overflow: ellipsis;
-              white-space: nowrap;
-            }
-          }
-
-          .batch-result-prompt {
-            font-size: 11.5px;
-            color: var(--color-text-muted);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-          }
-        }
-
-        .batch-result-actions {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          flex-shrink: 0;
-        }
-      }
-    }
-
-    .batch-empty-results {
-      display: flex;
-      flex: 1;
-      min-height: 100%;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 60px 20px;
-      text-align: center;
-      color: var(--color-text-muted);
-
-      .empty-icon {
-        color: var(--color-text-soft);
-        margin-bottom: 12px;
-      }
-
-      h4 {
-        margin: 0 0 4px;
-        font-size: 14px;
-        color: var(--color-text);
-      }
-
-      p {
-        margin: 0;
-        font-size: 12px;
-        color: var(--color-text-muted);
-      }
-    }
-
-    /* 结果底部翻页 */
-    .batch-results-footer {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding-top: 10px;
-      border-top: 1px solid var(--color-line);
-      flex-shrink: 0;
-
-      .footer-left {
-        display: flex;
-        align-items: center;
-      }
-
-      .footer-right {
-        display: flex;
-        align-items: center;
-      }
-    }
-
-    /* 通用分页组件 (Batch Pagination) */
-    .batch-pagination {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-
-      .page-nav-btn {
-        display: grid;
-        width: 26px;
-        height: 26px;
-        place-items: center;
-        border: 1px solid var(--color-line);
-        border-radius: 5px;
-        background: var(--color-panel);
-        color: var(--color-text-muted);
-        cursor: pointer;
-        transition: all 0.14s ease;
-
-        &:hover:not(:disabled) {
-          border-color: var(--color-line-strong);
-          color: var(--color-text);
-          background: var(--color-panel-soft);
-        }
-
-        &:disabled {
-          opacity: 0.4;
-          cursor: not-allowed;
-        }
-      }
-
-      .page-num-btn {
-        display: grid;
-        min-width: 26px;
-        height: 26px;
-        padding: 0 6px;
-        place-items: center;
-        border: 1px solid var(--color-line);
-        border-radius: 5px;
-        background: var(--color-panel);
-        color: var(--color-text);
-        font-size: 11.5px;
-        font-family: "Bahnschrift", monospace;
-        cursor: pointer;
-        transition: all 0.14s ease;
-
-        &:hover {
-          border-color: #2563eb;
-          color: #2563eb;
-        }
-
-        &.is-active {
-          border-color: #2563eb;
-          background: #2563eb;
-          color: #ffffff;
-          font-weight: 700;
-        }
-      }
-
-      .page-ellipsis {
-        display: grid;
-        width: 20px;
-        height: 26px;
-        place-items: center;
-        color: var(--color-text-soft);
-        font-size: 12px;
-      }
-    }
-
-    /* 迷你下拉选择框 */
-    .custom-select-wrapper.is-mini {
-      position: relative;
-      display: inline-flex;
-      align-items: center;
-
-      .mini-select {
-        height: 26px;
-        padding: 0 22px 0 8px;
-        border: 1px solid var(--color-line);
-        border-radius: 5px;
-        background: var(--color-panel);
-        color: var(--color-text);
-        font-size: 11.5px;
-        outline: none;
-        cursor: pointer;
-        appearance: none;
-
-        &:focus {
-          border-color: #2563eb;
-        }
-      }
-
-      .custom-select-arrow {
-        position: absolute;
-        right: 6px;
-        color: var(--color-text-muted);
-        pointer-events: none;
-      }
-    }
-
     /* 右侧任务列表面板 */
     .tasks-panel {
       position: relative;
@@ -6086,49 +5116,6 @@ defineExpose({
 
           &:hover:not(:disabled) {
             background: #3b82f6;
-          }
-        }
-      }
-    }
-
-    /* 批量生成暗色模式适配 */
-    .batch-results-panel {
-      background: var(--color-panel);
-      border-color: var(--color-line);
-    }
-
-    .batch-result-card {
-      background: var(--color-panel);
-      border-color: var(--color-line);
-
-      &:hover {
-        border-color: var(--color-line-strong);
-        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3);
-      }
-
-      .result-card-media {
-        background: var(--color-panel-soft);
-
-        .result-card-badge {
-          &.is-completed {
-            background: rgba(20, 83, 45, 0.85);
-            border-color: rgba(34, 197, 94, 0.4);
-            color: #4ade80;
-          }
-          &.is-processing {
-            background: rgba(30, 58, 138, 0.85);
-            border-color: rgba(59, 130, 246, 0.4);
-            color: #60a5fa;
-          }
-          &.is-queued {
-            background: rgba(113, 63, 18, 0.85);
-            border-color: rgba(234, 179, 8, 0.4);
-            color: #facc15;
-          }
-          &.is-failed {
-            background: rgba(127, 29, 29, 0.85);
-            border-color: rgba(239, 68, 68, 0.4);
-            color: #f87171;
           }
         }
       }

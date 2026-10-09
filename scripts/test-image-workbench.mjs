@@ -76,6 +76,9 @@ try {
     sourcePath,
     resolve(
       "src/features/tools/imageWorkbench/components/ImageDrawingDialog.vue"
+    ),
+    resolve(
+      "src/features/tools/imageWorkbench/components/BatchResultsPanel.vue"
     )
   ]) {
     const { descriptor, errors } = parse(await readFile(path, "utf8"))
