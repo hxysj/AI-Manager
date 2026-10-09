@@ -34,6 +34,7 @@ pub struct ManagerState {
 pub struct AppState {
     manager: Mutex<ManagerState>,
     close_action: RwLock<String>,
+    git_tool_lock: Mutex<()>,
 }
 
 impl AppState {
@@ -43,6 +44,7 @@ impl AppState {
         Self {
             manager: Mutex::new(manager),
             close_action: RwLock::new(close_action),
+            git_tool_lock: Mutex::new(()),
         }
     }
 
@@ -52,6 +54,24 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        // Git 写操作串行执行；远程同步仅持有路径快照，不阻塞应用状态。
+        if channel.starts_with("git-tool:") {
+            let _git_guard = self.git_tool_lock.lock().await;
+            if matches!(channel, "git-tool:status" | "git-tool:worktree-diff" | "git-tool:revision-preview" | "git-tool:operation") {
+                let manager = self.manager.lock().await;
+                let paths = manager.paths.clone();
+                let repos = manager.state["repos"].clone();
+                drop(manager);
+                let payload = payload.unwrap_or_else(|| json!({}));
+                return match channel {
+                    "git-tool:status" => git_tool::get_status(&paths, &repos, payload).await,
+                    "git-tool:worktree-diff" => git_tool::get_worktree_diff(&paths, &repos, payload).await,
+                    "git-tool:revision-preview" => git_tool::preview_revision(&paths, &repos, payload).await,
+                    _ => git_tool::execute_operation(&paths, &repos, payload).await,
+                };
+            }
+            return self.manager.lock().await.dispatch(app, channel, payload).await;
+        }
         // 网络诊断不持有应用状态锁，避免慢端点阻塞其他页面。
         if let Some(action) = channel.strip_prefix("network-quality:") {
             return network_quality::dispatch(&app, action, payload.unwrap_or_else(|| json!({})))

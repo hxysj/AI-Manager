@@ -1,6 +1,13 @@
-import { request } from '../request'
+import { request } from '@/api/request'
 
 export const gitToolApi = {
+  // 工作区读取与写操作沿用统一 IPC，请求结果包含最新仓库状态。
+  getGitToolStatus: payload => request('git-tool:status', payload),
+  getGitToolWorktreeDiff: payload =>
+    request('git-tool:worktree-diff', payload),
+  previewGitToolRevision: payload =>
+    request('git-tool:revision-preview', payload),
+  executeGitToolOperation: payload => request('git-tool:operation', payload),
   scanGitToolBranches: payload => request('git-tool:branches', payload),
   listGitToolCommits: payload => request('git-tool:commits', payload),
   getGitToolCommitDetail: payload =>

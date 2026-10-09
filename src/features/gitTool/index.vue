@@ -13,7 +13,12 @@
             <select
               class="git-tool-select-native"
               :value="selectedRepoId"
-              :disabled="repos.length === 0"
+              :disabled="
+                repos.length === 0 ||
+                operationBusy ||
+                !!operationDialog ||
+                confirmDialog.visible
+              "
               @change="handleRepoChange"
             >
               <option value="" disabled>请选择项目</option>
@@ -44,34 +49,29 @@
 
           <div class="git-tool-tabs">
             <button
+              v-for="tab in [
+                { key: 'worktree', label: '工作区', icon: FileText },
+                { key: 'branch', label: '分支', icon: GitBranchIcon },
+                { key: 'stash', label: 'Stash', icon: Database }
+              ]"
+              :key="tab.key"
               :class="[
                 'git-tool-tab',
-                { 'git-tool-tab-active': gitWorkspace === 'branch' }
+                { 'git-tool-tab-active': gitWorkspace === tab.key }
               ]"
               type="button"
-              @click="selectGitWorkspace('branch')"
+              @click="selectGitWorkspace(tab.key)"
             >
-              <GitBranchIcon :size="14" />
-              <span>分支</span>
-            </button>
-            <button
-              :class="[
-                'git-tool-tab',
-                { 'git-tool-tab-active': gitWorkspace === 'stash' }
-              ]"
-              type="button"
-              @click="selectGitWorkspace('stash')"
-            >
-              <Database :size="14" />
-              <span>Stash</span>
+              <component :is="tab.icon" :size="14" />
+              <span>{{ tab.label }}</span>
             </button>
           </div>
 
           <button
             class="git-tool-action git-tool-action-primary"
             type="button"
-            :disabled="gitLoading || !selectedRepo"
-            @click="refreshGitProject"
+            :disabled="gitLoading || operationBusy || !selectedRepo"
+            @click="refreshGitProject()"
           >
             <RefreshCw :size="14" />
             <span>刷新</span>
@@ -85,8 +85,139 @@
             <span>添加项目</span>
           </button>
         </div>
+        <div v-if="gitStatus" class="git-tool-operation-bar">
+          <div class="git-tool-operation-status">
+            <GitBranchIcon :size="13" />
+            <span class="git-tool-operation-branch">{{
+              gitStatus.branch ||
+              `分离 HEAD · ${gitStatus.headHash.slice(0, 8)}`
+            }}</span>
+            <span class="git-tool-operation-upstream">{{
+              gitStatus.upstream || '未设置上游'
+            }}</span>
+            <span v-if="gitStatus.upstream" class="git-tool-operation-count"
+              >↑ {{ gitStatus.ahead }} · ↓ {{ gitStatus.behind }}</span
+            >
+            <button
+              class="git-tool-operation-dirty"
+              type="button"
+              @click="selectGitWorkspace('worktree')"
+            >
+              {{
+                gitStatus.files.length
+                  ? `${gitStatus.files.length} 个未提交文件`
+                  : '工作区干净'
+              }}
+            </button>
+          </div>
+          <div class="git-tool-operation-actions">
+            <button
+              v-for="action in [
+                'create-branch',
+                'switch-branch',
+                'merge',
+                'stash-save',
+                'fetch',
+                'pull',
+                'push'
+              ]"
+              :key="action"
+              class="git-tool-operation-button"
+              type="button"
+              :disabled="
+                operationBusy ||
+                gitLoading ||
+                !!gitStatus.operation ||
+                conflictCount > 0 ||
+                (['fetch', 'pull', 'push'].includes(action) &&
+                  !gitStatus.remotes.length)
+              "
+              @click="openGitOperation(action)"
+            >
+              {{ gitOperationDefinitions[action].label }}
+            </button>
+          </div>
+        </div>
       </div>
     </section>
+
+    <div
+      v-if="gitStatus?.operation || conflictCount"
+      class="git-tool-operation-banner"
+    >
+      <div class="git-tool-operation-banner-info">
+        <span class="git-tool-operation-banner-title">{{
+          gitStatus.operation
+            ? `${gitStatus.operation} 操作尚未完成`
+            : '工作区存在冲突'
+        }}</span>
+        <span class="git-tool-operation-banner-description">{{
+          conflictCount
+            ? `${conflictCount} 个冲突文件：打开编辑器解决后暂存，或选择保留的一侧版本。`
+            : '冲突已暂存，可以继续完成操作。'
+        }}</span>
+      </div>
+      <div class="git-tool-operation-banner-actions">
+        <button
+          class="git-tool-operation-banner-button"
+          type="button"
+          @click="selectGitWorkspace('worktree')"
+        >
+          查看工作区
+        </button>
+        <button
+          v-if="gitStatus.operation"
+          class="git-tool-operation-banner-button"
+          type="button"
+          :disabled="operationBusy || conflictCount > 0"
+          @click="executeGitOperation({ action: 'continue' })"
+        >
+          继续
+        </button>
+        <button
+          v-if="
+            ['cherry-pick', 'revert', 'rebase'].includes(gitStatus.operation)
+          "
+          class="git-tool-operation-banner-button"
+          type="button"
+          :disabled="operationBusy"
+          @click="executeGitOperation({ action: 'skip' })"
+        >
+          跳过当前提交
+        </button>
+        <button
+          v-if="gitStatus.operation"
+          class="git-tool-operation-banner-button"
+          type="button"
+          :disabled="operationBusy"
+          @click="executeGitOperation({ action: 'abort' })"
+        >
+          中止
+        </button>
+      </div>
+    </div>
+    <div
+      v-if="operationOutput.text"
+      :class="[
+        'git-tool-operation-output',
+        { 'git-tool-operation-output-error': !operationOutput.success }
+      ]"
+    >
+      <span class="git-tool-operation-output-label">{{
+        operationOutput.label
+      }}</span>
+      <pre class="git-tool-operation-output-text">{{
+        operationOutput.text
+      }}</pre>
+      <button
+        class="git-tool-operation-output-close"
+        type="button"
+        aria-label="关闭操作输出"
+        @click="operationOutput.text = ''"
+      >
+        <X :size="14" />
+      </button>
+    </div>
 
     <section v-if="!repos.length" class="git-tool-empty">
       <span data-emphasis class="git-tool-empty-title">当前没有项目</span>
@@ -99,7 +230,7 @@
       </button>
     </section>
 
-    <section v-else-if="gitLoading" class="git-tool-loading">
+    <section v-else-if="gitLoading && !gitStatus" class="git-tool-loading">
       <RefreshCw class="git-tool-loading-icon" :size="22" />
       <span data-emphasis class="git-tool-loading-title"
         >正在加载 Git 数据</span
@@ -109,6 +240,28 @@
       }}</span>
     </section>
 
+    <GitWorkspacePanel
+      v-else-if="gitWorkspace === 'worktree' && gitStatus"
+      :repo-id="selectedRepoId"
+      :status="gitStatus"
+      :busy="operationBusy || gitLoading || !!operationDialog || confirmDialog.visible"
+      :execute="executeGitOperation"
+    >
+      <template #default="{ detail, title, select }">
+        <GitChangeDetail
+          :detail="detail"
+          :title="title"
+          :hide-tree="true"
+          @select-file="select"
+        />
+      </template>
+    </GitWorkspacePanel>
+    <section
+      v-else-if="gitWorkspace === 'worktree'"
+      class="git-tool-list-empty"
+    >
+      {{ gitStatusError || '正在读取工作区…' }}
+    </section>
     <section v-else-if="gitWorkspace === 'branch'" class="git-tool-workbench">
       <aside class="git-tool-branch-panel">
         <div class="git-tool-branch-head">
@@ -210,6 +363,7 @@
                 <button
                   class="git-tool-branch-main"
                   type="button"
+                  :disabled="operationBusy"
                   @click="selectBranch(branch.name)"
                 >
                   <GitBranchIcon :size="14" class="git-tool-branch-icon" />
@@ -305,7 +459,7 @@
                 }
               ]"
               type="button"
-              :disabled="commit.isGraphOnly"
+              :disabled="commit.isGraphOnly || operationBusy"
               @click="selectCommit(commit)"
               @contextmenu.prevent="openCommitContextMenu($event, commit)"
             >
@@ -512,6 +666,25 @@
                 <ArchiveRestore :size="13" />
                 归档
               </button>
+              <div class="git-tool-stash-operation-actions">
+                <button
+                  v-for="action in ['stash-apply', 'stash-pop']"
+                  :key="action"
+                  class="git-tool-stash-operation-button"
+                  type="button"
+                  :disabled="
+                    operationBusy || !!gitStatus?.operation || conflictCount > 0
+                  "
+                  @click="
+                    openGitOperation(action, {
+                      stashHash: stash.hash,
+                      subject: stash.subject
+                    })
+                  "
+                >
+                  {{ action === 'stash-apply' ? '应用' : '弹出' }}
+                </button>
+              </div>
             </article>
             <div v-if="!stashes.length" class="git-tool-list-empty">
               暂无 stash
@@ -823,6 +996,18 @@
         <Hash :size="14" />
         复制完整 Hash
       </button>
+      <button
+        v-for="action in ['revert', 'reset', 'cherry-pick']"
+        :key="action"
+        class="git-tool-context-menu-button"
+        type="button"
+        :disabled="operationBusy || !!gitStatus?.operation || conflictCount > 0"
+        @click="
+          openGitOperation(action, { revision: commitContextMenu.commit?.hash })
+        "
+      >
+        {{ gitOperationDefinitions[action].label }}
+      </button>
     </div>
 
     <div
@@ -842,7 +1027,35 @@
         <Copy :size="14" />
         复制分支名
       </button>
+      <button
+        v-for="action in ['switch-branch', 'rename-branch', 'merge']"
+        :key="action"
+        class="git-tool-context-menu-button"
+        type="button"
+        :disabled="operationBusy || !!gitStatus?.operation || conflictCount > 0"
+        @click="
+          openGitOperation(action, {
+            branchName: branchContextMenu.branch?.name,
+            revision: branchContextMenu.branch?.name
+          })
+        "
+      >
+        {{ gitOperationDefinitions[action].label }}
+      </button>
     </div>
+
+    <GitOperationModal
+      v-if="operationDialog"
+      :key="operationDialog.action"
+      :action="operationDialog.action"
+      :initial="operationDialog.initial"
+      :repo-id="selectedRepoId"
+      :status="operationDialog.status"
+      :branches="branches"
+      :busy="operationBusy"
+      :execute="executeGitOperation"
+      @close="operationDialog = null"
+    />
 
     <!-- 操作确认弹窗组件 -->
     <GitConfirmModal
@@ -868,6 +1081,7 @@ import {
   h,
   nextTick,
   onBeforeUnmount,
+  onMounted,
   ref,
   watch
 } from "vue"
@@ -891,8 +1105,11 @@ import {
   Trash2,
   X
 } from "lucide-vue-next"
-import GitCommitDetailModal from "./components/GitCommitDetailModal.vue"
-import GitConfirmModal from "./components/GitConfirmModal.vue"
+import GitCommitDetailModal from '@/features/gitTool/components/GitCommitDetailModal.vue'
+import GitConfirmModal from '@/features/gitTool/components/GitConfirmModal.vue'
+import GitWorkspacePanel from '@/features/gitTool/components/GitWorkspacePanel.vue'
+import GitOperationModal from '@/features/gitTool/components/GitOperationModal.vue'
+import { gitOperationDefinitions } from '@/features/gitTool/constant'
 import { gitToolApi } from "@/api"
 import { createMessage } from "@/utils/message"
 
@@ -914,6 +1131,11 @@ const GitChangeDetail = defineComponent({
     title: {
       type: String,
       default: ""
+    },
+    // 工作区已有文件分组，仅复用差异区域，隐藏重复的提交元信息。
+    hideTree: {
+      type: Boolean,
+      default: false
     }
   },
   emits: ["select-file"],
@@ -958,7 +1180,11 @@ const GitChangeDetail = defineComponent({
           ? [
               h("header", { class: "git-change-view-head" }, [
                 h("div", { class: "git-change-view-summary" }, [
-                  h("span", { class: "git-tool-label" }, "提交详情"),
+                  h(
+                    'span',
+                    { class: 'git-tool-label' },
+                    detailProps.hideTree ? '文件差异' : '提交详情'
+                  ),
                   h(
                     "span",
                     {
@@ -968,58 +1194,62 @@ const GitChangeDetail = defineComponent({
                     },
                     detailProps.title || detailProps.detail.subject
                   ),
-                  h("div", { class: "git-change-view-meta-row" }, [
-                    h("span", {}, [
-                      h("small", {}, "完整 hash"),
-                      h("code", {}, detailProps.detail.hash || "-")
-                    ]),
-                    h("span", {}, [
-                      h("small", {}, "作者"),
-                      h(
-                        "span",
-                        { "data-emphasis": true },
-                        detailProps.detail.author || "-"
-                      )
-                    ]),
-                    h("span", {}, [
-                      h("small", {}, "提交时间"),
-                      h(
-                        "span",
-                        { "data-emphasis": true },
-                        formatDate(detailProps.detail.date)
-                      )
-                    ])
-                  ])
+                  detailProps.hideTree
+                    ? null
+                    : h('div', { class: 'git-change-view-meta-row' }, [
+                        h('span', {}, [
+                          h('small', {}, '完整 hash'),
+                          h('code', {}, detailProps.detail.hash || '-')
+                        ]),
+                        h('span', {}, [
+                          h('small', {}, '作者'),
+                          h(
+                            'span',
+                            { 'data-emphasis': true },
+                            detailProps.detail.author || '-'
+                          )
+                        ]),
+                        h('span', {}, [
+                          h('small', {}, '提交时间'),
+                          h(
+                            'span',
+                            { 'data-emphasis': true },
+                            formatDate(detailProps.detail.date)
+                          )
+                        ])
+                      ])
                 ])
               ]),
               h("div", { class: "git-change-view-body" }, [
-                h("aside", { class: "git-change-view-tree" }, [
-                  h("div", { class: "git-change-view-tree-head" }, [
-                    h("span", {}, "变更文件"),
-                    h(
-                      "span",
-                      { "data-emphasis": true },
-                      `${detailProps.detail.files.length} 个文件`
-                    )
-                  ]),
-                  h(
-                    "div",
-                    { class: "git-change-view-tree-body" },
-                    fileTree.value.children.length
-                      ? renderFileTreeNodes(
-                          fileTree.value.children,
-                          selectedPath.value,
-                          emit,
-                          closedDirectoryPaths.value,
-                          toggleDirectoryClosed
+                detailProps.hideTree
+                  ? null
+                  : h('aside', { class: 'git-change-view-tree' }, [
+                      h('div', { class: 'git-change-view-tree-head' }, [
+                        h('span', {}, '变更文件'),
+                        h(
+                          'span',
+                          { 'data-emphasis': true },
+                          `${detailProps.detail.files.length} 个文件`
                         )
-                      : h(
-                          "div",
-                          { class: "git-tool-list-empty" },
-                          "暂无变更文件"
-                        )
-                  )
-                ]),
+                      ]),
+                      h(
+                        'div',
+                        { class: 'git-change-view-tree-body' },
+                        fileTree.value.children.length
+                          ? renderFileTreeNodes(
+                              fileTree.value.children,
+                              selectedPath.value,
+                              emit,
+                              closedDirectoryPaths.value,
+                              toggleDirectoryClosed
+                            )
+                          : h(
+                              'div',
+                              { class: 'git-tool-list-empty' },
+                              '暂无变更文件'
+                            )
+                      )
+                    ]),
                 h("section", { class: "git-change-view-diff-panel" }, [
                   h("header", { class: "git-change-view-file-head" }, [
                     h(
@@ -1221,6 +1451,15 @@ function renderFileTreeNodes(
 
 const selectedRepoId = ref("")
 const gitWorkspace = ref("branch")
+// 工作区状态与执行状态独立于历史浏览；写操作完成后统一刷新。
+const gitStatus = ref(null)
+const gitStatusError = ref('')
+const operationBusy = ref(false)
+const operationDialog = ref(null)
+const operationOutput = ref({ text: '', success: true, label: '' })
+const conflictCount = computed(
+  () => gitStatus.value?.files.filter(file => file.conflicted).length || 0
+)
 const gitLoading = ref(false)
 const commitsLoading = ref(false)
 const commitsLoadingMore = ref(false)
@@ -1302,6 +1541,7 @@ const selectedRepo = computed(() => {
 })
 
 const gitToolStatus = computed(() => [
+  { label: '未提交', value: gitStatus.value?.files.length || 0 },
   {
     label: "当前分支",
     value: currentBranch.value || "-"
@@ -1720,6 +1960,9 @@ watch(
     }
 
     if (selectedRepoId.value && selectedRepoId.value !== previousRepoId) {
+      gitStatus.value = null
+      operationOutput.value = { text: '', success: true, label: '' }
+      stashLoaded = false
       await nextTick()
       scheduleRefreshGitProject()
     }
@@ -1729,6 +1972,9 @@ watch(
 
 function handleRepoChange(event) {
   selectedRepoId.value = event.target.value
+  gitStatus.value = null
+  operationOutput.value = { text: '', success: true, label: '' }
+  closeDetailDrawer()
   stashLoaded = false
   scheduleRefreshGitProject()
 }
@@ -1739,6 +1985,8 @@ function selectGitWorkspace(workspace) {
   if (workspace === "stash" && !stashLoaded) {
     loadStashes()
   }
+  if (workspace === 'branch' && selectedBranch.value && !commits.value.length)
+    loadCommits()
 }
 
 function scheduleRefreshGitProject() {
@@ -1750,23 +1998,46 @@ function scheduleRefreshGitProject() {
 
 onBeforeUnmount(() => {
   window.clearTimeout(refreshTimer)
+  window.removeEventListener('keydown', handleGitKeydown)
+  closeConfirmDialog(false)
 })
 
-async function refreshGitProject() {
+onMounted(() => {
+  window.addEventListener('keydown', handleGitKeydown)
+})
+
+function handleGitKeydown(event) {
+  if (event.key !== 'Escape' || operationBusy.value) return
+  if (confirmDialog.value.visible) cancelConfirmDialog()
+  else if (operationDialog.value) operationDialog.value = null
+  else {
+    closeContextMenus()
+    closeDetailDrawer()
+  }
+}
+
+async function refreshGitProject(options = {}) {
   if (!selectedRepoId.value) {
     return
   }
 
-  gitLoading.value = true
+  const repoId = selectedRepoId.value
+  if (!options.silent) gitLoading.value = true
+  gitStatusError.value = ''
 
   try {
+    const status =
+      options.status || (await gitToolApi.getGitToolStatus({ repoId }))
+    if (repoId !== selectedRepoId.value) return
+    gitStatus.value = status
     const result = await gitToolApi.scanGitToolBranches({
-      repoId: selectedRepoId.value
+      repoId
     })
+    if (repoId !== selectedRepoId.value) return
 
     project.value = result.project || null
     branches.value = result.branches || []
-    currentBranch.value = result.currentBranch || ""
+    currentBranch.value = status.branch || result.currentBranch || ''
     archives.value = result.archives || []
     stashes.value = result.stashes || []
     stashArchives.value = result.stashArchives || []
@@ -1797,9 +2068,145 @@ async function refreshGitProject() {
       loadStashes()
     }
   } catch (error) {
+    if (repoId === selectedRepoId.value)
+      gitStatusError.value = String(error?.message || error)
     showErrorMessage(error)
   } finally {
-    gitLoading.value = false
+    if (!options.silent && repoId === selectedRepoId.value)
+      gitLoading.value = false
+  }
+}
+
+// 操作弹窗记录打开时的仓库快照，执行时由后端再次验证。
+async function openGitOperation(action, initial = {}) {
+  if (operationBusy.value || gitLoading.value || confirmDialog.value.visible || operationDialog.value || !selectedRepoId.value) return
+  closeContextMenus()
+  operationBusy.value = true
+  const repoId = selectedRepoId.value
+  try {
+    const status = await gitToolApi.getGitToolStatus({
+      repoId
+    })
+    if (repoId !== selectedRepoId.value) return
+    gitStatus.value = status
+    operationDialog.value = { action, initial, status }
+  } catch (error) {
+    showErrorMessage(error)
+  } finally {
+    operationBusy.value = false
+  }
+}
+
+async function executeGitOperation(payload) {
+  if (operationBusy.value || gitLoading.value || confirmDialog.value.visible || !selectedRepoId.value || !gitStatus.value)
+    return null
+  const repoId = selectedRepoId.value
+  const status = gitStatus.value
+  const label =
+    gitOperationDefinitions[payload.action]?.label ||
+    {
+      stage: '暂存文件',
+      unstage: '取消暂存',
+      discard: '丢弃改动',
+      'delete-untracked': '删除未跟踪文件',
+      commit: '提交',
+      'resolve-ours': '采用当前一侧版本',
+      'resolve-theirs': '采用传入一侧版本',
+      'resolve-delete': '按删除解决冲突',
+      continue: '继续操作',
+      abort: '中止操作',
+      skip: '跳过当前提交'
+    }[payload.action]
+  const request = {
+    repoId,
+    expectedHead: status.headHash,
+    expectedBranch: status.branch,
+    ...payload
+  }
+  const replacingFiles = [
+    'discard',
+    'delete-untracked',
+    'resolve-ours',
+    'resolve-theirs',
+    'resolve-delete'
+  ].includes(payload.action)
+  const resolvingConflicts =
+    payload.action === 'stage' &&
+    payload.filePaths?.some(path =>
+      status.files.some(file => file.path === path && file.conflicted)
+    )
+  if (
+    replacingFiles ||
+    resolvingConflicts ||
+    ['abort', 'skip'].includes(payload.action)
+  ) {
+    const confirmed = await confirmGitAction({
+      title: label,
+      description: replacingFiles
+        ? '所选文件内容将被替换或删除，当前未保存内容不可撤销。'
+        : resolvingConflicts
+          ? '请确认已解决所选文件的冲突，暂存后 Git 会将它们标记为已解决。'
+          : '将结束或跳过当前步骤，正在处理的冲突修改可能被丢弃。',
+      message: `确认在「${status.branch || '分离 HEAD'}」执行${label}吗？`,
+      detail:
+        payload.filePaths?.join('、') ||
+        `${status.operation} · ${status.headHash.slice(0, 8)}`,
+      confirmText: `确认${label}`
+    })
+    if (!confirmed) return null
+  }
+  if (operationBusy.value || repoId !== selectedRepoId.value) return null
+  operationBusy.value = true
+  try {
+    const result = await gitToolApi.executeGitToolOperation(request)
+    if (repoId !== selectedRepoId.value) return result
+    gitStatus.value = result.status
+    operationOutput.value = {
+      text: result.output || `${label}${result.success ? '已完成' : '失败'}`,
+      success: result.success,
+      label
+    }
+    if (
+      result.status.operation ||
+      result.status.files.some(file => file.conflicted)
+    ) {
+      gitWorkspace.value = 'worktree'
+      operationDialog.value = null
+      closeDetailDrawer()
+    }
+    if (
+      ['switch-branch', 'rename-branch', 'reset'].includes(payload.action) ||
+      (payload.action === 'create-branch' && payload.switchAfterCreate)
+    ) {
+      selectedBranch.value = result.status.branch
+      selectedCommit.value = null
+      selectedCommitDetail.value = null
+      closeDetailDrawer()
+    }
+    await refreshGitProject({ silent: true, status: result.status })
+    if (result.success) createMessage.success(`${label}已完成`)
+    else
+      createMessage.error(
+        result.status.operation ||
+          result.status.files.some(file => file.conflicted)
+          ? '操作遇到冲突，请在工作区处理'
+          : `${label}失败，请查看操作输出`
+      )
+    return result
+  } catch (error) {
+    operationOutput.value = {
+      text: String(error?.message || error),
+      success: false,
+      label
+    }
+    showErrorMessage(error)
+    await refreshGitProject({ silent: true })
+    if (operationDialog.value && (gitStatus.value?.headHash !== request.expectedHead || gitStatus.value?.branch !== request.expectedBranch)) {
+      operationDialog.value = null
+    }
+    return null
+  } finally {
+    operationBusy.value = false
   }
 }
 
@@ -5976,6 +6383,204 @@ function showErrorMessage(error) {
     border-radius: 8px;
     color: var(--color-text-muted);
     font-size: var(--font-size-base);
+  }
+}
+.git-tool {
+  .git-tool-top {
+    .git-tool-top-card {
+      .git-tool-operation-bar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding-top: 12px;
+        margin-top: 12px;
+        border-top: 1px solid var(--color-line);
+
+        .git-tool-operation-status {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+          color: var(--color-primary);
+
+          .git-tool-operation-branch {
+            font-size: 12px;
+            white-space: nowrap;
+          }
+          .git-tool-operation-upstream {
+            font-size: 11px;
+            color: var(--color-text-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .git-tool-operation-count {
+            font-size: 11px;
+            color: var(--color-text-muted);
+            white-space: nowrap;
+          }
+          .git-tool-operation-dirty {
+            padding: 3px 7px;
+            border: 1px solid var(--color-line);
+            border-radius: 4px;
+            background: var(--color-panel-soft);
+            color: var(--color-text-muted);
+            font-size: 11px;
+            white-space: nowrap;
+            cursor: pointer;
+          }
+        }
+        .git-tool-operation-actions {
+          display: flex;
+          flex-wrap: wrap;
+          max-width: 100%;
+          flex: none;
+          align-items: center;
+          gap: 5px;
+
+          .git-tool-operation-button {
+            padding: 6px 9px;
+            border: 1px solid var(--color-line);
+            border-radius: 5px;
+            background: var(--color-panel);
+            color: var(--color-text);
+            font-size: 12px;
+            cursor: pointer;
+            &:hover:not(:disabled) {
+              border-color: var(--color-primary);
+              color: var(--color-primary);
+            }
+            &:disabled {
+              opacity: 0.45;
+              cursor: default;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  .git-tool-operation-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--color-warning-line);
+    border-radius: 8px;
+    background: var(--color-warning-soft);
+    flex: none;
+
+    .git-tool-operation-banner-info {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+
+      .git-tool-operation-banner-title {
+        font-size: 13px;
+        color: var(--color-warning);
+      }
+      .git-tool-operation-banner-description {
+        font-size: 12px;
+        color: var(--color-text-muted);
+      }
+    }
+    .git-tool-operation-banner-actions {
+      display: flex;
+      gap: 6px;
+      flex: none;
+
+      .git-tool-operation-banner-button {
+        padding: 6px 9px;
+        border: 1px solid var(--color-warning-line);
+        border-radius: 5px;
+        background: var(--color-panel);
+        color: var(--color-warning);
+        cursor: pointer;
+        font-size: 12px;
+        &:disabled {
+          opacity: 0.45;
+          cursor: default;
+        }
+      }
+    }
+  }
+
+  .git-tool-operation-output {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background: var(--color-panel-soft);
+    flex: none;
+
+    &.git-tool-operation-output-error {
+      border-color: var(--color-danger-line);
+    }
+    .git-tool-operation-output-label {
+      flex: none;
+      font-size: 12px;
+      color: var(--color-primary);
+    }
+    .git-tool-operation-output-text {
+      flex: 1;
+      min-width: 0;
+      max-height: 100px;
+      margin: 0;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-size: 12px;
+      color: var(--color-text-muted);
+    }
+    .git-tool-operation-output-close {
+      display: inline-flex;
+      border: 0;
+      background: transparent;
+      color: var(--color-text-muted);
+      cursor: pointer;
+    }
+  }
+
+  .git-tool-stash-workbench {
+    .git-tool-stash-panel {
+      .git-tool-stash-list {
+        .git-tool-stash-card {
+          .git-tool-stash-operation-actions {
+            display: flex;
+            flex: none;
+            gap: 4px;
+
+            .git-tool-stash-operation-button {
+              padding: 5px 8px;
+              border: 1px solid var(--color-line);
+              border-radius: 4px;
+              background: var(--color-panel);
+              color: var(--color-primary);
+              cursor: pointer;
+              font-size: 12px;
+              &:disabled {
+                opacity: 0.45;
+                cursor: default;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  .git-operation-modal {
+    :deep(.base-modal__panel) {
+      width: 650px;
+    }
+    :deep(.base-modal__content) {
+      overflow: auto;
+    }
   }
 }
 </style>

@@ -6,6 +6,9 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::process::Command;
 
+mod operations;
+pub use operations::{execute_operation, get_status, get_worktree_diff, preview_revision};
+
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -1707,12 +1710,8 @@ async fn run_git(args: &[&str], cwd: &str) -> Result<String, ManagerError> {
 }
 
 async fn run_git_raw(args: &[&str], cwd: &str) -> Result<String, ManagerError> {
-    let mut command = Command::new("git");
-
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
-
-    let output = command.args(args).current_dir(cwd).output().await?;
+    let args = args.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+    let output = run_git_output(&args, cwd).await?;
 
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1732,12 +1731,7 @@ async fn run_git_vec(args: &[String], cwd: &str) -> Result<String, ManagerError>
 }
 
 async fn run_git_raw_vec(args: &[String], cwd: &str) -> Result<String, ManagerError> {
-    let mut command = Command::new("git");
-
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
-
-    let output = command.args(args).current_dir(cwd).output().await?;
+    let output = run_git_output(args, cwd).await?;
 
     if !output.status.success() {
         let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -1750,6 +1744,25 @@ async fn run_git_raw_vec(args: &[String], cwd: &str) -> Result<String, ManagerEr
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+async fn run_git_output(args: &[String], cwd: &str) -> Result<std::process::Output, ManagerError> {
+    let mut command = Command::new("git");
+
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    // 桌面操作使用已有凭据，避免等待终端输入或 Git 编辑器。
+    Ok(command
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_EDITOR", ":")
+        .env("GIT_SEQUENCE_EDITOR", ":")
+        .env("GIT_MERGE_AUTOEDIT", "no")
+        .stdin(std::process::Stdio::null())
+        .current_dir(cwd)
+        .output()
+        .await?)
 }
 
 fn create_archive_id(repo_id: &str, branch_name: &str, commit_hash: &str) -> String {
