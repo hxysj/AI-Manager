@@ -597,58 +597,24 @@
     </section>
 
     <section
-      v-if="detailDrawerVisible"
+      v-if="detailDrawerVisible && detailDrawerType === 'archives'"
       class="git-tool-drawer"
       @click="closeDetailDrawer"
     >
       <div
-        :class="[
-          'git-tool-drawer-panel',
-          {
-            'git-tool-drawer-panel-archives': detailDrawerType === 'archives'
-          }
-        ]"
+        class="git-tool-drawer-panel git-tool-drawer-panel-archives"
         @click.stop
       >
         <header class="git-tool-drawer-head">
-          <div
-            v-if="detailDrawerType === 'archives'"
-            class="git-tool-drawer-title-box"
-          >
-            <span data-emphasis class="git-tool-drawer-main-title">分支归档</span>
+          <div class="git-tool-drawer-title-box">
+            <span data-emphasis class="git-tool-drawer-main-title"
+              >分支归档</span
+            >
             <span class="git-tool-drawer-main-subtitle"
               >{{ archives.length }} 条记录</span
             >
           </div>
-          <div
-            v-else-if="detailDrawerType === 'archive'"
-            class="git-tool-drawer-title-box"
-          >
-            <button
-              class="git-tool-drawer-back"
-              type="button"
-              @click="backToArchiveList"
-            >
-              <ChevronRight class="git-tool-drawer-back-icon" :size="14" />
-              <span class="git-tool-drawer-back-text">返回归档列表</span>
-            </button>
-            <span data-emphasis class="git-tool-drawer-main-title">{{
-              selectedArchive?.branchName || "归档"
-            }}</span>
-          </div>
-          <div v-else class="git-tool-drawer-title-box">
-            <span class="git-tool-label">{{ detailDrawerEyebrow }}</span>
-            <span data-emphasis class="git-tool-drawer-title">{{
-              detailDrawerTitle
-            }}</span>
-          </div>
           <div class="git-tool-drawer-actions">
-            <span
-              v-if="detailDrawerType === 'archive'"
-              class="git-tool-drawer-hash"
-            >
-              {{ formatHash(selectedArchive?.commitHash) }}
-            </span>
             <button
               class="git-tool-icon-button git-tool-drawer-close-btn"
               type="button"
@@ -659,10 +625,7 @@
             </button>
           </div>
         </header>
-        <div
-          v-if="detailDrawerType === 'archives'"
-          class="git-tool-drawer-body"
-        >
+        <div class="git-tool-drawer-body">
           <div class="git-tool-drawer-archives">
             <div v-if="archives.length" class="git-tool-archive-tools">
               <span class="git-tool-archive-selected-text">
@@ -764,10 +727,7 @@
                       class="git-tool-archive-card-path"
                       :title="archive.projectPath"
                     >
-                      <Folder
-                        :size="13"
-                        class="git-tool-archive-card-folder"
-                      />
+                      <Folder :size="13" class="git-tool-archive-card-folder" />
                       <span>{{ archive.projectPath }}</span>
                     </span>
                     <span class="git-tool-archive-card-meta">
@@ -808,87 +768,27 @@
             </div>
           </div>
         </div>
-        <div
-          v-else-if="detailDrawerType === 'archive'"
-          class="git-tool-drawer-body git-tool-archive-detail"
-        >
-          <div class="git-tool-archive-detail-meta">
-            <span>{{ selectedArchive?.projectPath || "" }}</span>
-            <span data-emphasis>{{
-              formatFullDate(selectedArchive?.archivedAt)
-            }}</span>
-          </div>
-
-          <div class="git-tool-archive-commit-table">
-            <div class="git-tool-archive-commit-head">
-              <span>描述</span>
-              <span>日期</span>
-              <span>作者</span>
-              <span>提交</span>
-            </div>
-            <div class="git-tool-archive-commit-list">
-              <button
-                v-for="commit in visibleArchiveCommits"
-                :key="commit.rowId"
-                :class="[
-                  'git-tool-archive-commit',
-                  {
-                    'git-tool-archive-commit-active':
-                      commit.hash && commit.hash === selectedArchiveCommit?.hash
-                  }
-                ]"
-                type="button"
-                :disabled="commit.isGraphOnly"
-                @click="selectArchiveCommit(commit)"
-              >
-                <span class="git-tool-archive-commit-title">{{
-                  commit.subject
-                }}</span>
-                <span>{{
-                  commit.isGraphOnly ? "" : formatFullDate(commit.date)
-                }}</span>
-                <span>{{ commit.isGraphOnly ? "" : commit.author }}</span>
-                <span class="git-tool-archive-commit-hash">{{
-                  commit.isGraphOnly ? "" : commit.shortHash
-                }}</span>
-              </button>
-              <div
-                v-if="!visibleArchiveCommits.length"
-                class="git-tool-list-empty"
-              >
-                暂无归档提交
-              </div>
-            </div>
-          </div>
-
-          <div class="git-tool-archive-detail-content">
-            <div
-              v-if="archiveCommitDetailLoading"
-              class="git-tool-detail-empty"
-            >
-              正在读取详情
-            </div>
-            <GitChangeDetail
-              v-else
-              :detail="selectedArchiveCommitDetail"
-              :title="selectedArchiveCommit?.subject || '归档提交详情'"
-              @select-file="selectArchiveCommitFile"
-            />
-          </div>
-        </div>
-        <div v-else class="git-tool-drawer-body git-tool-drawer-body-detail">
-          <div v-if="activeDetailLoading" class="git-tool-detail-empty">
-            正在读取详情
-          </div>
-          <GitChangeDetail
-            v-else
-            :detail="activeDetail"
-            :title="activeDetailTitle"
-            @select-file="selectActiveDetailFile"
-          />
-        </div>
       </div>
     </section>
+
+    <!-- 提交详情/归档详情重构现代化弹窗 -->
+    <GitCommitDetailModal
+      :visible="commitModalVisible"
+      :type="commitModalType"
+      :project-path="commitModalProjectPath"
+      :branch-name="commitModalBranchName"
+      :archived-at="commitModalArchivedAt"
+      :commit-hash="commitModalHash"
+      :author="commitModalAuthor"
+      :commits="commitModalCommits"
+      :selected-commit-hash="commitModalSelectedHash"
+      :commit-detail="commitModalDetail"
+      :loading="commitModalLoading"
+      @close="closeDetailDrawer"
+      @back="handleCommitModalBack"
+      @select-commit="handleCommitModalSelectCommit"
+      @select-file="handleCommitModalSelectFile"
+    />
 
     <div
       v-if="commitContextMenu.visible"
@@ -944,46 +844,20 @@
       </button>
     </div>
 
-    <BaseModal
-      v-if="confirmDialog.visible"
+    <!-- 操作确认弹窗组件 -->
+    <GitConfirmModal
+      :visible="confirmDialog.visible"
       :title="confirmDialog.title"
       :description="confirmDialog.description"
-      @close="cancelConfirmDialog"
-    >
-      <section class="git-tool-confirm">
-        <div class="git-tool-confirm-icon">
-          <Archive :size="19" />
-        </div>
-        <div class="git-tool-confirm-content">
-          <span data-emphasis>{{ confirmDialog.message }}</span>
-          <span v-if="confirmDialog.detail">{{ confirmDialog.detail }}</span>
-          <label v-if="confirmDialog.input" class="git-tool-confirm-field">
-            <span>{{ confirmDialog.inputLabel }}</span>
-            <input
-              v-model.trim="confirmDialog.inputValue"
-              type="text"
-              @keydown.enter="resolveConfirmDialog"
-            />
-          </label>
-        </div>
-      </section>
-      <div class="git-tool-confirm-actions">
-        <button
-          class="git-tool-confirm-button"
-          type="button"
-          @click="cancelConfirmDialog"
-        >
-          取消
-        </button>
-        <button
-          class="git-tool-confirm-button git-tool-confirm-button-primary"
-          type="button"
-          @click="resolveConfirmDialog"
-        >
-          {{ confirmDialog.confirmText }}
-        </button>
-      </div>
-    </BaseModal>
+      :message="confirmDialog.message"
+      :detail="confirmDialog.detail"
+      :input="confirmDialog.input"
+      :input-label="confirmDialog.inputLabel"
+      :input-value="confirmDialog.inputValue"
+      :confirm-text="confirmDialog.confirmText"
+      @confirm="resolveConfirmDialog"
+      @cancel="cancelConfirmDialog"
+    />
   </section>
 </template>
 
@@ -1017,7 +891,8 @@ import {
   Trash2,
   X
 } from "lucide-vue-next"
-import BaseModal from "@/components/BaseModal.vue"
+import GitCommitDetailModal from "./components/GitCommitDetailModal.vue"
+import GitConfirmModal from "./components/GitConfirmModal.vue"
 import { gitToolApi } from "@/api"
 import { createMessage } from "@/utils/message"
 
@@ -1691,6 +1566,135 @@ const visibleArchiveCommits = computed(() => {
   return archiveCommits.value.filter((item) => !item.isGraphOnly)
 })
 
+const commitModalVisible = computed(() => {
+  return (
+    detailDrawerVisible.value &&
+    ["archive", "commit", "stash"].includes(detailDrawerType.value)
+  )
+})
+
+const commitModalType = computed(() => {
+  return detailDrawerType.value || "commit"
+})
+
+const commitModalProjectPath = computed(() => {
+  if (detailDrawerType.value === "archive") {
+    return (
+      selectedArchive.value?.projectPath || selectedRepo.value?.localPath || ""
+    )
+  }
+  return selectedRepo.value?.localPath || ""
+})
+
+const commitModalBranchName = computed(() => {
+  if (detailDrawerType.value === "archive") {
+    return selectedArchive.value?.branchName || ""
+  }
+  if (detailDrawerType.value === "stash") {
+    return selectedStash.value?.stashRef || "stash"
+  }
+  return currentBranch.value || ""
+})
+
+const commitModalArchivedAt = computed(() => {
+  return selectedArchive.value?.archivedAt || null
+})
+
+const commitModalHash = computed(() => {
+  if (detailDrawerType.value === "archive") {
+    return selectedArchive.value?.commitHash || ""
+  }
+  if (detailDrawerType.value === "stash") {
+    return selectedStash.value?.stashRef || ""
+  }
+  return selectedCommit.value?.hash || ""
+})
+
+const commitModalAuthor = computed(() => {
+  if (detailDrawerType.value === "archive") {
+    return selectedArchiveCommit.value?.author || ""
+  }
+  if (detailDrawerType.value === "commit") {
+    return selectedCommit.value?.author || ""
+  }
+  return ""
+})
+
+const commitModalCommits = computed(() => {
+  if (detailDrawerType.value === "archive") {
+    return visibleArchiveCommits.value
+  }
+  if (detailDrawerType.value === "commit") {
+    return commits.value.filter((item) => !item.isGraphOnly)
+  }
+  return []
+})
+
+const commitModalSelectedHash = computed(() => {
+  if (detailDrawerType.value === "archive") {
+    return selectedArchiveCommit.value?.hash || ""
+  }
+  if (detailDrawerType.value === "commit") {
+    return selectedCommit.value?.hash || ""
+  }
+  if (detailDrawerType.value === "stash") {
+    return selectedStash.value?.hash || selectedStash.value?.stashRef || ""
+  }
+  return ""
+})
+
+const commitModalDetail = computed(() => {
+  if (detailDrawerType.value === "archive") {
+    return selectedArchiveCommitDetail.value
+  }
+  if (detailDrawerType.value === "commit") {
+    return selectedCommitDetail.value
+  }
+  if (detailDrawerType.value === "stash") {
+    return stashDetail.value
+  }
+  return null
+})
+
+const commitModalLoading = computed(() => {
+  if (detailDrawerType.value === "archive") {
+    return archiveCommitDetailLoading.value
+  }
+  if (detailDrawerType.value === "commit") {
+    return commitDetailLoading.value
+  }
+  if (detailDrawerType.value === "stash") {
+    return stashDetailLoading.value
+  }
+  return false
+})
+
+function handleCommitModalBack() {
+  if (detailDrawerType.value === "archive") {
+    backToArchiveList()
+  } else {
+    closeDetailDrawer()
+  }
+}
+
+async function handleCommitModalSelectCommit(commit) {
+  if (detailDrawerType.value === "archive") {
+    await selectArchiveCommit(commit)
+  } else if (detailDrawerType.value === "commit") {
+    await selectCommit(commit)
+  }
+}
+
+async function handleCommitModalSelectFile(filePath) {
+  if (detailDrawerType.value === "archive") {
+    await selectArchiveCommitFile(filePath)
+  } else if (detailDrawerType.value === "commit") {
+    await selectCommitFile(filePath)
+  } else if (detailDrawerType.value === "stash") {
+    await selectStashDetailFile(filePath)
+  }
+}
+
 watch(
   gitToolStatus,
   (value) => {
@@ -2318,9 +2322,13 @@ function cancelConfirmDialog() {
   closeConfirmDialog(false)
 }
 
-function resolveConfirmDialog() {
+function resolveConfirmDialog(val) {
   closeConfirmDialog(
-    confirmDialog.value.input ? confirmDialog.value.inputValue : true
+    val !== undefined
+      ? val
+      : confirmDialog.value.input
+        ? confirmDialog.value.inputValue
+        : true
   )
 }
 
@@ -3146,109 +3154,6 @@ function showErrorMessage(error) {
 
 .git-tool :deep(.base-modal__content) {
   padding: 0 16px 16px;
-}
-
-.git-tool-confirm {
-  display: flex;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: var(--color-panel-soft);
-}
-
-.git-tool-confirm-icon {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  flex: none;
-  place-items: center;
-  border: 1px solid var(--color-info-line);
-  border-radius: 8px;
-  background: var(--color-primary-soft);
-  color: var(--color-primary);
-}
-
-.git-tool-confirm-content {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.git-tool-confirm-content [data-emphasis] {
-  color: var(--color-text);
-  font-size: var(--font-size-base);
-  line-height: 1.5;
-}
-
-.git-tool-confirm-content span:not([data-emphasis]) {
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: var(--font-size-base);
-  line-height: 1.45;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.git-tool-confirm-field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  padding-top: 5px;
-}
-
-.git-tool-confirm-field span:not([data-emphasis]) {
-  color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-}
-
-.git-tool-confirm-field input {
-  height: 32px;
-  padding: 0 9px;
-  border: 1px solid var(--color-line);
-  border-radius: 7px;
-  background: var(--color-panel);
-  color: var(--color-text);
-  font-size: var(--font-size-base);
-}
-
-.git-tool-confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding-top: 12px;
-}
-
-.git-tool-confirm-button {
-  display: inline-flex;
-  min-width: 74px;
-  height: 32px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--color-line);
-  border-radius: 7px;
-  background: var(--color-panel);
-  color: var(--color-primary);
-  cursor: pointer;
-  font-size: var(--font-size-base);
-}
-
-.git-tool-confirm-button:hover {
-  border-color: var(--color-line-strong);
-  background: var(--color-panel-soft);
-}
-
-.git-tool-confirm-button-primary {
-  border-color: var(--color-primary);
-  background: var(--color-primary-solid);
-  color: #ffffff;
-}
-
-.git-tool-confirm-button-primary:hover {
-  border-color: var(--color-primary);
-  background: var(--color-primary-solid);
 }
 
 .git-tool-action,
@@ -4257,7 +4162,9 @@ function showErrorMessage(error) {
         background: rgba(37, 99, 235, 0.16);
       }
 
-      .git-tool-commit-graph-cell .git-tool-commit-graph-svg .git-tool-commit-graph-node {
+      .git-tool-commit-graph-cell
+        .git-tool-commit-graph-svg
+        .git-tool-commit-graph-node {
         stroke: var(--color-panel);
       }
 
@@ -4723,7 +4630,10 @@ function showErrorMessage(error) {
     border: 1px solid var(--color-line);
     border-radius: 9px;
     background: var(--color-panel);
-    transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+    transition:
+      border-color 0.2s ease,
+      background-color 0.2s ease,
+      box-shadow 0.2s ease;
 
     &:hover {
       border-color: var(--color-line-strong);
@@ -5023,7 +4933,9 @@ function showErrorMessage(error) {
       padding: 14px 16px;
       margin-bottom: 4px;
       box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
-      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+      transition:
+        border-color 0.2s ease,
+        box-shadow 0.2s ease;
     }
 
     .git-tool-archive-group-head {
@@ -5129,7 +5041,10 @@ function showErrorMessage(error) {
       border: 1px solid #e2e8f0;
       border-radius: 10px;
       background: #ffffff;
-      transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+      transition:
+        border-color 0.2s ease,
+        background-color 0.2s ease,
+        box-shadow 0.2s ease;
 
       &:hover {
         border-color: #93c5fd;
