@@ -1,7 +1,8 @@
-use super::{get_repo_project, get_stashes, run_git, run_git_output, run_git_raw, string_value};
+use super::{get_repo_project, get_stashes, run_git, run_git_output, run_git_raw, run_git_raw_vec, string_value};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::Path;
 
 pub async fn get_status(
@@ -20,6 +21,15 @@ pub async fn get_worktree_diff(
 ) -> Result<Value, ManagerError> {
     let cwd = project_directory(paths, repos, &payload).await?;
     worktree_diff(&cwd, &payload).await
+}
+
+pub async fn get_branch_diff(
+    paths: &AppPaths,
+    repos: &Value,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let cwd = project_directory(paths, repos, &payload).await?;
+    branch_diff(&cwd, &payload).await
 }
 
 pub async fn preview_revision(
@@ -286,6 +296,108 @@ async fn worktree_diff(cwd: &str, payload: &Value) -> Result<Value, ManagerError
     Ok(
         json!({ "selectedFilePath": path, "patch": String::from_utf8_lossy(&output.stdout), "staged": staged }),
     )
+}
+
+async fn branch_diff(cwd: &str, payload: &Value) -> Result<Value, ManagerError> {
+    let base_branch = string_value(payload.get("baseBranch"));
+    let target_branch = string_value(payload.get("targetBranch"));
+    if base_branch.is_empty() || target_branch.is_empty() {
+        return Err(ManagerError::System("请选择两个不同的分支".to_string()));
+    }
+    if base_branch == target_branch {
+        return Err(ManagerError::System("请选择两个不同的分支".to_string()));
+    }
+
+    let base_hash = resolve_commit(cwd, &base_branch).await?;
+    let target_hash = resolve_commit(cwd, &target_branch).await?;
+    let numstat_args = vec![
+        "diff".to_string(),
+        "--no-ext-diff".to_string(),
+        "--no-textconv".to_string(),
+        "--numstat".to_string(),
+        "-z".to_string(),
+        "--no-renames".to_string(),
+        base_hash.clone(),
+        target_hash.clone(),
+        "--".to_string(),
+    ];
+    let numstat = run_git_raw_vec(&numstat_args, cwd).await?;
+    let status_args = vec![
+        "diff".to_string(),
+        "--no-ext-diff".to_string(),
+        "--no-textconv".to_string(),
+        "--name-status".to_string(),
+        "-z".to_string(),
+        "--no-renames".to_string(),
+        base_hash.clone(),
+        target_hash.clone(),
+        "--".to_string(),
+    ];
+    let status_output = run_git_raw_vec(&status_args, cwd).await?;
+    let status_records = status_output
+        .split('\0')
+        .filter(|record| !record.is_empty())
+        .collect::<Vec<_>>();
+    let mut statuses = HashMap::new();
+    let mut status_index = 0;
+    while status_index + 1 < status_records.len() {
+        statuses.insert(
+            status_records[status_index + 1].to_string(),
+            status_records[status_index].to_string(),
+        );
+        status_index += 2;
+    }
+    let mut files = Vec::new();
+    let mut additions = 0u64;
+    let mut deletions = 0u64;
+    for record in numstat.split('\0').filter(|record| !record.is_empty()) {
+        let mut parts = record.splitn(3, '\t');
+        let additions_value = parts.next().unwrap_or("-");
+        let deletions_value = parts.next().unwrap_or("-");
+        let path = parts.next().unwrap_or("");
+        if path.is_empty() {
+            continue;
+        }
+        let binary = additions_value == "-" || deletions_value == "-";
+        let file_additions = additions_value.parse::<u64>().unwrap_or(0);
+        let file_deletions = deletions_value.parse::<u64>().unwrap_or(0);
+        additions += file_additions;
+        deletions += file_deletions;
+        files.push(json!({
+            "path": path,
+            "status": statuses.get(path).cloned().unwrap_or_else(|| "M".to_string()),
+            "additions": file_additions,
+            "deletions": file_deletions,
+            "binary": binary
+        }));
+    }
+
+    let patch_args = vec![
+        "diff".to_string(),
+        "--no-ext-diff".to_string(),
+        "--no-textconv".to_string(),
+        "--no-color".to_string(),
+        "--unified=3".to_string(),
+        base_hash,
+        target_hash,
+        "--".to_string(),
+    ];
+    let patch = run_git_raw_vec(&patch_args, cwd)
+        .await?
+        .trim_end_matches(['\r', '\n'])
+        .to_string();
+
+    Ok(json!({
+        "baseBranch": base_branch,
+        "targetBranch": target_branch,
+        "files": files,
+        "fileCount": files.len(),
+        "additions": additions,
+        "deletions": deletions,
+        "changedLines": additions + deletions,
+        "command": format!("git diff --stat {}..{}", string_value(payload.get("baseBranch")), string_value(payload.get("targetBranch"))),
+        "patch": patch
+    }))
 }
 
 async fn validate_branch(cwd: &str, name: &str) -> Result<(), ManagerError> {

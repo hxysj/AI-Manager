@@ -61,10 +61,17 @@ function loadComponent(path) {
 globalThis.window = { setTimeout, clearTimeout, addEventListener() {}, removeEventListener() {} }
 globalThis.Document = class { activeElement = null }
 globalThis.document = new Document()
+// 模拟滚动容器尺寸变化，验证大 diff 在窗口缩放后仍按可见区域渲染。
+globalThis.ResizeObserver = class {
+  static instances = []
+  constructor(callback) { this.callback = callback; ResizeObserver.instances.push(this) }
+  observe(element) { this.element = element; this.callback() }
+  disconnect() { this.disconnected = true }
+}
 
 function hostNode(type, text = '') {
   return {
-    type, tagName: type.toUpperCase(), text, children: [], parent: null, props: {}, listeners: {}, value: '',
+    type, tagName: type.toUpperCase(), text, children: [], parent: null, props: {}, listeners: {}, value: '', clientHeight: 400,
     addEventListener(name, handler) { (this.listeners[name] ||= []).push(handler) },
     removeEventListener() {},
     setAttribute(name, value) { this.props[name] = value },
@@ -215,16 +222,80 @@ await pick.state.submit()
 assert.equal(submitted.mainline, 2)
 pick.unmount()
 
+const ComparePanel = loadComponent('src/features/gitTool/components/GitBranchComparePanel.vue')
+handlers.getGitToolBranchDiff = payload => ({
+  baseBranch: payload.baseBranch,
+  targetBranch: payload.targetBranch,
+  command: `git diff --stat ${payload.baseBranch}..${payload.targetBranch}`,
+  files: [{ path: 'src/app.js', status: 'M', additions: 2, deletions: 1, binary: false }],
+  fileCount: 1,
+  additions: 2,
+  deletions: 1,
+  changedLines: 3,
+  patch: 'diff --git a/src/app.js b/src/app.js\n+added\n-removed'
+})
+const compare = mount(ComparePanel, {
+  repoId: 'repo',
+  branches,
+  currentBranch: 'main',
+  selectedBranch: 'feature'
+})
+await tick()
+assert.equal(findNodes(compare.root, 'git-branch-compare-stat-total').length, 1)
+assert.equal(findNodes(compare.root, 'git-branch-compare-line-add').length, 1)
+assert.equal(findNodes(compare.root, 'git-branch-compare-file').length, 1)
+const smallDiff = handlers.getGitToolBranchDiff
+handlers.getGitToolBranchDiff = payload => ({
+  ...smallDiff(payload),
+  patch: Array.from({ length: 610659 }, (_, index) => `+line ${index}`).join('\n')
+})
+await compare.state.compareBranches()
+await tick()
+assert.ok(findNodes(compare.root, 'git-branch-compare-line').length < 100)
+const diffViewport = findNodes(compare.root, 'git-branch-compare-diff')[0]
+const diffObserver = ResizeObserver.instances.findLast(observer => vue.toRaw(observer.element) === diffViewport)
+diffViewport.props.onScroll({ target: { scrollTop: 4000000 } })
+await tick()
+assert.equal(findNodes(compare.root, 'git-branch-compare-line')[0].text, '+line 199980')
+const previousRows = findNodes(compare.root, 'git-branch-compare-line').length
+diffViewport.clientHeight = 800
+diffObserver.callback()
+await tick()
+assert.ok(findNodes(compare.root, 'git-branch-compare-line').length > previousRows)
+assert.ok(findNodes(compare.root, 'git-branch-compare-line').length < 100)
+diffViewport.props.onScroll({ target: { scrollTop: 610659 * 20 - 800 } })
+await tick()
+assert.equal(findNodes(compare.root, 'git-branch-compare-line').at(-1).text, '+line 610658')
+handlers.getGitToolBranchDiff = smallDiff
+await compare.state.compareBranches()
+await tick()
+assert.equal(findNodes(compare.root, 'git-branch-compare-line-add').length, 1)
+assert.equal(compare.state.diffScrollTop, 0)
+assert.deepEqual(compare.warnings, [])
+assert.deepEqual(compare.errors, [])
+compare.unmount()
+assert.equal(diffObserver.disconnected, true)
+
 handlers = {
   getGitToolStatus: () => clone(status),
   scanGitToolBranches: () => ({ project: {}, branches, archives: [], stashArchives: [] }),
   listGitToolCommits: () => [],
   getGitToolWorktreeDiff: payload => ({ selectedFilePath: payload.filePath, patch: '+preview' }),
+  getGitToolBranchDiff: smallDiff,
   executeGitToolOperation: payload => ({ success: true, output: '完成', status: clone(status) })
 }
 const page = mount(Page, { repos: [{ id: 'repo', name: '测试仓库', localPath: 'D:/test' }] })
 await delay(60)
 await tick()
+assert.equal(findNodes(page.root, 'git-tool-operation-button').length, 7)
+page.state.branchCompareVisible = true
+await tick()
+assert.equal(findNodes(page.root, 'git-tool-branch-panel').length, 0)
+assert.equal(findNodes(page.root, 'git-tool-operation-bar').length, 0)
+assert.equal(findNodes(page.root, 'git-branch-compare').length, 1)
+page.state.branchCompareVisible = false
+await tick()
+assert.equal(findNodes(page.root, 'git-tool-branch-panel').length, 1)
 assert.equal(findNodes(page.root, 'git-tool-operation-button').length, 7)
 await page.state.openGitOperation('merge', { revision: 'feature' })
 assert.equal(page.state.operationDialog.status.branch, 'main')

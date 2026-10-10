@@ -5,6 +5,7 @@ export const gitToolApi = {
   getGitToolStatus: payload => request('git-tool:status', payload),
   getGitToolWorktreeDiff: payload =>
     request('git-tool:worktree-diff', payload),
+  getGitToolBranchDiff: payload => request('git-tool:branch-diff', payload),
   previewGitToolRevision: payload =>
     request('git-tool:revision-preview', payload),
   executeGitToolOperation: payload => request('git-tool:operation', payload),

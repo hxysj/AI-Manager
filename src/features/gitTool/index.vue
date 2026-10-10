@@ -85,7 +85,7 @@
             <span>添加项目</span>
           </button>
         </div>
-        <div v-if="gitStatus" class="git-tool-operation-bar">
+        <div v-if="gitStatus && !branchCompareVisible" class="git-tool-operation-bar">
           <div class="git-tool-operation-status">
             <GitBranchIcon :size="13" />
             <span class="git-tool-operation-branch">{{
@@ -263,7 +263,7 @@
       {{ gitStatusError || '正在读取工作区…' }}
     </section>
     <section v-else-if="gitWorkspace === 'branch'" class="git-tool-workbench">
-      <aside class="git-tool-branch-panel">
+      <aside v-if="!branchCompareVisible" class="git-tool-branch-panel">
         <div class="git-tool-branch-head">
           <div class="git-tool-branch-title-row">
             <div class="git-tool-branch-title-wrap">
@@ -389,15 +389,14 @@
             <GitBranchIcon :size="20" class="git-tool-panel-branch-icon" />
             <div class="git-tool-panel-title-text">
               <span data-emphasis class="git-tool-panel-title">{{
-                selectedBranch || "提交记录"
+                branchCompareVisible ? "对比分支" : selectedBranch || "提交记录"
               }}</span>
-              <span class="git-tool-panel-subtitle"
-                >{{ commits.length }} 条提交</span
-              >
+              <span class="git-tool-panel-subtitle">{{ branchCompareVisible ? "git diff 结果" : `${commits.length} 条提交` }}</span>
             </div>
           </div>
           <div class="git-tool-panel-actions">
             <select
+              v-if="!branchCompareVisible"
               class="git-tool-mini-select"
               :value="project?.checkBranchName || ''"
               :disabled="!selectedBranch"
@@ -415,6 +414,7 @@
               </option>
             </select>
             <button
+              v-if="!branchCompareVisible"
               class="git-tool-icon-button"
               type="button"
               title="清理检查缓存"
@@ -424,6 +424,7 @@
               <RotateCcw :size="14" />
             </button>
             <button
+              v-if="!branchCompareVisible"
               class="git-tool-action git-tool-action-outline"
               type="button"
               :disabled="!selectedRepo"
@@ -432,10 +433,29 @@
               <Archive :size="14" />
               <span>归档</span>
             </button>
+            <button
+              class="git-tool-action git-tool-action-outline"
+              type="button"
+              :disabled="branches.length < 2 || !selectedRepo"
+              @click="branchCompareVisible = !branchCompareVisible"
+            >
+              <GitBranchIcon :size="14" />
+              <span>{{ branchCompareVisible ? "提交记录" : "对比分支" }}</span>
+            </button>
           </div>
         </div>
 
-        <div class="git-tool-commit-layout">
+        <GitBranchComparePanel
+          :key="selectedRepoId"
+          v-if="branchCompareVisible"
+          :repo-id="selectedRepoId"
+          :branches="branches"
+          :current-branch="currentBranch"
+          :selected-branch="selectedBranch"
+          :busy="operationBusy || gitLoading"
+          @close="branchCompareVisible = false"
+        />
+        <div v-else class="git-tool-commit-layout">
           <div
             class="git-tool-commit-list git-tool-commit-table"
             @scroll="handleCommitListScroll"
@@ -1109,6 +1129,7 @@ import GitCommitDetailModal from '@/features/gitTool/components/GitCommitDetailM
 import GitConfirmModal from '@/features/gitTool/components/GitConfirmModal.vue'
 import GitWorkspacePanel from '@/features/gitTool/components/GitWorkspacePanel.vue'
 import GitOperationModal from '@/features/gitTool/components/GitOperationModal.vue'
+import GitBranchComparePanel from '@/features/gitTool/components/GitBranchComparePanel.vue'
 import { gitOperationDefinitions } from '@/features/gitTool/constant'
 import { gitToolApi } from "@/api"
 import { createMessage } from "@/utils/message"
@@ -1478,6 +1499,8 @@ const stashes = ref([])
 const stashArchives = ref([])
 const currentBranch = ref("")
 const selectedBranch = ref("")
+// 分支对比视图独立于提交列表，切换时保留当前分支选择。
+const branchCompareVisible = ref(false)
 const selectedBranchNames = ref([])
 const selectedArchiveIds = ref([])
 const selectedStashHashes = ref([])
@@ -1981,6 +2004,7 @@ function handleRepoChange(event) {
 
 function selectGitWorkspace(workspace) {
   gitWorkspace.value = workspace
+  if (workspace !== "branch") branchCompareVisible.value = false
 
   if (workspace === "stash" && !stashLoaded) {
     loadStashes()

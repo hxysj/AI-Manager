@@ -7,7 +7,7 @@ use std::path::Path;
 use tokio::process::Command;
 
 mod operations;
-pub use operations::{execute_operation, get_status, get_worktree_diff, preview_revision};
+pub use operations::{execute_operation, get_branch_diff, get_status, get_worktree_diff, preview_revision};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;

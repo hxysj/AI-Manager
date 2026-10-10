@@ -57,7 +57,7 @@ impl AppState {
         // Git 写操作串行执行；远程同步仅持有路径快照，不阻塞应用状态。
         if channel.starts_with("git-tool:") {
             let _git_guard = self.git_tool_lock.lock().await;
-            if matches!(channel, "git-tool:status" | "git-tool:worktree-diff" | "git-tool:revision-preview" | "git-tool:operation") {
+            if matches!(channel, "git-tool:status" | "git-tool:worktree-diff" | "git-tool:branch-diff" | "git-tool:revision-preview" | "git-tool:operation") {
                 let manager = self.manager.lock().await;
                 let paths = manager.paths.clone();
                 let repos = manager.state["repos"].clone();
@@ -66,6 +66,7 @@ impl AppState {
                 return match channel {
                     "git-tool:status" => git_tool::get_status(&paths, &repos, payload).await,
                     "git-tool:worktree-diff" => git_tool::get_worktree_diff(&paths, &repos, payload).await,
+                    "git-tool:branch-diff" => git_tool::get_branch_diff(&paths, &repos, payload).await,
                     "git-tool:revision-preview" => git_tool::preview_revision(&paths, &repos, payload).await,
                     _ => git_tool::execute_operation(&paths, &repos, payload).await,
                 };
