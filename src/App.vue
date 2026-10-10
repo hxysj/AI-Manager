@@ -2,7 +2,7 @@
   <QuickSwitchPanel
     v-if="isQuickSwitchPanel"
     :state="state"
-    @state-updated="updateState"
+    :ready="quickSwitchReady"
   />
 
   <div
@@ -140,6 +140,7 @@
 
         <ToolsView
           v-else-if="activeView === 'tools'"
+          :tool-request="toolRequest"
           :cli-targets="state.cliTargets"
           :providers="state.providers"
           :repos="state.repos"
@@ -148,6 +149,7 @@
           :theme-mode="themeMode"
           @add-repo="showAddRepo = true"
           @detail-change="toolWorkspaceActive = $event"
+          @tool-request-handled="toolRequest = null"
           @toggle-theme="toggleTheme"
         />
 
@@ -508,6 +510,8 @@ applyTheme(themeMode.value)
 const queryParams = new URLSearchParams(window.location.search)
 const queryView = queryParams.get("view")
 const isQuickSwitchPanel = queryParams.get("panel") === "quick-switch"
+// 浮窗读到真实配置后再展示，避免桌宠模式先闪出默认信息卡。
+const quickSwitchReady = ref(false)
 
 const placeholderMap = {
   sessions: {
@@ -608,9 +612,11 @@ const state = reactive({
       maxCount: 20,
       lastBackupAt: 0
     },
+    desktop: { enabled: false, petId: "" },
     system: {
       closeAction: "ask",
       quickSwitchVisible: true,
+      quickSwitchTools: {},
       autoLaunchEnabled: false
     }
   },
@@ -621,6 +627,9 @@ const activeView = ref(
   baseNavItems.some((item) => item.id === queryView) ? queryView : "providers"
 )
 const showLogsTab = ref(false)
+// 主窗口重建时从 URL 恢复入口，已有窗口通过事件接收工具请求。
+const queryTool = new URLSearchParams(window.location.search).get("tool")
+const toolRequest = ref(queryTool ? { toolId: queryTool } : null)
 const sidebarTitleClickCount = ref(0)
 const appLogs = ref([])
 const appLogPath = ref("")
@@ -658,6 +667,7 @@ const { loading: pending, withGlobalLoading } = useGlobalLoading()
 let unsubscribe = null
 let unsubscribeClose = null
 let unsubscribeUpdate = null
+let unsubscribeTool = null
 
 function toggleTheme() {
   themeMode.value = themeMode.value === "dark" ? "light" : "dark"
@@ -731,6 +741,7 @@ async function bootstrap() {
   await withGlobalLoading(async () => {
     try {
       updateState(await appApi.bootstrap())
+      quickSwitchReady.value = true
       await refreshLocalBackups(false)
       unsubscribe = appApi.onStateChanged((nextState) => {
         const previousLocalBackupAt =
@@ -2094,6 +2105,13 @@ onMounted(() => {
 
   bootstrap()
 
+  if (!isQuickSwitchPanel) {
+    unsubscribeTool = appApi.onToolRequested((request) => {
+      toolRequest.value = request
+      activeView.value = "tools"
+    })
+  }
+
   // 后端启动时已开启后台快传服务，这里只监听全局设备连接配对请求。
   unsubscribeLanShare = lanShareApi.onStateChanged((payload) => {
     const data = payload?.service ? payload : payload?.data || {}
@@ -2101,20 +2119,24 @@ onMounted(() => {
   })
 
   // 视图切换按需加载
-  watch(activeView, async (view) => {
-    try {
-      if (view === "sessions") {
-        updateState(await appApi.ensureSessionsReady())
-      } else if (view === "tools") {
-        updateState(await appApi.ensureToolsReady())
-      } else if (view === "skills") {
-        updateState(await appApi.ensureSkillsReady())
-        await loadSkillTrash()
+  watch(
+    activeView,
+    async (view) => {
+      try {
+        if (view === "sessions") {
+          updateState(await appApi.ensureSessionsReady())
+        } else if (view === "tools") {
+          updateState(await appApi.ensureToolsReady())
+        } else if (view === "skills") {
+          updateState(await appApi.ensureSkillsReady())
+          await loadSkillTrash()
+        }
+      } catch (error) {
+        showErrorMessage(error)
       }
-    } catch (error) {
-      showErrorMessage(error)
-    }
-  })
+    },
+    { immediate: !isQuickSwitchPanel }
+  )
 
   unsubscribeUpdate = appApi.onUpdateStatus(applyUpdateStatus)
   appApi
@@ -2129,6 +2151,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener("storage", handleStoredThemeChange)
+  unsubscribeTool?.()
 
   if (typeof unsubscribe === "function") {
     unsubscribe()

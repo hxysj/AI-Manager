@@ -1,1603 +1,997 @@
 <template>
   <section
-    :class="[
-      'quick-switch-panel',
-      { 'quick-switch-panel-collapsed': collapsed }
-    ]"
+    v-if="ready && layoutReady"
+    class="quick-switch-panel"
+    :style="centerLayoutStyle"
+    :class="{
+      'quick-switch-panel-expanded': expanded,
+      'quick-switch-panel-dragging': drag.active
+    }"
+    @pointerenter="enterPanel"
+    @pointerleave="leavePanel"
+    @focusin="enterPanel"
+    @focusout="handleFocusOut"
+    @keydown.esc="setExpanded(false)"
+    @dragstart.prevent
   >
-    <header class="quick-switch-panel-header" @dblclick="showMainPanel">
-      <button
-        v-if="collapsed"
-        class="quick-switch-panel-logo-button"
-        type="button"
-        title="展开快速切换"
-        @click="handleLogoClick"
-        @pointerdown="startLogoDrag"
+    <template v-if="expanded">
+      <svg
+        v-if="orbitLayout === 'radial'"
+        class="quick-switch-connections"
+        viewBox="0 0 560 560"
+        aria-hidden="true"
       >
-        <svg
-          class="quick-switch-panel-logo-scene"
-          viewBox="0 0 44 44"
-          role="img"
-          aria-label="AI Manager"
-        >
-          <defs>
-            <linearGradient
-              id="quick-switch-logo-ring"
-              x1="8"
-              x2="36"
-              y1="7"
-              y2="36"
-              gradientUnits="userSpaceOnUse"
-            >
-              <stop offset="0" stop-color="#4da3ff"></stop>
-              <stop offset="0.52" stop-color="#18a058"></stop>
-              <stop offset="1" stop-color="#ffb84d"></stop>
-            </linearGradient>
-          </defs>
-          <ellipse
-            class="quick-switch-panel-logo-shadow"
-            cx="22"
-            cy="36"
-            rx="10"
-            ry="3"
-          ></ellipse>
-          <g class="quick-switch-panel-logo-mascot">
-            <circle
-              class="quick-switch-panel-logo-orbit"
-              cx="22"
-              cy="21"
-              r="17"
-            ></circle>
-            <image
-              class="quick-switch-panel-logo-core"
-              :href="logoUrl"
-              x="8"
-              y="7"
-              width="28"
-              height="28"
-              preserveAspectRatio="xMidYMid meet"
-            ></image>
-          </g>
-          <g class="quick-switch-panel-logo-sparks">
-            <circle cx="8" cy="15" r="1.3"></circle>
-            <circle cx="35" cy="14" r="1.1"></circle>
-            <circle cx="33" cy="31" r="1.4"></circle>
-          </g>
-        </svg>
-      </button>
-      <template v-else>
-        <div class="quick-switch-panel-title">
-          <span class="quick-switch-panel-dot"></span>
-          <span data-emphasis class="quick-switch-panel-title-name">
-            {{ activeCli?.name || "未选择" }}
-          </span>
-          <small class="quick-switch-panel-title-desc">{{ activeName }}</small>
-        </div>
-        <div class="quick-switch-panel-actions">
-          <button
-            class="quick-switch-panel-icon-button"
-            type="button"
-            title="打开主界面"
-            @click="showMainPanel"
-          >
-            <ExternalLink :size="14" />
-          </button>
-          <button
-            class="quick-switch-panel-icon-button"
-            type="button"
-            title="收起"
-            @click="toggleCollapsed"
-          >
-            <ChevronDown :size="15" />
-          </button>
-        </div>
-      </template>
-    </header>
-
-    <template v-if="!collapsed">
-      <nav class="quick-switch-panel-cli-tabs">
+        <line
+          v-for="tool in orbitTools"
+          :key="tool.id"
+          :x1="centerPosition.x"
+          :y1="centerPosition.y"
+          :x2="tool.x"
+          :y2="tool.y"
+        />
+      </svg>
+      <div
+        v-if="orbitLayout === 'radial'"
+        class="quick-switch-orbit-ring"
+        aria-hidden="true"
+      ></div>
+      <nav
+        class="quick-switch-tools"
+        :class="{ 'quick-switch-tools-adaptive': toolTray }"
+        :style="
+          toolTray && {
+            '--tray-left': `${toolTray.x}px`,
+            '--tray-top': `${toolTray.y}px`,
+            '--tray-width': `${toolTray.width}px`,
+            '--tray-height': `${toolTray.height}px`
+          }
+        "
+        aria-label="悬浮工具"
+      >
         <button
-          v-for="cli in cliTargets"
-          :key="cli.id"
-          :class="[
-            'quick-switch-panel-cli-tab',
-            {
-              'quick-switch-panel-cli-tab-active': cli.id === activeCli?.id
-            }
-          ]"
+          v-for="tool in orbitTools"
+          :key="tool.id"
+          class="quick-switch-tool"
+          :class="`quick-switch-tool-${tool.theme}`"
+          :style="{
+            '--tool-left': `${tool.x}px`,
+            '--tool-top': `${tool.y}px`,
+            '--tool-order': tool.order
+          }"
           type="button"
-          @click="selectedCli = cli.id"
+          :title="tool.summary"
+          @click="showMainPanel(tool.id)"
         >
-          {{ cli.name }}
+          <span class="quick-switch-tool-icon">
+            <component :is="tool.icon" :size="24" :stroke-width="1.7" />
+          </span>
+          <span class="quick-switch-tool-name">{{ tool.label }}</span>
         </button>
       </nav>
-
-      <section v-if="mode === 'usage'" class="quick-switch-panel-usage">
-        <div class="quick-switch-panel-hero">
-          <div class="quick-switch-panel-hero-copy">
-            <span class="quick-switch-panel-hero-label">当前用量</span>
-            <span data-emphasis class="quick-switch-panel-hero-name">
-              {{ activeCli?.name || "未选择" }}
-            </span>
-            <small class="quick-switch-panel-hero-desc">{{ activeName }}</small>
-          </div>
-          <button
-            class="quick-switch-panel-manage-button"
-            type="button"
-            @click="mode = 'provider'"
-          >
-            管理
-          </button>
-        </div>
-
-        <div class="quick-switch-panel-metrics">
-          <article class="quick-switch-panel-metric">
-            <span class="quick-switch-panel-metric-label">请求</span>
-            <span data-emphasis class="quick-switch-panel-metric-value">
-              {{ formatQuickNumber(usageSummary.requestCount) }}
-            </span>
-          </article>
-          <article class="quick-switch-panel-metric">
-            <span class="quick-switch-panel-metric-label">Token</span>
-            <span data-emphasis class="quick-switch-panel-metric-value">
-              <TokenCount :value="usageSummary.actualTokens" />
-            </span>
-          </article>
-          <article class="quick-switch-panel-metric">
-            <span class="quick-switch-panel-metric-label">费用</span>
-            <span data-emphasis class="quick-switch-panel-metric-value">
-              {{ formatQuickCost(usageSummary.totalCostUsd) }}
-            </span>
-          </article>
-        </div>
-
-        <div class="quick-switch-panel-summary-row">
-          <section class="quick-switch-panel-usage-panel">
-            <div class="quick-switch-panel-usage-head">
-              <span data-emphasis class="quick-switch-panel-usage-title"
-                >最近用量</span
-              >
-              <span class="quick-switch-panel-usage-count">
-                {{ usageTrend.length }} 天
-              </span>
-            </div>
-            <div v-if="usageTrend.length" class="quick-switch-panel-bars">
-              <div
-                v-for="item in usageTrend"
-                :key="item.date"
-                class="quick-switch-panel-bar"
-                :title="`${item.date} · ${formatTokenCount(item.actualTokens)} Token`"
-              >
-                <span
-                  class="quick-switch-panel-bar-fill"
-                  :style="{ height: `${item.percent}%` }"
-                ></span>
-                <small class="quick-switch-panel-bar-label">
-                  {{ item.label }}
-                </small>
-              </div>
-            </div>
-            <div v-else class="quick-switch-panel-empty">暂无用量统计</div>
-          </section>
-
-          <section
-            class="quick-switch-panel-usage-panel quick-switch-panel-provider-panel"
-          >
-            <div class="quick-switch-panel-usage-head">
-              <span data-emphasis class="quick-switch-panel-usage-title"
-                >Provider</span
-              >
-              <span class="quick-switch-panel-usage-count">
-                {{ usageProviders.length }} 个
-              </span>
-            </div>
-            <div
-              v-if="usageProviders.length"
-              class="quick-switch-panel-provider-bars"
-            >
-              <article
-                v-for="item in usageProviders"
-                :key="item.providerId"
-                class="quick-switch-panel-provider-bar"
-              >
-                <div class="quick-switch-panel-provider-bar-head">
-                  <span data-emphasis class="quick-switch-panel-provider-name">
-                    {{ item.providerName }}
-                  </span>
-                  <span class="quick-switch-panel-provider-cost">
-                    {{ formatQuickCost(item.totalCostUsd) }}
-                  </span>
-                </div>
-                <div class="quick-switch-panel-provider-track">
-                  <span
-                    class="quick-switch-panel-provider-fill"
-                    :style="{ width: `${item.percent}%` }"
-                  ></span>
-                </div>
-              </article>
-            </div>
-            <div v-else class="quick-switch-panel-empty">暂无 Provider</div>
-          </section>
-        </div>
-      </section>
-
-      <section v-else class="quick-switch-panel-list">
-        <div class="quick-switch-panel-manager-head">
-          <div class="quick-switch-panel-manager-copy">
-            <span data-emphasis class="quick-switch-panel-manager-title">
-              Provider 管理
-            </span>
-            <span class="quick-switch-panel-manager-desc">
-              {{ activeCli?.name || "未选择" }} · {{ activeName }}
-            </span>
-          </div>
-          <button
-            class="quick-switch-panel-manage-button"
-            type="button"
-            @click="mode = 'usage'"
-          >
-            统计
-          </button>
-        </div>
-        <article
-          v-for="item in items"
-          :key="item.key"
-          :class="[
-            'quick-switch-panel-item',
-            {
-              'quick-switch-panel-item-active': item.active,
-              'quick-switch-panel-item-account': item.type === 'account'
-            }
-          ]"
-        >
-          <span class="quick-switch-panel-item-copy">
-            <span data-emphasis class="quick-switch-panel-item-title">
-              {{ item.label }}
-            </span>
-            <small class="quick-switch-panel-item-desc">
-              {{ item.description }}
-            </small>
-            <span
-              v-if="item.type === 'account' && item.quotas.length"
-              class="quick-switch-panel-quota-list"
-            >
-              <span
-                v-for="quota in item.quotas"
-                :key="quota.key"
-                class="quick-switch-panel-quota-item"
-                :title="quota.reset"
-              >
-                <span class="quick-switch-panel-quota-label">
-                  {{ quota.label }}
-                </span>
-                <span data-emphasis class="quick-switch-panel-quota-value">
-                  {{ quota.remaining }}%
-                </span>
-              </span>
-            </span>
-          </span>
-          <span class="quick-switch-panel-item-actions">
-            <button
-              v-if="item.type === 'account' && !item.disabled"
-              class="quick-switch-panel-item-icon-button"
-              type="button"
-              title="刷新额度"
-              aria-label="刷新额度"
-              @click.stop="refreshCodexAccount(item)"
-            >
-              <RefreshCw :size="14" />
-            </button>
-            <button
-              class="quick-switch-panel-item-action"
-              type="button"
-              :disabled="item.active || item.disabled"
-              @click.stop="selectItem(item)"
-            >
-              启用
-            </button>
-            <button
-              class="quick-switch-panel-item-action quick-switch-panel-item-danger-action"
-              type="button"
-              :disabled="!item.active"
-              @click.stop="clearActive"
-            >
-              取消启用
-            </button>
-          </span>
-        </article>
-
-        <div v-if="!items.length" class="quick-switch-panel-empty">
-          暂无可切换项
-        </div>
-      </section>
     </template>
+
+    <article
+      class="quick-switch-center"
+      :class="{ 'quick-switch-center-pet': desktopPet }"
+      @pointerdown="startDrag"
+      @click="handleMainClick"
+    >
+      <button
+        v-if="desktopPet"
+        class="quick-switch-pet-button"
+        :class="{
+          'quick-switch-pet-mirrored':
+            screenEdge === 'right' && petAction === 'peek'
+        }"
+        type="button"
+        :aria-label="`${desktopPet.name} · 点击打开主界面，拖动移动悬浮窗`"
+      >
+        <DesktopPet
+          :pet="desktopPet"
+          :dragging="drag.active"
+          :action="petAction"
+        />
+      </button>
+      <template v-else>
+        <button
+          class="quick-switch-main"
+          type="button"
+          aria-label="点击打开主界面，拖动移动悬浮窗"
+        >
+          <span
+            class="quick-switch-avatar"
+            :class="{ 'quick-switch-avatar-home': !activeCli }"
+          >
+            <AiIcon
+              v-if="activeCli"
+              :name="activeCli.id"
+              :alt="activeCli.name"
+              class-name="quick-switch-cli-icon"
+            />
+            <img
+              v-else
+              class="quick-switch-logo"
+              :src="logoUrl"
+              alt="AI Manager"
+            />
+          </span>
+          <span class="quick-switch-name">{{
+            activeCli?.name || "AI Manager"
+          }}</span>
+          <span class="quick-switch-provider">{{ activeName }}</span>
+          <span v-if="activeCli" class="quick-switch-model">{{
+            activeModel
+          }}</span>
+          <span v-else class="quick-switch-model">{{
+            visibleTools.length ? "悬浮工具 · 拖动移动" : "拖动移动 · 点击打开"
+          }}</span>
+        </button>
+        <div
+          class="quick-switch-usage"
+          :aria-label="usageError || '今日用量'"
+          aria-live="polite"
+        >
+          <span class="quick-switch-usage-item">
+            <span class="quick-switch-usage-label">今日 Token</span>
+            <span class="quick-switch-usage-value">{{
+              usageSummary ? tokenCount.compact : "—"
+            }}</span>
+          </span>
+          <span class="quick-switch-usage-item">
+            <span class="quick-switch-usage-label">费用</span>
+            <span class="quick-switch-usage-value">{{
+              usageSummary ? formatCost(usageSummary.totalCostUsd) : "—"
+            }}</span>
+          </span>
+        </div>
+        <nav
+          class="quick-switch-pages"
+          aria-label="中心节点内容"
+          @pointerdown.stop
+          @click.stop
+        >
+          <button
+            v-for="page in centerPages"
+            :key="page.id"
+            class="quick-switch-page"
+            :class="{ 'quick-switch-page-active': selectedPage === page.id }"
+            type="button"
+            :aria-label="page.name"
+            :aria-pressed="selectedPage === page.id"
+            @click="selectedPage = page.id"
+          ></button>
+        </nav>
+      </template>
+    </article>
   </section>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from "vue"
-import { ChevronDown, ExternalLink, RefreshCw } from "lucide-vue-next"
-import { accountApi, appApi, proxyApi, runtimeApi } from "@/api"
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue"
+import { appApi, usageApi } from "@/api"
+import AiIcon from "@/components/AiIcon.vue"
+import DesktopPet from "@/components/DesktopPet.vue"
+import { getDesktopPet } from "@/constants/desktop-pets"
 import logoUrl from "@/assets/ai-manager-logo.png?url"
-import TokenCount from "@/components/TokenCount.vue"
-import { useGlobalLoading } from "@/utils/global-loading"
-import { formatTokenCount } from "@/utils/formatters"
+import { getToolItems } from "@/features/tools/constant"
+import { formatTokenCountParts } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
-  state: {
-    type: Object,
-    required: true
-  }
+  state: { type: Object, required: true },
+  ready: { type: Boolean, default: true }
 })
-
-const emit = defineEmits(["state-updated"])
-const quickParams = new URLSearchParams(window.location.search)
-
-const mode = ref("usage")
-const selectedCli = ref("")
-const collapsed = ref(quickParams.get("collapsed") === "1")
-const logoDrag = {
-  active: false,
-  moved: false,
-  lastX: 0,
-  lastY: 0,
-  totalX: 0,
-  totalY: 0
-}
-const { withGlobalLoading } = useGlobalLoading()
-
-const cliTargets = computed(() => {
-  return (props.state.cliTargets || []).filter((item) => {
-    return props.state.runtimeConfigSchemas?.[item.id]?.enabled
-  })
-})
-
-const activeCli = computed(() => {
-  return (
-    cliTargets.value.find((item) => item.id === selectedCli.value) ||
-    cliTargets.value[0] ||
-    null
+const expanded = ref(false)
+const layoutReady = ref(false)
+const screenEdge = ref("")
+const hovered = ref(false)
+const selectedPage = ref("home")
+const usageSummary = ref(null)
+const usageError = ref("")
+const desktopPet = computed(() =>
+  props.state.appSettings?.desktop?.enabled
+    ? getDesktopPet(props.state.appSettings.desktop.petId)
+    : null
+)
+const cliTargets = computed(() =>
+  (props.state.cliTargets || []).filter(
+    (cli) => props.state.runtimeConfigSchemas?.[cli.id]?.enabled
   )
-})
-
-const activeProfile = computed(() => {
-  return (
-    (props.state.runtimeProfiles || []).find(
-      (item) => item.cli === activeCli.value?.id
-    ) || null
+)
+const centerPages = computed(() => [
+  { id: "home", name: "AI Manager" },
+  ...cliTargets.value
+])
+const activeCli = computed(
+  () => cliTargets.value.find((cli) => cli.id === selectedPage.value) || null
+)
+const activeProfile = computed(() =>
+  (props.state.runtimeProfiles || []).find(
+    (profile) => profile.cli === activeCli.value?.id
   )
-})
-
-const activeProxyState = computed(() => {
-  if (activeCli.value?.id === "claude") {
-    return props.state.claudeProxyState
-  }
-
-  if (activeCli.value?.id === "codex") {
-    return props.state.codexProxyState
-  }
-
-  return null
-})
-
-const proxyActiveTargetId = computed(() => {
-  if (!activeProxyState.value?.enabled) {
-    return ""
-  }
-
-  return activeProxyState.value.activeProviderId || ""
-})
-
-const proxyActiveProvider = computed(() => {
-  if (!proxyActiveTargetId.value.startsWith("account:")) {
-    return (
-      (props.state.providers || []).find(
-        (item) => item.id === proxyActiveTargetId.value
-      ) || null
-    )
-  }
-
-  return null
-})
-
-const proxyActiveAccount = computed(() => {
-  if (!proxyActiveTargetId.value.startsWith("account:")) {
-    return null
-  }
-
-  const accountId = proxyActiveTargetId.value.slice("account:".length)
-
-  return (
-    (props.state.codexAccounts || []).find((item) => item.id === accountId) ||
-    null
+)
+const activeProxy = computed(() =>
+  activeCli.value?.id === "claude"
+    ? props.state.claudeProxyState
+    : activeCli.value?.id === "codex"
+      ? props.state.codexProxyState
+      : null
+)
+const proxyTarget = computed(() =>
+  activeProxy.value?.enabled ? activeProxy.value.activeProviderId || "" : ""
+)
+const activeProvider = computed(() =>
+  (props.state.providers || []).find(
+    (provider) =>
+      provider.id === (proxyTarget.value || activeProfile.value?.providerId)
   )
-})
-
-const activeProvider = computed(() => {
-  if (proxyActiveTargetId.value) {
-    return proxyActiveProvider.value
-  }
-
-  return (
-    (props.state.providers || []).find(
-      (item) => item.id === activeProfile.value?.providerId
-    ) || null
-  )
-})
-
+)
 const activeAccount = computed(() => {
-  if (activeCli.value?.id !== "codex") {
-    return null
-  }
-
-  if (proxyActiveTargetId.value) {
-    return proxyActiveAccount.value
-  }
-
-  return (props.state.codexAccounts || []).find((item) => item.active) || null
+  if (activeCli.value?.id !== "codex") return null
+  return (props.state.codexAccounts || []).find((account) =>
+    proxyTarget.value
+      ? proxyTarget.value === `account:${account.id}`
+      : account.active
+  )
 })
-
 const activeName = computed(() => {
-  if (proxyActiveTargetId.value) {
-    return `Proxy 接管中：${
-      activeProvider.value?.name ||
-      activeAccount.value?.email ||
-      activeAccount.value?.accountId ||
-      "未激活"
-    }`
-  }
-
-  if (activeAccount.value) {
-    return (
-      activeAccount.value.email ||
-      activeAccount.value.accountId ||
-      "Codex 官方账号"
-    )
-  }
-
-  return activeProvider.value?.name || "未启用"
+  if (!activeCli.value) return "你的桌面工具中心"
+  const name =
+    activeAccount.value?.email ||
+    activeAccount.value?.accountId ||
+    activeProvider.value?.name ||
+    "未启用 Provider"
+  return proxyTarget.value ? `Proxy · ${name}` : name
 })
-
-const items = computed(() => {
-  if (!activeCli.value) {
-    return []
-  }
-
-  const providerItems = (props.state.providers || [])
-    .filter((item) => {
-      return item.cli === activeCli.value.id && item.enabled !== false
-    })
-    .map((provider) => {
-      const model = firstModelName(provider)
-      const active = proxyActiveTargetId.value
-        ? proxyActiveTargetId.value === provider.id
-        : !activeAccount.value && activeProvider.value?.id === provider.id
-
-      return {
-        key: `provider:${provider.id}`,
-        type: "provider",
-        provider,
-        model,
-        label: provider.name,
-        description: model || "缺少模型",
-        active,
-        disabled: !model || provider.enabled === false
-      }
-    })
-
-  if (activeCli.value.id !== "codex") {
-    return providerItems
-  }
-
-  return [
-    ...providerItems,
-    ...(props.state.codexAccounts || []).map((account) => ({
-      key: `account:${account.id}`,
-      type: "account",
-      account,
-      label: account.email || account.accountId || "Codex 官方账号",
-      description: formatAccountDescription(account),
-      quotas: formatAccountQuotas(account),
-      active: proxyActiveTargetId.value
-        ? proxyActiveTargetId.value === `account:${account.id}`
-        : account.active,
-      disabled: Boolean(account.disabled)
-    }))
-  ]
-})
-
-const activeUsageLogs = computed(() => {
-  return (props.state.usage?.logs || []).filter((item) => {
-    return item.appType === activeCli.value?.id
-  })
-})
-
-const usageSummary = computed(() => {
-  return activeUsageLogs.value.reduce(
-    (result, item) => {
-      result.requestCount += 1
-      result.actualTokens += Number(item.actualTokens || 0)
-      result.totalCostUsd += Number(item.totalCostUsd || 0)
-      return result
-    },
-    {
-      requestCount: 0,
-      actualTokens: 0,
-      totalCostUsd: 0
-    }
-  )
-})
-
-const usageTrend = computed(() => {
-  const groups = new Map()
-
-  for (const item of activeUsageLogs.value) {
-    const date = new Date(Number(item.createdAt || 0))
-    const key = date.toLocaleDateString("zh-CN")
-
-    groups.set(key, {
-      date: key,
-      label: `${date.getMonth() + 1}/${date.getDate()}`,
-      timestamp: new Date(
-        date.getFullYear(),
-        date.getMonth(),
-        date.getDate()
-      ).getTime(),
-      actualTokens:
-        (groups.get(key)?.actualTokens || 0) + Number(item.actualTokens || 0)
-    })
-  }
-
-  const rows = Array.from(groups.values())
-    .sort((left, right) => left.timestamp - right.timestamp)
-    .slice(-7)
-  const maxTokens = Math.max(...rows.map((item) => item.actualTokens), 1)
-
-  return rows.map((item) => ({
-    ...item,
-    percent: Math.max(8, Math.round((item.actualTokens / maxTokens) * 100))
-  }))
-})
-
-const usageProviders = computed(() => {
-  const groups = new Map()
-
-  for (const item of activeUsageLogs.value) {
-    const key = item.providerId || item.providerName || "unknown"
-    const previous = groups.get(key) || {
-      providerId: key,
-      providerName: item.providerName || "未知 Provider",
-      actualTokens: 0,
-      totalCostUsd: 0
-    }
-
-    previous.actualTokens += Number(item.actualTokens || 0)
-    previous.totalCostUsd += Number(item.totalCostUsd || 0)
-    groups.set(key, previous)
-  }
-
-  const rows = Array.from(groups.values())
-    .sort((left, right) => right.actualTokens - left.actualTokens)
-    .slice(0, 2)
-  const maxTokens = Math.max(...rows.map((item) => item.actualTokens), 1)
-
-  return rows.map((item) => ({
-    ...item,
-    percent: Math.max(4, Math.round((item.actualTokens / maxTokens) * 100))
-  }))
-})
-
-function formatQuickNumber(value) {
-  return new Intl.NumberFormat("zh-CN", {
-    maximumFractionDigits: 0
-  }).format(Number(value || 0))
-}
-
-function formatQuickCost(value) {
-  const cost = Number(value || 0)
-
-  if (!cost) {
-    return "$0"
-  }
-
-  return `$${cost >= 1 ? cost.toFixed(2) : cost.toFixed(6)}`
-}
-
-function ensureSelectedCli() {
-  if (
-    selectedCli.value &&
-    cliTargets.value.find((item) => item.id === selectedCli.value)
-  ) {
-    return
-  }
-
-  selectedCli.value = cliTargets.value[0]?.id || ""
-}
-
-function emitState(nextState) {
-  if (nextState && typeof nextState === "object") {
-    emit("state-updated", nextState)
-  }
-}
-
-async function runAction(action) {
-  return withGlobalLoading(async () => {
-    try {
-      emitState(await action())
-      return true
-    } catch (error) {
-      createMessage.error(error.message || String(error))
-      return false
-    }
-  })
-}
-
-function getProxyState(cli) {
-  if (cli === "claude") {
-    return props.state.claudeProxyState
-  }
-
-  if (cli === "codex") {
-    return props.state.codexProxyState
-  }
-
-  return null
-}
-
-function getProxyApi(cli) {
-  if (cli === "claude") {
-    return {
-      disable: proxyApi.disableClaudeProxy
-    }
-  }
-
-  if (cli === "codex") {
-    return {
-      disable: proxyApi.disableCodexProxy
-    }
-  }
-
-  return null
-}
-
-function firstModelName(provider) {
-  return (
-    provider.runtimeConfig?.mainModel ||
+const activeModel = computed(() => {
+  const providerModel =
+    activeProvider.value?.runtimeConfig?.mainModel ||
     (props.state.runtimeModels || []).find(
-      (item) => item.providerId === provider.id
-    )?.name ||
-    ""
+      (model) => model.providerId === activeProvider.value?.id
+    )?.name
+  return (
+    (proxyTarget.value
+      ? providerModel
+      : activeProfile.value?.model || providerModel) ||
+    (activeAccount.value ? "官方账号" : "未选择模型")
   )
-}
-
-function formatAccountDescription(account) {
-  const rateLimit = account.usage?.rate_limit
-  const primaryWindow = rateLimit?.primary_window
-  const remaining = primaryWindow
-    ? `${Math.max(0, 100 - Number(primaryWindow.used_percent || 0))}%`
-    : "额度未知"
-
-  return `${account.plan || "free"} · ${remaining}`
-}
-
-function formatAccountQuotas(account) {
-  const rateLimit = account.usage?.rate_limit
-
-  if (!rateLimit) {
-    return []
-  }
-
-  return [
-    { key: "primary", window: rateLimit.primary_window },
-    { key: "secondary", window: rateLimit.secondary_window }
+})
+const visibleTools = computed(() =>
+  getToolItems(props.state).filter(
+    (tool) =>
+      props.state.appSettings?.system?.quickSwitchTools?.[tool.id] !== false
+  )
+)
+const centerPosition = ref({ x: 64, y: 64 })
+// 贴边时露出一部分桌宠，悬浮展开和拖动时完整显示。
+const petHidden = computed(() =>
+  Boolean(
+    desktopPet.value &&
+    screenEdge.value &&
+    !hovered.value &&
+    !expanded.value &&
+    !drag.active
+  )
+)
+const petAction = computed(() => {
+  if (!desktopPet.value) return ""
+  const action = drag.active
+    ? "walk"
+    : hovered.value
+      ? "salute"
+      : screenEdge.value
+        ? "peek"
+        : ""
+  return desktopPet.value.animations.some(
+    (animation) => animation.id === action
+  )
+    ? action
+    : ""
+})
+const centerLayoutStyle = computed(() => ({
+  "--center-x": `${centerPosition.value.x}px`,
+  "--center-y": `${centerPosition.value.y}px`,
+  "--pet-offset-x": `${petHidden.value ? (screenEdge.value === "left" ? -52 : screenEdge.value === "right" ? 52 : 0) : 0}px`,
+  "--pet-offset-y": `${petHidden.value ? (screenEdge.value === "top" ? -36 : screenEdge.value === "bottom" ? 52 : 0) : 0}px`
+}))
+// 边缘空间不足时改用可用网格，工具不再强行围绕中心节点。
+const orbitLayout = computed(() => {
+  const { x, y } = centerPosition.value
+  return x >= 200 && x <= 360 && y >= 200 && y <= 360 ? "radial" : "adaptive"
+})
+const toolTray = computed(() => {
+  if (orbitLayout.value === "radial" || !visibleTools.value.length) return null
+  const { x, y } = centerPosition.value
+  // 工具集中在空间较大的一侧，保持等距排列和固定阅读顺序。
+  const regions = [
+    {
+      side: "right",
+      x: x + 68,
+      y: 12,
+      width: 480 - x,
+      height: 536,
+      columns: 3
+    },
+    { side: "left", x: 12, y: 12, width: x - 80, height: 536, columns: 3 },
+    {
+      side: "bottom",
+      x: 12,
+      y: y + 68,
+      width: 536,
+      height: 480 - y,
+      columns: 4
+    },
+    { side: "top", x: 12, y: 12, width: 536, height: y - 80, columns: 4 }
   ]
-    .filter((item) => item.window)
-    .map((item) => {
-      return {
-        key: item.key,
-        label: formatRateWindowName(item.key, item.window),
-        remaining: Math.max(0, 100 - Number(item.window.used_percent || 0)),
-        reset: formatResetText(item.window.reset_at)
-      }
-    })
-}
-
-function formatRateWindowName(key, window) {
-  const seconds = Number(window.limit_window_seconds || 0)
-
-  if (seconds === 604800) {
-    return key === "secondary" ? "7天额度" : "周额度"
-  }
-
-  if (seconds % 86400 === 0) {
-    return `${seconds / 86400}天额度`
-  }
-
-  if (seconds % 3600 === 0) {
-    return `${seconds / 3600}小时额度`
-  }
-
-  return `${seconds}秒额度`
-}
-
-function formatResetText(value) {
-  const timestamp = Number(value || 0)
-
-  if (!timestamp) {
-    return "重置时间未知"
-  }
-
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(timestamp > 1e12 ? timestamp : timestamp * 1000))
-}
-
-async function showMainPanel() {
-  try {
-    await appApi.showMainPanel()
-  } catch (error) {
-    createMessage.error(error.message || String(error))
-  }
-}
-
-async function toggleCollapsed() {
-  collapsed.value = !collapsed.value
-
-  try {
-    await appApi.setQuickSwitchCollapsed({
-      collapsed: collapsed.value
-    })
-  } catch (error) {
-    createMessage.error(error.message || String(error))
-  }
-}
-
-function startLogoDrag(event) {
-  if (event.button !== 0) {
-    return
-  }
-
-  event.preventDefault()
-  logoDrag.active = true
-  logoDrag.moved = false
-  logoDrag.lastX = event.screenX
-  logoDrag.lastY = event.screenY
-  logoDrag.totalX = 0
-  logoDrag.totalY = 0
-  window.addEventListener("pointermove", moveLogoDrag)
-  window.addEventListener("pointerup", stopLogoDrag)
-  window.addEventListener("pointercancel", stopLogoDrag)
-}
-
-function moveLogoDrag(event) {
-  if (!logoDrag.active) {
-    return
-  }
-
-  const x = event.screenX - logoDrag.lastX
-  const y = event.screenY - logoDrag.lastY
-  logoDrag.lastX = event.screenX
-  logoDrag.lastY = event.screenY
-  logoDrag.totalX += Math.abs(x)
-  logoDrag.totalY += Math.abs(y)
-
-  if (logoDrag.totalX + logoDrag.totalY > 3) {
-    logoDrag.moved = true
-  }
-
-  if (x || y) {
-    appApi.moveQuickSwitchBy({ x, y })
-  }
-}
-
-function stopLogoDrag() {
-  logoDrag.active = false
-  window.removeEventListener("pointermove", moveLogoDrag)
-  window.removeEventListener("pointerup", stopLogoDrag)
-  window.removeEventListener("pointercancel", stopLogoDrag)
-}
-
-async function handleLogoClick() {
-  if (logoDrag.moved) {
-    return
-  }
-
-  await showMainPanel()
-}
-
-function isCodexAccountRefreshError(error) {
-  return Boolean(error)
-}
-
-async function refreshCodexAccount(item) {
-  await withGlobalLoading(async () => {
-    try {
-      emitState(
-        await accountApi.refreshCodexAccount({
-          accountId: item.account.id,
-          syncAuth: false
-        })
+  const candidates = regions
+    .map((region) => {
+      const columns = Math.min(
+        visibleTools.value.length,
+        region.columns,
+        Math.floor((region.width - 10) / 94)
       )
-    } catch (error) {
-      if (!isCodexAccountRefreshError(error)) {
-        createMessage.error(error.message || String(error))
+      const rows =
+        columns > 0 ? Math.ceil(visibleTools.value.length / columns) : 0
+      return {
+        ...region,
+        columns,
+        trayWidth: columns * 94 + 10,
+        trayHeight: rows * 80 + 10
       }
-    }
-  })
-}
-
-async function selectItem(item) {
-  if (item.type === "provider") {
-    await runAction(async () => {
-      const currentProxyApi = getProxyApi(activeCli.value?.id)
-      const proxyState = getProxyState(activeCli.value?.id)
-
-      if (proxyState?.enabled) {
-        await currentProxyApi.disable()
-      }
-
-      if (activeCli.value?.id === "codex") {
-        await accountApi.clearCodexAccount()
-      }
-
-      return runtimeApi.switchRuntime({
-        cli: activeCli.value.id,
-        providerId: item.provider.id,
-        model: item.model
-      })
     })
-    return
+    .filter(
+      (region) => region.columns > 0 && region.trayHeight <= region.height
+    )
+  const region = candidates.sort(
+    (a, b) => b.width * b.height - a.width * a.height
+  )[0]
+  const width = region.trayWidth
+  const height = region.trayHeight
+  let left = Math.max(12, Math.min(548 - width, x - width / 2))
+  let top = Math.max(12, Math.min(548 - height, y - height / 2))
+  if (region.side === "left") left = x - 68 - width
+  if (region.side === "right") left = x + 68
+  if (region.side === "top") top = y - 68 - height
+  if (region.side === "bottom") top = y + 68
+  return { x: left, y: top, width, height, columns: region.columns }
+})
+const orbitTools = computed(() => {
+  const tools = visibleTools.value
+  if (!tools.length) return []
+  if (orbitLayout.value === "radial") {
+    return tools.map((tool, index) => {
+      const angle = -Math.PI / 2 + (index * Math.PI * 2) / tools.length
+      return {
+        ...tool,
+        x: Math.min(
+          515,
+          Math.max(45, centerPosition.value.x + Math.cos(angle) * 205)
+        ),
+        y: Math.min(
+          519,
+          Math.max(41, centerPosition.value.y + Math.sin(angle) * 205)
+        ),
+        order: index
+      }
+    })
   }
 
-  await runAction(async () => {
-    const currentProxyApi = getProxyApi(activeCli.value?.id)
-    const proxyState = getProxyState(activeCli.value?.id)
-
-    if (proxyState?.enabled) {
-      await currentProxyApi.disable()
+  const tray = toolTray.value
+  return tools.map((tool, index) => {
+    const row = Math.floor(index / tray.columns)
+    const rowCount = Math.min(tray.columns, tools.length - row * tray.columns)
+    return {
+      ...tool,
+      x:
+        tray.x +
+        52 +
+        (index % tray.columns) * 94 +
+        (tray.columns - rowCount) * 47,
+      y: tray.y + 45 + row * 80,
+      order: index
     }
-
-    await runtimeApi.clearRuntime({
-      cli: activeCli.value.id
-    })
-    return accountApi.enableCodexAccount({
-      accountId: item.account.id
-    })
   })
+})
+const tokenCount = computed(() =>
+  formatTokenCountParts(usageSummary.value?.actualTokens)
+)
+let hoverTimer = null
+let resizing = false
+let wantedExpanded = false
+let disposed = false
+let usageSequence = 0
+let usageKey = ""
+let moveRequest = Promise.resolve()
+// 拖动期间锁住悬浮样式，避免移动时误触发工具效果。
+const drag = reactive({ active: false, moved: false, x: 0, y: 0, distance: 0 })
+
+function formatCost(value) {
+  const cost = Number(value || 0)
+  return `$${cost === 0 ? "0" : cost.toFixed(cost >= 1 ? 2 : 4)}`
 }
 
-async function clearActive() {
-  await runAction(async () => {
-    const currentProxyApi = getProxyApi(activeCli.value?.id)
-    const proxyState = getProxyState(activeCli.value?.id)
-
-    if (proxyState?.enabled) {
-      return currentProxyApi.disable()
+// 原生窗口按中心扩缩；串行处理，避免快速进出时旧请求覆盖新状态。
+async function setExpanded(value) {
+  wantedExpanded = value && visibleTools.value.length > 0
+  if (drag.active || resizing || disposed) return
+  resizing = true
+  try {
+    // 先完成拖动，避免迟到的坐标覆盖展开或收起后的中心位置。
+    await moveRequest
+    while (!disposed && !drag.active && wantedExpanded !== expanded.value) {
+      const next = wantedExpanded
+      const layout = await appApi.setQuickSwitchCollapsed({ collapsed: !next })
+      if (!disposed) {
+        expanded.value = next
+        const fallback = next ? 280 : 64
+        const centerX = Number(layout?.centerX)
+        const centerY = Number(layout?.centerY)
+        centerPosition.value = {
+          x: Number.isFinite(centerX) ? centerX : fallback,
+          y: Number.isFinite(centerY) ? centerY : fallback
+        }
+        screenEdge.value = layout?.edge || ""
+      }
     }
-
-    if (activeCli.value?.id === "codex") {
-      await accountApi.clearCodexAccount()
-    }
-
-    return runtimeApi.clearRuntime({
-      cli: activeCli.value.id
-    })
-  })
+  } catch (error) {
+    wantedExpanded = expanded.value
+    createMessage.error(error.message || String(error))
+  } finally {
+    resizing = false
+  }
 }
 
-watch(cliTargets, ensureSelectedCli, { immediate: true })
+function enterPanel() {
+  hovered.value = true
+  clearTimeout(hoverTimer)
+  if (drag.active) return
+  hoverTimer = setTimeout(() => setExpanded(true), 100)
+}
+
+function leavePanel() {
+  hovered.value = false
+  clearTimeout(hoverTimer)
+  // 给鼠标从中心经过透明间隔到工具节点留出时间。
+  if (!drag.active) hoverTimer = setTimeout(() => setExpanded(false), 260)
+}
+
+function handleFocusOut(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) leavePanel()
+}
+
+async function showMainPanel(toolId) {
+  try {
+    await appApi.showMainPanel(toolId ? { toolId } : undefined)
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  }
+}
+
+function handleMainClick(event) {
+  if (!drag.moved || event.detail === 0) showMainPanel()
+}
+
+function startDrag(event) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  clearTimeout(hoverTimer)
+  wantedExpanded = expanded.value
+  drag.active = true
+  drag.moved = false
+  drag.distance = 0
+  drag.x = event.screenX
+  drag.y = event.screenY
+  event.currentTarget.setPointerCapture(event.pointerId)
+  window.addEventListener("pointermove", moveDrag)
+  window.addEventListener("pointerup", stopDrag)
+  window.addEventListener("pointercancel", stopDrag)
+}
+
+function moveDrag(event) {
+  const x = event.screenX - drag.x
+  const y = event.screenY - drag.y
+  drag.x = event.screenX
+  drag.y = event.screenY
+  drag.distance += Math.abs(x) + Math.abs(y)
+  if (drag.distance > 3) drag.moved = true
+  if (drag.moved && (x || y)) {
+    // 串行同步实际中心位置，贴边时让工具自动移到剩余空间。
+    moveRequest = moveRequest
+      .then(async () => {
+        if (disposed) return
+        const layout = await appApi.moveQuickSwitchBy({ x, y })
+        if (
+          !disposed &&
+          Number.isFinite(layout?.centerX) &&
+          Number.isFinite(layout?.centerY)
+        ) {
+          centerPosition.value = { x: layout.centerX, y: layout.centerY }
+          screenEdge.value = layout.edge || ""
+        }
+      })
+      .catch((error) => createMessage.error(error.message || String(error)))
+    return moveRequest
+  }
+}
+
+function stopDrag() {
+  const wasActive = drag.active
+  drag.active = false
+  window.removeEventListener("pointermove", moveDrag)
+  window.removeEventListener("pointerup", stopDrag)
+  window.removeEventListener("pointercancel", stopDrag)
+  if (wasActive && !disposed) hovered.value ? enterPanel() : leavePanel()
+}
+
+// 每五秒轮换中心内容，查看或拖动时暂停，手动切换仍保留。
+function rotateCenterPage() {
+  if (
+    !props.ready ||
+    desktopPet.value ||
+    hovered.value ||
+    drag.active ||
+    disposed ||
+    document.hidden
+  )
+    return
+  const pages = centerPages.value
+  const index = pages.findIndex((page) => page.id === selectedPage.value)
+  selectedPage.value = pages[(index + 1) % pages.length].id
+}
+
+// 主状态仅带最近 200 条记录，今日汇总复用统计接口，避免漏算。
+async function loadTodayUsage() {
+  if (!props.ready) return
+  const sequence = ++usageSequence
+  const start = new Date()
+  start.setHours(0, 0, 0, 0)
+  const end = new Date(start)
+  end.setDate(end.getDate() + 1)
+  const nextKey = `${activeCli.value?.id || "all"}:${start.getTime()}`
+  if (usageKey !== nextKey) usageSummary.value = null
+  usageKey = nextKey
+  usageError.value = ""
+  try {
+    const result = await usageApi.getUsageStats({
+      appType: activeCli.value?.id || "all",
+      startAt: start.getTime(),
+      endAt: end.getTime() - 1,
+      logPageSize: 1
+    })
+    if (!disposed && sequence === usageSequence)
+      usageSummary.value = result.data.summary
+  } catch (error) {
+    if (!disposed && sequence === usageSequence)
+      usageError.value = `今日用量加载失败：${error.message || error}`
+  }
+}
+
+watch(cliTargets, () => {
+  if (!centerPages.value.some((page) => page.id === selectedPage.value))
+    selectedPage.value = "home"
+})
+watch(visibleTools, () => {
+  if (!visibleTools.value.length) setExpanded(false)
+})
+// 初始化同步保存的屏幕位置和贴边状态，配置和布局就绪后才显示主节点。
+watch(
+  () => props.ready,
+  async (ready) => {
+    if (!ready) {
+      layoutReady.value = false
+      return
+    }
+    try {
+      const layout = await appApi.setQuickSwitchCollapsed({
+        collapsed: !expanded.value
+      })
+      if (disposed || !props.ready) return
+      if (Number.isFinite(layout?.centerX) && Number.isFinite(layout?.centerY))
+        centerPosition.value = { x: layout.centerX, y: layout.centerY }
+      screenEdge.value = layout?.edge || ""
+      layoutReady.value = true
+    } catch (error) {
+      if (!disposed) createMessage.error(error.message || String(error))
+    }
+  },
+  { immediate: true }
+)
+watch(
+  () => [props.ready, activeCli.value?.id, props.state.usage],
+  loadTodayUsage,
+  {
+    immediate: true
+  }
+)
+// 跨日和后台更新时刷新今日统计，不额外触发全量扫描。
+const usageTimer = setInterval(loadTodayUsage, 60000)
+const pageTimer = setInterval(rotateCenterPage, 5000)
 
 onBeforeUnmount(() => {
-  stopLogoDrag()
+  disposed = true
+  usageSequence += 1
+  clearTimeout(hoverTimer)
+  clearInterval(usageTimer)
+  clearInterval(pageTimer)
+  stopDrag()
 })
 </script>
 
 <style scoped lang="less">
 .quick-switch-panel {
-  display: flex;
+  position: relative;
+  width: 100vw;
   height: 100vh;
-  min-height: 0;
-  flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--color-info-line);
-  background: var(--color-primary-soft);
   color: var(--color-text);
+  user-select: none;
 
-  :deep(.token-count) {
-    font-size: inherit;
+  .quick-switch-connections {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    stroke: rgba(81, 148, 235, 0.14);
+    stroke-width: 1;
   }
 
-  :deep(.token-count-exact) {
-    font-size: var(--font-size-xs);
+  .quick-switch-orbit-ring {
+    position: absolute;
+    top: var(--center-y);
+    left: var(--center-x);
+    width: 410px;
+    height: 410px;
+    border: 1px solid rgba(81, 148, 235, 0.22);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
   }
 
-  .quick-switch-panel-header {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    height: 34px;
-    padding: 0 8px 0 10px;
-    border-bottom: 1px solid var(--color-line-strong);
-    background: var(--color-panel-soft);
-    -webkit-app-region: drag;
-  }
-
-  .quick-switch-panel-title {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    align-items: center;
-    gap: 7px;
-
-    .quick-switch-panel-title-name {
-      flex: none;
-      font-size: var(--font-size-sm);
-      line-height: 1;
+  .quick-switch-tools {
+    position: absolute;
+    inset: 0;
+    .quick-switch-tool {
+      --tool-color: #448bea;
+      position: absolute;
+      top: var(--tool-top);
+      left: var(--tool-left);
+      display: flex;
+      width: 90px;
+      height: 82px;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 7px;
+      padding: 8px 3px;
+      border: 1px solid rgba(122, 164, 219, 0.38);
+      border-radius: 21px;
+      background: color-mix(in srgb, var(--color-panel) 96%, transparent);
+      box-shadow:
+        0 4px 16px rgba(29, 71, 129, 0.11),
+        inset 0 1px 0 rgba(255, 255, 255, 0.65);
+      color: var(--color-text);
+      cursor: pointer;
+      transform: translate(-50%, -50%);
+      animation: quick-switch-tool-enter 280ms cubic-bezier(0.2, 0.72, 0.3, 1)
+        both;
+      animation-delay: calc(var(--tool-order) * 16ms);
+      transition:
+        transform 180ms ease,
+        border-color 140ms,
+        box-shadow 180ms ease;
+      &.quick-switch-tool-green {
+        --tool-color: #29876c;
+      }
+      &.quick-switch-tool-orange {
+        --tool-color: #c08332;
+      }
+      &.quick-switch-tool-purple,
+      &.quick-switch-tool-violet {
+        --tool-color: #8d6bb7;
+      }
+      &.quick-switch-tool-rose {
+        --tool-color: #c27382;
+      }
+      &:hover,
+      &:focus-visible {
+        transform: translate(-50%, -50%) scale(1.08);
+        border-color: var(--tool-color);
+        box-shadow: 0 5px 22px rgba(43, 103, 180, 0.2);
+        outline: none;
+      }
+      .quick-switch-tool-icon {
+        display: flex;
+        width: 34px;
+        height: 34px;
+        align-items: center;
+        justify-content: center;
+        border-radius: 11px;
+        background: color-mix(
+          in srgb,
+          var(--tool-color) 10%,
+          var(--color-panel)
+        );
+        color: var(--tool-color);
+        transition:
+          transform 180ms ease,
+          background-color 180ms ease;
+      }
+      &:hover .quick-switch-tool-icon,
+      &:focus-visible .quick-switch-tool-icon {
+        transform: translateY(-2px) scale(1.06);
+      }
+      .quick-switch-tool-name {
+        font-size: 11px;
+        line-height: 16px;
+        white-space: nowrap;
+      }
     }
 
-    .quick-switch-panel-title-desc {
-      overflow: hidden;
-      min-width: 0;
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-      line-height: 1;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    &.quick-switch-tools-adaptive {
+      inset: auto;
+      top: var(--tray-top);
+      left: var(--tray-left);
+      width: var(--tray-width);
+      height: var(--tray-height);
+      box-sizing: border-box;
+      border: 1px solid rgba(122, 164, 219, 0.3);
+      border-radius: 20px;
+      background: color-mix(in srgb, var(--color-panel) 97%, transparent);
+      box-shadow: 0 6px 20px rgba(29, 71, 129, 0.14);
+
+      .quick-switch-tool {
+        top: calc(var(--tool-top) - var(--tray-top));
+        left: calc(var(--tool-left) - var(--tray-left));
+        width: 84px;
+        height: 70px;
+        gap: 4px;
+        padding: 4px 2px;
+        border-color: transparent;
+        border-radius: 14px;
+        background: transparent;
+        box-shadow: none;
+
+        &:hover,
+        &:focus-visible {
+          border-color: transparent;
+          background: color-mix(
+            in srgb,
+            var(--tool-color) 8%,
+            var(--color-panel)
+          );
+          box-shadow: none;
+        }
+
+        .quick-switch-tool-icon {
+          width: 28px;
+          height: 28px;
+          border-radius: 9px;
+        }
+
+        .quick-switch-tool-name {
+          font-size: 10px;
+        }
+      }
     }
   }
 
-  .quick-switch-panel-dot {
-    width: 7px;
-    height: 7px;
-    flex: none;
-    border-radius: 999px;
-    background: var(--color-success);
-    box-shadow: 0 0 0 3px #e3f5ec;
+  &.quick-switch-panel-dragging {
+    .quick-switch-center.quick-switch-center-pet {
+      transition: none;
+    }
+    .quick-switch-tools {
+      pointer-events: none;
+
+      .quick-switch-tool,
+      .quick-switch-tool:hover,
+      .quick-switch-tool:focus-visible {
+        pointer-events: none;
+        opacity: 1;
+        transform: translate(-50%, -50%);
+        border-color: rgba(122, 164, 219, 0.38);
+        box-shadow:
+          0 4px 16px rgba(29, 71, 129, 0.11),
+          inset 0 1px 0 rgba(255, 255, 255, 0.65);
+        animation: none;
+        transition: none;
+        outline: none;
+
+        .quick-switch-tool-icon {
+          transform: none;
+          transition: none;
+        }
+      }
+
+      &.quick-switch-tools-adaptive {
+        .quick-switch-tool {
+          border-color: transparent;
+          background: transparent;
+          box-shadow: none;
+        }
+      }
+    }
   }
 
-  .quick-switch-panel-actions {
+  .quick-switch-center {
+    position: absolute;
+    top: var(--center-y);
+    left: var(--center-x);
     display: flex;
-    flex: none;
-    align-items: center;
-    gap: 4px;
-    -webkit-app-region: no-drag;
-  }
-
-  .quick-switch-panel-icon-button {
-    display: inline-flex;
-    width: 26px;
-    height: 26px;
+    width: 112px;
+    height: 112px;
+    box-sizing: border-box;
     align-items: center;
     justify-content: center;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--color-primary);
-    cursor: pointer;
-  }
-
-  .quick-switch-panel-icon-button:hover {
-    border-color: var(--color-info-line);
-    background: var(--color-primary-soft);
-  }
-
-  .quick-switch-panel-logo-button {
-    display: inline-flex;
-    width: 44px;
-    height: 44px;
-    align-items: center;
-    justify-content: center;
-    border: 0;
-    background: transparent;
+    flex-direction: column;
+    padding: 5px 6px;
+    border: 1px solid rgba(111, 160, 225, 0.62);
+    border-radius: 24px;
+    background: color-mix(in srgb, var(--color-panel) 96%, transparent);
+    box-shadow:
+      0 4px 10px rgba(29, 71, 129, 0.13),
+      inset 0 0 0 4px rgba(108, 166, 244, 0.05);
+    transform: translate(-50%, -50%);
     cursor: grab;
     touch-action: none;
-    -webkit-app-region: no-drag;
-  }
-
-  .quick-switch-panel-logo-button:active {
-    cursor: grabbing;
-  }
-
-  .quick-switch-panel-logo-scene {
-    width: 42px;
-    height: 42px;
-    overflow: visible;
-  }
-
-  .quick-switch-panel-logo-shadow {
-    animation: quick-switch-logo-shadow 2.4s ease-in-out infinite;
-    fill: rgba(16, 24, 40, 0.2);
-    transform-origin: 22px 36px;
-  }
-
-  .quick-switch-panel-logo-mascot {
-    animation: quick-switch-logo-float 2.4s ease-in-out infinite;
-    transform-origin: 22px 26px;
-  }
-
-  .quick-switch-panel-logo-orbit {
-    animation: quick-switch-logo-pulse 2.4s ease-in-out infinite;
-    fill: rgba(255, 255, 255, 0.84);
-    stroke: url("#quick-switch-logo-ring");
-    stroke-width: 1.8;
-    transform-origin: 22px 21px;
-  }
-
-  .quick-switch-panel-logo-core {
-    animation: quick-switch-logo-breathe 2.4s ease-in-out infinite;
-    transform-origin: 22px 21px;
-  }
-
-  .quick-switch-panel-logo-sparks {
-    animation: quick-switch-logo-sparkle 2.2s ease-in-out infinite;
-    fill: #ffb84d;
-    transform-origin: 22px 22px;
-  }
-
-  .quick-switch-panel-cli-tabs {
-    display: flex;
-    flex: none;
-    gap: 4px;
-    padding: 6px 7px;
-    background: var(--color-panel-soft);
-  }
-
-  .quick-switch-panel-cli-tab {
-    height: 24px;
-    flex: 1;
-    border: 1px solid var(--color-line);
-    border-radius: 6px;
-    background: var(--color-panel-soft);
-    color: var(--color-text-muted);
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-  }
-
-  .quick-switch-panel-cli-tab-active {
-    border-color: var(--color-primary-solid);
-    background: var(--color-primary-solid);
-    color: #ffffff;
-  }
-
-  .quick-switch-panel-usage {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 4px;
-    overflow: hidden;
-    padding: 0 7px 6px;
-  }
-
-  .quick-switch-panel-hero {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    height: 34px;
-    padding: 0 8px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel);
-
-    .quick-switch-panel-hero-copy {
-      display: grid;
-      min-width: 0;
-      grid-template-columns: auto minmax(0, 1fr);
-      gap: 2px 8px;
+    &:active {
+      cursor: grabbing;
     }
-
-    .quick-switch-panel-hero-label {
-      grid-row: 1 / 3;
-      align-self: center;
-      padding: 2px 6px;
-      border-radius: 5px;
-      background: var(--color-primary-soft);
-      color: var(--color-primary);
-      font-size: var(--font-size-xs);
+    &.quick-switch-center-pet {
+      padding: 0;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+      transform: translate(
+        calc(-50% + var(--pet-offset-x)),
+        calc(-50% + var(--pet-offset-y))
+      );
+      transition: transform 240ms cubic-bezier(0.2, 0.72, 0.3, 1);
+      &:active {
+        transition: none;
+      }
     }
-
-    .quick-switch-panel-hero-name,
-    .quick-switch-panel-hero-desc {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .quick-switch-panel-hero-name {
-      font-size: var(--font-size-xs);
-      line-height: 1.15;
-    }
-
-    .quick-switch-panel-hero-desc {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-      line-height: 1.15;
-    }
-  }
-
-  .quick-switch-panel-manage-button {
-    display: inline-flex;
-    height: 23px;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    padding: 0 10px;
-    border: 1px solid var(--color-info-line);
-    border-radius: 6px;
-    background: var(--color-primary-soft);
-    color: var(--color-primary);
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-  }
-
-  .quick-switch-panel-manage-button:hover {
-    border-color: var(--color-info-line);
-    background: var(--color-primary-soft);
-  }
-
-  .quick-switch-panel-metrics {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 5px;
-
-    .quick-switch-panel-metric {
-      display: flex;
-      min-width: 0;
-      align-items: center;
-      justify-content: space-between;
-      gap: 6px;
-      height: 28px;
-      padding: 0 7px;
-      border: 1px solid var(--color-line);
-      border-radius: 7px;
-      background: var(--color-panel);
-    }
-
-    .quick-switch-panel-metric-label {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-    }
-
-    .quick-switch-panel-metric-value {
-      overflow: hidden;
-      color: var(--color-text);
-      font-size: var(--font-size-xs);
-      line-height: 1.2;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  .quick-switch-panel-summary-row {
-    display: grid;
-    min-height: 0;
-    flex: 1;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
-    gap: 5px;
-  }
-
-  .quick-switch-panel-usage-panel {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-    gap: 4px;
-    overflow: hidden;
-    padding: 6px 7px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel);
-
-    .quick-switch-panel-usage-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-
-    .quick-switch-panel-usage-title {
-      color: var(--color-text);
-      font-size: var(--font-size-xs);
-    }
-
-    .quick-switch-panel-usage-count {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-    }
-  }
-
-  .quick-switch-panel-provider-panel {
-    min-width: 0;
-  }
-
-  .quick-switch-panel-bars {
-    display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
-    gap: 4px;
-    height: 48px;
-    align-items: end;
-
-    .quick-switch-panel-bar {
-      display: flex;
-      min-width: 0;
+    .quick-switch-pet-button {
+      width: 100%;
       height: 100%;
-      flex-direction: column;
-      justify-content: flex-end;
-      gap: 4px;
-    }
-
-    .quick-switch-panel-bar-fill {
-      display: block;
-      min-height: 6px;
-      border-radius: 4px 4px 2px 2px;
-      background: var(--color-primary-solid);
-    }
-
-    .quick-switch-panel-bar-label {
-      overflow: hidden;
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-      line-height: 1;
-      text-align: center;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-  }
-
-  .quick-switch-panel-provider-bars {
-    display: flex;
-    min-height: 0;
-    flex-direction: column;
-    gap: 6px;
-    overflow: hidden;
-
-    .quick-switch-panel-provider-bar {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .quick-switch-panel-provider-bar-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-
-    .quick-switch-panel-provider-name,
-    .quick-switch-panel-provider-cost {
-      overflow: hidden;
-      font-size: var(--font-size-xs);
-      line-height: 1.2;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .quick-switch-panel-provider-name {
-      color: var(--color-text);
-    }
-
-    .quick-switch-panel-provider-cost {
-      flex: none;
-      color: var(--color-text-muted);
-    }
-
-    .quick-switch-panel-provider-track {
-      height: 6px;
-      overflow: hidden;
-      border-radius: 999px;
-      background: var(--color-panel-soft);
-    }
-
-    .quick-switch-panel-provider-fill {
-      display: block;
-      height: 100%;
+      padding: 0;
+      border: 0;
       border-radius: inherit;
-      background: var(--color-success);
+      background: transparent;
+      cursor: inherit;
+      &.quick-switch-pet-mirrored {
+        transform: scaleX(-1);
+      }
+      &:focus-visible {
+        outline: 1px solid #448bea;
+        outline-offset: -3px;
+      }
     }
-  }
-
-  .quick-switch-panel-list {
-    display: flex;
-    min-height: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 6px;
-    overflow-x: hidden;
-    overflow-y: auto;
-    padding: 0 7px 7px;
-  }
-
-  .quick-switch-panel-manager-head {
-    display: flex;
-    flex: none;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 8px 9px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel);
-
-    .quick-switch-panel-manager-copy {
+    .quick-switch-main {
       display: flex;
+      width: 100%;
       min-width: 0;
+      align-items: center;
       flex-direction: column;
-      gap: 2px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: inherit;
+      text-align: center;
+      &:focus-visible {
+        outline: 1px solid #448bea;
+        outline-offset: 3px;
+        border-radius: 12px;
+      }
+      .quick-switch-avatar {
+        display: flex;
+        width: 20px;
+        height: 20px;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 1px;
+        .quick-switch-logo {
+          width: 24px;
+          height: 24px;
+          object-fit: contain;
+        }
+        :deep(.quick-switch-cli-icon) {
+          width: 18px;
+          height: 18px;
+          object-fit: contain;
+        }
+      }
+      .quick-switch-name {
+        font-size: 10px;
+        line-height: 13px;
+        letter-spacing: 0.1px;
+      }
+      .quick-switch-provider,
+      .quick-switch-model {
+        max-width: 100%;
+        overflow: hidden;
+        color: var(--color-text-muted);
+        font-size: 8px;
+        line-height: 9px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .quick-switch-provider {
+        color: var(--color-text-secondary);
+      }
     }
-
-    .quick-switch-panel-manager-title,
-    .quick-switch-panel-manager-desc {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .quick-switch-usage {
+      display: flex;
+      width: 100%;
+      justify-content: center;
+      margin-top: 2px;
+      padding-top: 2px;
+      border-top: 1px solid rgba(111, 160, 225, 0.2);
+      .quick-switch-usage-item {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        align-items: center;
+        flex-direction: column;
+        gap: 0;
+        .quick-switch-usage-label {
+          color: var(--color-text-muted);
+          font-size: 7px;
+          line-height: 8px;
+        }
+        .quick-switch-usage-value {
+          color: var(--color-text);
+          font-size: 10px;
+          line-height: 12px;
+          font-variant-numeric: tabular-nums;
+        }
+      }
     }
-
-    .quick-switch-panel-manager-title {
-      color: var(--color-text);
-      font-size: var(--font-size-xs);
-      line-height: 1.2;
+    .quick-switch-pages {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-top: 1px;
+      .quick-switch-page {
+        display: flex;
+        width: 12px;
+        height: 10px;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        &::after {
+          width: 4px;
+          height: 4px;
+          border-radius: 50%;
+          background: rgba(124, 146, 176, 0.35);
+          content: "";
+        }
+        &.quick-switch-page-active::after {
+          width: 8px;
+          border-radius: 4px;
+          background: #5495eb;
+        }
+        &:focus-visible {
+          outline: 1px solid #448bea;
+          border-radius: 4px;
+        }
+      }
     }
-
-    .quick-switch-panel-manager-desc {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-      line-height: 1.2;
-    }
-  }
-
-  .quick-switch-panel-item {
-    display: flex;
-    min-height: 50px;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 8px 9px;
-    border: 1px solid var(--color-line);
-    border-radius: 7px;
-    background: var(--color-panel);
-    color: var(--color-text);
-    text-align: left;
-    transition:
-      border-color 0.18s ease,
-      background 0.18s ease,
-      box-shadow 0.18s ease,
-      transform 0.18s ease;
-  }
-
-  .quick-switch-panel-item:hover {
-    border-color: var(--color-info-line);
-    background: var(--color-panel-soft);
-    box-shadow: 0 7px 18px rgba(22, 119, 255, 0.12);
-    transform: translateY(-1px);
-  }
-
-  .quick-switch-panel-item-active {
-    border-color: var(--color-info-line);
-    background: var(--color-primary-soft);
-    box-shadow: inset 3px 0 0 var(--color-primary-solid);
-  }
-
-  .quick-switch-panel-item-account {
-    min-height: 68px;
-  }
-
-  .quick-switch-panel-item-copy {
-    display: flex;
-    min-width: 0;
-    flex: 1;
-    flex-direction: column;
-    gap: 3px;
-
-    .quick-switch-panel-item-title,
-    .quick-switch-panel-item-desc {
-      overflow: hidden;
-      max-width: 230px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-
-    .quick-switch-panel-item-title {
-      font-size: var(--font-size-sm);
-      line-height: 1.25;
-    }
-
-    .quick-switch-panel-item-desc {
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xs);
-    }
-  }
-
-  .quick-switch-panel-item-actions {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: 5px;
-  }
-
-  .quick-switch-panel-item-icon-button {
-    display: inline-flex;
-    width: 26px;
-    height: 26px;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid var(--color-line);
-    border-radius: 6px;
-    background: var(--color-panel);
-    color: var(--color-primary);
-    cursor: pointer;
-  }
-
-  .quick-switch-panel-item-icon-button:hover {
-    border-color: var(--color-info-line);
-    background: var(--color-primary-soft);
-  }
-
-  .quick-switch-panel-item-action {
-    display: inline-flex;
-    height: 26px;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    padding: 0 10px;
-    border: 1px solid var(--color-info-line);
-    border-radius: 6px;
-    background: var(--color-primary-soft);
-    color: var(--color-primary);
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-  }
-
-  .quick-switch-panel-item-action:hover {
-    border-color: var(--color-info-line);
-    background: var(--color-primary-soft);
-  }
-
-  .quick-switch-panel-item-action:disabled {
-    border-color: var(--color-line-strong);
-    background: var(--color-panel-soft);
-    color: var(--color-text-soft);
-    cursor: not-allowed;
-  }
-
-  .quick-switch-panel-item-danger-action {
-    border-color: var(--color-danger-line);
-    background: var(--color-danger-soft);
-    color: var(--color-danger);
-  }
-
-  .quick-switch-panel-item-danger-action:hover {
-    border-color: var(--color-danger-line);
-    background: var(--color-danger-soft);
-  }
-
-  .quick-switch-panel-quota-list {
-    display: flex;
-    min-width: 0;
-    gap: 5px;
-    margin-top: 1px;
-  }
-
-  .quick-switch-panel-quota-item {
-    display: inline-flex;
-    height: 18px;
-    align-items: center;
-    gap: 4px;
-    padding: 0 6px;
-    border: 1px solid var(--color-line);
-    border-radius: 5px;
-    background: var(--color-primary-soft);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-xs);
-    line-height: 18px;
-    white-space: nowrap;
-
-    .quick-switch-panel-quota-value {
-      color: var(--color-primary);
-      font-size: var(--font-size-xs);
-      line-height: 18px;
-    }
-  }
-
-  .quick-switch-panel-empty {
-    display: flex;
-    flex: 1;
-    align-items: center;
-    justify-content: center;
-    color: var(--color-text-muted);
   }
 }
 
-.quick-switch-panel-collapsed {
-  border: 0;
-  background: transparent;
-
-  .quick-switch-panel-header {
-    height: 100vh;
-    justify-content: center;
-    padding: 0;
-    border-bottom: 0;
-    background: transparent;
+@keyframes quick-switch-tool-enter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.72);
   }
-}
-
-@keyframes quick-switch-logo-float {
-  0% {
-    transform: translateY(0);
-  }
-
-  25% {
-    transform: translateY(-3px);
-  }
-
-  50% {
-    transform: translateY(1px);
-  }
-
-  75% {
-    transform: translateY(-2px);
-  }
-
-  100% {
-    transform: translateY(0);
-  }
-}
-
-@keyframes quick-switch-logo-shadow {
-  0%,
-  100% {
-    opacity: 0.42;
-    transform: scaleX(0.86);
-  }
-
-  50% {
-    opacity: 0.22;
-    transform: scaleX(1.08);
-  }
-}
-
-@keyframes quick-switch-logo-pulse {
-  0%,
-  100% {
-    opacity: 0.88;
-    transform: scale(0.95);
-  }
-
-  50% {
+  to {
     opacity: 1;
-    transform: scale(1.04);
-  }
-}
-
-@keyframes quick-switch-logo-breathe {
-  0%,
-  100% {
-    transform: scale(0.94);
-  }
-
-  50% {
-    transform: scale(1.03);
-  }
-}
-
-@keyframes quick-switch-logo-sparkle {
-  0%,
-  100% {
-    opacity: 0.28;
-    transform: rotate(0deg) scale(0.9);
-  }
-
-  50% {
-    opacity: 0.95;
-    transform: rotate(18deg) scale(1.08);
+    transform: translate(-50%, -50%) scale(1);
   }
 }
 </style>

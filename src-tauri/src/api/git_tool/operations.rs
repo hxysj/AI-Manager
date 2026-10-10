@@ -302,7 +302,7 @@ async fn branch_diff(cwd: &str, payload: &Value) -> Result<Value, ManagerError> 
     let base_branch = string_value(payload.get("baseBranch"));
     let target_branch = string_value(payload.get("targetBranch"));
     if base_branch.is_empty() || target_branch.is_empty() {
-        return Err(ManagerError::System("请选择两个不同的分支".to_string()));
+        return Err(ManagerError::System("请选择基准分支和对比分支".to_string()));
     }
     let base_hash = resolve_commit(cwd, &base_branch).await?;
     let target_hash = resolve_commit(cwd, &target_branch).await?;
@@ -884,6 +884,17 @@ mod tests {
         assert_eq!(status["files"][2]["conflicted"], true);
         assert_eq!(status["files"][3]["untracked"], true);
     }
+
+    git_test!(comparing_current_branch_with_itself_is_empty, {
+        let repo = Repository::new().await;
+        repo.write("main.txt", "base\n");
+        repo.commit("base").await;
+        let result = branch_diff(repo.cwd(), &json!({ "baseBranch": "main", "targetBranch": "main" }))
+            .await.unwrap();
+        assert_eq!(result["fileCount"], 0);
+        assert_eq!(result["changedLines"], 0);
+        assert_eq!(result["patch"], "");
+    });
 
     git_test!(unborn_repository_stages_unstages_previews_and_commits, {
         let repo = Repository::new().await;

@@ -20,6 +20,16 @@ async fn dispatch_api(
     channel: String,
     payload: Option<Value>,
 ) -> Result<Value, String> {
+    // 拖动和悬浮尺寸调整不改变业务状态，不逐帧写日志和重建托盘菜单。
+    if matches!(
+        channel.as_str(),
+        "quick-switch:move-by" | "quick-switch:set-collapsed"
+    ) {
+        return state
+            .dispatch(app, &channel, payload)
+            .await
+            .map_err(|error| error.to_string());
+    }
     if channel.starts_with("app-log:") || channel.starts_with("network-quality:") {
         return state
             .dispatch(app.clone(), &channel, payload)
@@ -454,7 +464,8 @@ fn show_main_from_tray(app: &tauri::AppHandle) {
             return;
         };
         let (app_settings, quick_switch_collapsed) = state.quick_switch_settings().await;
-        if let Err(error) = app::show_main_panel(&app_handle, &app_settings, quick_switch_collapsed)
+        if let Err(error) =
+            app::show_main_panel(&app_handle, &app_settings, quick_switch_collapsed, None)
         {
             eprintln!("{error}");
         }

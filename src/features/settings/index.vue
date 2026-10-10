@@ -451,6 +451,115 @@
         />
       </section>
 
+      <section
+        v-else-if="activeTab === 'desktop'"
+        class="settings-view__panel settings-desktop-panel"
+      >
+        <div class="settings-view__panel-header">
+          <div>
+            <h2>桌面管理</h2>
+            <span>用动画桌宠陪伴桌面，拖动移动，悬浮展开工具。</span>
+          </div>
+        </div>
+        <div class="settings-view__system-list">
+          <article class="settings-view__system-card">
+            <div class="settings-view__data-copy">
+              <span data-emphasis>启用桌宠</span>
+              <span>开启后替换悬浮窗中心内容；关闭后恢复原来的信息卡片。</span>
+            </div>
+            <div class="settings-view__choice-group">
+              <label
+                v-for="item in desktopModeItems"
+                :key="String(item.value)"
+                class="settings-view__choice"
+                :class="{
+                  'settings-view__choice--active':
+                    draft.desktop.enabled === item.value
+                }"
+              >
+                <input
+                  v-model="draft.desktop.enabled"
+                  type="radio"
+                  name="desktop-pet-enabled"
+                  :value="item.value"
+                  :disabled="item.value && !desktopPets.length"
+                />
+                <span>{{ item.label }}</span>
+              </label>
+            </div>
+          </article>
+        </div>
+        <div v-if="draft.desktop.enabled" class="settings-desktop-selection">
+          <div class="settings-desktop-copy">
+            <span data-emphasis>选择桌宠</span>
+            <span>自动轮换动作，保存后生效，下次启用会记住你的选择。</span>
+          </div>
+          <div class="settings-desktop-pets">
+            <label
+              v-for="pet in desktopPets"
+              :key="pet.id"
+              class="settings-desktop-pet"
+              :class="{
+                'settings-desktop-pet-active': draft.desktop.petId === pet.id
+              }"
+            >
+              <span class="settings-desktop-preview"
+                ><DesktopPet :pet="pet"
+              /></span>
+              <span class="settings-desktop-pet-choice">
+                <input
+                  v-model="draft.desktop.petId"
+                  type="radio"
+                  name="desktop-pet"
+                  :value="pet.id"
+                />
+                <span>{{ pet.name }}</span>
+              </span>
+            </label>
+          </div>
+          <section
+            v-if="selectedDesktopPet"
+            class="settings-desktop-animations"
+          >
+            <div class="settings-desktop-copy">
+              <span data-emphasis>{{ selectedDesktopPet.name }}的全部动画</span>
+              <span
+                >{{
+                  selectedDesktopPet.animations.length
+                }}
+                个动作，每个动作独立循环播放。</span
+              >
+            </div>
+            <div class="settings-desktop-animation-list">
+              <article
+                v-for="animation in selectedDesktopPet.animations"
+                :key="`${selectedDesktopPet.id}:${animation.id}`"
+                class="settings-desktop-animation"
+              >
+                <div class="settings-desktop-animation-preview">
+                  <DesktopPet
+                    :pet="selectedDesktopPet"
+                    :action="animation.id"
+                  />
+                </div>
+                <span class="settings-desktop-animation-name">{{
+                  animation.name
+                }}</span>
+              </article>
+            </div>
+          </section>
+          <p
+            v-if="!draft.system.quickSwitchVisible"
+            class="settings-desktop-hint"
+          >
+            悬浮窗当前已隐藏，可在“系统设置”中开启显示。
+          </p>
+        </div>
+        <p v-if="!desktopPets.length" class="settings-desktop-hint">
+          暂无可用桌宠。
+        </p>
+      </section>
+
       <section v-else class="settings-view__panel">
         <div class="settings-view__panel-header">
           <div>
@@ -534,7 +643,9 @@
           <article class="settings-view__system-card">
             <div class="settings-view__data-copy">
               <span data-emphasis>悬浮快速切换窗</span>
-              <span>开启后，主界面最小化时显示 Provider 快速切换悬浮窗。</span>
+              <span
+                >主界面最小化时显示中心节点，鼠标悬浮后展开四周的工具入口。</span
+              >
             </div>
             <div class="settings-view__choice-group">
               <label
@@ -570,6 +681,33 @@
                   :value="false"
                 />
                 <span>隐藏</span>
+              </label>
+            </div>
+          </article>
+          <article
+            v-if="draft.system.quickSwitchVisible"
+            class="settings-view__system-card settings-floating-tools-card"
+          >
+            <div class="settings-view__data-copy">
+              <span data-emphasis>悬浮窗工具</span>
+              <span
+                >选择悬浮时显示的工具，默认全部显示。取消全部后只保留中心节点。</span
+              >
+            </div>
+            <div class="settings-floating-tools">
+              <label
+                v-for="tool in floatingToolItems"
+                :key="tool.id"
+                class="settings-floating-tool"
+              >
+                <input
+                  v-model="draft.system.quickSwitchTools[tool.id]"
+                  type="checkbox"
+                />
+                <component :is="tool.icon" :size="16" />
+                <span class="settings-floating-tool-label">{{
+                  tool.label
+                }}</span>
               </label>
             </div>
           </article>
@@ -616,6 +754,7 @@ import {
   Eye,
   FolderOpen,
   Languages,
+  Monitor,
   Power,
   Puzzle,
   RefreshCw,
@@ -627,6 +766,9 @@ import {
   UploadCloud
 } from "lucide-vue-next"
 import { systemApi } from "@/api"
+import { getToolItems } from "@/features/tools/constant"
+import { desktopPets, getDesktopPet } from "@/constants/desktop-pets"
+import DesktopPet from "@/components/DesktopPet.vue"
 import TranslationAgentSettings from "./components/TranslationAgentSettings.vue"
 
 const props = defineProps({
@@ -673,6 +815,9 @@ const emit = defineEmits([
 
 const activeTab = ref("directories")
 const activeAgent = ref("")
+const floatingToolItems = computed(() =>
+  getToolItems({ cliTargets: props.cliTargets })
+)
 
 // 两个 WebDAV 服务保留独立配置，避免切换同步目标时覆盖凭据。
 const cloudSyncItems = [
@@ -695,6 +840,7 @@ const cloudSyncItems = [
 ]
 
 const draft = reactive({
+  desktop: { enabled: false, petId: "" },
   agents: {
     translation: {
       enabled: false,
@@ -735,6 +881,7 @@ const draft = reactive({
   system: {
     closeAction: "ask",
     quickSwitchVisible: true,
+    quickSwitchTools: {},
     autoLaunchEnabled: false
   }
 })
@@ -762,6 +909,7 @@ const tabs = [
     label: "系统设置",
     icon: Settings
   },
+  { id: "desktop", label: "桌面管理", icon: Monitor },
   { id: "agents", label: "功能扩展", icon: Puzzle }
 ]
 
@@ -779,6 +927,14 @@ const closeActionItems = [
     label: "直接关闭"
   }
 ]
+
+const desktopModeItems = [
+  { value: true, label: "启用" },
+  { value: false, label: "关闭" }
+]
+
+// 当前选择直接驱动全部动作预览，不影响已保存的桌宠配置。
+const selectedDesktopPet = computed(() => getDesktopPet(draft.desktop.petId))
 
 const cliItems = computed(() => {
   return Object.entries(cliNames).map(([id, name]) => {
@@ -800,6 +956,10 @@ const cliItems = computed(() => {
 })
 
 function syncDraft() {
+  // 关闭只停用桌宠，不清除上次选择；旧素材不存在时选择第一只。
+  draft.desktop.enabled = Boolean(props.appSettings.desktop?.enabled)
+  draft.desktop.petId =
+    getDesktopPet(props.appSettings.desktop?.petId)?.id || ""
   // 保存后的全局配置驱动划词入口；未保存的编辑仅留在设置草稿中。
   draft.agents.translation = {
     enabled: false,
@@ -837,6 +997,16 @@ function syncDraft() {
   draft.system.closeAction = props.appSettings.system?.closeAction || "ask"
   draft.system.quickSwitchVisible =
     props.appSettings.system?.quickSwitchVisible !== false
+  // 缺少配置的工具默认显示，旧配置和以后新增的工具都无需迁移。
+  draft.system.quickSwitchTools = {
+    ...props.appSettings.system?.quickSwitchTools,
+    ...Object.fromEntries(
+      floatingToolItems.value.map((tool) => [
+        tool.id,
+        props.appSettings.system?.quickSwitchTools?.[tool.id] !== false
+      ])
+    )
+  }
   draft.system.autoLaunchEnabled = Boolean(
     props.appSettings.system?.autoLaunchEnabled
   )
@@ -867,6 +1037,7 @@ function resetCliPath(key) {
 
 function submitSettings() {
   emit("save", {
+    desktop: { ...draft.desktop },
     agents: { translation: { ...draft.agents.translation } },
     dataPath: draft.dataPath,
     cliConfigPaths: {
@@ -900,6 +1071,7 @@ function submitSettings() {
     system: {
       closeAction: draft.system.closeAction,
       quickSwitchVisible: draft.system.quickSwitchVisible,
+      quickSwitchTools: { ...draft.system.quickSwitchTools },
       autoLaunchEnabled: draft.system.autoLaunchEnabled
     }
   })
@@ -983,10 +1155,138 @@ watch(
   },
   { deep: true, immediate: true }
 )
+
+watch(floatingToolItems, (tools) => {
+  for (const tool of tools) {
+    if (draft.system.quickSwitchTools[tool.id] === undefined)
+      draft.system.quickSwitchTools[tool.id] = true
+  }
+})
 </script>
 
 <style scoped lang="less">
 .settings-view {
+  .settings-desktop-panel {
+    .settings-desktop-selection {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 20px;
+      .settings-desktop-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        color: var(--color-text-secondary);
+        font-size: var(--font-size-sm);
+      }
+      .settings-desktop-pets {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 14px;
+        .settings-desktop-pet {
+          display: flex;
+          width: 168px;
+          flex-direction: column;
+          align-items: center;
+          gap: 12px;
+          padding: 14px;
+          border: 1px solid var(--color-line);
+          border-radius: 14px;
+          background: var(--color-panel-soft);
+          cursor: pointer;
+          transition:
+            border-color 160ms,
+            background-color 160ms;
+          &.settings-desktop-pet-active {
+            border-color: var(--color-primary);
+            background: var(--color-primary-soft);
+          }
+          &:focus-within {
+            outline: 1px solid var(--color-primary);
+            outline-offset: 3px;
+          }
+          .settings-desktop-preview {
+            display: flex;
+            width: 112px;
+            height: 112px;
+          }
+          .settings-desktop-pet-choice {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--color-text);
+          }
+        }
+      }
+      .settings-desktop-animations {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        .settings-desktop-animation-list {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 12px;
+          .settings-desktop-animation {
+            display: flex;
+            width: 136px;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            border: 1px solid var(--color-line);
+            border-radius: 10px;
+            background: var(--color-panel-soft);
+            .settings-desktop-animation-preview {
+              width: 112px;
+              height: 112px;
+            }
+            .settings-desktop-animation-name {
+              color: var(--color-text);
+              font-size: var(--font-size-sm);
+              line-height: 20px;
+            }
+          }
+        }
+      }
+    }
+    .settings-desktop-hint {
+      margin: 14px 0 0;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-sm);
+    }
+  }
+  .settings-view__panel {
+    .settings-view__system-list {
+      .settings-floating-tools-card {
+        align-items: stretch;
+        flex-direction: column;
+        .settings-floating-tools {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          .settings-floating-tool {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 12px;
+            border: 1px solid var(--color-line);
+            border-radius: 8px;
+            background: var(--color-panel);
+            color: var(--color-text-secondary);
+            cursor: pointer;
+            &:has(:checked) {
+              border-color: var(--color-primary);
+              background: var(--color-panel-soft);
+              color: var(--color-primary);
+            }
+            .settings-floating-tool-label {
+              font-size: var(--font-size-sm);
+            }
+          }
+        }
+      }
+    }
+  }
   display: flex;
   height: 100%;
   min-height: 0;

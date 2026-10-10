@@ -2,6 +2,7 @@ use crate::core::error::ManagerError;
 use crate::core::paths::{home_path, path_text, portable_home_prefix, DEFAULT_USER_DATA_PATH};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -29,7 +30,16 @@ pub struct LocalBackupSettings {
 pub struct SystemSettings {
     pub close_action: String,
     pub quick_switch_visible: bool,
+    #[serde(default)]
+    pub quick_switch_tools: BTreeMap<String, bool>,
     pub auto_launch_enabled: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DesktopSettings {
+    pub enabled: bool,
+    pub pet_id: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -59,6 +69,8 @@ pub struct AppSettings {
     pub koofr_sync: CloudSyncSettings,
     pub local_backup: LocalBackupSettings,
     pub system: SystemSettings,
+    #[serde(default)]
+    pub desktop: DesktopSettings,
     pub agents: AgentSettings,
     pub restart_required: bool,
 }
@@ -91,6 +103,7 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
         .cloned()
         .unwrap_or_else(|| json!({}));
     let system = input.get("system").cloned().unwrap_or_else(|| json!({}));
+    let desktop = &input["desktop"];
     let translation = &input["agents"]["translation"];
 
     AppSettings {
@@ -128,7 +141,23 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
         system: SystemSettings {
             close_action: normalize_close_action(system.get("closeAction")),
             quick_switch_visible: bool_value(system.get("quickSwitchVisible"), true),
+            quick_switch_tools: system
+                .get("quickSwitchTools")
+                .and_then(Value::as_object)
+                .map(|tools| {
+                    tools
+                        .iter()
+                        .filter_map(|(id, value)| {
+                            value.as_bool().map(|visible| (id.clone(), visible))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
             auto_launch_enabled: bool_value(system.get("autoLaunchEnabled"), false),
+        },
+        desktop: DesktopSettings {
+            enabled: bool_value(desktop.get("enabled"), false),
+            pet_id: string_value(desktop.get("petId")),
         },
         agents: AgentSettings {
             translation: TranslationAgentSettings {
@@ -196,6 +225,60 @@ pub fn serialize_app_settings(app_settings: &AppSettings) -> Value {
     });
 
     payload
+}
+
+#[cfg(test)]
+mod floating_tools_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_and_tool_visibility_survive_round_trip() {
+        let path = PathBuf::from("settings.json");
+        let defaults = normalize_app_settings(path.clone(), Some(json!({})));
+        assert!(defaults.system.quick_switch_visible);
+        assert!(defaults.system.quick_switch_tools.is_empty());
+
+        let settings = normalize_app_settings(
+            path.clone(),
+            Some(json!({
+                "system": { "quickSwitchTools": { "git": false, "string-diff": true, "future-tool": false } }
+            })),
+        );
+        let restored = normalize_app_settings(path, Some(serialize_app_settings(&settings)));
+        assert_eq!(
+            restored.system.quick_switch_tools,
+            settings.system.quick_switch_tools
+        );
+        assert_eq!(restored.system.quick_switch_tools.get("git"), Some(&false));
+        assert_eq!(
+            restored.system.quick_switch_tools.get("image-workbench"),
+            None
+        );
+    }
+
+    #[test]
+    fn desktop_pet_defaults_and_last_selection_survive_round_trip() {
+        let path = PathBuf::from("settings.json");
+        let defaults = normalize_app_settings(path.clone(), None);
+        assert!(!defaults.desktop.enabled);
+        assert!(defaults.desktop.pet_id.is_empty());
+
+        for enabled in [true, false] {
+            let settings = normalize_app_settings(
+                path.clone(),
+                Some(json!({ "desktop": { "enabled": enabled, "petId": "monkey_animations" } })),
+            );
+            let restored =
+                normalize_app_settings(path.clone(), Some(serialize_app_settings(&settings)));
+            assert_eq!(restored.desktop.enabled, enabled);
+            assert_eq!(restored.desktop.pet_id, "monkey_animations");
+        }
+        let mut old_payload = serialize_app_settings(&defaults);
+        old_payload.as_object_mut().unwrap().remove("desktop");
+        let restored: AppSettings = serde_json::from_value(old_payload).unwrap();
+        assert!(!restored.desktop.enabled);
+        assert!(restored.desktop.pet_id.is_empty());
+    }
 }
 
 pub fn string_value(value: Option<&Value>) -> String {

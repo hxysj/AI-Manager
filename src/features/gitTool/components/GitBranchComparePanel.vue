@@ -61,8 +61,12 @@
         </button>
 
         <div class="git-branch-compare-select-wrap">
-          <span class="git-branch-compare-select-label">对比分支 (compare)</span>
-          <div class="git-branch-compare-select-box git-branch-compare-select-box--target">
+          <span class="git-branch-compare-select-label"
+            >对比分支 (compare)</span
+          >
+          <div
+            class="git-branch-compare-select-box git-branch-compare-select-box--target"
+          >
             <GitBranch :size="14" class="git-branch-compare-select-icon" />
             <select
               v-model="targetBranch"
@@ -114,7 +118,10 @@
     <!-- 加载中状态 -->
     <div v-else-if="loading" class="git-branch-compare-loading-view">
       <div class="git-branch-compare-loader-card">
-        <RefreshCw :size="24" class="git-branch-compare-spinner git-branch-compare-loader-icon" />
+        <RefreshCw
+          :size="24"
+          class="git-branch-compare-spinner git-branch-compare-loader-icon"
+        />
         <span class="git-branch-compare-loader-text">正在分析分支差异...</span>
         <span class="git-branch-compare-loader-subtext">
           对比 {{ baseBranch }} 与 {{ targetBranch }}
@@ -128,7 +135,9 @@
       <div class="git-branch-compare-stats-card">
         <div class="git-branch-compare-stats">
           <div class="git-branch-compare-stat git-branch-compare-stat-files">
-            <div class="git-branch-compare-stat-icon-wrap git-branch-compare-stat-icon--blue">
+            <div
+              class="git-branch-compare-stat-icon-wrap git-branch-compare-stat-icon--blue"
+            >
               <FolderGit2 :size="16" />
             </div>
             <div class="git-branch-compare-stat-content">
@@ -140,31 +149,37 @@
           </div>
 
           <div class="git-branch-compare-stat git-branch-compare-stat-add">
-            <div class="git-branch-compare-stat-icon-wrap git-branch-compare-stat-icon--green">
+            <div
+              class="git-branch-compare-stat-icon-wrap git-branch-compare-stat-icon--green"
+            >
               <PlusCircle :size="16" />
             </div>
             <div class="git-branch-compare-stat-content">
               <span class="git-branch-compare-stat-label">新增行</span>
-              <span data-emphasis class="git-branch-compare-stat-number">+{{
-                result.additions
-              }}</span>
+              <span data-emphasis class="git-branch-compare-stat-number"
+                >+{{ result.additions }}</span
+              >
             </div>
           </div>
 
           <div class="git-branch-compare-stat git-branch-compare-stat-delete">
-            <div class="git-branch-compare-stat-icon-wrap git-branch-compare-stat-icon--red">
+            <div
+              class="git-branch-compare-stat-icon-wrap git-branch-compare-stat-icon--red"
+            >
               <MinusCircle :size="16" />
             </div>
             <div class="git-branch-compare-stat-content">
               <span class="git-branch-compare-stat-label">删除行</span>
-              <span data-emphasis class="git-branch-compare-stat-number">-{{
-                result.deletions
-              }}</span>
+              <span data-emphasis class="git-branch-compare-stat-number"
+                >-{{ result.deletions }}</span
+              >
             </div>
           </div>
 
           <div class="git-branch-compare-stat git-branch-compare-stat-total">
-            <div class="git-branch-compare-stat-icon-wrap git-branch-compare-stat-icon--amber">
+            <div
+              class="git-branch-compare-stat-icon-wrap git-branch-compare-stat-icon--amber"
+            >
               <GitCommitHorizontal :size="16" />
             </div>
             <div class="git-branch-compare-stat-content">
@@ -177,7 +192,10 @@
         </div>
 
         <!-- 差异变动比例条 -->
-        <div v-if="result.changedLines > 0" class="git-branch-compare-ratio-bar-wrap">
+        <div
+          v-if="result.changedLines > 0"
+          class="git-branch-compare-ratio-bar-wrap"
+        >
           <div class="git-branch-compare-ratio-bar">
             <div
               class="git-branch-compare-ratio-segment git-branch-compare-ratio-add"
@@ -211,7 +229,10 @@
               <button
                 :class="[
                   'git-branch-compare-view-toggle',
-                  { 'git-branch-compare-view-toggle--active': viewMode === 'list' }
+                  {
+                    'git-branch-compare-view-toggle--active':
+                      viewMode === 'list'
+                  }
                 ]"
                 type="button"
                 title="平铺列表视图"
@@ -222,7 +243,10 @@
               <button
                 :class="[
                   'git-branch-compare-view-toggle',
-                  { 'git-branch-compare-view-toggle--active': viewMode === 'tree' }
+                  {
+                    'git-branch-compare-view-toggle--active':
+                      viewMode === 'tree'
+                  }
                 ]"
                 type="button"
                 title="目录树视图"
@@ -257,16 +281,21 @@
             <button
               :class="[
                 'git-branch-compare-filter-btn',
-                { 'git-branch-compare-filter-btn--active': statusFilter !== 'all' }
+                {
+                  'git-branch-compare-filter-btn--active':
+                    statusFilter !== 'all'
+                }
               ]"
               type="button"
               :title="`筛选状态：${currentStatusFilterLabel}`"
               @click="cycleStatusFilter"
             >
               <Filter :size="13" />
-              <span v-if="statusFilter !== 'all'" class="git-branch-compare-filter-tag">{{
-                statusFilter
-              }}</span>
+              <span
+                v-if="statusFilter !== 'all'"
+                class="git-branch-compare-filter-tag"
+                >{{ statusFilter }}</span
+              >
             </button>
           </div>
 
@@ -280,14 +309,18 @@
             </div>
 
             <!-- 平铺列表视图 -->
-            <div v-else-if="viewMode === 'list'" class="git-branch-compare-files-list">
+            <div
+              v-else-if="viewMode === 'list'"
+              class="git-branch-compare-files-list"
+            >
               <button
                 v-for="file in filteredFiles"
                 :key="file.path"
                 :class="[
                   'git-branch-compare-file',
                   {
-                    'git-branch-compare-file--active': file.path === activeFilePath
+                    'git-branch-compare-file--active':
+                      file.path === activeFilePath
                   }
                 ]"
                 type="button"
@@ -362,10 +395,7 @@
                     :size="12"
                     class="git-branch-compare-tree-caret"
                   />
-                  <Folder
-                    :size="13"
-                    class="git-branch-compare-tree-dir-icon"
-                  />
+                  <Folder :size="13" class="git-branch-compare-tree-dir-icon" />
                   <span class="git-branch-compare-tree-dir-name">{{
                     node.name
                   }}</span>
@@ -444,7 +474,10 @@
               >
                 <component :is="getFileIcon(activeFile.path)" :size="14" />
               </span>
-              <span class="git-branch-compare-diff-file-name" :title="activeFile.path">
+              <span
+                class="git-branch-compare-diff-file-name"
+                :title="activeFile.path"
+              >
                 {{ activeFile.path }}
               </span>
               <span
@@ -455,7 +488,10 @@
               >
                 {{ statusFullLabel(activeFile.status) }}
               </span>
-              <div v-if="!activeFile.binary" class="git-branch-compare-file-diff-stat">
+              <div
+                v-if="!activeFile.binary"
+                class="git-branch-compare-file-diff-stat"
+              >
                 <span class="git-branch-compare-file-add"
                   >+{{ activeFile.additions }}</span
                 >
@@ -495,7 +531,11 @@
                 title="复制文件路径"
                 @click="copyText(activeFile.path, '文件路径')"
               >
-                <Check v-if="copiedTarget === '文件路径'" :size="13" class="git-branch-compare-copied-icon" />
+                <Check
+                  v-if="copiedTarget === '文件路径'"
+                  :size="13"
+                  class="git-branch-compare-copied-icon"
+                />
                 <Copy v-else :size="13" />
               </button>
 
@@ -526,17 +566,24 @@
 
       <!-- 无文件差异状态 -->
       <div v-else class="git-branch-compare-empty-view">
-        <CheckCircle2 :size="32" class="git-branch-compare-empty-success-icon" />
+        <CheckCircle2
+          :size="32"
+          class="git-branch-compare-empty-success-icon"
+        />
         <span class="git-branch-compare-empty-title">两个分支没有文件差异</span>
         <span class="git-branch-compare-empty-subtitle">
-          分支 {{ result.baseBranch }} 与 {{ result.targetBranch }} 的代码完全一致
+          分支 {{ result.baseBranch }} 与
+          {{ result.targetBranch }} 的代码完全一致
         </span>
       </div>
     </template>
 
     <!-- 初始引导状态 -->
     <div v-else class="git-branch-compare-empty-view">
-      <GitCompare :size="36" class="git-branch-compare-empty-placeholder-icon" />
+      <GitCompare
+        :size="36"
+        class="git-branch-compare-empty-placeholder-icon"
+      />
       <span class="git-branch-compare-empty-title">准备对比分支</span>
       <span class="git-branch-compare-empty-subtitle">
         在上方选择基准分支和对比分支，点击「开始对比」查看差异详情
@@ -546,7 +593,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, onBeforeUnmount, ref, watch } from "vue"
 import {
   AlertCircle,
   ArrowLeftRight,
@@ -651,7 +698,9 @@ const lineNumbers = computed(() => {
       newLine = 0
       nums[i] = ""
     } else if (line.startsWith("@@")) {
-      const match = line.match(/@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/)
+      const match = line.match(
+        /@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/
+      )
       if (match) {
         oldLine = parseInt(match[1], 10)
         newLine = parseInt(match[3], 10)
@@ -747,7 +796,9 @@ const rawFileTree = computed(() => {
   }
 
   for (const file of files) {
-    const parts = String(file.path || "").split("/").filter(Boolean)
+    const parts = String(file.path || "")
+      .split("/")
+      .filter(Boolean)
     let current = root
     current.count += 1
 
@@ -996,11 +1047,26 @@ function getFileIconType(path) {
   const filename = path.split("/").pop().toLowerCase()
   if (filename.endsWith(".vue")) return "vue"
   if (filename.endsWith(".ts") || filename.endsWith(".tsx")) return "ts"
-  if (filename.endsWith(".js") || filename.endsWith(".jsx") || filename.endsWith(".mjs")) return "js"
+  if (
+    filename.endsWith(".js") ||
+    filename.endsWith(".jsx") ||
+    filename.endsWith(".mjs")
+  )
+    return "js"
   if (filename.endsWith(".json")) return "json"
   if (filename.endsWith(".md") || filename.endsWith(".markdown")) return "md"
-  if (filename.endsWith(".css") || filename.endsWith(".less") || filename.endsWith(".scss")) return "css"
-  if (filename.endsWith(".yml") || filename.endsWith(".yaml") || filename.includes("config")) return "config"
+  if (
+    filename.endsWith(".css") ||
+    filename.endsWith(".less") ||
+    filename.endsWith(".scss")
+  )
+    return "css"
+  if (
+    filename.endsWith(".yml") ||
+    filename.endsWith(".yaml") ||
+    filename.includes("config")
+  )
+    return "config"
   return "default"
 }
 
@@ -1021,7 +1087,8 @@ function statusLabel(status) {
 
 function statusFullLabel(status) {
   return (
-    { A: "新增", M: "已修改", D: "已删除", R: "重命名", C: "复制" }[status] || "已修改"
+    { A: "新增", M: "已修改", D: "已删除", R: "重命名", C: "复制" }[status] ||
+    "已修改"
   )
 }
 
@@ -1040,9 +1107,14 @@ function lineClass(line) {
   return "normal"
 }
 
-onMounted(() => {
-  if (canCompare.value) compareBranches()
-})
+// 切换项目后等待分支列表就绪，再自动比较当前分支自身。
+watch(
+  canCompare,
+  (ready) => {
+    if (ready) compareBranches()
+  },
+  { immediate: true }
+)
 
 onBeforeUnmount(() => {
   diffResizeObserver?.disconnect()
@@ -1454,7 +1526,8 @@ onBeforeUnmount(() => {
 
   .git-branch-compare-stat-number {
     color: var(--color-text);
-    font-family: "Bahnschrift", "JetBrains Mono", "Segoe UI Variable", sans-serif;
+    font-family:
+      "Bahnschrift", "JetBrains Mono", "Segoe UI Variable", sans-serif;
     font-size: 15px;
     font-weight: 600;
     line-height: 1.2;

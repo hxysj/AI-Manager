@@ -12,7 +12,7 @@ export const appApi = {
   installUpdate: payload => request('app:update-install', payload),
   dismissUpdate: () => request('app:update-dismiss'),
   uninstallWithoutTrace: () => request('app:uninstall-without-trace'),
-  showMainPanel: () => request('quick-switch:show-main'),
+  showMainPanel: payload => request('quick-switch:show-main', payload),
   setQuickSwitchCollapsed: payload =>
     request('quick-switch:set-collapsed', payload),
   moveQuickSwitchBy: payload => request('quick-switch:move-by', payload),
@@ -20,6 +20,7 @@ export const appApi = {
   getAppLogs: () => request('app-log:list'),
   clearAppLogs: () => request('app-log:clear'),
   onStateChanged: callback => subscribe('state:changed', callback),
+  onToolRequested: callback => subscribe('app:open-tool', callback),
   onUpdateStatus: callback => subscribe('app:update-status', callback),
   onCloseRequested: callback => subscribe('app:close-requested', callback)
 }

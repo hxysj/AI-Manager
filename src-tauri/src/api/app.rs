@@ -11,8 +11,8 @@ use std::sync::{LazyLock, Mutex as SyncMutex};
 use std::time::Duration;
 use tauri::window::Color;
 use tauri::{
-    Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
-    WebviewWindowBuilder,
+    Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewUrl,
+    WebviewWindow, WebviewWindowBuilder,
 };
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_updater::{Update, Updater, UpdaterExt};
@@ -20,10 +20,14 @@ use tokio::sync::Mutex as AsyncMutex;
 const UPDATE_REQUEST_TIMEOUT_SECS: u64 = 30;
 const UPDATE_DOWNLOAD_TIMEOUT_SECS: u64 = 300;
 const QUICK_SWITCH_LABEL: &str = "quick-switch";
-const QUICK_SWITCH_EXPANDED_WIDTH: u32 = 360;
-const QUICK_SWITCH_EXPANDED_HEIGHT: u32 = 238;
-const QUICK_SWITCH_COLLAPSED_WIDTH: u32 = 44;
-const QUICK_SWITCH_COLLAPSED_HEIGHT: u32 = 44;
+const QUICK_SWITCH_EXPANDED_WIDTH: u32 = 560;
+const QUICK_SWITCH_EXPANDED_HEIGHT: u32 = 560;
+const QUICK_SWITCH_COLLAPSED_WIDTH: u32 = 128;
+const QUICK_SWITCH_COLLAPSED_HEIGHT: u32 = 128;
+// 主窗口的焦点和尺寸事件会并发触发同步，窗口检查与创建必须在同一临界区。
+// 同时保留中心节点的物理坐标，重新创建时不受展开尺寸影响。
+static QUICK_SWITCH_WINDOW_POSITION: SyncMutex<Option<PhysicalPosition<f64>>> =
+    SyncMutex::new(None);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -418,10 +422,28 @@ pub fn show_main_panel(
     app: &tauri::AppHandle,
     _app_settings: &AppSettings,
     _quick_switch_collapsed: bool,
+    tool_id: Option<&str>,
 ) -> Result<Value, ManagerError> {
+    let _guard = QUICK_SWITCH_WINDOW_POSITION
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let tool_id = tool_id.filter(|id| {
+        !id.is_empty()
+            && id.len() <= 64
+            && id
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    });
     let window = match app.get_webview_window("main") {
-        Some(window) => window,
-        None => create_main_window(app)?,
+        Some(window) => {
+            if let Some(tool_id) = tool_id {
+                window
+                    .emit("app:open-tool", json!({ "toolId": tool_id }))
+                    .map_err(|error| ManagerError::System(error.to_string()))?;
+            }
+            window
+        }
+        None => create_main_window(app, tool_id)?,
     };
 
     if window
@@ -447,19 +469,32 @@ pub fn set_quick_switch_collapsed(
     app: &tauri::AppHandle,
     payload: Value,
 ) -> Result<Value, ManagerError> {
+    let mut center = QUICK_SWITCH_WINDOW_POSITION
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
     let collapsed = payload
         .get("collapsed")
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
     if let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) {
-        apply_quick_switch_collapsed(&window, collapsed)?;
+        let (center_x, center_y, edge) =
+            apply_quick_switch_collapsed(&window, collapsed, &mut center)?;
+        return Ok(json!({
+            "collapsed": collapsed,
+            "centerX": center_x,
+            "centerY": center_y,
+            "edge": edge
+        }));
     }
 
-    Ok(json!(true))
+    Ok(json!({ "collapsed": collapsed }))
 }
 
 pub fn move_quick_switch_by(app: &tauri::AppHandle, payload: Value) -> Result<Value, ManagerError> {
+    let mut center = QUICK_SWITCH_WINDOW_POSITION
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
     let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) else {
         return Ok(json!(true));
     };
@@ -468,22 +503,70 @@ pub fn move_quick_switch_by(app: &tauri::AppHandle, payload: Value) -> Result<Va
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let x = payload.get("x").and_then(Value::as_f64).unwrap_or(0.0);
     let y = payload.get("y").and_then(Value::as_f64).unwrap_or(0.0);
+    let scale = window
+        .scale_factor()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let size = window
+        .outer_size()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let previous_center = center.unwrap_or_else(|| {
+        PhysicalPosition::new(
+            position.x as f64 + size.width as f64 / 2.0,
+            position.y as f64 + size.height as f64 / 2.0,
+        )
+    });
+    let mut next_center =
+        PhysicalPosition::new(previous_center.x + x * scale, previous_center.y + y * scale);
+    let mut next_position = PhysicalPosition::new(
+        position.x + (x * scale).round() as i32,
+        position.y + (y * scale).round() as i32,
+    );
+    let cursor = window
+        .cursor_position()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let monitor = window
+        .available_monitors()
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .into_iter()
+        .find(|monitor| {
+            let origin = monitor.position();
+            let bounds = monitor.size();
+            cursor.x >= origin.x as f64
+                && cursor.x < origin.x as f64 + bounds.width as f64
+                && cursor.y >= origin.y as f64
+                && cursor.y < origin.y as f64 + bounds.height as f64
+        })
+        .or(window
+            .monitor_from_point(previous_center.x, previous_center.y)
+            .map_err(|error| ManagerError::System(error.to_string()))?);
+    let mut edge = "";
+    if let Some(monitor) = monitor {
+        // 中心节点允许贴边，展开后的工具由前端根据剩余空间重新排布。
+        (next_position, next_center) =
+            quick_switch_window_layout(next_center, size, scale, monitor.work_area());
+        edge = quick_switch_window_edge(next_center, scale, monitor.work_area());
+    }
 
     window
-        .set_position(PhysicalPosition::new(
-            position.x + x.round() as i32,
-            position.y + y.round() as i32,
-        ))
+        .set_position(next_position)
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    *center = Some(next_center);
 
-    Ok(json!(true))
+    Ok(json!({
+        "centerX": (next_center.x - next_position.x as f64) / scale,
+        "centerY": (next_center.y - next_position.y as f64) / scale,
+        "edge": edge
+    }))
 }
 
 pub fn sync_quick_switch_window(
     app: &tauri::AppHandle,
     app_settings: &AppSettings,
-    quick_switch_collapsed: bool,
+    _quick_switch_collapsed: bool,
 ) -> Result<(), ManagerError> {
+    let mut center = QUICK_SWITCH_WINDOW_POSITION
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
     let Some(main_window) = app.get_webview_window("main") else {
         destroy_quick_switch_window(app)?;
         return Ok(());
@@ -497,7 +580,8 @@ pub fn sync_quick_switch_window(
     let should_show = app_settings.system.quick_switch_visible && (!main_visible || main_minimized);
 
     if should_show {
-        create_quick_switch_window(app, quick_switch_collapsed)?;
+        // 每次最小化都先显示中心节点，悬浮时再展开工具。
+        create_quick_switch_window(app, true, &mut center)?;
     } else {
         destroy_quick_switch_window(app)?;
     }
@@ -505,8 +589,14 @@ pub fn sync_quick_switch_window(
     Ok(())
 }
 
-fn create_main_window(app: &tauri::AppHandle) -> Result<WebviewWindow, ManagerError> {
-    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+fn create_main_window(
+    app: &tauri::AppHandle,
+    tool_id: Option<&str>,
+) -> Result<WebviewWindow, ManagerError> {
+    let url = tool_id
+        .map(|id| format!("index.html?view=tools&tool={id}"))
+        .unwrap_or_else(|| "index.html".to_string());
+    let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url.into()))
         .title("Monkey Thief")
         .inner_size(1024.0, 688.0)
         .min_inner_size(896.0, 576.0)
@@ -520,6 +610,7 @@ fn create_main_window(app: &tauri::AppHandle) -> Result<WebviewWindow, ManagerEr
 fn create_quick_switch_window(
     app: &tauri::AppHandle,
     quick_switch_collapsed: bool,
+    center: &mut Option<PhysicalPosition<f64>>,
 ) -> Result<(), ManagerError> {
     if app.get_webview_window(QUICK_SWITCH_LABEL).is_some() {
         return Ok(());
@@ -564,7 +655,7 @@ fn create_quick_switch_window(
         .set_always_on_top(true)
         .map_err(|error| ManagerError::System(error.to_string()))?;
     set_quick_switch_size(&window, width, height)?;
-    position_quick_switch_window(&window)?;
+    *center = Some(position_quick_switch_window(&window, *center)?);
 
     Ok(())
 }
@@ -582,7 +673,8 @@ fn destroy_quick_switch_window(app: &tauri::AppHandle) -> Result<(), ManagerErro
 fn apply_quick_switch_collapsed(
     window: &WebviewWindow,
     collapsed: bool,
-) -> Result<(), ManagerError> {
+    center: &mut Option<PhysicalPosition<f64>>,
+) -> Result<(f64, f64, &'static str), ManagerError> {
     let width = if collapsed {
         QUICK_SWITCH_COLLAPSED_WIDTH
     } else {
@@ -599,51 +691,159 @@ fn apply_quick_switch_collapsed(
     let size = window
         .outer_size()
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    let scale = window
+        .scale_factor()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let previous_center = center.unwrap_or_else(|| {
+        PhysicalPosition::new(
+            position.x as f64 + size.width as f64 / 2.0,
+            position.y as f64 + size.height as f64 / 2.0,
+        )
+    });
     let monitor = window
-        .current_monitor()
+        .monitor_from_point(previous_center.x, previous_center.y)
         .map_err(|error| ManagerError::System(error.to_string()))?
         .or_else(|| window.primary_monitor().ok().and_then(|monitor| monitor));
     let Some(monitor) = monitor else {
         set_quick_switch_size(window, width, height)?;
-        return Ok(());
+        let next_position = window
+            .outer_position()
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        *center = Some(previous_center);
+        return Ok((
+            (previous_center.x - next_position.x as f64) / scale,
+            (previous_center.y - next_position.y as f64) / scale,
+            "",
+        ));
     };
-    let work_area = monitor.work_area();
-    let center_x = position.x as f64 + size.width as f64 / 2.0;
-    let center_y = position.y as f64 + size.height as f64 / 2.0;
-    let next_x = (center_x - width as f64 / 2.0).round() as i32;
-    let next_y = (center_y - height as f64 / 2.0).round() as i32;
-    let max_x = work_area.position.x + work_area.size.width as i32 - width as i32;
-    let max_y = work_area.position.y + work_area.size.height as i32 - height as i32;
-    let x = next_x.max(work_area.position.x).min(max_x);
-    let y = next_y.max(work_area.position.y).min(max_y);
+    let physical_size = PhysicalSize::new(
+        (width as f64 * scale).round() as u32,
+        (height as f64 * scale).round() as u32,
+    );
+    let (next_position, next_center) =
+        quick_switch_window_layout(previous_center, physical_size, scale, monitor.work_area());
 
     set_quick_switch_size(window, width, height)?;
     window
-        .set_position(PhysicalPosition::new(x, y))
+        .set_position(next_position)
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    *center = Some(next_center);
 
-    Ok(())
+    Ok((
+        (next_center.x - next_position.x as f64) / scale,
+        (next_center.y - next_position.y as f64) / scale,
+        quick_switch_window_edge(next_center, scale, monitor.work_area()),
+    ))
 }
 
-fn position_quick_switch_window(window: &WebviewWindow) -> Result<(), ManagerError> {
+fn position_quick_switch_window(
+    window: &WebviewWindow,
+    center: Option<PhysicalPosition<f64>>,
+) -> Result<PhysicalPosition<f64>, ManagerError> {
     let size = window
         .outer_size()
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    let monitor = window
-        .primary_monitor()
+    let monitors = window
+        .available_monitors()
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    let monitor = center
+        .and_then(|center| {
+            monitors.into_iter().find(|monitor| {
+                let origin = monitor.position();
+                let bounds = monitor.size();
+                center.x >= origin.x as f64
+                    && center.x < origin.x as f64 + bounds.width as f64
+                    && center.y >= origin.y as f64
+                    && center.y < origin.y as f64 + bounds.height as f64
+            })
+        })
+        .or(window
+            .primary_monitor()
+            .map_err(|error| ManagerError::System(error.to_string()))?);
     let Some(monitor) = monitor else {
-        return Ok(());
+        let position = window
+            .outer_position()
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        return Ok(PhysicalPosition::new(
+            position.x as f64 + size.width as f64 / 2.0,
+            position.y as f64 + size.height as f64 / 2.0,
+        ));
     };
     let work_area = monitor.work_area();
-    let x = work_area.position.x + work_area.size.width as i32 - size.width as i32 - 16;
-    let y = work_area.position.y + work_area.size.height as i32 - size.height as i32 - 12;
+    let center = center.unwrap_or_else(|| {
+        PhysicalPosition::new(
+            work_area.position.x as f64 + work_area.size.width as f64
+                - size.width as f64 / 2.0
+                - 16.0,
+            work_area.position.y as f64 + work_area.size.height as f64
+                - size.height as f64 / 2.0
+                - 12.0,
+        )
+    });
+    // 显示器移除或工作区变化后，将原位置限制在当前屏幕内。
+    let scale = window
+        .scale_factor()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let (position, center) = quick_switch_window_layout(center, size, scale, work_area);
 
     window
-        .set_position(PhysicalPosition::new(x, y))
+        .set_position(position)
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
-    Ok(())
+    Ok(center)
+}
+
+// 贴边依据真实屏幕坐标判断，避免把收起后的局部中心误认为屏幕边缘。
+fn quick_switch_window_edge(
+    center: PhysicalPosition<f64>,
+    scale: f64,
+    work_area: &PhysicalRect<i32, u32>,
+) -> &'static str {
+    let x = center.x - work_area.position.x as f64;
+    let y = center.y - work_area.position.y as f64;
+    let half_width = QUICK_SWITCH_COLLAPSED_WIDTH as f64 * scale / 2.0;
+    let half_height = QUICK_SWITCH_COLLAPSED_HEIGHT as f64 * scale / 2.0;
+    if x <= half_width + scale {
+        "left"
+    } else if x >= work_area.size.width as f64 - half_width - scale {
+        "right"
+    } else if y <= half_height + scale {
+        "top"
+    } else if y >= work_area.size.height as f64 - half_height - scale {
+        "bottom"
+    } else {
+        ""
+    }
+}
+
+// 移动范围只限制中心节点，外层窗口贴边后中心仍可继续移动。
+fn quick_switch_window_layout(
+    mut center: PhysicalPosition<f64>,
+    size: PhysicalSize<u32>,
+    scale: f64,
+    work_area: &PhysicalRect<i32, u32>,
+) -> (PhysicalPosition<i32>, PhysicalPosition<f64>) {
+    let min_center_x =
+        work_area.position.x as f64 + QUICK_SWITCH_COLLAPSED_WIDTH as f64 * scale / 2.0;
+    let min_center_y =
+        work_area.position.y as f64 + QUICK_SWITCH_COLLAPSED_HEIGHT as f64 * scale / 2.0;
+    let max_center_x = (work_area.position.x as f64 + work_area.size.width as f64
+        - QUICK_SWITCH_COLLAPSED_WIDTH as f64 * scale / 2.0)
+        .max(min_center_x);
+    let max_center_y = (work_area.position.y as f64 + work_area.size.height as f64
+        - QUICK_SWITCH_COLLAPSED_HEIGHT as f64 * scale / 2.0)
+        .max(min_center_y);
+    center.x = center.x.clamp(min_center_x, max_center_x);
+    center.y = center.y.clamp(min_center_y, max_center_y);
+    let max_x = (work_area.position.x + work_area.size.width as i32 - size.width as i32)
+        .max(work_area.position.x);
+    let max_y = (work_area.position.y + work_area.size.height as i32 - size.height as i32)
+        .max(work_area.position.y);
+    let x =
+        ((center.x - size.width as f64 / 2.0).round() as i32).clamp(work_area.position.x, max_x);
+    let y =
+        ((center.y - size.height as f64 / 2.0).round() as i32).clamp(work_area.position.y, max_y);
+    (PhysicalPosition::new(x, y), center)
 }
 
 fn set_quick_switch_size(
@@ -651,7 +851,7 @@ fn set_quick_switch_size(
     width: u32,
     height: u32,
 ) -> Result<(), ManagerError> {
-    let size = PhysicalSize::new(width, height);
+    let size = LogicalSize::new(width as f64, height as f64);
 
     window
         .set_resizable(true)
@@ -988,6 +1188,111 @@ fn now_millis() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod quick_switch_tests {
+    use super::*;
+
+    #[test]
+    fn expanded_center_continues_after_window_reaches_edge() {
+        let area = PhysicalRect {
+            position: PhysicalPosition::new(0, 0),
+            size: PhysicalSize::new(1920, 1080),
+        };
+        let size = PhysicalSize::new(560, 560);
+        let (first, _) =
+            quick_switch_window_layout(PhysicalPosition::new(280.0, 540.0), size, 1.0, &area);
+        let (next, center) =
+            quick_switch_window_layout(PhysicalPosition::new(64.0, 540.0), size, 1.0, &area);
+        assert_eq!(first.x, 0);
+        assert_eq!(next.x, 0);
+        assert_eq!(center.x - next.x as f64, 64.0);
+    }
+
+    #[test]
+    fn pet_edges_follow_monitor_origin_and_scale() {
+        let area = PhysicalRect {
+            position: PhysicalPosition::new(-3840, 40),
+            size: PhysicalSize::new(3840, 2120),
+        };
+        for scale in [1.0, 1.5, 2.0] {
+            let left = area.position.x as f64 + 64.0 * scale;
+            let right = area.position.x as f64 + area.size.width as f64 - 64.0 * scale;
+            let top = area.position.y as f64 + 64.0 * scale;
+            let bottom = area.position.y as f64 + area.size.height as f64 - 64.0 * scale;
+            for (center, expected) in [
+                (PhysicalPosition::new(left, 1000.0), "left"),
+                (PhysicalPosition::new(right, 1000.0), "right"),
+                (PhysicalPosition::new(-1920.0, top), "top"),
+                (PhysicalPosition::new(-1920.0, bottom), "bottom"),
+                (PhysicalPosition::new(left, top), "left"),
+                (PhysicalPosition::new(-1920.0, 1000.0), ""),
+                (PhysicalPosition::new(left + 16.0 * scale, 1000.0), ""),
+            ] {
+                assert_eq!(quick_switch_window_edge(center, scale, &area), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn center_reaches_all_edges_and_corners_at_different_scales() {
+        for scale in [1.0, 1.5, 2.0] {
+            let area = PhysicalRect {
+                position: PhysicalPosition::new(-3840, 40),
+                size: PhysicalSize::new(3840, 2120),
+            };
+            let left = area.position.x as f64 + 64.0 * scale;
+            let right = area.position.x as f64 + area.size.width as f64 - 64.0 * scale;
+            let top = area.position.y as f64 + 64.0 * scale;
+            let bottom = area.position.y as f64 + area.size.height as f64 - 64.0 * scale;
+            for (x, y) in [
+                (left, 1000.0),
+                (right, 1000.0),
+                (left, top),
+                (right, top),
+                (-1920.0, top),
+                (-1920.0, bottom),
+                (left, bottom),
+                (right, bottom),
+            ] {
+                let center = PhysicalPosition::new(x, y);
+                let expanded_size =
+                    PhysicalSize::new((560.0 * scale) as u32, (560.0 * scale) as u32);
+                let (expanded_position, expanded_center) =
+                    quick_switch_window_layout(center, expanded_size, scale, &area);
+                assert_eq!(expanded_center, center);
+                assert!(expanded_position.x >= area.position.x);
+                assert!(expanded_position.y >= area.position.y);
+                assert!(
+                    expanded_position.x + expanded_size.width as i32
+                        <= area.position.x + area.size.width as i32
+                );
+                assert!(
+                    expanded_position.y + expanded_size.height as i32
+                        <= area.position.y + area.size.height as i32
+                );
+                let collapsed_size =
+                    PhysicalSize::new((128.0 * scale) as u32, (128.0 * scale) as u32);
+                let (collapsed_position, collapsed_center) =
+                    quick_switch_window_layout(expanded_center, collapsed_size, scale, &area);
+                assert_eq!(collapsed_center, center);
+                assert_eq!((center.x - collapsed_position.x as f64) / scale, 64.0);
+                assert_eq!((center.y - collapsed_position.y as f64) / scale, 64.0);
+                let (restored_position, restored_center) =
+                    quick_switch_window_layout(collapsed_center, expanded_size, scale, &area);
+                assert_eq!(restored_center, center);
+                assert_eq!(restored_position, expanded_position);
+            }
+            let (_, clamped) = quick_switch_window_layout(
+                PhysicalPosition::new(-10000.0, 10000.0),
+                PhysicalSize::new((560.0 * scale) as u32, (560.0 * scale) as u32),
+                scale,
+                &area,
+            );
+            assert_eq!(clamped, PhysicalPosition::new(left, bottom));
+        }
+    }
 }
 
 #[cfg(all(test, windows))]

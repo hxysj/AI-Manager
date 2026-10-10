@@ -281,7 +281,7 @@ impl ManagerState {
             resource_dir,
             paths,
             app_settings,
-            quick_switch_collapsed: false,
+            quick_switch_collapsed: true,
             data_backup_cache: data::DataBackupCache::new(),
             codex_login_cache: codex_account::CodexLoginCache::new(),
             google_login: google_account::GoogleLogin::default(),
@@ -441,7 +441,12 @@ impl ManagerState {
                 Ok(result)
             }
             "quick-switch:show-main" => {
-                app::show_main_panel(&app, &self.app_settings, self.quick_switch_collapsed)
+                app::show_main_panel(
+                    &app,
+                    &self.app_settings,
+                    self.quick_switch_collapsed,
+                    payload.as_ref().and_then(|value| value.get("toolId")).and_then(Value::as_str),
+                )
             }
             "quick-switch:set-collapsed" => {
                 let payload = payload.unwrap_or_else(|| json!({}));
