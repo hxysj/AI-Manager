@@ -386,12 +386,22 @@
       <section class="git-tool-commit-panel">
         <div class="git-tool-panel-head">
           <div class="git-tool-panel-title-group">
-            <GitBranchIcon :size="20" class="git-tool-panel-branch-icon" />
+            <div
+              v-if="branchCompareVisible"
+              class="git-tool-panel-badge git-tool-panel-badge--blue"
+            >
+              <GitCompare :size="18" />
+            </div>
+            <GitBranchIcon v-else :size="20" class="git-tool-panel-branch-icon" />
             <div class="git-tool-panel-title-text">
               <span data-emphasis class="git-tool-panel-title">{{
                 branchCompareVisible ? "对比分支" : selectedBranch || "提交记录"
               }}</span>
-              <span class="git-tool-panel-subtitle">{{ branchCompareVisible ? "git diff 结果" : `${commits.length} 条提交` }}</span>
+              <span class="git-tool-panel-subtitle">{{
+                branchCompareVisible
+                  ? "选择两个分支进行对比，查看文件差异和代码变更。"
+                  : `${commits.length} 条提交`
+              }}</span>
             </div>
           </div>
           <div class="git-tool-panel-actions">
@@ -439,7 +449,7 @@
               :disabled="branches.length < 2 || !selectedRepo"
               @click="branchCompareVisible = !branchCompareVisible"
             >
-              <GitBranchIcon :size="14" />
+              <component :is="branchCompareVisible ? History : GitCompare" :size="14" />
               <span>{{ branchCompareVisible ? "提交记录" : "对比分支" }}</span>
             </button>
           </div>
@@ -449,6 +459,7 @@
           :key="selectedRepoId"
           v-if="branchCompareVisible"
           :repo-id="selectedRepoId"
+          :project-path="selectedRepo?.localPath || gitStatus?.projectPath || ''"
           :branches="branches"
           :current-branch="currentBranch"
           :selected-branch="selectedBranch"
@@ -1116,7 +1127,9 @@ import {
   Folder,
   FolderGit2,
   GitBranch as GitBranchIcon,
+  GitCompare,
   Hash,
+  History,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -1984,6 +1997,11 @@ watch(
 
     if (selectedRepoId.value && selectedRepoId.value !== previousRepoId) {
       gitStatus.value = null
+      branches.value = []
+      currentBranch.value = ''
+      selectedBranch.value = ''
+      project.value = null
+      commits.value = []
       operationOutput.value = { text: '', success: true, label: '' }
       stashLoaded = false
       await nextTick()
@@ -1996,6 +2014,11 @@ watch(
 function handleRepoChange(event) {
   selectedRepoId.value = event.target.value
   gitStatus.value = null
+  branches.value = []
+  currentBranch.value = ''
+  selectedBranch.value = ''
+  project.value = null
+  commits.value = []
   operationOutput.value = { text: '', success: true, label: '' }
   closeDetailDrawer()
   stashLoaded = false

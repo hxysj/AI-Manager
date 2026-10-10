@@ -276,6 +276,29 @@ assert.deepEqual(compare.errors, [])
 compare.unmount()
 assert.equal(diffObserver.disconnected, true)
 
+handlers.getGitToolBranchDiff = payload => ({
+  baseBranch: payload.baseBranch,
+  targetBranch: payload.targetBranch,
+  command: `git diff --stat ${payload.baseBranch}..${payload.targetBranch}`,
+  files: [],
+  fileCount: 0,
+  additions: 0,
+  deletions: 0,
+  changedLines: 0,
+  patch: ''
+})
+const selfCompare = mount(ComparePanel, {
+  repoId: 'repo',
+  branches,
+  currentBranch: 'main',
+  selectedBranch: 'main'
+})
+await tick()
+assert.equal(calls.findLast(call => call.name === 'getGitToolBranchDiff').payload.baseBranch, 'main')
+assert.equal(calls.findLast(call => call.name === 'getGitToolBranchDiff').payload.targetBranch, 'main')
+assert.equal(findNodes(selfCompare.root, 'git-branch-compare-empty-view').length, 1)
+selfCompare.unmount()
+
 handlers = {
   getGitToolStatus: () => clone(status),
   scanGitToolBranches: () => ({ project: {}, branches, archives: [], stashArchives: [] }),

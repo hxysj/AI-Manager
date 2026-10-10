@@ -304,10 +304,6 @@ async fn branch_diff(cwd: &str, payload: &Value) -> Result<Value, ManagerError> 
     if base_branch.is_empty() || target_branch.is_empty() {
         return Err(ManagerError::System("请选择两个不同的分支".to_string()));
     }
-    if base_branch == target_branch {
-        return Err(ManagerError::System("请选择两个不同的分支".to_string()));
-    }
-
     let base_hash = resolve_commit(cwd, &base_branch).await?;
     let target_hash = resolve_commit(cwd, &target_branch).await?;
     let numstat_args = vec![
