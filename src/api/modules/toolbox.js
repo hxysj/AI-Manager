@@ -24,6 +24,8 @@ export const toolboxApi = {
   imageTaskInputs: (payload) => request("tools:image-inputs", payload),
   clearImageResults: (payload) => request("tools:image-clear-results", payload),
   deleteImageTasks: (payload) => request("tools:image-delete", payload),
+  // 用户删除会话时，同时删除保留的 Web 会话和本地图片。
+  deleteImageConversation: (payload) => request("tools:image-delete-conversation", payload),
   exportImageTasks: (payload) => request("tools:image-export", payload),
   exportImages: (payload) => request("tools:export-images", payload),
   // JSON Agent 请求由后端注入当前 Codex Provider 的密钥和地址。
