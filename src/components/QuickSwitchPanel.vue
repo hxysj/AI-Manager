@@ -263,16 +263,7 @@ const visibleTools = computed(() =>
   )
 )
 const centerPosition = ref({ x: 64, y: 64 })
-// 贴边时露出一部分桌宠，悬浮展开和拖动时完整显示。
-const petHidden = computed(() =>
-  Boolean(
-    desktopPet.value &&
-    screenEdge.value &&
-    !hovered.value &&
-    !expanded.value &&
-    !drag.active
-  )
-)
+// 偷看素材已包含墙壁遮挡，贴边只切换动作，不再把桌宠移出窗口。
 const petAction = computed(() => {
   if (!desktopPet.value) return ""
   const action = drag.active
@@ -291,8 +282,9 @@ const petAction = computed(() => {
 const centerLayoutStyle = computed(() => ({
   "--center-x": `${centerPosition.value.x}px`,
   "--center-y": `${centerPosition.value.y}px`,
-  "--pet-offset-x": `${petHidden.value ? (screenEdge.value === "left" ? -52 : screenEdge.value === "right" ? 52 : 0) : 0}px`,
-  "--pet-offset-y": `${petHidden.value ? (screenEdge.value === "top" ? -36 : screenEdge.value === "bottom" ? 52 : 0) : 0}px`
+  // 贴边时向边缘靠近 2px，保留窗口内的安全留白。
+  "--pet-offset-x": `${desktopPet.value ? (screenEdge.value === "left" ? -2 : screenEdge.value === "right" ? 2 : 0) : 0}px`,
+  "--pet-offset-y": `${desktopPet.value ? (screenEdge.value === "top" ? -2 : screenEdge.value === "bottom" ? 2 : 0) : 0}px`
 }))
 // 边缘空间不足时改用可用网格，工具不再强行围绕中心节点。
 const orbitLayout = computed(() => {
@@ -777,9 +769,6 @@ onBeforeUnmount(() => {
   }
 
   &.quick-switch-panel-dragging {
-    .quick-switch-center.quick-switch-center-pet {
-      transition: none;
-    }
     .quick-switch-tools {
       pointer-events: none;
 
@@ -846,10 +835,6 @@ onBeforeUnmount(() => {
         calc(-50% + var(--pet-offset-x)),
         calc(-50% + var(--pet-offset-y))
       );
-      transition: transform 240ms cubic-bezier(0.2, 0.72, 0.3, 1);
-      &:active {
-        transition: none;
-      }
     }
     .quick-switch-pet-button {
       width: 100%;

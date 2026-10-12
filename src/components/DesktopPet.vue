@@ -1,14 +1,52 @@
 <template>
   <div class="desktop-pet">
-    <img
+    <svg
       v-if="animation"
       :key="`${pet.id}:${animation.id}`"
       class="desktop-pet-animation"
-      :src="animation.url"
-      :alt="pet.name"
-      draggable="false"
-      @load="scheduleAnimation"
-    />
+      :viewBox="`0 0 ${animation.frameWidth} ${animation.frameHeight}`"
+      role="img"
+      :aria-label="pet.name"
+    >
+      <!-- 墙壁使用固定图层，逐帧只更新墙右侧的角色。 -->
+      <svg
+        v-if="animation.staticFrame"
+        class="desktop-pet-static-frame"
+        x="0"
+        :y="animation.frameHeight - animation.staticFrame.height"
+        :width="animation.staticFrame.width"
+        :height="animation.staticFrame.height"
+        :viewBox="`${animation.staticFrame.x} ${animation.staticFrame.y} ${animation.staticFrame.width} ${animation.staticFrame.height}`"
+        overflow="hidden"
+      >
+        <image
+          :href="animation.url"
+          :width="animation.sheetWidth"
+          :height="animation.sheetHeight"
+        />
+      </svg>
+      <svg
+        class="desktop-pet-frame"
+        :x="
+          animation.staticFrame
+            ? animation.staticFrame.width
+            : (animation.frameWidth - frame.width) / 2
+        "
+        :y="animation.frameHeight - frame.height"
+        :width="frame.width"
+        :height="frame.height"
+        :viewBox="`${frame.x} ${frame.y} ${frame.width} ${frame.height}`"
+        overflow="hidden"
+      >
+        <image
+          class="desktop-pet-sheet"
+          :href="animation.url"
+          :width="animation.sheetWidth"
+          :height="animation.sheetHeight"
+          @load="startAnimation"
+        />
+      </svg>
+    </svg>
   </div>
 </template>
 
@@ -21,6 +59,7 @@ const props = defineProps({
   action: { type: String, default: "" }
 })
 const animationIndex = ref(0)
+const frameIndex = ref(0)
 const animation = computed(() => {
   // 管理页固定播放指定动作，悬浮窗继续自动轮换。
   if (props.action)
@@ -31,10 +70,22 @@ const animation = computed(() => {
   }
   return props.pet.animations[animationIndex.value]
 })
+const frame = computed(() => animation.value.frames[frameIndex.value])
 let animationTimer = null
+let frameTimer = null
 let disposed = false
 
-// WebP 原生循环播放；按完整动作周期轮换，避免中途截断动画。
+// 精灵图只显示当前帧；固定画布和底部对齐避免不同帧缩放跳动。
+function startAnimation() {
+  clearInterval(frameTimer)
+  if (disposed) return
+  frameTimer = setInterval(() => {
+    frameIndex.value = (frameIndex.value + 1) % animation.value.frames.length
+  }, animation.value.frameDuration)
+  scheduleAnimation()
+}
+
+// 按完整动作周期轮换，避免中途截断动画。
 function scheduleAnimation() {
   clearTimeout(animationTimer)
   if (
@@ -61,10 +112,16 @@ watch(
   () => props.pet.id,
   () => {
     clearTimeout(animationTimer)
+    clearInterval(frameTimer)
     animationIndex.value = 0
+    frameIndex.value = 0
   }
 )
-watch(animation, () => clearTimeout(animationTimer))
+watch(animation, () => {
+  clearTimeout(animationTimer)
+  clearInterval(frameTimer)
+  frameIndex.value = 0
+})
 // 正好轮换到行走动作时，拖动前后图片不变，也要恢复轮换计时。
 watch(
   () => [props.dragging, props.action],
@@ -76,6 +133,7 @@ watch(
 onBeforeUnmount(() => {
   disposed = true
   clearTimeout(animationTimer)
+  clearInterval(frameTimer)
 })
 </script>
 
@@ -90,7 +148,6 @@ onBeforeUnmount(() => {
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: contain;
     pointer-events: none;
     user-select: none;
   }

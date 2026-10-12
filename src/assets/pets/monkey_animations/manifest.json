@@ -1,128 +1,98 @@
 {
   "idle": {
     "file": "idle.webp",
-    "frame_count": 12,
-    "frame_size": "192x192",
-    "frame_duration_ms": 260,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "walk": {
-    "file": "walk.webp",
-    "frame_count": 12,
-    "frame_size": "192x192",
-    "frame_duration_ms": 120,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
+    "size": [1122, 787],
+    "frames_layout": "9x5 sprite sheet (45 frames)",
+    "transparent_background": true
   },
   "greeting": {
     "file": "greeting.webp",
-    "frame_count": 11,
-    "frame_size": "192x192",
-    "frame_duration_ms": 150,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "jump": {
-    "file": "jump.webp",
-    "frame_count": 10,
-    "frame_size": "192x192",
-    "frame_duration_ms": 110,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "read_book": {
-    "file": "read_book.webp",
-    "frame_count": 12,
-    "frame_size": "192x192",
-    "frame_duration_ms": 230,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "use_phone": {
-    "file": "use_phone.webp",
-    "frame_count": 11,
-    "frame_size": "192x192",
-    "frame_duration_ms": 190,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
+    "size": [1122, 634],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
   },
   "sleep": {
     "file": "sleep.webp",
-    "frame_count": 10,
-    "frame_size": "192x192",
-    "frame_duration_ms": 300,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "think": {
-    "file": "think.webp",
-    "frame_count": 10,
-    "frame_size": "192x192",
-    "frame_duration_ms": 260,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "work_laptop": {
-    "file": "work_laptop.webp",
-    "frame_count": 10,
-    "frame_size": "192x192",
-    "frame_duration_ms": 170,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "salute": {
-    "file": "salute.webp",
-    "frame_count": 5,
-    "frame_size": "192x192",
-    "frame_duration_ms": 170,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "steal": {
-    "file": "steal.webp",
-    "frame_count": 5,
-    "frame_size": "192x192",
-    "frame_duration_ms": 150,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "peek": {
-    "file": "peek.webp",
-    "frame_count": 5,
-    "frame_size": "192x192",
-    "frame_duration_ms": 180,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
-  },
-  "run": {
-    "file": "run.webp",
-    "frame_count": 4,
-    "frame_size": "192x192",
-    "frame_duration_ms": 95,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
+    "size": [1119, 725],
+    "frames_layout": "9x5 sprite sheet (45 frames)",
+    "transparent_background": true
   },
   "wake_up": {
     "file": "wake_up.webp",
-    "frame_count": 3,
-    "frame_size": "192x192",
-    "frame_duration_ms": 220,
-    "loop": "infinite",
-    "transparent_background": true,
-    "embedded_category_labels": false
+    "size": [1120, 664],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
+  },
+  "salute": {
+    "file": "salute.webp",
+    "size": [1122, 751],
+    "frames_layout": "9x5 sprite sheet (45 frames)",
+    "transparent_background": true
+  },
+  "think": {
+    "file": "think.webp",
+    "size": [1122, 648],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
+  },
+  "walk": {
+    "file": "walk.webp",
+    "size": [1122, 644],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
+  },
+  "run": {
+    "file": "run.webp",
+    "size": [1122, 749],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
+  },
+  "steal": {
+    "file": "steal.webp",
+    "size": [1122, 736],
+    "frames_layout": "9x5 sprite sheet (45 frames)",
+    "transparent_background": true
+  },
+  "peek": {
+    "file": "peek.webp",
+    "size": [1774, 887],
+    "frames_layout": "10x4 sprite sheet (40 frames)",
+    "transparent_background": true
+  },
+  "read_book": {
+    "file": "read_book.webp",
+    "size": [1122, 748],
+    "frames_layout": "9x5 sprite sheet (45 frames)",
+    "transparent_background": true
+  },
+  "use_phone": {
+    "file": "use_phone.webp",
+    "size": [1122, 643],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
+  },
+  "work_laptop": {
+    "file": "work_laptop.webp",
+    "size": [1122, 610],
+    "frames_layout": "9x5 sprite sheet (45 frames)",
+    "transparent_background": true
+  },
+  "work": {
+    "file": "work.webp",
+    "size": [1119, 738],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
+  },
+  "jump": {
+    "file": "jump.webp",
+    "size": [1117, 733],
+    "frames_layout": "9x5 sprite sheet (45 frames)",
+    "transparent_background": true
+  },
+  "exercise": {
+    "file": "exercise.webp",
+    "size": [1117, 674],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
   }
 }

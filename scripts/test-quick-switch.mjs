@@ -89,10 +89,7 @@ function loadComponent(path) {
             if (!folder.isDirectory()) continue
             const directory = `src/assets/pets/${folder.name}`
             for (const file of readdirSync(resolve(directory))) {
-              if (
-                pattern.endsWith("/manifest.json") &&
-                file === "manifest.json"
-              )
+              if (pattern.endsWith(`/${file}`) && file.endsWith(".json"))
                 assets[`/${directory}/${file}`] = JSON.parse(
                   readFileSync(resolve(directory, file), "utf8")
                 )
@@ -629,12 +626,17 @@ finishInitialLayout({ centerX: 64, centerY: 64, edge: "left" })
 await tick()
 assert.equal(findNodes(startup.root, "quick-switch-main").length, 0)
 assert.ok(
-  findNodes(startup.root, "desktop-pet-animation")[0].props.src.endsWith(
+  findNodes(startup.root, "desktop-pet-sheet")[0].props.href.endsWith(
     "/peek.webp"
   )
 )
-assert.equal(startup.state.petHidden, true)
-assert.equal(startup.state.centerLayoutStyle["--pet-offset-x"], "-52px")
+assert.equal(startup.state.petAction, "peek")
+assert.deepEqual(startup.state.centerLayoutStyle, {
+  "--center-x": "64px",
+  "--center-y": "64px",
+  "--pet-offset-x": "-2px",
+  "--pet-offset-y": "0px"
+})
 startup.unmount()
 assert.deepEqual(startup.errors, [])
 assert.deepEqual(startup.warnings, [])
@@ -649,7 +651,7 @@ assert.equal(findNodes(petPanel.root, "quick-switch-main").length, 1)
 petState.appSettings.desktop = { enabled: true, petId: "" }
 await tick()
 assert.equal(petPanel.state.desktopPet.id, "monkey_animations")
-assert.equal(petPanel.state.desktopPet.animations.length, 14)
+assert.equal(petPanel.state.desktopPet.animations.length, 16)
 assert.equal(findNodes(petPanel.root, "quick-switch-center-pet").length, 1)
 assert.equal(findNodes(petPanel.root, "desktop-pet-animation").length, 1)
 assert.equal(findNodes(petPanel.root, "quick-switch-main").length, 0)
@@ -670,14 +672,14 @@ petPanel.state.startDrag({
 })
 await tick()
 assert.ok(
-  findNodes(petPanel.root, "desktop-pet-animation")[0].props.src.endsWith(
+  findNodes(petPanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
     "/walk.webp"
   )
 )
 petPanel.state.stopDrag()
 await tick()
 assert.ok(
-  findNodes(petPanel.root, "desktop-pet-animation")[0].props.src.endsWith(
+  findNodes(petPanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
     "/idle.webp"
   )
 )
@@ -700,7 +702,7 @@ petPanel.unmount()
 assert.deepEqual(petPanel.errors, [])
 assert.deepEqual(petPanel.warnings, [])
 
-// 四个边缘都能偷看和移出；悬浮时敬礼，拖动时始终完整显示行走动作。
+// 四个边缘偷看时保持在窗口内；悬浮时敬礼，拖动时完整显示行走动作。
 const edgeState = fixture()
 edgeState.appSettings.desktop = { enabled: true, petId: "monkey_animations" }
 let currentEdge = "left"
@@ -717,12 +719,7 @@ handlers.moveQuickSwitchBy = () => ({
 const edgePanel = mount(Quick, { state: edgeState })
 await tick()
 assert.equal(edgePanel.state.screenEdge, "left")
-for (const [edge, offsetX, offsetY] of [
-  ["left", "-52px", "0px"],
-  ["right", "52px", "0px"],
-  ["top", "0px", "-36px"],
-  ["bottom", "0px", "52px"]
-]) {
+for (const edge of ["left", "right", "top", "bottom"]) {
   currentEdge = edge
   edgePanel.state.startDrag({
     button: 0,
@@ -734,31 +731,36 @@ for (const [edge, offsetX, offsetY] of [
   })
   await edgePanel.state.moveDrag({ screenX: 5, screenY: 5 })
   await tick()
-  assert.equal(edgePanel.state.petHidden, false)
-  assert.equal(edgePanel.state.centerLayoutStyle["--pet-offset-x"], "0px")
-  assert.equal(edgePanel.state.centerLayoutStyle["--pet-offset-y"], "0px")
+  assert.equal(edgePanel.state.petAction, "walk")
   assert.ok(
-    findNodes(edgePanel.root, "desktop-pet-animation")[0].props.src.endsWith(
+    findNodes(edgePanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
       "/walk.webp"
     )
   )
   edgePanel.state.stopDrag()
   await tick()
-  assert.equal(edgePanel.state.petHidden, true)
-  assert.equal(edgePanel.state.centerLayoutStyle["--pet-offset-x"], offsetX)
-  assert.equal(edgePanel.state.centerLayoutStyle["--pet-offset-y"], offsetY)
-  assert.equal(findNodes(edgePanel.root, 'quick-switch-pet-mirrored').length, edge === 'right' ? 1 : 0)
+  assert.equal(edgePanel.state.petAction, "peek")
+  assert.deepEqual(edgePanel.state.centerLayoutStyle, {
+    "--center-x": "64px",
+    "--center-y": "64px",
+    "--pet-offset-x": `${edge === "left" ? -2 : edge === "right" ? 2 : 0}px`,
+    "--pet-offset-y": `${edge === "top" ? -2 : edge === "bottom" ? 2 : 0}px`
+  })
+  assert.equal(
+    findNodes(edgePanel.root, "quick-switch-pet-mirrored").length,
+    edge === "right" ? 1 : 0
+  )
   assert.ok(
-    findNodes(edgePanel.root, "desktop-pet-animation")[0].props.src.endsWith(
+    findNodes(edgePanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
       "/peek.webp"
     )
   )
   edgePanel.state.enterPanel()
   await tick()
-  assert.equal(edgePanel.state.petHidden, false)
-  assert.equal(findNodes(edgePanel.root, 'quick-switch-pet-mirrored').length, 0)
+  assert.equal(edgePanel.state.petAction, "salute")
+  assert.equal(findNodes(edgePanel.root, "quick-switch-pet-mirrored").length, 0)
   assert.ok(
-    findNodes(edgePanel.root, "desktop-pet-animation")[0].props.src.endsWith(
+    findNodes(edgePanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
       "/salute.webp"
     )
   )
@@ -769,7 +771,7 @@ for (const [edge, offsetX, offsetY] of [
   edgePanel.state.leavePanel()
   await tickDelay(300)
   assert.equal(edgePanel.state.expanded, false)
-  assert.equal(edgePanel.state.petHidden, true)
+  assert.equal(edgePanel.state.petAction, "peek")
 }
 currentEdge = ""
 edgePanel.state.startDrag({
@@ -784,16 +786,16 @@ await edgePanel.state.moveDrag({ screenX: 5, screenY: 5 })
 edgePanel.state.stopDrag()
 await tick()
 assert.equal(edgePanel.state.screenEdge, "")
-assert.equal(edgePanel.state.petHidden, false)
+assert.equal(edgePanel.state.petAction, "")
 assert.ok(
-  findNodes(edgePanel.root, "desktop-pet-animation")[0].props.src.endsWith(
+  findNodes(edgePanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
     "/idle.webp"
   )
 )
 edgePanel.state.enterPanel()
 await tick()
 assert.ok(
-  findNodes(edgePanel.root, "desktop-pet-animation")[0].props.src.endsWith(
+  findNodes(edgePanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
     "/salute.webp"
   )
 )
@@ -809,6 +811,9 @@ handlers.moveQuickSwitchBy = () => true
 
 // 完整周期轮换、拖动暂停、切换桌宠和卸载清理计时器。
 const { desktopPets, getDesktopPet } = modules.get("@/constants/desktop-pets")
+const spriteConfig = JSON.parse(
+  readFileSync("src/assets/pets/monkey_animations/sprite_config.json", "utf8")
+)
 assert.equal(getDesktopPet("").id, desktopPets[0].id)
 assert.ok(
   desktopPets[0].animations.every(
@@ -817,8 +822,11 @@ assert.ok(
 )
 const Pet = loadComponent("src/components/DesktopPet.vue")
 const timers = new Map()
+const frameTimers = new Map()
 const originalSetTimeout = globalThis.setTimeout
 const originalClearTimeout = globalThis.clearTimeout
+const originalSetInterval = globalThis.setInterval
+const originalClearInterval = globalThis.clearInterval
 let nextTimer = 1
 globalThis.setTimeout = (callback, ms) => {
   const id = nextTimer++
@@ -826,18 +834,26 @@ globalThis.setTimeout = (callback, ms) => {
   return id
 }
 globalThis.clearTimeout = (id) => timers.delete(id)
+globalThis.setInterval = (callback, ms) => {
+  const id = nextTimer++
+  frameTimers.set(id, { callback, ms })
+  return id
+}
+globalThis.clearInterval = (id) => frameTimers.delete(id)
 const pet = mount(Pet, { pet: desktopPets[0] })
 await tick()
 const firstAnimation = pet.state.animation
-findNodes(pet.root, "desktop-pet-animation")[0].props.onLoad()
+findNodes(pet.root, "desktop-pet-sheet")[0].props.onLoad()
 assert.equal(timers.size, 1)
+assert.equal(frameTimers.size, 1)
 const timer = [...timers.values()][0]
 assert.ok(timer.ms >= 4000)
 assert.equal(timer.ms % firstAnimation.duration, 0)
 timer.callback()
 await tick()
-assert.equal(pet.state.animation.id, "walk")
+assert.equal(pet.state.animation.id, desktopPets[0].animations[1].id)
 assert.equal(timers.size, 0)
+assert.equal(frameTimers.size, 0)
 for (let index = 1; index < desktopPets[0].animations.length; index++) {
   pet.state.rotateAnimation()
   await tick()
@@ -858,12 +874,17 @@ assert.equal(timers.size, 1)
 pet.state.rotateAnimation()
 await tick()
 assert.equal(timers.size, 0)
+pet.state.animationIndex = desktopPets[0].animations.findIndex(
+  (animation) => animation.id === "walk"
+)
+await tick()
 assert.equal(pet.state.animation.id, "walk")
 pet.state.scheduleAnimation()
 assert.equal(timers.size, 1)
 pet.component.props.dragging = true
 await tick()
 assert.equal(timers.size, 0)
+assert.equal(frameTimers.size, 0)
 pet.component.props.dragging = false
 await tick()
 assert.equal(timers.size, 1)
@@ -880,15 +901,45 @@ for (const animation of desktopPets[0].animations) {
   const preview = mount(Pet, { pet: desktopPets[0], action: animation.id })
   await tick()
   assert.equal(
-    findNodes(preview.root, "desktop-pet-animation")[0].props.src,
+    findNodes(preview.root, "desktop-pet-sheet")[0].props.href,
     animation.url
   )
+  // 逐帧跨行播放且完整循环，裁切区域始终只对应一帧。
+  findNodes(preview.root, "desktop-pet-sheet")[0].props.onLoad()
+  assert.equal(frameTimers.size, 1)
+  const frameTimer = [...frameTimers.values()][0]
+  assert.equal(frameTimer.ms, animation.frameDuration)
+  assert.equal(frameTimer.ms, spriteConfig.actions[animation.id].frameDurationMs)
+  const wall = findNodes(preview.root, "desktop-pet-static-frame")
+  assert.equal(wall.length, animation.id === "peek" ? 1 : 0)
+  const wallProps = wall.length ? { ...wall[0].props } : null
+  for (const [index, frame] of animation.frames.entries()) {
+    assert.equal(preview.state.frameIndex, index)
+    assert.equal(
+      findNodes(preview.root, "desktop-pet-frame")[0].props.viewBox,
+      `${frame.x} ${frame.y} ${frame.width} ${frame.height}`
+    )
+    assert.ok(frame.x >= 0 && frame.x + frame.width <= animation.sheetWidth)
+    assert.ok(frame.y >= 0 && frame.y + frame.height <= animation.sheetHeight)
+    if (wallProps) {
+      // 墙壁像素和位置保持不变，角色播放区域始终在墙壁右侧。
+      assert.deepEqual(wall[0].props, wallProps)
+      assert.equal(
+        findNodes(preview.root, "desktop-pet-frame")[0].props.x,
+        animation.staticFrame.width
+      )
+    }
+    frameTimer.callback()
+    await tick()
+  }
+  assert.equal(preview.state.frameIndex, 0)
   preview.state.scheduleAnimation()
   assert.equal(timers.size, 0)
   preview.state.rotateAnimation()
   await tick()
   assert.equal(preview.state.animation.id, animation.id)
   preview.unmount()
+  assert.equal(frameTimers.size, 0)
   assert.deepEqual(preview.errors, [])
   assert.deepEqual(preview.warnings, [])
 }
@@ -901,9 +952,20 @@ lockedPreview.component.props.action = "salute"
 await tick()
 assert.equal(timers.size, 0)
 assert.equal(lockedPreview.state.animation.id, "salute")
+findNodes(lockedPreview.root, "desktop-pet-sheet")[0].props.onLoad()
+const saluteFrameTimer = [...frameTimers.values()][0]
+saluteFrameTimer.callback()
+await tick()
+assert.equal(lockedPreview.state.frameIndex, 1)
+lockedPreview.component.props.action = "peek"
+await tick()
+assert.equal(lockedPreview.state.frameIndex, 0)
+assert.equal(frameTimers.size, 0)
 lockedPreview.unmount()
 globalThis.setTimeout = originalSetTimeout
 globalThis.clearTimeout = originalClearTimeout
+globalThis.setInterval = originalSetInterval
+globalThis.clearInterval = originalClearInterval
 assert.deepEqual(pet.errors, [])
 assert.deepEqual(pet.warnings, [])
 
@@ -952,12 +1014,12 @@ assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 0)
 settings.state.draft.desktop.enabled = true
 await tick()
 assert.equal(findNodes(settings.root, "settings-desktop-pet-active").length, 1)
-assert.equal(findNodes(settings.root, "desktop-pet-animation").length, 15)
+assert.equal(findNodes(settings.root, "desktop-pet-animation").length, 17)
 const animationCards = findNodes(settings.root, "settings-desktop-animation")
 assert.equal(animationCards.length, desktopPets[0].animations.length)
 animationCards.forEach((card, index) => {
   assert.equal(
-    findNodes(card, "desktop-pet-animation")[0].props.src,
+    findNodes(card, "desktop-pet-sheet")[0].props.href,
     desktopPets[0].animations[index].url
   )
   assert.equal(

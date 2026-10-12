@@ -3,6 +3,13 @@ const manifests = import.meta.glob("/src/assets/pets/*/manifest.json", {
   eager: true,
   import: "default"
 })
+const spriteConfigs = import.meta.glob(
+  "/src/assets/pets/*/sprite_config.json",
+  {
+    eager: true,
+    import: "default"
+  }
+)
 const images = import.meta.glob("/src/assets/pets/*/*.webp", {
   eager: true,
   query: "?url",
@@ -18,7 +25,9 @@ const animationNames = {
   use_phone: "玩手机",
   sleep: "睡觉",
   think: "思考",
+  work: "工作",
   work_laptop: "用电脑",
+  exercise: "锻炼",
   salute: "敬礼",
   steal: "偷东西",
   peek: "偷看",
@@ -31,13 +40,31 @@ export const desktopPets = Object.entries(manifests)
   .map(([path, manifest]) => {
     const directory = path.slice(0, path.lastIndexOf("/"))
     const id = directory.split("/").at(-1)
+    const config = spriteConfigs[`${directory}/sprite_config.json`]
     const animations = Object.entries(manifest)
-      .map(([action, item]) => ({
-        id: action,
-        name: animationNames[action] || action.replace(/[_-]/g, " "),
-        url: images[`${directory}/${item.file}`],
-        duration: item.frame_count * item.frame_duration_ms
-      }))
+      .map(([action, item]) => {
+        // 裁切坐标使用素材配置，播放时保持同一动作的画布尺寸稳定。
+        const sprite = config.actions[action]
+        // 每个动作独立配置帧间隔，轮换周期也随该动作的速度计算。
+        const frameDuration = sprite.frameDurationMs
+        return {
+          id: action,
+          name: animationNames[action] || action.replace(/[_-]/g, " "),
+          url: images[`${directory}/${item.file}`],
+          sheetWidth: sprite.sheetWidth,
+          sheetHeight: sprite.sheetHeight,
+          staticFrame: sprite.staticFrame,
+          frames: sprite.frameRects,
+          frameWidth:
+            Math.max(...sprite.frameRects.map((frame) => frame.width)) +
+            (sprite.staticFrame ? sprite.staticFrame.width : 0),
+          frameHeight: Math.max(
+            ...sprite.frameRects.map((frame) => frame.height)
+          ),
+          frameDuration,
+          duration: sprite.frameCount * frameDuration
+        }
+      })
       .filter((animation) => animation.url)
     return {
       id,
