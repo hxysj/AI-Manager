@@ -20,10 +20,14 @@ async fn dispatch_api(
     channel: String,
     payload: Option<Value>,
 ) -> Result<Value, String> {
+    // 悬浮窗复用内存状态，初始化不扫描磁盘，也不更新托盘和操作日志。
+    if channel == "quick-switch:bootstrap" {
+        return Ok(state.state_snapshot().await);
+    }
     // 拖动和悬浮尺寸调整不改变业务状态，不逐帧写日志和重建托盘菜单。
     if matches!(
         channel.as_str(),
-        "quick-switch:move-by" | "quick-switch:set-collapsed"
+        "quick-switch:move-by" | "quick-switch:set-collapsed" | "quick-switch:ready"
     ) {
         return state
             .dispatch(app, &channel, payload)
@@ -143,13 +147,16 @@ pub fn run() {
             ))?;
             let manager_state = ManagerState::new(app.handle())?;
             app::apply_auto_launch_setting(app.handle(), manager_state.app_settings())?;
+            let app_settings = manager_state.app_settings().clone();
+            let quick_switch_collapsed = manager_state.quick_switch_collapsed();
+            // 预热窗口会立即调用 IPC，先注册共享状态。
+            app.manage(AppState::new(manager_state));
             app::sync_quick_switch_window(
                 app.handle(),
-                manager_state.app_settings(),
-                manager_state.quick_switch_collapsed(),
+                &app_settings,
+                quick_switch_collapsed,
             )?;
             create_tray(app.handle())?;
-            app.manage(AppState::new(manager_state));
             if let Some(state) = app.handle().try_state::<AppState>() {
                 let snapshot = tauri::async_runtime::block_on(state.state_snapshot());
                 update_tray_menu(app.handle(), &snapshot)?;

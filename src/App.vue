@@ -738,6 +738,17 @@ const selectedCloudBackupEntry = computed(() => {
 })
 
 async function bootstrap() {
+  // 预热浮窗复用内存状态，仅主页面执行完整初始化和备份加载。
+  if (isQuickSwitchPanel) {
+    try {
+      unsubscribe = await appApi.onStateChangedReady(updateState)
+      updateState(await appApi.bootstrapQuickSwitch())
+      quickSwitchReady.value = true
+    } catch (error) {
+      showErrorMessage(error)
+    }
+    return
+  }
   await withGlobalLoading(async () => {
     try {
       updateState(await appApi.bootstrap())
@@ -2104,13 +2115,12 @@ onMounted(() => {
   }
 
   bootstrap()
+  if (isQuickSwitchPanel) return
 
-  if (!isQuickSwitchPanel) {
-    unsubscribeTool = appApi.onToolRequested((request) => {
-      toolRequest.value = request
-      activeView.value = "tools"
-    })
-  }
+  unsubscribeTool = appApi.onToolRequested((request) => {
+    toolRequest.value = request
+    activeView.value = "tools"
+  })
 
   // 后端启动时已开启后台快传服务，这里只监听全局设备连接配对请求。
   unsubscribeLanShare = lanShareApi.onStateChanged((payload) => {

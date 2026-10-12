@@ -7,6 +7,7 @@ use std::io::{Cursor, Read};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex as SyncMutex};
 use std::time::Duration;
 use tauri::window::Color;
@@ -28,6 +29,8 @@ const QUICK_SWITCH_COLLAPSED_HEIGHT: u32 = 128;
 // 同时保留中心节点的物理坐标，重新创建时不受展开尺寸影响。
 static QUICK_SWITCH_WINDOW_POSITION: SyncMutex<Option<PhysicalPosition<f64>>> =
     SyncMutex::new(None);
+// 隐藏窗口提前加载，配置和布局就绪后才允许显示。
+static QUICK_SWITCH_WINDOW_READY: AtomicBool = AtomicBool::new(false);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -461,8 +464,25 @@ pub fn show_main_panel(
     window
         .set_focus()
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    destroy_quick_switch_window(app)?;
+    hide_quick_switch_window(app)?;
     Ok(json!(true))
+}
+
+pub fn mark_quick_switch_ready(
+    app: &tauri::AppHandle,
+    app_settings: &AppSettings,
+    quick_switch_collapsed: bool,
+) -> Result<Value, ManagerError> {
+    QUICK_SWITCH_WINDOW_READY.store(true, Ordering::SeqCst);
+    sync_quick_switch_window(app, app_settings, quick_switch_collapsed)?;
+    // 已显示的窗口不会再次触发显示事件，重载前端时仍需恢复真实可见状态。
+    let visible = app
+        .get_webview_window(QUICK_SWITCH_LABEL)
+        .map(|window| window.is_visible())
+        .transpose()
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .unwrap_or(false);
+    Ok(json!({ "visible": visible }))
 }
 
 pub fn set_quick_switch_collapsed(
@@ -478,6 +498,11 @@ pub fn set_quick_switch_collapsed(
         .unwrap_or(false);
 
     if let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) {
+        // 隐藏后的迟到悬浮请求不能重新展开窗口。
+        let collapsed = collapsed
+            || !window
+                .is_visible()
+                .map_err(|error| ManagerError::System(error.to_string()))?;
         let (center_x, center_y, edge) =
             apply_quick_switch_collapsed(&window, collapsed, &mut center)?;
         return Ok(json!({
@@ -498,6 +523,12 @@ pub fn move_quick_switch_by(app: &tauri::AppHandle, payload: Value) -> Result<Va
     let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) else {
         return Ok(json!(true));
     };
+    if !window
+        .is_visible()
+        .map_err(|error| ManagerError::System(error.to_string()))?
+    {
+        return Ok(json!(true));
+    }
     let position = window
         .outer_position()
         .map_err(|error| ManagerError::System(error.to_string()))?;
@@ -567,6 +598,10 @@ pub fn sync_quick_switch_window(
     let mut center = QUICK_SWITCH_WINDOW_POSITION
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    if !app_settings.system.quick_switch_visible {
+        destroy_quick_switch_window(app)?;
+        return Ok(());
+    }
     let Some(main_window) = app.get_webview_window("main") else {
         destroy_quick_switch_window(app)?;
         return Ok(());
@@ -577,13 +612,29 @@ pub fn sync_quick_switch_window(
     let main_minimized = main_window
         .is_minimized()
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    let should_show = app_settings.system.quick_switch_visible && (!main_visible || main_minimized);
-
-    if should_show {
-        // 每次最小化都先显示中心节点，悬浮时再展开工具。
-        create_quick_switch_window(app, true, &mut center)?;
-    } else {
-        destroy_quick_switch_window(app)?;
+    // 主页面显示期间预热并保留 WebView，切换时只改变可见性。
+    let window = create_quick_switch_window(app, true, &mut center)?;
+    let visible = window
+        .is_visible()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    if !main_visible || main_minimized {
+        if QUICK_SWITCH_WINDOW_READY.load(Ordering::SeqCst) && !visible {
+            let (center_x, center_y, edge) =
+                apply_quick_switch_collapsed(&window, true, &mut center)?;
+            window
+                .emit("quick-switch:visibility-changed", json!({
+                    "visible": true,
+                    "centerX": center_x,
+                    "centerY": center_y,
+                    "edge": edge
+                }))
+                .map_err(|error| ManagerError::System(error.to_string()))?;
+            window
+                .show()
+                .map_err(|error| ManagerError::System(error.to_string()))?;
+        }
+    } else if visible {
+        hide_quick_switch_window(app)?;
     }
 
     Ok(())
@@ -611,10 +662,11 @@ fn create_quick_switch_window(
     app: &tauri::AppHandle,
     quick_switch_collapsed: bool,
     center: &mut Option<PhysicalPosition<f64>>,
-) -> Result<(), ManagerError> {
-    if app.get_webview_window(QUICK_SWITCH_LABEL).is_some() {
-        return Ok(());
+) -> Result<WebviewWindow, ManagerError> {
+    if let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) {
+        return Ok(window);
     }
+    QUICK_SWITCH_WINDOW_READY.store(false, Ordering::SeqCst);
     let width = if quick_switch_collapsed {
         QUICK_SWITCH_COLLAPSED_WIDTH
     } else {
@@ -648,6 +700,7 @@ fn create_quick_switch_window(
     .background_color(Color(0, 0, 0, 0))
     .shadow(false)
     .focused(false)
+    .visible(false)
     .build()
     .map_err(|error| ManagerError::System(error.to_string()))?;
 
@@ -657,10 +710,23 @@ fn create_quick_switch_window(
     set_quick_switch_size(&window, width, height)?;
     *center = Some(position_quick_switch_window(&window, *center)?);
 
+    Ok(window)
+}
+
+fn hide_quick_switch_window(app: &tauri::AppHandle) -> Result<(), ManagerError> {
+    if let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) {
+        window
+            .hide()
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        window
+            .emit("quick-switch:visibility-changed", json!({ "visible": false }))
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+    }
     Ok(())
 }
 
 fn destroy_quick_switch_window(app: &tauri::AppHandle) -> Result<(), ManagerError> {
+    QUICK_SWITCH_WINDOW_READY.store(false, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) {
         window
             .destroy()

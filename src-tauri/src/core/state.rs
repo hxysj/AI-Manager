@@ -449,6 +449,11 @@ impl ManagerState {
                     payload.as_ref().and_then(|value| value.get("toolId")).and_then(Value::as_str),
                 )
             }
+            "quick-switch:ready" => app::mark_quick_switch_ready(
+                &app,
+                &self.app_settings,
+                self.quick_switch_collapsed,
+            ),
             "quick-switch:set-collapsed" => {
                 let payload = payload.unwrap_or_else(|| json!({}));
                 self.quick_switch_collapsed = payload

@@ -56,7 +56,8 @@ import { computed, onBeforeUnmount, ref, watch } from "vue"
 const props = defineProps({
   pet: { type: Object, required: true },
   dragging: { type: Boolean, default: false },
-  action: { type: String, default: "" }
+  action: { type: String, default: "" },
+  paused: { type: Boolean, default: false }
 })
 const animationIndex = ref(0)
 const frameIndex = ref(0)
@@ -74,11 +75,13 @@ const frame = computed(() => animation.value.frames[frameIndex.value])
 let animationTimer = null
 let frameTimer = null
 let disposed = false
+let imageLoaded = false
 
 // 精灵图只显示当前帧；固定画布和底部对齐避免不同帧缩放跳动。
 function startAnimation() {
+  imageLoaded = true
   clearInterval(frameTimer)
-  if (disposed) return
+  if (disposed || props.paused) return
   frameTimer = setInterval(() => {
     frameIndex.value = (frameIndex.value + 1) % animation.value.frames.length
   }, animation.value.frameDuration)
@@ -90,6 +93,7 @@ function scheduleAnimation() {
   clearTimeout(animationTimer)
   if (
     disposed ||
+    props.paused ||
     props.action ||
     props.dragging ||
     props.pet.animations.length < 2
@@ -103,7 +107,7 @@ function scheduleAnimation() {
 }
 
 function rotateAnimation() {
-  if (disposed || props.action || props.dragging) return
+  if (disposed || props.paused || props.action || props.dragging) return
   animationIndex.value =
     (animationIndex.value + 1) % props.pet.animations.length
 }
@@ -115,13 +119,24 @@ watch(
     clearInterval(frameTimer)
     animationIndex.value = 0
     frameIndex.value = 0
+    imageLoaded = false
   }
 )
 watch(animation, () => {
   clearTimeout(animationTimer)
   clearInterval(frameTimer)
   frameIndex.value = 0
+  imageLoaded = false
 })
+// 隐藏的预热窗口保留图片，暂停计时；重新显示直接继续播放。
+watch(
+  () => props.paused,
+  (paused) => {
+    clearTimeout(animationTimer)
+    clearInterval(frameTimer)
+    if (!paused && imageLoaded) startAnimation()
+  }
+)
 // 正好轮换到行走动作时，拖动前后图片不变，也要恢复轮换计时。
 watch(
   () => [props.dragging, props.action],

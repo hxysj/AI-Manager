@@ -1,5 +1,6 @@
 <template>
   <section
+    ref="panelElement"
     v-if="ready && layoutReady"
     class="quick-switch-panel"
     :style="centerLayoutStyle"
@@ -9,6 +10,7 @@
     }"
     @pointerenter="enterPanel"
     @pointerleave="leavePanel"
+    @pointermove="handlePointerMove"
     @focusin="enterPanel"
     @focusout="handleFocusOut"
     @keydown.esc="setExpanded(false)"
@@ -90,6 +92,7 @@
           :pet="desktopPet"
           :dragging="drag.active"
           :action="petAction"
+          :paused="!windowVisible"
         />
       </button>
       <template v-else>
@@ -167,7 +170,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
 import { appApi, usageApi } from "@/api"
 import AiIcon from "@/components/AiIcon.vue"
 import DesktopPet from "@/components/DesktopPet.vue"
@@ -182,7 +185,9 @@ const props = defineProps({
   ready: { type: Boolean, default: true }
 })
 const expanded = ref(false)
+const panelElement = ref(null)
 const layoutReady = ref(false)
+const windowVisible = ref(false)
 const screenEdge = ref("")
 const hovered = ref(false)
 const selectedPage = ref("home")
@@ -270,7 +275,7 @@ const petAction = computed(() => {
     ? "walk"
     : hovered.value
       ? "salute"
-      : screenEdge.value
+      : screenEdge.value === "left" || screenEdge.value === "right"
         ? "peek"
         : ""
   return desktopPet.value.animations.some(
@@ -282,9 +287,8 @@ const petAction = computed(() => {
 const centerLayoutStyle = computed(() => ({
   "--center-x": `${centerPosition.value.x}px`,
   "--center-y": `${centerPosition.value.y}px`,
-  // 贴边时向边缘靠近 2px，保留窗口内的安全留白。
-  "--pet-offset-x": `${desktopPet.value ? (screenEdge.value === "left" ? -2 : screenEdge.value === "right" ? 2 : 0) : 0}px`,
-  "--pet-offset-y": `${desktopPet.value ? (screenEdge.value === "top" ? -2 : screenEdge.value === "bottom" ? 2 : 0) : 0}px`
+  // 左右贴边时靠近边缘 20px，上下贴边保持原位。
+  "--pet-offset-x": `${desktopPet.value ? (screenEdge.value === "left" ? -20 : screenEdge.value === "right" ? 20 : 0) : 0}px`
 }))
 // 边缘空间不足时改用可用网格，工具不再强行围绕中心节点。
 const orbitLayout = computed(() => {
@@ -394,6 +398,8 @@ let disposed = false
 let usageSequence = 0
 let usageKey = ""
 let moveRequest = Promise.resolve()
+let unsubscribeVisibility = null
+let visibilitySequence = 0
 // 拖动期间锁住悬浮样式，避免移动时误触发工具效果。
 const drag = reactive({ active: false, moved: false, x: 0, y: 0, distance: 0 })
 
@@ -405,17 +411,25 @@ function formatCost(value) {
 // 原生窗口按中心扩缩；串行处理，避免快速进出时旧请求覆盖新状态。
 async function setExpanded(value) {
   wantedExpanded = value && visibleTools.value.length > 0
-  if (drag.active || resizing || disposed) return
+  if (!windowVisible.value || drag.active || resizing || disposed) return
   resizing = true
   try {
     // 先完成拖动，避免迟到的坐标覆盖展开或收起后的中心位置。
     await moveRequest
-    while (!disposed && !drag.active && wantedExpanded !== expanded.value) {
+    while (
+      !disposed &&
+      windowVisible.value &&
+      !drag.active &&
+      wantedExpanded !== expanded.value
+    ) {
       const next = wantedExpanded
+      const sequence = visibilitySequence
       const layout = await appApi.setQuickSwitchCollapsed({ collapsed: !next })
-      if (!disposed) {
-        expanded.value = next
-        const fallback = next ? 280 : 64
+      if (!disposed && sequence === visibilitySequence) {
+        expanded.value =
+          typeof layout?.collapsed === "boolean" ? !layout.collapsed : next
+        if (expanded.value !== next) wantedExpanded = expanded.value
+        const fallback = expanded.value ? 280 : 64
         const centerX = Number(layout?.centerX)
         const centerY = Number(layout?.centerY)
         centerPosition.value = {
@@ -434,17 +448,32 @@ async function setExpanded(value) {
 }
 
 function enterPanel() {
+  if (!windowVisible.value) return
   hovered.value = true
   clearTimeout(hoverTimer)
   if (drag.active) return
-  hoverTimer = setTimeout(() => setExpanded(true), 100)
+  hoverTimer = setTimeout(() => {
+    hoverTimer = null
+    setExpanded(true)
+  }, 100)
+}
+
+// 原生窗口贴边移动后，鼠标可能仍在窗口内而没有新的进入事件。
+function handlePointerMove() {
+  if (drag.active || resizing) return
+  if (!hovered.value || (!expanded.value && hoverTimer === null)) enterPanel()
 }
 
 function leavePanel() {
   hovered.value = false
   clearTimeout(hoverTimer)
+  hoverTimer = null
   // 给鼠标从中心经过透明间隔到工具节点留出时间。
-  if (!drag.active) hoverTimer = setTimeout(() => setExpanded(false), 260)
+  if (windowVisible.value && !drag.active)
+    hoverTimer = setTimeout(() => {
+      hoverTimer = null
+      setExpanded(false)
+    }, 260)
 }
 
 function handleFocusOut(event) {
@@ -464,9 +493,10 @@ function handleMainClick(event) {
 }
 
 function startDrag(event) {
-  if (event.button !== 0) return
+  if (!windowVisible.value || event.button !== 0) return
   event.preventDefault()
   clearTimeout(hoverTimer)
+  hoverTimer = null
   wantedExpanded = expanded.value
   drag.active = true
   drag.moved = false
@@ -487,13 +517,15 @@ function moveDrag(event) {
   drag.distance += Math.abs(x) + Math.abs(y)
   if (drag.distance > 3) drag.moved = true
   if (drag.moved && (x || y)) {
+    const sequence = visibilitySequence
     // 串行同步实际中心位置，贴边时让工具自动移到剩余空间。
     moveRequest = moveRequest
       .then(async () => {
-        if (disposed) return
+        if (disposed || sequence !== visibilitySequence) return
         const layout = await appApi.moveQuickSwitchBy({ x, y })
         if (
           !disposed &&
+          sequence === visibilitySequence &&
           Number.isFinite(layout?.centerX) &&
           Number.isFinite(layout?.centerY)
         ) {
@@ -506,19 +538,50 @@ function moveDrag(event) {
   }
 }
 
-function stopDrag() {
+function stopDrag(event) {
   const wasActive = drag.active
   drag.active = false
   window.removeEventListener("pointermove", moveDrag)
   window.removeEventListener("pointerup", stopDrag)
   window.removeEventListener("pointercancel", stopDrag)
-  if (wasActive && !disposed) hovered.value ? enterPanel() : leavePanel()
+  if (wasActive && !disposed && windowVisible.value) {
+    // 松开时使用实际指针位置，修正拖动和窗口贴边造成的过期悬浮状态。
+    if (Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)) {
+      const bounds = panelElement.value.getBoundingClientRect()
+      hovered.value =
+        event.clientX >= bounds.left &&
+        event.clientX < bounds.right &&
+        event.clientY >= bounds.top &&
+        event.clientY < bounds.bottom
+    }
+    hovered.value ? enterPanel() : leavePanel()
+  }
+}
+
+// 复用窗口时清掉上次悬浮和拖动状态，显示位置由原生窗口一次性同步。
+function handleVisibilityChange(layout) {
+  visibilitySequence += 1
+  // 先停止交互，再恢复可见性，避免拖动结束时重新安排悬浮计时。
+  windowVisible.value = false
+  clearTimeout(hoverTimer)
+  hoverTimer = null
+  hovered.value = false
+  stopDrag()
+  drag.moved = false
+  wantedExpanded = false
+  expanded.value = false
+  if (layout.visible) {
+    centerPosition.value = { x: layout.centerX, y: layout.centerY }
+    screenEdge.value = layout.edge || ""
+  }
+  windowVisible.value = layout.visible
 }
 
 // 每五秒轮换中心内容，查看或拖动时暂停，手动切换仍保留。
 function rotateCenterPage() {
   if (
     !props.ready ||
+    !windowVisible.value ||
     desktopPet.value ||
     hovered.value ||
     drag.active ||
@@ -533,7 +596,8 @@ function rotateCenterPage() {
 
 // 主状态仅带最近 200 条记录，今日汇总复用统计接口，避免漏算。
 async function loadTodayUsage() {
-  if (!props.ready) return
+  if (!props.ready || !windowVisible.value || desktopPet.value || disposed)
+    return
   const sequence = ++usageSequence
   const start = new Date()
   start.setHours(0, 0, 0, 0)
@@ -574,6 +638,31 @@ watch(
       return
     }
     try {
+      if (!unsubscribeVisibility) {
+        const unsubscribe = await appApi.onQuickSwitchVisibilityChanged(
+          handleVisibilityChange
+        )
+        if (disposed) {
+          unsubscribe()
+          return
+        }
+        unsubscribeVisibility = unsubscribe
+      }
+      // 配置和 DOM 就绪不代表素材已加载；提前缓存动作，避免首次显示或敬礼切换时空白。
+      if (desktopPet.value) {
+        await Promise.all(
+          desktopPet.value.animations.map((animation) => {
+            return new Promise((resolve, reject) => {
+              const image = new Image()
+              image.onload = resolve
+              image.onerror = () =>
+                reject(new Error(`桌宠动作素材加载失败：${animation.name}`))
+              image.src = animation.url
+            })
+          })
+        )
+        if (disposed || !props.ready) return
+      }
       const layout = await appApi.setQuickSwitchCollapsed({
         collapsed: !expanded.value
       })
@@ -582,6 +671,15 @@ watch(
         centerPosition.value = { x: layout.centerX, y: layout.centerY }
       screenEdge.value = layout?.edge || ""
       layoutReady.value = true
+      // 先提交首帧节点，再允许原生窗口显示，首次切换也不会闪出错误布局。
+      await nextTick()
+      if (!disposed && props.ready) {
+        const sequence = visibilitySequence
+        const status = await appApi.markQuickSwitchReady()
+        // 已显示窗口重载时没有新显示事件；较新的可见性事件仍优先。
+        if (!disposed && props.ready && sequence === visibilitySequence)
+          windowVisible.value = status.visible
+      }
     } catch (error) {
       if (!disposed) createMessage.error(error.message || String(error))
     }
@@ -589,7 +687,13 @@ watch(
   { immediate: true }
 )
 watch(
-  () => [props.ready, activeCli.value?.id, props.state.usage],
+  () => [
+    props.ready,
+    windowVisible.value,
+    desktopPet.value,
+    activeCli.value?.id,
+    props.state.usage
+  ],
   loadTodayUsage,
   {
     immediate: true
@@ -605,6 +709,7 @@ onBeforeUnmount(() => {
   clearTimeout(hoverTimer)
   clearInterval(usageTimer)
   clearInterval(pageTimer)
+  unsubscribeVisibility?.()
   stopDrag()
 })
 </script>
@@ -827,14 +932,13 @@ onBeforeUnmount(() => {
       cursor: grabbing;
     }
     &.quick-switch-center-pet {
+      width: 88px;
+      height: 88px;
       padding: 0;
       border: 0;
       background: transparent;
       box-shadow: none;
-      transform: translate(
-        calc(-50% + var(--pet-offset-x)),
-        calc(-50% + var(--pet-offset-y))
-      );
+      transform: translate(calc(-50% + var(--pet-offset-x)), -50%);
     }
     .quick-switch-pet-button {
       width: 100%;

@@ -16,13 +16,24 @@ const vue = require("vue")
 const calls = []
 const messages = []
 let handlers = {}
+const visibilityListeners = new Set()
+let nativeLayout = { centerX: 64, centerY: 64, edge: "" }
 const api = new Proxy(
   {},
   {
     get: (_, name) => async (payload) => {
       calls.push({ name, payload })
       assert.ok(handlers[name], `缺少接口模拟：${name}`)
-      return handlers[name](payload)
+      const result = await handlers[name](payload)
+      if (name === "setQuickSwitchCollapsed")
+        nativeLayout = Number.isFinite(result?.centerX)
+          ? result
+          : {
+              centerX: payload.collapsed ? 64 : 280,
+              centerY: payload.collapsed ? 64 : 280,
+              edge: ""
+            }
+      return result
     }
   }
 )
@@ -132,6 +143,13 @@ globalThis.Document = class {
   activeElement = null
 }
 globalThis.document = new Document()
+const preloadedPetImages = []
+let loadPetImage = async (url) => preloadedPetImages.push(url)
+globalThis.Image = class {
+  set src(url) {
+    loadPetImage(url).then(() => this.onload())
+  }
+}
 function hostNode(type, text = "") {
   return {
     type,
@@ -157,6 +175,9 @@ function hostNode(type, text = "") {
       return document
     },
     focus() {},
+    getBoundingClientRect() {
+      return { left: 0, top: 0, right: 560, bottom: 560 }
+    },
     get options() {
       return this.children.filter((node) => node.type === "option")
     }
@@ -239,10 +260,10 @@ function assertNoHoverTitles(node) {
 }
 
 const tick = async () => {
-  await Promise.resolve()
-  await vue.nextTick()
-  await Promise.resolve()
-  await vue.nextTick()
+  for (let index = 0; index < 6; index += 1) {
+    await Promise.resolve()
+    await vue.nextTick()
+  }
 }
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -277,6 +298,15 @@ const fixture = () =>
 handlers.setQuickSwitchCollapsed = () => true
 handlers.moveQuickSwitchBy = () => true
 handlers.showMainPanel = () => true
+handlers.onQuickSwitchVisibilityChanged = (callback) => {
+  visibilityListeners.add(callback)
+  return () => visibilityListeners.delete(callback)
+}
+handlers.markQuickSwitchReady = () => {
+  const callback = [...visibilityListeners].at(-1)
+  callback({ visible: true, ...nativeLayout })
+  return { visible: true }
+}
 handlers.getUsageStats = (payload) => ({
   data: {
     summary: {
@@ -605,6 +635,101 @@ panel.state.rotateCenterPage()
 assert.equal(panel.state.selectedPage, pageAfterUnmount)
 assert.deepEqual(panel.errors, [])
 assert.deepEqual(panel.warnings, [])
+assert.equal(visibilityListeners.size, 0)
+
+// 隐藏后丢弃迟到的展开和拖动结果；复用窗口时恢复收起状态且只初始化一次。
+const reusable = mount(Quick, { state: fixture() })
+await tick()
+const reusableVisibility = [...visibilityListeners].at(-1)
+const readyCallCount = calls.filter(
+  (call) => call.name === "markQuickSwitchReady"
+).length
+let finishHiddenResize
+handlers.setQuickSwitchCollapsed = () =>
+  new Promise((resolve) => {
+    finishHiddenResize = resolve
+  })
+const hiddenResize = reusable.state.setExpanded(true)
+await tick()
+reusable.state.hovered = true
+reusableVisibility({ visible: false })
+finishHiddenResize({ centerX: 280, centerY: 280 })
+await hiddenResize
+assert.equal(reusable.state.expanded, false)
+assert.equal(reusable.state.hovered, false)
+const hiddenUsageCount = calls.filter(
+  (call) => call.name === "getUsageStats"
+).length
+await reusable.state.loadTodayUsage()
+reusable.state.enterPanel()
+assert.equal(reusable.state.hovered, false)
+assert.equal(
+  calls.filter((call) => call.name === "getUsageStats").length,
+  hiddenUsageCount
+)
+reusableVisibility({ visible: true, centerX: 64, centerY: 64, edge: "right" })
+await tick()
+assert.deepEqual(reusable.state.centerPosition, { x: 64, y: 64 })
+assert.equal(reusable.state.screenEdge, "right")
+assert.equal(reusable.state.expanded, false)
+assert.equal(
+  calls.filter((call) => call.name === "markQuickSwitchReady").length,
+  readyCallCount
+)
+let finishHiddenMove
+let hiddenMoveCount = 0
+handlers.moveQuickSwitchBy = () => {
+  hiddenMoveCount += 1
+  return new Promise((resolve) => {
+    finishHiddenMove = resolve
+  })
+}
+reusable.state.startDrag({
+  button: 0,
+  screenX: 0,
+  screenY: 0,
+  pointerId: 10,
+  preventDefault() {},
+  currentTarget: { setPointerCapture() {} }
+})
+const hiddenMove = reusable.state.moveDrag({ screenX: 10, screenY: 0 })
+const queuedHiddenMove = reusable.state.moveDrag({ screenX: 20, screenY: 0 })
+await tick()
+reusableVisibility({ visible: false })
+assert.equal(reusable.state.drag.active, false)
+reusableVisibility({ visible: true, centerX: 64, centerY: 64, edge: "left" })
+finishHiddenMove({ centerX: 200, centerY: 280, edge: "" })
+await hiddenMove
+await queuedHiddenMove
+assert.equal(hiddenMoveCount, 1)
+assert.deepEqual(reusable.state.centerPosition, { x: 64, y: 64 })
+reusable.unmount()
+assert.equal(visibilityListeners.size, 0)
+assert.deepEqual(reusable.errors, [])
+assert.deepEqual(reusable.warnings, [])
+handlers.setQuickSwitchCollapsed = () => true
+handlers.moveQuickSwitchBy = () => true
+
+// 复用中的窗口重载前端时不一定有显示事件，初始化返回值恢复真实可见状态。
+const originalMarkReady = handlers.markQuickSwitchReady
+handlers.markQuickSwitchReady = () => ({ visible: true })
+const reloaded = mount(Quick, { state: fixture() })
+await tick()
+assert.equal(reloaded.state.windowVisible, true)
+reloaded.state.enterPanel()
+await tickDelay(130)
+assert.equal(reloaded.state.expanded, true)
+reloaded.unmount()
+assert.deepEqual(reloaded.errors, [])
+handlers.markQuickSwitchReady = () => ({ visible: false })
+const preheated = mount(Quick, { state: fixture() })
+await tick()
+assert.equal(preheated.state.layoutReady, true)
+assert.equal(preheated.state.windowVisible, false)
+preheated.state.enterPanel()
+assert.equal(preheated.state.hovered, false)
+preheated.unmount()
+handlers.markQuickSwitchReady = originalMarkReady
 
 // 配置和位置尚未加载时保持透明，首帧直接展示已保存的桌宠和贴边动作。
 const startupState = fixture()
@@ -614,6 +739,12 @@ assert.equal(findNodes(startup.root, "quick-switch-center").length, 0)
 startup.state.rotateCenterPage()
 assert.equal(startup.state.selectedPage, "home")
 startupState.appSettings.desktop = { enabled: true, petId: "monkey_animations" }
+const pendingPetImages = []
+loadPetImage = (url) =>
+  new Promise((resolve) => pendingPetImages.push({ url, resolve }))
+const readyBeforeImages = calls.filter(
+  (call) => call.name === "markQuickSwitchReady"
+).length
 let finishInitialLayout
 handlers.setQuickSwitchCollapsed = () =>
   new Promise((resolve) => {
@@ -622,6 +753,19 @@ handlers.setQuickSwitchCollapsed = () =>
 startup.component.props.ready = true
 await tick()
 assert.equal(findNodes(startup.root, "quick-switch-center").length, 0)
+assert.equal(pendingPetImages.length, 16)
+assert.ok(pendingPetImages.some((image) => image.url.endsWith("/salute.webp")))
+assert.equal(finishInitialLayout, undefined)
+assert.equal(
+  calls.filter((call) => call.name === "markQuickSwitchReady").length,
+  readyBeforeImages
+)
+for (const image of pendingPetImages.slice(0, -1)) image.resolve()
+await tick()
+assert.equal(finishInitialLayout, undefined)
+pendingPetImages.at(-1).resolve()
+await tick()
+loadPetImage = async (url) => preloadedPetImages.push(url)
 finishInitialLayout({ centerX: 64, centerY: 64, edge: "left" })
 await tick()
 assert.equal(findNodes(startup.root, "quick-switch-main").length, 0)
@@ -634,8 +778,7 @@ assert.equal(startup.state.petAction, "peek")
 assert.deepEqual(startup.state.centerLayoutStyle, {
   "--center-x": "64px",
   "--center-y": "64px",
-  "--pet-offset-x": "-2px",
-  "--pet-offset-y": "0px"
+  "--pet-offset-x": "-20px"
 })
 startup.unmount()
 assert.deepEqual(startup.errors, [])
@@ -739,12 +882,12 @@ for (const edge of ["left", "right", "top", "bottom"]) {
   )
   edgePanel.state.stopDrag()
   await tick()
-  assert.equal(edgePanel.state.petAction, "peek")
+  const edgeAction = edge === "left" || edge === "right" ? "peek" : ""
+  assert.equal(edgePanel.state.petAction, edgeAction)
   assert.deepEqual(edgePanel.state.centerLayoutStyle, {
     "--center-x": "64px",
     "--center-y": "64px",
-    "--pet-offset-x": `${edge === "left" ? -2 : edge === "right" ? 2 : 0}px`,
-    "--pet-offset-y": `${edge === "top" ? -2 : edge === "bottom" ? 2 : 0}px`
+    "--pet-offset-x": `${edge === "left" ? -20 : edge === "right" ? 20 : 0}px`
   })
   assert.equal(
     findNodes(edgePanel.root, "quick-switch-pet-mirrored").length,
@@ -752,7 +895,7 @@ for (const edge of ["left", "right", "top", "bottom"]) {
   )
   assert.ok(
     findNodes(edgePanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
-      "/peek.webp"
+      edgeAction ? "/peek.webp" : "/idle.webp"
     )
   )
   edgePanel.state.enterPanel()
@@ -771,8 +914,34 @@ for (const edge of ["left", "right", "top", "bottom"]) {
   edgePanel.state.leavePanel()
   await tickDelay(300)
   assert.equal(edgePanel.state.expanded, false)
-  assert.equal(edgePanel.state.petAction, "peek")
+  assert.equal(edgePanel.state.petAction, edgeAction)
 }
+// 贴边时遗漏进入事件，松开后按当前指针位置恢复悬浮，无需先移出窗口。
+currentEdge = "left"
+edgePanel.state.startDrag({
+  button: 0,
+  screenX: 0,
+  screenY: 0,
+  pointerId: 11,
+  preventDefault() {},
+  currentTarget: { setPointerCapture() {} }
+})
+await edgePanel.state.moveDrag({ screenX: 5, screenY: 5 })
+edgePanel.state.hovered = false
+edgePanel.state.stopDrag({ clientX: 64, clientY: 64 })
+await tickDelay(130)
+assert.equal(edgePanel.state.hovered, true)
+assert.equal(edgePanel.state.petAction, "salute")
+assert.equal(edgePanel.state.expanded, true)
+edgePanel.state.leavePanel()
+await tickDelay(300)
+assert.equal(edgePanel.state.petAction, "peek")
+edgePanel.state.handlePointerMove()
+await tickDelay(130)
+assert.equal(edgePanel.state.expanded, true)
+assert.equal(edgePanel.state.petAction, "salute")
+edgePanel.state.leavePanel()
+await tickDelay(300)
 currentEdge = ""
 edgePanel.state.startDrag({
   button: 0,
@@ -846,6 +1015,21 @@ const firstAnimation = pet.state.animation
 findNodes(pet.root, "desktop-pet-sheet")[0].props.onLoad()
 assert.equal(timers.size, 1)
 assert.equal(frameTimers.size, 1)
+// 图片在隐藏时保留，暂停后不推进帧；恢复播放不需要再次加载图片。
+pet.component.props.paused = true
+await tick()
+assert.equal(timers.size, 0)
+assert.equal(frameTimers.size, 0)
+const hiddenFrame = pet.state.frameIndex
+pet.state.startAnimation()
+pet.state.rotateAnimation()
+assert.equal(pet.state.frameIndex, hiddenFrame)
+assert.equal(pet.state.animation.id, firstAnimation.id)
+assert.equal(frameTimers.size, 0)
+pet.component.props.paused = false
+await tick()
+assert.equal(timers.size, 1)
+assert.equal(frameTimers.size, 1)
 const timer = [...timers.values()][0]
 assert.ok(timer.ms >= 4000)
 assert.equal(timer.ms % firstAnimation.duration, 0)
@@ -909,7 +1093,10 @@ for (const animation of desktopPets[0].animations) {
   assert.equal(frameTimers.size, 1)
   const frameTimer = [...frameTimers.values()][0]
   assert.equal(frameTimer.ms, animation.frameDuration)
-  assert.equal(frameTimer.ms, spriteConfig.actions[animation.id].frameDurationMs)
+  assert.equal(
+    frameTimer.ms,
+    spriteConfig.actions[animation.id].frameDurationMs
+  )
   const wall = findNodes(preview.root, "desktop-pet-static-frame")
   assert.equal(wall.length, animation.id === "peek" ? 1 : 0)
   const wallProps = wall.length ? { ...wall[0].props } : null
@@ -1131,6 +1318,64 @@ const appTemplate = compileTemplate({
   compilerOptions: { bindingMetadata: appScript.bindings }
 })
 assert.deepEqual(appTemplate.errors, [])
+
+// 执行根组件的实际初始化函数，验证浮窗只拿快照、跳过备份，并持续接收状态。
+const bootstrapSource = appDescriptor.scriptSetup.content.slice(
+  appDescriptor.scriptSetup.content.indexOf("async function bootstrap()"),
+  appDescriptor.scriptSetup.content.indexOf("function updateState(nextState)")
+)
+const createBootstrap = new Function(
+  "isQuickSwitchPanel",
+  "appApi",
+  "updateState",
+  "quickSwitchReady",
+  "withGlobalLoading",
+  "refreshLocalBackups",
+  "showErrorMessage",
+  `let unsubscribe = null\n${bootstrapSource}\nreturn { bootstrap, stop: () => unsubscribe?.() }`
+)
+const bootstrapCalls = []
+const snapshots = []
+let stateListener
+let finishStateSubscription
+const quickReady = { value: false }
+const initialized = createBootstrap(
+  true,
+  {
+    onStateChangedReady: (callback) => {
+      stateListener = callback
+      return new Promise((resolve) => {
+        finishStateSubscription = () =>
+          resolve(() => bootstrapCalls.push("stop"))
+      })
+    },
+    bootstrapQuickSwitch: async () => {
+      bootstrapCalls.push("snapshot")
+      return { appSettings: { desktop: { enabled: true } } }
+    },
+    bootstrap: () => assert.fail("浮窗不应重复全量初始化")
+  },
+  (snapshot) => snapshots.push(snapshot),
+  quickReady,
+  () => assert.fail("浮窗不需要全局加载流程"),
+  () => assert.fail("浮窗不应加载备份列表"),
+  (error) => {
+    throw error
+  }
+)
+const initializing = initialized.bootstrap()
+await tick()
+assert.equal(quickReady.value, false)
+assert.deepEqual(bootstrapCalls, [])
+finishStateSubscription()
+await initializing
+assert.equal(quickReady.value, true)
+assert.deepEqual(bootstrapCalls, ["snapshot"])
+assert.equal(snapshots[0].appSettings.desktop.enabled, true)
+stateListener({ appSettings: { desktop: { enabled: false } } })
+assert.equal(snapshots.at(-1).appSettings.desktop.enabled, false)
+initialized.stop()
+assert.deepEqual(bootstrapCalls, ["snapshot", "stop"])
 console.log(
-  "浮窗初始化、贴边偷看、悬浮敬礼、拖动、全部动画预览、设置和页面跳转检查通过"
+  "浮窗预热初始化、复用与暂停、贴边偷看、悬浮敬礼、拖动、全部动画预览、设置和页面跳转检查通过"
 )
