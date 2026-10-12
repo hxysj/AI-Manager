@@ -120,14 +120,14 @@
                 class="batch-concurrency-btn is-minus"
                 type="button"
                 title="减少并发数量 (最小 1)"
-                :disabled="concurrency <= 1 || stopping"
+                :disabled="serial || concurrency <= 1 || stopping"
                 @click="$emit('set-concurrency', concurrency - 1)"
               >
                 <Minus :size="12" />
               </button>
               <span
                 class="batch-concurrency-value"
-                :title="`当前并发任务数: ${concurrency}`"
+                :title="serial ? 'Web 模式复用会话依次生成' : `当前并发任务数: ${concurrency}`"
               >
                 {{ concurrency }}
               </span>
@@ -135,7 +135,7 @@
                 class="batch-concurrency-btn is-plus"
                 type="button"
                 title="增加并发数量 (最大 10)"
-                :disabled="concurrency >= 10 || stopping"
+                :disabled="serial || concurrency >= 10 || stopping"
                 @click="$emit('set-concurrency', concurrency + 1)"
               >
                 <Plus :size="12" />
@@ -365,6 +365,7 @@ const props = defineProps({
   loading: Boolean,
   paused: Boolean,
   concurrency: { type: Number, default: 2 },
+  serial: { type: Boolean, default: false },
   stopping: Boolean,
   deleting: Boolean,
   resumingIds: { type: Array, default: () => [] },

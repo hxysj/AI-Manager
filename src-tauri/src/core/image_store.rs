@@ -28,7 +28,11 @@ fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
            task_id TEXT NOT NULL, position INTEGER NOT NULL, data_url TEXT NOT NULL,
            PRIMARY KEY(task_id, position)
          );
-         CREATE INDEX IF NOT EXISTS idx_image_tasks_status ON image_tasks(status);",
+         CREATE INDEX IF NOT EXISTS idx_image_tasks_status ON image_tasks(status);
+         CREATE TABLE IF NOT EXISTS image_web_sessions (
+           local_id TEXT NOT NULL, account_id TEXT NOT NULL, payload_json TEXT NOT NULL,
+           PRIMARY KEY(local_id, account_id)
+         );",
     )?;
     Ok(connection)
 }
@@ -41,6 +45,24 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
          WHERE status IN ('processing', 'queued')",
         [],
     )?;
+    Ok(())
+}
+
+// Web 会话独立保存，清除图片或任务不会丢失可复用会话。
+pub fn web_sessions(paths: &AppPaths, local_id: &str) -> Result<Vec<Value>, ManagerError> {
+    let connection = open(paths)?;
+    let mut statement = connection.prepare("SELECT payload_json FROM image_web_sessions WHERE local_id = ?1 OR ?1 = ''")?;
+    let rows = statement.query_map([local_id], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter().map(|raw| serde_json::from_str(&raw).map_err(ManagerError::from)).collect()
+}
+
+pub fn save_web_session(paths: &AppPaths, session: &Value) -> Result<(), ManagerError> {
+    open(paths)?.execute("INSERT INTO image_web_sessions(local_id, account_id, payload_json) VALUES (?1, ?2, ?3) ON CONFLICT(local_id, account_id) DO UPDATE SET payload_json = excluded.payload_json", params![session["localId"].as_str(), session["accountId"].as_str(), session.to_string()])?;
+    Ok(())
+}
+
+pub fn remove_web_session(paths: &AppPaths, session: &Value) -> Result<(), ManagerError> {
+    open(paths)?.execute("DELETE FROM image_web_sessions WHERE local_id = ?1 AND account_id = ?2", params![session["localId"].as_str(), session["accountId"].as_str()])?;
     Ok(())
 }
 
@@ -107,10 +129,11 @@ pub fn requeue_with_concurrency(
 // 历史索引只返回小型元数据；缩略图和原图仍按当前会话按需读取。
 pub fn history(paths: &AppPaths) -> Result<Value, ManagerError> {
     let connection = open(paths)?;
-    let mut statement = connection.prepare("SELECT id, created_at, status, json_extract(payload_json, '$.request.conversationId'), json_extract(payload_json, '$.request.roundId'), json_extract(payload_json, '$.request.prompt'), json_extract(payload_json, '$.request.batchName') FROM image_tasks ORDER BY created_at")?;
+    let mut statement = connection.prepare("SELECT id, created_at, status, json_extract(payload_json, '$.request.conversationId'), json_extract(payload_json, '$.request.roundId'), json_extract(payload_json, '$.request.prompt'), json_extract(payload_json, '$.request.batchName'), json_extract(payload_json, '$.request.accountId'), json_extract(payload_json, '$.request.generationMode') FROM image_tasks ORDER BY created_at")?;
     let rows = statement.query_map([], |row| Ok(json!({
         "id": row.get::<_, String>(0)?, "createdAt": row.get::<_, i64>(1)?, "status": row.get::<_, String>(2)?,
-        "conversationId": row.get::<_, Option<String>>(3)?, "roundId": row.get::<_, Option<String>>(4)?, "prompt": row.get::<_, Option<String>>(5)?, "batchName": row.get::<_, Option<String>>(6)?
+        "conversationId": row.get::<_, Option<String>>(3)?, "roundId": row.get::<_, Option<String>>(4)?, "prompt": row.get::<_, Option<String>>(5)?, "batchName": row.get::<_, Option<String>>(6)?,
+        "accountId": row.get::<_, Option<String>>(7)?, "generationMode": row.get::<_, Option<String>>(8)?
     })))?.collect::<Result<Vec<_>, _>>()?;
     Ok(json!(rows))
 }
