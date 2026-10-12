@@ -103,7 +103,7 @@ impl AppState {
                 .await.map_err(|error| ManagerError::System(error.to_string()))?;
         }
         // 图片读取与导出只需路径快照，不占用整个应用的状态锁。
-        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-cancel" | "tools:image-export") {
+        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-cancel" | "tools:image-export" | "tools:image-task-export" | "tools:image-task-import") {
             let paths = self.manager.lock().await.paths.clone();
             let payload = payload.unwrap_or_else(|| json!({}));
             return match channel {
@@ -117,7 +117,27 @@ impl AppState {
                     let ids = serde_json::from_value::<Vec<String>>(payload["ids"].clone())?;
                     crate::core::image_store::cancel(&paths, &ids, payload["recoverable"] == true)
                 }
+                "tools:image-task-export" => image_workbench::export_task_bundle(&paths, payload).await,
+                "tools:image-task-import" => image_workbench::import_task_bundle(&paths, payload).await,
                 _ => image_workbench::export(&paths, payload).await,
+            };
+        }
+        if matches!(
+            channel,
+            "tools:image-task-cloud-push" | "tools:image-task-cloud-pull"
+        ) {
+            let manager = self.manager.lock().await;
+            let paths = manager.paths.clone();
+            let koofr_sync = manager.app_settings.koofr_sync.clone();
+            drop(manager);
+            let payload = payload.unwrap_or_else(|| json!({}));
+            return match channel {
+                "tools:image-task-cloud-push" => {
+                    image_workbench::push_task_bundle_to_koofr(&paths, &koofr_sync, payload).await
+                }
+                _ => {
+                    image_workbench::pull_task_bundle_from_koofr(&paths, &koofr_sync, payload).await
+                }
             };
         }
         // 模型请求可能持续较久，快照后释放状态锁，让其他页面和设置保持可用。

@@ -2283,6 +2283,14 @@ async fn upload_webdav_backup(
     Ok(())
 }
 
+// 图片任务备份复用同一套 Koofr/坚果云 WebDAV 校验和传输逻辑。
+pub(crate) async fn upload_webdav_content(
+    config: &CloudSyncSettings,
+    content: String,
+) -> Result<(), ManagerError> {
+    upload_webdav_backup(config, content).await
+}
+
 fn webdav_content_length(headers: &HeaderMap) -> Option<u64> {
     headers
         .get(CONTENT_LENGTH)?
@@ -2373,6 +2381,12 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
             cloud_sync_provider_name(config)
         ))
     })
+}
+
+pub(crate) async fn download_webdav_content(
+    config: &CloudSyncSettings,
+) -> Result<String, ManagerError> {
+    download_webdav_backup(config).await
 }
 
 struct WebdavDownloadRange {
@@ -2604,6 +2618,10 @@ fn encrypt_backup_payload(payload: &Value, scope: BackupScope) -> Result<String,
     Ok(serde_json::to_string_pretty(&envelope)?)
 }
 
+pub(crate) fn encrypt_cloud_backup_payload(payload: &Value) -> Result<String, ManagerError> {
+    encrypt_backup_payload(payload, BackupScope::Cloud)
+}
+
 fn decrypt_backup_payload(content: &str) -> Result<Value, ManagerError> {
     let payload: Value = serde_json::from_str(content).map_err(|error| {
         if error.is_eof() {
@@ -2667,6 +2685,10 @@ fn decrypt_backup_payload(content: &str) -> Result<Value, ManagerError> {
     }
 
     Ok(serde_json::from_slice(&decrypted)?)
+}
+
+pub(crate) fn decrypt_cloud_backup_payload(content: &str) -> Result<Value, ManagerError> {
+    decrypt_backup_payload(content)
 }
 
 fn encrypt_backup_data(value: &Value) -> Result<String, ManagerError> {

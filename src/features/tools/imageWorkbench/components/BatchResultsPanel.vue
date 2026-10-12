@@ -10,10 +10,29 @@
     <header class="batch-results-header">
       <div class="batch-results-header-left">
         <h3 class="batch-results-title">生成结果</h3>
-        <span class="batch-results-counter">{{ filteredResultTasks.length }} 项</span>
+        <span class="batch-results-counter"
+          >{{ filteredResultTasks.length }} 项</span
+        >
       </div>
 
       <div class="batch-results-toolbar">
+        <button
+          class="batch-export-btn"
+          type="button"
+          :disabled="!exportableTaskIds.length || exporting"
+          :title="
+            exportableTaskIds.length
+              ? `导出当前批量会话中的 ${exportableTaskIds.length} 个任务`
+              : '暂无可导出的图片'
+          "
+          @click="emit('export-batch', exportableTaskIds)"
+        >
+          <Download :size="13" />
+          <span>批量导出</span>
+          <span v-if="exportableTaskIds.length"
+            >({{ exportableTaskIds.length }})</span
+          >
+        </button>
         <div class="batch-search-box">
           <Search :size="13" class="search-icon" />
           <input
@@ -79,7 +98,9 @@
         >
           <div
             class="result-card-media"
-            @click="task.imageCount ? emit('show-detail', task, 'images') : null"
+            @click="
+              task.imageCount ? emit('show-detail', task, 'images') : null
+            "
           >
             <el-image
               v-if="task.thumbnail && task.imageCount"
@@ -100,7 +121,10 @@
               <span>无图片</span>
             </div>
 
-            <div class="result-card-badge" :class="`is-${batchStatusTone(task.status)}`">
+            <div
+              class="result-card-badge"
+              :class="`is-${batchStatusTone(task.status)}`"
+            >
               <span class="badge-dot" />
               <span>{{ statusLabels[task.status] || task.status }}</span>
             </div>
@@ -169,7 +193,9 @@
         >
           <div
             class="batch-result-thumb"
-            @click="task.imageCount ? emit('show-detail', task, 'images') : null"
+            @click="
+              task.imageCount ? emit('show-detail', task, 'images') : null
+            "
           >
             <el-image
               v-if="task.thumbnail && task.imageCount"
@@ -234,7 +260,9 @@
       <div v-else class="batch-empty-results">
         <ImageIcon :size="40" class="empty-icon" />
         <h4>暂无生成结果</h4>
-        <p>{{ search ? "未找到符合搜索条件的结果" : "等待批量图片任务生成完成" }}</p>
+        <p>
+          {{ search ? "未找到符合搜索条件的结果" : "等待批量图片任务生成完成" }}
+        </p>
       </div>
     </div>
 
@@ -317,6 +345,7 @@ const props = defineProps({
   tasks: { type: Array, default: () => [] },
   roundState: { type: Object, default: () => ({}) },
   loading: Boolean,
+  exporting: Boolean,
   statusLabels: { type: Object, default: () => ({}) }
 })
 
@@ -325,8 +354,27 @@ const status = defineModel("status", { type: String, default: "completed" })
 const viewMode = defineModel("viewMode", { type: String, default: "grid" })
 const page = defineModel("page", { type: Number, default: 1 })
 const pageSize = defineModel("pageSize", { type: Number, default: 20 })
-const emit = defineEmits(["show-detail", "download-task", "copy-prompt"])
+const emit = defineEmits([
+  "show-detail",
+  "download-task",
+  "copy-prompt",
+  "export-batch"
+])
 const resultScroll = ref(null)
+
+const exportableTaskIds = computed(() => {
+  const ids = props.tasks
+    .filter((task) => {
+      const roundId = task.request?.roundId || task.id
+      return (
+        !props.roundState[roundId]?.replaced?.includes(task.id) &&
+        ["completed", "partial"].includes(task.status) &&
+        Number(task.imageCount) > 0
+      )
+    })
+    .map((task) => task.id)
+  return [...new Set(ids)]
+})
 
 // 重试记录继续保留在任务队列中，结果面板只展示当前有效记录。
 const filteredResultTasks = computed(() => {
@@ -356,7 +404,10 @@ const filteredResultTasks = computed(() => {
 })
 
 const totalPages = computed(() =>
-  Math.max(1, Math.ceil(filteredResultTasks.value.length / Math.max(1, pageSize.value)))
+  Math.max(
+    1,
+    Math.ceil(filteredResultTasks.value.length / Math.max(1, pageSize.value))
+  )
 )
 const paginatedResultTasks = computed(() => {
   const start = (page.value - 1) * pageSize.value
@@ -487,6 +538,34 @@ function getVisiblePages(current, total) {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.batch-export-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 9px;
+  border: 1px solid #2563eb;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  transition:
+    background-color 0.14s ease,
+    border-color 0.14s ease;
+
+  &:hover:not(:disabled) {
+    border-color: #1d4ed8;
+    background: #1d4ed8;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
 }
 
 .batch-search-box {
@@ -667,25 +746,33 @@ function getVisiblePages(current, total) {
         border: 1px solid rgba(220, 252, 231, 0.9);
         background: rgba(240, 253, 244, 0.9);
         color: #16a34a;
-        .badge-dot { background: #22c55e; }
+        .badge-dot {
+          background: #22c55e;
+        }
       }
       &.is-processing {
         border: 1px solid rgba(219, 234, 254, 0.9);
         background: rgba(239, 246, 255, 0.9);
         color: #2563eb;
-        .badge-dot { background: #3b82f6; }
+        .badge-dot {
+          background: #3b82f6;
+        }
       }
       &.is-queued {
         border: 1px solid rgba(254, 240, 138, 0.9);
         background: rgba(254, 249, 195, 0.9);
         color: #854d0e;
-        .badge-dot { background: #eab308; }
+        .badge-dot {
+          background: #eab308;
+        }
       }
       &.is-failed {
         border: 1px solid rgba(254, 226, 226, 0.9);
         background: rgba(254, 242, 242, 0.9);
         color: #dc2626;
-        .badge-dot { background: #ef4444; }
+        .badge-dot {
+          background: #ef4444;
+        }
       }
     }
   }
@@ -869,25 +956,33 @@ function getVisiblePages(current, total) {
     border-color: #bbf7d0;
     background: #f0fdf4;
     color: #15803d;
-    .pill-dot { background: #22c55e; }
+    .pill-dot {
+      background: #22c55e;
+    }
   }
   &.is-processing {
     border-color: #bfdbfe;
     background: #eff6ff;
     color: #2563eb;
-    .pill-dot { background: #3b82f6; }
+    .pill-dot {
+      background: #3b82f6;
+    }
   }
   &.is-queued {
     border-color: #fef08a;
     background: #fef9c3;
     color: #854d0e;
-    .pill-dot { background: #eab308; }
+    .pill-dot {
+      background: #eab308;
+    }
   }
   &.is-failed {
     border-color: #fecaca;
     background: #fef2f2;
     color: #dc2626;
-    .pill-dot { background: #ef4444; }
+    .pill-dot {
+      background: #ef4444;
+    }
   }
 }
 
@@ -1062,56 +1157,80 @@ function getVisiblePages(current, total) {
   background: var(--color-panel-soft);
 }
 
-:global(:root[data-theme="dark"] .batch-results-panel .result-card-badge.is-completed),
-:global(.tools-view--dark .batch-results-panel .result-card-badge.is-completed) {
+:global(
+  :root[data-theme="dark"] .batch-results-panel .result-card-badge.is-completed
+),
+:global(
+  .tools-view--dark .batch-results-panel .result-card-badge.is-completed
+) {
   background: rgba(20, 83, 45, 0.85);
   border-color: rgba(34, 197, 94, 0.4);
   color: #4ade80;
 }
 
-:global(:root[data-theme="dark"] .batch-results-panel .result-card-badge.is-processing),
-:global(.tools-view--dark .batch-results-panel .result-card-badge.is-processing) {
+:global(
+  :root[data-theme="dark"] .batch-results-panel .result-card-badge.is-processing
+),
+:global(
+  .tools-view--dark .batch-results-panel .result-card-badge.is-processing
+) {
   background: rgba(30, 58, 138, 0.85);
   border-color: rgba(59, 130, 246, 0.4);
   color: #60a5fa;
 }
 
-:global(:root[data-theme="dark"] .batch-results-panel .result-card-badge.is-queued),
+:global(
+  :root[data-theme="dark"] .batch-results-panel .result-card-badge.is-queued
+),
 :global(.tools-view--dark .batch-results-panel .result-card-badge.is-queued) {
   background: rgba(113, 63, 18, 0.85);
   border-color: rgba(234, 179, 8, 0.4);
   color: #facc15;
 }
 
-:global(:root[data-theme="dark"] .batch-results-panel .result-card-badge.is-failed),
+:global(
+  :root[data-theme="dark"] .batch-results-panel .result-card-badge.is-failed
+),
 :global(.tools-view--dark .batch-results-panel .result-card-badge.is-failed) {
   background: rgba(127, 29, 29, 0.85);
   border-color: rgba(239, 68, 68, 0.4);
   color: #f87171;
 }
 
-:global(:root[data-theme="dark"] .batch-results-panel .queue-status-pill.is-completed),
-:global(.tools-view--dark .batch-results-panel .queue-status-pill.is-completed) {
+:global(
+  :root[data-theme="dark"] .batch-results-panel .queue-status-pill.is-completed
+),
+:global(
+  .tools-view--dark .batch-results-panel .queue-status-pill.is-completed
+) {
   background: rgba(20, 83, 45, 0.35);
   border-color: rgba(34, 197, 94, 0.4);
   color: #4ade80;
 }
 
-:global(:root[data-theme="dark"] .batch-results-panel .queue-status-pill.is-processing),
-:global(.tools-view--dark .batch-results-panel .queue-status-pill.is-processing) {
+:global(
+  :root[data-theme="dark"] .batch-results-panel .queue-status-pill.is-processing
+),
+:global(
+  .tools-view--dark .batch-results-panel .queue-status-pill.is-processing
+) {
   background: rgba(30, 58, 138, 0.35);
   border-color: rgba(59, 130, 246, 0.4);
   color: #60a5fa;
 }
 
-:global(:root[data-theme="dark"] .batch-results-panel .queue-status-pill.is-queued),
+:global(
+  :root[data-theme="dark"] .batch-results-panel .queue-status-pill.is-queued
+),
 :global(.tools-view--dark .batch-results-panel .queue-status-pill.is-queued) {
   background: rgba(113, 63, 18, 0.35);
   border-color: rgba(234, 179, 8, 0.4);
   color: #facc15;
 }
 
-:global(:root[data-theme="dark"] .batch-results-panel .queue-status-pill.is-failed),
+:global(
+  :root[data-theme="dark"] .batch-results-panel .queue-status-pill.is-failed
+),
 :global(.tools-view--dark .batch-results-panel .queue-status-pill.is-failed) {
   background: rgba(127, 29, 29, 0.35);
   border-color: rgba(239, 68, 68, 0.4);

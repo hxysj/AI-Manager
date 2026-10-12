@@ -25,6 +25,14 @@ export const toolboxApi = {
   clearImageResults: (payload) => request("tools:image-clear-results", payload),
   deleteImageTasks: (payload) => request("tools:image-delete", payload),
   exportImageTasks: (payload) => request("tools:image-export", payload),
+  exportImageTaskBundle: (payload) =>
+    request("tools:image-task-export", payload),
+  importImageTaskBundle: (payload) =>
+    request("tools:image-task-import", payload),
+  pushImageTaskBundleToKoofr: (payload) =>
+    request("tools:image-task-cloud-push", payload),
+  pullImageTaskBundleFromKoofr: (payload) =>
+    request("tools:image-task-cloud-pull", payload),
   exportImages: (payload) => request("tools:export-images", payload),
   // JSON Agent 请求由后端注入当前 Codex Provider 的密钥和地址。
   requestJsonAgent: (payload) => request("tools:json-agent-request", payload),

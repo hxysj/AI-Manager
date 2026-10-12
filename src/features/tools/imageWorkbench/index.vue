@@ -83,6 +83,46 @@
           <Plus :size="14" />
           <span>批量生成</span>
         </button>
+        <button
+          class="conversation-button conversation-task-backup-btn"
+          type="button"
+          title="导出当前会话中可恢复的图片任务"
+          :disabled="taskBackupBusy"
+          @click="exportTaskBundle"
+        >
+          <Download :size="13" />
+          <span>导出任务</span>
+        </button>
+        <button
+          class="conversation-button conversation-task-backup-btn"
+          type="button"
+          title="导入图片任务备份"
+          :disabled="taskBackupBusy"
+          @click="importTaskBundle"
+        >
+          <Upload :size="13" />
+          <span>导入任务</span>
+        </button>
+        <button
+          class="conversation-button conversation-task-cloud-btn"
+          type="button"
+          title="将当前会话中可恢复的图片任务备份到 Koofr"
+          :disabled="taskBackupBusy"
+          @click="pushTaskBundleToKoofr"
+        >
+          <UploadCloud :size="13" />
+          <span>备份到 Koofr</span>
+        </button>
+        <button
+          class="conversation-button conversation-task-cloud-btn"
+          type="button"
+          title="从配置的 Koofr 恢复图片任务"
+          :disabled="taskBackupBusy"
+          @click="pullTaskBundleFromKoofr"
+        >
+          <DownloadCloud :size="13" />
+          <span>从 Koofr 恢复</span>
+        </button>
       </div>
     </header>
     <aside v-if="historyOpen" class="conversation-sidebar">
@@ -1240,6 +1280,7 @@
         :tasks="tasks"
         :round-state="roundState"
         :loading="loadingTasks"
+        :exporting="exporting"
         :status-labels="statusLabels"
         v-model:search="batchResultSearch"
         v-model:status="batchResultStatus"
@@ -1249,6 +1290,7 @@
         @show-detail="showDetail"
         @download-task="downloadTaskImage"
         @copy-prompt="copyPromptText"
+        @export-batch="exportTasks"
       />
     </div>
 
@@ -1335,6 +1377,7 @@ import {
   Copy,
   Database,
   Download,
+  DownloadCloud,
   Image as ImageIcon,
   ImageOff,
   ImagePlus,
@@ -1352,6 +1395,8 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Upload,
+  UploadCloud,
   X
 } from "lucide-vue-next"
 import {
@@ -2323,6 +2368,14 @@ const status = ref("")
 const autoRefresh = ref(true)
 const selecting = ref(false)
 const selected = ref([])
+const taskBackupStatus = new Set(["queued", "processing", "failed", "interrupted"])
+function isTaskBackupCandidate(task) {
+  if (taskBackupStatus.has(task?.status) || task?.canResume) return true
+  return (
+    task?.status === "partial" &&
+    Number(task.imageCount || 0) < Number(task.request?.n || 1)
+  )
+}
 const detail = ref(null)
 const detailView = ref("images")
 const detailLoading = ref(false)
@@ -2332,6 +2385,7 @@ const refreshing = ref(false)
 const submitting = ref(false)
 const uploading = ref(false)
 const exporting = ref(false)
+const taskBackupBusy = ref(false)
 const deleting = ref(false)
 const submitError = ref("")
 const listError = ref("")
@@ -2773,6 +2827,131 @@ async function downloadImage(index) {
   }
 }
 
+async function collectTaskBackupIds() {
+  const explicitIds = batchViewVisible.value
+    ? batchQueueSelected.value
+    : selected.value
+  if (explicitIds.length) return [...new Set(explicitIds)]
+
+  const conversation = ensureConversation()
+  const query = {
+    page: 1,
+    status: "",
+    conversationId: conversation.id,
+    pageSize: 100,
+    groupByRound: false
+  }
+  let result = await toolboxApi.listImageTasks(query)
+  let items = result.items || []
+  const pageCount = Math.ceil(Number(result.total || items.length) / query.pageSize)
+  if (pageCount > 1) {
+    const pages = await Promise.all(
+      Array.from({ length: pageCount - 1 }, (_, index) =>
+        toolboxApi.listImageTasks({ ...query, page: index + 2 })
+      )
+    )
+    items = [items, ...pages.map((pageResult) => pageResult.items || [])].flat()
+  }
+  return [
+    ...new Set(items.filter(isTaskBackupCandidate).map((task) => task.id))
+  ]
+}
+
+async function exportTaskBundle() {
+  taskBackupBusy.value = true
+  try {
+    const ids = await collectTaskBackupIds()
+    if (!ids.length) throw new Error("当前会话没有可导出的未完成任务")
+    const targetPath = await systemApi.saveFile({
+      title: "导出图片任务",
+      defaultPath: "image-tasks.aimagetasks",
+      filters: [{ name: "图片任务备份", extensions: ["aimagetasks"] }]
+    })
+    if (!targetPath) return
+    const result = await toolboxApi.exportImageTaskBundle({ ids, targetPath })
+    createMessage.success("已导出 " + result.taskCount + " 个图片任务")
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    taskBackupBusy.value = false
+  }
+}
+
+async function importTaskBundle() {
+  taskBackupBusy.value = true
+  try {
+    const sourcePath = await systemApi.selectFile({
+      title: "导入图片任务",
+      filters: [{ name: "图片任务备份", extensions: ["aimagetasks"] }]
+    })
+    if (!sourcePath) return
+    const conversation = ensureConversation()
+    const result = await toolboxApi.importImageTaskBundle({
+      sourcePath,
+      targetConversationId: conversation.id
+    })
+    await loadHistory()
+    await loadTasks()
+    createMessage.success(
+      "已导入 " +
+        (result.imported || 0) +
+        " 个任务，更新 " +
+        (result.updated || 0) +
+        " 个任务"
+    )
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    taskBackupBusy.value = false
+  }
+}
+
+async function pushTaskBundleToKoofr() {
+  taskBackupBusy.value = true
+  try {
+    const ids = await collectTaskBackupIds()
+    if (!ids.length) throw new Error("当前会话没有可备份的未完成任务")
+    const result = await toolboxApi.pushImageTaskBundleToKoofr({ ids })
+    createMessage.success(
+      "已将 " +
+        result.taskCount +
+        " 个任务备份到 Koofr（" +
+        result.fileName +
+        "）"
+    )
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    taskBackupBusy.value = false
+  }
+}
+
+async function pullTaskBundleFromKoofr() {
+  taskBackupBusy.value = true
+  try {
+    const conversation = ensureConversation()
+    const result = await toolboxApi.pullImageTaskBundleFromKoofr({
+      targetConversationId: conversation.id
+    })
+    await loadHistory()
+    await loadTasks()
+    const imported = result.result?.imported || 0
+    const updated = result.result?.updated || 0
+    const resumable = result.result?.resumable || 0
+    createMessage.success(
+      "已从 Koofr 恢复 " +
+        (imported + updated) +
+        " 个任务，其中 " +
+        resumable +
+        " 个可继续生成"
+    )
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    taskBackupBusy.value = false
+  }
+}
+
 async function exportTasks(ids) {
   exporting.value = true
   try {
@@ -2968,6 +3147,11 @@ defineExpose({
       gap: 8px;
     }
 
+    .conversation-toolbar-right {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
     .conversation-button {
       display: inline-flex;
       align-items: center;
@@ -3023,6 +3207,30 @@ defineExpose({
           border-color: #0d9488;
           background: #ccfbf1;
           color: #115e59;
+        }
+      }
+
+      &.conversation-task-backup-btn {
+        border-color: #7c3aed;
+        background: #f5f3ff;
+        color: #6d28d9;
+
+        &:hover {
+          border-color: #6d28d9;
+          background: #ede9fe;
+          color: #5b21b6;
+        }
+      }
+
+      &.conversation-task-cloud-btn {
+        border-color: #0369a1;
+        background: #f0f9ff;
+        color: #0369a1;
+
+        &:hover {
+          border-color: #0284c7;
+          background: #e0f2fe;
+          color: #075985;
         }
       }
     }

@@ -2,6 +2,7 @@ use crate::core::{database, error::ManagerError, paths::AppPaths};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
+use std::collections::HashSet;
 
 pub struct StoredImage {
     pub bytes: Vec<u8>,
@@ -42,6 +43,281 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
         [],
     )?;
     Ok(())
+}
+
+const MAX_TASK_BACKUP_BYTES: usize = 512 * 1024 * 1024;
+
+// 任务备份包含恢复上下文、参考图和已生成图片，独立于通用配置备份保存。
+pub fn export_task_bundle(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(ManagerError::System("请选取 1–10000 个任务".into()));
+    }
+
+    let connection = open(paths)?;
+    let mut task_statement = connection.prepare(
+        "SELECT id, created_at, status, payload_json, thumbnail
+         FROM image_tasks WHERE id = ?1",
+    )?;
+    let mut output_statement = connection.prepare(
+        "SELECT position, format, bytes FROM image_outputs
+         WHERE task_id = ?1 ORDER BY position",
+    )?;
+    let mut tasks = Vec::new();
+    let mut outputs = Vec::new();
+    let mut input_ids = HashSet::new();
+    let mut raw_bytes = 0usize;
+
+    for id in ids {
+        let Some((task_id, created_at, status, payload_json, thumbnail)) = task_statement
+            .query_row([id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })
+            .optional()?
+        else {
+            continue;
+        };
+
+        raw_bytes = raw_bytes
+            .saturating_add(payload_json.len())
+            .saturating_add(thumbnail.len());
+        if raw_bytes > MAX_TASK_BACKUP_BYTES {
+            return Err(ManagerError::System(
+                "任务备份超过 512 MB，请分批导出".into(),
+            ));
+        }
+        let payload: Value = serde_json::from_str(&payload_json)?;
+        let input_id = payload["inputId"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&task_id);
+        input_ids.insert(input_id.to_string());
+        tasks.push(json!({
+            "id": task_id,
+            "createdAt": created_at,
+            "status": status,
+            "payload": payload,
+            "thumbnail": thumbnail
+        }));
+
+        let rows = output_statement.query_map([id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (position, format, bytes) = row?;
+            raw_bytes = raw_bytes.saturating_add(bytes.len());
+            if raw_bytes > MAX_TASK_BACKUP_BYTES {
+                return Err(ManagerError::System(
+                    "任务备份超过 512 MB，请分批导出".into(),
+                ));
+            }
+            outputs.push(json!({
+                "taskId": id,
+                "position": position,
+                "format": format,
+                "data": STANDARD.encode(bytes)
+            }));
+        }
+    }
+
+    if tasks.is_empty() {
+        return Err(ManagerError::System("所选任务不存在或已被删除".into()));
+    }
+
+    let mut input_statement = connection.prepare(
+        "SELECT position, data_url FROM image_inputs WHERE task_id = ?1 ORDER BY position",
+    )?;
+    let mut inputs = Vec::new();
+    for input_id in input_ids {
+        let rows = input_statement.query_map([&input_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut items = Vec::new();
+        for row in rows {
+            let (position, data_url) = row?;
+            raw_bytes = raw_bytes.saturating_add(data_url.len());
+            if raw_bytes > MAX_TASK_BACKUP_BYTES {
+                return Err(ManagerError::System(
+                    "任务备份超过 512 MB，请分批导出".into(),
+                ));
+            }
+            items.push(json!({ "position": position, "dataUrl": data_url }));
+        }
+        inputs.push(json!({ "id": input_id, "items": items }));
+    }
+
+    Ok(json!({
+        "format": "ai-manager-image-task-bundle",
+        "version": 1,
+        "tasks": tasks,
+        "inputs": inputs,
+        "outputs": outputs
+    }))
+}
+
+// 导入时把快照中的排队/生成中任务标成中断，避免导入后误以为上游仍在执行。
+pub fn import_task_bundle(
+    paths: &AppPaths,
+    bundle: &Value,
+    target_conversation_id: &str,
+) -> Result<Value, ManagerError> {
+    if bundle["format"] != "ai-manager-image-task-bundle" || bundle["version"] != 1 {
+        return Err(ManagerError::System("任务备份格式或版本不支持".into()));
+    }
+    let task_entries = bundle["tasks"]
+        .as_array()
+        .filter(|items| !items.is_empty() && items.len() <= 10000)
+        .ok_or_else(|| ManagerError::System("任务备份缺少有效任务".into()))?;
+
+    let mut connection = open(paths)?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut seen_ids = HashSet::new();
+    let mut imported = 0usize;
+    let mut updated = 0usize;
+    let mut resumable = 0usize;
+
+    for entry in task_entries {
+        let id = entry["id"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| ManagerError::System("任务备份包含无效任务 ID".into()))?;
+        if !seen_ids.insert(id.to_string()) {
+            continue;
+        }
+        let mut payload = entry["payload"].clone();
+        if !payload.is_object() {
+            return Err(ManagerError::System("任务备份包含无效任务参数".into()));
+        }
+        payload["id"] = json!(id);
+        if !target_conversation_id.trim().is_empty() {
+            payload["request"]["conversationId"] = json!(target_conversation_id);
+            if payload["batchKey"].is_string() {
+                if let Some(round_id) = payload["request"]["roundId"].as_str() {
+                    payload["batchKey"] = json!(format!(
+                        "{}:{}",
+                        target_conversation_id, round_id
+                    ));
+                }
+            }
+        }
+        let status = entry["status"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| payload["status"].as_str().map(str::to_string))
+            .unwrap_or_else(|| "interrupted".to_string());
+        let requested_count = payload["request"]["n"].as_u64().unwrap_or(1);
+        let saved_count = payload["imageCount"].as_u64().unwrap_or(0);
+        let resumable_status = matches!(status.as_str(), "queued" | "processing")
+            || (status == "partial" && saved_count < requested_count);
+        let imported_status = if resumable_status {
+            "interrupted".to_string()
+        } else {
+            status
+        };
+        payload["status"] = json!(imported_status);
+        if resumable_status {
+            resumable += 1;
+            payload["canResume"] = json!(true);
+            payload["finishedAt"] = Value::Null;
+            payload["error"] = json!({
+                "source": "backup",
+                "message": "任务从备份恢复，点击继续等待以恢复生成"
+            });
+        }
+        let payload_json = serde_json::to_string(&payload)?;
+        let created_at = entry["createdAt"]
+            .as_i64()
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+        let thumbnail = entry["thumbnail"].as_str().unwrap_or("");
+        let existed = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM image_tasks WHERE id = ?1)",
+            [id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        transaction.execute(
+            "INSERT INTO image_tasks(id, created_at, status, payload_json, thumbnail)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+               created_at = excluded.created_at,
+               status = excluded.status,
+               payload_json = excluded.payload_json,
+               thumbnail = excluded.thumbnail",
+            params![id, created_at, imported_status, payload_json, thumbnail],
+        )?;
+        if existed {
+            updated += 1;
+        } else {
+            imported += 1;
+        }
+        transaction.execute("DELETE FROM image_outputs WHERE task_id = ?1", [id])?;
+    }
+
+    if let Some(inputs) = bundle["inputs"].as_array() {
+        for input in inputs {
+            let input_id = input["id"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| ManagerError::System("任务备份包含无效输入 ID".into()))?;
+            for item in input["items"].as_array().cloned().unwrap_or_default() {
+                let position = item["position"]
+                    .as_i64()
+                    .ok_or_else(|| ManagerError::System("任务备份包含无效输入位置".into()))?;
+                let data_url = item["dataUrl"]
+                    .as_str()
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| ManagerError::System("任务备份包含空输入图片".into()))?;
+                transaction.execute(
+                    "INSERT OR REPLACE INTO image_inputs(task_id, position, data_url)
+                     VALUES (?1, ?2, ?3)",
+                    params![input_id, position, data_url],
+                )?;
+            }
+        }
+    }
+
+    if let Some(outputs) = bundle["outputs"].as_array() {
+        for output in outputs {
+            let task_id = output["taskId"]
+                .as_str()
+                .filter(|value| seen_ids.contains(*value))
+                .ok_or_else(|| ManagerError::System("任务备份包含无效输出任务".into()))?;
+            let position = output["position"]
+                .as_i64()
+                .ok_or_else(|| ManagerError::System("任务备份包含无效输出位置".into()))?;
+            let format = output["format"]
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| ManagerError::System("任务备份包含无效图片格式".into()))?;
+            let encoded = output["data"]
+                .as_str()
+                .ok_or_else(|| ManagerError::System("任务备份缺少图片数据".into()))?;
+            let bytes = STANDARD
+                .decode(encoded)
+                .map_err(|error| ManagerError::System(error.to_string()))?;
+            transaction.execute(
+                "INSERT OR REPLACE INTO image_outputs(task_id, position, format, bytes)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![task_id, position, format, bytes],
+            )?;
+        }
+    }
+
+    transaction.commit()?;
+    Ok(json!({
+        "imported": imported,
+        "updated": updated,
+        "resumable": resumable
+    }))
 }
 
 // 一轮任务原子入队，共享输入图片，避免 100 张生成重复保存 100 份参考图。
@@ -87,10 +363,17 @@ pub fn requeue_with_concurrency(
 ) -> Result<Value, ManagerError> {
     let mut connection = open(paths)?;
     let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let raw: String = transaction.query_row("SELECT payload_json FROM image_tasks WHERE id = ?1 AND status IN ('failed', 'interrupted')", [id], |row| row.get(0))?;
+    let (status, raw): (String, String) = transaction.query_row(
+        "SELECT status, payload_json FROM image_tasks WHERE id = ?1 AND status IN ('failed', 'interrupted')",
+        [id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
     let mut task: Value = serde_json::from_str(&raw)?;
-    // 有 Web 恢复上下文时继续查询原会话，否则从原请求重新排队。
-    if task["request"]["generationMode"] != "web" || !task["recovery"]["conversationId"].is_string() {
+    // 失败任务必须重新提交请求创建新会话；只有中断任务才继续查询原 Web 会话。
+    if status != "interrupted"
+        || task["request"]["generationMode"] != "web"
+        || !task["recovery"]["conversationId"].is_string()
+    {
         task["recovery"] = Value::Null;
     }
     if let Some(concurrency) = concurrency {
@@ -125,7 +408,8 @@ pub fn finish(paths: &AppPaths, task: &Value, images: &[StoredImage]) -> Result<
     task["canResume"] = json!(task["status"] == "failed" && task["recovery"]["conversationId"].is_string());
     for (index, image) in images.iter().enumerate() {
         transaction.execute(
-            "INSERT INTO image_outputs(task_id, position, format, bytes) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO image_outputs(task_id, position, format, bytes)
+             VALUES (?1, ?2, ?3, ?4)",
             params![task["id"].as_str(), index, image.format, image.bytes],
         )?;
     }
@@ -326,4 +610,72 @@ pub fn clear_results(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerE
     }
     transaction.commit()?;
     Ok(json!({"deleted": ids.len()}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::paths::resolve_app_paths;
+    use std::path::Path;
+
+    #[test]
+    fn task_bundle_round_trip_preserves_inputs_outputs_and_resume_state() {
+        let suffix = uuid::Uuid::new_v4().to_string();
+        let source_root = std::env::temp_dir().join(format!("image-task-source-{suffix}"));
+        let target_root = std::env::temp_dir().join(format!("image-task-target-{suffix}"));
+        let source_paths = resolve_app_paths(Path::new(&source_root));
+        let target_paths = resolve_app_paths(Path::new(&target_root));
+        let task = json!({
+            "id": "task-1",
+            "createdAt": 1,
+            "status": "queued",
+            "request": {
+                "conversationId": "source-conversation",
+                "generationMode": "codex",
+                "n": 1
+            },
+            "inputId": "input-1",
+            "imageCount": 0
+        });
+
+        create_batch(
+            &source_paths,
+            std::slice::from_ref(&task),
+            &["data:image/png;base64,reference".to_string()],
+            "",
+        )
+        .unwrap();
+        open(&source_paths)
+            .unwrap()
+            .execute(
+                "INSERT INTO image_outputs(task_id, position, format, bytes)
+                 VALUES ('task-1', 0, 'png', ?1)",
+                [vec![1u8, 2, 3]],
+            )
+            .unwrap();
+
+        let bundle = export_task_bundle(&source_paths, &["task-1".to_string()]).unwrap();
+        let result = import_task_bundle(&target_paths, &bundle, "target-conversation").unwrap();
+        assert_eq!(result["imported"], 1);
+        assert_eq!(result["resumable"], 1);
+
+        let listed = list(
+            &target_paths,
+            &json!({
+                "conversationId": "target-conversation",
+                "page": 1,
+                "pageSize": 10
+            }),
+        )
+        .unwrap();
+        assert_eq!(listed["items"][0]["status"], "interrupted");
+        assert_eq!(
+            inputs(&target_paths, "task-1").unwrap()["images"][0],
+            "data:image/png;base64,reference"
+        );
+        assert_eq!(read_images(&target_paths, &["task-1".to_string()]).unwrap()[0].3, vec![1, 2, 3]);
+
+        std::fs::remove_dir_all(source_root).unwrap();
+        std::fs::remove_dir_all(target_root).unwrap();
+    }
 }

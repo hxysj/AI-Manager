@@ -1,9 +1,10 @@
-use crate::api::codex_account;
+use crate::api::{codex_account, data};
 use crate::core::{
     error::ManagerError,
     image_store::{self, StoredImage},
     paths::AppPaths,
     provider_store,
+    settings::CloudSyncSettings,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::StreamExt;
@@ -2973,6 +2974,109 @@ pub async fn export(paths: &AppPaths, payload: Value) -> Result<Value, ManagerEr
     Ok(json!({ "imageCount": count, "filePath": target }))
 }
 
+fn task_backup_ids(payload: &Value) -> Result<Vec<String>, ManagerError> {
+    let ids: Vec<String> = serde_json::from_value(payload["ids"].clone())?;
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(failure("请选取 1–10000 个任务"));
+    }
+    Ok(ids)
+}
+
+fn task_backup_file_name(file_name: &str) -> String {
+    let separator = file_name.rfind('/');
+    let (directory, base_name) = separator
+        .map(|index| (&file_name[..=index], &file_name[index + 1..]))
+        .unwrap_or(("", file_name));
+    let base_name = if base_name.ends_with(".aimbackup") {
+        format!(
+            "{}-image-tasks.aimbackup",
+            base_name.trim_end_matches(".aimbackup")
+        )
+    } else {
+        format!("{}-image-tasks.aimbackup", base_name)
+    };
+    format!("{}{}", directory, base_name)
+}
+
+fn task_backup_cloud_config(config: &CloudSyncSettings) -> Result<CloudSyncSettings, ManagerError> {
+    if config.provider != "koofr"
+        || config.webdav_url.trim().is_empty()
+        || config.username.trim().is_empty()
+        || config.password.trim().is_empty()
+        || config.file_name.trim().is_empty()
+    {
+        return Err(failure("请先在设置中完成 Koofr WebDAV 配置"));
+    }
+    Ok(CloudSyncSettings {
+        file_name: task_backup_file_name(&config.file_name),
+        ..config.clone()
+    })
+}
+
+pub async fn export_task_bundle(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+    let ids = task_backup_ids(&payload)?;
+    let target = payload["targetPath"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| failure("请选择任务备份保存位置"))?;
+    let bundle = image_store::export_task_bundle(paths, &ids)?;
+    let content = data::encrypt_cloud_backup_payload(&bundle)?;
+    tokio::fs::write(target, content).await?;
+    Ok(json!({
+        "taskCount": bundle["tasks"].as_array().map(Vec::len).unwrap_or(0),
+        "filePath": target
+    }))
+}
+
+pub async fn import_task_bundle(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+    let source = payload["sourcePath"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| failure("请选择任务备份文件"))?;
+    let content = tokio::fs::read_to_string(source).await?;
+    let bundle = data::decrypt_cloud_backup_payload(&content)?;
+    image_store::import_task_bundle(
+        paths,
+        &bundle,
+        payload["targetConversationId"].as_str().unwrap_or(""),
+    )
+}
+
+pub async fn push_task_bundle_to_koofr(
+    paths: &AppPaths,
+    config: &CloudSyncSettings,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let config = task_backup_cloud_config(config)?;
+    let ids = task_backup_ids(&payload)?;
+    let bundle = image_store::export_task_bundle(paths, &ids)?;
+    let content = data::encrypt_cloud_backup_payload(&bundle)?;
+    data::upload_webdav_content(&config, content).await?;
+    Ok(json!({
+        "taskCount": bundle["tasks"].as_array().map(Vec::len).unwrap_or(0),
+        "fileName": config.file_name
+    }))
+}
+
+pub async fn pull_task_bundle_from_koofr(
+    paths: &AppPaths,
+    config: &CloudSyncSettings,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let config = task_backup_cloud_config(config)?;
+    let content = data::download_webdav_content(&config).await?;
+    let bundle = data::decrypt_cloud_backup_payload(&content)?;
+    let result = image_store::import_task_bundle(
+        paths,
+        &bundle,
+        payload["targetConversationId"].as_str().unwrap_or(""),
+    )?;
+    Ok(json!({
+        "fileName": config.file_name,
+        "result": result
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3455,11 +3559,27 @@ mod tests {
         assert_eq!(image_store::inputs(&paths, "task-99").unwrap()["mask"], "mask");
         assert!(image_store::start(&paths, "task-1").unwrap());
         image_store::checkpoint(&paths, "task-1", &json!({"conversationId":"upstream", "inputIds": ["file-input"], "fileIds":[], "sedimentIds":[]})).unwrap();
+        let failed_task = json!({
+            "id": "failed-web", "inputId": "failed-web", "createdAt": 100, "status": "queued",
+            "request": {"conversationId": "failed-conversation", "roundId": "failed-round", "generationMode": "web", "responseFormat": "url"}
+        });
+        image_store::create_batch(&paths, &[failed_task], &[], "").unwrap();
+        assert!(image_store::start(&paths, "failed-web").unwrap());
+        image_store::checkpoint(&paths, "failed-web", &json!({"conversationId":"failed-upstream", "inputIds": [], "fileIds":[], "sedimentIds":[]})).unwrap();
         image_store::initialize(&paths).unwrap();
         assert_eq!(image_store::detail(&paths, "task-99").unwrap()["status"], "interrupted");
+        let connection = crate::core::database::open(&paths).unwrap();
+        connection.execute(
+            "UPDATE image_tasks SET status = 'failed', payload_json = json_set(payload_json, '$.status', 'failed') WHERE id = 'failed-web'",
+            [],
+        ).unwrap();
+        drop(connection);
         let recovered = image_store::requeue(&paths, "task-1").unwrap();
         assert_eq!(recovered["recovery"]["conversationId"], "upstream");
         assert!(image_store::requeue(&paths, "task-1").is_err());
+        let retried_failed = image_store::requeue(&paths, "failed-web").unwrap();
+        assert_eq!(retried_failed["status"], "queued");
+        assert!(retried_failed["recovery"].is_null());
         let recovered_queued = image_store::requeue(&paths, "task-99").unwrap();
         assert_eq!(recovered_queued["status"], "queued");
         assert!(image_store::start(&paths, "task-1").unwrap());
@@ -3474,7 +3594,8 @@ mod tests {
         assert_eq!(cleared["imageCount"], 0);
         assert_eq!(cleared["request"]["roundId"], "round");
         assert_eq!(image_store::inputs(&paths, "task-1").unwrap()["mask"], "mask");
-        let ids = (1..100).map(|index| format!("task-{index}")).collect::<Vec<_>>();
+        let mut ids = (1..100).map(|index| format!("task-{index}")).collect::<Vec<_>>();
+        ids.push("failed-web".into());
         image_store::delete(&paths, &ids).unwrap();
         assert_eq!(image_store::history(&paths).unwrap(), json!([]));
         let connection = crate::core::database::open(&paths).unwrap();
