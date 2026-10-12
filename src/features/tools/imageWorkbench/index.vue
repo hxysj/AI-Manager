@@ -611,8 +611,7 @@
         :expected-total="batchExpectedTotal"
         :loading="loadingTasks"
         :paused="batchPaused"
-        :concurrency="(tasks[0]?.request?.generationMode || form.generationMode) === 'web' ? 1 : batchConcurrency"
-        :serial="(tasks[0]?.request?.generationMode || form.generationMode) === 'web'"
+        :concurrency="batchConcurrency"
         :stopping="batchQueueStopping"
         :deleting="deleting"
         :resuming-ids="resuming"
@@ -1892,8 +1891,8 @@ async function deleteConversation(id) {
   try {
     await ElMessageBox.confirm(
       id
-        ? "删除此会话、关联的 Web 会话及本地图片，并取消排队任务？"
-        : "清空全部历史、关联的 Web 会话及本地图片，并取消排队任务？",
+        ? "删除此会话及其本地图片，并取消排队任务？"
+        : "清空全部历史及本地图片，并取消排队任务？",
       "删除历史",
       { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" }
     )
@@ -1901,11 +1900,8 @@ async function deleteConversation(id) {
     return
   }
   try {
-    // 会话独立于图片保留，即使已清空图片也需要显式删除。
-    await toolboxApi.deleteImageConversation({
-      conversationId: id || "",
-      ids: items.map(item => item.id)
-    })
+    if (items.length)
+      await toolboxApi.deleteImageTasks({ ids: items.map((item) => item.id) })
     historyVersion++
     for (const item of items) delete roundState.value[item.roundId || item.id]
     conversations.value = id

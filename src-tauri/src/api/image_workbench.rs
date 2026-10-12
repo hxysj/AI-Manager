@@ -405,7 +405,6 @@ pub async fn submit(
     let mut request: ImageRequest = serde_json::from_value(payload)?;
     request.model = request.model.trim().to_string();
     request.validate()?;
-    if request.conversation_id.is_empty() { request.conversation_id = Uuid::new_v4().to_string(); }
     let account = accounts(paths)?.as_array().unwrap().iter().find(|item| item["id"] == request.account_id && item["disabled"] != true && item["requiresReauth"] != true).cloned().ok_or_else(|| failure("所选官方账号不可用"))?;
     let count = request.n;
     request.n = 1;
@@ -434,8 +433,7 @@ pub async fn submit_batch(
     cli_targets: &Value,
     payload: Value,
 ) -> Result<Value, ManagerError> {
-    let mut batch: ImageBatchRequest = serde_json::from_value(payload)?;
-    if batch.conversation_id.is_empty() { batch.conversation_id = Uuid::new_v4().to_string(); }
+    let batch: ImageBatchRequest = serde_json::from_value(payload)?;
     if batch.items.is_empty() || batch.items.len() > 10000 {
         return Err(failure("一轮可提交 1–10000 个任务"));
     }
@@ -540,40 +538,6 @@ fn task_batch_key(task: &Value) -> Option<String> {
         .then(|| format!("{conversation_id}:{round_id}"))
 }
 
-fn web_session_lock(paths: &AppPaths, local_id: &str, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-    static LOCKS: std::sync::OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = std::sync::OnceLock::new();
-    let key = format!("{}:{local_id}:{account_id}", paths.storage_files.database);
-    LOCKS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap()
-        .entry(key).or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))).clone()
-}
-
-pub async fn delete_conversation(paths: &AppPaths, cli_targets: &Value, payload: Value) -> Result<Value, ManagerError> {
-    let local_id = payload["conversationId"].as_str().unwrap_or("");
-    let ids: Vec<String> = serde_json::from_value(payload["ids"].clone())?;
-    if ids.len() > 10000 { return Err(failure("请选取不超过 10000 个任务")); }
-    let history = image_store::history(paths)?;
-    if history.as_array().unwrap().iter().any(|task| (local_id.is_empty() || task["conversationId"] == local_id) && task["status"] == "processing") {
-        return Err(failure("会话中仍有任务生成中，请完成后再删除"));
-    }
-    let sessions = image_store::web_sessions(paths, local_id)?;
-    let mut keys = sessions.iter().map(|session| (session["localId"].as_str().unwrap().to_string(), session["accountId"].as_str().unwrap().to_string())).collect::<HashSet<_>>();
-    for task in history.as_array().unwrap().iter().filter(|task| task["generationMode"] == "web" && (local_id.is_empty() || task["conversationId"] == local_id)) {
-        keys.insert((task["conversationId"].as_str().unwrap_or("").to_string(), task["accountId"].as_str().unwrap_or("").to_string()));
-    }
-    let mut guards = Vec::new();
-    for (conversation_id, account_id) in &keys {
-        guards.push(web_session_lock(paths, conversation_id, account_id)
-            .try_lock_owned().map_err(|_| failure("会话中仍有任务生成中，请完成后再删除"))?);
-    }
-    // 取得会话锁后重新读取，包含刚完成任务保存的会话。
-    for session in image_store::web_sessions(paths, local_id)? {
-        let (client, auth) = image_account_session(paths, cli_targets, session["accountId"].as_str().unwrap(), "web").await?;
-        web_delete_conversation(&client, &auth, &WebContext::new(), session["conversationId"].as_str().unwrap()).await?;
-        image_store::remove_web_session(paths, &session)?;
-    }
-    if ids.is_empty() { Ok(json!({"deleted": 0})) } else { image_store::delete(paths, &ids) }
-}
-
 fn spawn_task(
     app: &tauri::AppHandle,
     paths: &AppPaths,
@@ -586,10 +550,6 @@ fn spawn_task(
     let paths = paths.clone();
     let cli_targets = cli_targets.clone();
     tauri::async_runtime::spawn(async move {
-        // 同一账号的同一会话串行提交，各会话之间仍可并发。
-        let session_lock = (task["request"]["generationMode"] == "web").then(|| web_session_lock(
-            &paths, task["request"]["conversationId"].as_str().unwrap_or(""), task["request"]["accountId"].as_str().unwrap_or("")));
-        let _session_guard = match &session_lock { Some(lock) => Some(lock.lock().await), None => None };
         let _permit = slots.acquire().await.unwrap();
         let mut task = task;
         let id = task["id"].as_str().unwrap().to_string();
@@ -612,15 +572,6 @@ fn spawn_task(
             let (client, auth) = image_account_session(&paths, &cli_targets, &request.account_id, &request.generation_mode).await?;
             let mut context = WebContext::new();
             context.task = Some((paths.clone(), id.clone()));
-            context.local_id = request.conversation_id.clone();
-            context.account_id = request.account_id.clone();
-            if request.generation_mode == "web" {
-                if let Some(saved) = image_store::web_sessions(&paths, &request.conversation_id)?.into_iter().find(|session| session["accountId"] == request.account_id) {
-                    context.conversation_id = saved["conversationId"].as_str().unwrap().to_string();
-                    context.device_id = saved["deviceId"].as_str().unwrap().to_string();
-                    context.session_id = saved["sessionId"].as_str().unwrap().to_string();
-                }
-            }
             if task["recovery"]["conversationId"].is_string() {
                 let recovery = &task["recovery"];
                 context.device_id = recovery["deviceId"].as_str().unwrap_or(&context.device_id).to_string();
@@ -708,11 +659,6 @@ struct WebRequirements {
 
 struct WebContext {
     task: Option<(AppPaths, String)>,
-    local_id: String,
-    account_id: String,
-    conversation_id: String,
-    parent_message_id: String,
-    excluded_ids: HashSet<String>,
     base_url: String,
     device_id: String,
     session_id: String,
@@ -724,11 +670,6 @@ impl WebContext {
     fn new() -> Self {
         Self {
             task: None,
-            local_id: String::new(),
-            account_id: String::new(),
-            conversation_id: String::new(),
-            parent_message_id: Uuid::new_v4().to_string(),
-            excluded_ids: HashSet::new(),
             base_url: "https://chatgpt.com".to_string(),
             device_id: Uuid::new_v4().to_string(),
             session_id: Uuid::new_v4().to_string(),
@@ -830,7 +771,7 @@ async fn execute_web(
     let mut last_error = Value::Null;
     let mut sentinel_diagnostics = Vec::new();
 
-    // 网页端没有 n 参数；多次提交继续使用同一会话。
+    // 网页端没有 n 参数；每张请求都创建一个独立会话。
     for _ in 0..request.n {
         let requirements = match web_requirements(client, auth, &context).await {
             Ok(value) => value,
@@ -846,7 +787,7 @@ async fn execute_web(
         match web_execute_once(
             client,
             auth,
-            context,
+            &context,
             request,
             &requirements,
             &model,
@@ -1021,33 +962,12 @@ async fn web_quota(
 async fn web_execute_once(
     client: &reqwest::Client,
     auth: &Value,
-    context: &mut WebContext,
+    context: &WebContext,
     request: &ImageRequest,
     requirements: &WebRequirements,
     model: &str,
     references: &[WebReference],
 ) -> Result<(String, Vec<StoredImage>, Value), ManagerError> {
-    context.parent_message_id = Uuid::new_v4().to_string();
-    context.excluded_ids.clear();
-    if !context.conversation_id.is_empty() {
-        let path = format!("/backend-api/conversation/{}", context.conversation_id);
-        let response = web_builder(client, auth, context, reqwest::Method::GET, &path).send().await
-            .map_err(|error| failure(&format!("Web 会话读取失败：{error}")))?;
-        if !response.status().is_success() {
-            return Err(failure(&format!("Web 会话读取失败：HTTP {}，请删除失效会话后新建", response.status().as_u16())));
-        }
-        let payload: Value = response.json().await.map_err(|error| failure(&format!("Web 会话解析失败：{error}")))?;
-        context.parent_message_id = payload["current_node"].as_str().filter(|id| !id.is_empty())
-            .ok_or_else(|| failure("Web 会话缺少当前消息，无法继续生成"))?.to_string();
-        let mut previous = WebAssetIds::default();
-        web_collect_assets(&payload, &HashSet::new(), &mut previous);
-        context.excluded_ids.extend(previous.file_ids);
-        context.excluded_ids.extend(previous.sediment_ids);
-        if let Some(mapping) = payload["mapping"].as_object() {
-            context.excluded_ids.extend(mapping.keys().cloned());
-            context.excluded_ids.extend(mapping.values().filter_map(|node| node["message"]["id"].as_str().map(str::to_string)));
-        }
-    }
     let conduit =
         web_prepare_conversation(client, auth, context, request, requirements, model).await?;
     let response = web_start_conversation(
@@ -1062,11 +982,10 @@ async fn web_execute_once(
     )
     .await?;
     let status = response.status();
-    let mut input_ids = references
+    let input_ids = references
         .iter()
         .map(|item| item.file_id.clone())
         .collect::<HashSet<_>>();
-    input_ids.extend(context.excluded_ids.iter().cloned());
     let (_, bytes) = read_web_sse_with_checkpoint(response, context, &input_ids).await?;
     if !status.is_success() {
         return Err(failure(&format!(
@@ -1079,11 +998,6 @@ async fn web_execute_once(
         )));
     }
     let mut ids = web_parse_sse(&bytes, &references);
-    if ids.conversation_id.is_empty() { ids.conversation_id = context.conversation_id.clone(); }
-    if !ids.conversation_id.is_empty() {
-        context.conversation_id = ids.conversation_id.clone();
-        save_web_recovery(context, &ids, &input_ids)?;
-    }
     if ids.blocked && ids.file_ids.is_empty() && ids.sediment_ids.is_empty() {
         return Err(failure("Web 生图被上游内容策略拒绝"));
     }
@@ -1127,6 +1041,9 @@ async fn web_finish_assets(client: &reqwest::Client, auth: &Value, context: &Web
     if images.is_empty() && !errors.is_empty() {
         return Err(failure(&format!("Web 图片下载失败：{}", errors.join("；"))));
     }
+    if !images.is_empty() {
+        web_delete_conversation(client, auth, context, &ids.conversation_id).await;
+    }
     let error = if errors.is_empty() {
         Value::Null
     } else {
@@ -1140,21 +1057,17 @@ async fn web_delete_conversation(
     auth: &Value,
     context: &WebContext,
     conversation_id: &str,
-) -> Result<(), ManagerError> {
+) {
     if conversation_id.trim().is_empty() {
-        return Ok(());
+        return;
     }
     let path = format!("/backend-api/conversation/{conversation_id}");
-    let response = web_builder(client, auth, context, reqwest::Method::PATCH, &path)
+    let _ = web_builder(client, auth, context, reqwest::Method::PATCH, &path)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .json(&json!({ "is_visible": false }))
         .send()
-        .await.map_err(|error| failure(&format!("Web 会话删除失败：{error}")))?;
-    if !response.status().is_success() && response.status().as_u16() != 404 {
-        return Err(failure(&format!("Web 会话删除失败：HTTP {}", response.status().as_u16())));
-    }
-    Ok(())
+        .await;
 }
 
 async fn read_response_limited(
@@ -1180,12 +1093,6 @@ fn save_web_recovery(
     input_ids: &HashSet<String>,
 ) -> Result<(), ManagerError> {
     if let Some((paths, task_id)) = &context.task {
-        if !context.local_id.is_empty() && !ids.conversation_id.is_empty() {
-            image_store::save_web_session(paths, &json!({
-                "localId": context.local_id, "accountId": context.account_id,
-                "conversationId": ids.conversation_id, "deviceId": context.device_id, "sessionId": context.session_id
-            }))?;
-        }
         image_store::checkpoint(
             paths,
             task_id,
@@ -2103,8 +2010,7 @@ async fn web_prepare_conversation(
         .json(&json!({
             "action": "next",
             "fork_from_shared_post": false,
-            "parent_message_id": context.parent_message_id,
-            "conversation_id": if context.conversation_id.is_empty() { Value::Null } else { json!(context.conversation_id) },
+            "parent_message_id": Uuid::new_v4().to_string(),
             "model": model,
             "client_prepare_state": "success",
             "timezone_offset_min": -480,
@@ -2206,8 +2112,7 @@ async fn web_start_conversation(
                     })).collect::<Vec<_>>()
                 }
             }],
-            "parent_message_id": context.parent_message_id,
-            "conversation_id": if context.conversation_id.is_empty() { Value::Null } else { json!(context.conversation_id) },
+            "parent_message_id": Uuid::new_v4().to_string(),
             "model": model,
             "client_prepare_state": "sent",
             "timezone_offset_min": -480,
@@ -2375,8 +2280,6 @@ fn web_apply_message_patch(document: &mut Value, event: &Value, prefix: &str) {
 fn web_collect_assets(value: &Value, input_ids: &HashSet<String>, result: &mut WebAssetIds) {
     match value {
         Value::Object(map) => {
-            // 历史消息整体排除，避免旧任务稍后完成时混入当前图片。
-            if map.get("id").and_then(Value::as_str).is_some_and(|id| input_ids.contains(id)) { return; }
             if result.conversation_id.is_empty() {
                 result.conversation_id = map
                     .get("conversation_id")
@@ -2536,7 +2439,6 @@ async fn web_poll_assets(
                         for task in tasks {
                             if (task["conversation_id"] == ids.conversation_id
                                 || task["original_conversation_id"] == ids.conversation_id)
-                                && !task["image_gen_message"]["id"].as_str().is_some_and(|id| input_ids.contains(id))
                                 && task["image_gen_message"]["metadata"]["is_error"] == true
                             {
                                 last_error = task["image_gen_message"]["content"]["parts"]
@@ -3585,13 +3487,20 @@ mod tests {
     #[test]
     fn web_continue_waiting_only_reads_original_conversation() {
         tauri::async_runtime::block_on(async {
-            let (address, handle) = mock_http_responder(4, |index, raw, address| {
+            let (address, handle) = mock_http_responder(5, |index, raw, address| {
                 let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
                 match index {
                     0 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/tasks"); (200, "application/json".into(), b"{}".to_vec()) },
                     1 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/conversation/original"); (200, "application/json".into(), b"{}".to_vec()) },
                     2 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/files/output/download"); (200, "application/json".into(), serde_json::to_vec(&json!({"download_url":format!("{address}/image")})).unwrap()) },
                     3 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/image"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) },
+                    4 => {
+                        assert!(raw.starts_with("PATCH "));
+                        assert_eq!(path, "/backend-api/conversation/original");
+                        let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+                        assert_eq!(body["is_visible"], false);
+                        (200, "application/json".into(), serde_json::to_vec(&json!({"success": true})).unwrap())
+                    },
                     _ => unreachable!()
                 }
             }).await;
@@ -3601,7 +3510,7 @@ mod tests {
             assert_eq!(conversation, "original");
             assert_eq!(images.len(), 1);
             assert!(error.is_null());
-            assert_eq!(handle.join().unwrap().len(), 4);
+            assert_eq!(handle.join().unwrap().len(), 5);
         });
     }
 
@@ -3619,94 +3528,8 @@ mod tests {
             let context = WebContext { base_url: address, ..WebContext::new() };
             let client = reqwest::Client::builder().no_proxy().build().unwrap();
             let auth = json!({"accessToken": "del-token"});
-            web_delete_conversation(&client, &auth, &context, "conv-delete-123").await.unwrap();
+            web_delete_conversation(&client, &auth, &context, "conv-delete-123").await;
             assert_eq!(handle.join().unwrap().len(), 1);
-        });
-    }
-
-    #[test]
-    fn web_session_reuses_persisted_conversation_and_excludes_history() {
-        tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!("image-session-test-{}", Uuid::new_v4()));
-            let paths = crate::core::paths::resolve_app_paths(&root);
-            std::fs::create_dir_all(&paths.storage_dir).unwrap();
-            let mut request = request();
-            request.generation_mode = "web".into();
-            request.conversation_id = "local".into();
-            let tasks = ["first", "second"].map(|id| json!({"id":id, "createdAt":1, "status":"queued", "request":request, "images":[]}));
-            image_store::create_batch(&paths, &tasks, &[], "").unwrap();
-            let old = json!({"id":"old-message", "author":{"role":"tool"}, "content":{"parts":[{"asset_pointer":"file-service://old-image"}]}});
-            let (address, handle) = mock_http_responder(13, move |index, raw, address| {
-                let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
-                let json_response = |value: Value| (200, "application/json".into(), serde_json::to_vec(&value).unwrap());
-                match index {
-                    0 | 7 => {
-                        assert_eq!(path, "/backend-api/f/conversation/prepare");
-                        let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
-                        if index == 0 { assert!(body["conversation_id"].is_null()); }
-                        else { assert_eq!(body["conversation_id"], "shared"); assert_eq!(body["parent_message_id"], "old-message"); }
-                        json_response(json!({}))
-                    }
-                    1 | 8 => {
-                        assert_eq!(path, "/backend-api/f/conversation");
-                        let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
-                        if index == 8 { assert_eq!(body["conversation_id"], "shared"); assert_eq!(body["parent_message_id"], "old-message"); }
-                        let file = if index == 1 { "old-image" } else { "new-image" };
-                        (200, "text/event-stream".into(), events(&[json!({"conversation_id":"shared", "message":{"id":file, "author":{"role":"tool"}, "content":{"parts":[{"asset_pointer":format!("file-service://{file}")}]}}})]))
-                    }
-                    2 | 9 => { assert_eq!(path, "/backend-api/tasks"); json_response(json!({})) }
-                    3 => { assert_eq!(path, "/backend-api/conversation/shared"); json_response(json!({})) }
-                    6 => {
-                        assert_eq!(path, "/backend-api/conversation/shared");
-                        json_response(json!({"current_node":"old-message", "mapping":{"old-message":{"message":old}}}))
-                    }
-                    10 => {
-                        assert_eq!(path, "/backend-api/conversation/shared");
-                        let mut late_old = old.clone();
-                        late_old["content"]["parts"].as_array_mut().unwrap().push(json!({"asset_pointer":"file-service://late-old-image"}));
-                        json_response(json!({"mapping":{"old-message":{"message":late_old}}}))
-                    }
-                    4 | 11 => {
-                        assert_eq!(path, if index == 4 { "/backend-api/files/old-image/download" } else { "/backend-api/files/new-image/download" });
-                        json_response(json!({"download_url":format!("{address}/image")}))
-                    }
-                    5 | 12 => { assert_eq!(path, "/image"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) }
-                    _ => unreachable!()
-                }
-            }).await;
-            let client = reqwest::Client::builder().no_proxy().build().unwrap();
-            let auth = json!({"accessToken":"token"});
-            let requirements = WebRequirements { token: "token".into(), proof_token: String::new(), turnstile_diagnostic: None };
-            for id in ["first", "second"] {
-                assert!(image_store::start(&paths, id).unwrap());
-                // 用新上下文读取数据库，模拟下一任务或重启后继续生成。
-                let mut context = WebContext { base_url: address.clone(), task: Some((paths.clone(), id.into())), local_id: "local".into(), account_id: request.account_id.clone(), ..WebContext::new() };
-                if let Some(saved) = image_store::web_sessions(&paths, "local").unwrap().first() {
-                    context.conversation_id = saved["conversationId"].as_str().unwrap().into();
-                    context.device_id = saved["deviceId"].as_str().unwrap().into();
-                    context.session_id = saved["sessionId"].as_str().unwrap().into();
-                }
-                let (conversation, images, error) = web_execute_once(&client, &auth, &mut context, &request, &requirements, "gpt-5.6-sol", &[]).await.unwrap();
-                assert_eq!(conversation, "shared");
-                assert_eq!(images.len(), 1);
-                assert!(error.is_null());
-                let recovery = image_store::detail(&paths, id).unwrap()["recovery"].clone();
-                if id == "second" { assert!(recovery["inputIds"].as_array().unwrap().contains(&json!("old-message"))); }
-                image_store::finish(&paths, &json!({"id":id,"status":"completed"}), &images).unwrap();
-            }
-            assert_eq!(handle.join().unwrap().len(), 13);
-            let saved = image_store::web_sessions(&paths, "local").unwrap();
-            assert_eq!(saved.len(), 1);
-            assert!(Arc::ptr_eq(&web_session_lock(&paths, "local", "account"), &web_session_lock(&paths, "local", "account")));
-            let guard = web_session_lock(&paths, "local", "account").try_lock_owned().unwrap();
-            assert!(web_session_lock(&paths, "local", "account").try_lock_owned().is_err());
-            assert!(web_session_lock(&paths, "local", "other-account").try_lock_owned().is_ok());
-            drop(guard);
-            image_store::delete(&paths, &["first".into(), "second".into()]).unwrap();
-            assert_eq!(image_store::web_sessions(&paths, "local").unwrap().len(), 1);
-            image_store::remove_web_session(&paths, &saved[0]).unwrap();
-            assert!(image_store::web_sessions(&paths, "local").unwrap().is_empty());
-            std::fs::remove_dir_all(root).unwrap();
         });
     }
 
@@ -3813,7 +3636,7 @@ mod tests {
     #[test]
     fn web_image_flow_keeps_outputs_after_transient_poll_and_partial_download_failure() {
         tauri::async_runtime::block_on(async {
-            let (address, handle) = mock_http_responder(13, move |index, raw, address| {
+            let (address, handle) = mock_http_responder(14, move |index, raw, address| {
                 let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
                 let json_response = |value: Value| (200, "application/json".into(), serde_json::to_vec(&value).unwrap());
                 match index {
@@ -3858,6 +3681,13 @@ mod tests {
                     10 => { assert_eq!(path, "/backend-api/files/output-1/download"); json_response(json!({"download_url":format!("{address}/asset")})) }
                     11 => { assert_eq!(path, "/asset"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) }
                     12 => { assert_eq!(path, "/backend-api/conversation/conversation-1/attachment/attachment-1/download"); (403, "application/json".into(), b"{}".to_vec()) }
+                    13 => {
+                        assert!(raw.starts_with("PATCH "));
+                        assert_eq!(path, "/backend-api/conversation/conversation-1");
+                        let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+                        assert_eq!(body["is_visible"], false);
+                        json_response(json!({"success": true}))
+                    }
                     _ => unreachable!(),
                 }
             }).await;
@@ -3894,7 +3724,7 @@ mod tests {
                     .len(),
                 1
             );
-            assert_eq!(handle.join().unwrap().len(), 13);
+            assert_eq!(handle.join().unwrap().len(), 14);
         });
     }
 

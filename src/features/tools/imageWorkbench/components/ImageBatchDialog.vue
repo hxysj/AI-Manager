@@ -9,7 +9,7 @@
         <div class="batch-modal-header-text">
           <h2 class="batch-modal-title">批量生成</h2>
           <p class="batch-modal-subtitle">
-            {{ settings.generationMode === 'web' ? '复用一个会话依次生成，会话保留至手动删除。' : '按设定并发数执行，可批量创建图片生成任务。' }}
+            按设定并发数执行，可批量创建图片生成任务。
           </p>
         </div>
       </div>
@@ -341,7 +341,7 @@
                 <span class="batch-field-label">并发任务数</span>
                 <span
                   class="batch-help-icon"
-                  :title="settings.generationMode === 'web' ? 'Web 模式在同一会话依次生成，实际并发为 1' : '同时执行的批量任务数量 (1–10)，默认 2'"
+                  title="同时执行的批量任务数量 (1–10)，默认 2"
                 >
                   <HelpCircle :size="13" />
                 </span>
@@ -350,16 +350,16 @@
                 <button
                   class="stepper-btn"
                   type="button"
-                  :disabled="running || settings.generationMode === 'web' || concurrency <= 1"
+                  :disabled="running || concurrency <= 1"
                   @click="concurrency = Math.max(1, concurrency - 1)"
                 >
                   <Minus :size="14" />
                 </button>
-                <span class="stepper-val">{{ settings.generationMode === 'web' ? 1 : concurrency }}</span>
+                <span class="stepper-val">{{ concurrency }}</span>
                 <button
                   class="stepper-btn"
                   type="button"
-                  :disabled="running || settings.generationMode === 'web' || concurrency >= 10"
+                  :disabled="running || concurrency >= 10"
                   @click="concurrency = Math.min(10, concurrency + 1)"
                 >
                   <Plus :size="14" />
@@ -740,7 +740,7 @@ async function submitQueue(queue) {
       model: selectedModel.value,
       size: selectedSize.value,
       n: outputCount.value,
-      concurrency: props.settings.generationMode === 'web' ? 1 : concurrency.value,
+      concurrency: concurrency.value,
       conversationId: runningConversationId.value,
       roundId,
       items: queue.rows.map((row) => ({
@@ -854,7 +854,7 @@ async function startBatch() {
       "session-created",
       runningConversationId.value,
       batchQueue.value.rows.length,
-      props.settings.generationMode === 'web' ? 1 : concurrency.value
+      concurrency.value
     )
   emit("close")
   try {

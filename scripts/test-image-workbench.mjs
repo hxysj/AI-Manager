@@ -53,7 +53,7 @@ globalThis.__imageTest = {
       calls.push(["clear", payload])
       return {}
     },
-    deleteImageConversation: async (payload) => {
+    deleteImageTasks: async (payload) => {
       calls.push(["delete", payload])
       tasks = []
       history = []
@@ -79,12 +79,6 @@ try {
     ),
     resolve(
       "src/features/tools/imageWorkbench/components/BatchResultsPanel.vue"
-    ),
-    resolve(
-      "src/features/tools/imageWorkbench/components/ImageBatchDialog.vue"
-    ),
-    resolve(
-      "src/features/tools/imageWorkbench/components/BatchQueuePanel.vue"
     )
   ]) {
     const { descriptor, errors } = parse(await readFile(path, "utf8"))
@@ -229,14 +223,6 @@ try {
   assert.equal(submitted.size, "1900x1088")
   assert.equal(submitted.generationMode, "web")
   assert.ok(submitted.conversationId && submitted.roundId)
-  // 同一工作台会话的后续单张请求沿用会话标识，仅创建新的一轮。
-  state.form.n = 1
-  await state.submitTask()
-  const single = calls.filter(([name]) => name === "submit").at(-1)[1]
-  assert.equal(single.conversationId, submitted.conversationId)
-  assert.notEqual(single.roundId, submitted.roundId)
-  state.form.n = 100
-  await settle()
   assert.equal(JSON.parse(storage.get("image-workbench-preferences")).n, 100)
   state.applyDrawing({
     name: "sketch.png",
@@ -343,7 +329,6 @@ try {
     "original"
   ])
   await state.deleteConversation("original-conversation")
-  assert.equal(calls.filter(([name]) => name === "delete").at(-1)[1].conversationId, "original-conversation")
   assert.deepEqual(calls.filter(([name]) => name === "delete").at(-1)[1].ids, [
     "original"
   ])
