@@ -115,7 +115,27 @@ impl AppState {
                 "tools:image-delete" => crate::core::image_store::delete(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
                 "tools:image-cancel" => {
                     let ids = serde_json::from_value::<Vec<String>>(payload["ids"].clone())?;
-                    crate::core::image_store::cancel(&paths, &ids, payload["recoverable"] == true)
+                    let recoverable = payload["recoverable"] == true;
+                    let result = crate::core::image_store::cancel(&paths, &ids, recoverable)?;
+                    let message = if recoverable { "批量任务已暂停" } else { "任务已由用户取消" };
+                    for task_id in result["ids"].as_array().cloned().unwrap_or_default().into_iter().filter_map(|value| value.as_str().map(str::to_string)) {
+                        let _ = app.emit(
+                            "images:changed",
+                            json!({
+                                "taskId": task_id.clone(),
+                                "status": "interrupted",
+                                "imageCount": 0,
+                                "task": {
+                                    "id": task_id,
+                                    "status": "interrupted",
+                                    "imageCount": 0,
+                                    "error": { "message": message },
+                                    "canResume": recoverable
+                                }
+                            }),
+                        );
+                    }
+                    Ok(result)
                 }
                 "tools:image-task-export" => image_workbench::export_task_bundle(&paths, payload).await,
                 "tools:image-task-import" => image_workbench::import_task_bundle(&paths, payload).await,

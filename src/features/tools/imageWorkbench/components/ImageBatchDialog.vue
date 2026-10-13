@@ -485,7 +485,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue"
+import { computed, onBeforeUnmount, ref, watch } from "vue"
 import {
   ChevronDown,
   FileSpreadsheet,
@@ -504,6 +504,7 @@ import {
 import * as XLSX from "xlsx"
 import BaseModal from "@/components/BaseModal.vue"
 import { systemApi, toolboxApi } from "@/api"
+import { subscribe } from "@/api/request"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
@@ -536,6 +537,9 @@ const nameColumn = ref("")
 const promptColumn = ref("")
 const importedRows = ref([])
 const batchSelectMenuOpen = ref(false)
+const pendingTaskEvents = new Map()
+let waitingTaskIds = new Set()
+let resolveTaskWait = null
 
 const selectedRows = computed(() => rows.value.filter((row) => row.included))
 const allRowsSelected = computed({
@@ -726,6 +730,43 @@ function buildQueue() {
   }
 }
 
+function applyTaskEvent(event) {
+  const task = event?.task || event
+  const taskId = task?.id || event?.taskId
+  if (!taskId) return
+  const row = rows.value.find((item) => item.taskId === taskId)
+  if (!row) {
+    // 提交响应返回前可能先收到事件，暂存一次，绑定 taskId 后立即应用。
+    const conversationId = event?.conversationId || ""
+    if (
+      running.value &&
+      (!conversationId || conversationId === runningConversationId.value)
+    )
+      pendingTaskEvents.set(taskId, event)
+    return
+  }
+  const status = task.status || event.status
+  if (status) row.status = status
+  if (task.imageCount !== undefined || event.imageCount !== undefined)
+    row.imageCount = Number(task.imageCount ?? event.imageCount ?? 0)
+  row.error =
+    typeof task.error === "string"
+      ? task.error
+      : task.error?.message || event.error?.message || ""
+  pendingTaskEvents.delete(taskId)
+  if (waitingTaskIds.has(taskId) && ["completed", "partial", "failed", "interrupted"].includes(row.status)) {
+    waitingTaskIds.delete(taskId)
+    if (!waitingTaskIds.size && resolveTaskWait) {
+      const resolve = resolveTaskWait
+      resolveTaskWait = null
+      resolve()
+    }
+  }
+}
+
+// 后端任务完成后主动推送状态，批量页面不再按固定间隔扫描任务表。
+const unsubscribeImages = subscribe("images:changed", applyTaskEvent)
+
 async function submitQueue(queue) {
   queue.status = "processing"
   const roundId = crypto.randomUUID()
@@ -754,6 +795,8 @@ async function submitQueue(queue) {
         row.status = "failed"
         row.error = "批量任务记录创建失败"
       }
+      const event = pendingTaskEvents.get(row.taskId)
+      if (event) applyTaskEvent(event)
     })
     // 任务记录已经落库，通知工作台立即展示队列。
     if (queue.rows.some((row) => row.taskId)) emit("tasks-created")
@@ -782,47 +825,25 @@ async function submitQueue(queue) {
 }
 
 async function waitForTasks(taskRows) {
-  const ids = new Set(taskRows.map((row) => row.taskId))
-  while (ids.size) {
-    const seen = new Set()
-    let page = 1
-    let pageCount = 1
-    do {
-      const result = await toolboxApi.listImageTasks({
-        page,
-        pageSize: 100,
-        conversationId: runningConversationId.value,
-        groupByRound: false
-      })
-      for (const task of result.items || []) {
-        if (!ids.has(task.id)) continue
-        seen.add(task.id)
-        const row = taskRows.find((item) => item.taskId === task.id)
-        if (!row) continue
-        row.status = task.status
-        row.imageCount = task.imageCount || 0
-        row.error = task.error?.message || ""
-        if (
-          ["completed", "partial", "failed", "interrupted"].includes(
-            task.status
-          )
-        )
-          ids.delete(task.id)
-      }
-      pageCount = Math.max(1, Math.ceil((result.total || 0) / 100))
-      page += 1
-    } while (ids.size && page <= pageCount)
-
-    for (const row of taskRows) {
-      if (ids.has(row.taskId) && !seen.has(row.taskId)) {
-        row.status = "interrupted"
-        row.error = "任务已从队列移除"
-        ids.delete(row.taskId)
-      }
-    }
-    if (ids.size)
-      await new Promise((resolve) => window.setTimeout(resolve, 1200))
+  waitingTaskIds = new Set(
+    taskRows
+      .filter((row) => row.taskId)
+      .map((row) => row.taskId)
+  )
+  for (const row of taskRows) {
+    const event = pendingTaskEvents.get(row.taskId)
+    if (event) applyTaskEvent(event)
+    if (["completed", "partial", "failed", "interrupted"].includes(row.status))
+      waitingTaskIds.delete(row.taskId)
   }
+  if (!waitingTaskIds.size) return
+  await new Promise((resolve) => {
+    resolveTaskWait = resolve
+    if (!waitingTaskIds.size) {
+      resolveTaskWait = null
+      resolve()
+    }
+  })
 }
 
 async function downloadBatch(ids) {
@@ -841,6 +862,7 @@ async function startBatch() {
   if (!canStart.value || running.value) return
   running.value = true
   errorMessage.value = ""
+  pendingTaskEvents.clear()
   runningConversationId.value = props.conversationId || crypto.randomUUID()
   rows.value.forEach((row) => {
     row.status = row.included ? "pending" : "skipped"
@@ -894,6 +916,16 @@ watch(
   },
   { immediate: true }
 )
+
+onBeforeUnmount(() => {
+  unsubscribeImages()
+  if (resolveTaskWait) {
+    const resolve = resolveTaskWait
+    resolveTaskWait = null
+    waitingTaskIds = new Set()
+    resolve()
+  }
+})
 </script>
 
 <style scoped lang="less">

@@ -1800,6 +1800,7 @@ function createBatchConversation(id, total = 0, concurrency = 2) {
   batchExpectedTotal.value = Number(total) || 0
   batchConcurrency.value = Math.min(10, Math.max(1, Number(concurrency) || 2))
   tasks.value = []
+  taskIndexById = new Map()
   total.value = 0
   batchRunning.value = true
   batchPaused.value = false
@@ -1856,6 +1857,7 @@ async function loadHistory() {
   const items = await toolboxApi.imageHistory()
   if (disposed || version !== historyVersion) return
   historyIndex.value = items
+  historyIndexById = new Map(items.map((item, index) => [item.id, index]))
   for (const item of items) {
     const id = item.conversationId || "legacy"
     let conversation = conversations.value.find((item) => item.id === id)
@@ -1882,6 +1884,7 @@ function selectConversation(id) {
   activeConversationId.value = id
   batchExpectedTotal.value = 0
   tasks.value = []
+  taskIndexById = new Map()
   total.value = 0
   batchPaused.value = false
   historyOpen.value = false
@@ -2394,9 +2397,11 @@ const taskBackupBusy = ref(false)
 const deleting = ref(false)
 const submitError = ref("")
 const listError = ref("")
-let timer
 let requestVersion = 0
 let disposed = false
+let taskIndexById = new Map()
+let historyIndexById = new Map()
+let taskRefreshTimer = null
 const availableAccounts = computed(() =>
   accounts.value.filter(
     (account) => !account.disabled && !account.requiresReauth
@@ -2570,6 +2575,7 @@ async function loadTasks() {
     }
     if (version !== requestVersion || disposed) return
     tasks.value = result.items
+    taskIndexById = new Map(result.items.map((task, index) => [task.id, index]))
     if (
       isBatchMode &&
       (!batchRunning.value ||
@@ -2619,6 +2625,48 @@ async function refreshAll() {
   const results = await Promise.allSettled([loadAccounts(), loadTasks()])
   if (results[0].status === "rejected")
     listError.value = `账号读取失败：${results[0].reason}`
+}
+
+function scheduleTaskRefresh() {
+  if (taskRefreshTimer || disposed) return
+  // 只对当前列表中不存在的任务兜底刷新，并合并连续事件。
+  taskRefreshTimer = window.setTimeout(() => {
+    taskRefreshTimer = null
+    loadTasks()
+  }, 200)
+}
+
+function applyTaskEvent(event) {
+  const task = event?.task || {}
+  const taskId = task.id || event?.taskId
+  if (!taskId) return false
+  const taskIndex = taskIndexById.get(taskId)
+  let updated = false
+  if (taskIndex !== undefined && tasks.value[taskIndex]?.id === taskId) {
+    const current = tasks.value[taskIndex]
+    tasks.value[taskIndex] = {
+      ...current,
+      ...task,
+      status: task.status || event.status || current.status,
+      imageCount:
+        task.imageCount === undefined
+          ? event.imageCount ?? current.imageCount
+          : task.imageCount,
+      error: task.error === undefined ? current.error : task.error,
+      request: task.request || current.request
+    }
+    updated = true
+  }
+  const historyItemIndex = historyIndexById.get(taskId)
+  if (historyItemIndex !== undefined && historyIndex.value[historyItemIndex]) {
+    const historyItem = historyIndex.value[historyItemIndex]
+    historyIndex.value[historyItemIndex] = {
+      ...historyItem,
+      status: task.status || event.status || historyItem.status
+    }
+    updated = true
+  }
+  return updated
 }
 
 async function addImages(event, isMask) {
@@ -3018,7 +3066,13 @@ watch(page, () => {
   loadTasks()
 })
 const unsubscribe = subscribe("images:changed", (event) => {
-  if (autoRefresh.value || batchViewVisible.value) loadTasks()
+  const conversationId =
+    event?.conversationId || event?.task?.request?.conversationId || ""
+  const currentId = activeConversationId.value
+  if (!conversationId || !currentId || conversationId === currentId) {
+    if (!applyTaskEvent(event) && (autoRefresh.value || batchViewVisible.value))
+      scheduleTaskRefresh()
+  }
   consumeQuotaFromImageEvent(event)
 })
 const unsubscribeError = subscribe("images:storage-error", (event) => {
@@ -3026,19 +3080,11 @@ const unsubscribeError = subscribe("images:storage-error", (event) => {
 })
 onMounted(() => {
   refreshAll()
-  timer = window.setInterval(() => {
-    if (
-      (autoRefresh.value || batchViewVisible.value) &&
-      !refreshing.value &&
-      !document.hidden
-    )
-      loadTasks()
-  }, 3000)
 })
 onBeforeUnmount(() => {
   disposed = true
   requestVersion++
-  window.clearInterval(timer)
+  if (taskRefreshTimer) window.clearTimeout(taskRefreshTimer)
   if (copiedTimer) clearTimeout(copiedTimer)
   unsubscribe()
   unsubscribeError()

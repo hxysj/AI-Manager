@@ -582,6 +582,16 @@ pub fn cancel(paths: &AppPaths, ids: &[String], recoverable: bool) -> Result<Val
         return Err(ManagerError::System("请选取 1–10000 个任务".into()));
     }
     let connection = open(paths)?;
+    let ids_json = serde_json::to_string(ids)?;
+    let active_ids = {
+        let mut statement = connection.prepare(
+            "SELECT id FROM image_tasks WHERE id IN (SELECT value FROM json_each(?1)) AND status IN ('queued', 'processing')",
+        )?;
+        let rows = statement
+            .query_map([ids_json.as_str()], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows
+    };
     let error_message = if recoverable {
         "批量任务已暂停"
     } else {
@@ -590,12 +600,12 @@ pub fn cancel(paths: &AppPaths, ids: &[String], recoverable: bool) -> Result<Val
     let changed = connection.execute(
         "UPDATE image_tasks SET status = 'interrupted', payload_json = json_set(payload_json, '$.status', 'interrupted', '$.canResume', json(?2), '$.error.message', ?3) WHERE id IN (SELECT value FROM json_each(?1)) AND status IN ('queued', 'processing')",
         rusqlite::params![
-            serde_json::to_string(ids)?,
+            ids_json,
             if recoverable { "true" } else { "false" },
             error_message
         ],
     )?;
-    Ok(json!({ "cancelled": changed }))
+    Ok(json!({ "cancelled": changed, "ids": active_ids }))
 }
 
 pub fn clear_results(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {

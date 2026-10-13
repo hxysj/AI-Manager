@@ -569,7 +569,21 @@ fn spawn_task(
             }
         }
         task["status"] = json!("processing");
-        let _ = app.emit("images:changed", json!({"taskId": id}));
+        let _ = app.emit(
+            "images:changed",
+            json!({
+                "taskId": id,
+                "status": "processing",
+                "conversationId": task["request"]["conversationId"],
+                "roundId": task["request"]["roundId"],
+                "task": {
+                    "id": task["id"],
+                    "status": "processing",
+                    "imageCount": 0,
+                    "images": []
+                }
+            }),
+        );
         let mut request: ImageRequest = match serde_json::from_value(task["request"].clone()) { Ok(value) => value, Err(_) => return };
         let result = async {
             let inputs = image_store::inputs(&paths, &id)?;
@@ -579,7 +593,9 @@ fn spawn_task(
             let (client, auth) = image_account_session(&paths, &cli_targets, &request.account_id, &request.generation_mode).await?;
             let mut context = WebContext::new();
             context.task = Some((paths.clone(), id.clone()));
-            if task["recovery"]["conversationId"].is_string() {
+            if request.generation_mode == "web"
+                && task["recovery"]["conversationId"].is_string()
+            {
                 let recovery = &task["recovery"];
                 context.device_id = recovery["deviceId"].as_str().unwrap_or(&context.device_id).to_string();
                 context.session_id = recovery["sessionId"].as_str().unwrap_or(&context.session_id).to_string();
@@ -642,9 +658,22 @@ fn spawn_task(
             "images:changed",
             json!({
                 "taskId": task["id"],
+                "status": task["status"],
+                "conversationId": task["request"]["conversationId"],
+                "roundId": task["request"]["roundId"],
                 "accountId": request.account_id,
                 "generationMode": request.generation_mode,
-                "imageCount": task["imageCount"].as_u64().unwrap_or(0)
+                "imageCount": task["imageCount"].as_u64().unwrap_or(0),
+                "task": {
+                    "id": task["id"],
+                    "status": task["status"],
+                    "imageCount": task["imageCount"],
+                    "images": task["images"],
+                    "error": task["error"],
+                    "finishedAt": task["finishedAt"],
+                    "canResume": task["canResume"],
+                    "thumbnail": images.first().map(|image| image.thumbnail.clone()).unwrap_or_default()
+                }
             }),
         );
     });
