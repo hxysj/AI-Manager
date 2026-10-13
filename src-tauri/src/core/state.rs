@@ -103,37 +103,29 @@ impl AppState {
                 .await.map_err(|error| ManagerError::System(error.to_string()))?;
         }
         // 图片读取与导出只需路径快照，不占用整个应用的状态锁。
-        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-cancel" | "tools:image-export" | "tools:image-task-export" | "tools:image-task-import") {
+        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-wait" | "tools:image-previews" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-cancel" | "tools:image-export" | "tools:image-task-export" | "tools:image-task-import") {
             let paths = self.manager.lock().await.paths.clone();
             let payload = payload.unwrap_or_else(|| json!({}));
             return match channel {
                 "tools:image-history" => crate::core::image_store::history(&paths),
                 "tools:image-list" => crate::core::image_store::list(&paths, &payload),
+                "tools:image-wait" => image_workbench::wait_tasks(&paths, payload).await,
+                "tools:image-previews" => crate::core::image_store::previews(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
                 "tools:image-detail" => crate::core::image_store::detail(&paths, payload["id"].as_str().unwrap_or("")),
                 "tools:image-inputs" => crate::core::image_store::inputs(&paths, payload["id"].as_str().unwrap_or("")),
                 "tools:image-clear-results" => crate::core::image_store::clear_results(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
-                "tools:image-delete" => crate::core::image_store::delete(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
+                "tools:image-delete" => {
+                    let ids = serde_json::from_value::<Vec<String>>(payload["ids"].clone())?;
+                    let result = crate::core::image_store::delete(&paths, &ids)?;
+                    image_workbench::notify_deleted_tasks(&ids);
+                    Ok(result)
+                }
                 "tools:image-cancel" => {
                     let ids = serde_json::from_value::<Vec<String>>(payload["ids"].clone())?;
                     let recoverable = payload["recoverable"] == true;
                     let result = crate::core::image_store::cancel(&paths, &ids, recoverable)?;
-                    let message = if recoverable { "批量任务已暂停" } else { "任务已由用户取消" };
-                    for task_id in result["ids"].as_array().cloned().unwrap_or_default().into_iter().filter_map(|value| value.as_str().map(str::to_string)) {
-                        let _ = app.emit(
-                            "images:changed",
-                            json!({
-                                "taskId": task_id.clone(),
-                                "status": "interrupted",
-                                "imageCount": 0,
-                                "task": {
-                                    "id": task_id,
-                                    "status": "interrupted",
-                                    "imageCount": 0,
-                                    "error": { "message": message },
-                                    "canResume": recoverable
-                                }
-                            }),
-                        );
+                    for task in result["items"].as_array().unwrap() {
+                        image_workbench::publish_task(&app, task);
                     }
                     Ok(result)
                 }

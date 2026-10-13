@@ -103,8 +103,8 @@
             "
           >
             <el-image
-              v-if="task.thumbnail && task.imageCount"
-              :src="task.thumbnail"
+              v-if="previews[task.id] && task.imageCount"
+              :src="previews[task.id]"
               fit="cover"
               lazy
               class="result-card-img"
@@ -198,8 +198,8 @@
             "
           >
             <el-image
-              v-if="task.thumbnail && task.imageCount"
-              :src="task.thumbnail"
+              v-if="previews[task.id] && task.imageCount"
+              :src="previews[task.id]"
               fit="cover"
               lazy
             />
@@ -340,6 +340,8 @@ import {
 } from "lucide-vue-next"
 import { ElImage } from "element-plus"
 import "element-plus/es/components/image/style/css"
+import { toolboxApi } from "@/api"
+import { createMessage } from "@/utils/message"
 
 const props = defineProps({
   tasks: { type: Array, default: () => [] },
@@ -361,6 +363,7 @@ const emit = defineEmits([
   "export-batch"
 ])
 const resultScroll = ref(null)
+const previews = ref({})
 
 const exportableTaskIds = computed(() => {
   const ids = props.tasks
@@ -413,6 +416,38 @@ const paginatedResultTasks = computed(() => {
   const start = (page.value - 1) * pageSize.value
   return filteredResultTasks.value.slice(start, start + pageSize.value)
 })
+
+// 只持有当前结果页的缩略图，任务增量与整批元数据不携带图片。
+watch(
+  () =>
+    paginatedResultTasks.value
+      .filter((task) => task.imageCount > 0)
+      .map((task) => `${task.id}:${task.revision || 0}`)
+      .join("|"),
+  async (_, __, onCleanup) => {
+    let stale = false
+    onCleanup(() => {
+      stale = true
+    })
+    const ids = paginatedResultTasks.value
+      .filter((task) => task.imageCount > 0)
+      .map((task) => task.id)
+    previews.value = Object.fromEntries(
+      ids.map((id) => [id, previews.value[id] || ""])
+    )
+    if (!ids.length) return
+    try {
+      const items = await toolboxApi.imageTaskPreviews({ ids })
+      if (!stale)
+        previews.value = Object.fromEntries(
+          items.map((item) => [item.id, item.thumbnail])
+        )
+    } catch (error) {
+      if (!stale) createMessage.error(`缩略图读取失败：${error}`)
+    }
+  },
+  { immediate: true }
+)
 
 function scrollToTop() {
   nextTick(() => resultScroll.value?.scrollTo({ top: 0 }))

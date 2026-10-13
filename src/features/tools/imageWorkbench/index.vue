@@ -1415,7 +1415,7 @@ import ImageDrawingDialog from "./components/ImageDrawingDialog.vue"
 import ImageSettingsModal from "./components/ImageSettingsModal.vue"
 import TaskDetailModal from "./components/TaskDetailModal.vue"
 import { systemApi, toolboxApi } from "@/api"
-import { subscribe } from "@/api/request"
+import { subscribeReady } from "@/api/request"
 import { formatDateTime } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 import { readLocal, writeLocal } from "./utils/storage"
@@ -1854,10 +1854,22 @@ function conversationStats(id) {
 let historyVersion = 0
 async function loadHistory() {
   const version = ++historyVersion
-  const items = await toolboxApi.imageHistory()
+  const events = new Map()
+  historyLoadEvents = events
+  let items
+  try {
+    await listenersReady
+    if (imagesSubscriptionError) throw imagesSubscriptionError
+    items = await toolboxApi.imageHistory()
+  } catch (error) {
+    if (historyLoadEvents === events) historyLoadEvents = null
+    throw error
+  }
   if (disposed || version !== historyVersion) return
   historyIndex.value = items
   historyIndexById = new Map(items.map((item, index) => [item.id, index]))
+  for (const event of events.values()) applyTaskEvent(event)
+  if (historyLoadEvents === events) historyLoadEvents = null
   for (const item of items) {
     const id = item.conversationId || "legacy"
     let conversation = conversations.value.find((item) => item.id === id)
@@ -2376,7 +2388,12 @@ const status = ref("")
 const autoRefresh = ref(true)
 const selecting = ref(false)
 const selected = ref([])
-const taskBackupStatus = new Set(["queued", "processing", "failed", "interrupted"])
+const taskBackupStatus = new Set([
+  "queued",
+  "processing",
+  "failed",
+  "interrupted"
+])
 function isTaskBackupCandidate(task) {
   if (taskBackupStatus.has(task?.status) || task?.canResume) return true
   return (
@@ -2402,6 +2419,9 @@ let disposed = false
 let taskIndexById = new Map()
 let historyIndexById = new Map()
 let taskRefreshTimer = null
+let taskLoadEvents = null
+let historyLoadEvents = null
+let taskRefreshPending = false
 const availableAccounts = computed(() =>
   accounts.value.filter(
     (account) => !account.disabled && !account.requiresReauth
@@ -2549,25 +2569,35 @@ function consumeQuotaFromImageEvent(event) {
 async function loadTasks() {
   // 状态筛选和轮询可能重叠，只应用最后一次请求，避免旧列表覆盖新筛选。
   const version = ++requestVersion
+  // 加载期间缓存增量，快照返回后重放，避免旧快照覆盖完成通知。
+  const events = new Map()
+  taskLoadEvents = events
   refreshing.value = true
   try {
+    await listenersReady
+    if (imagesSubscriptionError) throw imagesSubscriptionError
+    if (disposed || version !== requestVersion) return
     const isBatchMode = currentConversationIsBatch.value
     const query = {
       page: isBatchMode ? 1 : page.value,
       status: isBatchMode ? "" : status.value,
       conversationId: activeConversationId.value,
       pageSize: isBatchMode ? 100 : pageSize.value,
-      groupByRound: !isBatchMode
+      groupByRound: !isBatchMode,
+      includeThumbnails: !isBatchMode
     }
     let result = await toolboxApi.listImageTasks(query)
     if (isBatchMode && result.total > result.items.length) {
       // 批量面板显示会话内的每一条任务，不能只取后端单页的 100 条。
       const pageCount = Math.ceil(result.total / query.pageSize)
-      const pages = await Promise.all(
-        Array.from({ length: pageCount - 1 }, (_, index) =>
-          toolboxApi.listImageTasks({ ...query, page: index + 2 })
+      const pages = []
+      // 顺序读取轻量任务页，限制同时返回的数据量。
+      for (let nextPage = 2; nextPage <= pageCount; nextPage++) {
+        if (version !== requestVersion || disposed) return
+        pages.push(
+          await toolboxApi.listImageTasks({ ...query, page: nextPage })
         )
-      )
+      }
       result = {
         ...result,
         items: [result.items, ...pages.map((page) => page.items)].flat()
@@ -2576,6 +2606,7 @@ async function loadTasks() {
     if (version !== requestVersion || disposed) return
     tasks.value = result.items
     taskIndexById = new Map(result.items.map((task, index) => [task.id, index]))
+    for (const event of events.values()) applyTaskEvent(event)
     if (
       isBatchMode &&
       (!batchRunning.value ||
@@ -2613,9 +2644,14 @@ async function loadTasks() {
   } catch (error) {
     if (version === requestVersion) listError.value = String(error)
   } finally {
+    if (taskLoadEvents === events) taskLoadEvents = null
     if (version === requestVersion) {
       refreshing.value = false
       loadingTasks.value = false
+      if (taskRefreshPending) {
+        taskRefreshPending = false
+        scheduleTaskRefresh()
+      }
     }
   }
 }
@@ -2629,10 +2665,14 @@ async function refreshAll() {
 
 function scheduleTaskRefresh() {
   if (taskRefreshTimer || disposed) return
+  if (taskLoadEvents) {
+    taskRefreshPending = true
+    return
+  }
   // 只对当前列表中不存在的任务兜底刷新，并合并连续事件。
   taskRefreshTimer = window.setTimeout(() => {
     taskRefreshTimer = null
-    loadTasks()
+    if (autoRefresh.value || batchViewVisible.value) loadTasks()
   }, 200)
 }
 
@@ -2644,27 +2684,32 @@ function applyTaskEvent(event) {
   let updated = false
   if (taskIndex !== undefined && tasks.value[taskIndex]?.id === taskId) {
     const current = tasks.value[taskIndex]
-    tasks.value[taskIndex] = {
-      ...current,
-      ...task,
-      status: task.status || event.status || current.status,
-      imageCount:
-        task.imageCount === undefined
-          ? event.imageCount ?? current.imageCount
-          : task.imageCount,
-      error: task.error === undefined ? current.error : task.error,
-      request: task.request || current.request
-    }
+    if (Number(task.revision || 0) >= Number(current.revision || 0))
+      tasks.value[taskIndex] = {
+        ...current,
+        ...task,
+        status: task.status || event.status || current.status,
+        imageCount:
+          task.imageCount === undefined
+            ? (event.imageCount ?? current.imageCount)
+            : task.imageCount,
+        error: task.error === undefined ? current.error : task.error,
+        request: task.request || current.request,
+        thumbnail: currentConversationIsBatch.value
+          ? ""
+          : (task.thumbnail ?? current.thumbnail)
+      }
     updated = true
   }
   const historyItemIndex = historyIndexById.get(taskId)
   if (historyItemIndex !== undefined && historyIndex.value[historyItemIndex]) {
     const historyItem = historyIndex.value[historyItemIndex]
-    historyIndex.value[historyItemIndex] = {
-      ...historyItem,
-      status: task.status || event.status || historyItem.status
-    }
-    updated = true
+    if (Number(task.revision || 0) >= Number(historyItem.revision || 0))
+      historyIndex.value[historyItemIndex] = {
+        ...historyItem,
+        status: task.status || event.status || historyItem.status,
+        revision: Number(task.revision || 0)
+      }
   }
   return updated
 }
@@ -2896,7 +2941,9 @@ async function collectTaskBackupIds() {
   }
   let result = await toolboxApi.listImageTasks(query)
   let items = result.items || []
-  const pageCount = Math.ceil(Number(result.total || items.length) / query.pageSize)
+  const pageCount = Math.ceil(
+    Number(result.total || items.length) / query.pageSize
+  )
   if (pageCount > 1) {
     const pages = await Promise.all(
       Array.from({ length: pageCount - 1 }, (_, index) =>
@@ -3065,29 +3112,85 @@ watch(page, () => {
   selected.value = []
   loadTasks()
 })
-const unsubscribe = subscribe("images:changed", (event) => {
+// 重新开启自动更新时补读一次关闭期间的状态。
+watch(autoRefresh, (enabled) => {
+  if (enabled) loadTasks()
+  else if (!batchViewVisible.value) {
+    taskRefreshPending = false
+    if (taskRefreshTimer) window.clearTimeout(taskRefreshTimer)
+    taskRefreshTimer = null
+  }
+})
+let unsubscribe = null
+let imagesSubscriptionError = null
+const imagesReady = subscribeReady("images:changed", (event) => {
+  if (disposed) return
   const conversationId =
     event?.conversationId || event?.task?.request?.conversationId || ""
   const currentId = activeConversationId.value
-  if (!conversationId || !currentId || conversationId === currentId) {
-    if (!applyTaskEvent(event) && (autoRefresh.value || batchViewVisible.value))
+  if (autoRefresh.value || batchViewVisible.value) {
+    const taskId = event?.task?.id || event?.taskId
+    const previous = historyIndex.value[historyIndexById.get(taskId)]
+    if (Number(event?.task?.revision || 0) < Number(previous?.revision || 0))
+      return
+    for (const buffer of [taskLoadEvents, historyLoadEvents]) {
+      if (
+        buffer &&
+        Number(event?.task?.revision || 0) >=
+          Number(buffer.get(taskId)?.task?.revision || 0)
+      )
+        buffer.set(taskId, event)
+    }
+    const updated = applyTaskEvent(event)
+    // 历史状态跨会话更新，当前列表只在新增任务或筛选成员变化时补查。
+    const nextStatus = event?.task?.status || event?.status
+    const affectsFilter =
+      !currentConversationIsBatch.value &&
+      status.value &&
+      previous?.status !== nextStatus &&
+      [previous?.status, nextStatus].includes(status.value)
+    if (
+      (!conversationId || !currentId || conversationId === currentId) &&
+      ((!updated && !previous) || affectsFilter)
+    )
       scheduleTaskRefresh()
   }
   consumeQuotaFromImageEvent(event)
 })
-const unsubscribeError = subscribe("images:storage-error", (event) => {
-  listError.value = `任务结果保存失败：${event.message}`
+  .then((unlisten) => {
+    if (disposed) unlisten()
+    else unsubscribe = unlisten
+  })
+  .catch((error) => {
+    imagesSubscriptionError = error
+    if (!disposed) listError.value = `任务监听注册失败：${error}`
+  })
+let unsubscribeError = null
+const storageErrorsReady = subscribeReady("images:storage-error", (event) => {
+  if (!disposed) listError.value = `任务结果保存失败：${event.message}`
 })
+  .then((unlisten) => {
+    if (disposed) unlisten()
+    else unsubscribeError = unlisten
+  })
+  .catch((error) => {
+    imagesSubscriptionError = error
+    if (!disposed) listError.value = `任务监听注册失败：${error}`
+  })
+const listenersReady = Promise.all([imagesReady, storageErrorsReady])
 onMounted(() => {
   refreshAll()
 })
 onBeforeUnmount(() => {
   disposed = true
   requestVersion++
+  historyVersion++
+  taskLoadEvents = null
+  historyLoadEvents = null
   if (taskRefreshTimer) window.clearTimeout(taskRefreshTimer)
   if (copiedTimer) clearTimeout(copiedTimer)
-  unsubscribe()
-  unsubscribeError()
+  unsubscribe?.()
+  unsubscribeError?.()
 })
 
 defineExpose({

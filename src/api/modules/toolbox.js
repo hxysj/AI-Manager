@@ -16,6 +16,9 @@ export const toolboxApi = {
   imageQuota: (payload) => request("tools:image-quota", payload),
   submitImageTask: (payload) => request("tools:image-submit", payload),
   submitImageBatch: (payload) => request("tools:image-submit-batch", payload),
+  // 批次等待在后端挂起，任务结束后一次返回，不由前端定时查询。
+  waitImageTasks: (payload) => request("tools:image-wait", payload),
+  imageTaskPreviews: (payload) => request("tools:image-previews", payload),
   imageHistory: () => request("tools:image-history"),
   resumeImageTask: (payload) => request("tools:image-resume", payload),
   cancelImageTasks: (payload) => request("tools:image-cancel", payload),

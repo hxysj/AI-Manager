@@ -342,12 +342,18 @@ pub fn create_batch(paths: &AppPaths, tasks: &[Value], images: &[String], mask: 
     Ok(())
 }
 
-pub fn start(paths: &AppPaths, id: &str) -> Result<bool, ManagerError> {
-    Ok(open(paths)?.execute("UPDATE image_tasks SET status = 'processing', payload_json = json_set(payload_json, '$.status', 'processing') WHERE id = ?1 AND status = 'queued'", [id])? == 1)
+pub fn start(paths: &AppPaths, task: &Value) -> Result<Option<Value>, ManagerError> {
+    let raw: Option<String> = open(paths)?.query_row(
+        "UPDATE image_tasks SET status = 'processing', payload_json = json_set(payload_json, '$.status', 'processing', '$.revision', COALESCE(json_extract(payload_json, '$.revision'), 0) + 1)
+         WHERE id = ?1 AND status = 'queued' AND COALESCE(json_extract(payload_json, '$.revision'), 0) = ?2 RETURNING payload_json",
+        params![task["id"].as_str(), task["revision"].as_u64().unwrap_or(0)],
+        |row| row.get(0),
+    ).optional()?;
+    raw.map(|raw| serde_json::from_str(&raw).map_err(ManagerError::from)).transpose()
 }
 
-pub fn checkpoint(paths: &AppPaths, id: &str, recovery: &Value) -> Result<(), ManagerError> {
-    open(paths)?.execute("UPDATE image_tasks SET payload_json = json_set(payload_json, '$.recovery', json(?2), '$.canResume', json('true')) WHERE id = ?1 AND status = 'processing'", params![id, recovery.to_string()])?;
+pub fn checkpoint(paths: &AppPaths, id: &str, revision: u64, recovery: &Value) -> Result<(), ManagerError> {
+    open(paths)?.execute("UPDATE image_tasks SET payload_json = json_set(payload_json, '$.recovery', json(?2), '$.canResume', json('true')) WHERE id = ?1 AND status = 'processing' AND COALESCE(json_extract(payload_json, '$.revision'), 0) = ?3", params![id, recovery.to_string(), revision])?;
     Ok(())
 }
 
@@ -386,6 +392,7 @@ pub fn requeue_with_concurrency(
     task["status"] = json!("queued");
     task["error"] = Value::Null;
     task["finishedAt"] = Value::Null;
+    task["revision"] = json!(task["revision"].as_u64().unwrap_or(0) + 1);
     transaction.execute("UPDATE image_tasks SET status = 'queued', payload_json = ?2 WHERE id = ?1", params![id, task.to_string()])?;
     transaction.commit()?;
     Ok(task)
@@ -394,22 +401,28 @@ pub fn requeue_with_concurrency(
 // 历史索引只返回小型元数据；缩略图和原图仍按当前会话按需读取。
 pub fn history(paths: &AppPaths) -> Result<Value, ManagerError> {
     let connection = open(paths)?;
-    let mut statement = connection.prepare("SELECT id, created_at, status, json_extract(payload_json, '$.request.conversationId'), json_extract(payload_json, '$.request.roundId'), json_extract(payload_json, '$.request.prompt'), json_extract(payload_json, '$.request.batchName') FROM image_tasks ORDER BY created_at")?;
+    let mut statement = connection.prepare("SELECT id, created_at, status, json_extract(payload_json, '$.request.conversationId'), json_extract(payload_json, '$.request.roundId'), json_extract(payload_json, '$.request.prompt'), json_extract(payload_json, '$.request.batchName'), COALESCE(json_extract(payload_json, '$.revision'), 0) FROM image_tasks ORDER BY created_at")?;
     let rows = statement.query_map([], |row| Ok(json!({
         "id": row.get::<_, String>(0)?, "createdAt": row.get::<_, i64>(1)?, "status": row.get::<_, String>(2)?,
-        "conversationId": row.get::<_, Option<String>>(3)?, "roundId": row.get::<_, Option<String>>(4)?, "prompt": row.get::<_, Option<String>>(5)?, "batchName": row.get::<_, Option<String>>(6)?
+        "conversationId": row.get::<_, Option<String>>(3)?, "roundId": row.get::<_, Option<String>>(4)?, "prompt": row.get::<_, Option<String>>(5)?, "batchName": row.get::<_, Option<String>>(6)?, "revision": row.get::<_, u64>(7)?
     })))?.collect::<Result<Vec<_>, _>>()?;
     Ok(json!(rows))
 }
 
-pub fn finish(paths: &AppPaths, task: &Value, images: &[StoredImage]) -> Result<(), ManagerError> {
+pub fn finish(paths: &AppPaths, task: &Value, images: &[StoredImage]) -> Result<Option<Value>, ManagerError> {
     let mut connection = open(paths)?;
-    let transaction = connection.transaction()?;
+    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let mut task = task.clone();
-    let saved: String = transaction.query_row("SELECT payload_json FROM image_tasks WHERE id = ?1", [task["id"].as_str()], |row| row.get(0))?;
+    let saved: Option<String> = transaction.query_row("SELECT payload_json FROM image_tasks WHERE id = ?1", [task["id"].as_str()], |row| row.get(0)).optional()?;
+    let Some(saved) = saved else { return Ok(None) };
     let saved: Value = serde_json::from_str(&saved)?;
+    // 取消或恢复已经改变版本，旧请求既不能写入图片，也不能发布完成状态。
+    if saved["status"] != "processing" || saved["revision"] != task["revision"] {
+        return Ok(None);
+    }
     task["recovery"] = saved["recovery"].clone();
     task["canResume"] = json!(task["status"] == "failed" && task["recovery"]["conversationId"].is_string());
+    task["revision"] = json!(saved["revision"].as_u64().unwrap_or(0) + 1);
     for (index, image) in images.iter().enumerate() {
         transaction.execute(
             "INSERT INTO image_outputs(task_id, position, format, bytes)
@@ -428,7 +441,30 @@ pub fn finish(paths: &AppPaths, task: &Value, images: &[StoredImage]) -> Result<
         ));
     }
     transaction.commit()?;
-    Ok(())
+    task["thumbnail"] = json!(images.first().map(|image| image.thumbnail.as_str()).unwrap_or(""));
+    Ok(Some(task))
+}
+
+// 等待批次只读取小型状态快照，不重复传输任务详情和图片。
+pub fn task_states(paths: &AppPaths, ids: &[String]) -> Result<Vec<Value>, ManagerError> {
+    let connection = open(paths)?;
+    let mut statement = connection.prepare(
+        "SELECT id, status, COALESCE(json_extract(payload_json, '$.revision'), 0), COALESCE(json_extract(payload_json, '$.imageCount'), 0), json_extract(payload_json, '$.error')
+         FROM image_tasks WHERE id IN (SELECT value FROM json_each(?1))",
+    )?;
+    let rows = statement.query_map([serde_json::to_string(ids)?], |row| {
+        let error = row.get::<_, Option<String>>(4)?.map(|raw| serde_json::from_str::<Value>(&raw).unwrap_or(Value::String(raw)));
+        Ok(json!({ "id": row.get::<_, String>(0)?, "status": row.get::<_, String>(1)?, "revision": row.get::<_, u64>(2)?, "imageCount": row.get::<_, u64>(3)?, "error": error }))
+    })?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn previews(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
+    if ids.is_empty() || ids.len() > 100 { return Err(ManagerError::System("请选取 1–100 个任务".into())); }
+    let connection = open(paths)?;
+    let mut statement = connection.prepare("SELECT id, thumbnail FROM image_tasks WHERE id IN (SELECT value FROM json_each(?1))")?;
+    let rows = statement.query_map([serde_json::to_string(ids)?], |row| Ok(json!({ "id": row.get::<_, String>(0)?, "thumbnail": row.get::<_, String>(1)? })))?.collect::<Result<Vec<_>, _>>()?;
+    Ok(json!(rows))
 }
 
 pub fn list(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
@@ -438,6 +474,7 @@ pub fn list(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
     let conversation_id = payload["conversationId"].as_str().unwrap_or("");
     let page_size = payload["pageSize"].as_u64().unwrap_or(12).clamp(1, 100);
     let grouped = payload["groupByRound"] == true;
+    let thumbnail = if payload["includeThumbnails"] == false { "''" } else { "thumbnail" };
     let filter = "(?1 = '' OR status = ?1) AND (?2 = '' OR COALESCE(NULLIF(json_extract(payload_json, '$.request.conversationId'), ''), 'legacy') = ?2)";
     let round_key = "COALESCE(NULLIF(json_extract(payload_json, '$.request.roundId'), ''), id)";
     let count = if grouped { format!("COUNT(DISTINCT {round_key})") } else { "COUNT(*)".to_string() };
@@ -449,10 +486,10 @@ pub fn list(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
     let query = if grouped {
         format!("WITH filtered AS (SELECT *, {round_key} AS round_key FROM image_tasks WHERE {filter}),
             page_rounds AS (SELECT round_key FROM filtered GROUP BY round_key ORDER BY MAX(created_at) DESC, round_key DESC LIMIT ?3 OFFSET ?4)
-            SELECT payload_json, thumbnail FROM filtered WHERE round_key IN (SELECT round_key FROM page_rounds)
+            SELECT payload_json, {thumbnail} FROM filtered WHERE round_key IN (SELECT round_key FROM page_rounds)
             ORDER BY created_at DESC, json_extract(payload_json, '$.batchIndex') ASC, id DESC")
     } else {
-        format!("SELECT payload_json, thumbnail FROM image_tasks WHERE {filter} ORDER BY created_at DESC, id DESC LIMIT ?3 OFFSET ?4")
+        format!("SELECT payload_json, {thumbnail} FROM image_tasks WHERE {filter} ORDER BY created_at DESC, id DESC LIMIT ?3 OFFSET ?4")
     };
     let mut statement = connection.prepare(&query)?;
     let rows = statement
@@ -581,31 +618,29 @@ pub fn cancel(paths: &AppPaths, ids: &[String], recoverable: bool) -> Result<Val
     if ids.is_empty() || ids.len() > 10000 {
         return Err(ManagerError::System("请选取 1–10000 个任务".into()));
     }
-    let connection = open(paths)?;
+    let mut connection = open(paths)?;
+    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let ids_json = serde_json::to_string(ids)?;
-    let active_ids = {
-        let mut statement = connection.prepare(
-            "SELECT id FROM image_tasks WHERE id IN (SELECT value FROM json_each(?1)) AND status IN ('queued', 'processing')",
-        )?;
-        let rows = statement
-            .query_map([ids_json.as_str()], |row| row.get::<_, String>(0))?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows
-    };
     let error_message = if recoverable {
         "批量任务已暂停"
     } else {
         "任务已由用户取消"
     };
-    let changed = connection.execute(
-        "UPDATE image_tasks SET status = 'interrupted', payload_json = json_set(payload_json, '$.status', 'interrupted', '$.canResume', json(?2), '$.error.message', ?3) WHERE id IN (SELECT value FROM json_each(?1)) AND status IN ('queued', 'processing')",
-        rusqlite::params![
+    let items = {
+        let mut statement = transaction.prepare(
+            "UPDATE image_tasks SET status = 'interrupted', payload_json = json_set(payload_json, '$.status', 'interrupted', '$.canResume', json(?2), '$.error.message', ?3, '$.finishedAt', ?4, '$.revision', COALESCE(json_extract(payload_json, '$.revision'), 0) + 1)
+             WHERE id IN (SELECT value FROM json_each(?1)) AND status IN ('queued', 'processing') RETURNING payload_json",
+        )?;
+        let raw = statement.query_map(params![
             ids_json,
             if recoverable { "true" } else { "false" },
-            error_message
-        ],
-    )?;
-    Ok(json!({ "cancelled": changed, "ids": active_ids }))
+            error_message,
+            chrono::Utc::now().timestamp_millis()
+        ], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+        raw.iter().map(|raw| serde_json::from_str::<Value>(raw)).collect::<Result<Vec<_>, _>>()?
+    };
+    transaction.commit()?;
+    Ok(json!({ "cancelled": items.len(), "ids": items.iter().map(|task| &task["id"]).collect::<Vec<_>>(), "items": items }))
 }
 
 pub fn clear_results(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
@@ -631,6 +666,59 @@ mod tests {
     use super::*;
     use crate::core::paths::resolve_app_paths;
     use std::path::Path;
+
+    #[test]
+    fn cancelled_and_old_attempts_cannot_commit_or_overwrite_recovery() {
+        let root = std::env::temp_dir().join(format!("image-cancel-test-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&root);
+        let queued = json!({ "id": "task", "createdAt": 1, "status": "queued", "request": { "generationMode": "web" }, "imageCount": 0 });
+        create_batch(&paths, std::slice::from_ref(&queued), &[], "").unwrap();
+        let mut old = start(&paths, &queued).unwrap().unwrap();
+        checkpoint(&paths, "task", old["revision"].as_u64().unwrap(), &json!({"conversationId": "old"})).unwrap();
+        let cancelled = cancel(&paths, &["task".into()], true).unwrap();
+        assert_eq!(cancelled["cancelled"], 1);
+        assert_eq!(cancelled["items"][0]["status"], "interrupted");
+        assert_eq!(cancel(&paths, &["task".into()], true).unwrap()["ids"], json!([]));
+        let resumed = requeue(&paths, "task").unwrap();
+        assert!(start(&paths, &queued).unwrap().is_none());
+        let mut current = start(&paths, &resumed).unwrap().unwrap();
+        checkpoint(&paths, "task", current["revision"].as_u64().unwrap(), &json!({"conversationId": "new"})).unwrap();
+        checkpoint(&paths, "task", old["revision"].as_u64().unwrap(), &json!({"conversationId": "stale"})).unwrap();
+        old["status"] = json!("completed");
+        let image = StoredImage { bytes: vec![1], format: "png".into(), width: 1, height: 1, revised_prompt: String::new(), thumbnail: "preview".into() };
+        assert!(finish(&paths, &old, std::slice::from_ref(&image)).unwrap().is_none());
+        assert!(read_images(&paths, &["task".into()]).unwrap().is_empty());
+        current["status"] = json!("failed");
+        let saved = finish(&paths, &current, &[]).unwrap().unwrap();
+        assert_eq!(saved["canResume"], true);
+        assert_eq!(saved["recovery"]["conversationId"], "new");
+        assert_eq!(saved["revision"], current["revision"].as_u64().unwrap() + 1);
+        assert_eq!(cancel(&paths, &["task".into()], false).unwrap()["cancelled"], 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_output_write_rolls_back_and_previews_are_read_on_demand() {
+        let root = std::env::temp_dir().join(format!("image-save-test-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&root);
+        let queued = json!({ "id": "task", "createdAt": 1, "status": "queued", "imageCount": 0 });
+        create_batch(&paths, std::slice::from_ref(&queued), &[], "").unwrap();
+        let mut task = start(&paths, &queued).unwrap().unwrap();
+        task["status"] = json!("completed");
+        task["imageCount"] = json!(1);
+        let image = StoredImage { bytes: vec![1], format: "png".into(), width: 1, height: 1, revised_prompt: String::new(), thumbnail: "preview".into() };
+        let connection = open(&paths).unwrap();
+        connection.execute_batch("CREATE TRIGGER fail_image_save BEFORE INSERT ON image_outputs BEGIN SELECT RAISE(ABORT, 'save failed'); END;").unwrap();
+        assert!(finish(&paths, &task, std::slice::from_ref(&image)).is_err());
+        assert_eq!(task_states(&paths, &["task".into()]).unwrap()[0]["status"], "processing");
+        assert!(read_images(&paths, &["task".into()]).unwrap().is_empty());
+        connection.execute_batch("DROP TRIGGER fail_image_save").unwrap();
+        drop(connection);
+        finish(&paths, &task, &[image]).unwrap().unwrap();
+        assert_eq!(list(&paths, &json!({ "includeThumbnails": false })).unwrap()["items"][0]["thumbnail"], "");
+        assert_eq!(previews(&paths, &["task".into()]).unwrap()[0]["thumbnail"], "preview");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn task_bundle_round_trip_preserves_inputs_outputs_and_resume_state() {

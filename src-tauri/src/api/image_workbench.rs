@@ -545,6 +545,101 @@ fn task_batch_key(task: &Value) -> Option<String> {
         .then(|| format!("{conversation_id}:{round_id}"))
 }
 
+struct TaskUpdates {
+    sender: tokio::sync::broadcast::Sender<Value>,
+    storage_errors: Mutex<HashMap<String, Value>>,
+}
+
+fn task_updates() -> &'static TaskUpdates {
+    static UPDATES: std::sync::OnceLock<TaskUpdates> = std::sync::OnceLock::new();
+    UPDATES.get_or_init(|| TaskUpdates {
+        sender: tokio::sync::broadcast::channel(256).0,
+        storage_errors: Mutex::new(HashMap::new()),
+    })
+}
+
+pub fn notify_deleted_tasks(ids: &[String]) {
+    for id in ids {
+        task_updates().storage_errors.lock().unwrap().remove(id);
+        let _ = task_updates().sender.send(json!({ "id": id, "deleted": true }));
+    }
+}
+
+pub fn publish_task(app: &tauri::AppHandle, task: &Value) {
+    let terminal = !matches!(task["status"].as_str(), Some("queued" | "processing"));
+    let mut event_task = task.clone();
+    if task["batchKey"].is_string() {
+        event_task.as_object_mut().unwrap().remove("thumbnail");
+    }
+    let _ = app.emit("images:changed", json!({
+        "taskId": task["id"], "status": task["status"],
+        "conversationId": task["request"]["conversationId"], "roundId": task["request"]["roundId"],
+        "accountId": task["request"]["accountId"], "generationMode": task["request"]["generationMode"],
+        "imageCount": if matches!(task["status"].as_str(), Some("completed" | "partial")) { task["imageCount"].as_u64().unwrap_or(0) } else { 0 },
+        "task": event_task,
+    }));
+    if terminal {
+        let _ = task_updates().sender.send(json!({
+            "id": task["id"], "status": task["status"], "revision": task["revision"],
+            "imageCount": task["imageCount"], "error": task["error"],
+        }));
+    }
+}
+
+fn publish_storage_error(app: &tauri::AppHandle, task: &Value, error: &ManagerError) {
+    let update = json!({ "id": task["id"], "revision": task["revision"].as_u64().unwrap_or(0), "storageError": error.to_string() });
+    task_updates().storage_errors.lock().unwrap().insert(task["id"].as_str().unwrap().to_string(), update.clone());
+    let _ = task_updates().sender.send(update);
+    let _ = app.emit("images:storage-error", json!({ "taskId": task["id"], "message": error.to_string() }));
+}
+
+// 一个批次只保留一个等待请求；注册后先读快照，之后等待后端通知，避免前端轮询和事件丢失挂起。
+pub async fn wait_tasks(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+    let ids = serde_json::from_value::<Vec<String>>(payload["ids"].clone())?;
+    if ids.is_empty() || ids.len() > 10000 { return Err(failure("请选取 1–10000 个任务")); }
+    let mut receiver = task_updates().sender.subscribe();
+    let mut pending: HashSet<String> = ids.iter().cloned().collect();
+    let mut results = HashMap::new();
+    loop {
+        let paths = paths.clone();
+        let pending_ids = pending.iter().cloned().collect::<Vec<_>>();
+        let states = tauri::async_runtime::spawn_blocking(move || image_store::task_states(&paths, &pending_ids))
+            .await.map_err(|error| failure(&error.to_string()))??;
+        if states.len() != pending.len() { return Err(failure("等待的图片任务已被删除")); }
+        for state in states {
+            let id = state["id"].as_str().unwrap().to_string();
+            if matches!(state["status"].as_str(), Some("queued" | "processing")) {
+                if let Some(error) = task_updates().storage_errors.lock().unwrap().get(&id) {
+                    if error["revision"] == state["revision"] {
+                        return Err(failure(error["storageError"].as_str().unwrap()));
+                    }
+                }
+            } else {
+                pending.remove(&id);
+            }
+            results.insert(id, state);
+        }
+        while !pending.is_empty() {
+            let update = match receiver.recv().await {
+                Ok(update) => update,
+                // 通知积压时补一次小型状态快照，不启动定时查询。
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => break,
+                Err(error) => return Err(failure(&error.to_string())),
+            };
+            let id = update["id"].as_str().unwrap();
+            if !pending.contains(id) { continue; }
+            if update["deleted"] == true { return Err(failure("等待的图片任务已被删除")); }
+            if update["revision"].as_u64().unwrap_or(0) < results[id]["revision"].as_u64().unwrap_or(0) { continue; }
+            if let Some(error) = update["storageError"].as_str() { return Err(failure(error)); }
+            pending.remove(id);
+            results.insert(id.to_string(), update);
+        }
+        if pending.is_empty() {
+            return Ok(json!({ "items": ids.iter().map(|id| &results[id]).collect::<Vec<_>>() }));
+        }
+    }
+}
+
 fn spawn_task(
     app: &tauri::AppHandle,
     paths: &AppPaths,
@@ -552,47 +647,32 @@ fn spawn_task(
     task: Value,
     slots: Arc<tokio::sync::Semaphore>,
 ) {
+    task_updates().storage_errors.lock().unwrap().remove(task["id"].as_str().unwrap());
     // 每个批次共享自己的并发信号量，普通任务使用默认并发限制。
     let app = app.clone();
     let paths = paths.clone();
     let cli_targets = cli_targets.clone();
     tauri::async_runtime::spawn(async move {
         let _permit = slots.acquire().await.unwrap();
-        let mut task = task;
         let id = task["id"].as_str().unwrap().to_string();
-        match image_store::start(&paths, &id) {
-            Ok(true) => {},
-            Ok(false) => return,
+        let mut task = match image_store::start(&paths, &task) {
+            Ok(Some(task)) => task,
+            Ok(None) => return,
             Err(error) => {
-                let _ = app.emit("images:storage-error", json!({"taskId": id, "message": error.to_string()}));
+                publish_storage_error(&app, &task, &error);
                 return;
             }
-        }
-        task["status"] = json!("processing");
-        let _ = app.emit(
-            "images:changed",
-            json!({
-                "taskId": id,
-                "status": "processing",
-                "conversationId": task["request"]["conversationId"],
-                "roundId": task["request"]["roundId"],
-                "task": {
-                    "id": task["id"],
-                    "status": "processing",
-                    "imageCount": 0,
-                    "images": []
-                }
-            }),
-        );
-        let mut request: ImageRequest = match serde_json::from_value(task["request"].clone()) { Ok(value) => value, Err(_) => return };
+        };
+        publish_task(&app, &task);
         let result = async {
+            let mut request: ImageRequest = serde_json::from_value(task["request"].clone())?;
             let inputs = image_store::inputs(&paths, &id)?;
             request.images = serde_json::from_value(inputs["images"].clone())?;
             request.mask = inputs["mask"].as_str().unwrap_or("").to_string();
             // 排队时不持有访问凭证；轮到执行再刷新账号会话。
             let (client, auth) = image_account_session(&paths, &cli_targets, &request.account_id, &request.generation_mode).await?;
             let mut context = WebContext::new();
-            context.task = Some((paths.clone(), id.clone()));
+            context.task = Some((paths.clone(), id.clone(), task["revision"].as_u64().unwrap_or(0)));
             if request.generation_mode == "web"
                 && task["recovery"]["conversationId"].is_string()
             {
@@ -630,13 +710,13 @@ fn spawn_task(
                 })).collect::<Vec<_>>());
                 task["status"] = json!(if result.images.is_empty() {
                     "failed"
-                } else if !task["error"].is_null() || result.images.len() < request.n as usize {
+                } else if !task["error"].is_null() || result.images.len() < task["request"]["n"].as_u64().unwrap_or(1) as usize {
                     "partial"
                 } else {
                     "completed"
                 });
                 if task["status"] == "partial" && task["error"].is_null() {
-                    task["error"] = json!({ "message": format!("请求 {} 张，实际返回 {} 张", request.n, result.images.len()), "source": "upstream" });
+                    task["error"] = json!({ "message": format!("请求 {} 张，实际返回 {} 张", task["request"]["n"], result.images.len()), "source": "upstream" });
                 }
                 result.images
             }
@@ -647,35 +727,14 @@ fn spawn_task(
             }
         };
         task["finishedAt"] = json!(chrono::Utc::now().timestamp_millis());
-        if let Err(error) = image_store::finish(&paths, &task, &images) {
-            // 保存失败不能声称生成成功；重启仍会把未写回任务标成中断。
-            let _ = app.emit(
-                "images:storage-error",
-                json!({ "taskId": task["id"], "message": error.to_string() }),
-            );
+        match image_store::finish(&paths, &task, &images) {
+            Ok(Some(saved)) => publish_task(&app, &saved),
+            Ok(None) => {},
+            Err(error) => {
+                // 保存失败不能声称生成成功；重启仍会把未写回任务标成中断。
+                publish_storage_error(&app, &task, &error);
+            }
         }
-        let _ = app.emit(
-            "images:changed",
-            json!({
-                "taskId": task["id"],
-                "status": task["status"],
-                "conversationId": task["request"]["conversationId"],
-                "roundId": task["request"]["roundId"],
-                "accountId": request.account_id,
-                "generationMode": request.generation_mode,
-                "imageCount": task["imageCount"].as_u64().unwrap_or(0),
-                "task": {
-                    "id": task["id"],
-                    "status": task["status"],
-                    "imageCount": task["imageCount"],
-                    "images": task["images"],
-                    "error": task["error"],
-                    "finishedAt": task["finishedAt"],
-                    "canResume": task["canResume"],
-                    "thumbnail": images.first().map(|image| image.thumbnail.clone()).unwrap_or_default()
-                }
-            }),
-        );
     });
 }
 
@@ -694,7 +753,7 @@ struct WebRequirements {
 }
 
 struct WebContext {
-    task: Option<(AppPaths, String)>,
+    task: Option<(AppPaths, String, u64)>,
     base_url: String,
     device_id: String,
     session_id: String,
@@ -1128,10 +1187,11 @@ fn save_web_recovery(
     ids: &WebAssetIds,
     input_ids: &HashSet<String>,
 ) -> Result<(), ManagerError> {
-    if let Some((paths, task_id)) = &context.task {
+    if let Some((paths, task_id, revision)) = &context.task {
         image_store::checkpoint(
             paths,
             task_id,
+            *revision,
             &json!({
                 "conversationId": ids.conversation_id,
                 "inputIds": input_ids,
@@ -3520,6 +3580,45 @@ mod tests {
     }
 
     #[test]
+    fn image_wait_uses_snapshot_notifications_and_reports_storage_errors() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("image-wait-test-{}", Uuid::new_v4()));
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let first_id = Uuid::new_v4().to_string();
+            let second_id = Uuid::new_v4().to_string();
+            let tasks = [&first_id, &second_id].iter().map(|id| json!({ "id": id, "createdAt": 1, "status": "queued", "imageCount": 0 })).collect::<Vec<_>>();
+            image_store::create_batch(&paths, &tasks, &[], "").unwrap();
+            let mut first = image_store::start(&paths, &tasks[0]).unwrap().unwrap();
+            first["status"] = json!("completed");
+            image_store::finish(&paths, &first, &[]).unwrap().unwrap();
+            // 第一个任务在等待注册前已经完成，第二个在快照加载期间完成且通知积压。
+            let mut wait = Box::pin(wait_tasks(&paths, json!({ "ids": [&first_id, &second_id] })));
+            assert!(futures_util::poll!(&mut wait).is_pending());
+            let mut second = image_store::start(&paths, &tasks[1]).unwrap().unwrap();
+            second["status"] = json!("failed");
+            let saved = image_store::finish(&paths, &second, &[]).unwrap().unwrap();
+            for _ in 0..300 { let _ = task_updates().sender.send(json!({ "id": "unrelated", "revision": 0 })); }
+            let _ = task_updates().sender.send(saved);
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), wait).await.unwrap().unwrap();
+            assert_eq!(result["items"][0]["status"], "completed");
+            assert_eq!(result["items"][1]["status"], "failed");
+            let resumed = image_store::requeue(&paths, &second_id).unwrap();
+            let mut wait = Box::pin(wait_tasks(&paths, json!({ "ids": [&second_id] })));
+            assert!(futures_util::poll!(&mut wait).is_pending());
+            let cancellation = image_store::cancel(&paths, std::slice::from_ref(&second_id), true).unwrap();
+            let _ = task_updates().sender.send(cancellation["items"][0].clone());
+            assert_eq!(tokio::time::timeout(std::time::Duration::from_secs(5), wait).await.unwrap().unwrap()["items"][0]["status"], "interrupted");
+            let queued = image_store::requeue(&paths, &second_id).unwrap();
+            assert!(queued["revision"].as_u64() > resumed["revision"].as_u64());
+            // 写库失败即使早于等待请求也应直接返回错误。
+            task_updates().storage_errors.lock().unwrap().insert(second_id.clone(), json!({ "revision": queued["revision"], "storageError": "磁盘写入失败" }));
+            assert!(wait_tasks(&paths, json!({ "ids": [&second_id] })).await.unwrap_err().to_string().contains("磁盘写入失败"));
+            task_updates().storage_errors.lock().unwrap().remove(&second_id);
+            std::fs::remove_dir_all(root).unwrap();
+        });
+    }
+
+    #[test]
     fn image_store_persists_results_and_handles_restart() {
         let root =
             std::env::temp_dir().join(format!("image-workbench-test-{}", uuid::Uuid::new_v4()));
@@ -3542,10 +3641,9 @@ mod tests {
         );
         let task2 = json!({ "id": "two", "inputId": "two", "createdAt": 2, "status": "queued", "request": { "generationMode": "codex" } });
         image_store::create_batch(&paths, &[task2], &[], "").unwrap();
-        assert!(image_store::start(&paths, "one").unwrap());
-        assert!(!image_store::start(&paths, "one").unwrap());
+        let mut task = image_store::start(&paths, &task).unwrap().unwrap();
+        assert!(image_store::start(&paths, &task).unwrap().is_none());
         assert!(image_store::delete(&paths, &["one".into()]).is_err());
-        let mut task = task;
         task["status"] = json!("completed");
         image_store::finish(&paths, &task, &[store_image(&png(), &json!({})).unwrap()]).unwrap();
         let detail = image_store::detail(&paths, "one").unwrap();
@@ -3589,18 +3687,18 @@ mod tests {
         assert_eq!(image_store::list(&paths, &json!({"conversationId":"other"})).unwrap()["total"], 0);
         // 删除队头不影响剩余任务的共享参考图，已取消任务不会进入执行状态。
         image_store::delete(&paths, &["task-0".into()]).unwrap();
-        assert!(!image_store::start(&paths, "task-0").unwrap());
+        assert!(image_store::start(&paths, &tasks[0]).unwrap().is_none());
         assert_eq!(image_store::inputs(&paths, "task-99").unwrap()["images"], json!(["input"]));
         assert_eq!(image_store::inputs(&paths, "task-99").unwrap()["mask"], "mask");
-        assert!(image_store::start(&paths, "task-1").unwrap());
-        image_store::checkpoint(&paths, "task-1", &json!({"conversationId":"upstream", "inputIds": ["file-input"], "fileIds":[], "sedimentIds":[]})).unwrap();
+        let running = image_store::start(&paths, &tasks[1]).unwrap().unwrap();
+        image_store::checkpoint(&paths, "task-1", running["revision"].as_u64().unwrap(), &json!({"conversationId":"upstream", "inputIds": ["file-input"], "fileIds":[], "sedimentIds":[]})).unwrap();
         let failed_task = json!({
             "id": "failed-web", "inputId": "failed-web", "createdAt": 100, "status": "queued",
             "request": {"conversationId": "failed-conversation", "roundId": "failed-round", "generationMode": "web", "responseFormat": "url"}
         });
-        image_store::create_batch(&paths, &[failed_task], &[], "").unwrap();
-        assert!(image_store::start(&paths, "failed-web").unwrap());
-        image_store::checkpoint(&paths, "failed-web", &json!({"conversationId":"failed-upstream", "inputIds": [], "fileIds":[], "sedimentIds":[]})).unwrap();
+        image_store::create_batch(&paths, std::slice::from_ref(&failed_task), &[], "").unwrap();
+        let failed_running = image_store::start(&paths, &failed_task).unwrap().unwrap();
+        image_store::checkpoint(&paths, "failed-web", failed_running["revision"].as_u64().unwrap(), &json!({"conversationId":"failed-upstream", "inputIds": [], "fileIds":[], "sedimentIds":[]})).unwrap();
         image_store::initialize(&paths).unwrap();
         assert_eq!(image_store::detail(&paths, "task-99").unwrap()["status"], "interrupted");
         let connection = crate::core::database::open(&paths).unwrap();
@@ -3629,9 +3727,8 @@ mod tests {
         assert_eq!(recovered_queued["status"], "queued");
         assert_eq!(recovered_queued["request"]["generationMode"], "codex");
         assert!(recovered_queued["recovery"].is_null());
-        assert!(image_store::start(&paths, "task-1").unwrap());
+        let mut finished = image_store::start(&paths, &recovered).unwrap().unwrap();
         assert!(image_store::clear_results(&paths, &["task-1".into()]).is_err());
-        let mut finished = recovered;
         finished["status"] = json!("completed");
         finished["imageCount"] = json!(1);
         image_store::finish(&paths, &finished, &[store_image(&png(), &json!({})).unwrap()]).unwrap();

@@ -504,7 +504,7 @@ import {
 import * as XLSX from "xlsx"
 import BaseModal from "@/components/BaseModal.vue"
 import { systemApi, toolboxApi } from "@/api"
-import { subscribe } from "@/api/request"
+import { subscribeReady } from "@/api/request"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
@@ -538,8 +538,14 @@ const promptColumn = ref("")
 const importedRows = ref([])
 const batchSelectMenuOpen = ref(false)
 const pendingTaskEvents = new Map()
-let waitingTaskIds = new Set()
-let resolveTaskWait = null
+const taskRowsById = new Map()
+let disposed = false
+let unsubscribeImages = null
+let subscriptionError = null
+let resolveDisposal = null
+const disposal = new Promise((resolve) => {
+  resolveDisposal = resolve
+})
 
 const selectedRows = computed(() => rows.value.filter((row) => row.included))
 const allRowsSelected = computed({
@@ -622,6 +628,8 @@ function removeRow(id) {
 }
 
 function clearRows() {
+  taskRowsById.clear()
+  pendingTaskEvents.clear()
   rows.value = []
   batchQueue.value = null
   fileName.value = ""
@@ -699,6 +707,8 @@ async function importWorkbook(event) {
 }
 
 function applyImportedRows() {
+  taskRowsById.clear()
+  pendingTaskEvents.clear()
   if (!running.value) batchQueue.value = null
   const nameIndex = Number(nameColumn.value)
   const promptIndex = Number(promptColumn.value)
@@ -731,10 +741,11 @@ function buildQueue() {
 }
 
 function applyTaskEvent(event) {
+  if (disposed) return
   const task = event?.task || event
   const taskId = task?.id || event?.taskId
   if (!taskId) return
-  const row = rows.value.find((item) => item.taskId === taskId)
+  const row = taskRowsById.get(taskId)
   if (!row) {
     // 提交响应返回前可能先收到事件，暂存一次，绑定 taskId 后立即应用。
     const conversationId = event?.conversationId || ""
@@ -742,9 +753,16 @@ function applyTaskEvent(event) {
       running.value &&
       (!conversationId || conversationId === runningConversationId.value)
     )
-      pendingTaskEvents.set(taskId, event)
+      if (
+        Number(task.revision || 0) >=
+        Number(pendingTaskEvents.get(taskId)?.task?.revision || 0)
+      )
+        pendingTaskEvents.set(taskId, event)
     return
   }
+  // 取消、恢复和完成通知可能交错，只应用当前任务的最新版本。
+  if (Number(task.revision || 0) < Number(row.revision || 0)) return
+  row.revision = Number(task.revision || 0)
   const status = task.status || event.status
   if (status) row.status = status
   if (task.imageCount !== undefined || event.imageCount !== undefined)
@@ -754,18 +772,17 @@ function applyTaskEvent(event) {
       ? task.error
       : task.error?.message || event.error?.message || ""
   pendingTaskEvents.delete(taskId)
-  if (waitingTaskIds.has(taskId) && ["completed", "partial", "failed", "interrupted"].includes(row.status)) {
-    waitingTaskIds.delete(taskId)
-    if (!waitingTaskIds.size && resolveTaskWait) {
-      const resolve = resolveTaskWait
-      resolveTaskWait = null
-      resolve()
-    }
-  }
 }
 
 // 后端任务完成后主动推送状态，批量页面不再按固定间隔扫描任务表。
-const unsubscribeImages = subscribe("images:changed", applyTaskEvent)
+const imagesReady = subscribeReady("images:changed", applyTaskEvent)
+  .then((unlisten) => {
+    if (disposed) unlisten()
+    else unsubscribeImages = unlisten
+  })
+  .catch((error) => {
+    subscriptionError = error
+  })
 
 async function submitQueue(queue) {
   queue.status = "processing"
@@ -776,6 +793,10 @@ async function submitQueue(queue) {
     row.error = ""
   })
   try {
+    // 监听注册完成后才提交，快任务也能更新进度。
+    await imagesReady
+    if (disposed) return
+    if (subscriptionError) throw subscriptionError
     const result = await toolboxApi.submitImageBatch({
       ...props.settings,
       model: selectedModel.value,
@@ -789,18 +810,24 @@ async function submitQueue(queue) {
         prompt: row.prompt
       }))
     })
+    if (disposed) return
     queue.rows.forEach((row, index) => {
       row.taskId = result.items?.[index]?.id || ""
+      const event = pendingTaskEvents.get(row.taskId)
+      if (row.taskId) {
+        taskRowsById.set(row.taskId, row)
+        applyTaskEvent({ task: result.items[index] })
+      }
       if (!row.taskId) {
         row.status = "failed"
         row.error = "批量任务记录创建失败"
       }
-      const event = pendingTaskEvents.get(row.taskId)
       if (event) applyTaskEvent(event)
     })
     // 任务记录已经落库，通知工作台立即展示队列。
     if (queue.rows.some((row) => row.taskId)) emit("tasks-created")
   } catch (error) {
+    if (disposed) return
     queue.rows.forEach((row) => {
       row.status = "failed"
       row.error = String(error)
@@ -808,6 +835,7 @@ async function submitQueue(queue) {
   }
   const pending = queue.rows.filter((row) => row.taskId)
   if (pending.length) await waitForTasks(pending)
+  if (disposed) return
   const successIds = queue.rows
     .filter(
       (row) =>
@@ -825,36 +853,25 @@ async function submitQueue(queue) {
 }
 
 async function waitForTasks(taskRows) {
-  waitingTaskIds = new Set(
-    taskRows
-      .filter((row) => row.taskId)
-      .map((row) => row.taskId)
-  )
-  for (const row of taskRows) {
-    const event = pendingTaskEvents.get(row.taskId)
-    if (event) applyTaskEvent(event)
-    if (["completed", "partial", "failed", "interrupted"].includes(row.status))
-      waitingTaskIds.delete(row.taskId)
-  }
-  if (!waitingTaskIds.size) return
-  await new Promise((resolve) => {
-    resolveTaskWait = resolve
-    if (!waitingTaskIds.size) {
-      resolveTaskWait = null
-      resolve()
-    }
-  })
+  // 后端返回最终快照，完成判断不依赖前端是否收齐了事件。
+  const result = await Promise.race([
+    toolboxApi.waitImageTasks({ ids: taskRows.map((row) => row.taskId) }),
+    disposal
+  ])
+  if (disposed) return
+  for (const task of result.items) applyTaskEvent({ task })
 }
 
 async function downloadBatch(ids) {
+  if (disposed) return
   const targetPath = await systemApi.saveFile({
     title: "保存批量图片",
     defaultPath: "image-batch.zip",
     filters: [{ name: "ZIP 压缩包", extensions: ["zip"] }]
   })
-  if (targetPath) {
+  if (targetPath && !disposed) {
     await toolboxApi.exportImageTasks({ ids, targetPath })
-    createMessage.success("批量图片已导出")
+    if (!disposed) createMessage.success("批量图片已导出")
   }
 }
 
@@ -863,11 +880,13 @@ async function startBatch() {
   running.value = true
   errorMessage.value = ""
   pendingTaskEvents.clear()
+  taskRowsById.clear()
   runningConversationId.value = props.conversationId || crypto.randomUUID()
   rows.value.forEach((row) => {
     row.status = row.included ? "pending" : "skipped"
     row.taskId = ""
     row.error = ""
+    row.revision = 0
   })
   buildQueue()
   // 记录落库前先传递预期数量，避免队列头短暂显示 0/0。
@@ -881,6 +900,7 @@ async function startBatch() {
   emit("close")
   try {
     await submitQueue(batchQueue.value)
+    if (disposed) return
     const failed = rows.value.filter((row) =>
       ["failed", "interrupted"].includes(row.status)
     ).length
@@ -890,7 +910,15 @@ async function startBatch() {
     })
     if (!failed) emit("close")
   } catch (error) {
-    errorMessage.value = String(error)
+    if (!disposed) {
+      errorMessage.value = String(error)
+      emit("finished", {
+        total: rows.value.length,
+        failed: rows.value.filter(
+          (row) => !["completed", "partial", "skipped"].includes(row.status)
+        ).length
+      })
+    }
   } finally {
     running.value = false
   }
@@ -918,13 +946,11 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  unsubscribeImages()
-  if (resolveTaskWait) {
-    const resolve = resolveTaskWait
-    resolveTaskWait = null
-    waitingTaskIds = new Set()
-    resolve()
-  }
+  disposed = true
+  unsubscribeImages?.()
+  resolveDisposal()
+  pendingTaskEvents.clear()
+  taskRowsById.clear()
 })
 </script>
 
