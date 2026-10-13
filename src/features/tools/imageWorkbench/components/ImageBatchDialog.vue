@@ -512,7 +512,8 @@ const props = defineProps({
   conversationId: { type: String, default: "" },
   settings: { type: Object, default: () => ({}) },
   models: { type: Array, default: () => [] },
-  sizePresets: { type: Array, default: () => [] }
+  sizePresets: { type: Array, default: () => [] },
+  exportImages: { type: Function, default: null }
 })
 const emit = defineEmits([
   "close",
@@ -864,6 +865,10 @@ async function waitForTasks(taskRows) {
 
 async function downloadBatch(ids) {
   if (disposed) return
+  if (props.exportImages) {
+    await props.exportImages(ids)
+    return
+  }
   const targetPath = await systemApi.saveFile({
     title: "保存批量图片",
     defaultPath: "image-batch.zip",

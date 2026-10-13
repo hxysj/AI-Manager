@@ -2,7 +2,7 @@ use crate::core::{database, error::ManagerError, paths::AppPaths};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::{collections::HashSet, fs::File, io::Write};
 
 pub struct StoredImage {
     pub bytes: Vec<u8>,
@@ -589,6 +589,134 @@ pub fn read_images(
     Ok(output)
 }
 
+pub fn export_image_count(paths: &AppPaths, ids: &[String]) -> Result<usize, ManagerError> {
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(ManagerError::System("请选取 1–10000 个任务".into()));
+    }
+    let connection = open(paths)?;
+    let count = connection.query_row(
+        "SELECT COUNT(*) FROM image_outputs WHERE task_id IN (SELECT value FROM json_each(?1))",
+        [serde_json::to_string(ids)?],
+        |row| row.get::<_, usize>(0),
+    )?;
+    Ok(count)
+}
+
+fn sanitize_export_stem(value: &str) -> String {
+    let mut stem = value
+        .chars()
+        .map(|character| {
+            if character.is_control() || "<>:\"/\\|?*".contains(character) {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect::<String>();
+    stem = stem.trim().trim_matches('.').chars().take(80).collect();
+    if stem.is_empty() {
+        "image".into()
+    } else {
+        stem
+    }
+}
+
+// 合集导出逐张写入 ZIP，避免把 100 张以上图片一次性读进内存。
+pub fn write_export_zip_with_progress<F>(
+    paths: &AppPaths,
+    ids: &[String],
+    target: &str,
+    mut progress: F,
+) -> Result<usize, ManagerError>
+where
+    F: FnMut(usize),
+{
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(ManagerError::System("请选取 1–10000 个任务".into()));
+    }
+    let connection = open(paths)?;
+    let mut statement = connection.prepare(
+        "SELECT position, format, bytes FROM image_outputs WHERE task_id = ?1 ORDER BY position",
+    )?;
+    let mut task_statement = connection.prepare(
+        "SELECT json_extract(payload_json, '$.request.batchName'), json_extract(payload_json, '$.batchIndex')
+         FROM image_tasks WHERE id = ?1",
+    )?;
+    let file = File::create(target)?;
+    let mut archive = zip::ZipWriter::new(file);
+    // PNG、JPEG、WebP 已经压缩过，直接存储可避免再次 Deflate 消耗 CPU。
+    let file_options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored);
+    let mut entry_names = HashSet::new();
+    let mut count = 0;
+    for id in ids {
+        let (batch_name, batch_index): (Option<String>, Option<i64>) = task_statement
+            .query_row([id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?
+            .unwrap_or((None, None));
+        let stem = sanitize_export_stem(batch_name.as_deref().unwrap_or("image"));
+        let id_prefix = id.chars().take(8).collect::<String>();
+        let rows = statement.query_map([id], |row| {
+            Ok((
+                row.get::<_, usize>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Vec<u8>>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (index, format, bytes) = row?;
+            let mut file_name = if batch_name.as_deref().is_some_and(|name| !name.trim().is_empty()) {
+                if let Some(batch_index) = batch_index {
+                    format!(
+                        "{stem}-{:03}-image-{:03}.{}",
+                        batch_index.saturating_add(1),
+                        index + 1,
+                        format
+                    )
+                } else {
+                    format!("{stem}-{id_prefix}-{:03}.{}", index + 1, format)
+                }
+            } else {
+                format!("{stem}-{id_prefix}-{:03}.{}", index + 1, format)
+            };
+            if !entry_names.insert(file_name.clone()) {
+                let (base, extension) = file_name
+                    .rsplit_once('.')
+                    .unwrap_or((file_name.as_str(), "png"));
+                let mut suffix = format!("{base}-{id_prefix}.{extension}");
+                let mut duplicate = 2;
+                while !entry_names.insert(suffix.clone()) {
+                    suffix = format!("{base}-{id_prefix}-{duplicate}.{extension}");
+                    duplicate += 1;
+                }
+                file_name = suffix;
+            }
+            archive
+                .start_file(file_name, file_options)
+                .map_err(|_| ManagerError::System("创建图片压缩包失败".into()))?;
+            archive.write_all(&bytes)?;
+            count += 1;
+            progress(count);
+        }
+    }
+    if count == 0 {
+        let file = archive
+            .finish()
+            .map_err(|_| ManagerError::System("完成图片压缩包失败".into()))?;
+        drop(file);
+        let _ = std::fs::remove_file(target);
+        return Err(ManagerError::System("所选任务没有可导出的图片".into()));
+    }
+    archive
+        .finish()
+        .map_err(|_| ManagerError::System("完成图片压缩包失败".into()))?;
+    Ok(count)
+}
+
+pub fn write_export_zip(paths: &AppPaths, ids: &[String], target: &str) -> Result<usize, ManagerError> {
+    write_export_zip_with_progress(paths, ids, target, |_| {})
+}
+
 pub fn delete(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
     if ids.is_empty() || ids.len() > 10000 {
         return Err(ManagerError::System("请选取 1–10000 个任务".into()));
@@ -717,6 +845,99 @@ mod tests {
         finish(&paths, &task, &[image]).unwrap().unwrap();
         assert_eq!(list(&paths, &json!({ "includeThumbnails": false })).unwrap()["items"][0]["thumbnail"], "");
         assert_eq!(previews(&paths, &["task".into()]).unwrap()[0]["thumbnail"], "preview");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn export_zip_supports_more_than_one_hundred_completed_tasks() {
+        let root = std::env::temp_dir().join(format!("image-export-test-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&root);
+        let tasks = (0..101)
+            .map(|index| {
+                json!({
+                    "id": format!("task-{index}"),
+                    "createdAt": index,
+                    "status": "completed",
+                    "inputId": format!("input-{index}"),
+                    "request": { "n": 1 },
+                    "imageCount": 1
+                })
+            })
+            .collect::<Vec<_>>();
+        let ids = tasks
+            .iter()
+            .map(|task| task["id"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>();
+        create_batch(&paths, &tasks, &[], "").unwrap();
+        let connection = open(&paths).unwrap();
+        for id in &ids {
+            connection
+                .execute(
+                    "INSERT INTO image_outputs(task_id, position, format, bytes) VALUES (?1, 0, 'png', ?2)",
+                    params![id, vec![1u8, 2, 3]],
+                )
+                .unwrap();
+        }
+        drop(connection);
+        let target = root.join("images.zip");
+        assert_eq!(write_export_zip(&paths, &ids, target.to_str().unwrap()).unwrap(), 101);
+        let archive = zip::ZipArchive::new(File::open(&target).unwrap()).unwrap();
+        assert_eq!(archive.len(), 101);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn export_zip_reports_progress_and_names_batch_images() {
+        let root = std::env::temp_dir().join(format!("image-export-progress-test-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&root);
+        let task = json!({
+            "id": "named-task",
+            "createdAt": 1,
+            "status": "completed",
+            "request": { "batchName": "春季/海报", "n": 2 },
+            "batchIndex": 2,
+            "imageCount": 2
+        });
+        create_batch(&paths, std::slice::from_ref(&task), &[], "").unwrap();
+        let connection = open(&paths).unwrap();
+        for position in 0..2 {
+            connection
+                .execute(
+                    "INSERT INTO image_outputs(task_id, position, format, bytes) VALUES (?1, ?2, 'png', ?3)",
+                    params!["named-task", position, vec![position as u8]],
+                )
+                .unwrap();
+        }
+        drop(connection);
+        assert_eq!(export_image_count(&paths, &["named-task".into()]).unwrap(), 2);
+        let target = root.join("images.zip");
+        let mut progress = Vec::new();
+        assert_eq!(
+            write_export_zip_with_progress(
+                &paths,
+                &["named-task".into()],
+                target.to_str().unwrap(),
+                |completed| progress.push(completed),
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(progress, vec![1, 2]);
+        let mut archive = zip::ZipArchive::new(File::open(&target).unwrap()).unwrap();
+        assert_eq!(
+            archive
+                .by_name("春季_海报-003-image-001.png")
+                .unwrap()
+                .compression(),
+            zip::CompressionMethod::Stored
+        );
+        assert_eq!(
+            archive
+                .by_name("春季_海报-003-image-002.png")
+                .unwrap()
+                .compression(),
+            zip::CompressionMethod::Stored
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 

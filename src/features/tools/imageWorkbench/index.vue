@@ -5,6 +5,19 @@
       class="workbench-top-loader"
       title="正在加载任务..."
     />
+    <div v-if="exportProgress.active" class="export-progress-card">
+      <div class="export-progress-head">
+        <span>正在导出图片合集</span>
+        <span>{{ exportProgress.completed }} / {{ exportProgress.total }}</span>
+      </div>
+      <div class="export-progress-track">
+        <div
+          class="export-progress-bar"
+          :style="{ width: `${exportProgressPercent}%` }"
+        />
+      </div>
+      <span class="export-progress-meta">{{ exportProgressPercent }}%</span>
+    </div>
     <header class="conversation-toolbar">
       <div class="conversation-toolbar-left">
         <button
@@ -1345,6 +1358,7 @@
       :settings="batchSettings"
       :models="displayModels"
       :size-presets="sizePresets"
+      :export-images="exportTasks"
       @close="closeBatchDialog"
       @session-created="createBatchConversation"
       @tasks-created="handleBatchTasksCreated"
@@ -2410,6 +2424,13 @@ const refreshing = ref(false)
 const submitting = ref(false)
 const uploading = ref(false)
 const exporting = ref(false)
+const exportProgress = ref({
+  active: false,
+  completed: 0,
+  total: 0,
+  phase: ""
+})
+const activeExportId = ref("")
 const taskBackupBusy = ref(false)
 const deleting = ref(false)
 const submitError = ref("")
@@ -2439,6 +2460,15 @@ const hasSettingsError = computed(
     form.n > 100 ||
     (form.background === "transparent" && form.outputFormat === "jpeg")
 )
+const exportProgressPercent = computed(() => {
+  if (!exportProgress.value.total) return 0
+  return Math.min(
+    100,
+    Math.round(
+      (exportProgress.value.completed / exportProgress.value.total) * 100
+    )
+  )
+})
 function resetToDefaultSettings() {
   form.quality = "auto"
   width.value = 1024
@@ -3053,6 +3083,8 @@ async function pullTaskBundleFromKoofr() {
 }
 
 async function exportTasks(ids) {
+  const exportIds = [...ids]
+  if (!exportIds.length) return
   exporting.value = true
   try {
     const targetPath = await systemApi.saveFile({
@@ -3061,15 +3093,33 @@ async function exportTasks(ids) {
       filters: [{ name: "ZIP 压缩包", extensions: ["zip"] }]
     })
     if (!targetPath) return
+    // 先绑定本次导出 ID，再调用后端，避免快速开始事件被其他导出串入。
+    const exportId = crypto.randomUUID()
+    activeExportId.value = exportId
+    exportProgress.value = {
+      active: true,
+      completed: 0,
+      total: 0,
+      phase: "started"
+    }
+    await exportProgressReady
     const result = await toolboxApi.exportImageTasks({
-      ids: [...ids],
-      targetPath
+      ids: exportIds,
+      targetPath,
+      exportId
     })
     createMessage.success(`已导出 ${result.imageCount} 张图片`)
   } catch (error) {
     createMessage.error(String(error))
   } finally {
     exporting.value = false
+    exportProgress.value = {
+      active: false,
+      completed: 0,
+      total: 0,
+      phase: ""
+    }
+    activeExportId.value = ""
   }
 }
 
@@ -3123,6 +3173,33 @@ watch(autoRefresh, (enabled) => {
 })
 let unsubscribe = null
 let imagesSubscriptionError = null
+let unsubscribeExportProgress = null
+// 导出 ZIP 的每张图片写入进度由 Tauri 事件主动推送，不再轮询状态。
+const exportProgressReady = subscribeReady(
+  "images:export-progress",
+  (event) => {
+    if (disposed || !event?.exportId) return
+    if (!activeExportId.value && event.phase === "started") {
+      activeExportId.value = event.exportId
+    }
+    if (event.exportId !== activeExportId.value) return
+    exportProgress.value = {
+      active: event.phase !== "completed" && event.phase !== "failed",
+      completed: Number(event.completed || 0),
+      total: Number(event.total || 0),
+      phase: event.phase || ""
+    }
+  }
+)
+  .then((unlisten) => {
+    if (disposed) unlisten()
+    else unsubscribeExportProgress = unlisten
+  })
+  .catch((error) => {
+    imagesSubscriptionError = error
+    if (!disposed) listError.value = `导出进度监听注册失败：${error}`
+    throw error
+  })
 const imagesReady = subscribeReady("images:changed", (event) => {
   if (disposed) return
   const conversationId =
@@ -3177,7 +3254,11 @@ const storageErrorsReady = subscribeReady("images:storage-error", (event) => {
     imagesSubscriptionError = error
     if (!disposed) listError.value = `任务监听注册失败：${error}`
   })
-const listenersReady = Promise.all([imagesReady, storageErrorsReady])
+const listenersReady = Promise.all([
+  imagesReady,
+  storageErrorsReady,
+  exportProgressReady
+])
 onMounted(() => {
   refreshAll()
 })
@@ -3191,6 +3272,7 @@ onBeforeUnmount(() => {
   if (copiedTimer) clearTimeout(copiedTimer)
   unsubscribe?.()
   unsubscribeError?.()
+  unsubscribeExportProgress?.()
 })
 
 defineExpose({
@@ -3229,6 +3311,48 @@ defineExpose({
     );
     background-size: 200% 100%;
     animation: top-loader-slide 1.5s ease-in-out infinite;
+  }
+
+  .export-progress-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--color-line);
+    border-radius: 6px;
+    background: var(--color-panel-soft);
+    color: var(--color-text);
+    font-size: 12px;
+
+    .export-progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-width: 160px;
+    }
+
+    .export-progress-track {
+      flex: 1;
+      height: 5px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--color-line);
+
+      .export-progress-bar {
+        height: 100%;
+        border-radius: inherit;
+        background: var(--color-primary, #2563eb);
+        transition: width 0.18s ease;
+      }
+    }
+
+    .export-progress-meta {
+      min-width: 34px;
+      color: var(--color-text-muted);
+      text-align: right;
+    }
   }
 
   @keyframes top-loader-slide {

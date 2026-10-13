@@ -15,7 +15,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::{Cursor, Write},
     sync::{Arc, Mutex},
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::Emitter;
 use uuid::Uuid;
@@ -3032,17 +3032,21 @@ fn store_image(encoded: &str, metadata: &Value) -> Result<StoredImage, ManagerEr
     })
 }
 
-pub async fn export(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+pub async fn export(
+    app: &tauri::AppHandle,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
     let ids: Vec<String> = serde_json::from_value(payload["ids"].clone())?;
     let target = payload["targetPath"]
         .as_str()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| failure("请选择导出位置"))?;
-    let images = image_store::read_images(paths, &ids)?;
-    if images.is_empty() {
-        return Err(failure("所选任务没有可导出的图片"));
-    }
     if let Some(index) = payload["index"].as_u64() {
+        let images = image_store::read_images(paths, &ids)?;
+        if images.is_empty() {
+            return Err(failure("所选任务没有可导出的图片"));
+        }
         let (_, _, _, bytes) = images.get(index as usize).ok_or_else(|| failure("图片不存在"))?;
         let image = decode_image(bytes)?;
         let mut png = Cursor::new(Vec::new());
@@ -3050,23 +3054,101 @@ pub async fn export(paths: &AppPaths, payload: Value) -> Result<Value, ManagerEr
         tokio::fs::write(target, png.into_inner()).await?;
         return Ok(json!({"imageCount": 1, "filePath": target}));
     }
-    let count = images.len();
-    let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
-    for (id, index, format, bytes) in images {
-        archive
-            .start_file(
-                format!("{id}/image-{}.{}", index + 1, format),
-                zip::write::SimpleFileOptions::default(),
-            )
-            .map_err(|_| failure("创建图片压缩包失败"))?;
-        archive.write_all(&bytes)?;
+    let paths = paths.clone();
+    let ids = ids.clone();
+    let target = target.to_string();
+    let output_path = target.clone();
+    let export_id = payload["exportId"]
+        .as_str()
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let total = tauri::async_runtime::spawn_blocking({
+        let paths = paths.clone();
+        let ids = ids.clone();
+        let export_id = export_id.clone();
+        let app = app.clone();
+        move || {
+            let total = image_store::export_image_count(&paths, &ids)?;
+            let _ = app.emit(
+                "images:export-progress",
+                json!({
+                    "exportId": export_id,
+                    "phase": "started",
+                    "completed": 0,
+                    "total": total
+                }),
+            );
+            Ok::<usize, ManagerError>(total)
+        }
+    })
+    .await
+    .map_err(|error| failure(&error.to_string()))??;
+    if total == 0 {
+        let error = failure("所选任务没有可导出的图片");
+        let _ = app.emit(
+            "images:export-progress",
+            json!({
+                "exportId": export_id,
+                "phase": "failed",
+                "completed": 0,
+                "total": 0,
+                "error": error.to_string()
+            }),
+        );
+        return Err(error);
     }
-    let output = archive
-        .finish()
-        .map_err(|_| failure("完成图片压缩包失败"))?
-        .into_inner();
-    tokio::fs::write(target, output).await?;
-    Ok(json!({ "imageCount": count, "filePath": target }))
+    let progress_app = app.clone();
+    let progress_export_id = export_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut last_progress_at = Instant::now();
+        let mut last_progress = 0usize;
+        image_store::write_export_zip_with_progress(&paths, &ids, &target, |completed| {
+            // 进度事件节流，避免每张图片都跨 IPC 推送拖慢写 ZIP。
+            if completed != total
+                && completed.saturating_sub(last_progress) < 10
+                && last_progress_at.elapsed() < Duration::from_millis(100)
+            {
+                return;
+            }
+            last_progress = completed;
+            last_progress_at = Instant::now();
+            let _ = progress_app.emit(
+                "images:export-progress",
+                json!({
+                    "exportId": progress_export_id,
+                    "phase": "writing",
+                    "completed": completed,
+                    "total": total
+                }),
+            );
+        })
+    })
+    .await
+    .map_err(|error| failure(&error.to_string()))?;
+    let count = match result {
+        Ok(count) => count,
+        Err(error) => {
+            let _ = app.emit(
+                "images:export-progress",
+                json!({
+                    "exportId": export_id,
+                    "phase": "failed",
+                    "completed": 0,
+                    "total": total,
+                    "error": error.to_string()
+                }),
+            );
+            return Err(error);
+        }
+    };
+    let _ = app.emit("images:export-progress", json!({
+        "exportId": export_id,
+        "phase": "completed",
+        "completed": count,
+        "total": total
+    }));
+    Ok(json!({ "imageCount": count, "filePath": output_path }))
 }
 
 fn task_backup_ids(payload: &Value) -> Result<Vec<String>, ManagerError> {

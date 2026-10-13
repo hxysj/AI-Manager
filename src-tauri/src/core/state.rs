@@ -131,7 +131,7 @@ impl AppState {
                 }
                 "tools:image-task-export" => image_workbench::export_task_bundle(&paths, payload).await,
                 "tools:image-task-import" => image_workbench::import_task_bundle(&paths, payload).await,
-                _ => image_workbench::export(&paths, payload).await,
+                _ => image_workbench::export(&app, &paths, payload).await,
             };
         }
         if matches!(

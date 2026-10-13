@@ -88,6 +88,10 @@ globalThis.__imageTest = {
       calls.push(["submit", structuredClone(payload)])
       return { roundId: payload.roundId, items: [] }
     },
+    exportImageTasks: async (payload) => {
+      calls.push(["export", structuredClone(payload)])
+      return { imageCount: 0, filePath: payload.targetPath }
+    },
     resumeImageTask: async (payload) => {
       calls.push(["resume", payload])
       return {}
@@ -552,6 +556,27 @@ try {
   listeners.get("images:changed")({ ...completion, task: tasks[0] })
   assert.equal(restored.tasks[0].status, "interrupted")
   assert.equal(restored.tasks[0].revision, 7)
+  // 合集导出先注册长连接，再用后端事件更新真实写入进度。
+  const exportProgressSnapshots = []
+  globalThis.__imageTest.systemApi.saveFile = async () => "images.zip"
+  globalThis.__imageTest.toolboxApi.exportImageTasks = async (payload) => {
+    calls.push(["export", structuredClone(payload)])
+    assert.ok(payload.exportId)
+    assert.ok(listeners.has("images:export-progress"))
+    const notify = listeners.get("images:export-progress")
+    notify({ exportId: payload.exportId, phase: "started", completed: 0, total: 2 })
+    exportProgressSnapshots.push({ ...restored.exportProgress })
+    notify({ exportId: payload.exportId, phase: "writing", completed: 1, total: 2 })
+    exportProgressSnapshots.push({ ...restored.exportProgress })
+    notify({ exportId: payload.exportId, phase: "completed", completed: 2, total: 2 })
+    return { imageCount: 2, filePath: payload.targetPath }
+  }
+  await restored.exportTasks(["live-task"])
+  assert.deepEqual(exportProgressSnapshots, [
+    { active: true, completed: 0, total: 2, phase: "started" },
+    { active: true, completed: 1, total: 2, phase: "writing" }
+  ])
+  assert.ok(calls.some(([name, payload]) => name === "export" && payload.exportId))
   restoredApp.unmount()
 
   // 批量进度先等监听注册，完成判断由后端快照返回。
