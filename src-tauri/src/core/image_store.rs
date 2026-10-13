@@ -353,13 +353,14 @@ pub fn checkpoint(paths: &AppPaths, id: &str, recovery: &Value) -> Result<(), Ma
 
 #[allow(dead_code)]
 pub fn requeue(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
-    requeue_with_concurrency(paths, id, None)
+    requeue_with_concurrency(paths, id, None, None)
 }
 
 pub fn requeue_with_concurrency(
     paths: &AppPaths,
     id: &str,
     concurrency: Option<u8>,
+    generation_mode: Option<&str>,
 ) -> Result<Value, ManagerError> {
     let mut connection = open(paths)?;
     let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -369,6 +370,9 @@ pub fn requeue_with_concurrency(
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let mut task: Value = serde_json::from_str(&raw)?;
+    if let Some(generation_mode) = generation_mode {
+        task["request"]["generationMode"] = json!(generation_mode);
+    }
     // 失败任务必须重新提交请求创建新会话；只有中断任务才继续查询原 Web 会话。
     if status != "interrupted"
         || task["request"]["generationMode"] != "web"

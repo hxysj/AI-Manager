@@ -2130,7 +2130,10 @@ async function resumeTask(task) {
     await toolboxApi.resumeImageTask({
       id: task.id,
       ...(currentConversationIsBatch.value
-        ? { concurrency: batchConcurrency.value }
+        ? {
+            generationMode: form.generationMode,
+            concurrency: batchConcurrency.value
+          }
         : {})
     })
     await loadTasks()
@@ -2156,6 +2159,7 @@ async function resumeSelectedBatchTasks(ids = batchQueueSelected.value) {
     for (const id of targets) {
       await toolboxApi.resumeImageTask({
         id,
+        generationMode: form.generationMode,
         concurrency: batchConcurrency.value
       })
     }
@@ -2214,6 +2218,7 @@ async function toggleBatchPause() {
       for (const id of targets)
         await toolboxApi.resumeImageTask({
           id,
+          generationMode: form.generationMode,
           concurrency: batchConcurrency.value
         })
       batchPaused.value = false

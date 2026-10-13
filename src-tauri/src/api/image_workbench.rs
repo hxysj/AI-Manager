@@ -492,10 +492,16 @@ pub async fn resume(app: &tauri::AppHandle, paths: &AppPaths, cli_targets: &Valu
             return Err(failure("批量并发数需在 1 到 10 之间"));
         }
     }
+    let generation_mode = match payload["generationMode"].as_str() {
+        Some(mode @ ("web" | "codex")) => Some(mode),
+        Some(_) => return Err(failure("生图调用模式不支持")),
+        None => None,
+    };
     let task = image_store::requeue_with_concurrency(
         paths,
         payload["id"].as_str().unwrap_or(""),
         requested,
+        generation_mode,
     )?;
     let stored = task["batchConcurrency"]
         .as_u64()
@@ -3574,14 +3580,26 @@ mod tests {
             [],
         ).unwrap();
         drop(connection);
-        let recovered = image_store::requeue(&paths, "task-1").unwrap();
+        let recovered = image_store::requeue_with_concurrency(
+            &paths,
+            "task-1",
+            None,
+            Some("web"),
+        ).unwrap();
         assert_eq!(recovered["recovery"]["conversationId"], "upstream");
         assert!(image_store::requeue(&paths, "task-1").is_err());
         let retried_failed = image_store::requeue(&paths, "failed-web").unwrap();
         assert_eq!(retried_failed["status"], "queued");
         assert!(retried_failed["recovery"].is_null());
-        let recovered_queued = image_store::requeue(&paths, "task-99").unwrap();
+        let recovered_queued = image_store::requeue_with_concurrency(
+            &paths,
+            "task-99",
+            None,
+            Some("codex"),
+        ).unwrap();
         assert_eq!(recovered_queued["status"], "queued");
+        assert_eq!(recovered_queued["request"]["generationMode"], "codex");
+        assert!(recovered_queued["recovery"].is_null());
         assert!(image_store::start(&paths, "task-1").unwrap());
         assert!(image_store::clear_results(&paths, &["task-1".into()]).is_err());
         let mut finished = recovered;
