@@ -1220,9 +1220,15 @@ $ScriptPath = {script_path}
 
 Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 300
-$installer = Start-Process -FilePath $InstallerPath -ArgumentList '/S /UPDATE' -WindowStyle Hidden -Wait -PassThru
-if ($installer.ExitCode -ne 0) {{ exit $installer.ExitCode }}
-if (Test-Path -LiteralPath $CurrentExePath) {{
+try {{
+  $installer = Start-Process -FilePath $InstallerPath -ArgumentList '/S /UPDATE' -WindowStyle Hidden -Wait -PassThru
+}} catch {{
+  $installer = $null
+}}
+if ($null -eq $installer -or $installer.ExitCode -ne 0) {{
+  # 静默安装失败时打开同一个安装包，让用户按安装向导手动处理。
+  Start-Process -FilePath $InstallerPath -WindowStyle Normal
+}} elseif (Test-Path -LiteralPath $CurrentExePath) {{
   Start-Process -FilePath $CurrentExePath
 }}
 Remove-Item -LiteralPath $ScriptPath -Force -ErrorAction SilentlyContinue
