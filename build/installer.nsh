@@ -118,6 +118,9 @@ FunctionEnd
   ReadRegStr $0 HKLM "${AI_MANAGER_UNINSTALL_ROOT}\${AI_MANAGER_ELECTRON_UNINSTALL_KEY}" UninstallString
   StrCmp $0 "" 0 aiManagerFoundInstalled
 
+  ; Tauri 更新按内置更新流程覆盖安装；仅旧版 Electron 迁移需要先卸载。
+  StrCmp $UpdateMode "1" aiManagerNoInstalled
+
   ReadRegStr $0 HKCU "${AI_MANAGER_UNINSTALL_ROOT}\${AI_MANAGER_TAURI_UNINSTALL_KEY}" QuietUninstallString
   ReadRegStr $4 HKCU "${AI_MANAGER_UNINSTALL_ROOT}\${AI_MANAGER_TAURI_UNINSTALL_KEY}" InstallLocation
   StrCmp $0 "" 0 aiManagerFoundInstalled
@@ -165,6 +168,13 @@ FunctionEnd
   aiManagerRestoreUpgradePaths:
     StrCpy $0 $R8
     StrCpy $4 $R9
+    ; InstallLocation 可能包含外层引号，NSIS 的 _?= 目录参数不能带引号。
+    StrCpy $2 $4 1
+    StrCmp $2 '$\"' 0 +2
+    StrCpy $4 $4 "" 1
+    StrCpy $2 $4 1 -1
+    StrCmp $2 '$\"' 0 +2
+    StrCpy $4 $4 -1
     Goto aiManagerUninstallCurrentUser
 
   aiManagerCancelInstall:
@@ -172,6 +182,8 @@ FunctionEnd
 
   aiManagerUninstallCurrentUser:
     DetailPrint "正在卸载旧版本 ${PRODUCTNAME}..."
+    ; 前面的注册表查询可能留下错误标记，卸载结果只取本次执行的状态。
+    ClearErrors
     StrCmp $R7 "1" aiManagerUninstallWithDataCleanup aiManagerUninstallKeepData
 
   aiManagerUninstallWithDataCleanup:
@@ -232,6 +244,7 @@ FunctionEnd
     IntCmp $6 120 aiManagerUninstallFailed aiManagerWaitOldUninstallLoop aiManagerUninstallFailed
 
   aiManagerUninstallFailed:
+    SetErrorLevel 2
     MessageBox MB_OK|MB_ICONEXCLAMATION "旧版本卸载失败，安装已取消。"
     Quit
 
