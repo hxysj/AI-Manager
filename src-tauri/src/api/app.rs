@@ -9,7 +9,6 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{LazyLock, Mutex as SyncMutex};
-use std::time::Duration;
 use tauri::window::Color;
 use tauri::{
     Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalRect, PhysicalSize, WebviewUrl,
@@ -18,8 +17,6 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_updater::{Update, Updater, UpdaterExt};
 use tokio::sync::Mutex as AsyncMutex;
-const UPDATE_REQUEST_TIMEOUT_SECS: u64 = 30;
-const UPDATE_DOWNLOAD_TIMEOUT_SECS: u64 = 300;
 const QUICK_SWITCH_LABEL: &str = "quick-switch";
 const QUICK_SWITCH_EXPANDED_WIDTH: u32 = 560;
 const QUICK_SWITCH_EXPANDED_HEIGHT: u32 = 560;
@@ -104,7 +101,7 @@ pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError
         let update = updater
             .check()
             .await
-            .map_err(|error| ManagerError::System(error.to_string()))?;
+            .map_err(update_request_error)?;
 
         *DOWNLOADED_UPDATE.lock().await = None;
 
@@ -146,10 +143,10 @@ pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerErr
         }
 
         let updater = create_public_release_updater(app)?;
-        let Some(mut update) = updater
+        let Some(update) = updater
             .check()
             .await
-            .map_err(|error| ManagerError::System(error.to_string()))?
+            .map_err(update_request_error)?
         else {
             return Ok(json!({
               "phase": "not-available",
@@ -159,7 +156,6 @@ pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerErr
               "isDev": cfg!(debug_assertions)
             }));
         };
-        update.timeout = Some(Duration::from_secs(UPDATE_DOWNLOAD_TIMEOUT_SECS));
         let mut transferred = 0_u64;
         let started_at = now_millis();
         let app_handle = app.clone();
@@ -192,7 +188,7 @@ pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerErr
                 || {},
             )
             .await
-            .map_err(|error| ManagerError::System(error.to_string()))?;
+            .map_err(update_request_error)?;
 
         let version = update.version.clone();
         let release_notes = update.body.clone().unwrap_or_default();
@@ -1086,9 +1082,20 @@ fn emit_update_status(app: &tauri::AppHandle, patch: Value) -> Result<Value, Man
 
 fn create_public_release_updater(app: &tauri::AppHandle) -> Result<Updater, ManagerError> {
     app.updater_builder()
-        .timeout(Duration::from_secs(UPDATE_REQUEST_TIMEOUT_SECS))
         .build()
-        .map_err(|error| ManagerError::System(error.to_string()))
+        .map_err(update_request_error)
+}
+
+fn update_request_error(error: impl std::error::Error) -> ManagerError {
+    // 保留网络错误链，避免只显示请求地址而丢失 DNS、代理或 TLS 失败原因。
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str("；");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    ManagerError::System(format!("更新请求失败：{message}"))
 }
 
 #[cfg(windows)]
@@ -1363,7 +1370,37 @@ mod quick_switch_tests {
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::extract_windows_update_installer;
+    use super::{extract_windows_update_installer, update_request_error};
+
+    #[test]
+    fn update_request_error_preserves_connection_failure_cause() {
+        tauri::async_runtime::block_on(async {
+            // 本地服务主动断开连接，验证真实请求错误的底层原因仍能传到界面。
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 1024];
+                tokio::io::AsyncReadExt::read(&mut stream, &mut request)
+                    .await
+                    .unwrap();
+            });
+            let error = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(format!("http://{address}"))
+                .send()
+                .await
+                .unwrap_err();
+            let cause = std::error::Error::source(&error).unwrap().to_string();
+            let message = update_request_error(error).to_string();
+            assert!(message.contains("更新请求失败"));
+            assert!(message.contains(&cause));
+            assert!(message.contains("connection closed before message completed"));
+            server.await.unwrap();
+        });
+    }
 
     #[test]
     fn accepts_raw_windows_installer() {
