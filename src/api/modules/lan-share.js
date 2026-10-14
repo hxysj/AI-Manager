@@ -20,6 +20,8 @@ export const lanShareApi = {
   sendMessage: payload => request('lan-share:send-message', payload),
   retryMessage: payload => request('lan-share:retry-message', payload),
   setAutoDiscovery: payload => request('lan-share:set-auto-discovery', payload),
+  // 所有设备共用本机发送限额，设置由后端持久化并即时应用。
+  setTransferSettings: payload => request('lan-share:set-transfer-settings', payload),
   scanDevices: () => request('lan-share:scan-devices'),
   createSession: payload => request('lan-share:create-session', payload),
   activateSession: payload => request('lan-share:activate-session', payload),

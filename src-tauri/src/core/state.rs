@@ -73,6 +73,31 @@ impl AppState {
             }
             return self.manager.lock().await.dispatch(app, channel, payload).await;
         }
+        // 文件传输仅持有快照，限速等待期间允许调整设置和使用其他页面。
+        if matches!(
+            channel,
+            "lan-share:send-message" | "lan-share:retry-message" | "lan-share:add-files"
+        ) {
+            let (registry, paths) = {
+                let manager = self.manager.lock().await;
+                (manager.lan_share_registry.clone(), manager.paths.clone())
+            };
+            let payload = payload.unwrap_or_else(|| json!({}));
+            return match channel {
+                "lan-share:send-message" => {
+                    lan_share::send_message(app, &registry, &paths, payload).await
+                }
+                "lan-share:retry-message" => {
+                    lan_share::retry_message(app, &registry, &paths, payload).await
+                }
+                _ => {
+                    let result = lan_share::add_files(&registry, &paths, payload).await?;
+                    lan_share::broadcast_files_changed(&registry).await?;
+                    self.manager.lock().await.emit_state_changed(&app)?;
+                    Ok(result)
+                }
+            };
+        }
         // 网络诊断不持有应用状态锁，避免慢端点阻塞其他页面。
         if let Some(action) = channel.strip_prefix("network-quality:") {
             return network_quality::dispatch(&app, action, payload.unwrap_or_else(|| json!({})))
@@ -650,17 +675,6 @@ impl ManagerState {
             "lan-share:stop" => {
                 lan_share::stop_service(app.clone(), &self.lan_share_registry, &self.paths).await
             }
-            "lan-share:add-files" => {
-                let result = lan_share::add_files(
-                    &self.lan_share_registry,
-                    &self.paths,
-                    payload.unwrap_or_else(|| json!({})),
-                )
-                .await?;
-                lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
-                self.emit_state_changed(&app)?;
-                Ok(result)
-            }
             "lan-share:remove-file" => {
                 let result = lan_share::remove_file(
                     &self.lan_share_registry,
@@ -697,24 +711,6 @@ impl ManagerState {
                 )
                 .await
             }
-            "lan-share:send-message" => {
-                lan_share::send_message(
-                    app.clone(),
-                    &self.lan_share_registry,
-                    &self.paths,
-                    payload.unwrap_or_else(|| json!({})),
-                )
-                .await
-            }
-            "lan-share:retry-message" => {
-                lan_share::retry_message(
-                    app.clone(),
-                    &self.lan_share_registry,
-                    &self.paths,
-                    payload.unwrap_or_else(|| json!({})),
-                )
-                .await
-            }
             "lan-share:set-auto-discovery" => {
                 lan_share::set_auto_discovery(
                     &self.lan_share_registry,
@@ -725,6 +721,15 @@ impl ManagerState {
             }
             "lan-share:scan-devices" => {
                 lan_share::scan_devices(&self.lan_share_registry).await
+            }
+            "lan-share:set-transfer-settings" => {
+                lan_share::set_transfer_settings(
+                    app.clone(),
+                    &self.lan_share_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
             }
             "lan-share:create-session" => {
                 lan_share::create_session(

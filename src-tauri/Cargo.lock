@@ -2584,7 +2584,7 @@ dependencies = [
 
 [[package]]
 name = "monkey-thief"
-version = "2.0.23"
+version = "2.0.24"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -2598,12 +2598,14 @@ dependencies = [
  "hyper",
  "hyper-util",
  "image",
+ "libc",
  "local-ip-address",
  "mime_guess",
  "png 0.17.16",
  "qrcode",
  "regex",
  "reqwest 0.12.28",
+ "ring",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2624,6 +2626,7 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
  "zip 2.4.2",
 ]
 

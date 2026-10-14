@@ -1,8 +1,11 @@
 use super::*;
-use tokio::io::AsyncWriteExt;
+use sha2::{Digest, Sha256};
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 
 pub(super) const MAX_ATTACHMENTS: usize = 100;
+pub(crate) const FILE_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 10 * 1024 * 1024 * 1024;
+const PARTIAL_UPLOAD_LIFETIME: u128 = 24 * 60 * 60 * 1000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -181,6 +184,215 @@ pub(super) async fn upload(
     Ok(uploaded)
 }
 
+pub(super) async fn upload_chunk<B>(
+    mut body: B,
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    session_id: &str,
+    upload_id: &str,
+    name: &str,
+    chunk_index: u64,
+    chunk_total: u64,
+    offset: u64,
+    total_size: u64,
+    content_length: u64,
+    content_range: &str,
+    chunk_sha256: &str,
+) -> Result<Option<LanShareFile>, ManagerError>
+where
+    B: hyper::body::Body<Data = Bytes> + Unpin,
+    B::Error: std::fmt::Display,
+{
+    if !read_array::<LanShareSession>(&paths.lan_share_files.sessions)?
+        .iter()
+        .any(|session| session.id == session_id)
+    {
+        return Err(ManagerError::System("请先选择有效会话。".into()));
+    }
+    let safe_name = safe_name(name)?;
+    if upload_id.is_empty()
+        || upload_id.len() > 120
+        || !upload_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        return Err(ManagerError::System("分块上传标识无效。".into()));
+    }
+    if chunk_total != total_size.div_ceil(FILE_CHUNK_BYTES).max(1)
+        || chunk_index >= chunk_total
+        || total_size > MAX_FILE_BYTES
+        || offset != chunk_index * FILE_CHUNK_BYTES
+    {
+        return Err(ManagerError::System("分块上传参数无效。".into()));
+    }
+    if content_length > FILE_CHUNK_BYTES
+        || offset > total_size
+        || content_length > total_size.saturating_sub(offset)
+        || (total_size > 0 && content_length == 0)
+        || (chunk_index + 1 < chunk_total && content_length != FILE_CHUNK_BYTES)
+        || (chunk_index + 1 == chunk_total && content_length != total_size.saturating_sub(offset))
+    {
+        return Err(ManagerError::System("分块大小或偏移无效。".into()));
+    }
+    if chunk_sha256.len() != 64
+        || !chunk_sha256
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err(ManagerError::System("分块校验值无效。".into()));
+    }
+    let expected_range = if total_size == 0 {
+        "bytes 0-0/0".to_string()
+    } else {
+        format!(
+            "bytes {}-{}/{}",
+            offset,
+            offset + content_length - 1,
+            total_size
+        )
+    };
+    if content_range != expected_range {
+        return Err(ManagerError::System("分块范围无效。".into()));
+    }
+
+    // 同一上传的校验和写入串行执行，避免重叠请求覆盖已经接收的分块。
+    let upload_lock = {
+        let mut uploads = registry.uploads.lock().await;
+        uploads.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = uploads.get(upload_id).and_then(std::sync::Weak::upgrade) {
+            lock
+        } else {
+            let lock = Arc::new(Mutex::new(()));
+            uploads.insert(upload_id.to_string(), Arc::downgrade(&lock));
+            lock
+        }
+    };
+    let _upload = upload_lock.lock().await;
+    if chunk_index == 0 {
+        cleanup_uploads(registry, paths).await?;
+    }
+    let directory = Path::new(&paths.lan_share_dir).join("uploads");
+    tokio::fs::create_dir_all(&directory).await?;
+    let part_path = directory.join(format!(".lan-upload-{upload_id}.part"));
+    let metadata_path = directory.join(format!(".lan-upload-{upload_id}.json"));
+    let stored_metadata = match tokio::fs::read(&metadata_path).await {
+        Ok(bytes) => Some(serde_json::from_slice::<Value>(&bytes)?),
+        Err(error) if error.kind() == ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(metadata) = stored_metadata.as_ref() {
+        if metadata["sessionId"] != session_id
+            || metadata["name"] != safe_name
+            || metadata["chunkTotal"] != chunk_total
+            || metadata["totalSize"] != total_size
+            || metadata["nextIndex"] != chunk_index
+        {
+            return Err(ManagerError::System("分块顺序或上传信息不匹配。".into()));
+        }
+    } else if chunk_index != 0 || offset != 0 {
+        return Err(ManagerError::System("缺少首个分块，无法继续拼接。".into()));
+    } else {
+        write_json(
+            &metadata_path.to_string_lossy(),
+            &json!({
+                "sessionId": session_id,
+                "name": safe_name,
+                "chunkTotal": chunk_total,
+                "totalSize": total_size,
+                "nextIndex": 0,
+                "updatedAt": now_millis()
+            }),
+        )
+        .await?;
+    }
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&part_path)
+        .await?;
+    let current_size = file.metadata().await?.len();
+    if current_size != offset {
+        return Err(ManagerError::System("分块偏移与已接收内容不匹配。".into()));
+    }
+    file.seek(std::io::SeekFrom::Start(offset)).await?;
+    let result = async {
+        let mut received = 0u64;
+        let mut digest = Sha256::new();
+        while let Some(frame) = body.frame().await {
+            let frame = frame.map_err(|error| ManagerError::System(error.to_string()))?;
+            if let Ok(bytes) = frame.into_data() {
+                received = received.saturating_add(bytes.len() as u64);
+                if received > content_length {
+                    return Err(ManagerError::System("分块大小超过声明值。".into()));
+                }
+                digest.update(&bytes);
+                file.write_all(&bytes).await?;
+            }
+        }
+        if received != content_length
+            || format!("{:x}", digest.finalize()) != chunk_sha256.to_lowercase()
+        {
+            return Err(ManagerError::System("分块校验失败。".into()));
+        }
+        file.flush().await?;
+        Ok::<(), ManagerError>(())
+    }
+    .await;
+    if let Err(error) = result {
+        let _ = file.set_len(current_size).await;
+        drop(file);
+        if chunk_index == 0 && current_size == 0 {
+            let _ = tokio::fs::remove_file(&part_path).await;
+            let _ = tokio::fs::remove_file(&metadata_path).await;
+        }
+        return Err(error);
+    }
+    drop(file);
+
+    if chunk_index + 1 < chunk_total {
+        write_json(
+            &metadata_path.to_string_lossy(),
+            &json!({
+                "sessionId": session_id,
+                "name": safe_name,
+                "chunkTotal": chunk_total,
+                "totalSize": total_size,
+                "nextIndex": chunk_index + 1,
+                "updatedAt": now_millis()
+            }),
+        )
+        .await?;
+        return Ok(None);
+    }
+
+    let final_size = tokio::fs::metadata(&part_path).await?.len();
+    if final_size != total_size {
+        return Err(ManagerError::System("文件拼接后的大小不匹配。".into()));
+    }
+    let target = directory.join(format!("{}-{safe_name}", create_id("attachment")));
+    tokio::fs::rename(&part_path, &target).await?;
+    let mut uploaded = match file_payload(&target.to_string_lossy(), session_id).await {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&target).await;
+            return Err(error);
+        }
+    };
+    uploaded.name = safe_name;
+    uploaded.enabled = false;
+    let _storage = registry.storage.lock().await;
+    let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
+    files.push(uploaded.clone());
+    if let Err(error) = write_json(&paths.lan_share_files.files, &json!(files)).await {
+        let _ = tokio::fs::remove_file(&target).await;
+        return Err(error);
+    }
+    let _ = tokio::fs::remove_file(&metadata_path).await;
+    Ok(Some(uploaded))
+}
+
 fn safe_name(name: &str) -> Result<String, ManagerError> {
     let name = name.trim();
     if name.is_empty()
@@ -252,12 +464,42 @@ pub(super) async fn cleanup_uploads(
     if !identifiers.is_empty() {
         discard_uploads(registry, paths, json!({ "attachmentIds": identifiers })).await?;
     }
+    let directory = Path::new(&paths.lan_share_dir).join("uploads");
+    let mut entries = match tokio::fs::read_dir(&directory).await {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    while let Some(entry) = entries.next_entry().await? {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !(name.starts_with(".lan-upload-")
+            && (name.ends_with(".part") || name.ends_with(".json")))
+        {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .await
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| modified.elapsed().ok())
+            .map(|elapsed| elapsed.as_millis() > PARTIAL_UPLOAD_LIFETIME)
+            .unwrap_or(false);
+        if stale {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hyper::header::CONTENT_RANGE;
 
     #[test]
     fn batch_files_create_one_message_and_preserve_order() {
@@ -490,5 +732,225 @@ mod tests {
         .unwrap();
         assert!(message.attachments.is_empty());
         assert_eq!(message.content, "旧消息");
+    }
+
+    #[test]
+    fn chunk_upload_reassembles_file_and_cleans_failed_chunk() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id("attachment-chunk-test"));
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            tokio::fs::create_dir_all(&paths.lan_share_dir)
+                .await
+                .unwrap();
+            let registry = LanShareServerRegistry::new();
+            let device = upsert_device(
+                &registry,
+                &paths,
+                "native-chunk-peer",
+                "分块设备",
+                "MonkeyThief/Desktop",
+                "127.0.0.1",
+            )
+            .await
+            .unwrap();
+            let state = create_session(&registry, &paths, json!({ "deviceId": device.id }))
+                .await
+                .unwrap();
+            let session_id = state["data"]["currentSession"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let chunks = vec![
+                vec![b'a'; FILE_CHUNK_BYTES as usize],
+                vec![b'b'; FILE_CHUNK_BYTES as usize],
+                b"tail".to_vec(),
+            ];
+            let total_size = chunks.iter().map(|chunk| chunk.len() as u64).sum::<u64>();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server_registry = registry.clone();
+            let server_paths = paths.clone();
+            let server_session = session_id.clone();
+            let server = tauri::async_runtime::spawn(async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let server_registry = server_registry.clone();
+                    let server_paths = server_paths.clone();
+                    let server_session = server_session.clone();
+                    let service = service_fn(move |request: Request<Incoming>| {
+                        let registry = server_registry.clone();
+                        let paths = server_paths.clone();
+                        let session_id = server_session.clone();
+                        async move {
+                            let content_length = request
+                                .headers()
+                                .get(CONTENT_LENGTH)
+                                .and_then(|value| value.to_str().ok())
+                                .and_then(|value| value.parse::<u64>().ok())
+                                .unwrap();
+                            let content_range = request
+                                .headers()
+                                .get(CONTENT_RANGE)
+                                .and_then(|value| value.to_str().ok())
+                                .unwrap_or_default()
+                                .to_string();
+                            let upload_id = query_value(request.uri(), "uploadId");
+                            let name = query_value(request.uri(), "name");
+                            let chunk_index = query_value(request.uri(), "chunkIndex")
+                                .parse::<u64>()
+                                .unwrap();
+                            let chunk_total = query_value(request.uri(), "chunkTotal")
+                                .parse::<u64>()
+                                .unwrap();
+                            let offset =
+                                query_value(request.uri(), "offset").parse::<u64>().unwrap();
+                            let total_size = query_value(request.uri(), "totalSize")
+                                .parse::<u64>()
+                                .unwrap();
+                            let chunk_sha256 = query_value(request.uri(), "sha256");
+                            let response = match upload_chunk(
+                                request.into_body(),
+                                &registry,
+                                &paths,
+                                &session_id,
+                                &upload_id,
+                                &name,
+                                chunk_index,
+                                chunk_total,
+                                offset,
+                                total_size,
+                                content_length,
+                                &content_range,
+                                &chunk_sha256,
+                            )
+                            .await
+                            {
+                                Ok(file) => api_success(json!({
+                                    "complete": file.is_some(),
+                                    "file": file.as_ref().map(Attachment::from),
+                                    "chunkIndex": chunk_index
+                                })),
+                                Err(error) => api_error(StatusCode::BAD_REQUEST, error.to_string()),
+                            };
+                            Ok::<_, Infallible>(response)
+                        }
+                    });
+                    http1::Builder::new()
+                        .serve_connection(TokioIo::new(socket), service)
+                        .await
+                        .unwrap();
+                }
+            });
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let upload_id = "chunk-test-upload";
+            let chunk_total = chunks.len();
+            let send_chunk = |index: usize, chunk: Vec<u8>, sha256: String| {
+                let client = client.clone();
+                let session_id = session_id.clone();
+                async move {
+                    let offset = if index == 0 {
+                        0
+                    } else if index == 1 {
+                        FILE_CHUNK_BYTES
+                    } else {
+                        FILE_CHUNK_BYTES * 2
+                    };
+                    let range = if total_size == 0 {
+                        "bytes 0-0/0".to_string()
+                    } else {
+                        format!(
+                            "bytes {}-{}/{}",
+                            offset,
+                            offset + chunk.len() as u64 - 1,
+                            total_size
+                        )
+                    };
+                    let response = client
+                        .put(format!("http://{address}/test/chunk"))
+                        .query(&[
+                            ("uploadId", upload_id.to_string()),
+                            ("sessionId", session_id),
+                            ("name", "assembled.bin".to_string()),
+                            ("chunkIndex", index.to_string()),
+                            ("chunkTotal", chunk_total.to_string()),
+                            ("offset", offset.to_string()),
+                            ("totalSize", total_size.to_string()),
+                            ("sha256", sha256),
+                        ])
+                        .header(CONTENT_LENGTH, chunk.len())
+                        .header(CONTENT_RANGE, range)
+                        .body(chunk)
+                        .send()
+                        .await
+                        .unwrap();
+                    let status = response.status();
+                    let body = response.text().await.unwrap();
+                    let parsed: Value = serde_json::from_str(&body).unwrap_or_else(|error| {
+                        panic!("status={status}, body={body:?}, error={error}")
+                    });
+                    parsed
+                }
+            };
+            let failed = send_chunk(0, chunks[0].clone(), "0".repeat(64)).await;
+            assert_eq!(failed["status"], "error");
+            let missing = send_chunk(
+                1,
+                chunks[1].clone(),
+                format!("{:x}", Sha256::digest(&chunks[1])),
+            )
+            .await;
+            assert_eq!(missing["status"], "error");
+            let first = send_chunk(
+                0,
+                chunks[0].clone(),
+                format!("{:x}", Sha256::digest(&chunks[0])),
+            )
+            .await;
+            assert_eq!(first["data"]["complete"], false);
+            let duplicate = send_chunk(
+                0,
+                chunks[0].clone(),
+                format!("{:x}", Sha256::digest(&chunks[0])),
+            )
+            .await;
+            assert_eq!(duplicate["status"], "error");
+            let out_of_order = send_chunk(
+                2,
+                chunks[2].clone(),
+                format!("{:x}", Sha256::digest(&chunks[2])),
+            )
+            .await;
+            assert_eq!(out_of_order["status"], "error");
+            let corrupted = send_chunk(1, chunks[1].clone(), "0".repeat(64)).await;
+            assert_eq!(corrupted["status"], "error");
+            let second = send_chunk(
+                1,
+                chunks[1].clone(),
+                format!("{:x}", Sha256::digest(&chunks[1])),
+            )
+            .await;
+            assert_eq!(second["data"]["complete"], false);
+            let third = send_chunk(
+                2,
+                chunks[2].clone(),
+                format!("{:x}", Sha256::digest(&chunks[2])),
+            )
+            .await;
+            assert_eq!(third["data"]["complete"], true);
+            drop(client);
+            server.abort();
+            let _ = server.await;
+            let files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files).unwrap();
+            assert_eq!(files.len(), 1);
+            let assembled = tokio::fs::read(&files[0].path).await.unwrap();
+            assert_eq!(assembled.len(), total_size as usize);
+            assert_eq!(&assembled[..FILE_CHUNK_BYTES as usize], &chunks[0]);
+            assert_eq!(
+                &assembled[FILE_CHUNK_BYTES as usize..FILE_CHUNK_BYTES as usize * 2],
+                &chunks[1]
+            );
+            assert_eq!(&assembled[FILE_CHUNK_BYTES as usize * 2..], &chunks[2]);
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
     }
 }

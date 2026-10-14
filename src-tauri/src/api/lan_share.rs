@@ -37,6 +37,7 @@ type BoxBody = http_body_util::combinators::BoxBody<Bytes, std::io::Error>;
 
 mod attachments;
 mod native;
+mod transfer;
 pub use attachments::{clipboard_files, discard_uploads};
 pub use native::{connect_peer, respond_pairing};
 
@@ -49,6 +50,8 @@ pub const EVENT_DEVICES_CHANGED: &str = "lan-share:devices-changed";
 pub struct LanShareServerRegistry {
     inner: Arc<Mutex<LanShareRuntime>>,
     storage: Arc<Mutex<()>>,
+    uploads: Arc<Mutex<HashMap<String, std::sync::Weak<Mutex<()>>>>>,
+    transfer: Arc<transfer::Control>,
 }
 
 pub struct LanShareRuntime {
@@ -173,6 +176,8 @@ impl LanShareServerRegistry {
     pub fn new() -> Self {
         Self {
             storage: Arc::new(Mutex::new(())),
+            uploads: Arc::new(Mutex::new(HashMap::new())),
+            transfer: Arc::new(transfer::Control::default()),
             inner: Arc::new(Mutex::new(LanShareRuntime {
                 native: native::NativeRuntime::default(),
                 handle: None,
@@ -3225,6 +3230,18 @@ pub async fn set_auto_discovery(
     Ok(lan_share_response(result))
 }
 
+pub async fn set_transfer_settings(
+    app: tauri::AppHandle,
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let settings: transfer::Settings = serde_json::from_value(payload)?;
+    native::set_transfer_settings(registry, paths, settings).await?;
+    emit_state_changed(&app, registry, paths).await?;
+    get_state(registry, paths).await
+}
+
 pub async fn scan_devices(
     registry: &LanShareServerRegistry,
 ) -> Result<Value, ManagerError> {
@@ -3415,7 +3432,12 @@ async fn download_file(
     };
     let stream_file = File::open(&file.path).await?;
     let metadata = stream_file.metadata().await?;
-    let stream = ReaderStream::new(stream_file).map_ok(Frame::data);
+    let stream = context
+        .registry
+        .transfer
+        .file_stream(stream_file)
+        .await
+        .map_ok(Frame::data);
     let body = BodyExt::boxed(StreamBody::new(stream));
     append_download_record(
         &context.registry,
@@ -3477,7 +3499,12 @@ async fn preview_file(
 
     let stream_file = File::open(&file.path).await?;
     let metadata = stream_file.metadata().await?;
-    let stream = ReaderStream::new(stream_file).map_ok(Frame::data);
+    let stream = context
+        .registry
+        .transfer
+        .file_stream(stream_file)
+        .await
+        .map_ok(Frame::data);
     let body = BodyExt::boxed(StreamBody::new(stream));
     append_download_record(
         &context.registry,

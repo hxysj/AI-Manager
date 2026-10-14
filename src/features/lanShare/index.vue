@@ -109,6 +109,9 @@
           <template #dropdown>
             <el-dropdown-menu class="cyber-dropdown-menu">
               <el-dropdown-item disabled>{{ serviceSummary }}</el-dropdown-item>
+              <el-dropdown-item @click="openTransferSettings">
+                传输限速与并发
+              </el-dropdown-item>
               <el-dropdown-item
                 v-for="ip in state.service.lanIps || []"
                 :key="ip"
@@ -481,6 +484,58 @@
       </div>
     </BaseModal>
 
+    <BaseModal
+      v-if="transferSettingsOpen"
+      class="drop-transfer-modal"
+      title="传输限速与并发"
+      @close="transferSettingsOpen = false"
+    >
+      <form class="drop-transfer-form" @submit.prevent="saveTransferSettings">
+        <p class="drop-transfer-hint">
+          所有设备共享本机发送限额，客户端发送和访客下载均受限制。
+          Wi-Fi 卡顿时可降低限速；接收速度由发送方设置决定。
+        </p>
+        <label class="drop-transfer-field">
+          <span>发送总限速（MiB/s）</span>
+          <el-input-number
+            v-model="transferSettings.sendMibPerSecond"
+            :min="1"
+            :max="1024"
+            :precision="0"
+            :disabled="loading"
+            aria-label="发送总限速，单位 MiB 每秒"
+          />
+        </label>
+        <label class="drop-transfer-field">
+          <span>同时发送的文件数</span>
+          <el-input-number
+            v-model="transferSettings.maxConcurrentFiles"
+            :min="1"
+            :max="8"
+            :precision="0"
+            :disabled="loading"
+            aria-label="同时发送的文件数"
+          />
+        </label>
+        <p class="drop-transfer-hint">
+          保存后立即生效并保留设置。降低并发时，正在发送的文件继续完成。
+        </p>
+        <div class="drop-transfer-actions">
+          <el-button :disabled="loading" @click="transferSettingsOpen = false">
+            取消
+          </el-button>
+          <el-button
+            type="primary"
+            native-type="submit"
+            :loading="loading"
+            :disabled="!transferSettings.sendMibPerSecond || !transferSettings.maxConcurrentFiles"
+          >
+            保存设置
+          </el-button>
+        </div>
+      </form>
+    </BaseModal>
+
     <!-- 创建群聊弹窗 -->
     <BaseModal
       v-if="createGroupOpen"
@@ -556,12 +611,14 @@ import {
   ElDropdown,
   ElDropdownItem,
   ElDropdownMenu,
-  ElInput
+  ElInput,
+  ElInputNumber
 } from "element-plus"
 import "element-plus/es/components/button/style/css"
 import "element-plus/es/components/checkbox/style/css"
 import "element-plus/es/components/dropdown/style/css"
 import "element-plus/es/components/input/style/css"
+import "element-plus/es/components/input-number/style/css"
 import {
   Globe,
   Link,
@@ -606,7 +663,8 @@ const state = reactive({
     peers: [],
     pairingRequests: [],
     error: "",
-    autoDiscovery: false
+    autoDiscovery: false,
+    transfer: { sendMibPerSecond: 10, maxConcurrentFiles: 1 }
   },
   messages: []
 })
@@ -620,6 +678,8 @@ const deleteDeviceTarget = ref(null)
 const deleteDevicePending = ref(false)
 const deleteDeviceError = ref("")
 const createGroupOpen = ref(false)
+const transferSettingsOpen = ref(false)
+const transferSettings = reactive({ sendMibPerSecond: 10, maxConcurrentFiles: 1 })
 const newGroup = reactive({ name: "新的群聊", deviceIds: [] })
 
 const selectedGroupDeviceIds = computed(() =>
@@ -816,6 +876,21 @@ async function toggleAutoDiscovery() {
   } finally {
     togglingAutoDiscovery.value = false
   }
+}
+
+// 打开时读取已保存设置，后台状态事件不会覆盖正在编辑的数值。
+function openTransferSettings() {
+  Object.assign(transferSettings, state.native.transfer)
+  transferSettingsOpen.value = true
+}
+
+async function saveTransferSettings() {
+  if (loading.value) return
+  const result = await runAction(
+    () => lanShareApi.setTransferSettings({ ...transferSettings }),
+    '传输设置已生效'
+  )
+  if (result) transferSettingsOpen.value = false
 }
 
 async function scanNearby() {
@@ -2007,6 +2082,36 @@ function isTextPreviewFile(name, mimeType) {
 }
 
 /* 弹窗通用样式 */
+.drop-transfer-modal.base-modal {
+  .drop-transfer-form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    padding-top: 6px;
+    color: var(--color-text);
+
+    .drop-transfer-hint {
+      margin: 0;
+      color: var(--color-text-muted);
+      font-size: 12.5px;
+      line-height: 1.6;
+    }
+
+    .drop-transfer-field {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .drop-transfer-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+  }
+}
+
 .drop-connect-modal.base-modal,
 .drop-group-modal.base-modal {
   .drop-connect-content,
