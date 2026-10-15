@@ -24,37 +24,17 @@
           class="conversation-button conversation-history-btn"
           :class="{ active: historyOpen }"
           type="button"
-          title="查看历史会话"
+          :title="`切换本地对话：${currentConversation?.title || '新对话'}`"
+          :aria-expanded="historyOpen"
           @click="toggleHistory"
         >
-          <Clock :size="14" />
-          <span>历史会话</span>
-        </button>
-        <button
-          class="conversation-button conversation-library-btn"
-          :class="{ active: promptLibraryOpen }"
-          type="button"
-          title="打开社区提示词库"
-          @click="promptLibraryOpen = true"
-        >
-          <BookOpen :size="14" />
-          <span>提示词库</span>
-        </button>
-        <button
-          class="conversation-button conversation-web-session-btn"
-          :class="{ active: webSessionOpen }"
-          type="button"
-          title="管理 ChatGPT 官方 Web 会话"
-          @click="toggleWebSessionPanel"
-        >
-          <MessageSquare :size="14" />
-          <span>GPT 会话</span>
-        </button>
-        <div class="conversation-chip" :title="currentConversation?.title">
-          <span class="conversation-chip-title">{{
+          <Clock :size="14" class="conversation-context-icon" />
+          <span class="conversation-context-label">本地对话</span>
+          <span class="conversation-context-title">{{
             currentConversation?.title || "新对话"
           }}</span>
-        </div>
+          <ChevronDown :size="13" class="conversation-context-icon" />
+        </button>
         <div
           v-if="batchViewVisible && form.generationMode === 'web'"
           class="batch-quota-compact"
@@ -80,22 +60,66 @@
         </div>
       </div>
       <div class="conversation-toolbar-right">
-        <button
-          class="conversation-button conversation-rename-btn"
-          type="button"
-          :disabled="!currentConversation"
-          @click="renameConversation(currentConversation)"
+        <el-dropdown
+          trigger="click"
+          placement="bottom-end"
+          popper-class="image-workbench-menu-popper"
         >
-          <Pencil :size="13" />
-          <span>重命名</span>
-        </button>
+          <button class="conversation-button" type="button">
+            <SlidersHorizontal :size="14" />
+            <span>工具</span>
+            <ChevronDown :size="12" />
+          </button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                :disabled="!currentConversation"
+                @click="renameConversation(currentConversation)"
+              >
+                <Pencil :size="14" />重命名本地对话
+              </el-dropdown-item>
+              <el-dropdown-item divided @click="promptLibraryOpen = true">
+                <BookOpen :size="14" />提示词库
+              </el-dropdown-item>
+              <el-dropdown-item @click="toggleWebSessionPanel">
+                <MessageSquare :size="14" />GPT Web 会话管理
+              </el-dropdown-item>
+              <el-dropdown-item
+                divided
+                :disabled="taskBackupBusy"
+                @click="exportTaskBundle"
+              >
+                <Download :size="14" />导出任务备份
+              </el-dropdown-item>
+              <el-dropdown-item
+                :disabled="taskBackupBusy"
+                @click="importTaskBundle"
+              >
+                <Upload :size="14" />导入任务备份
+              </el-dropdown-item>
+              <el-dropdown-item
+                divided
+                :disabled="taskBackupBusy"
+                @click="pushTaskBundleToKoofr"
+              >
+                <UploadCloud :size="14" />备份到 Koofr
+              </el-dropdown-item>
+              <el-dropdown-item
+                :disabled="taskBackupBusy"
+                @click="pullTaskBundleFromKoofr"
+              >
+                <DownloadCloud :size="14" />从 Koofr 恢复
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <button
           class="conversation-button conversation-new-btn"
           type="button"
           @click="newConversation"
         >
           <Plus :size="14" />
-          <span>新建对话</span>
+          <span>新建本地对话</span>
         </button>
         <button
           class="conversation-button conversation-batch-btn"
@@ -106,51 +130,11 @@
           <Plus :size="14" />
           <span>批量生成</span>
         </button>
-        <button
-          class="conversation-button conversation-task-backup-btn"
-          type="button"
-          title="导出当前会话中可恢复的图片任务"
-          :disabled="taskBackupBusy"
-          @click="exportTaskBundle"
-        >
-          <Download :size="13" />
-          <span>导出任务</span>
-        </button>
-        <button
-          class="conversation-button conversation-task-backup-btn"
-          type="button"
-          title="导入图片任务备份"
-          :disabled="taskBackupBusy"
-          @click="importTaskBundle"
-        >
-          <Upload :size="13" />
-          <span>导入任务</span>
-        </button>
-        <button
-          class="conversation-button conversation-task-cloud-btn"
-          type="button"
-          title="将当前会话中可恢复的图片任务备份到 Koofr"
-          :disabled="taskBackupBusy"
-          @click="pushTaskBundleToKoofr"
-        >
-          <UploadCloud :size="13" />
-          <span>备份到 Koofr</span>
-        </button>
-        <button
-          class="conversation-button conversation-task-cloud-btn"
-          type="button"
-          title="从配置的 Koofr 恢复图片任务"
-          :disabled="taskBackupBusy"
-          @click="pullTaskBundleFromKoofr"
-        >
-          <DownloadCloud :size="13" />
-          <span>从 Koofr 恢复</span>
-        </button>
       </div>
     </header>
     <aside v-if="historyOpen" class="conversation-sidebar">
       <header class="history-head">
-        <span>历史会话</span
+        <span>本地历史对话</span
         ><button
           class="history-action"
           type="button"
@@ -3630,9 +3614,10 @@ defineExpose({
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    padding: 0 0 14px;
+    gap: 8px 16px;
+    padding: 0 0 12px;
     flex: none;
+    flex-wrap: wrap;
 
     .conversation-toolbar-left,
     .conversation-toolbar-right {
@@ -3641,7 +3626,14 @@ defineExpose({
       gap: 8px;
     }
 
+    .conversation-toolbar-left {
+      min-width: 0;
+      flex: 1 1 240px;
+    }
+
     .conversation-toolbar-right {
+      max-width: 100%;
+      margin-left: auto;
       flex-wrap: wrap;
       justify-content: flex-end;
     }
@@ -3651,13 +3643,12 @@ defineExpose({
       align-items: center;
       gap: 6px;
       height: 32px;
-      padding: 0 14px;
+      padding: 0 10px;
       border: 1px solid var(--color-line);
-      border-radius: 9999px;
+      border-radius: 7px;
       background: var(--color-panel);
       color: var(--color-text);
       font-size: 13px;
-      font-weight: 500;
       cursor: pointer;
       white-space: nowrap;
       flex-shrink: 0;
@@ -3680,72 +3671,39 @@ defineExpose({
         cursor: not-allowed;
       }
 
-      &.conversation-new-btn {
-        background: #2563eb;
-        border-color: #2563eb;
-        color: #ffffff;
-
-        &:hover {
-          background: #1d4ed8;
-          border-color: #1d4ed8;
-          color: #ffffff;
-        }
-      }
-
       &.conversation-batch-btn {
-        border-color: #0f766e;
-        background: #f0fdfa;
-        color: #0f766e;
+        border-color: var(--color-primary);
+        background: var(--color-primary);
+        color: #fff;
 
         &:hover {
-          border-color: #0d9488;
-          background: #ccfbf1;
-          color: #115e59;
+          filter: brightness(0.94);
+          background: var(--color-primary);
+          color: #fff;
         }
       }
 
-      &.conversation-task-backup-btn {
-        border-color: #7c3aed;
-        background: #f5f3ff;
-        color: #6d28d9;
+      &.conversation-history-btn {
+        min-width: 0;
+        max-width: 340px;
+        flex-shrink: 1;
+        background: var(--color-panel-soft);
 
-        &:hover {
-          border-color: #6d28d9;
-          background: #ede9fe;
-          color: #5b21b6;
+        .conversation-context-icon {
+          flex-shrink: 0;
         }
-      }
 
-      &.conversation-task-cloud-btn {
-        border-color: #0369a1;
-        background: #f0f9ff;
-        color: #0369a1;
-
-        &:hover {
-          border-color: #0284c7;
-          background: #e0f2fe;
-          color: #075985;
+        .conversation-context-label {
+          flex-shrink: 0;
+          color: var(--color-text-muted);
+          font-size: 11px;
         }
-      }
-    }
 
-    .conversation-chip {
-      display: inline-flex;
-      align-items: center;
-      height: 32px;
-      padding: 0 16px;
-      border-radius: 9999px;
-      background: #eff6ff;
-      border: 1px solid #bfdbfe;
-      color: #2563eb;
-      font-size: 13px;
-      font-weight: 500;
-      max-width: 360px;
-
-      .conversation-chip-title {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
+        .conversation-context-title {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
       }
     }
 
@@ -3756,25 +3714,23 @@ defineExpose({
       height: 32px;
       max-width: 240px;
       padding: 0 8px;
-      border: 1px solid #bfdbfe;
-      border-radius: 9999px;
-      background: #eff6ff;
-      color: #2563eb;
+      flex-shrink: 0;
+      color: var(--color-text-muted);
       font-size: 12px;
       white-space: nowrap;
 
       .batch-quota-label {
-        color: #475569;
+        color: var(--color-text-muted);
       }
 
       .batch-quota-value {
-        color: #1d4ed8;
-        font-size: 14px;
+        color: var(--color-text);
+        font-size: 13px;
         font-variant-numeric: tabular-nums;
       }
 
       .batch-quota-unit {
-        color: #475569;
+        color: var(--color-text-muted);
       }
 
       .batch-quota-refresh {
@@ -5795,29 +5751,6 @@ defineExpose({
 
   :global(:root[data-theme="dark"]),
   .tools-view--dark & {
-    .conversation-toolbar {
-      .conversation-chip {
-        background: rgba(37, 99, 235, 0.16);
-        border-color: rgba(96, 165, 250, 0.35);
-        color: #60a5fa;
-      }
-
-      .batch-quota-compact {
-        background: rgba(37, 99, 235, 0.16);
-        border-color: rgba(96, 165, 250, 0.35);
-        color: #93c5fd;
-
-        .batch-quota-label,
-        .batch-quota-unit {
-          color: #bfdbfe;
-        }
-
-        .batch-quota-value {
-          color: #f1f5f9;
-        }
-      }
-    }
-
     .create-panel {
       .panel-head .panel-head-badge {
         background: rgba(37, 99, 235, 0.16);
@@ -6050,6 +5983,28 @@ defineExpose({
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+</style>
+
+<style lang="less">
+.image-workbench-menu-popper {
+  .el-dropdown-menu {
+    min-width: 190px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+    padding: 5px;
+
+    .el-dropdown-menu__item {
+      gap: 9px;
+      padding: 8px 10px;
+      border-radius: 5px;
+      font-size: 12px;
+
+      &.workbench-menu-danger:not(.is-disabled) {
+        color: var(--color-danger, #dc2626);
+      }
+    }
   }
 }
 </style>

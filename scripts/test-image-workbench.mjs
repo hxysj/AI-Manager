@@ -151,6 +151,9 @@ try {
     ),
     resolve(
       "src/features/tools/imageWorkbench/components/BatchResultsPanel.vue"
+    ),
+    resolve(
+      "src/features/tools/imageWorkbench/components/BatchQueuePanel.vue"
     )
   ]) {
     const { descriptor, errors } = parse(await readFile(path, "utf8"))
@@ -162,14 +165,16 @@ try {
       id: path,
       compilerOptions: { bindingMetadata: script.bindings }
     })
-    const style = await compileStyleAsync({
-      source: descriptor.styles[0].content,
-      filename: path,
-      id: path,
-      preprocessLang: "less"
-    })
     assert.deepEqual(template.errors, [])
-    assert.deepEqual(style.errors, [])
+    for (const style of descriptor.styles) {
+      const result = await compileStyleAsync({
+        source: style.content,
+        filename: path,
+        id: path,
+        preprocessLang: "less"
+      })
+      assert.deepEqual(result.errors, [])
+    }
   }
   const bundle = await build({
     entryPoints: [sourcePath, batchSourcePath, panelSourcePath],

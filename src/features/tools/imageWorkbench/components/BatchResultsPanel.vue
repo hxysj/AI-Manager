@@ -15,76 +15,84 @@
         >
       </div>
 
-      <div class="batch-results-toolbar">
-        <button
-          class="batch-export-btn"
-          type="button"
-          :disabled="!exportableTaskIds.length || exporting"
-          :title="
-            exportableTaskIds.length
-              ? `导出当前批量会话中的 ${exportableTaskIds.length} 个任务`
-              : '暂无可导出的图片'
-          "
-          @click="emit('export-batch', exportableTaskIds)"
+      <button
+        class="batch-export-btn"
+        type="button"
+        :disabled="!exportableTaskIds.length || exporting"
+        :title="
+          exportableTaskIds.length
+            ? `导出当前批量会话中的 ${exportableTaskIds.length} 个任务`
+            : '暂无可导出的图片'
+        "
+        @click="emit('export-batch', exportableTaskIds)"
+      >
+        <Download :size="13" />
+        <span>批量导出</span>
+        <span v-if="exportableTaskIds.length"
+          >({{ exportableTaskIds.length }})</span
         >
-          <Download :size="13" />
-          <span>批量导出</span>
-          <span v-if="exportableTaskIds.length"
-            >({{ exportableTaskIds.length }})</span
-          >
-        </button>
-        <div class="batch-search-box">
-          <Search :size="13" class="search-icon" />
-          <input
-            v-model="search"
-            type="text"
-            class="batch-search-input"
-            placeholder="搜索图片名称或提示词..."
-          />
-          <button
-            v-if="search"
-            type="button"
-            class="search-clear-btn"
-            title="清除搜索"
-            @click="search = ''"
-          >
-            <X :size="12" />
-          </button>
-        </div>
-
-        <div class="batch-view-toggle">
-          <button
-            type="button"
-            class="view-toggle-btn"
-            :class="{ 'is-active': viewMode === 'grid' }"
-            title="网格视图"
-            @click="viewMode = 'grid'"
-          >
-            <Grid :size="14" />
-          </button>
-          <button
-            type="button"
-            class="view-toggle-btn"
-            :class="{ 'is-active': viewMode === 'list' }"
-            title="列表视图"
-            @click="viewMode = 'list'"
-          >
-            <List :size="14" />
-          </button>
-        </div>
-
-        <div class="custom-select-wrapper is-mini status-filter-select">
-          <select v-model="status" class="custom-select mini-select">
-            <option value="completed">已完成</option>
-            <option value="">全部状态</option>
-            <option value="processing">进行中</option>
-            <option value="queued">排队中</option>
-            <option value="failed">失败</option>
-          </select>
-          <ChevronDown :size="12" class="custom-select-arrow" />
-        </div>
-      </div>
+      </button>
     </header>
+
+    <div class="batch-results-toolbar">
+      <div class="batch-search-box">
+        <Search :size="13" class="search-icon" />
+        <input
+          v-model="search"
+          type="text"
+          class="batch-search-input"
+          placeholder="搜索名称或提示词"
+          aria-label="搜索生成结果"
+        />
+        <button
+          v-if="search"
+          type="button"
+          class="search-clear-btn"
+          title="清除搜索"
+          @click="search = ''"
+        >
+          <X :size="12" />
+        </button>
+      </div>
+
+      <div class="custom-select-wrapper is-mini status-filter-select">
+        <select
+          v-model="status"
+          class="custom-select mini-select"
+          aria-label="筛选生成结果状态"
+        >
+          <option value="completed">已完成</option>
+          <option value="">全部状态</option>
+          <option value="processing">进行中</option>
+          <option value="queued">排队中</option>
+          <option value="failed">失败</option>
+        </select>
+        <ChevronDown :size="12" class="custom-select-arrow" />
+      </div>
+
+      <div class="batch-view-toggle">
+        <button
+          type="button"
+          class="view-toggle-btn"
+          :class="{ 'is-active': viewMode === 'grid' }"
+          :aria-pressed="viewMode === 'grid'"
+          title="网格视图"
+          @click="viewMode = 'grid'"
+        >
+          <Grid :size="14" />
+        </button>
+        <button
+          type="button"
+          class="view-toggle-btn"
+          :class="{ 'is-active': viewMode === 'list' }"
+          :aria-pressed="viewMode === 'list'"
+          title="列表视图"
+          @click="viewMode = 'list'"
+        >
+          <List :size="14" />
+        </button>
+      </div>
+    </div>
 
     <div ref="resultScroll" class="batch-results-body">
       <div
@@ -145,37 +153,42 @@
               <button
                 class="card-act-btn"
                 type="button"
-                title="查看大图"
-                :disabled="!task.imageCount"
-                @click="emit('show-detail', task, 'images')"
-              >
-                <ZoomIn :size="13" />
-              </button>
-              <button
-                class="card-act-btn"
-                type="button"
                 title="下载图片"
                 :disabled="!task.imageCount"
                 @click="emit('download-task', task)"
               >
                 <Download :size="13" />
               </button>
-              <button
-                class="card-act-btn"
-                type="button"
-                title="复制提示词"
-                @click="emit('copy-prompt', task.request?.prompt)"
+              <el-dropdown
+                trigger="click"
+                placement="bottom-end"
+                popper-class="image-workbench-menu-popper"
               >
-                <Copy :size="13" />
-              </button>
-              <button
-                class="card-act-btn"
-                type="button"
-                title="查看参数"
-                @click="emit('show-detail', task, 'parameters')"
-              >
-                <SlidersHorizontal :size="13" />
-              </button>
+                <button
+                  class="card-act-btn"
+                  type="button"
+                  title="更多图片操作"
+                  aria-label="更多图片操作"
+                >
+                  <MoreHorizontal :size="13" />
+                </button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item
+                      :disabled="!task.imageCount"
+                      @click="emit('show-detail', task, 'images')"
+                    >
+                      <ZoomIn :size="14" />查看大图
+                    </el-dropdown-item>
+                    <el-dropdown-item @click="emit('copy-prompt', task.request?.prompt)">
+                      <Copy :size="14" />复制提示词
+                    </el-dropdown-item>
+                    <el-dropdown-item @click="emit('show-detail', task, 'parameters')">
+                      <SlidersHorizontal :size="14" />查看参数
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
             </div>
           </div>
         </article>
@@ -229,30 +242,44 @@
 
           <div class="batch-result-actions">
             <button
-              v-if="task.imageCount"
               class="row-action-btn"
               type="button"
               title="下载图片"
+              :disabled="!task.imageCount"
               @click="emit('download-task', task)"
             >
               <Download :size="13" />
             </button>
-            <button
-              class="row-action-btn"
-              type="button"
-              title="复制提示词"
-              @click="emit('copy-prompt', task.request?.prompt)"
+            <el-dropdown
+              trigger="click"
+              placement="bottom-end"
+              popper-class="image-workbench-menu-popper"
             >
-              <Copy :size="13" />
-            </button>
-            <button
-              class="row-action-btn"
-              type="button"
-              title="查看详情"
-              @click="emit('show-detail', task, 'parameters')"
-            >
-              <MoreHorizontal :size="13" />
-            </button>
+              <button
+                class="row-action-btn"
+                type="button"
+                title="更多图片操作"
+                aria-label="更多图片操作"
+              >
+                <MoreHorizontal :size="13" />
+              </button>
+              <template #dropdown>
+                <el-dropdown-menu>
+                  <el-dropdown-item
+                    :disabled="!task.imageCount"
+                    @click="emit('show-detail', task, 'images')"
+                  >
+                    <ZoomIn :size="14" />查看大图
+                  </el-dropdown-item>
+                  <el-dropdown-item @click="emit('copy-prompt', task.request?.prompt)">
+                    <Copy :size="14" />复制提示词
+                  </el-dropdown-item>
+                  <el-dropdown-item @click="emit('show-detail', task, 'parameters')">
+                    <SlidersHorizontal :size="14" />查看参数
+                  </el-dropdown-item>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
           </div>
         </article>
       </div>
@@ -338,7 +365,8 @@ import {
   X,
   ZoomIn
 } from "lucide-vue-next"
-import { ElImage } from "element-plus"
+import { ElDropdown, ElDropdownItem, ElDropdownMenu, ElImage } from "element-plus"
+import "element-plus/es/components/dropdown/style/css"
 import "element-plus/es/components/image/style/css"
 import { toolboxApi } from "@/api"
 import { createMessage } from "@/utils/message"
@@ -540,153 +568,158 @@ function getVisiblePages(current, total) {
   opacity: 0;
 }
 
-.batch-results-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  flex-shrink: 0;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--color-line);
-}
+.batch-results-panel {
+  .batch-results-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
 
-.batch-results-header-left {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
+    .batch-results-header-left {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
 
-.batch-results-title {
-  margin: 0;
-  color: var(--color-text);
-  font-size: 15px;
-  font-weight: 700;
-}
+      .batch-results-title {
+        margin: 0;
+        color: var(--color-text);
+        font-size: 15px;
+      }
 
-.batch-results-counter {
-  color: var(--color-text-muted);
-  font-size: 12.5px;
-}
-
-.batch-results-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.batch-export-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  height: 28px;
-  padding: 0 9px;
-  border: 1px solid #2563eb;
-  border-radius: 6px;
-  background: #2563eb;
-  color: #fff;
-  cursor: pointer;
-  font-size: 12px;
-  transition:
-    background-color 0.14s ease,
-    border-color 0.14s ease;
-
-  &:hover:not(:disabled) {
-    border-color: #1d4ed8;
-    background: #1d4ed8;
-  }
-
-  &:disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-  }
-}
-
-.batch-search-box {
-  position: relative;
-  display: flex;
-  align-items: center;
-  width: 180px;
-  height: 28px;
-  padding: 0 6px 0 26px;
-  border: 1px solid var(--color-line);
-  border-radius: 6px;
-  background: var(--color-panel);
-  transition: border-color 0.16s ease;
-
-  &:focus-within {
-    border-color: #2563eb;
-    box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
-  }
-
-  .search-icon {
-    position: absolute;
-    left: 8px;
-    color: var(--color-text-soft);
-    pointer-events: none;
-  }
-
-  .batch-search-input {
-    width: 100%;
-    padding: 0;
-    border: 0;
-    outline: none;
-    background: transparent;
-    color: var(--color-text);
-    font-size: 12px;
-
-    &::placeholder {
-      color: var(--color-text-soft);
-    }
-  }
-
-  .search-clear-btn {
-    display: grid;
-    width: 16px;
-    height: 16px;
-    padding: 0;
-    place-items: center;
-    border: 0;
-    border-radius: 50%;
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-
-    &:hover {
-      background: var(--color-panel-soft);
-      color: var(--color-text);
-    }
-  }
-}
-
-.batch-view-toggle {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px;
-  border: 1px solid var(--color-line);
-  border-radius: 6px;
-  background: var(--color-panel-soft);
-
-  .view-toggle-btn {
-    display: grid;
-    width: 26px;
-    height: 24px;
-    place-items: center;
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-
-    &:hover {
-      color: var(--color-text);
+      .batch-results-counter {
+        color: var(--color-text-muted);
+        font-size: 12.5px;
+      }
     }
 
-    &.is-active {
+    .batch-export-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      height: 28px;
+      padding: 0 9px;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
       background: var(--color-panel);
-      color: #2563eb;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      font-size: 12px;
+      transition:
+        background-color 0.14s ease,
+        border-color 0.14s ease;
+
+      &:hover:not(:disabled) {
+        border-color: var(--color-line-strong);
+        background: var(--color-panel-soft);
+      }
+
+      &:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+    }
+  }
+
+  .batch-results-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    flex-wrap: wrap;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--color-line);
+
+    .batch-search-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      flex: 1 1 130px;
+      height: 28px;
+      padding: 0 6px 0 26px;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel);
+      transition: border-color 0.16s ease;
+
+      &:focus-within {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+      }
+
+      .search-icon {
+        position: absolute;
+        left: 8px;
+        color: var(--color-text-soft);
+        pointer-events: none;
+      }
+
+      .batch-search-input {
+        width: 100%;
+        min-width: 0;
+        padding: 0;
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: var(--color-text);
+        font-size: 12px;
+
+        &::placeholder {
+          color: var(--color-text-soft);
+        }
+      }
+
+      .search-clear-btn {
+        display: grid;
+        width: 16px;
+        height: 16px;
+        padding: 0;
+        place-items: center;
+        border: 0;
+        border-radius: 50%;
+        background: transparent;
+        color: var(--color-text-muted);
+        cursor: pointer;
+
+        &:hover {
+          background: var(--color-panel-soft);
+          color: var(--color-text);
+        }
+      }
+    }
+
+    .batch-view-toggle {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel-soft);
+
+      .view-toggle-btn {
+        display: grid;
+        width: 26px;
+        height: 24px;
+        place-items: center;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--color-text-muted);
+        cursor: pointer;
+
+        &:hover {
+          color: var(--color-text);
+        }
+
+        &.is-active {
+          background: var(--color-panel);
+          color: #2563eb;
+          box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+        }
+      }
     }
   }
 }
@@ -700,17 +733,9 @@ function getVisiblePages(current, total) {
 
 .batch-card-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 170px), 1fr));
   gap: 12px;
   padding-bottom: 8px;
-
-  @media (max-width: 900px) {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  @media (max-width: 600px) {
-    grid-template-columns: 1fr;
-  }
 }
 
 .batch-result-card {

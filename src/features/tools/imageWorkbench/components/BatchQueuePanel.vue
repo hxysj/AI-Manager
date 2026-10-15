@@ -19,38 +19,29 @@
             }}
           </span>
         </div>
-        <div class="batch-queue-status-pills">
-          <button
-            class="queue-status-pill is-filter-pill is-all"
-            :class="{ 'is-active': statusFilter === 'all' }"
-            type="button"
-            title="查看全部状态任务"
-            @click="statusFilter = 'all'"
+        <div class="custom-select-wrapper is-mini">
+          <select
+            v-model="statusFilter"
+            class="mini-select"
+            aria-label="筛选任务队列状态"
           >
-            <span>全部 {{ allTasks.length }}</span>
-          </button>
-          <button
-            v-for="filter in statusFilters"
-            :key="filter.value"
-            class="queue-status-pill is-filter-pill"
-            :class="[
-              `is-${filter.value}`,
-              { 'is-active': statusFilter === filter.value }
-            ]"
-            type="button"
-            :title="`筛选${filter.label}任务`"
-            @click="toggleStatusFilter(filter.value)"
-          >
-            <span class="pill-dot" />
-            <span>{{ filter.label }} {{ filter.count }}</span>
-          </button>
+            <option value="all">全部状态 · {{ allTasks.length }}</option>
+            <option
+              v-for="filter in statusFilters"
+              :key="filter.value"
+              :value="filter.value"
+            >
+              {{ filter.label }} · {{ filter.count }}
+            </option>
+          </select>
+          <ChevronDown :size="12" class="custom-select-arrow" />
         </div>
       </div>
 
       <div class="batch-queue-toolbar">
         <div class="batch-queue-toolbar-left">
           <button
-            class="batch-btn is-primary is-sm"
+            class="batch-btn is-outline is-sm"
             type="button"
             :disabled="
               (paused ? !resumableTasks.length : !activeTasks.length) ||
@@ -63,84 +54,79 @@
             <Pause v-else :size="13" />
             <span>{{ paused ? "开始任务" : "暂停任务" }}</span>
           </button>
-          <button
-            class="batch-btn is-success-outline is-sm"
-            type="button"
-            :disabled="!resumableSelected.length || stopping"
-            :title="`恢复或重试选中的已暂停或失败任务${resumableSelected.length ? ` (${resumableSelected.length})` : ''}`"
-            @click="$emit('resume-selected', [...resumableSelected])"
+          <el-dropdown
+            v-if="selectedIds.length"
+            trigger="click"
+            placement="bottom-start"
+            popper-class="image-workbench-menu-popper"
           >
-            <RotateCcw :size="13" />
-            <span
-              >恢复选中{{
-                resumableSelected.length ? ` (${resumableSelected.length})` : ""
-              }}</span
+            <button class="batch-btn is-outline is-sm" type="button">
+              <span>批量操作 · {{ selectedIds.length }}</span>
+              <ChevronDown :size="12" />
+            </button>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item
+                  :disabled="!resumableSelected.length || stopping"
+                  @click="$emit('resume-selected', [...resumableSelected])"
+                >
+                  <RotateCcw :size="14" />
+                  恢复 / 重试 {{ resumableSelected.length }} 项
+                </el-dropdown-item>
+                <el-dropdown-item
+                  :disabled="!cancellableSelected.length || stopping"
+                  @click="$emit('cancel-selected', [...cancellableSelected])"
+                >
+                  <Pause :size="14" />取消任务 {{ cancellableSelected.length }} 项
+                </el-dropdown-item>
+                <el-dropdown-item
+                  divided
+                  class="workbench-menu-danger"
+                  :disabled="deleting"
+                  @click="$emit('delete-selected', [...selectedIds])"
+                >
+                  <Trash2 :size="14" />删除选中 {{ selectedIds.length }} 项
+                </el-dropdown-item>
+                <el-dropdown-item divided @click="selectedIds = []">
+                  <X :size="14" />取消选择
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
+        <div
+          class="batch-concurrency-control"
+          title="批量任务同时执行数量 (1–10)"
+        >
+          <div class="batch-concurrency-label-group">
+            <SlidersHorizontal :size="12" class="concurrency-icon" />
+            <span class="batch-concurrency-label">并发</span>
+          </div>
+          <div class="batch-concurrency-stepper">
+            <button
+              class="batch-concurrency-btn is-minus"
+              type="button"
+              title="减少并发数量 (最小 1)"
+              :disabled="concurrency <= 1 || stopping"
+              @click="$emit('set-concurrency', concurrency - 1)"
             >
-          </button>
-          <button
-            class="batch-btn is-outline is-sm"
-            type="button"
-            :disabled="!cancellableSelected.length || stopping"
-            title="取消选中的排队或生成任务"
-            @click="$emit('cancel-selected', [...cancellableSelected])"
-          >
-            <X :size="13" />
+              <Minus :size="12" />
+            </button>
             <span
-              >取消选中{{
-                cancellableSelected.length
-                  ? ` (${cancellableSelected.length})`
-                  : ""
-              }}</span
+              class="batch-concurrency-value"
+              :title="`当前并发任务数: ${concurrency}`"
             >
-          </button>
-          <button
-            class="batch-btn is-danger-outline is-sm"
-            type="button"
-            :disabled="!selectedIds.length || deleting"
-            title="删除选中的批量任务"
-            @click="$emit('delete-selected', [...selectedIds])"
-          >
-            <Trash2 :size="13" />
-            <span
-              >删除选中{{
-                selectedIds.length ? ` (${selectedIds.length})` : ""
-              }}</span
+              {{ concurrency }}
+            </span>
+            <button
+              class="batch-concurrency-btn is-plus"
+              type="button"
+              title="增加并发数量 (最大 10)"
+              :disabled="concurrency >= 10 || stopping"
+              @click="$emit('set-concurrency', concurrency + 1)"
             >
-          </button>
-          <div
-            class="batch-concurrency-control"
-            title="批量任务同时执行数量 (1–10)"
-          >
-            <div class="batch-concurrency-label-group">
-              <SlidersHorizontal :size="12" class="concurrency-icon" />
-              <span class="batch-concurrency-label">并发</span>
-            </div>
-            <div class="batch-concurrency-stepper">
-              <button
-                class="batch-concurrency-btn is-minus"
-                type="button"
-                title="减少并发数量 (最小 1)"
-                :disabled="concurrency <= 1 || stopping"
-                @click="$emit('set-concurrency', concurrency - 1)"
-              >
-                <Minus :size="12" />
-              </button>
-              <span
-                class="batch-concurrency-value"
-                :title="`当前并发任务数: ${concurrency}`"
-              >
-                {{ concurrency }}
-              </span>
-              <button
-                class="batch-concurrency-btn is-plus"
-                type="button"
-                title="增加并发数量 (最大 10)"
-                :disabled="concurrency >= 10 || stopping"
-                @click="$emit('set-concurrency', concurrency + 1)"
-              >
-                <Plus :size="12" />
-              </button>
-            </div>
+              <Plus :size="12" />
+            </button>
           </div>
         </div>
       </div>
@@ -280,14 +266,8 @@
               :indeterminate="isIndeterminate"
               :disabled="!paginatedTasks.length"
             />
-            <span>全选</span>
+            <span>本页全选</span>
           </label>
-          <span class="footer-selected-count">
-            已选 {{ selectedIds.length }} 项
-            <template v-if="statusFilter !== 'all'">
-              · 当前筛选共 {{ filteredTasks.length }} 项</template
-            >
-          </span>
         </div>
         <div class="footer-right">
           <div class="custom-select-wrapper is-mini">
@@ -342,6 +322,8 @@
 
 <script setup>
 import { computed, nextTick, ref, watch } from "vue"
+import { ElDropdown, ElDropdownItem, ElDropdownMenu } from "element-plus"
+import "element-plus/es/components/dropdown/style/css"
 import {
   ChevronDown,
   ChevronLeft,
@@ -524,10 +506,6 @@ function statusTone(status) {
   return "queued"
 }
 
-function toggleStatusFilter(value) {
-  statusFilter.value = statusFilter.value === value ? "all" : value
-}
-
 function scrollToTop() {
   nextTick(() => scrollElement.value?.scrollTo({ top: 0 }))
 }
@@ -568,41 +546,54 @@ watch(
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
 }
 
-.batch-queue-header {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  flex-shrink: 0;
-}
-.batch-queue-title-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.batch-queue-title-group {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-.batch-queue-title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--color-text);
-}
-.batch-queue-counter {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-text-muted);
-  font-family: "Bahnschrift", monospace;
-}
-.batch-queue-status-pills {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+.batch-queue-panel {
+  .batch-queue-header {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex-shrink: 0;
+
+    .batch-queue-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+
+      .batch-queue-title-group {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+
+        .batch-queue-title {
+          margin: 0;
+          font-size: 15px;
+          color: var(--color-text);
+        }
+
+        .batch-queue-counter {
+          font-size: 12px;
+          color: var(--color-text-muted);
+          font-variant-numeric: tabular-nums;
+        }
+      }
+    }
+
+    .batch-queue-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+
+      .batch-queue-toolbar-left {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+    }
+  }
 }
 
 .queue-status-pill {
@@ -617,35 +608,14 @@ watch(
   font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
-  &.is-filter-pill {
-    cursor: pointer;
-    user-select: none;
-    outline: none;
-    font-family: inherit;
-    transition: all 0.16s ease;
-    &:hover {
-      transform: translateY(-1px);
-    }
-    &:active {
-      transform: translateY(0);
-    }
-  }
+
   .pill-dot {
     width: 6px;
     height: 6px;
     flex-shrink: 0;
     border-radius: 50%;
   }
-  &.is-all {
-    background: var(--color-panel-soft);
-    border-color: var(--color-line);
-    color: var(--color-text-muted);
-    &.is-active {
-      background: #2563eb;
-      border-color: #2563eb;
-      color: #fff;
-    }
-  }
+
   &.is-processing {
     background: #eff6ff;
     border-color: #dbeafe;
@@ -714,19 +684,6 @@ watch(
   }
 }
 
-.batch-queue-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.batch-queue-toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
 .batch-btn {
   display: inline-flex;
   align-items: center;
@@ -753,23 +710,17 @@ watch(
     padding: 0 10px;
     font-size: 11.5px;
   }
-  &.is-primary {
-    background: #2563eb;
-    border-color: #2563eb;
-    color: #fff;
-  }
+
   &.is-outline {
     border-color: var(--color-line);
+
+    &:hover:not(:disabled) {
+      background: var(--color-panel-soft);
+      border-color: var(--color-line-strong);
+    }
   }
-  &.is-success-outline {
-    border-color: var(--color-line);
-    color: #16a34a;
-  }
-  &.is-danger-outline {
-    border-color: var(--color-danger-line, #fecaca);
-    background: var(--color-danger-soft, #fff5f5);
-    color: var(--color-danger, #ef4444);
-  }
+
+
 }
 .batch-concurrency-control {
   display: inline-flex;
@@ -848,7 +799,7 @@ watch(
 .batch-table-head,
 .batch-table-row {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 110px 80px;
+  grid-template-columns: 26px minmax(0, 1fr) 90px 56px;
   align-items: center;
 }
 .batch-table-head {
@@ -924,7 +875,7 @@ watch(
   gap: 3px;
 }
 .task-error-tip {
-  max-width: 100px;
+  max-width: 100%;
   overflow: hidden;
   color: var(--color-danger, #ef4444);
   font-size: 10.5px;
@@ -1004,6 +955,8 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   flex-shrink: 0;
   margin-top: auto;
   padding: 8px 12px;
@@ -1022,6 +975,7 @@ watch(
   gap: 6px;
   color: var(--color-text);
   font-size: 12px;
+  white-space: nowrap;
   cursor: pointer;
   user-select: none;
   input[type="checkbox"] {
@@ -1031,10 +985,6 @@ watch(
     accent-color: #2563eb;
     cursor: pointer;
   }
-}
-.footer-selected-count {
-  color: var(--color-text-muted);
-  font-size: 11.5px;
 }
 .custom-select-wrapper.is-mini {
   position: relative;
@@ -1200,26 +1150,6 @@ watch(
   }
   50% {
     opacity: 0.45;
-  }
-}
-@media (max-width: 700px) {
-  .batch-table-head,
-  .batch-table-row {
-    grid-template-columns: 28px minmax(0, 1fr) 90px 64px;
-    padding-right: 8px;
-    padding-left: 8px;
-  }
-  .batch-queue-panel {
-    padding: 10px;
-  }
-  .batch-table-footer {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .footer-right {
-    width: 100%;
-    justify-content: space-between;
   }
 }
 </style>
