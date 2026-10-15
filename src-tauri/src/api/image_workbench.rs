@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use sha3::{Digest, Sha3_512};
 use std::{
     collections::{HashMap, HashSet},
-    io::{Cursor, Write},
+    io::Cursor,
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -259,6 +259,50 @@ pub fn accounts(paths: &AppPaths) -> Result<Value, ManagerError> {
         "id": account["id"], "email": account["email"], "plan": account["plan"],
         "active": account["active"], "disabled": account["disabled"], "requiresReauth": account["requires_reauth"]
     })).collect::<Vec<_>>()))
+}
+
+pub async fn delete_web_conversations(
+    paths: &AppPaths,
+    cli_targets: &Value,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let ids = serde_json::from_value::<Vec<String>>(payload["ids"].clone())?;
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(failure("请选取 1–10000 个 Web 会话"));
+    }
+    let records = image_store::read_web_conversations(paths, &ids)?;
+    let mut deleted_ids = Vec::new();
+    let mut failures = Vec::new();
+    for record in records {
+        let record_id = record["id"].as_str().unwrap_or("").to_string();
+        let account_id = record["accountId"].as_str().unwrap_or("");
+        // 与生成共用账号锁，删除成功后先保存状态，再允许后续任务选择会话。
+        let _guard = web_conversation_lock(account_id).lock_owned().await;
+        if record["deleted"] == true {
+            deleted_ids.push(record_id);
+            continue;
+        }
+        let (client, auth) = match image_account_session(paths, cli_targets, account_id, "web").await {
+            Ok(value) => value,
+            Err(error) => {
+                failures.push(json!({ "id": record_id, "message": error.to_string() }));
+                continue;
+            }
+        };
+        let mut context = WebContext::new();
+        context.account_id = account_id.to_string();
+        let upstream_id = record["conversationId"].as_str().unwrap_or("");
+        if web_delete_conversation(&client, &auth, &context, upstream_id).await {
+            image_store::mark_web_conversations_deleted(paths, &[record_id.clone()], true)?;
+            deleted_ids.push(record_id);
+        } else {
+            failures.push(json!({
+                "id": record_id,
+                "message": "ChatGPT 未确认会话删除"
+            }));
+        }
+    }
+    Ok(json!({ "deleted": deleted_ids.len(), "failed": failures }))
 }
 
 pub async fn models(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
@@ -535,6 +579,16 @@ fn batch_slots(key: &str, concurrency: u8) -> Arc<tokio::sync::Semaphore> {
     slots
 }
 
+fn web_conversation_lock(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: std::sync::OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
+        std::sync::OnceLock::new();
+    let mut locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+    locks
+        .entry(key.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
 fn task_batch_key(task: &Value) -> Option<String> {
     if let Some(key) = task["batchKey"].as_str().filter(|key| !key.is_empty()) {
         return Some(key.to_string());
@@ -654,6 +708,12 @@ fn spawn_task(
     let cli_targets = cli_targets.clone();
     tauri::async_runtime::spawn(async move {
         let _permit = slots.acquire().await.unwrap();
+        // GPT Web 会话按官方账号复用，本地历史分组不决定是否新建上游会话。
+        let _web_conversation_guard = if task["request"]["generationMode"] == "web" {
+            Some(web_conversation_lock(task["request"]["accountId"].as_str().unwrap_or("")).lock_owned().await)
+        } else {
+            None
+        };
         let id = task["id"].as_str().unwrap().to_string();
         let mut task = match image_store::start(&paths, &task) {
             Ok(Some(task)) => task,
@@ -673,22 +733,46 @@ fn spawn_task(
             let (client, auth) = image_account_session(&paths, &cli_targets, &request.account_id, &request.generation_mode).await?;
             let mut context = WebContext::new();
             context.task = Some((paths.clone(), id.clone(), task["revision"].as_u64().unwrap_or(0)));
+            context.account_id = request.account_id.clone();
+            context.local_conversation_id = request.conversation_id.clone();
             if request.generation_mode == "web"
                 && task["recovery"]["conversationId"].is_string()
             {
                 let recovery = &task["recovery"];
+                context.input_message_id = recovery["inputMessageId"].as_str().unwrap_or("").to_string();
                 context.device_id = recovery["deviceId"].as_str().unwrap_or(&context.device_id).to_string();
                 context.session_id = recovery["sessionId"].as_str().unwrap_or(&context.session_id).to_string();
-                let mut ids = WebAssetIds {
-                    conversation_id: recovery["conversationId"].as_str().unwrap().to_string(),
-                    file_ids: serde_json::from_value(recovery["fileIds"].clone()).unwrap_or_default(),
-                    sediment_ids: serde_json::from_value(recovery["sedimentIds"].clone()).unwrap_or_default(),
-                    ..Default::default()
+                let recovery_conversation_id = recovery["conversationId"].as_str().unwrap().to_string();
+                // 恢复先以本地 GPT 会话记录为准，用户删除记录后不能再从任务快照复用旧会话。
+                let saved = image_store::find_web_conversation(
+                    &paths,
+                    &request.account_id,
+                    &recovery_conversation_id,
+                )?;
+                // 导入和旧任务可能尚无独立会话记录，仍应优先查询其原上游会话。
+                let upstream = if saved.as_ref().is_some_and(|record| record["deleted"] == true) {
+                    None
+                } else {
+                    web_read_conversation(&client, &auth, &context, &recovery_conversation_id).await?
                 };
-                let input_ids: HashSet<String> = serde_json::from_value(recovery["inputIds"].clone())?;
-                // 继续等待只查询原会话，不创建会话、不重新提交提示词。
-                let (_, images, error) = web_finish_assets(&client, &auth, &context, &input_ids, &mut ids).await?;
-                return Ok(GenerationResult { images, error, usage: json!({"web_conversations": [ids.conversation_id], "resumed": true}), endpoint: "/backend-api/conversation".into(), request_id: id.clone() });
+                if let Some(upstream) = upstream {
+                    context.conversation_id = recovery_conversation_id.clone();
+                    context.parent_message_id = recovery["parentMessageId"].as_str().unwrap_or("").to_string();
+                    let mut ids = WebAssetIds {
+                        conversation_id: recovery_conversation_id.clone(),
+                        parent_message_id: upstream["current_node"].as_str().unwrap_or(&context.parent_message_id).to_string(),
+                        file_ids: serde_json::from_value(recovery["fileIds"].clone()).unwrap_or_default(),
+                        sediment_ids: serde_json::from_value(recovery["sedimentIds"].clone()).unwrap_or_default(),
+                        ..Default::default()
+                    };
+                    let input_ids: HashSet<String> = serde_json::from_value(recovery["inputIds"].clone())?;
+                    // 恢复先确认上游会话仍存在，存在时只继续查询原会话。
+                    let (_, images, error) = web_finish_assets(&client, &auth, &context, &input_ids, &mut ids).await?;
+                    return Ok(GenerationResult { images, error, usage: json!({"web_conversations": [ids.conversation_id], "resumed": true}), endpoint: "/backend-api/conversation".into(), request_id: id.clone() });
+                }
+                // 只记录已确认不存在的会话，网络或权限异常会直接保留原任务恢复信息。
+                image_store::mark_web_conversation_deleted_by_upstream(&paths, &request.account_id, &recovery_conversation_id)?;
+                task["recovery"] = Value::Null;
             }
             if request.generation_mode == "web" {
                 execute_web(&client, &auth, &request, &id, &mut context).await
@@ -754,6 +838,12 @@ struct WebRequirements {
 
 struct WebContext {
     task: Option<(AppPaths, String, u64)>,
+    account_id: String,
+    local_conversation_id: String,
+    conversation_id: String,
+    parent_message_id: String,
+    input_message_id: String,
+    excluded_asset_ids: HashSet<String>,
     base_url: String,
     device_id: String,
     session_id: String,
@@ -765,6 +855,12 @@ impl WebContext {
     fn new() -> Self {
         Self {
             task: None,
+            account_id: String::new(),
+            local_conversation_id: String::new(),
+            conversation_id: String::new(),
+            parent_message_id: String::new(),
+            input_message_id: Uuid::new_v4().to_string(),
+            excluded_asset_ids: HashSet::new(),
             base_url: "https://chatgpt.com".to_string(),
             device_id: Uuid::new_v4().to_string(),
             session_id: Uuid::new_v4().to_string(),
@@ -777,6 +873,7 @@ impl WebContext {
 #[derive(Default)]
 struct WebAssetIds {
     conversation_id: String,
+    parent_message_id: String,
     file_ids: Vec<String>,
     sediment_ids: Vec<String>,
     blocked: bool,
@@ -861,12 +958,34 @@ async fn execute_web(
     };
     let references = web_upload_references(client, auth, &context, request).await?;
     web_bootstrap(client, auth, context).await?;
+    if let Some((paths, _, _)) = &context.task {
+        while let Some(saved) = image_store::find_web_conversation(paths, &request.account_id, "")? {
+            let upstream_id = saved["conversationId"].as_str().unwrap_or("").to_string();
+            if let Some(upstream) = web_read_conversation(client, auth, context, &upstream_id).await? {
+                context.conversation_id = upstream_id;
+                context.parent_message_id = upstream["current_node"].as_str()
+                    .or_else(|| saved["parentMessageId"].as_str()).unwrap_or("").to_string();
+                // 保存旧轮次的资源排除范围，后续查询整段会话时只收集本轮图片。
+                let mut previous = WebAssetIds::default();
+                web_collect_assets(&upstream, &HashSet::new(), &mut previous);
+                context.excluded_asset_ids.extend(previous.file_ids);
+                context.excluded_asset_ids.extend(previous.sediment_ids);
+                break;
+            } else {
+                image_store::mark_web_conversation_deleted_by_upstream(
+                    paths,
+                    &request.account_id,
+                    &upstream_id,
+                )?;
+            }
+        }
+    }
     let mut images = Vec::new();
     let mut conversation_ids = Vec::new();
     let mut last_error = Value::Null;
     let mut sentinel_diagnostics = Vec::new();
 
-    // 网页端没有 n 参数；每张请求都创建一个独立会话。
+    // Web 端没有 n 参数，同一账号的连续生成复用同一个上游会话。
     for _ in 0..request.n {
         let requirements = match web_requirements(client, auth, &context).await {
             Ok(value) => value,
@@ -882,7 +1001,7 @@ async fn execute_web(
         match web_execute_once(
             client,
             auth,
-            &context,
+            &mut *context,
             request,
             &requirements,
             &model,
@@ -920,6 +1039,7 @@ async fn execute_web(
             "message": "Web 生图未返回可下载的完整图片"
         });
     }
+    conversation_ids.dedup();
     Ok(GenerationResult {
         images,
         usage: json!({
@@ -1057,12 +1177,13 @@ async fn web_quota(
 async fn web_execute_once(
     client: &reqwest::Client,
     auth: &Value,
-    context: &WebContext,
+    context: &mut WebContext,
     request: &ImageRequest,
     requirements: &WebRequirements,
     model: &str,
     references: &[WebReference],
 ) -> Result<(String, Vec<StoredImage>, Value), ManagerError> {
+    context.input_message_id = Uuid::new_v4().to_string();
     let conduit =
         web_prepare_conversation(client, auth, context, request, requirements, model).await?;
     let response = web_start_conversation(
@@ -1080,6 +1201,7 @@ async fn web_execute_once(
     let input_ids = references
         .iter()
         .map(|item| item.file_id.clone())
+        .chain(context.excluded_asset_ids.iter().cloned())
         .collect::<HashSet<_>>();
     let (_, bytes) = read_web_sse_with_checkpoint(response, context, &input_ids).await?;
     if !status.is_success() {
@@ -1093,14 +1215,22 @@ async fn web_execute_once(
         )));
     }
     let mut ids = web_parse_sse(&bytes, &references);
+    ids.file_ids.retain(|id| !input_ids.contains(id));
+    ids.sediment_ids.retain(|id| !input_ids.contains(id));
     if ids.blocked && ids.file_ids.is_empty() && ids.sediment_ids.is_empty() {
         return Err(failure("Web 生图被上游内容策略拒绝"));
     }
     if ids.conversation_id.is_empty() {
         return Err(failure("Web 生图响应缺少 conversation_id"));
     }
+    context.conversation_id = ids.conversation_id.clone();
+    context.parent_message_id = ids.parent_message_id.clone();
     save_web_recovery(context, &ids, &input_ids)?;
-    web_finish_assets(client, auth, context, &input_ids, &mut ids).await
+    let result = web_finish_assets(client, auth, context, &input_ids, &mut ids).await;
+    context.parent_message_id = ids.parent_message_id;
+    context.excluded_asset_ids.extend(ids.file_ids);
+    context.excluded_asset_ids.extend(ids.sediment_ids);
+    result
 }
 
 async fn web_finish_assets(client: &reqwest::Client, auth: &Value, context: &WebContext, input_ids: &HashSet<String>, ids: &mut WebAssetIds) -> Result<(String, Vec<StoredImage>, Value), ManagerError> {
@@ -1136,9 +1266,6 @@ async fn web_finish_assets(client: &reqwest::Client, auth: &Value, context: &Web
     if images.is_empty() && !errors.is_empty() {
         return Err(failure(&format!("Web 图片下载失败：{}", errors.join("；"))));
     }
-    if !images.is_empty() {
-        web_delete_conversation(client, auth, context, &ids.conversation_id).await;
-    }
     let error = if errors.is_empty() {
         Value::Null
     } else {
@@ -1147,22 +1274,55 @@ async fn web_finish_assets(client: &reqwest::Client, auth: &Value, context: &Web
     Ok((ids.conversation_id.clone(), images, error))
 }
 
+async fn web_read_conversation(
+    client: &reqwest::Client,
+    auth: &Value,
+    context: &WebContext,
+    conversation_id: &str,
+) -> Result<Option<Value>, ManagerError> {
+    if conversation_id.trim().is_empty() {
+        return Ok(None);
+    }
+    let path = format!("/backend-api/conversation/{conversation_id}");
+    let response = web_builder(client, auth, context, reqwest::Method::GET, &path)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|error| failure(&format!("Web 会话存在性检查失败：{error}")))?;
+    if response.status().is_success() {
+        let payload = response.json::<Value>().await
+            .map_err(|error| failure(&format!("Web 会话响应解析失败：{error}")))?;
+        return Ok((payload["is_visible"] != false).then_some(payload));
+    }
+    if response.status().as_u16() == 404 {
+        return Ok(None);
+    }
+    Err(failure(&format!(
+        "Web 会话存在性检查失败：HTTP {}",
+        response.status().as_u16()
+    )))
+}
+
 async fn web_delete_conversation(
     client: &reqwest::Client,
     auth: &Value,
     context: &WebContext,
     conversation_id: &str,
-) {
+) -> bool {
     if conversation_id.trim().is_empty() {
-        return;
+        return false;
     }
     let path = format!("/backend-api/conversation/{conversation_id}");
-    let _ = web_builder(client, auth, context, reqwest::Method::PATCH, &path)
+    match web_builder(client, auth, context, reqwest::Method::PATCH, &path)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .json(&json!({ "is_visible": false }))
         .send()
-        .await;
+        .await
+    {
+        Ok(response) => response.status().is_success() || response.status().as_u16() == 404,
+        Err(_) => false,
+    }
 }
 
 async fn read_response_limited(
@@ -1188,12 +1348,26 @@ fn save_web_recovery(
     input_ids: &HashSet<String>,
 ) -> Result<(), ManagerError> {
     if let Some((paths, task_id, revision)) = &context.task {
+        if !context.account_id.is_empty() {
+            image_store::save_web_conversation(
+                paths,
+                &json!({
+                    "accountId": context.account_id,
+                    "localConversationId": context.local_conversation_id,
+                    "conversationId": ids.conversation_id,
+                    "parentMessageId": ids.parent_message_id,
+                    "updatedAt": chrono::Utc::now().timestamp_millis()
+                }),
+            )?;
+        }
         image_store::checkpoint(
             paths,
             task_id,
             *revision,
             &json!({
                 "conversationId": ids.conversation_id,
+                "parentMessageId": ids.parent_message_id,
+                "inputMessageId": context.input_message_id,
                 "inputIds": input_ids,
                 "fileIds": ids.file_ids,
                 "sedimentIds": ids.sediment_ids,
@@ -1240,11 +1414,16 @@ async fn read_web_sse_with_checkpoint(
             continue;
         }
         pending.extend_from_slice(&chunk);
-        while let Some(index) = pending
-            .windows(2)
-            .position(|window| window == b"\n\n")
-        {
-            let frame = pending.drain(..index + 2).collect::<Vec<_>>();
+        while let Some((index, separator_len)) = pending.iter().enumerate().find_map(|(index, _)| {
+            if pending[index..].starts_with(b"\r\n\r\n") {
+                Some((index, 4))
+            } else if pending[index..].starts_with(b"\n\n") {
+                Some((index, 2))
+            } else {
+                None
+            }
+        }) {
+            let frame = pending.drain(..index + separator_len).collect::<Vec<_>>();
             let Some(conversation_id) = web_sse_conversation_id(&frame) else {
                 continue;
             };
@@ -2106,7 +2285,8 @@ async fn web_prepare_conversation(
         .json(&json!({
             "action": "next",
             "fork_from_shared_post": false,
-            "parent_message_id": Uuid::new_v4().to_string(),
+            "parent_message_id": if context.parent_message_id.is_empty() { Uuid::new_v4().to_string() } else { context.parent_message_id.clone() },
+            "conversation_id": if context.conversation_id.is_empty() { Value::Null } else { json!(context.conversation_id) },
             "model": model,
             "client_prepare_state": "success",
             "timezone_offset_min": -480,
@@ -2114,7 +2294,7 @@ async fn web_prepare_conversation(
             "conversation_mode": {"kind": "primary_assistant"},
             "system_hints": ["picture_v2"],
             "partial_query": {
-                "id": Uuid::new_v4().to_string(),
+                "id": context.input_message_id,
                 "author": {"role": "user"},
                 "content": {"content_type": "text", "parts": [prompt]}
             },
@@ -2188,7 +2368,7 @@ async fn web_start_conversation(
         .json(&json!({
             "action": "next",
             "messages": [{
-                "id": Uuid::new_v4().to_string(),
+                "id": context.input_message_id,
                 "author": {"role": "user"},
                 "create_time": chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
                 "content": {"content_type": content_type, "parts": parts},
@@ -2208,7 +2388,8 @@ async fn web_start_conversation(
                     })).collect::<Vec<_>>()
                 }
             }],
-            "parent_message_id": Uuid::new_v4().to_string(),
+            "parent_message_id": if context.parent_message_id.is_empty() { Uuid::new_v4().to_string() } else { context.parent_message_id.clone() },
+            "conversation_id": if context.conversation_id.is_empty() { Value::Null } else { json!(context.conversation_id) },
             "model": model,
             "client_prepare_state": "sent",
             "timezone_offset_min": -480,
@@ -2278,6 +2459,11 @@ fn web_parse_sse(bytes: &[u8], references: &[WebReference]) -> WebAssetIds {
                 .get("message")
                 .or_else(|| payload["v"].get("message"))
             {
+                if message["author"]["role"] != "user" {
+                    if let Some(message_id) = message["id"].as_str().filter(|value| !value.is_empty()) {
+                        result.parent_message_id = message_id.to_string();
+                    }
+                }
                 if document["message"]["id"] != message["id"]
                     || document["message"]["author"] != message["author"]
                 {
@@ -2505,6 +2691,38 @@ fn web_collect_pointers(value: &Value, input_ids: &HashSet<String>, result: &mut
     }
 }
 
+fn web_collect_turn_assets(
+    payload: &Value,
+    input_message_id: &str,
+    input_ids: &HashSet<String>,
+    ids: &mut WebAssetIds,
+) {
+    // 旧版独立会话没有记录用户消息 ID，沿用原来的资源查询范围。
+    if input_message_id.is_empty() {
+        web_collect_assets(payload, input_ids, ids);
+        return;
+    }
+    let Some(mapping) = payload["mapping"].as_object() else { return };
+    let mut pending = mapping.iter()
+        .filter(|(id, node)| id.as_str() == input_message_id || node["message"]["id"] == input_message_id)
+        .map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+    let mut visited = HashSet::new();
+    while let Some(id) = pending.pop() {
+        if !visited.insert(id) { continue; }
+        let Some(node) = mapping.get(id) else { continue };
+        // 下一条用户消息属于另一次生成，恢复较早任务时不能把后续图片一起下载。
+        if node["message"]["author"]["role"] == "user"
+            && id != input_message_id && node["message"]["id"] != input_message_id
+        {
+            continue;
+        }
+        web_collect_assets(&node["message"], input_ids, ids);
+        if let Some(children) = node["children"].as_array() {
+            pending.extend(children.iter().filter_map(Value::as_str));
+        }
+    }
+}
+
 async fn web_poll_assets(
     client: &reqwest::Client,
     auth: &Value,
@@ -2580,7 +2798,10 @@ async fn web_poll_assets(
                     continue;
                 }
             };
-            web_collect_assets(&payload, input_ids, ids);
+            if let Some(parent_id) = payload["current_node"].as_str().filter(|id| !id.is_empty()) {
+                ids.parent_message_id = parent_id.to_string();
+            }
+            web_collect_turn_assets(&payload, &context.input_message_id, input_ids, ids);
             save_web_recovery(context, ids, input_ids)?;
             let current = (ids.file_ids.clone(), ids.sediment_ids.clone());
             if (!current.0.is_empty() || !current.1.is_empty()) && previous == current {
@@ -3569,10 +3790,52 @@ mod tests {
     }
 
     #[test]
+    fn web_recovery_collects_only_its_turn_after_later_generations() {
+        let payload = json!({"current_node":"later-output", "mapping":{
+            "old-output":{"message":{"author":{"role":"tool"},"content":{"parts":["file-service://old"]}},"children":["current-user"]},
+            "current-user":{"message":{"id":"current-input","author":{"role":"user"}},"children":["current-output"]},
+            "current-output":{"message":{"author":{"role":"tool"},"content":{"parts":["file-service://current","sediment://current-attachment"]}},"children":["later-user"]},
+            "later-user":{"message":{"id":"later-input","author":{"role":"user"}},"children":["later-output"]},
+            "later-output":{"message":{"author":{"role":"tool"},"content":{"parts":["file-service://later"]}}}
+        }});
+        let mut ids = WebAssetIds::default();
+        web_collect_turn_assets(&payload, "current-input", &HashSet::new(), &mut ids);
+        assert_eq!(ids.file_ids, vec!["current"]);
+        assert_eq!(ids.sediment_ids, vec!["current-attachment"]);
+    }
+
+    #[test]
     fn web_sse_conversation_id_can_be_saved_before_stream_end() {
         let frame = b"data: {\"conversation_id\":\"conversation-1\"}\r\n\r\n";
         assert_eq!(web_sse_conversation_id(frame).as_deref(), Some("conversation-1"));
         assert_eq!(web_sse_conversation_id(b"data: [DONE]\r\n\r\n"), None);
+    }
+
+    #[test]
+    fn web_sse_checkpoint_handles_crlf_and_preserves_recovery_exclusions() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("image-web-checkpoint-{}", Uuid::new_v4()));
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let task = json!({"id":"task", "createdAt":0, "revision":0, "request":{}});
+            image_store::create_batch(&paths, &[task.clone()], &[], "").unwrap();
+            let started = image_store::start(&paths, &task).unwrap().unwrap();
+            let (address, handle) = mock_http_responder(1, |_, _, _| {
+                (200, "text/event-stream".into(), events(&[json!({"conversation_id":"saved"})]))
+            }).await;
+            let context = WebContext {
+                task: Some((paths.clone(), "task".into(), started["revision"].as_u64().unwrap())),
+                account_id: "official".into(), ..WebContext::new()
+            };
+            let response = reqwest::Client::builder().no_proxy().build().unwrap().get(address).send().await.unwrap();
+            let excluded = HashSet::from(["old-output".to_string()]);
+            read_web_sse_with_checkpoint(response, &context, &excluded).await.unwrap();
+            let recovery = image_store::detail(&paths, "task").unwrap()["recovery"].clone();
+            assert_eq!(recovery["conversationId"], "saved");
+            assert_eq!(recovery["inputIds"], json!(["old-output"]));
+            assert_eq!(image_store::find_web_conversation(&paths, "official", "").unwrap().unwrap()["conversationId"], "saved");
+            assert_eq!(handle.join().unwrap().len(), 1);
+            std::fs::remove_dir_all(root).unwrap();
+        });
     }
 
     #[test]
@@ -3834,20 +4097,13 @@ mod tests {
     #[test]
     fn web_continue_waiting_only_reads_original_conversation() {
         tauri::async_runtime::block_on(async {
-            let (address, handle) = mock_http_responder(5, |index, raw, address| {
+            let (address, handle) = mock_http_responder(4, |index, raw, address| {
                 let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
                 match index {
                     0 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/tasks"); (200, "application/json".into(), b"{}".to_vec()) },
                     1 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/conversation/original"); (200, "application/json".into(), b"{}".to_vec()) },
                     2 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/files/output/download"); (200, "application/json".into(), serde_json::to_vec(&json!({"download_url":format!("{address}/image")})).unwrap()) },
                     3 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/image"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) },
-                    4 => {
-                        assert!(raw.starts_with("PATCH "));
-                        assert_eq!(path, "/backend-api/conversation/original");
-                        let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
-                        assert_eq!(body["is_visible"], false);
-                        (200, "application/json".into(), serde_json::to_vec(&json!({"success": true})).unwrap())
-                    },
                     _ => unreachable!()
                 }
             }).await;
@@ -3857,7 +4113,140 @@ mod tests {
             assert_eq!(conversation, "original");
             assert_eq!(images.len(), 1);
             assert!(error.is_null());
-            assert_eq!(handle.join().unwrap().len(), 5);
+            assert_eq!(handle.join().unwrap().len(), 4);
+        });
+    }
+
+    #[test]
+    fn web_image_reuses_account_conversation_and_recreates_missing() {
+        tauri::async_runtime::block_on(async {
+            for exists in [true, false] {
+                let root = std::env::temp_dir().join(format!("image-web-reuse-{}", Uuid::new_v4()));
+                let paths = crate::core::paths::resolve_app_paths(&root);
+                image_store::save_web_conversation(&paths, &json!({
+                    "accountId": "official", "localConversationId": "old-local",
+                    "conversationId": "saved", "parentMessageId": "stale-parent"
+                })).unwrap();
+                let upstream_id = if exists { "saved" } else { "replacement" };
+                let mut input_message_ids = Vec::new();
+                let mut prepared_message_id = String::new();
+                let (address, handle) = mock_http_responder(19, move |index, raw, address| {
+                    let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                    let json_response = |value: Value| (200, "application/json".into(), serde_json::to_vec(&value).unwrap());
+                    match index {
+                        0 => json_response(json!({"limits_progress":[{"feature_name":"image_gen","remaining":10}]})),
+                        1 => (200, "text/html".into(), b"<html></html>".to_vec()),
+                        2 => {
+                            assert_eq!(path, "/backend-api/conversation/saved");
+                            if exists {
+                                json_response(json!({"current_node":"latest-parent", "mapping":{
+                                    "old":{"message":{"author":{"role":"tool"},"content":{"parts":["file-service://old-output"]}}}
+                                }}))
+                            } else {
+                                (404, "application/json".into(), b"{}".to_vec())
+                            }
+                        }
+                        _ => {
+                            let turn = (index - 3) / 8 + 1;
+                            match (index - 3) % 8 {
+                                0 => { assert_eq!(path, "/backend-api/sentinel/chat-requirements/prepare"); json_response(json!({"prepare_token":"prepared"})) }
+                                1 => { assert_eq!(path, "/backend-api/sentinel/chat-requirements/finalize"); json_response(json!({"token":"accepted"})) }
+                                2 | 3 => {
+                                    let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+                                    assert_eq!(body["conversation_id"], if exists || turn > 1 { json!(upstream_id) } else { Value::Null });
+                                    if turn > 1 {
+                                        assert_eq!(body["parent_message_id"], "message-1");
+                                    } else if exists {
+                                        assert_eq!(body["parent_message_id"], "latest-parent");
+                                    }
+                                    if (index - 3) % 8 == 2 {
+                                        assert_eq!(path, "/backend-api/f/conversation/prepare");
+                                        prepared_message_id = body["partial_query"]["id"].as_str().unwrap().to_string();
+                                        json_response(json!({}))
+                                    } else {
+                                        assert_eq!(path, "/backend-api/f/conversation");
+                                        assert_eq!(body["messages"][0]["id"], prepared_message_id);
+                                        input_message_ids.push(prepared_message_id.clone());
+                                        (200, "text/event-stream".into(), events(&[json!({"conversation_id":upstream_id,"message":{
+                                            "id":format!("message-{turn}"), "author":{"role":"tool"},
+                                            "content":{"parts":[format!("file-service://output-{turn}"),
+                                                if exists { "file-service://old-output" } else { "" },
+                                                if turn > 1 { "file-service://output-1" } else { "" }
+                                            ]}
+                                        }})]))
+                                    }
+                                }
+                                4 => { assert_eq!(path, "/backend-api/tasks"); json_response(json!({"tasks":[]})) }
+                                5 => {
+                                    assert_eq!(path, format!("/backend-api/conversation/{upstream_id}"));
+                                    // 整段会话同时含历史图片和本轮图片，当前任务只能下载本轮资源。
+                                    let mut mapping = json!({
+                                        "old":{"message":{"author":{"role":"tool"},"content":{"parts":["file-service://old-output"]}}},
+                                        "first":{"message":{"author":{"role":"tool"},"content":{"parts":["file-service://output-1"]}}}
+                                    });
+                                    if !exists { mapping.as_object_mut().unwrap().remove("old"); }
+                                    if turn > 1 { mapping["second"] = json!({"message":{"author":{"role":"tool"},"content":{"parts":["file-service://output-2"]}}}); }
+                                    mapping[&input_message_ids[0]] = json!({"message":{"id":input_message_ids[0],"author":{"role":"user"}},"children":["first"]});
+                                    if turn > 1 {
+                                        mapping["first"]["children"] = json!([input_message_ids[1]]);
+                                        mapping[&input_message_ids[1]] = json!({"message":{"id":input_message_ids[1],"author":{"role":"user"}},"children":["second"]});
+                                    }
+                                    json_response(json!({"current_node":format!("message-{turn}"),"mapping":mapping}))
+                                }
+                                6 => { assert_eq!(path, format!("/backend-api/files/output-{turn}/download")); json_response(json!({"download_url":format!("{address}/asset")})) }
+                                7 => { assert_eq!(path, "/asset"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) }
+                                _ => unreachable!()
+                            }
+                        }
+                    }
+                }).await;
+                let mut context = WebContext {
+                    base_url: address, task: Some((paths.clone(), "task".into(), 0)),
+                    account_id: "official".into(), local_conversation_id: "new-local".into(),
+                    ..WebContext::new()
+                };
+                let mut request = request();
+                request.generation_mode = "web".into();
+                request.conversation_id = "new-local".into();
+                request.n = 2;
+                let client = reqwest::Client::builder().no_proxy().build().unwrap();
+                let result = execute_web(&client, &json!({}), &request, "task", &mut context).await.unwrap();
+                assert_eq!(result.images.len(), 2);
+                assert_eq!(result.usage["web_conversations"], json!([upstream_id]));
+                let saved = image_store::find_web_conversation(&paths, "official", "").unwrap().unwrap();
+                assert_eq!(saved["conversationId"], upstream_id);
+                assert_eq!(saved["parentMessageId"], "message-2");
+                assert_eq!(saved["localConversationId"], "new-local");
+                assert_eq!(image_store::find_web_conversation(&paths, "official", "saved").unwrap().unwrap()["deleted"], !exists);
+                assert_eq!(handle.join().unwrap().len(), 19);
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        });
+    }
+
+    #[test]
+    fn web_conversation_check_does_not_treat_access_errors_as_deletion() {
+        tauri::async_runtime::block_on(async {
+            let (address, handle) = mock_http_responder(6, |index, _, _| {
+                let (status, body) = match index {
+                    0 => (200, r#"{"current_node":"parent"}"#),
+                    1 => (200, r#"{"is_visible":false}"#),
+                    2 => (404, "{}"),
+                    3 => (403, "{}"),
+                    4 => (400, "{}"),
+                    _ => (503, "{}")
+                };
+                (status, "application/json".into(), body.as_bytes().to_vec())
+            }).await;
+            let context = WebContext { base_url: address, ..WebContext::new() };
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            for index in 0..6 {
+                let result = web_read_conversation(&client, &json!({}), &context, "saved").await;
+                if index == 0 { assert_eq!(result.unwrap().unwrap()["current_node"], "parent"); }
+                else if index < 3 { assert!(result.unwrap().is_none()); }
+                else { assert!(result.is_err()); }
+            }
+            assert_eq!(handle.join().unwrap().len(), 6);
         });
     }
 
@@ -3983,7 +4372,7 @@ mod tests {
     #[test]
     fn web_image_flow_keeps_outputs_after_transient_poll_and_partial_download_failure() {
         tauri::async_runtime::block_on(async {
-            let (address, handle) = mock_http_responder(14, move |index, raw, address| {
+            let (address, handle) = mock_http_responder(13, move |index, raw, address| {
                 let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
                 let json_response = |value: Value| (200, "application/json".into(), serde_json::to_vec(&value).unwrap());
                 match index {
@@ -4028,13 +4417,6 @@ mod tests {
                     10 => { assert_eq!(path, "/backend-api/files/output-1/download"); json_response(json!({"download_url":format!("{address}/asset")})) }
                     11 => { assert_eq!(path, "/asset"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) }
                     12 => { assert_eq!(path, "/backend-api/conversation/conversation-1/attachment/attachment-1/download"); (403, "application/json".into(), b"{}".to_vec()) }
-                    13 => {
-                        assert!(raw.starts_with("PATCH "));
-                        assert_eq!(path, "/backend-api/conversation/conversation-1");
-                        let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
-                        assert_eq!(body["is_visible"], false);
-                        json_response(json!({"success": true}))
-                    }
                     _ => unreachable!(),
                 }
             }).await;
@@ -4071,7 +4453,7 @@ mod tests {
                     .len(),
                 1
             );
-            assert_eq!(handle.join().unwrap().len(), 14);
+            assert_eq!(handle.join().unwrap().len(), 13);
         });
     }
 
@@ -4285,7 +4667,7 @@ mod tests {
         count: usize,
         mut respond: impl FnMut(usize, &str, &str) -> (u16, String, Vec<u8>) + Send + 'static,
     ) -> (String, std::thread::JoinHandle<Vec<String>>) {
-        use std::io::Read;
+        use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = format!("http://{}", listener.local_addr().unwrap());
         let server_address = address.clone();

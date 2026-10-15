@@ -29,9 +29,164 @@ fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
            task_id TEXT NOT NULL, position INTEGER NOT NULL, data_url TEXT NOT NULL,
            PRIMARY KEY(task_id, position)
          );
-         CREATE INDEX IF NOT EXISTS idx_image_tasks_status ON image_tasks(status);",
+         CREATE INDEX IF NOT EXISTS idx_image_tasks_status ON image_tasks(status);
+         CREATE TABLE IF NOT EXISTS image_web_conversations (
+           id TEXT PRIMARY KEY, account_id TEXT NOT NULL,
+           local_conversation_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
+           parent_message_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
+           updated_at INTEGER NOT NULL, deleted_at INTEGER,
+           is_deleted INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_image_web_conversations_upstream
+           ON image_web_conversations(account_id, conversation_id);
+         CREATE INDEX IF NOT EXISTS idx_image_web_conversations_local
+           ON image_web_conversations(account_id, local_conversation_id, is_deleted, updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_image_web_conversations_reuse
+           ON image_web_conversations(account_id, is_deleted, updated_at DESC);",
     )?;
     Ok(connection)
+}
+
+fn web_conversation_json(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let deleted_at = row.get::<_, Option<i64>>(7)?;
+    Ok(json!({
+        "id": row.get::<_, String>(0)?,
+        "accountId": row.get::<_, String>(1)?,
+        "localConversationId": row.get::<_, String>(2)?,
+        "conversationId": row.get::<_, String>(3)?,
+        "parentMessageId": row.get::<_, String>(4)?,
+        "createdAt": row.get::<_, i64>(5)?,
+        "updatedAt": row.get::<_, i64>(6)?,
+        "deleted": row.get::<_, bool>(8)?,
+        "deletedAt": deleted_at
+    }))
+}
+
+pub fn find_web_conversation(
+    paths: &AppPaths,
+    account_id: &str,
+    conversation_id: &str,
+) -> Result<Option<Value>, ManagerError> {
+    let connection = open(paths)?;
+    connection
+        .query_row(
+            "SELECT id, account_id, local_conversation_id, conversation_id,
+                    parent_message_id, created_at, updated_at, deleted_at, is_deleted
+             FROM image_web_conversations
+             WHERE account_id = ?1
+               AND ((?2 = '' AND is_deleted = 0) OR conversation_id = ?2)
+             ORDER BY updated_at DESC LIMIT 1",
+            params![account_id, conversation_id],
+            web_conversation_json,
+        )
+        .optional()
+        .map_err(ManagerError::from)
+}
+
+pub fn save_web_conversation(paths: &AppPaths, conversation: &Value) -> Result<(), ManagerError> {
+    let account_id = conversation["accountId"].as_str().unwrap_or("").trim();
+    let local_conversation_id = conversation["localConversationId"].as_str().unwrap_or("").trim();
+    let conversation_id = conversation["conversationId"].as_str().unwrap_or("").trim();
+    if account_id.is_empty() || conversation_id.is_empty() {
+        return Err(ManagerError::System("Web 会话记录缺少账号或会话 ID".into()));
+    }
+    let now = chrono::Utc::now().timestamp_millis();
+    let created_at = conversation["createdAt"].as_i64().unwrap_or(now);
+    let updated_at = conversation["updatedAt"].as_i64().unwrap_or(now);
+    let record_id = conversation["id"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    open(paths)?.execute(
+        "INSERT INTO image_web_conversations
+           (id, account_id, local_conversation_id, conversation_id, parent_message_id,
+            created_at, updated_at, deleted_at, is_deleted)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0)
+         ON CONFLICT(account_id, conversation_id) DO UPDATE SET
+           local_conversation_id = excluded.local_conversation_id,
+           parent_message_id = CASE WHEN excluded.parent_message_id = ''
+             THEN image_web_conversations.parent_message_id ELSE excluded.parent_message_id END,
+           updated_at = excluded.updated_at,
+           deleted_at = image_web_conversations.deleted_at,
+           is_deleted = image_web_conversations.is_deleted",
+        params![
+            record_id,
+            account_id,
+            local_conversation_id,
+            conversation_id,
+            conversation["parentMessageId"].as_str().unwrap_or(""),
+            created_at,
+            updated_at
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_web_conversations(paths: &AppPaths) -> Result<Value, ManagerError> {
+    let connection = open(paths)?;
+    let mut statement = connection.prepare(
+        "SELECT id, account_id, local_conversation_id, conversation_id,
+                parent_message_id, created_at, updated_at, deleted_at, is_deleted
+         FROM image_web_conversations ORDER BY updated_at DESC, id DESC",
+    )?;
+    let rows = statement
+        .query_map([], web_conversation_json)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(json!(rows))
+}
+
+pub fn read_web_conversations(paths: &AppPaths, ids: &[String]) -> Result<Vec<Value>, ManagerError> {
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(ManagerError::System("请选取 1–10000 个 Web 会话".into()));
+    }
+    let connection = open(paths)?;
+    let mut statement = connection.prepare(
+        "SELECT id, account_id, local_conversation_id, conversation_id,
+                parent_message_id, created_at, updated_at, deleted_at, is_deleted
+         FROM image_web_conversations WHERE id IN (SELECT value FROM json_each(?1))",
+    )?;
+    let rows = statement
+        .query_map([serde_json::to_string(ids)?], web_conversation_json)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn mark_web_conversations_deleted(
+    paths: &AppPaths,
+    ids: &[String],
+    deleted: bool,
+) -> Result<Value, ManagerError> {
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(ManagerError::System("请选取 1–10000 个 Web 会话".into()));
+    }
+    let now = chrono::Utc::now().timestamp_millis();
+    let connection = open(paths)?;
+    let count = connection.execute(
+        "UPDATE image_web_conversations
+         SET is_deleted = ?2, deleted_at = CASE WHEN ?2 = 1 THEN ?3 ELSE NULL END,
+             updated_at = ?3
+         WHERE id IN (SELECT value FROM json_each(?1))",
+        params![serde_json::to_string(ids)?, if deleted { 1 } else { 0 }, now],
+    )?;
+    Ok(json!({ "deleted": count, "restored": !deleted && count > 0 }))
+}
+
+pub fn mark_web_conversation_deleted_by_upstream(
+    paths: &AppPaths,
+    account_id: &str,
+    conversation_id: &str,
+) -> Result<(), ManagerError> {
+    open(paths)?.execute(
+        "INSERT INTO image_web_conversations
+           (id, account_id, local_conversation_id, conversation_id, created_at, updated_at, deleted_at, is_deleted)
+         VALUES (?4, ?1, '', ?2, ?3, ?3, ?3, 1)
+         ON CONFLICT(account_id, conversation_id) DO UPDATE SET
+           is_deleted = 1, deleted_at = COALESCE(image_web_conversations.deleted_at, excluded.deleted_at),
+           updated_at = excluded.updated_at",
+        params![account_id, conversation_id, chrono::Utc::now().timestamp_millis(), uuid::Uuid::new_v4().to_string()],
+    )?;
+    Ok(())
 }
 
 pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
@@ -794,6 +949,56 @@ mod tests {
     use super::*;
     use crate::core::paths::resolve_app_paths;
     use std::path::Path;
+
+    #[test]
+    fn web_conversation_records_keep_reuse_and_deleted_state() {
+        let root = std::env::temp_dir().join(format!("image-web-session-test-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&root);
+        save_web_conversation(
+            &paths,
+            &json!({
+                "accountId": "account",
+                "localConversationId": "workbench",
+                "conversationId": "upstream",
+                "parentMessageId": "message-1"
+            }),
+        )
+        .unwrap();
+        let saved = find_web_conversation(&paths, "account", "")
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved["conversationId"], "upstream");
+        assert_eq!(saved["deleted"], false);
+        assert_eq!(list_web_conversations(&paths).unwrap().as_array().unwrap().len(), 1);
+        assert!(find_web_conversation(&paths, "other-account", "").unwrap().is_none());
+
+        // 切换本地历史分组仍使用同一个上游记录，早期 SSE 检查点不能清空父消息。
+        save_web_conversation(&paths, &json!({
+            "accountId": "account", "localConversationId": "another-workbench",
+            "conversationId": "upstream", "parentMessageId": ""
+        })).unwrap();
+        let reused = find_web_conversation(&paths, "account", "").unwrap().unwrap();
+        assert_eq!(reused["id"], saved["id"]);
+        assert_eq!(reused["parentMessageId"], "message-1");
+
+        let record_id = saved["id"].as_str().unwrap().to_string();
+        mark_web_conversations_deleted(&paths, &[record_id.clone()], true).unwrap();
+        assert!(find_web_conversation(&paths, "account", "")
+            .unwrap()
+            .is_none());
+        assert_eq!(list_web_conversations(&paths).unwrap()[0]["deleted"], true);
+        assert_eq!(find_web_conversation(&paths, "account", "upstream").unwrap().unwrap()["deleted"], true);
+        // 旧任务的延迟检查点不能把已经删除的会话重新变为可复用。
+        save_web_conversation(&paths, &json!({
+            "accountId": "account", "conversationId": "upstream", "parentMessageId": "late-message"
+        })).unwrap();
+        assert!(find_web_conversation(&paths, "account", "").unwrap().is_none());
+        save_web_conversation(&paths, &json!({
+            "accountId": "account", "conversationId": "new-upstream", "parentMessageId": "new-message"
+        })).unwrap();
+        assert_eq!(find_web_conversation(&paths, "account", "").unwrap().unwrap()["conversationId"], "new-upstream");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn cancelled_and_old_attempts_cannot_commit_or_overwrite_recovery() {

@@ -1408,12 +1408,14 @@ const diffStats = computed(() => {
       .git-commit-modal-detail-section {
         display: flex;
         flex: 1;
-        min-height: 0;
+        // 保留变更内容的阅读高度，小窗口由外层主体滚动，避免文件树和代码区被压扁。
+        min-height: 360px;
         flex-direction: column;
         gap: 8px;
 
         .git-commit-modal-detail-header {
           display: flex;
+          flex: none;
           align-items: flex-start;
           justify-content: space-between;
           gap: 16px;
@@ -1507,7 +1509,7 @@ const diffStats = computed(() => {
         .git-commit-modal-diff-layout {
           display: flex;
           flex: 1;
-          min-height: 0;
+          min-height: 260px;
           border: 1px solid var(--color-line);
           border-radius: 8px;
           overflow: hidden;

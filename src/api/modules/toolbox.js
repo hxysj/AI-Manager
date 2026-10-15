@@ -20,6 +20,9 @@ export const toolboxApi = {
   waitImageTasks: (payload) => request("tools:image-wait", payload),
   imageTaskPreviews: (payload) => request("tools:image-previews", payload),
   imageHistory: () => request("tools:image-history"),
+  imageWebConversations: () => request("tools:image-web-conversations"),
+  deleteImageWebConversations: (payload) =>
+    request("tools:image-web-conversations-delete", payload),
   resumeImageTask: (payload) => request("tools:image-resume", payload),
   cancelImageTasks: (payload) => request("tools:image-cancel", payload),
   listImageTasks: (payload) => request("tools:image-list", payload),

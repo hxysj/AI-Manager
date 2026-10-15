@@ -37,6 +37,8 @@ globalThis.__imageEvents = {
 }
 let tasks = []
 let history = []
+let webConversations = []
+let failedWebConversationId = ""
 let taskTotal = null
 let nextListReply = null
 let nextHistoryReply = null
@@ -73,6 +75,20 @@ globalThis.__imageTest = {
         return reply
       }
       return structuredClone(history)
+    },
+    imageWebConversations: async () => structuredClone(webConversations),
+    deleteImageWebConversations: async ({ ids }) => {
+      calls.push(["web-delete", [...ids]])
+      const deleted = ids.filter((id) => id !== failedWebConversationId)
+      for (const record of webConversations) {
+        if (deleted.includes(record.id)) record.deleted = true
+      }
+      return {
+        deleted: deleted.length,
+        failed: ids
+          .filter((id) => id === failedWebConversationId)
+          .map((id) => ({ id, message: "上游拒绝删除" }))
+      }
     },
     submitImageBatch: (payload) => batchSubmit(payload),
     waitImageTasks: (payload) => batchWait(payload),
@@ -246,6 +262,62 @@ try {
   assert.equal(state.form.accountId, "account")
   assert.equal(state.pageSize, 50)
   assert.equal(calls.filter(([name]) => name === "list").at(-1)[1].pageSize, 50)
+  // GPT 会话删除只操作官方记录，保留本地历史，并允许失败后重试。
+  const localConversationIds = state.conversations.map((item) => item.id)
+  webConversations = [
+    {
+      id: "web-one",
+      accountId: "account",
+      conversationId: "upstream-one",
+      deleted: false
+    },
+    {
+      id: "web-two",
+      accountId: "account",
+      conversationId: "upstream-two",
+      deleted: false
+    },
+    {
+      id: "web-deleted",
+      accountId: "account",
+      conversationId: "upstream-deleted",
+      deleted: true
+    }
+  ]
+  state.historyOpen = true
+  state.toggleWebSessionPanel()
+  await settle()
+  assert.equal(state.historyOpen, false)
+  assert.equal(state.webSessionOpen, true)
+  state.selectAllWebConversations()
+  assert.deepEqual(
+    [...state.selectedWebConversationIds],
+    ["web-one", "web-two"]
+  )
+  failedWebConversationId = "web-two"
+  await state.deleteWebConversations()
+  assert.deepEqual(calls.filter(([name]) => name === "web-delete").at(-1)[1], [
+    "web-one",
+    "web-two"
+  ])
+  assert.equal(state.webConversations.length, 3)
+  assert.equal(state.selectableWebConversations.length, 1)
+  failedWebConversationId = ""
+  await state.deleteWebConversations(["web-two"])
+  assert.equal(state.selectableWebConversations.length, 0)
+  assert.equal(state.webSessionsDeleting, false)
+  assert.deepEqual(
+    state.conversations.map((item) => item.id),
+    localConversationIds
+  )
+  assert.equal(
+    calls.some(([name]) => name === "delete"),
+    false
+  )
+  state.toggleHistory()
+  assert.equal(state.webSessionOpen, false)
+  assert.equal(state.historyOpen, true)
+  state.historyOpen = false
   // 切换条数应重置页码和勾选，并把数值传给后端，而不是 Vue 引用。
   taskTotal = 123
   state.page = 3
@@ -564,11 +636,26 @@ try {
     assert.ok(payload.exportId)
     assert.ok(listeners.has("images:export-progress"))
     const notify = listeners.get("images:export-progress")
-    notify({ exportId: payload.exportId, phase: "started", completed: 0, total: 2 })
+    notify({
+      exportId: payload.exportId,
+      phase: "started",
+      completed: 0,
+      total: 2
+    })
     exportProgressSnapshots.push({ ...restored.exportProgress })
-    notify({ exportId: payload.exportId, phase: "writing", completed: 1, total: 2 })
+    notify({
+      exportId: payload.exportId,
+      phase: "writing",
+      completed: 1,
+      total: 2
+    })
     exportProgressSnapshots.push({ ...restored.exportProgress })
-    notify({ exportId: payload.exportId, phase: "completed", completed: 2, total: 2 })
+    notify({
+      exportId: payload.exportId,
+      phase: "completed",
+      completed: 2,
+      total: 2
+    })
     return { imageCount: 2, filePath: payload.targetPath }
   }
   await restored.exportTasks(["live-task"])
@@ -576,7 +663,9 @@ try {
     { active: true, completed: 0, total: 2, phase: "started" },
     { active: true, completed: 1, total: 2, phase: "writing" }
   ])
-  assert.ok(calls.some(([name, payload]) => name === "export" && payload.exportId))
+  assert.ok(
+    calls.some(([name, payload]) => name === "export" && payload.exportId)
+  )
   restoredApp.unmount()
 
   // 批量进度先等监听注册，完成判断由后端快照返回。

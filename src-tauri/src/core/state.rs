@@ -128,11 +128,12 @@ impl AppState {
                 .await.map_err(|error| ManagerError::System(error.to_string()))?;
         }
         // 图片读取与导出只需路径快照，不占用整个应用的状态锁。
-        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-wait" | "tools:image-previews" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-cancel" | "tools:image-export" | "tools:image-task-export" | "tools:image-task-import") {
+        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-wait" | "tools:image-previews" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-cancel" | "tools:image-export" | "tools:image-task-export" | "tools:image-task-import" | "tools:image-web-conversations") {
             let paths = self.manager.lock().await.paths.clone();
             let payload = payload.unwrap_or_else(|| json!({}));
             return match channel {
                 "tools:image-history" => crate::core::image_store::history(&paths),
+                "tools:image-web-conversations" => crate::core::image_store::list_web_conversations(&paths),
                 "tools:image-list" => crate::core::image_store::list(&paths, &payload),
                 "tools:image-wait" => image_workbench::wait_tasks(&paths, payload).await,
                 "tools:image-previews" => crate::core::image_store::previews(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
@@ -178,7 +179,7 @@ impl AppState {
             };
         }
         // 模型请求可能持续较久，快照后释放状态锁，让其他页面和设置保持可用。
-        if matches!(channel, "tools:image-models" | "tools:image-quota" | "tools:image-submit" | "tools:image-submit-batch" | "tools:image-resume") {
+        if matches!(channel, "tools:image-models" | "tools:image-quota" | "tools:image-submit" | "tools:image-submit-batch" | "tools:image-resume" | "tools:image-web-conversations-delete") {
             let manager = self.manager.lock().await;
             let paths = manager.paths.clone();
             let cli_targets = manager.state["cliTargets"].clone();
@@ -189,6 +190,7 @@ impl AppState {
                 "tools:image-submit-batch" => image_workbench::submit_batch(&app, &paths, &cli_targets, payload).await,
                 "tools:image-resume" => image_workbench::resume(&app, &paths, &cli_targets, payload).await,
                 "tools:image-quota" => image_workbench::quota(&paths, &cli_targets, payload).await,
+                "tools:image-web-conversations-delete" => image_workbench::delete_web_conversations(&paths, &cli_targets, payload).await,
                 _ => image_workbench::models(&paths, payload).await,
             };
         }

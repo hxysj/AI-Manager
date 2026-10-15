@@ -25,7 +25,7 @@
           :class="{ active: historyOpen }"
           type="button"
           title="查看历史会话"
-          @click="historyOpen = !historyOpen"
+          @click="toggleHistory"
         >
           <Clock :size="14" />
           <span>历史会话</span>
@@ -39,6 +39,16 @@
         >
           <BookOpen :size="14" />
           <span>提示词库</span>
+        </button>
+        <button
+          class="conversation-button conversation-web-session-btn"
+          :class="{ active: webSessionOpen }"
+          type="button"
+          title="管理 ChatGPT 官方 Web 会话"
+          @click="toggleWebSessionPanel"
+        >
+          <MessageSquare :size="14" />
+          <span>GPT 会话</span>
         </button>
         <div class="conversation-chip" :title="currentConversation?.title">
           <span class="conversation-chip-title">{{
@@ -193,6 +203,136 @@
       <button class="history-clear" type="button" @click="deleteConversation()">
         清空全部历史
       </button>
+    </aside>
+    <aside v-if="webSessionOpen" class="web-session-sidebar">
+      <section class="web-session-records">
+        <header class="web-session-records-head">
+          <span>GPT Web 会话记录</span>
+          <button
+            class="web-session-action"
+            type="button"
+            :disabled="webSessionsLoading || webSessionsDeleting"
+            @click="loadWebConversations"
+          >
+            刷新
+          </button>
+          <button
+            class="web-session-action"
+            type="button"
+            @click="webSessionOpen = false"
+          >
+            收起
+          </button>
+        </header>
+        <p class="web-session-records-hint">
+          按官方账号复用 GPT Web 会话。删除会同步至
+          ChatGPT，本地图片历史单独保留。
+        </p>
+        <div v-if="webSessionsLoading" class="web-session-records-empty">
+          正在读取会话记录…
+        </div>
+        <div
+          v-else-if="!webConversations.length"
+          class="web-session-records-empty"
+        >
+          暂无 GPT Web 会话
+        </div>
+        <div v-else class="web-session-records-scroll">
+          <table class="web-session-records-table">
+            <thead>
+              <tr>
+                <th class="web-session-records-cell web-session-records-check">
+                  选择
+                </th>
+                <th class="web-session-records-cell">账号</th>
+                <th class="web-session-records-cell">GPT 会话 ID</th>
+                <th class="web-session-records-cell">状态</th>
+                <th class="web-session-records-cell">创建时间</th>
+                <th class="web-session-records-cell">更新时间</th>
+                <th class="web-session-records-cell">删除时间</th>
+                <th class="web-session-records-cell">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in webConversations" :key="item.id">
+                <td class="web-session-records-cell web-session-records-check">
+                  <input
+                    v-model="selectedWebConversationIds"
+                    type="checkbox"
+                    :value="item.id"
+                    :disabled="item.deleted || webSessionsDeleting"
+                  />
+                </td>
+                <td class="web-session-records-cell" :title="item.accountId">
+                  {{
+                    accounts.find((account) => account.id === item.accountId)
+                      ?.email || item.accountId.slice(0, 12)
+                  }}
+                </td>
+                <td
+                  class="web-session-records-cell"
+                  :title="item.conversationId"
+                >
+                  {{ item.conversationId.slice(0, 12) }}
+                </td>
+                <td class="web-session-records-cell">
+                  {{ item.deleted ? "已删除" : "未删除" }}
+                </td>
+                <td class="web-session-records-cell">
+                  {{ formatDateTime(item.createdAt) }}
+                </td>
+                <td class="web-session-records-cell">
+                  {{ formatDateTime(item.updatedAt) }}
+                </td>
+                <td class="web-session-records-cell">
+                  {{ item.deletedAt ? formatDateTime(item.deletedAt) : "—" }}
+                </td>
+                <td class="web-session-records-cell">
+                  <button
+                    class="web-session-action danger"
+                    type="button"
+                    :disabled="item.deleted || webSessionsDeleting"
+                    @click="deleteWebConversations([item.id])"
+                  >
+                    删除
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="web-session-records-actions">
+          <button
+            class="web-session-action"
+            type="button"
+            :disabled="
+              !selectableWebConversations.length || webSessionsDeleting
+            "
+            @click="selectAllWebConversations"
+          >
+            {{
+              selectedWebConversationIds.length ===
+              selectableWebConversations.length
+                ? "取消全选"
+                : "全选"
+            }}
+          </button>
+          <button
+            class="web-session-action danger"
+            type="button"
+            :disabled="
+              !selectedWebConversationIds.length || webSessionsDeleting
+            "
+            @click="deleteWebConversations()"
+          >
+            {{
+              webSessionsDeleting
+                ? "正在删除…"
+                : `删除选中 (${selectedWebConversationIds.length})`
+            }}
+          </button>
+        </div>
+      </section>
     </aside>
     <div
       ref="workbenchLayout"
@@ -1585,6 +1725,7 @@ const tier = ref(preferences.tier || "1k")
 const settingsOpen = ref(false)
 const drawing = ref(null)
 const historyOpen = ref(false)
+const webSessionOpen = ref(false)
 const savedHistory = readLocal("image-workbench-conversations", {})
 const conversations = ref(
   Array.isArray(savedHistory.conversations) ? savedHistory.conversations : []
@@ -1592,6 +1733,14 @@ const conversations = ref(
 const roundState = ref(savedHistory.rounds || {})
 const activeConversationId = ref(savedHistory.active || "")
 const historyIndex = ref([])
+const webConversations = ref([])
+const selectedWebConversationIds = ref([])
+const webSessionsLoading = ref(false)
+const webSessionsDeleting = ref(false)
+// GPT 官方会话单独管理，已删除记录只作审计，不再进入可删除或复用范围。
+const selectableWebConversations = computed(() =>
+  webConversations.value.filter((item) => !item.deleted)
+)
 const resuming = ref([])
 const batchDialogOpen = ref(false)
 const batchConversationId = ref("")
@@ -1920,6 +2069,73 @@ function selectConversation(id) {
   saveHistory()
   loadingTasks.value = true
   loadTasks()
+}
+
+async function loadWebConversations() {
+  if (webSessionsLoading.value) return
+  webSessionsLoading.value = true
+  try {
+    webConversations.value = await toolboxApi.imageWebConversations()
+    selectedWebConversationIds.value = selectedWebConversationIds.value.filter(
+      (id) => selectableWebConversations.value.some((item) => item.id === id)
+    )
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    webSessionsLoading.value = false
+  }
+}
+
+function toggleHistory() {
+  historyOpen.value = !historyOpen.value
+  if (historyOpen.value) webSessionOpen.value = false
+}
+
+function toggleWebSessionPanel() {
+  webSessionOpen.value = !webSessionOpen.value
+  if (webSessionOpen.value) {
+    historyOpen.value = false
+    loadWebConversations()
+  }
+}
+
+function selectAllWebConversations() {
+  selectedWebConversationIds.value =
+    selectedWebConversationIds.value.length ===
+    selectableWebConversations.value.length
+      ? []
+      : selectableWebConversations.value.map((item) => item.id)
+}
+
+async function deleteWebConversations(ids = selectedWebConversationIds.value) {
+  if (!ids.length || webSessionsDeleting.value) return
+  // 确认前固定选择范围，避免请求进行时勾选变化导致误报数量。
+  const deletingIds = [...ids]
+  try {
+    await ElMessageBox.confirm(
+      `确定删除 ${deletingIds.length} 个 GPT Web 会话吗？ChatGPT 上的会话也会被删除，本地图片历史保留。`,
+      "删除 GPT Web 会话",
+      { confirmButtonText: "删除", cancelButtonText: "取消", type: "warning" }
+    )
+  } catch {
+    return
+  }
+  webSessionsDeleting.value = true
+  try {
+    const result = await toolboxApi.deleteImageWebConversations({
+      ids: deletingIds
+    })
+    selectedWebConversationIds.value = []
+    await loadWebConversations()
+    const failed = result.failed?.length || 0
+    const message = `已删除 ${result.deleted || 0} 个 GPT Web 会话${failed ? `，${failed} 个删除失败` : ""}`
+    if (failed) createMessage.warning(`${message}：${result.failed[0].message}`)
+    else createMessage.success(message)
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    webSessionsDeleting.value = false
+  }
 }
 
 function newConversation() {
@@ -3701,6 +3917,106 @@ defineExpose({
       &:hover {
         background: rgba(239, 68, 68, 0.08);
         border-color: rgba(239, 68, 68, 0.3);
+      }
+    }
+  }
+
+  .web-session-sidebar {
+    position: absolute;
+    inset: 46px 0 16px auto;
+    z-index: 11;
+    width: 760px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: var(--color-panel);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.12);
+
+    .web-session-records {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+
+      .web-session-action {
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: var(--color-primary);
+        cursor: pointer;
+        font-size: 12px;
+
+        &:disabled {
+          cursor: not-allowed;
+          opacity: 0.45;
+        }
+
+        &.danger {
+          color: var(--color-danger);
+        }
+      }
+
+      .web-session-records-head,
+      .web-session-records-actions {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .web-session-records-head {
+        color: var(--color-text);
+        font-size: 14px;
+      }
+
+      .web-session-records-hint {
+        margin: 10px 0;
+        color: var(--color-text-muted);
+        font-size: 12px;
+      }
+
+      .web-session-records-empty {
+        padding: 12px 0;
+        color: var(--color-text-muted);
+        font-size: 11px;
+        text-align: center;
+      }
+
+      .web-session-records-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+
+        .web-session-records-table {
+          width: 100%;
+          border-collapse: collapse;
+          color: var(--color-text-muted);
+          font-size: 12px;
+
+          .web-session-records-cell {
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding: 8px 6px;
+            border-bottom: 1px solid var(--color-line);
+            text-align: left;
+            white-space: nowrap;
+          }
+
+          .web-session-records-check {
+            width: 34px;
+            text-align: center;
+          }
+        }
+      }
+
+      .web-session-records-actions {
+        margin-top: 8px;
       }
     }
   }
