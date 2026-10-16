@@ -953,10 +953,6 @@ function showErrorMessage(error) {
   createMessage.error(error.message || String(error))
 }
 
-function isCodexAccountRefreshError(error) {
-  return Boolean(error)
-}
-
 function getProxyState(cli) {
   if (cli === "claude") {
     return state.claudeProxyState
@@ -1797,9 +1793,8 @@ async function refreshCodexAccount(payload) {
       showSuccessMessage("Codex 官方账号额度已刷新。")
     }
   } catch (error) {
-    if (!isCodexAccountRefreshError(error)) {
-      showErrorMessage(error)
-    }
+    // 刷新失败由后端同步账号状态，同时向用户显示实际失败原因。
+    showErrorMessage(error)
   } finally {
     if (onSettled) {
       onSettled()
@@ -1826,9 +1821,7 @@ async function refreshCodexAccounts() {
           })
         )
       } catch (error) {
-        if (!isCodexAccountRefreshError(error)) {
-          showErrorMessage(error)
-        }
+        showErrorMessage(error)
       }
     })
   )

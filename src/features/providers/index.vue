@@ -427,14 +427,30 @@
                     'providers-view__account-tag',
                     {
                       'providers-view__account-tag--pro':
+                        !item.account.requires_reauth &&
+                        item.account.refresh_status !== 'failed' &&
                         item.account.plan === 'pro',
                       'providers-view__account-tag--plus':
+                        !item.account.requires_reauth &&
+                        item.account.refresh_status !== 'failed' &&
                         item.account.plan === 'plus'
                     }
                   ]"
-                  :title="formatPlanName(item.account.plan)"
+                  :title="
+                    item.account.requires_reauth
+                      ? item.account.reauth_message
+                      : item.account.refresh_status === 'failed'
+                        ? item.account.refresh_message
+                        : formatPlanName(item.account.plan)
+                  "
                 >
-                  {{ formatPlanName(item.account.plan) }}
+                  {{
+                    item.account.requires_reauth
+                      ? '登录已失效'
+                      : item.account.refresh_status === 'failed'
+                        ? '套餐待确认'
+                        : formatPlanName(item.account.plan)
+                  }}
                 </span>
                 <span
                   v-if="item.account.disabled"
@@ -443,28 +459,34 @@
                   已禁用
                 </span>
                 <span
-                  v-if="item.account.refresh_status === 'failed'"
+                  v-if="
+                    item.account.refresh_status === 'failed' ||
+                    item.account.requires_reauth
+                  "
                   class="providers-view__account-error"
-                  :aria-label="`刷新额度失败：${item.account.refresh_message}`"
+                  :aria-label="`刷新额度失败：${item.account.reauth_message || item.account.refresh_message}`"
                 >
                   <span
                     class="providers-view__account-tag providers-view__account-tag--error"
                   >
-                    {{ item.account.refresh_status_code || "错误" }}
+                    {{
+                      item.account.requires_reauth
+                        ? '需重新登录'
+                        : item.account.refresh_status_code || '错误'
+                    }}
                   </span>
                   <span class="providers-view__account-error-tip">
                     <span class="providers-view__account-error-title">
                       刷新额度失败
                     </span>
                     <span class="providers-view__account-error-message">
-                      {{ item.account.refresh_message }}
+                      {{ item.account.reauth_message || item.account.refresh_message }}
                     </span>
                   </span>
                 </span>
                 <button
                   v-if="
-                    !item.account.disabled &&
-                    item.account.refresh_status === 'failed'
+                    !item.account.disabled && item.account.requires_reauth
                   "
                   class="providers-view__reauth-button"
                   type="button"
@@ -475,12 +497,20 @@
               </div>
               <div
                 v-if="
-                  item.account.usage?.rate_limit ||
+                  (!item.account.requires_reauth &&
+                    item.account.refresh_status !== 'failed' &&
+                    item.account.usage?.rate_limit) ||
                   isCodexAccountRefreshing(item.account)
                 "
                 class="providers-view__quota-list"
               >
-                <template v-if="item.account.usage?.rate_limit">
+                <template
+                  v-if="
+                    !item.account.requires_reauth &&
+                    item.account.refresh_status !== 'failed' &&
+                    item.account.usage?.rate_limit
+                  "
+                >
                   <div
                     v-for="quota in rateLimitWindows(
                       item.account.usage.rate_limit
@@ -3965,6 +3995,9 @@ function rateLimitWindows(rateLimit) {
 function formatPlanName(value) {
   const googlePlans = { "g1-pro-tier": "Google AI Pro", "g1-ultra-tier": "Google AI Ultra", "free-tier": "免费版", "FREE": "免费版" }
   if (googlePlans[value]) return googlePlans[value]
+  if (value === 'free') {
+    return '免费版'
+  }
   if (value === "pro") {
     return "Pro"
   }

@@ -10,6 +10,8 @@ pub enum ManagerError {
     Io(#[from] std::io::Error),
     #[error("系统调用失败：{0}")]
     System(String),
+    #[error("OpenAI 请求失败：{status_code} {message}")]
+    OpenAiRequest { status_code: u16, message: String },
     #[error("数据序列化失败：{0}")]
     Json(#[from] serde_json::Error),
     #[error("数据库处理失败：{0}")]

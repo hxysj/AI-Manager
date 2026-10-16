@@ -273,7 +273,13 @@ pub async fn refresh_account(
     let account_id = string_value(payload.get("accountId"));
     let sync_auth = payload.get("syncAuth").and_then(Value::as_bool) != Some(false);
     let cli_target = find_codex_cli_target(cli_targets)?;
-    let account = refresh_account_usage(paths, &account_id, &cli_target).await?;
+    let account = match refresh_account_usage(paths, &account_id, &cli_target).await {
+        Ok(account) => account,
+        Err(error) => {
+            mark_account_refresh_error(paths, &account_id, &error).await?;
+            return Err(error);
+        }
+    };
 
     if sync_auth && string_value(account.get("id")) == read_active_account_id(paths)? {
         write_account_bundle(&account, &cli_target).await?;
@@ -703,11 +709,10 @@ async fn refresh_token(refresh_token: &str, proxy: &str) -> Result<TokenBundle, 
                 .or_else(|| payload.get("error")),
             &text,
         );
-        return Err(ManagerError::System(format!(
-            "OpenAI 请求失败：{} {}",
-            status.as_u16(),
-            message
-        )));
+        return Err(ManagerError::OpenAiRequest {
+            status_code: status.as_u16(),
+            message,
+        });
     }
 
     let payload: Value = serde_json::from_str(&text)?;
@@ -750,39 +755,11 @@ async fn refresh_account_usage(
         ));
     }
 
-    let mut tokens = tokens_from_account(&account);
+    let tokens = tokens_from_account(&account);
 
     if tokens.access_token.is_empty() || tokens.expires_at == 0 || tokens.expires_at <= now_millis()
     {
-        if tokens.refresh_token.is_empty() {
-            let message =
-                "Codex 登录授权缺少 refresh_token，无法自动续期；当前 access_token 已不可用。";
-            mark_account_reauth(paths, account_id, MISSING_REFRESH_TOKEN_REASON, message).await?;
-            mark_account_refresh_error(paths, account_id, 0, message).await?;
-            return Err(ManagerError::System(message.to_string()));
-        }
-
-        tokens =
-            match refresh_token(&tokens.refresh_token, &string_value(account.get("proxy"))).await {
-                Ok(mut tokens) => {
-                    tokens.token_generation = number_value(account.get("token_generation"), 0) + 1;
-                    tokens.token_updated_at = now_millis();
-                    tokens
-                }
-                Err(error) => {
-                    if should_mark_reauth(&error.to_string()) {
-                        mark_account_reauth(
-                            paths,
-                            account_id,
-                            "invalid_grant",
-                            "Codex 登录授权已失效，请重新登录。",
-                        )
-                        .await?;
-                    }
-                    mark_account_refresh_error(paths, account_id, 0, &error.to_string()).await?;
-                    return Err(error);
-                }
-            };
+        return perform_managed_token_refresh(paths, &account, cli_target).await;
     }
 
     let mut claims = decode_jwt_payload(&first_string(
@@ -796,13 +773,18 @@ async fn refresh_account_usage(
         &string_value(account.get("id")),
     );
     claims["account_id"] = json!(account_identity);
-    let usage = fetch_usage_info(
+    let usage = match fetch_usage_info(
         &tokens.access_token,
         &claims,
         &string_value(account.get("proxy")),
     )
-    .await
-    .map_err(|error| ManagerError::System(error.to_string()))?;
+    .await {
+        // 服务端可能在本地过期时间之前撤销 access_token，只续期重试一次。
+        Err(ManagerError::OpenAiRequest { status_code: 401, .. }) => {
+            return perform_managed_token_refresh(paths, &account, cli_target).await;
+        }
+        result => result?,
+    };
     let next_account = save_account(
         paths,
         tokens,
@@ -858,7 +840,11 @@ async fn prepare_account_for_switch(
         return Ok(account);
     }
 
-    perform_managed_token_refresh(paths, &account, cli_target).await
+    let result = perform_managed_token_refresh(paths, &account, cli_target).await;
+    if let Err(error) = &result {
+        mark_account_refresh_error(paths, account_id, error).await?;
+    }
+    result
 }
 
 async fn sync_account_from_authority_sources(
@@ -963,28 +949,40 @@ async fn perform_managed_token_refresh(
         return Err(ManagerError::System(message.to_string()));
     }
 
-    let mut tokens = match refresh_token(&refresh, &string_value(account.get("proxy"))).await {
-        Ok(tokens) => tokens,
-        Err(error) => {
-            if should_mark_reauth(&error.to_string()) {
-                mark_account_reauth(
-                    paths,
-                    &string_value(account.get("id")),
-                    "invalid_grant",
-                    "Codex 登录授权已失效，请重新登录。",
-                )
-                .await?;
-            }
-            mark_account_refresh_error(
-                paths,
-                &string_value(account.get("id")),
-                0,
-                &error.to_string(),
-            )
-            .await?;
-            return Err(error);
-        }
-    };
+    let mut tokens = refresh_token(&refresh, &string_value(account.get("proxy"))).await?;
+    if tokens.access_token.is_empty() {
+        return Err(ManagerError::System(
+            "Codex 续期响应缺少 access_token，未更新登录凭据。".to_string(),
+        ));
+    }
+    tokens.token_generation = number_value(account.get("token_generation"), 0) + 1;
+    tokens.token_updated_at = now_millis();
+
+    // 续期会轮换 refresh_token，先保存凭据，避免后续额度请求失败丢失新凭据。
+    let mut next_account = account.clone();
+    next_account["access_token"] = json!(tokens.access_token);
+    next_account["refresh_token"] = json!(tokens.refresh_token);
+    next_account["id_token"] = json!(tokens.id_token);
+    next_account["last_refresh"] = json!(tokens.last_refresh);
+    next_account["expired"] = json!(tokens.expired);
+    next_account["token_generation"] = json!(tokens.token_generation);
+    next_account["token_updated_at"] = json!(tokens.token_updated_at);
+    next_account["auth"] = json!({
+      "accessToken": tokens.access_token,
+      "refreshToken": tokens.refresh_token,
+      "idToken": tokens.id_token,
+      "expiresAt": tokens.expires_at,
+      "access_token": tokens.access_token,
+      "refresh_token": tokens.refresh_token,
+      "id_token": tokens.id_token,
+      "last_refresh": tokens.last_refresh,
+      "expired": tokens.expired,
+      "token_updated_at": tokens.token_updated_at
+    });
+    replace_account(paths, &next_account).await?;
+    if string_value(account.get("id")) == read_active_account_id(paths)? {
+        write_account_auth(&next_account, cli_target).await?;
+    }
     let mut claims = decode_jwt_payload(&first_string(
         Some(&json!(tokens.id_token.clone())),
         Some(&json!(tokens.access_token.clone())),
@@ -1002,8 +1000,6 @@ async fn perform_managed_token_refresh(
     )
     .await?;
 
-    tokens.token_generation = number_value(account.get("token_generation"), 0) + 1;
-    tokens.token_updated_at = now_millis();
     let next_account = save_account(
         paths,
         tokens,
@@ -1133,11 +1129,7 @@ async fn save_account(
       "accountId": account_id,
       "account_id": account_id,
       "email": email,
-      "plan": first_string(
-        usage.get("plan_type"),
-        profile.get("chatgpt_plan_type").or_else(|| claims.get("chatgpt_plan_type")),
-        ""
-      ),
+      "plan": string_value(usage.get("plan_type")),
       "usage": usage,
       "proxy": if proxy.is_empty() {
         current_account.as_ref().map(|account| string_value(account.get("proxy"))).unwrap_or_default()
@@ -1254,13 +1246,25 @@ async fn mark_account_reauth(
 async fn mark_account_refresh_error(
     paths: &AppPaths,
     account_id: &str,
-    status_code: u16,
-    message: &str,
+    error: &ManagerError,
 ) -> Result<(), ManagerError> {
+    let status_code = match error {
+        ManagerError::OpenAiRequest { status_code, .. } => *status_code,
+        _ => 0,
+    };
+    let message = error.to_string();
     update_account(paths, account_id, |account| {
+        // 失败后套餐和额度均未得到验证，不能继续展示上一次成功的数据。
+        account["plan"] = json!("");
+        account["usage"] = json!({});
         account["refresh_status"] = json!("failed");
         account["refresh_status_code"] = json!(status_code);
         account["refresh_message"] = json!(message);
+        if status_code == 401 || should_mark_reauth(&message) {
+            account["requires_reauth"] = json!(true);
+            account["reauth_reason"] = json!(if status_code == 401 { "unauthorized" } else { "invalid_grant" });
+            account["reauth_message"] = json!("Codex 登录授权已失效，请重新登录。");
+        }
         account["updatedAt"] = json!(now_millis());
     })
     .await
@@ -1318,7 +1322,13 @@ async fn fetch_usage_info(
         .await
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
-    read_response_json(response).await
+    let usage = read_response_json(response).await?;
+    if string_value(usage.get("plan_type")).trim().is_empty() {
+        return Err(ManagerError::System(
+            "Codex 额度响应缺少套餐信息，无法确认当前会员状态。".to_string(),
+        ));
+    }
+    Ok(usage)
 }
 
 fn http_client(proxy: &str) -> Result<reqwest::Client, ManagerError> {
@@ -1344,11 +1354,10 @@ async fn read_response_json(response: reqwest::Response) -> Result<Value, Manage
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
     if !status.is_success() {
-        return Err(ManagerError::System(format!(
-            "OpenAI 请求失败：{} {}",
-            status.as_u16(),
-            text
-        )));
+        return Err(ManagerError::OpenAiRequest {
+            status_code: status.as_u16(),
+            message: text,
+        });
     }
 
     Ok(serde_json::from_str(&text)?)
@@ -1833,8 +1842,128 @@ impl EmptyStringExt for String {
 
 #[cfg(test)]
 mod tests {
-    use super::create_quota_stage_samples;
+    use super::*;
+    use crate::core::paths::resolve_app_paths;
     use serde_json::json;
+
+    fn with_account_paths(test: impl FnOnce(&AppPaths)) {
+        let temp_root = std::env::temp_dir();
+        let root = temp_root.join(format!("codex-account-test-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&root);
+        test(&paths);
+        assert_eq!(root.parent(), Some(temp_root.as_path()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn cached_account() -> Value {
+        json!({
+          "id": "account-1",
+          "account_id": "account-1",
+          "email": "test@example.com",
+          "plan": "plus",
+          "usage": { "plan_type": "plus", "rate_limit": { "primary_window": { "used_percent": 10 } } },
+          "auth": { "accessToken": "old-access", "refreshToken": "old-refresh", "expiresAt": now_millis() + 3_600_000 },
+          "requires_reauth": false
+        })
+    }
+
+    #[test]
+    fn refresh_failures_invalidate_cached_membership_without_losing_credentials() {
+        with_account_paths(|paths| {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                for (status_code, message, requires_reauth) in [
+                    (401, "unauthorized", true),
+                    (403, "forbidden", false),
+                    (429, "rate limited", false),
+                    (400, "invalid_grant", true),
+                    (0, "网络连接失败", false),
+                ] {
+                    let account = cached_account();
+                    provider_store::write_codex_accounts(paths, &[account.clone()]).unwrap();
+                    let error = if status_code == 0 {
+                        ManagerError::System(message.to_string())
+                    } else {
+                        ManagerError::OpenAiRequest { status_code, message: message.to_string() }
+                    };
+                    mark_account_refresh_error(paths, "account-1", &error).await.unwrap();
+                    let stored = provider_store::read_codex_accounts(paths).unwrap().remove(0);
+                    assert_eq!(stored["plan"], "");
+                    assert_eq!(stored["usage"], json!({}));
+                    assert_eq!(stored["auth"], account["auth"]);
+                    assert_eq!(stored["refresh_status"], "failed");
+                    assert_eq!(stored["refresh_status_code"], status_code);
+                    assert_eq!(stored["requires_reauth"], requires_reauth);
+                    assert!(stored["refresh_message"].as_str().unwrap().contains(message));
+                    let public = read_public_accounts(paths).unwrap();
+                    assert_eq!(public[0]["refresh_status"], "failed");
+                    assert_eq!(public[0]["requires_reauth"], requires_reauth);
+                    assert!(public[0]["auth"].get("refreshToken").is_none());
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn expired_authorization_without_refresh_token_reports_reauth() {
+        with_account_paths(|paths| {
+            let mut account = cached_account();
+            account["auth"] = json!({ "accessToken": "expired", "expiresAt": 1 });
+            provider_store::write_codex_accounts(paths, &[account]).unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let result = runtime.block_on(refresh_account(
+                paths,
+                &json!([{ "id": "codex", "configPath": paths.temp_dir }]),
+                json!({ "accountId": "account-1" }),
+            ));
+            assert!(result.is_err());
+            let public = read_public_accounts(paths).unwrap();
+            assert_eq!(public[0]["plan"], "");
+            assert_eq!(public[0]["usage"], json!({}));
+            assert_eq!(public[0]["requires_reauth"], true);
+            assert_eq!(public[0]["reauth_reason"], MISSING_REFRESH_TOKEN_REASON);
+            assert_eq!(public[0]["refresh_status"], "failed");
+        });
+    }
+
+    #[test]
+    fn latest_usage_replaces_old_paid_plan_and_clears_refresh_errors() {
+        with_account_paths(|paths| {
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            runtime.block_on(async {
+                let mut account = cached_account();
+                account["requires_reauth"] = json!(true);
+                account["refresh_status"] = json!("failed");
+                provider_store::write_codex_accounts(paths, &[account.clone()]).unwrap();
+                for (usage, expected_plan) in [(json!({ "plan_type": "free" }), "free"), (json!({}), "")] {
+                    let saved = save_account(
+                        paths,
+                        tokens_from_account(&account),
+                        json!({ "email": "test@example.com", "chatgpt_plan_type": "plus" }),
+                        &mut json!({ "account_id": "account-1", "chatgpt_plan_type": "plus" }),
+                        usage.clone(),
+                        String::new(),
+                    ).await.unwrap();
+                    assert_eq!(saved["plan"], expected_plan);
+                    assert_eq!(saved["usage"], usage);
+                    assert_eq!(saved["requires_reauth"], false);
+                    assert_eq!(saved["refresh_status"], "");
+                }
+            });
+        });
+    }
+
+    #[test]
+    fn http_errors_preserve_status_for_authentication_handling() {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            for status_code in [401, 403, 429, 500] {
+                let response = http::Response::builder().status(status_code).body("failure").unwrap();
+                let error = read_response_json(reqwest::Response::from(response)).await.unwrap_err();
+                assert!(matches!(error, ManagerError::OpenAiRequest { status_code: actual, .. } if actual == status_code));
+            }
+        });
+    }
 
     #[test]
     fn creates_quota_stages_from_second_and_millisecond_resets() {

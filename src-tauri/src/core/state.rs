@@ -1095,14 +1095,16 @@ impl ManagerState {
                 Ok(self.state.clone())
             }
             "codex-account:refresh" => {
-                codex_account::refresh_account(
+                let result = codex_account::refresh_account(
                     &self.paths,
                     &self.state["cliTargets"],
                     payload.unwrap_or_else(|| json!({})),
                 )
-                .await?;
+                .await;
+                // 失败也要同步账号状态，让页面立即显示失效和刷新错误。
                 self.refresh_state().await?;
                 self.emit_state_changed(&app)?;
+                result?;
                 Ok(self.state.clone())
             }
             "codex-account:disable" => {
@@ -2028,12 +2030,17 @@ impl ManagerState {
                 codex_account::clear_account(&self.paths).await?;
             }
             ["tray", "codex", "account", "refresh", account_id] => {
-                codex_account::refresh_account(
+                let result = codex_account::refresh_account(
                     &self.paths,
                     &self.state["cliTargets"],
                     json!({ "accountId": *account_id, "syncAuth": false }),
                 )
-                .await?;
+                .await;
+                if let Err(error) = result {
+                    self.refresh_state().await?;
+                    self.emit_state_changed(&app)?;
+                    return Err(error);
+                }
             }
             ["tray", "codex", "proxy", "disable"] => {
                 self.disable_codex_proxy_for_tray().await?;
