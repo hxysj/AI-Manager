@@ -3216,6 +3216,8 @@ pub(super) async fn deliver_pending_messages_for_peer(
             }
             let _ = write_json(&paths.lan_share_files.messages, &json!(messages)).await;
         }
+        // 状态刷新会重新读取存储，必须先释放补发结果的写入锁。
+        drop(_storage);
         let _ = emit_state_changed(app, registry, paths).await;
     }
 }

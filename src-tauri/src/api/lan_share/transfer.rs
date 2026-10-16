@@ -18,7 +18,7 @@ pub(super) struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            send_mib_per_second: 10,
+            send_mib_per_second: 2,
             max_concurrent_files: 1,
         }
     }
@@ -30,7 +30,7 @@ impl Settings {
             || !(1..=8).contains(&self.max_concurrent_files)
         {
             return Err(ManagerError::System(
-                "发送限速需为 1–1024 MiB/s，并发文件数需为 1–8。".into(),
+                "传输限速需为 1–1024 MiB/s，并发文件数需为 1–8。".into(),
             ));
         }
         Ok(())
@@ -42,6 +42,7 @@ struct Budget {
     tokens: f64,
     updated: Instant,
     active_files: usize,
+    active_uploads: usize,
 }
 
 pub(super) struct Control {
@@ -57,6 +58,7 @@ impl Default for Control {
                 tokens: 0.0,
                 updated: Instant::now(),
                 active_files: 0,
+                active_uploads: 0,
             }),
             changed: Notify::new(),
         }
@@ -74,15 +76,25 @@ impl Control {
     }
 
     pub(super) async fn acquire_file(self: &Arc<Self>) -> FilePermit {
+        self.acquire_slot(false).await
+    }
+
+    pub(super) async fn acquire_upload(self: &Arc<Self>) -> FilePermit {
+        self.acquire_slot(true).await
+    }
+
+    async fn acquire_slot(self: &Arc<Self>, receiving: bool) -> FilePermit {
         loop {
             let notified = self.changed.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
             {
                 let mut budget = self.budget.lock().unwrap();
-                if budget.active_files < budget.settings.max_concurrent_files {
-                    budget.active_files += 1;
-                    return FilePermit(self.clone());
+                let maximum = budget.settings.max_concurrent_files;
+                let active = if receiving { &mut budget.active_uploads } else { &mut budget.active_files };
+                if *active < maximum {
+                    *active += 1;
+                    return FilePermit { control: self.clone(), receiving };
                 }
             }
             notified.await;
@@ -114,6 +126,15 @@ impl Control {
                 _ = tokio::time::sleep(delay).fuse() => {},
                 _ = notified.fuse() => {},
             }
+        }
+    }
+
+    pub(super) async fn receive_bytes(&self, mut size: usize) {
+        // 接收帧可能大于发送片，分片计入同一预算，避免接收绕过总限速。
+        while size > 0 {
+            let slice = size.min(SLICE_BYTES);
+            self.acquire_bytes(slice).await;
+            size -= slice;
         }
     }
 
@@ -155,18 +176,76 @@ impl Control {
     }
 }
 
-pub(super) struct FilePermit(Arc<Control>);
+pub(super) struct FilePermit {
+    control: Arc<Control>,
+    receiving: bool,
+}
 
 impl Drop for FilePermit {
     fn drop(&mut self) {
-        self.0.budget.lock().unwrap().active_files -= 1;
-        self.0.changed.notify_waiters();
+        let mut budget = self.control.budget.lock().unwrap();
+        if self.receiving {
+            budget.active_uploads -= 1;
+        } else {
+            budget.active_files -= 1;
+        }
+        drop(budget);
+        self.control.changed.notify_waiters();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn incoming_and_outgoing_files_share_the_total_rate() {
+        tauri::async_runtime::block_on(async {
+            let control = Arc::new(Control::default());
+            control.configure(Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+            let started = Instant::now();
+            let send = async {
+                let stream = control.bytes_stream(Bytes::from(vec![3; 128 * 1024]));
+                tokio::pin!(stream);
+                let mut sent = 0;
+                while let Some(bytes) = stream.next().await {
+                    sent += bytes.unwrap().len();
+                }
+                sent
+            };
+            let (sent, ()) = futures_util::join!(send, control.receive_bytes(128 * 1024));
+            assert_eq!(sent, 128 * 1024);
+            assert!(started.elapsed() >= Duration::from_millis(240));
+        });
+    }
+
+    #[test]
+    fn bidirectional_transfers_do_not_wait_on_each_others_file_slots() {
+        tauri::async_runtime::block_on(async {
+            let control = Arc::new(Control::default());
+            let outgoing = control.acquire_file().await;
+            let incoming = control.acquire_upload().now_or_never().unwrap();
+            let mut next_incoming = Box::pin(control.acquire_upload());
+            assert!(next_incoming.as_mut().now_or_never().is_none());
+            drop(incoming);
+            let incoming = next_incoming.await;
+            drop(outgoing);
+            let _outgoing = control.acquire_file().now_or_never().unwrap();
+            drop(incoming);
+
+            let task_control = control.clone();
+            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+            let task = tauri::async_runtime::spawn(async move {
+                let _permit = task_control.acquire_upload().await;
+                ready_tx.send(()).unwrap();
+                std::future::pending::<()>().await;
+            });
+            ready_rx.await.unwrap();
+            task.abort();
+            let _ = task.await;
+            let _incoming = control.acquire_upload().now_or_never().unwrap();
+        });
+    }
 
     #[test]
     fn all_streams_share_one_bandwidth_budget_and_small_slices() {

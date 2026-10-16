@@ -140,6 +140,7 @@ pub(super) async fn upload(
     {
         return Err(ManagerError::System("请先选择有效会话。".into()));
     }
+    let _permit = registry.transfer.acquire_upload().await;
     cleanup_uploads(registry, paths).await?;
     let safe_name = safe_name(name)?;
     let directory = Path::new(&paths.lan_share_dir).join("uploads");
@@ -159,6 +160,7 @@ pub(super) async fn upload(
                 if received > MAX_FILE_BYTES {
                     return Err(ManagerError::System("单个附件不能超过 10 GiB。".into()));
                 }
+                registry.transfer.receive_bytes(bytes.len()).await;
                 file.write_all(&bytes).await?;
             }
         }
@@ -500,6 +502,70 @@ pub(super) async fn cleanup_uploads(
 mod tests {
     use super::*;
     use hyper::header::CONTENT_RANGE;
+
+    #[test]
+    fn browser_upload_is_rate_limited_without_blocking_state_requests() {
+        tauri::async_runtime::block_on(async {
+            let temp_root = std::env::temp_dir();
+            let root = temp_root.join(create_id("browser-upload-rate-test"));
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            let device = upsert_device(&registry, &paths, "", "测试浏览器", "browser", "127.0.0.1").await.unwrap();
+            let state = create_session(&registry, &paths, json!({ "deviceId": device.id })).await.unwrap();
+            let session_id = state["data"]["currentSession"]["id"].as_str().unwrap().to_string();
+            registry.transfer.configure(transfer::Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+            let server_registry = registry.clone();
+            let server_paths = paths.clone();
+            let server = tauri::async_runtime::spawn(async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let registry = server_registry.clone();
+                    let paths = server_paths.clone();
+                    let session_id = session_id.clone();
+                    let started = started_tx.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let service = service_fn(move |request: Request<Incoming>| {
+                            let registry = registry.clone();
+                            let paths = paths.clone();
+                            let session_id = session_id.clone();
+                            let started = started.clone();
+                            async move {
+                                if request.method() == Method::PUT {
+                                    started.send(()).unwrap();
+                                    let file = upload(request.into_body(), &registry, &paths, &session_id, "browser.bin").await.unwrap();
+                                    Ok::<_, Infallible>(api_success(json!(file.size)))
+                                } else {
+                                    Ok(api_success(get_state(&registry, &paths).await.unwrap()))
+                                }
+                            }
+                        });
+                        let _ = http1::Builder::new().serve_connection(TokioIo::new(socket), service).await;
+                    });
+                }
+            });
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let content = vec![8; 512 * 1024];
+            let request = client.put(format!("http://{address}/upload")).body(content.clone());
+            registry.transfer.configure(transfer::Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+            let started = tokio::time::Instant::now();
+            let upload = tauri::async_runtime::spawn(async move { request.send().await.unwrap().json::<Value>().await.unwrap() });
+            started_rx.recv().await.unwrap();
+            let state = tokio::time::timeout(std::time::Duration::from_millis(250), client.get(format!("http://{address}/state")).send()).await.unwrap().unwrap();
+            assert!(state.status().is_success());
+            assert_eq!(upload.await.unwrap()["data"], content.len());
+            assert!(started.elapsed() >= std::time::Duration::from_millis(475));
+            let files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files).unwrap();
+            assert_eq!(tokio::fs::read(&files[0].path).await.unwrap(), content);
+            server.abort();
+            let _ = server.await;
+            drop(client);
+            assert_eq!(root.parent(), Some(temp_root.as_path()));
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
 
     #[test]
     fn batch_files_create_one_message_and_preserve_order() {

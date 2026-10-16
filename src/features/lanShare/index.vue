@@ -492,33 +492,33 @@
     >
       <form class="drop-transfer-form" @submit.prevent="saveTransferSettings">
         <p class="drop-transfer-hint">
-          所有设备共享本机发送限额，客户端发送和访客下载均受限制。
-          Wi-Fi 卡顿时可降低限速；接收速度由发送方设置决定。
+          限制本设备发送和接收文件的总速度，客户端和网页传输均生效。
+          默认 2 MiB/s，Wi-Fi 卡顿时可继续降低限速。
         </p>
         <label class="drop-transfer-field">
-          <span>发送总限速（MiB/s）</span>
+          <span>文件传输总限速（MiB/s）</span>
           <el-input-number
             v-model="transferSettings.sendMibPerSecond"
             :min="1"
             :max="1024"
             :precision="0"
             :disabled="loading"
-            aria-label="发送总限速，单位 MiB 每秒"
+            aria-label="文件传输总限速，单位 MiB 每秒"
           />
         </label>
         <label class="drop-transfer-field">
-          <span>同时发送的文件数</span>
+          <span>每个方向同时传输的文件数</span>
           <el-input-number
             v-model="transferSettings.maxConcurrentFiles"
             :min="1"
             :max="8"
             :precision="0"
             :disabled="loading"
-            aria-label="同时发送的文件数"
+            aria-label="每个方向同时传输的文件数"
           />
         </label>
         <p class="drop-transfer-hint">
-          保存后立即生效并保留设置。降低并发时，正在发送的文件继续完成。
+          保存后立即生效并保留设置。降低并发时，正在传输的文件继续完成。
         </p>
         <div class="drop-transfer-actions">
           <el-button :disabled="loading" @click="transferSettingsOpen = false">
@@ -664,7 +664,7 @@ const state = reactive({
     pairingRequests: [],
     error: "",
     autoDiscovery: false,
-    transfer: { sendMibPerSecond: 10, maxConcurrentFiles: 1 }
+    transfer: { sendMibPerSecond: 2, maxConcurrentFiles: 1 }
   },
   messages: []
 })
@@ -679,7 +679,8 @@ const deleteDevicePending = ref(false)
 const deleteDeviceError = ref("")
 const createGroupOpen = ref(false)
 const transferSettingsOpen = ref(false)
-const transferSettings = reactive({ sendMibPerSecond: 10, maxConcurrentFiles: 1 })
+// 默认使用较低的总速率，避免文件收发挤占同一无线网络。
+const transferSettings = reactive({ sendMibPerSecond: 2, maxConcurrentFiles: 1 })
 const newGroup = reactive({ name: "新的群聊", deviceIds: [] })
 
 const selectedGroupDeviceIds = computed(() =>

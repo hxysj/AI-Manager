@@ -51,6 +51,8 @@ pub(super) struct Config {
     pub(super) peers: Vec<TrustedPeer>,
     pub(super) ignored_peers: Vec<String>,
     pub(super) transfer: transfer::Settings,
+    #[serde(default)]
+    pub(super) transfer_configured: bool,
 }
 
 fn default_auto_discovery() -> bool {
@@ -64,6 +66,16 @@ fn migrate_discovery_config(config: &mut Config) {
     }
 }
 
+fn migrate_transfer_config(config: &mut Config) {
+    if !config.transfer_configured {
+        // 旧版会持久化默认 10 MiB/s；仅迁移该默认值，保留其他自定义配置。
+        if config.transfer == (transfer::Settings { send_mib_per_second: 10, max_concurrent_files: 1 }) {
+            config.transfer = transfer::Settings::default();
+        }
+        config.transfer_configured = true;
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -74,6 +86,7 @@ impl Default for Config {
             peers: Vec::new(),
             ignored_peers: Vec::new(),
             transfer: transfer::Settings::default(),
+            transfer_configured: true,
         }
     }
 }
@@ -267,6 +280,7 @@ pub(super) async fn start(
         Err(error) => return Err(error.into()),
     };
     migrate_discovery_config(&mut config);
+    migrate_transfer_config(&mut config);
     config.transfer.validate()?;
     registry.transfer.configure(config.transfer);
     normalize_native_id(&mut config.id);
@@ -533,6 +547,7 @@ pub(super) async fn set_transfer_settings(
         };
     }
     config.transfer = settings;
+    config.transfer_configured = true;
     write_json(&paths.lan_share_files.config, &json!(config)).await?;
     runtime.native.config = config;
     registry.transfer.configure(settings);
@@ -1140,18 +1155,22 @@ where
         pairing_id: pairing_id.clone(),
     };
     let aad = auth.aad();
-    let ciphertext = match Limited::new(request.into_body(), transport::MAX_BODY)
-        .collect()
-        .await
-    {
-        Ok(body) => body.to_bytes(),
-        Err(_) => {
-            return Ok(api_error(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "加密载荷过大或接收中断。",
-            ))
+    // 文件大包单独排队并按帧限速，短消息和心跳无需等待文件许可。
+    let bulk = request.body().size_hint().upper().map(|size| size > 64 * 1024).unwrap_or(true);
+    let mut _permit = if bulk { Some(registry.transfer.acquire_upload().await) } else { None };
+    let mut body = Limited::new(request.into_body(), transport::MAX_BODY);
+    let mut ciphertext = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let Ok(frame) = frame else {
+            return Ok(api_error(StatusCode::PAYLOAD_TOO_LARGE, "加密载荷过大或接收中断。"));
+        };
+        if let Ok(bytes) = frame.into_data() {
+            if bulk {
+                registry.transfer.receive_bytes(bytes.len()).await;
+            }
+            ciphertext.extend_from_slice(&bytes);
         }
-    };
+    }
     let plaintext = match transport::decrypt(&auth.secret, &aad, &ciphertext) {
         Ok(plaintext) => plaintext,
         Err(_) => {
@@ -1165,6 +1184,11 @@ where
     let result = async {
         let (metadata, bytes) = transport::unpack(plaintext)?;
         let operation = string_value(metadata.get("operation"));
+        if !bulk && operation == "file-chunk" {
+            // 尾块和小文件在解密后计费，控制消息仍可直接通过。
+            _permit = Some(registry.transfer.acquire_upload().await);
+            registry.transfer.receive_bytes(ciphertext.len()).await;
+        }
         let permitted = match scope.as_str() {
             "software" => matches!(operation.as_str(), "info" | "pair"),
             "pairing" => {
@@ -1347,6 +1371,76 @@ pub(super) async fn deliver(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_default_rate_is_lowered_without_replacing_custom_settings() {
+        for (rate, concurrent, configured, expected) in [
+            (10, 1, false, 2),
+            (5, 1, false, 5),
+            (10, 2, false, 10),
+            (10, 1, true, 10),
+        ] {
+            let mut value = json!({ "transfer": { "sendMibPerSecond": rate, "maxConcurrentFiles": concurrent } });
+            if configured { value["transfer_configured"] = json!(true); }
+            let mut config: Config = serde_json::from_value(value).unwrap();
+            migrate_transfer_config(&mut config);
+            assert_eq!(config.transfer.send_mib_per_second, expected);
+            assert_eq!(config.transfer.max_concurrent_files, concurrent);
+            assert!(config.transfer_configured);
+            migrate_transfer_config(&mut config);
+            assert_eq!(config.transfer.send_mib_per_second, expected);
+        }
+    }
+
+    #[test]
+    fn encrypted_uploads_are_limited_while_heartbeats_remain_responsive() {
+        tauri::async_runtime::block_on(async {
+            let temp_root = std::env::temp_dir();
+            let root = temp_root.join(create_id("native-upload-rate-test"));
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            registry.inner.lock().await.native.config.id = "native-receiver".into();
+            remember(&registry, &paths, TrustedPeer {
+                peer: Peer { id: "native-sender".into(), ip: "127.0.0.1".into(), port: DEFAULT_PORT, ..Peer::default() },
+                secret: "upload-test-secret".into(),
+                secure: true,
+            }).await.unwrap();
+            let auth = TransportAuth {
+                sender: "native-sender".into(), receiver: "native-receiver".into(),
+                secret: "upload-test-secret".into(), pairing_id: String::new(),
+            };
+            registry.transfer.configure(transfer::Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+            // 大块与短尾块都必须计入接收预算，心跳不能等待它们的文件许可。
+            for size in [512 * 1024, 32 * 1024] {
+                let content = vec![7; size];
+                let packet = transport::pack(&json!({
+                    "operation": "file-chunk", "sentAt": now_millis(),
+                    "payload": {
+                        "name": "rate-test.bin", "sessionId": "", "uploadId": create_id("upload"),
+                        "chunkIndex": 0, "chunkTotal": 1, "offset": 0, "totalSize": size,
+                        "sha256": format!("{:x}", Sha256::digest(&content)),
+                        "contentLength": size, "contentRange": format!("bytes 0-{}/{}", size - 1, size)
+                    }
+                }), &content).unwrap();
+                let packet = transport::encrypt(&auth.secret, &auth.aad(), &packet).unwrap();
+                registry.transfer.configure(transfer::Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+                let started = tokio::time::Instant::now();
+                let request = encrypted_test_request(&auth, &packet);
+                let mut upload = Box::pin(handle_secure_request(request, &registry, &paths, None, "127.0.0.1:12345".parse().unwrap()));
+                assert!(upload.as_mut().now_or_never().is_none());
+                let ping_packet = encrypted_test_packet(&auth, "ping", json!({}));
+                let ping = tokio::time::timeout(Duration::from_millis(250), handle_secure_request(
+                    encrypted_test_request(&auth, &ping_packet), &registry, &paths, None, "127.0.0.1:12345".parse().unwrap(),
+                )).await.unwrap().unwrap();
+                assert_eq!(decoded_test_response(ping, &auth, &ping_packet).await.0, StatusCode::OK);
+                let result = upload.await.unwrap();
+                assert_eq!(decoded_test_response(result, &auth, &packet).await.0, StatusCode::OK);
+                assert!(started.elapsed() >= Duration::from_secs_f64(size as f64 / (1024.0 * 1024.0) * 0.95));
+            }
+            assert_eq!(root.parent(), Some(temp_root.as_path()));
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
 
     fn encrypted_test_packet(auth: &TransportAuth, operation: &str, payload: Value) -> Vec<u8> {
         let packet = transport::pack(
