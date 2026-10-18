@@ -16,6 +16,7 @@ pub mod network_quality;
 pub mod proxy;
 pub mod repos;
 pub mod rules;
+pub mod screenshot;
 pub mod runtime_provider;
 pub mod sessions;
 pub mod settings;

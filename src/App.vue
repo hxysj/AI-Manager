@@ -668,6 +668,7 @@ let unsubscribe = null
 let unsubscribeClose = null
 let unsubscribeUpdate = null
 let unsubscribeTool = null
+let unsubscribeScreenshotError = null
 
 function toggleTheme() {
   themeMode.value = themeMode.value === "dark" ? "light" : "dark"
@@ -2110,6 +2111,9 @@ onMounted(() => {
   bootstrap()
   if (isQuickSwitchPanel) return
 
+  // 托盘和全局快捷键触发的截图错误统一在主面板提示。
+  unsubscribeScreenshotError = appApi.onScreenshotError(message => createMessage.error(String(message)))
+
   unsubscribeTool = appApi.onToolRequested((request) => {
     toolRequest.value = request
     activeView.value = "tools"
@@ -2155,6 +2159,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("storage", handleStoredThemeChange)
   unsubscribeTool?.()
+  unsubscribeScreenshotError?.()
 
   if (typeof unsubscribe === "function") {
     unsubscribe()

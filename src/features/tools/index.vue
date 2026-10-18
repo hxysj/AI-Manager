@@ -187,6 +187,7 @@
         v-model:auto-refresh="portAutoRefresh"
       />
       <StringDiff v-else-if="activeTool === 'string-diff'" />
+      <ScreenshotTool v-else-if="activeTool === 'screenshot'" />
       <ImageLinkExtractor v-else-if="activeTool === 'image-link-extractor'" />
       <CoordinateOverlayTool v-else-if="activeTool === 'coordinate-overlay'" />
       <ImageWorkbench
@@ -231,6 +232,11 @@ import CoordinateOverlayTool from "@/features/tools/coordinateOverlay/index.vue"
 import ImageLinkExtractor from "@/features/tools/imageLinkExtractor/index.vue"
 import PortMonitor from "@/features/tools/portMonitor/index.vue"
 import StringDiff from "@/features/tools/stringDiff/index.vue"
+
+// 截图和贴图共用编辑器，进入工具时再加载管理页。
+const ScreenshotTool = defineAsyncComponent(
+  () => import("@/features/tools/screenshot/index.vue")
+)
 
 const JsonAgentTool = defineAsyncComponent(
   () => import("@/features/tools/jsonAgent/index.vue")

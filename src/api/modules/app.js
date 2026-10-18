@@ -27,6 +27,7 @@ export const appApi = {
   onStateChanged: callback => subscribe('state:changed', callback),
   onStateChangedReady: callback => subscribeReady('state:changed', callback),
   onToolRequested: callback => subscribe('app:open-tool', callback),
+  onScreenshotError: callback => subscribe('screenshot:error', callback),
   onUpdateStatus: callback => subscribe('app:update-status', callback),
   onCloseRequested: callback => subscribe('app:close-requested', callback)
 }

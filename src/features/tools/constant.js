@@ -8,12 +8,21 @@ import {
   Network,
   PawPrint,
   ScanLine,
+  Scissors,
   Share2
 } from 'lucide-vue-next'
 
 // 工具中心、悬浮窗和设置共用入口，保持名称、图标及可用条件一致。
 export function getToolItems({ cliTargets = [], repos = [] } = {}) {
   const items = [
+    {
+      id: 'screenshot',
+      label: '截图贴图',
+      summary: '截取桌面区域、添加标注，将图片复制、保存或置顶贴在桌面。',
+      meta: '截图 / 标注 / 贴图',
+      icon: Scissors,
+      theme: 'sky'
+    },
     {
       id: 'image-workbench',
       label: '图片工作台',

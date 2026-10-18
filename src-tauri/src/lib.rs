@@ -1,7 +1,7 @@
 mod api;
 mod core;
 
-use crate::api::{app, app_logs};
+use crate::api::{app, app_logs, screenshot};
 use crate::core::state::{AppState, ManagerState};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +20,11 @@ async fn dispatch_api(
     channel: String,
     payload: Option<Value>,
 ) -> Result<Value, String> {
+    // 截图数据走独立服务，不写操作日志，也不重建 Provider 托盘。
+    if let Some(action) = channel.strip_prefix("screenshot:") {
+        return screenshot::dispatch(app, action.to_string(), payload.unwrap_or_else(|| serde_json::json!({})))
+            .await.map_err(|error| error.to_string());
+    }
     // 悬浮窗复用内存状态，初始化不扫描磁盘，也不更新托盘和操作日志。
     if channel == "quick-switch:bootstrap" {
         return Ok(state.state_snapshot().await);
@@ -78,6 +83,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
+            screenshot::window_event(window.app_handle(), window.label(), event);
             if window.label() != "main" {
                 return;
             }
@@ -151,6 +157,15 @@ pub fn run() {
             let quick_switch_collapsed = manager_state.quick_switch_collapsed();
             // 预热窗口会立即调用 IPC，先注册共享状态。
             app.manage(AppState::new(manager_state));
+            let data_root = tauri::async_runtime::block_on(app.state::<AppState>().user_data_path());
+            match screenshot::ScreenshotService::new(&data_root) {
+                Ok(service) => {
+                    app.manage(service);
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(async move { screenshot::start(handle); });
+                }
+                Err(error) => eprintln!("截图贴图数据加载失败，原数据保留：{error}"),
+            }
             app::sync_quick_switch_window(
                 app.handle(),
                 &app_settings,
@@ -191,8 +206,13 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![dispatch_api])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("启动 Monkey Thief 失败")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                screenshot::flush(app);
+            }
+        })
 }
 
 fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
@@ -209,6 +229,15 @@ fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             match item_id.as_str() {
                 "show-main" => show_main_from_tray(app),
                 "quit" => app.exit(0),
+                "screenshot:capture" | "screenshot:clipboard" | "screenshot:toggle" | "screenshot:reset-input" => {
+                    let action = item_id.trim_start_matches("screenshot:").to_string();
+                    let handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = screenshot::dispatch(handle.clone(), action, serde_json::json!({})).await {
+                            let _ = handle.emit("screenshot:error", error.to_string());
+                        }
+                    });
+                }
                 _ if item_id.starts_with("tray:") => run_tray_action(app, item_id),
                 _ => {}
             }
@@ -245,6 +274,9 @@ fn build_tray_menu(app: &tauri::AppHandle, state: &Value) -> tauri::Result<Menu<
 
     append_quick_switch_tray_items(app, &switch_menu, state)?;
     menu.append(&show_item)?;
+    for (id, label) in [("capture", "区域截图"), ("clipboard", "剪贴板贴图"), ("toggle", "显示/隐藏全部贴图"), ("reset-input", "取消全部贴图鼠标穿透")] {
+        menu.append(&MenuItem::with_id(app, format!("screenshot:{id}"), label, true, None::<&str>)?)?;
+    }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&switch_menu)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
