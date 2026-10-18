@@ -146,6 +146,26 @@
           >
             <Server :size="18" />
           </button>
+          <template v-if="activeCli === 'codex'">
+            <button
+              class="providers-view__system-config providers-model-action"
+              type="button"
+              :disabled="pending || codexModelsPending"
+              title="将当前 Provider 模型列表同步到 Codex；官方账号会从官方上游更新"
+              @click="syncCodexModels(false)"
+            >
+              同步模型列表
+            </button>
+            <button
+              class="providers-view__system-config providers-model-action"
+              type="button"
+              :disabled="pending || codexModelsPending"
+              title="清除当前自定义模型列表，恢复 Codex 官方默认目录"
+              @click="syncCodexModels(true)"
+            >
+              恢复默认模型
+            </button>
+          </template>
           <button
             class="providers-view__add"
             type="button"
@@ -1178,7 +1198,11 @@
           <div class="providers-view__section-title">
             <div>
               <h2>模型映射</h2>
-              <p>每行填写一个上游模型，Codex 会自动生成可选模型列表。</p>
+              <p>每行填写一个上游模型；留空恢复官方默认列表。保存后自动同步已启用的 Codex。</p>
+            </div>
+            <div v-if="draft.cli === 'codex'" class="providers-view__section-actions">
+              <button type="button" :disabled="codexModelsPending || pending" @click="fetchCodexModels">{{ codexModelsPending ? '获取中…' : '获取上游模型' }}</button>
+              <button type="button" :disabled="codexModelsPending || pending" @click="resetCodexDraftModels">恢复官方默认</button>
             </div>
             <!-- <div class="providers-view__section-actions">
               <button type="button">获取模型列表</button>
@@ -1481,7 +1505,11 @@
           <div class="providers-view__section-title">
             <div>
               <h2>模型映射</h2>
-              <p>每行填写一个上游模型，Codex 会自动生成可选模型列表。</p>
+              <p>每行填写一个上游模型；留空恢复官方默认列表。保存后自动同步已启用的 Codex。</p>
+            </div>
+            <div v-if="draft.cli === 'codex'" class="providers-view__section-actions">
+              <button type="button" :disabled="codexModelsPending || pending" @click="fetchCodexModels">{{ codexModelsPending ? '获取中…' : '获取上游模型' }}</button>
+              <button type="button" :disabled="codexModelsPending || pending" @click="resetCodexDraftModels">恢复官方默认</button>
             </div>
             <!-- <div class="providers-view__section-actions">
               <button type="button">获取模型列表</button>
@@ -2885,18 +2913,51 @@ const modelDrafts = reactive({
   opusModel: ""
 })
 
-const defaultCodexModelList = [
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-  "gpt-5.5",
-  "gpt-5.4",
-  "gpt-5.4-mini",
-  "gpt-5.3-codex",
-  "gpt-5.3-codex-spark",
-  "gpt-5.2"
-]
+const codexModelsPending = ref(false)
+const codexModelCatalog = ref(null)
 
+async function fetchCodexModels() {
+  codexModelsPending.value = true
+  const providerId = draft.id
+  try {
+    const catalog = await providerApi.fetchCodexModels({
+      providerId: providerId || undefined,
+      baseUrl: draft.baseUrl,
+      proxy: draft.proxy,
+      keyId: activeDraftApiKey.value?.masked ? draft.activeApiKeyId : undefined,
+      apiKey: activeDraftApiKey.value?.apiKey || draft.apiKey
+    })
+    if (draft.id !== providerId) return
+    codexModelCatalog.value = catalog
+    modelDrafts.modelList = catalog.models.map(model => model.slug).join('\n')
+    modelDrafts.mainModel = catalog.models.find(model => model.visibility !== 'hide')?.slug || catalog.models[0].slug
+    createMessage.success(`已获取 ${catalog.models.length} 个模型，保存后同步到 Codex。`)
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    codexModelsPending.value = false
+  }
+}
+
+function resetCodexDraftModels() {
+  modelDrafts.modelList = ''
+  modelDrafts.mainModel = ''
+  codexModelCatalog.value = null
+  draft.modelContextWindowEnabled = false
+}
+
+async function syncCodexModels(restore) {
+  codexModelsPending.value = true
+  try {
+    await providerApi.syncCodexModels({ restore })
+    createMessage.success(`${restore ? '已恢复官方默认模型' : '已同步模型列表'}，请重新打开 Codex 应用或 CLI 会话生效。`)
+  } catch (error) {
+    createMessage.error(String(error))
+  } finally {
+    codexModelsPending.value = false
+  }
+}
+W
 // 预览配置与后端保持同一套默认模型和壳位分配顺序。
 function getCodexDraftModels() {
   const models = String(modelDrafts.modelList || "")
@@ -2913,37 +2974,27 @@ function getCodexDraftModels() {
     return true
   })
 
-  return uniqueModels.length ? uniqueModels : defaultCodexModelList
+  return uniqueModels
 }
 
 function getCodexDraftCatalog() {
   const models = getCodexDraftModels()
-  const usedShells = new Set(
-    models.filter((model) => defaultCodexModelList.includes(model))
-  )
-  let nextShellIndex = 0
+  const template = props.runtimeConfigSchemas.codex?.modelTemplate || {}
   return {
-    models: models.map((model) => {
-      let slug = model
-      if (!defaultCodexModelList.includes(model)) {
-        while (
-          nextShellIndex < defaultCodexModelList.length &&
-          usedShells.has(defaultCodexModelList[nextShellIndex])
-        ) {
-          nextShellIndex += 1
-        }
-        slug = defaultCodexModelList[nextShellIndex] || model
-        nextShellIndex += 1
-      }
-      usedShells.add(slug)
+    models: models.map((model, index) => {
+      const metadata = codexModelCatalog.value?.models.find(item => item.slug === model)
+      const contextWindow = metadata?.context_window || template.context_window
       return {
-        slug,
-        display_name: model,
-        description: `上游模型：${model}`,
-        visibility: "list",
+        ...template,
+        ...metadata,
+        slug: model,
+        display_name: metadata?.display_name || model,
+        description: metadata?.description || `上游模型：${model}`,
+        visibility: /^(gpt-image|dall-e)|auto-review/i.test(model) || metadata?.visibility === 'hide' ? 'hide' : 'list',
         comp_hash: "3000",
-        default_reasoning_level: "low",
-        supported_reasoning_levels: ["low", "medium", "high", "xhigh"]
+        priority: index,
+        context_window: contextWindow,
+        auto_compact_token_limit: Math.floor(contextWindow * 0.9)
       }
     })
   }
@@ -3038,7 +3089,7 @@ const visibleCliTargets = computed(() => {
 })
 
 const activeRuntimeSchema = computed(() => {
-  return (
+  const schema = (
     props.runtimeConfigSchemas[activeCli.value] || {
       modelFields: [],
       optionFields: [],
@@ -3048,6 +3099,8 @@ const activeRuntimeSchema = computed(() => {
       defaultProviderType: "custom"
     }
   )
+  if (activeCli.value !== 'codex' || getCodexDraftModels().length) return schema
+  return { ...schema, configFiles: schema.configFiles.filter(file => file.name !== '.cockpit_model_catalog.json') }
 })
 
 function runtimeFieldOptions(field) {
@@ -3480,10 +3533,11 @@ function applyConfigTemplate(template) {
     hasApiKey: Boolean(activeApiKey || activeDraftApiKey.value?.masked),
     baseUrl: draft.baseUrl,
     hasBaseUrl: Boolean(draft.baseUrl),
-    mainModel: codexMainModel,
+    mainModel: codexMainModel || '',
     hasMainModel: Boolean(codexMainModel),
     modelList: codexModels.join("\n"),
     modelCatalog: JSON.stringify(getCodexDraftCatalog(), null, 2),
+    hasCustomModels: codexModels.length > 0,
     haikuModel: modelDrafts.haikuModel,
     hasHaikuModel: Boolean(modelDrafts.haikuModel),
     sonnetModel: modelDrafts.sonnetModel,
@@ -3625,6 +3679,7 @@ function editProvider(provider) {
   draft.authField = provider.authField || "ANTHROPIC_AUTH_TOKEN"
   draft.enabled = provider.enabled !== false
   modelDrafts.mainModel = provider.runtimeConfig?.mainModel || ""
+  codexModelCatalog.value = provider.runtimeConfig?.modelCatalog || null
   modelDrafts.modelList = Array.isArray(provider.runtimeConfig?.modelList)
     ? provider.runtimeConfig.modelList.join("\n")
     : provider.runtimeConfig?.modelList || modelDrafts.mainModel
@@ -4367,6 +4422,7 @@ function clearDraft() {
   draft.modelReasoningEffort = "low"
   draft.modelAutoCompactTokenLimit = 900000
   modelDrafts.mainModel = ""
+  codexModelCatalog.value = null
   modelDrafts.modelList = ""
   modelDrafts.haikuModel = ""
   modelDrafts.sonnetModel = ""
@@ -4456,6 +4512,7 @@ async function submitProvider() {
     runtimeConfig: {
       mainModel: modelDrafts.mainModel,
       modelList: modelDrafts.modelList,
+      modelCatalog: codexModelCatalog.value,
       haikuModel: modelDrafts.haikuModel,
       sonnetModel: modelDrafts.sonnetModel,
       opusModel: modelDrafts.opusModel,
@@ -4531,9 +4588,11 @@ function enableProvider(provider) {
     return
   }
 
-  const model = provider.runtimeConfig?.mainModel || firstModelName(provider.id)
+  const model = activeCli.value === 'codex'
+    ? provider.runtimeConfig?.mainModel || ''
+    : provider.runtimeConfig?.mainModel || firstModelName(provider.id)
 
-  if (!model) {
+  if (!model && activeCli.value !== 'codex') {
     return
   }
 
@@ -5164,6 +5223,12 @@ watch(
   &__system-config:disabled {
     cursor: not-allowed;
     opacity: 0.55;
+  }
+
+  .providers-model-action {
+    width: auto;
+    padding: 0 12px;
+    white-space: nowrap;
   }
 
   &-proxy-switch {

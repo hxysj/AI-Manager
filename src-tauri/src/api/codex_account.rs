@@ -1,4 +1,4 @@
-use crate::api::runtime_provider;
+use crate::api::{codex_models, runtime_provider};
 use crate::api::usage;
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
@@ -462,6 +462,62 @@ pub async fn get_proxy_auth(
         &string_value(account.get("id"))
       )
     }))
+}
+
+pub async fn fetch_models(
+    paths: &AppPaths,
+    account_id: &str,
+    cli_target: &Value,
+) -> Result<Value, ManagerError> {
+    let account = prepare_account_for_switch(paths, account_id, cli_target).await?;
+    let cache_path =
+        Path::new(&string_value(cli_target.get("configPath"))).join("models_cache.json");
+    let cache = match tokio::fs::read_to_string(cache_path).await {
+        Ok(content) => serde_json::from_str::<Value>(&content).unwrap_or(Value::Null),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
+        Err(error) => return Err(error.into()),
+    };
+    let version = cache["client_version"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .unwrap_or("0.153.4");
+    let response = http_client(&string_value(account.get("proxy")))?
+        .get("https://chatgpt.com/backend-api/codex/models")
+        .query(&[("client_version", version)])
+        .bearer_auth(account_access_token(&account))
+        .header(
+            "Chatgpt-Account-Id",
+            first_string(
+                account.get("account_id"),
+                account.get("accountId"),
+                account_id,
+            ),
+        )
+        .header("Originator", "codex_cli_rs")
+        .header(
+            "User-Agent",
+            format!(
+                "codex_cli_rs/{} ({}; {})",
+                version,
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            ),
+        )
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    if !response.status().is_success() {
+        return Err(ManagerError::System(format!(
+            "获取官方模型列表失败：HTTP {}",
+            response.status().as_u16()
+        )));
+    }
+    let catalog = response
+        .json::<Value>()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    codex_models::normalize_catalog(&catalog)
 }
 
 pub async fn state_patch(
@@ -1061,7 +1117,7 @@ async fn write_account_auth(account: &Value, cli_target: &Value) -> Result<(), M
     Ok(())
 }
 
-async fn write_codex_builtin_config(cli_target: &Value) -> Result<(), ManagerError> {
+pub(crate) async fn write_codex_builtin_config(cli_target: &Value) -> Result<(), ManagerError> {
     let config_path = Path::new(&string_value(cli_target.get("configPath"))).join("config.toml");
     let content = match tokio::fs::read_to_string(&config_path).await {
         Ok(content) => content,
@@ -1077,7 +1133,14 @@ async fn write_codex_builtin_config(cli_target: &Value) -> Result<(), ManagerErr
     );
     let next_content = remove_toml_root_keys(
         &without_managed_providers,
-        &["model_provider", "openai_base_url"],
+        &[
+            "model_provider",
+            "openai_base_url",
+            "model_catalog_json",
+            "model",
+            "model_context_window",
+            "model_auto_compact_token_limit",
+        ],
     );
 
     if next_content.is_empty() {
@@ -1089,7 +1152,7 @@ async fn write_codex_builtin_config(cli_target: &Value) -> Result<(), ManagerErr
         return Ok(());
     }
 
-    tokio::fs::write(config_path, format!("{}\n", next_content)).await?;
+    codex_models::write_atomic(&config_path, &format!("{}\n", next_content)).await?;
     Ok(())
 }
 
@@ -1865,6 +1928,42 @@ mod tests {
           "auth": { "accessToken": "old-access", "refreshToken": "old-refresh", "expiresAt": now_millis() + 3_600_000 },
           "requires_reauth": false
         })
+    }
+
+    #[test]
+    fn switching_official_account_removes_model_overrides_and_preserves_user_sections() {
+        with_account_paths(|paths| {
+            tauri::async_runtime::block_on(async {
+                let config_dir = Path::new(&paths.workspace_root).join("codex");
+                tokio::fs::create_dir_all(&config_dir).await.unwrap();
+                let config_file = config_dir.join("config.toml");
+                tokio::fs::write(&config_file, "model_provider = \"custom\"\nmodel = \"custom-model\"\nmodel_catalog_json = \".cockpit_model_catalog.json\"\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = 900000\nsandbox_mode = \"workspace-write\"\n\n[model_providers.custom]\nbase_url = \"https://example.com\"\n\n[mcp_servers.demo]\ncommand = \"keep\"\n\n[profiles.user]\nmodel = \"keep-profile-model\"\n").await.unwrap();
+                let target = json!({ "configPath": config_dir.to_string_lossy() });
+                write_account_bundle(&cached_account(), &target)
+                    .await
+                    .unwrap();
+                let content = tokio::fs::read_to_string(&config_file).await.unwrap();
+                let config = runtime_provider::parse_simple_toml(&content);
+                for key in [
+                    "model_provider",
+                    "model",
+                    "model_catalog_json",
+                    "model_context_window",
+                    "model_auto_compact_token_limit",
+                ] {
+                    assert!(config["root"].get(key).is_none(), "{}", key);
+                }
+                assert!(content.contains("sandbox_mode = \"workspace-write\""));
+                assert!(content.contains("[mcp_servers.demo]\ncommand = \"keep\""));
+                assert!(content.contains("[profiles.user]\nmodel = \"keep-profile-model\""));
+                assert!(!content.contains("[model_providers.custom]"));
+                write_codex_builtin_config(&target).await.unwrap();
+                assert_eq!(
+                    content,
+                    tokio::fs::read_to_string(&config_file).await.unwrap()
+                );
+            });
+        });
     }
 
     #[test]

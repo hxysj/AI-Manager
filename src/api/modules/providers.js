@@ -1,6 +1,8 @@
 import { request } from '../request'
 
 export const providerApi = {
+  fetchCodexModels: payload => request('codex-models:fetch', payload),
+  syncCodexModels: payload => request('codex-models:sync', payload),
   getKeyValue: payload => request('provider:key-value', payload),
   getKeyUsage: payload => request('provider:key-usage', payload),
   saveProvider: payload => request('provider:save', payload),

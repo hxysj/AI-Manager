@@ -390,6 +390,7 @@ impl ManagerState {
                 | "codex-account:disable"
                 | "codex-account:delete"
                 | "provider:save"
+                | "codex-models:sync"
                 | "provider:delete"
                 | "data:restore"
                 | "data:local-backup-restore"
@@ -1332,7 +1333,7 @@ impl ManagerState {
                     .unwrap_or("")
                     .to_string();
                 let should_sync_api_key =
-                    payload.get("apiKeys").is_some() || payload.get("apiKey").is_some();
+                    payload.get("apiKeys").is_some() || payload.get("apiKey").is_some() || payload.get("runtimeConfig").is_some();
                 let previous_provider_bundle = if should_sync_api_key {
                     Some((
                         provider_store::read_providers(&self.paths)?,
@@ -1392,6 +1393,91 @@ impl ManagerState {
                 )
                 .await?;
                 self.refresh_state().await?;
+                Ok(self.state.clone())
+            }
+            "codex-models:fetch" => {
+                runtime_provider::fetch_codex_models(
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                    &self.state["cliTargets"],
+                )
+                .await
+            }
+            "codex-models:sync" => {
+                let restore = payload
+                    .as_ref()
+                    .and_then(|value| value.get("restore"))
+                    .and_then(Value::as_bool)
+                    == Some(true);
+                let proxy_state = proxy::read_proxy_state(&self.paths, "codex")?;
+                let profiles = provider_store::read_profiles(&self.paths)?;
+                let profile = profiles.iter().find(|profile| profile["cli"] == "codex");
+                let target_id = if proxy::is_proxy_enabled(&self.paths, "codex")? {
+                    proxy_state["activeProviderId"].as_str().unwrap_or("")
+                } else {
+                    profile
+                        .and_then(|profile| profile["providerId"].as_str())
+                        .unwrap_or("")
+                };
+                let provider = provider_store::read_providers(&self.paths)?
+                    .into_iter()
+                    .find(|provider| provider["id"] == target_id);
+                let mut official_catalog = None;
+                if let Some(mut provider) = provider {
+                    if restore {
+                        if provider["type"] == "google-account" {
+                            return Err(ManagerError::System(
+                                "Google 账号的模型由专用设置维护，请在 Google 账号设置中选择模型"
+                                    .into(),
+                            ));
+                        }
+                        provider["runtimeConfig"]["modelList"] = json!([]);
+                        provider["runtimeConfig"]["mainModel"] = json!("");
+                        provider["runtimeConfig"]["modelCatalog"] = Value::Null;
+                        provider["runtimeConfig"]["modelContextWindowEnabled"] = json!(false);
+                        runtime_provider::save_provider(&self.paths, provider).await?;
+                    }
+                    runtime_provider::sync_active_provider_config(
+                        &self.paths,
+                        target_id,
+                        &self.state["cliTargets"],
+                    )
+                    .await?;
+                } else {
+                    let cli_target =
+                        runtime_provider::find_cli_target(&self.state["cliTargets"], "codex")?;
+                    if restore {
+                        runtime_provider::sync_codex_catalog(&cli_target, None).await?;
+                    } else {
+                        let account_id = target_id
+                            .strip_prefix("account:")
+                            .map(str::to_string)
+                            .unwrap_or(provider_store::read_active_codex_account_id(&self.paths)?);
+                        if account_id.is_empty() {
+                            return Err(ManagerError::System(
+                                "请先启用 Codex Provider 或官方账号".into(),
+                            ));
+                        }
+                        let catalog =
+                            codex_account::fetch_models(&self.paths, &account_id, &cli_target)
+                                .await?;
+                        official_catalog = Some((cli_target, catalog));
+                    }
+                }
+                if proxy::is_proxy_enabled(&self.paths, "codex")? {
+                    proxy::activate_provider(
+                        &self.paths,
+                        &self.state["cliTargets"],
+                        "codex",
+                        json!({ "providerId": proxy_state["activeProviderId"] }),
+                    )
+                    .await?;
+                }
+                if let Some((cli_target, catalog)) = official_catalog {
+                    runtime_provider::sync_codex_catalog(&cli_target, Some(&catalog)).await?;
+                }
+                self.refresh_state().await?;
+                self.emit_state_changed(&app)?;
                 Ok(self.state.clone())
             }
             "runtime-model:save" => {

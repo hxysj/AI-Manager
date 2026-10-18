@@ -227,6 +227,7 @@ where
         && model != target.model
         && !model_belongs_to_provider
         && !target.model_aliases.contains_key(&model)
+        && target.provider.as_ref().is_some_and(runtime_provider::codex_has_custom_models)
     {
         return Err(ManagerError::System(
             "所选模型不属于当前 Codex Provider".to_string(),
@@ -580,8 +581,11 @@ pub async fn enable_proxy(
         );
         codex_config = set_codex_model_catalog_config(
             &codex_config,
-            active_target.provider.is_some(),
+            active_target.provider.as_ref().is_some_and(runtime_provider::codex_has_custom_models),
         );
+        if active_target.provider.as_ref().is_some_and(|provider| !runtime_provider::codex_has_custom_models(provider)) {
+            codex_config = remove_toml_root_value(&codex_config, "model");
+        }
         json!({
           "auth": auth,
           "config": codex_config
@@ -803,7 +807,10 @@ pub async fn activate_provider(
                     target_client_model(&target, cli)
                 },
             );
-            codex_config = set_codex_model_catalog_config(&codex_config, target.provider.is_some());
+            codex_config = set_codex_model_catalog_config(&codex_config, target.provider.as_ref().is_some_and(runtime_provider::codex_has_custom_models));
+            if target.provider.as_ref().is_some_and(|provider| !runtime_provider::codex_has_custom_models(provider)) {
+                codex_config = remove_toml_root_value(&codex_config, "model");
+            }
             if cli == "codex" {
                 if let Some(provider) = target.provider.as_ref() {
                     runtime_provider::write_codex_model_catalog(
@@ -1204,7 +1211,8 @@ async fn forward_request(
         target.model.clone()
     };
 
-    if method != hyper::Method::GET && method != hyper::Method::HEAD && !model.is_empty() {
+    let use_client_model = cli == "codex" && target.provider.as_ref().is_some_and(|provider| !runtime_provider::codex_has_custom_models(provider));
+    if method != hyper::Method::GET && method != hyper::Method::HEAD && !model.is_empty() && !use_client_model {
         let mut payload: Value = serde_json::from_slice(&request_body)?;
         let requested_model = string_value(payload.get("model"));
         let upstream_model = target
@@ -1476,7 +1484,7 @@ fn get_target(
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    let model_aliases = if cli == "codex" {
+    let model_aliases = if cli == "codex" && runtime_provider::codex_has_custom_models(&provider) {
         runtime_provider::codex_model_aliases(&provider)
             .into_iter()
             .collect::<HashMap<_, _>>()
@@ -1951,7 +1959,15 @@ fn set_codex_model_catalog_config(content: &str, enabled: bool) -> String {
     if enabled {
         set_toml_root_value(content, "model_catalog_json", ".cockpit_model_catalog.json")
     } else {
-        remove_toml_root_value(content, "model_catalog_json")
+        let mut content = content.to_string();
+        for key in [
+            "model_catalog_json",
+            "model_context_window",
+            "model_auto_compact_token_limit",
+        ] {
+            content = remove_toml_root_value(&content, key);
+        }
+        content
     }
 }
 
@@ -2477,6 +2493,72 @@ mod tests {
             assert!(!usage.to_string().contains("secret-test-key"));
 
             server.await.unwrap();
+            std::fs::remove_dir_all(root).unwrap();
+        });
+    }
+
+    #[test]
+    fn codex_default_catalog_keeps_the_model_chosen_by_the_client() {
+        tauri::async_runtime::block_on(async {
+            let (paths, root) = create_json_agent_paths();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            write_json_agent_provider(&paths, &format!("http://{address}/v1"));
+            let mut providers = provider_store::read_providers(&paths).unwrap();
+            providers[0]["runtimeConfig"] = json!({ "modelList": [] });
+            provider_store::write_provider_bundle(
+                &paths,
+                &providers,
+                &provider_store::read_models(&paths).unwrap(),
+                &provider_store::read_profiles(&paths).unwrap(),
+                &provider_store::read_keys(&paths).unwrap(),
+            )
+            .unwrap();
+            let upstream = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                http1::Builder::new()
+                    .serve_connection(
+                        TokioIo::new(stream),
+                        service_fn(
+                            |request: hyper::Request<hyper::body::Incoming>| async move {
+                                let body = request.into_body().collect().await.unwrap().to_bytes();
+                                assert_eq!(
+                                    serde_json::from_slice::<Value>(&body).unwrap()["model"],
+                                    "new-official-model"
+                                );
+                                Ok::<_, Infallible>(
+                                    Response::builder()
+                                        .header("connection", "close")
+                                        .body(Full::new(Bytes::from_static(b"{}")))
+                                        .unwrap(),
+                                )
+                            },
+                        ),
+                    )
+                    .await
+                    .unwrap();
+            });
+            let result = super::forward_request(
+                &paths,
+                &json!([]),
+                "codex",
+                &json!({}),
+                &hyper::Method::POST,
+                &hyper::HeaderMap::new(),
+                &json!({ "endpoint": "/responses" }),
+                Bytes::from_static(br#"{"model":"new-official-model"}"#),
+                "provider-active",
+            )
+            .await
+            .unwrap();
+            assert!(result.target.model_aliases.is_empty());
+            result.response.bytes().await.unwrap();
+            upstream.await.unwrap();
+            let config = super::set_codex_model_catalog_config("model_catalog_json = 'old.json'\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = 900000\n[mcp_servers.demo]\ncommand = 'keep'\n", false);
+            assert!(!config.contains("model_catalog_json"));
+            assert!(!config.contains("model_context_window"));
+            assert!(!config.contains("model_auto_compact_token_limit"));
+            assert!(config.contains("[mcp_servers.demo]"));
             std::fs::remove_dir_all(root).unwrap();
         });
     }

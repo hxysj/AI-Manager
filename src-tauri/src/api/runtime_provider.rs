@@ -1,4 +1,4 @@
-use crate::api::{codex_account, google_gateway, proxy};
+use crate::api::{codex_account, codex_models, google_gateway, proxy};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use crate::core::provider_store;
@@ -115,6 +115,11 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
     }
 
     if provider.get("cli").and_then(Value::as_str) == Some("codex") {
+        for profile in &mut profiles {
+            if profile["providerId"] == provider_id {
+                profile["model"] = provider["runtimeConfig"]["mainModel"].clone();
+            }
+        }
         models.retain(|item| {
             item.get("providerId").and_then(Value::as_str) != Some(provider_id.as_str())
         });
@@ -226,7 +231,96 @@ pub async fn sync_active_provider_config(
         write_cli_config(paths, &cli, find_cli_target(cli_targets, &cli)?).await?;
     }
 
+    if proxy::is_proxy_enabled(paths, "codex")? {
+        let state = proxy::read_proxy_state(paths, "codex")?;
+        if state["activeProviderId"] == provider_id {
+            proxy::activate_provider(
+                paths,
+                cli_targets,
+                "codex",
+                json!({ "providerId": provider_id }),
+            )
+            .await?;
+        }
+    }
+
     Ok(())
+}
+
+pub async fn fetch_codex_models(
+    paths: &AppPaths,
+    payload: Value,
+    cli_targets: &Value,
+) -> Result<Value, ManagerError> {
+    let account_id = string_value(payload.get("accountId"));
+    if !account_id.is_empty() {
+        return codex_account::fetch_models(
+            paths,
+            &account_id,
+            &find_cli_target(cli_targets, "codex")?,
+        )
+        .await;
+    }
+    let provider_id = string_value(payload.get("providerId"));
+    let provider = if provider_id.is_empty() {
+        json!({})
+    } else {
+        find_provider(paths, &provider_id)?
+    };
+    let base_url = first_string(payload.get("baseUrl"), provider.get("baseUrl"));
+    let api_key = if let Some(key) = payload
+        .get("apiKey")
+        .and_then(Value::as_str)
+        .filter(|key| !key.is_empty())
+    {
+        key.to_string()
+    } else if !string_value(payload.get("keyId")).is_empty() {
+        string_value(read_provider_key_value(paths, &payload)?.get("apiKey"))
+    } else {
+        get_provider_api_key(paths, &provider_id)?
+    };
+    let proxy_url = payload
+        .get("proxy")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| provider["proxy"].as_str().unwrap_or(""));
+    let mut builder = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+    if !proxy_url.is_empty() {
+        builder = builder.proxy(
+            reqwest::Proxy::all(proxy_url)
+                .map_err(|error| ManagerError::System(error.to_string()))?,
+        );
+    }
+    let client = builder
+        .build()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let mut request = client
+        .get(codex_models::models_url(&base_url)?)
+        .header("Accept", "application/json");
+    if let Some(headers) = provider.get("headers").and_then(Value::as_object) {
+        for (name, value) in headers {
+            if let Some(value) = value.as_str() {
+                request = request.header(name, value);
+            }
+        }
+    }
+    if !api_key.is_empty() {
+        request = request.bearer_auth(api_key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    if !response.status().is_success() {
+        return Err(ManagerError::System(format!(
+            "获取模型列表失败：HTTP {}",
+            response.status().as_u16()
+        )));
+    }
+    let value = response
+        .json::<Value>()
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    codex_models::normalize_catalog(&value)
 }
 
 pub async fn save_runtime_model(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
@@ -647,7 +741,7 @@ pub async fn launch_codex_provider_instance(
         "disable_response_storage = true".to_string(),
     ];
 
-    if use_instance_proxy && catalog_provider.is_some() {
+    if catalog_provider.as_ref().is_some_and(codex_has_custom_models) {
         config_lines.push("model_catalog_json = \".cockpit_model_catalog.json\"".to_string());
     }
 
@@ -696,17 +790,15 @@ pub async fn launch_codex_provider_instance(
     )
     .await?;
 
-    if use_instance_proxy {
-        if let Some(provider) = catalog_provider.as_ref() {
-            tokio::fs::write(
-                profile_dir.join(".cockpit_model_catalog.json"),
-                format!(
-                    "{}\n",
-                    serde_json::to_string_pretty(&codex_model_catalog(provider))?
-                ),
-            )
-            .await?;
-        }
+    if let Some(provider) = catalog_provider.as_ref().filter(|provider| codex_has_custom_models(provider)) {
+        codex_models::write_atomic(
+            &profile_dir.join(codex_models::CATALOG_FILE),
+            &format!(
+                "{}\n",
+                serde_json::to_string_pretty(&codex_model_catalog_for_mode(provider, use_instance_proxy))?
+            ),
+        )
+        .await?;
     }
 
     let sessions_path = profile_dir.join("sessions");
@@ -1257,6 +1349,7 @@ pub fn runtime_config_schemas() -> Value {
       "codex": {
         "cli": "codex",
         "enabled": true,
+        "modelTemplate": codex_models::normalize_catalog(&json!({ "models": ["template"] })).expect("内置模型模板有效")["models"][0],
         "defaultProviderType": "openai",
         "advancedFields": [],
         "authFields": ["OPENAI_API_KEY"],
@@ -1266,7 +1359,7 @@ pub fn runtime_config_schemas() -> Value {
             "label": "模型列表",
             "type": "textarea",
             "configKey": "model_catalog_json",
-            "description": "每行或用逗号填写一个上游模型；留空时使用内置默认列表"
+            "description": "每行或用逗号填写一个上游模型；留空时使用 Codex 官方默认列表"
           }
         ],
         "optionFields": [
@@ -1286,7 +1379,7 @@ pub fn runtime_config_schemas() -> Value {
             "name": "config.toml",
             "format": "TOML",
             "description": "Codex config.toml 配置内容",
-            "template": "model_provider = \"custom\"\nmodel = \"{{mainModel}}\"\nmodel_reasoning_effort = \"{{modelReasoningEffort}}\"\nmodel_catalog_json = \".cockpit_model_catalog.json\"\ndisable_response_storage = true\n{{#serviceTierFast}}\nservice_tier = \"fast\"\n{{/serviceTierFast}}\n{{#modelContextWindowEnabled}}\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = {{modelAutoCompactTokenLimit}}\n{{/modelContextWindowEnabled}}\n\n[model_providers]\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"{{baseUrl}}\""
+            "template": "model_provider = \"custom\"\n{{#hasCustomModels}}\nmodel = \"{{mainModel}}\"\nmodel_catalog_json = \".cockpit_model_catalog.json\"\n{{/hasCustomModels}}\nmodel_reasoning_effort = \"{{modelReasoningEffort}}\"\ndisable_response_storage = true\n{{#serviceTierFast}}\nservice_tier = \"fast\"\n{{/serviceTierFast}}\n{{#modelContextWindowEnabled}}\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = {{modelAutoCompactTokenLimit}}\n{{/modelContextWindowEnabled}}\n\n[model_providers]\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"{{baseUrl}}\""
           },
           {
             "name": ".cockpit_model_catalog.json",
@@ -1430,11 +1523,15 @@ fn normalize_profile(input: &Value, previous: Option<&Value>) -> Result<Value, M
         previous.and_then(|item| item.get("providerId")),
         "",
     );
-    let model = non_empty_string(
-        input.get("model"),
-        previous.and_then(|item| item.get("model")),
-        "",
-    );
+    let model = if cli == "codex" && input.get("model").is_some() {
+        string_value(input.get("model"))
+    } else {
+        non_empty_string(
+            input.get("model"),
+            previous.and_then(|item| item.get("model")),
+            "",
+        )
+    };
 
     if !["claude", "codex", "gemini", "opencode"].contains(&cli.as_str()) {
         return Err(ManagerError::System(format!(
@@ -1449,7 +1546,7 @@ fn normalize_profile(input: &Value, previous: Option<&Value>) -> Result<Value, M
         ));
     }
 
-    if model.is_empty() {
+    if model.is_empty() && cli != "codex" {
         return Err(ManagerError::System(
             "Runtime Profile 必须选择模型".to_string(),
         ));
@@ -1550,8 +1647,24 @@ pub(crate) async fn write_cli_config(
     tokio::fs::create_dir_all(&config_path).await?;
     let files = build_cli_config_files(paths, cli, &provider, &profile)?;
 
+    if cli == "codex" {
+        if let Some(file) = files
+            .iter()
+            .find(|file| file["name"] == codex_models::CATALOG_FILE)
+        {
+            codex_models::write_atomic(
+                &Path::new(&config_path).join(codex_models::CATALOG_FILE),
+                &string_value(file.get("content")),
+            )
+            .await?;
+        }
+    }
+
     for file in &files {
         let name = string_value(file.get("name"));
+        if cli == "codex" && name == codex_models::CATALOG_FILE {
+            continue;
+        }
         let file_path = Path::new(&config_path).join(&name);
         let content = if cli == "codex" && name == "config.toml" {
             let existing_content = match tokio::fs::read_to_string(&file_path).await {
@@ -1565,7 +1678,11 @@ pub(crate) async fn write_cli_config(
             string_value(file.get("content"))
         };
 
-        tokio::fs::write(file_path, content).await?;
+        if cli == "codex" {
+            codex_models::write_atomic(&file_path, &content).await?;
+        } else {
+            tokio::fs::write(file_path, content).await?;
+        }
     }
 
     let mut runtime_state = provider_store::read_runtime_state(paths)?;
@@ -1684,9 +1801,14 @@ fn build_codex_config_files(
     let api_key = get_provider_api_key(paths, &string_value(provider.get("id")))?;
     let values = create_template_values(provider, profile, &api_key);
     let model_aliases = codex_model_aliases(provider);
-    let selected_model = first_string(profile.get("model"), values.get("mainModel"));
+    let has_custom_models = codex_has_custom_models(provider);
+    let selected_model = if has_custom_models {
+        first_string(profile.get("model"), values.get("mainModel"))
+    } else {
+        String::new()
+    };
     let proxy_enabled = proxy::is_proxy_enabled(paths, "codex")?;
-    let client_model = if proxy_enabled {
+    let client_model = if proxy_enabled && has_custom_models {
         model_aliases
             .first()
             .and_then(|fallback| {
@@ -1703,17 +1825,16 @@ fn build_codex_config_files(
     let mut config_lines = vec![
         "model_provider = \"custom\"".to_string(),
         format!(
-            "model = {}",
-            to_toml_string(client_model)
-        ),
-        format!(
             "model_reasoning_effort = {}",
             to_toml_string(string_value(values.get("modelReasoningEffort")))
         ),
         "disable_response_storage = true".to_string(),
     ];
 
-    if proxy_enabled {
+    if !client_model.is_empty() {
+        config_lines.push(format!("model = {}", to_toml_string(client_model)));
+    }
+    if has_custom_models {
         config_lines.push("model_catalog_json = \".cockpit_model_catalog.json\"".to_string());
     }
 
@@ -1758,10 +1879,10 @@ fn build_codex_config_files(
           "content": format!("{}\n", config_lines.join("\n"))
         }),
     ];
-    if proxy_enabled {
+    if has_custom_models {
         files.push(json!({
           "name": ".cockpit_model_catalog.json",
-          "content": format!("{}\n", serde_json::to_string_pretty(&codex_model_catalog(provider))?)
+          "content": format!("{}\n", serde_json::to_string_pretty(&codex_model_catalog_for_mode(provider, proxy_enabled))?)
         }));
     }
     Ok(files)
@@ -1800,7 +1921,7 @@ fn merge_codex_config_toml(existing_content: &str, managed_content: &str) -> Str
     ] {
         if let Some(value) = root.get(key) {
             content = set_toml_root_line(&content, key, &format_toml_line(key, value));
-        } else if key == "model_catalog_json" {
+        } else if key == "model_catalog_json" || key == "model" {
             content = remove_toml_root_line(&content, key);
         }
     }
@@ -1813,6 +1934,14 @@ fn merge_codex_config_toml(existing_content: &str, managed_content: &str) -> Str
         );
     } else {
         content = remove_toml_root_line(&content, "service_tier");
+    }
+
+    for key in ["model_context_window", "model_auto_compact_token_limit"] {
+        if let Some(value) = root.get(key) {
+            content = set_toml_root_line(&content, key, &format_toml_line(key, value));
+        } else {
+            content = remove_toml_root_line(&content, key);
+        }
     }
 
     if has_toml_section(&content, "model_providers.custom") {
@@ -2383,13 +2512,6 @@ fn normalize_codex_config_file(file: &Value) -> Result<Value, ManagerError> {
             to_toml_string(first_string(root.get("model"), Some(&json!(""))))
         ),
         format!(
-            "model_catalog_json = {}",
-            to_toml_string(first_string(
-                root.get("model_catalog_json"),
-                Some(&json!(".cockpit_model_catalog.json"))
-            ))
-        ),
-        format!(
             "disable_response_storage = {}",
             if root
                 .get("disable_response_storage")
@@ -2402,6 +2524,10 @@ fn normalize_codex_config_file(file: &Value) -> Result<Value, ManagerError> {
             }
         ),
     ];
+
+    if let Some(catalog) = root.get("model_catalog_json") {
+        lines.push(format_toml_line("model_catalog_json", catalog));
+    }
 
     if root.get("service_tier").and_then(Value::as_str) == Some("fast") {
         lines.push("service_tier = \"fast\"".to_string());
@@ -2567,11 +2693,18 @@ async fn sync_codex_runtime_to_manager(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let catalog_path = Path::new(&config_path).join(".cockpit_model_catalog.json");
-    let catalog = match tokio::fs::read_to_string(catalog_path).await {
-        Ok(content) => serde_json::from_str::<Value>(&content).unwrap_or_else(|_| json!({})),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
-        Err(error) => return Err(ManagerError::Io(error)),
+    let catalog_path = root
+        .get("model_catalog_json")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let catalog = if catalog_path.is_empty() {
+        json!({})
+    } else {
+        match tokio::fs::read_to_string(Path::new(config_path).join(catalog_path)).await {
+            Ok(content) => serde_json::from_str::<Value>(&content).unwrap_or_else(|_| json!({})),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({}),
+            Err(error) => return Err(ManagerError::Io(error)),
+        }
     };
     let model_aliases = catalog
         .get("models")
@@ -2581,7 +2714,14 @@ async fn sync_codex_runtime_to_manager(
         .filter_map(|item| {
             Some((
                 string_value(item.get("slug")),
-                first_string(item.get("display_name"), item.get("slug")),
+                first_string(
+                    item.get("upstream_model"),
+                    if item.get("shell_type").is_none() {
+                        item.get("display_name").or_else(|| item.get("slug"))
+                    } else {
+                        item.get("slug")
+                    },
+                ),
             ))
         })
         .filter(|(client, upstream)| !client.is_empty() && !upstream.is_empty())
@@ -2597,7 +2737,16 @@ async fn sync_codex_runtime_to_manager(
         .map(|items| {
             items
                 .iter()
-                .map(|item| first_string(item.get("display_name"), item.get("slug")))
+                .map(|item| {
+                    first_string(
+                        item.get("upstream_model"),
+                        if item.get("shell_type").is_none() {
+                            item.get("display_name").or_else(|| item.get("slug"))
+                        } else {
+                            item.get("slug")
+                        },
+                    )
+                })
                 .filter(|item| !item.is_empty())
                 .collect::<Vec<_>>()
         })
@@ -2626,6 +2775,7 @@ async fn sync_codex_runtime_to_manager(
           "runtimeConfig": {
             "mainModel": model,
             "modelList": model_list,
+            "modelCatalog": catalog,
             "modelReasoningEffort": first_string(root.get("model_reasoning_effort"), Some(&json!("low"))),
             "serviceTierFast": root.get("service_tier").and_then(Value::as_str) == Some("fast"),
             "modelContextWindowEnabled": root.get("model_context_window").is_some(),
@@ -2796,16 +2946,17 @@ fn normalize_runtime_config(value: Option<&Value>, cli: &str) -> Value {
         } else if !has_model_list_field && !legacy_main_model.is_empty() {
             vec![legacy_main_model.clone()]
         } else {
-            DEFAULT_CODEX_MODEL_LIST
-                .iter()
-                .map(|item| (*item).to_string())
-                .collect()
+            Vec::new()
         }
     } else {
         Vec::new()
     };
     let main_model = if cli == "codex" {
-        model_list.first().cloned().unwrap_or_default()
+        if model_list.contains(&legacy_main_model) {
+            legacy_main_model
+        } else {
+            model_list.first().cloned().unwrap_or_default()
+        }
     } else {
         legacy_main_model
     };
@@ -2813,6 +2964,7 @@ fn normalize_runtime_config(value: Option<&Value>, cli: &str) -> Value {
     json!({
       "mainModel": main_model,
       "modelList": model_list,
+      "modelCatalog": input.and_then(|item| item.get("modelCatalog")).cloned().unwrap_or(Value::Null),
       "haikuModel": optional_string_from_map(input, "haikuModel"),
       "sonnetModel": optional_string_from_map(input, "sonnetModel"),
       "opusModel": optional_string_from_map(input, "opusModel"),
@@ -2886,6 +3038,15 @@ pub(crate) fn codex_model_list(provider: &Value) -> Vec<String> {
         .collect()
 }
 
+pub(crate) fn codex_has_custom_models(provider: &Value) -> bool {
+    let runtime = &provider["runtimeConfig"];
+    if let Some(list) = runtime.get("modelList") {
+        !parse_model_list(list).is_empty()
+    } else {
+        !string_value(runtime.get("mainModel")).is_empty()
+    }
+}
+
 pub(crate) fn codex_model_aliases(provider: &Value) -> Vec<(String, String)> {
     let model_list = codex_model_list(provider);
     let mut used_shells = model_list
@@ -2921,18 +3082,38 @@ pub(crate) fn codex_model_aliases(provider: &Value) -> Vec<(String, String)> {
 }
 
 fn codex_model_catalog(provider: &Value) -> Value {
-    let models = codex_model_aliases(provider)
+    codex_model_catalog_for_mode(provider, true)
+}
+
+fn codex_model_catalog_for_mode(provider: &Value, use_aliases: bool) -> Value {
+    let aliases = if use_aliases {
+        codex_model_aliases(provider)
+    } else {
+        codex_model_list(provider)
+            .into_iter()
+            .map(|model| (model.clone(), model))
+            .collect()
+    };
+    let metadata = provider["runtimeConfig"]["modelCatalog"]["models"].as_array();
+    let models = aliases
         .into_iter()
         .map(|(client_model, upstream_model)| {
-            json!({
-              "slug": client_model,
-              "display_name": upstream_model,
-              "description": format!("上游模型：{}", upstream_model),
-              "visibility": "list",
-              "comp_hash": CODEX_MODEL_COMP_HASH,
-              "default_reasoning_level": "low",
-              "supported_reasoning_levels": ["low", "medium", "high", "xhigh"]
-            })
+            let mut model = metadata
+                .and_then(|items| {
+                    items.iter().find(|item| {
+                        item["slug"] == upstream_model || item["upstream_model"] == upstream_model
+                    })
+                })
+                .cloned()
+                .unwrap_or_else(
+                    || json!({ "slug": upstream_model, "comp_hash": CODEX_MODEL_COMP_HASH }),
+                );
+            let catalog = codex_models::normalize_catalog(&json!({ "models": [model] }))
+                .expect("模型标识已经校验");
+            model = catalog["models"][0].clone();
+            model["slug"] = json!(client_model);
+            model["upstream_model"] = json!(upstream_model);
+            model
         })
         .collect::<Vec<_>>();
 
@@ -2949,12 +3130,60 @@ pub(crate) async fn write_codex_model_catalog(
 
     let config_dir = Path::new(config_path);
     tokio::fs::create_dir_all(config_dir).await?;
-    tokio::fs::write(
-        config_dir.join(".cockpit_model_catalog.json"),
-        format!("{}\n", serde_json::to_string_pretty(&codex_model_catalog(provider))?),
+    if !codex_has_custom_models(provider) {
+        return Ok(());
+    }
+    codex_models::write_atomic(
+        &config_dir.join(codex_models::CATALOG_FILE),
+        &format!(
+            "{}\n",
+            serde_json::to_string_pretty(&codex_model_catalog(provider))?
+        ),
     )
     .await?;
     Ok(())
+}
+
+pub(crate) async fn sync_codex_catalog(
+    cli_target: &Value,
+    catalog: Option<&Value>,
+) -> Result<(), ManagerError> {
+    let config_path = string_value(cli_target.get("configPath"));
+    if config_path.is_empty() {
+        return Err(ManagerError::System("Codex 配置目录不存在".into()));
+    }
+    let directory = Path::new(&config_path);
+    tokio::fs::create_dir_all(directory).await?;
+    let config_file = directory.join("config.toml");
+    let content = match tokio::fs::read_to_string(&config_file).await {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let content = if let Some(catalog) = catalog {
+        codex_models::write_atomic(
+            &directory.join(codex_models::CATALOG_FILE),
+            &format!("{}\n", serde_json::to_string_pretty(catalog)?),
+        )
+        .await?;
+        set_toml_root_line(
+            &content,
+            "model_catalog_json",
+            &format!("model_catalog_json = \"{}\"", codex_models::CATALOG_FILE),
+        )
+    } else {
+        let mut content = content;
+        for key in [
+            "model_catalog_json",
+            "model",
+            "model_context_window",
+            "model_auto_compact_token_limit",
+        ] {
+            content = remove_toml_root_line(&content, key);
+        }
+        content
+    };
+    codex_models::write_atomic(&config_file, &content).await
 }
 
 fn normalize_headers(value: Option<&Value>) -> Value {
@@ -3475,6 +3704,141 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
+    fn codex_empty_model_list_restores_defaults_and_preserves_unrelated_config() {
+        tauri::async_runtime::block_on(async {
+            let (test_root, paths, _) = create_codex_runtime_fixture();
+            let custom = json!({ "id": "provider-codex", "cli": "codex", "runtimeConfig": { "modelList": ["deepseek-v3"], "mainModel": "deepseek-v3" } });
+            let profile = json!({ "model": "deepseek-v3" });
+            let files = build_codex_config_files(&paths, &custom, &profile).unwrap();
+            assert!(files
+                .iter()
+                .any(|file| file["name"] == codex_models::CATALOG_FILE));
+            let catalog: Value =
+                serde_json::from_str(files[2]["content"].as_str().unwrap()).unwrap();
+            assert_eq!(catalog["models"][0]["slug"], "deepseek-v3");
+            let managed = files[1]["content"].as_str().unwrap();
+            assert!(managed.contains("model_catalog_json"));
+            let existing = format!("{}\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = 900000\n[mcp_servers.demo]\ncommand = 'keep'\n", managed.split("[model_providers]").next().unwrap());
+            let normalized = normalize_runtime_config(
+                Some(&json!({ "modelList": "", "mainModel": "stale-model" })),
+                "codex",
+            );
+            assert_eq!(normalized["modelList"], json!([]));
+            assert_eq!(normalized["mainModel"], "");
+            let defaults =
+                json!({ "id": "provider-codex", "cli": "codex", "runtimeConfig": normalized });
+            let files = build_codex_config_files(&paths, &defaults, &profile).unwrap();
+            assert!(!files
+                .iter()
+                .any(|file| file["name"] == codex_models::CATALOG_FILE));
+            let merged = merge_codex_config_toml(&existing, files[1]["content"].as_str().unwrap());
+            let root = parse_simple_toml(&merged)["root"].clone();
+            for key in [
+                "model",
+                "model_catalog_json",
+                "model_context_window",
+                "model_auto_compact_token_limit",
+            ] {
+                assert!(root.get(key).is_none(), "{}", key);
+            }
+            assert!(merged.contains("[mcp_servers.demo]\ncommand = 'keep'"));
+            assert_eq!(
+                merged,
+                merge_codex_config_toml(&merged, files[1]["content"].as_str().unwrap())
+            );
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
+
+    #[test]
+    fn codex_catalog_keeps_upstream_ids_for_direct_connections_and_aliases_for_proxy() {
+        let provider = json!({ "runtimeConfig": {
+            "modelList": ["custom-model"],
+            "modelCatalog": { "models": [{ "slug": "custom-model", "display_name": "Custom Model", "context_window": 123456, "custom_field": true }] }
+        } });
+        let direct = codex_model_catalog_for_mode(&provider, false);
+        let proxy = codex_model_catalog_for_mode(&provider, true);
+        assert_eq!(direct["models"][0]["slug"], "custom-model");
+        assert_eq!(proxy["models"][0]["slug"], DEFAULT_CODEX_MODEL_LIST[0]);
+        for catalog in [direct, proxy] {
+            assert_eq!(catalog["models"][0]["upstream_model"], "custom-model");
+            assert_eq!(catalog["models"][0]["display_name"], "Custom Model");
+            assert_eq!(catalog["models"][0]["auto_compact_token_limit"], 111110);
+            assert_eq!(catalog["models"][0]["custom_field"], true);
+        }
+    }
+
+    #[test]
+    fn codex_active_provider_saves_and_clears_catalog_on_disk() {
+        tauri::async_runtime::block_on(async {
+            let (test_root, paths, config_dir) = create_codex_runtime_fixture();
+            let cli_targets =
+                json!([{ "id": "codex", "configPath": config_dir.to_string_lossy() }]);
+            fs::write(
+                config_dir.join("config.toml"),
+                "[mcp_servers.demo]\ncommand = 'keep'\n",
+            )
+            .unwrap();
+            save_provider(&paths, json!({ "id": "provider-codex", "runtimeConfig": { "modelList": ["custom-model"], "modelCatalog": { "models": [{ "slug": "custom-model", "context_window": 64000 }] } } })).await.unwrap();
+            sync_active_provider_config(&paths, "provider-codex", &cli_targets)
+                .await
+                .unwrap();
+            let config = fs::read_to_string(config_dir.join("config.toml")).unwrap();
+            assert!(config.contains("model_catalog_json = \".cockpit_model_catalog.json\""));
+            assert!(config.contains("model = \"custom-model\""));
+            let catalog: Value = serde_json::from_str(
+                &fs::read_to_string(config_dir.join(codex_models::CATALOG_FILE)).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(catalog["models"][0]["context_window"], 64000);
+            save_provider(&paths, json!({ "id": "provider-codex", "runtimeConfig": { "modelList": "", "mainModel": "custom-model" } })).await.unwrap();
+            sync_active_provider_config(&paths, "provider-codex", &cli_targets)
+                .await
+                .unwrap();
+            let config = fs::read_to_string(config_dir.join("config.toml")).unwrap();
+            let root = parse_simple_toml(&config)["root"].clone();
+            assert!(root.get("model_catalog_json").is_none());
+            assert!(root.get("model").is_none());
+            assert!(config.contains("[mcp_servers.demo]\ncommand = 'keep'"));
+            assert_eq!(
+                provider_store::read_profiles(&paths).unwrap()[0]["model"],
+                ""
+            );
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
+
+    #[test]
+    fn codex_models_fetch_uses_saved_key_and_keeps_metadata() {
+        tauri::async_runtime::block_on(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (test_root, paths, _) = create_codex_runtime_fixture();
+            let mut keys = Map::new();
+            set_provider_key(&mut keys, "provider-codex", "sk-model-test".into()).unwrap();
+            provider_store::write_keys(&paths, &keys).unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 8192];
+                let length = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..length]);
+                assert!(request.starts_with("GET /v1/models "));
+                assert!(request
+                    .to_lowercase()
+                    .contains("authorization: bearer sk-model-test"));
+                let body = r#"{"data":[{"id":"custom-model","context_window":64000}]}"#;
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+            });
+            let catalog = fetch_codex_models(&paths, json!({ "providerId": "provider-codex", "baseUrl": format!("http://{address}/v1") }), &json!([])).await.unwrap();
+            assert_eq!(catalog["models"][0]["slug"], "custom-model");
+            assert_eq!(catalog["models"][0]["context_window"], 64000);
+            server.await.unwrap();
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
+
+    #[test]
     fn codex_model_list_uses_defaults_and_assigns_shell_slots() {
         let default_provider = json!({ "runtimeConfig": {} });
         assert_eq!(codex_model_list(&default_provider).len(), DEFAULT_CODEX_MODEL_LIST.len());
@@ -3828,6 +4192,8 @@ web_search = true
               "headers": {},
               "enabled": true,
               "runtimeConfig": {
+                "mainModel": "gpt-5.6-sol",
+                "modelList": ["gpt-5.6-sol"],
                 "modelReasoningEffort": "minimal",
                 "serviceTierFast": true
               }
