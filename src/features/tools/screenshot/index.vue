@@ -8,7 +8,9 @@
         @click="run('capture')"
       >
         <ScanLine :size="18" />区域截图
-        <kbd class="action-shortcut">{{ shortcutPrefix }} A</kbd>
+        <kbd v-if="settings.hotkeys" class="action-shortcut">{{
+          captureShortcut
+        }}</kbd>
       </button>
       <button
         class="screenshot-button"
@@ -50,7 +52,8 @@
         type="button"
         title="截图设置"
         aria-label="截图设置"
-        @click="showSettings = !showSettings"
+        :disabled="!ready || busy"
+        @click="openSettings"
       >
         <Settings2 :size="17" />
       </button>
@@ -64,48 +67,98 @@
     >
       {{ message }}
     </div>
-    <div v-if="showSettings && ready" class="screenshot-settings">
-      <label class="setting-row"
-        ><input
-          v-model="settings.hotkeys"
-          type="checkbox"
-          :disabled="busy"
-          @change="saveSettings"
-        />启用全局快捷键</label
-      >
-      <label class="setting-row"
-        >快捷键组合
-        <select
-          v-model="settings.shortcutStyle"
-          class="setting-select"
-          :disabled="busy"
-          @change="saveSettings"
+    <BaseModal
+      v-if="showSettings"
+      class="screenshot-settings-modal"
+      title="截图贴图设置"
+      description="设置快捷键、历史数量和贴图恢复方式。"
+      @close="!busy && (showSettings = false)"
+    >
+      <form class="screenshot-settings" @submit.prevent="saveSettings">
+        <label class="setting-row"
+          ><input
+            v-model="settingsDraft.hotkeys"
+            type="checkbox"
+            :disabled="busy"
+          />启用全局快捷键</label
         >
-          <option value="alt">Ctrl + Alt</option>
-          <option value="shift">Ctrl + Shift</option>
-        </select></label
-      >
-      <label class="setting-row"
-        ><input
-          v-model="settings.restorePins"
-          type="checkbox"
+        <label
+          v-for="shortcut in shortcutFields"
+          :key="shortcut.id"
+          class="setting-row"
+          >{{ shortcut.label }}
+          <input
+            class="setting-input"
+            :value="settingsDraft.shortcuts[shortcut.id]"
+            :aria-label="shortcut.label"
+            placeholder="点击后按下快捷键"
+            readonly
+            :disabled="busy || !settingsDraft.hotkeys"
+            @keydown="recordShortcut($event, shortcut.id)"
+            @keyup="
+              $event.key === 'PrintScreen' &&
+              recordShortcut($event, shortcut.id)
+            "
+          />
+        </label>
+        <label class="setting-row"
+          >历史记录上限
+          <input
+            v-model.number="settingsDraft.historyLimit"
+            class="setting-input"
+            aria-label="历史记录上限"
+            type="number"
+            min="1"
+            max="500"
+            step="1"
+            required
+            :disabled="busy"
+          /><span>张（1–500）</span>
+        </label>
+        <span class="setting-hint"
+          >包含截图和贴图；超过上限自动删除最旧记录及文件，并关闭对应贴图。降低上限会立即清理，无法撤销。</span
+        >
+        <label class="setting-row"
+          ><input
+            v-model="settingsDraft.restorePins"
+            type="checkbox"
+            :disabled="busy"
+          />启动时恢复打开的贴图</label
+        >
+        <button
+          class="screenshot-button"
+          type="button"
           :disabled="busy"
-          @change="saveSettings"
-        />启动时恢复打开的贴图</label
-      >
-      <span class="setting-hint"
-        >A 截图 · P 剪贴板贴图 · H 显隐贴图 · R 取消鼠标穿透</span
-      >
-      <button
-        class="screenshot-button"
-        type="button"
-        :disabled="busy"
-        @click="run('reset-input')"
-      >
-        取消全部鼠标穿透
-      </button>
-      <span class="setting-path">数据目录：{{ dataPath }}</span>
-    </div>
+          @click="run('reset-input')"
+        >
+          取消全部鼠标穿透
+        </button>
+        <span class="setting-path">数据目录：{{ dataPath }}</span>
+        <div v-if="error" class="settings-error" role="alert">{{ error }}</div>
+        <div class="settings-actions">
+          <button
+            class="screenshot-button"
+            type="button"
+            :disabled="busy"
+            @click="settingsDraft = defaultSettings()"
+          >
+            恢复默认
+          </button>
+          <span class="actions-spacer" />
+          <button
+            class="screenshot-button"
+            type="button"
+            :disabled="busy"
+            @click="showSettings = false"
+          >
+            取消
+          </button>
+          <button class="screenshot-primary" type="submit" :disabled="busy">
+            保存设置
+          </button>
+        </div>
+      </form>
+    </BaseModal>
     <div class="screenshot-history-head">
       <span class="history-title">截图与贴图</span>
       <span class="history-count"
@@ -113,7 +166,7 @@
       >
       <span class="actions-spacer" />
       <span class="history-hint"
-        >普通历史上限 50 张 / 512 MiB / 30 天，贴图单独保留</span
+        >最多 {{ settings.historyLimit }} 张，超出自动删除最旧图片及贴图</span
       >
     </div>
     <div v-if="!entries.length" class="screenshot-empty">
@@ -125,7 +178,7 @@
       <span class="empty-shortcut"
         >{{
           settings.hotkeys
-            ? `${shortcutPrefix} A 开始截图`
+            ? `${captureShortcut} 开始截图`
             : "点击“区域截图”开始"
         }}
         · Esc 取消</span
@@ -207,7 +260,7 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   ClipboardPaste,
   Copy,
@@ -225,18 +278,43 @@ import { screenshotApi } from "@/api/modules/screenshot"
 import { systemApi } from "@/api/modules/system"
 import { subscribeReady } from "@/api/request"
 import { createMessage } from "@/utils/message"
+import BaseModal from "@/components/BaseModal.vue"
 
 const entries = ref([])
-const settings = ref({ hotkeys: true, shortcutStyle: "alt", restorePins: true })
+function defaultSettings() {
+  return {
+    hotkeys: true,
+    shortcutStyle: "alt",
+    restorePins: true,
+    historyLimit: 50,
+    shortcuts: {
+      capture: "Ctrl+Alt+A",
+      clipboard: "Ctrl+Alt+P",
+      toggle: "Ctrl+Alt+H",
+      resetInput: "Ctrl+Alt+R"
+    }
+  }
+}
+const settings = ref(defaultSettings())
+const settingsDraft = ref(defaultSettings())
+const shortcutFields = [
+  { id: "capture", label: "区域截图" },
+  { id: "clipboard", label: "剪贴板贴图" },
+  { id: "toggle", label: "显示 / 隐藏贴图" },
+  { id: "resetInput", label: "取消鼠标穿透" }
+]
 const warnings = ref([])
 const dataPath = ref("")
 const ready = ref(false)
 const busy = ref(false)
 const error = ref("")
 const showSettings = ref(false)
-const shortcutPrefix = computed(() =>
-  settings.value.shortcutStyle === "shift" ? "Ctrl + Shift +" : "Ctrl + Alt +"
-)
+watch(showSettings, paused => {
+  screenshotApi.call("pause-hotkeys", { paused }).catch(cause => {
+    error.value = String(cause)
+  })
+})
+const captureShortcut = computed(() => settings.value.shortcuts.capture)
 const openCount = computed(
   () => entries.value.filter(entry => entry.pin?.lifecycle === "open").length
 )
@@ -267,7 +345,19 @@ async function load() {
     const result = await screenshotApi.call("list")
     if (disposed) return
     entries.value = result.entries
-    settings.value = result.settings
+    const prefix =
+      result.settings.shortcutStyle === "shift" ? "Ctrl+Shift" : "Ctrl+Alt"
+    settings.value = {
+      ...defaultSettings(),
+      ...result.settings,
+      shortcuts: {
+        capture: `${prefix}+A`,
+        clipboard: `${prefix}+P`,
+        toggle: `${prefix}+H`,
+        resetInput: `${prefix}+R`,
+        ...result.settings.shortcuts
+      }
+    }
     warnings.value = [...result.errors, ...result.hotkeyErrors]
     dataPath.value = result.dataPath
     ready.value = true
@@ -309,8 +399,82 @@ async function importImage() {
   if (path) await run("import", { path })
 }
 
+function openSettings() {
+  settingsDraft.value = JSON.parse(JSON.stringify(settings.value))
+  error.value = ""
+  showSettings.value = true
+}
+
+function recordShortcut(event, id) {
+  if (event.key === "Tab") return
+  event.preventDefault()
+  if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return
+  const key =
+    event.code === "Space"
+      ? "Space"
+      : event.key.length === 1
+        ? event.key.toUpperCase()
+        : event.key
+  if (!/^[A-Z0-9]$|^F([1-9]|1[0-9]|2[0-4])$|^(PrintScreen|Space)$/.test(key)) {
+    error.value = "请使用字母、数字、F1–F24、PrintScreen 或空格"
+    return
+  }
+  if (
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    !event.metaKey &&
+    !/^F\d+$|^PrintScreen$/.test(key)
+  ) {
+    error.value = "请同时按下 Ctrl、Alt、Shift 或 Win 修饰键"
+    return
+  }
+  settingsDraft.value.shortcuts[id] = [
+    event.ctrlKey && "Ctrl",
+    event.altKey && "Alt",
+    event.shiftKey && "Shift",
+    event.metaKey && "Win",
+    key
+  ]
+    .filter(Boolean)
+    .join("+")
+  error.value = ""
+}
+
 async function saveSettings() {
-  await run("settings", { ...settings.value })
+  if (busy.value) return
+  const draft = settingsDraft.value
+  if (
+    !Number.isInteger(draft.historyLimit) ||
+    draft.historyLimit < 1 ||
+    draft.historyLimit > 500
+  ) {
+    error.value = "历史记录上限必须为 1 到 500 的整数"
+    return
+  }
+  if (new Set(Object.values(draft.shortcuts)).size !== shortcutFields.length) {
+    error.value = "截图快捷键不能重复"
+    return
+  }
+  if (
+    entries.value.length > draft.historyLimit &&
+    !window.confirm(
+      `保存后将删除最旧的 ${entries.value.length - draft.historyLimit} 张图片及其贴图，无法撤销。继续？`
+    )
+  )
+    return
+  busy.value = true
+  error.value = ""
+  try {
+    await screenshotApi.call("settings", JSON.parse(JSON.stringify(draft)))
+    await load()
+    showSettings.value = false
+    createMessage.success("截图设置已保存")
+  } catch (cause) {
+    error.value = String(cause)
+  } finally {
+    busy.value = false
+  }
 }
 
 async function deleteEntry(entry) {
@@ -341,6 +505,8 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  if (showSettings.value)
+    screenshotApi.call("pause-hotkeys", { paused: false }).catch(() => {})
   disposed = true
   unlisten?.()
   unlistenError?.()
@@ -418,8 +584,9 @@ onBeforeUnmount(() => {
   }
   .screenshot-settings {
     display: flex;
-    align-items: center;
-    flex-wrap: wrap;
+    align-items: stretch;
+    flex-direction: column;
+    overflow-y: auto;
     gap: 12px 22px;
     padding: 14px;
     border: 1px solid var(--color-line);
@@ -430,7 +597,9 @@ onBeforeUnmount(() => {
       align-items: center;
       gap: 7px;
       font-size: var(--font-size-sm);
-      .setting-select {
+      .setting-input {
+        margin-left: auto;
+        width: 230px;
         padding: 5px;
         border: 1px solid var(--color-line);
         border-radius: 5px;
@@ -445,8 +614,22 @@ onBeforeUnmount(() => {
       font-size: var(--font-size-xs);
     }
     .setting-path {
-      flex-basis: 100%;
       overflow-wrap: anywhere;
+    }
+    .settings-error {
+      color: var(--color-danger);
+      font-size: var(--font-size-sm);
+    }
+    .settings-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+  }
+  .screenshot-settings-modal {
+    :deep(.base-modal__panel) {
+      width: 600px;
+      max-width: 100%;
     }
   }
   .screenshot-history-head {

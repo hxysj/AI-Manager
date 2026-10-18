@@ -20,92 +20,101 @@
     />
     <Teleport to="body">
       <div class="screenshot-toolbar" :style="toolbarStyle" @pointerdown.stop>
-        <button
-          v-for="item in tools"
-          :key="item.id"
-          type="button"
-          class="toolbar-button"
-          :class="{ active: tool === item.id }"
-          :title="item.label"
-          :aria-label="item.label"
-          :aria-pressed="tool === item.id"
-          :disabled="busy"
-          @click="setTool(item.id)"
+        <div
+          v-if="!['select', 'eraser'].includes(tool)"
+          class="toolbar-options"
         >
-          <component :is="item.icon" :size="17" />
-        </button>
-        <input
-          v-model="color"
-          class="toolbar-color"
-          type="color"
-          title="标注颜色"
-          aria-label="标注颜色"
-        />
-        <select
-          v-model.number="width"
-          class="toolbar-width"
-          title="线宽 / 文字大小"
-          aria-label="线宽 / 文字大小"
-        >
-          <option v-for="size in [2, 4, 6, 10]" :key="size" :value="size">
-            {{ size }}
-          </option>
-        </select>
-        <span class="toolbar-separator" />
-        <button
-          class="toolbar-button"
-          type="button"
-          title="撤销 Ctrl+Z"
-          aria-label="撤销"
-          :disabled="!annotations.length || busy"
-          @click="undo"
-        >
-          <Undo2 :size="17" />
-        </button>
-        <button
-          class="toolbar-button"
-          type="button"
-          title="重做 Ctrl+Shift+Z"
-          aria-label="重做"
-          :disabled="!redoStack.length || busy"
-          @click="redo"
-        >
-          <Redo2 :size="17" />
-        </button>
-        <button
-          v-if="reselect"
-          class="toolbar-button"
-          type="button"
-          title="重新选择区域"
-          aria-label="重新选择区域"
-          :disabled="busy"
-          @click="$emit('reselect', annotations.length > 0)"
-        >
-          <Crop :size="17" />
-        </button>
-        <span class="toolbar-separator" />
-        <button
-          v-for="action in outputs"
-          :key="action.id"
-          class="toolbar-button"
-          type="button"
-          :title="action.label"
-          :aria-label="action.label"
-          :disabled="busy"
-          @click="output(action.id)"
-        >
-          <component :is="action.icon" :size="17" />
-        </button>
-        <button
-          class="toolbar-button"
-          type="button"
-          title="取消 Esc"
-          aria-label="取消"
-          :disabled="busy"
-          @click="$emit('cancel')"
-        >
-          <X :size="17" />
-        </button>
+          <input
+            v-model="color"
+            class="toolbar-color"
+            type="color"
+            title="标注颜色"
+            aria-label="标注颜色"
+            :disabled="busy"
+          />
+          <select
+            v-model.number="width"
+            class="toolbar-width"
+            title="线宽 / 文字大小"
+            aria-label="线宽 / 文字大小"
+            :disabled="busy"
+          >
+            <option v-for="size in [2, 4, 6, 10]" :key="size" :value="size">
+              {{ size }}
+            </option>
+          </select>
+        </div>
+        <div class="toolbar-buttons">
+          <button
+            v-for="item in tools"
+            :key="item.id"
+            type="button"
+            class="toolbar-button"
+            :class="{ active: tool === item.id }"
+            :title="item.label"
+            :aria-label="item.label"
+            :aria-pressed="tool === item.id"
+            :disabled="busy"
+            @click="setTool(item.id)"
+          >
+            <component :is="item.icon" :size="17" />
+          </button>
+          <span class="toolbar-separator" />
+          <button
+            class="toolbar-button"
+            type="button"
+            title="取消 Esc"
+            aria-label="取消"
+            :disabled="busy"
+            @click="$emit('cancel')"
+          >
+            <X :size="17" />
+          </button>
+          <button
+            class="toolbar-button"
+            type="button"
+            title="撤销 Ctrl+Z"
+            aria-label="撤销"
+            :disabled="!undoStack.length || busy"
+            @click="undo"
+          >
+            <Undo2 :size="17" />
+          </button>
+          <button
+            class="toolbar-button"
+            type="button"
+            title="重做 Ctrl+Shift+Z"
+            aria-label="重做"
+            :disabled="!redoStack.length || busy"
+            @click="redo"
+          >
+            <Redo2 :size="17" />
+          </button>
+          <button
+            v-if="reselect"
+            class="toolbar-button"
+            type="button"
+            title="重新选择区域"
+            aria-label="重新选择区域"
+            :disabled="busy"
+            @click="$emit('reselect', annotations.length > 0)"
+          >
+            <Crop :size="17" />
+          </button>
+          <span class="toolbar-separator" />
+          <button
+            v-for="action in outputs"
+            :key="action.id"
+            class="toolbar-button"
+            type="button"
+            :title="action.label"
+            :aria-label="action.label"
+            :disabled="busy"
+            @click="output(action.id)"
+          >
+            <component :is="action.icon" :size="17" />
+          </button>
+        </div>
       </div>
     </Teleport>
   </div>
@@ -118,8 +127,10 @@ import {
   Circle,
   Copy,
   Crop,
-  Download,
+  Eraser,
   Grid2X2,
+  Highlighter,
+  Minus,
   MousePointer2,
   PenLine,
   Pin,
@@ -159,6 +170,7 @@ const tool = ref(props.reselect ? "select" : "pen")
 const color = ref("#f43f5e")
 const width = ref(4)
 const annotations = ref(JSON.parse(JSON.stringify(props.initialAnnotations)))
+const undoStack = ref([])
 const redoStack = ref([])
 const textPosition = ref(null)
 const text = ref("")
@@ -170,16 +182,18 @@ const tools = [
   { id: "select", label: "调整选区", icon: MousePointer2 },
   { id: "rectangle", label: "矩形", icon: Square },
   { id: "ellipse", label: "椭圆", icon: Circle },
+  { id: "line", label: "直线", icon: Minus },
   { id: "arrow", label: "箭头", icon: ArrowUpRight },
   { id: "pen", label: "画笔", icon: PenLine },
+  { id: "highlighter", label: "荧光笔", icon: Highlighter },
+  { id: "mosaic", label: "马赛克", icon: Grid2X2 },
   { id: "text", label: "文字", icon: Type },
-  { id: "mosaic", label: "马赛克", icon: Grid2X2 }
+  { id: "eraser", label: "橡皮擦（删除标注）", icon: Eraser }
 ].filter(item => props.reselect || item.id !== "select")
 const outputs = [
-  { id: "copy", label: "复制图片 Enter", icon: Copy },
-  { id: "export", label: "保存 PNG", icon: Download },
   { id: "pin", label: "贴到桌面", icon: Pin },
-  { id: "history", label: "保存到历史", icon: Save }
+  { id: "export", label: "保存 PNG", icon: Save },
+  { id: "copy", label: "复制图片 Enter", icon: Copy }
 ]
 const textStyle = computed(() => ({
   left: `${(textPosition.value.x / image.naturalWidth) * 100}%`,
@@ -217,6 +231,7 @@ function point(event) {
 
 function commitText() {
   if (textPosition.value && text.value.trim()) {
+    undoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
     annotations.value.push({
       type: "text",
       points: [textPosition.value],
@@ -244,6 +259,36 @@ async function startDrawing(event) {
   }
   event.stopPropagation()
   commitText()
+  if (tool.value === "eraser") {
+    const position = point(event)
+    const index = annotations.value.findLastIndex(item => {
+      const padding = Math.max(8, item.width * 3)
+      const xs = item.points.map(point => point.x)
+      const ys = item.points.map(point => point.y)
+      const textWidth =
+        item.type === "text"
+          ? Math.max(...item.text.split("\n").map(line => line.length)) *
+            Math.max(14, item.width * 7)
+          : 0
+      const textHeight =
+        item.type === "text"
+          ? item.text.split("\n").length * Math.max(14, item.width * 7) * 1.35
+          : 0
+      return (
+        position.x >= Math.min(...xs) - padding &&
+        position.x <= Math.max(...xs) + textWidth + padding &&
+        position.y >= Math.min(...ys) - padding &&
+        position.y <= Math.max(...ys) + textHeight + padding
+      )
+    })
+    if (index >= 0) {
+      undoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
+      annotations.value.splice(index, 1)
+      redoStack.value = []
+      repaint()
+    }
+    return
+  }
   if (tool.value === "text") {
     textPosition.value = point(event)
     await nextTick()
@@ -263,7 +308,7 @@ async function startDrawing(event) {
 function draw(event) {
   if (!pending) return
   const value = point(event)
-  if (pending.type === "pen") pending.points.push(value)
+  if (["pen", "highlighter"].includes(pending.type)) pending.points.push(value)
   else pending.points[1] = value
   repaint()
 }
@@ -272,6 +317,7 @@ function finishDrawing(event) {
   if (!pending) return
   draw(event)
   // 一次拖动只提交一条命令，撤销不复制整张原图。
+  undoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
   annotations.value.push(pending)
   pending = null
   redoStack.value = []
@@ -284,13 +330,19 @@ function cancelDrawing() {
 }
 function undo() {
   commitText()
-  const item = annotations.value.pop()
-  if (item) redoStack.value.push(item)
+  const previous = undoStack.value.pop()
+  if (previous) {
+    redoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
+    annotations.value = previous
+  }
   repaint()
 }
 function redo() {
-  const item = redoStack.value.pop()
-  if (item) annotations.value.push(item)
+  const next = redoStack.value.pop()
+  if (next) {
+    undoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
+    annotations.value = next
+  }
   repaint()
 }
 
@@ -347,6 +399,9 @@ watch(
       if (generation !== sourceGeneration) return
       image = loaded
       annotations.value = JSON.parse(JSON.stringify(props.initialAnnotations))
+      undoStack.value = annotations.value.map((_, index) =>
+        JSON.parse(JSON.stringify(annotations.value.slice(0, index)))
+      )
       redoStack.value = []
       pending = null
       textPosition.value = null
@@ -390,7 +445,25 @@ onBeforeUnmount(() => {
   }
 }
 .screenshot-toolbar {
-  overflow-x: auto;
+  .toolbar-buttons {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    overflow-x: auto;
+    max-width: 100%;
+  }
+  .toolbar-options {
+    position: absolute;
+    bottom: calc(100% + 5px);
+    left: 0;
+    display: flex;
+    gap: 8px;
+    padding: 5px 8px;
+    border: 1px solid #aeb4bc;
+    border-radius: 3px;
+    background: #f5f5f5;
+    box-shadow: 0 2px 5px #0002;
+  }
   .toolbar-button,
   .toolbar-color,
   .toolbar-width,
@@ -400,14 +473,14 @@ onBeforeUnmount(() => {
   position: fixed;
   z-index: 1000;
   display: flex;
-  gap: 3px;
+  gap: 2px;
   align-items: center;
-  padding: 6px;
-  border: 1px solid #526479;
-  border-radius: 9px;
-  background: #17212bf5;
-  color: #f1f5f9;
-  box-shadow: 0 8px 24px #0005;
+  padding: 4px 6px;
+  border: 1px solid #aeb4bc;
+  border-radius: 3px;
+  background: #f5f5f5;
+  color: #353535;
+  box-shadow: 0 2px 6px #0003;
   .toolbar-button {
     display: flex;
     align-items: center;
@@ -416,14 +489,14 @@ onBeforeUnmount(() => {
     height: 31px;
     padding: 0;
     border: 0;
-    border-radius: 5px;
+    border-radius: 2px;
     background: transparent;
     color: inherit;
     cursor: pointer;
     &:hover,
     &.active {
-      background: #33556d;
-      color: #7dd3fc;
+      background: #dcecff;
+      color: #1478d4;
     }
     &:disabled {
       opacity: 0.35;
@@ -440,9 +513,9 @@ onBeforeUnmount(() => {
   .toolbar-width {
     width: 38px;
     height: 27px;
-    border: 1px solid #526479;
+    border: 1px solid #b8bec6;
     border-radius: 4px;
-    background: #17212b;
+    background: #fff;
     color: inherit;
     font-size: var(--font-size-xs);
   }
@@ -450,7 +523,7 @@ onBeforeUnmount(() => {
     width: 1px;
     height: 22px;
     margin: 0 3px;
-    background: #526479;
+    background: #b8bec6;
   }
 }
 </style>

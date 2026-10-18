@@ -1414,7 +1414,7 @@ async fn assert_target_ready(
 
 fn target_client_model(target: &ProxyTarget, cli: &str) -> String {
     if cli == "codex" {
-        if let Some(provider) = target.provider.as_ref() {
+        if let Some(provider) = target.provider.as_ref().filter(|provider| runtime_provider::codex_has_custom_models(provider)) {
             if let Some((client_model, _)) = runtime_provider::codex_model_aliases(provider)
                 .into_iter()
                 .find(|(_, upstream_model)| upstream_model == &target.model)
@@ -2505,7 +2505,7 @@ mod tests {
             let address = listener.local_addr().unwrap();
             write_json_agent_provider(&paths, &format!("http://{address}/v1"));
             let mut providers = provider_store::read_providers(&paths).unwrap();
-            providers[0]["runtimeConfig"] = json!({ "modelList": [] });
+            providers[0]["runtimeConfig"] = json!({ "modelList": ["disabled-upstream-model"], "mainModel": "disabled-upstream-model", "syncModelList": false });
             provider_store::write_provider_bundle(
                 &paths,
                 &providers,

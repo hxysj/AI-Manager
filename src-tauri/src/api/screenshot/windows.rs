@@ -310,7 +310,9 @@ pub fn start_hotkeys(app: AppHandle) {
         loop {
             let service = app.state::<ScreenshotService>();
             let settings = service.settings();
-            let key = format!("{}:{}", settings.hotkeys, settings.shortcut_style);
+            let enabled = settings.hotkeys && !service.hotkeys_paused.load(std::sync::atomic::Ordering::SeqCst);
+            let bindings = settings.shortcut_bindings();
+            let key = format!("{enabled}:{bindings:?}");
             if key != previous {
                 for id in registered.drain(..) {
                     unsafe {
@@ -318,26 +320,18 @@ pub fn start_hotkeys(app: AppHandle) {
                     }
                 }
                 let mut errors = Vec::new();
-                if settings.hotkeys {
-                    let modifier = MOD_CONTROL
-                        | if settings.shortcut_style == "shift" {
-                            MOD_SHIFT
-                        } else {
-                            MOD_ALT
-                        }
-                        | MOD_NOREPEAT;
-                    for (id, code, name) in [
-                        (1, b'A', "截图"),
-                        (2, b'P', "剪贴板贴图"),
-                        (3, b'H', "显示/隐藏贴图"),
-                        (4, b'R', "取消鼠标穿透"),
-                    ] {
-                        if unsafe { RegisterHotKey(null_mut(), id, modifier, u32::from(code)) } != 0
+                if enabled {
+                    for (id, name, shortcut) in bindings {
+                        let (modifiers, code) = match super::parse_shortcut(&shortcut) {
+                            Ok(binding) => binding,
+                            Err(error) => { errors.push(error.to_string()); continue; }
+                        };
+                        if unsafe { RegisterHotKey(null_mut(), id, modifiers | MOD_NOREPEAT, code) } != 0
                         {
                             registered.push(id);
                         } else {
                             errors.push(format!(
-                                "{name}快捷键注册失败，可能已被占用；可切换另一组组合键"
+                                "{name} 快捷键 {shortcut} 注册失败，可能已被占用；请在截图设置中更换"
                             ));
                         }
                     }

@@ -1376,6 +1376,39 @@ stateListener({ appSettings: { desktop: { enabled: false } } })
 assert.equal(snapshots.at(-1).appSettings.desktop.enabled, false)
 initialized.stop()
 assert.deepEqual(bootstrapCalls, ["snapshot", "stop"])
+
+const mainReady = { value: false }
+let mainLoading = false
+let finishBackupListing
+let mainBootstrapped = false
+const mainInitialized = createBootstrap(
+  false,
+  {
+    bootstrap: async () => ({ appSettings: {} }),
+    onStateChanged: () => () => {}
+  },
+  () => {},
+  mainReady,
+  async action => {
+    mainLoading = true
+    try {
+      return await action()
+    } finally {
+      mainLoading = false
+    }
+  },
+  () => new Promise(resolve => { finishBackupListing = resolve }),
+  error => { throw error }
+)
+const mainInitializing = mainInitialized.bootstrap().then(() => { mainBootstrapped = true })
+await tick()
+assert.equal(mainReady.value, true)
+assert.equal(mainLoading, false)
+assert.equal(mainBootstrapped, true)
+assert.equal(typeof finishBackupListing, "function")
+finishBackupListing()
+await mainInitializing
+
 console.log(
   "浮窗预热初始化、复用与暂停、贴边偷看、悬浮敬礼、拖动、全部动画预览、设置和页面跳转检查通过"
 )

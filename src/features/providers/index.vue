@@ -146,26 +146,6 @@
           >
             <Server :size="18" />
           </button>
-          <template v-if="activeCli === 'codex'">
-            <button
-              class="providers-view__system-config providers-model-action"
-              type="button"
-              :disabled="pending || codexModelsPending"
-              title="将当前 Provider 模型列表同步到 Codex；官方账号会从官方上游更新"
-              @click="syncCodexModels(false)"
-            >
-              同步模型列表
-            </button>
-            <button
-              class="providers-view__system-config providers-model-action"
-              type="button"
-              :disabled="pending || codexModelsPending"
-              title="清除当前自定义模型列表，恢复 Codex 官方默认目录"
-              @click="syncCodexModels(true)"
-            >
-              恢复默认模型
-            </button>
-          </template>
           <button
             class="providers-view__add"
             type="button"
@@ -381,7 +361,7 @@
         :proxy-state="activeProxyState"
         @account-model-save="emit('codex-proxy-account-model-save', $event)"
         @add-provider="
-          (payload) => {
+          payload => {
             showProxyAddAction = false
             emitProxyEvent('provider-add', payload)
           }
@@ -409,7 +389,7 @@
           :proxy-state="activeProxyState"
           @account-model-save="emit('codex-proxy-account-model-save', $event)"
           @add-provider="
-            (payload) => {
+            payload => {
               showProxyAddAction = false
               emitProxyEvent('provider-add', payload)
             }
@@ -466,9 +446,9 @@
                 >
                   {{
                     item.account.requires_reauth
-                      ? '登录已失效'
-                      : item.account.refresh_status === 'failed'
-                        ? '套餐待确认'
+                      ? "登录已失效"
+                      : item.account.refresh_status === "failed"
+                        ? "套餐待确认"
                         : formatPlanName(item.account.plan)
                   }}
                 </span>
@@ -491,8 +471,8 @@
                   >
                     {{
                       item.account.requires_reauth
-                        ? '需重新登录'
-                        : item.account.refresh_status_code || '错误'
+                        ? "需重新登录"
+                        : item.account.refresh_status_code || "错误"
                     }}
                   </span>
                   <span class="providers-view__account-error-tip">
@@ -500,14 +480,15 @@
                       刷新额度失败
                     </span>
                     <span class="providers-view__account-error-message">
-                      {{ item.account.reauth_message || item.account.refresh_message }}
+                      {{
+                        item.account.reauth_message ||
+                        item.account.refresh_message
+                      }}
                     </span>
                   </span>
                 </span>
                 <button
-                  v-if="
-                    !item.account.disabled && item.account.requires_reauth
-                  "
+                  v-if="!item.account.disabled && item.account.requires_reauth"
                   class="providers-view__reauth-button"
                   type="button"
                   @click.stop="openCodexAuthUpdateModal(item.account)"
@@ -747,18 +728,24 @@
               <template v-if="item.provider.type === 'google-account'">
                 <span
                   >Google · {{ formatPlanName(item.provider.google?.plan) }} ·
-                  {{ item.provider.runtimeConfig?.mainModel || "尚未选择模型" }}</span
+                  {{
+                    item.provider.runtimeConfig?.mainModel || "尚未选择模型"
+                  }}</span
                 >
                 <div
                   v-if="googleQuotaGroupsMap[item.provider.id]?.length"
                   class="providers-google-groups"
                 >
                   <div
-                    v-for="(group, groupIndex) in googleQuotaGroupsMap[item.provider.id]"
+                    v-for="(group, groupIndex) in googleQuotaGroupsMap[
+                      item.provider.id
+                    ]"
                     :key="groupIndex"
                     class="providers-google-group"
                   >
-                    <span class="providers-google-group-name">{{ group.name }}</span>
+                    <span class="providers-google-group-name">{{
+                      group.name
+                    }}</span>
                     <div class="providers-view__quota-list">
                       <div
                         v-for="(quota, quotaIndex) in group.windows"
@@ -766,13 +753,21 @@
                         :class="[
                           'providers-view__account-quota',
                           quota.levelClass,
-                          { 'providers-view__account-quota--loading': googleAccountRefreshingMap[item.provider.id] }
+                          {
+                            'providers-view__account-quota--loading':
+                              googleAccountRefreshingMap[item.provider.id]
+                          }
                         ]"
                       >
-                        <div class="providers-view__quota-bar" :title="formatUnixTime(quota.resetAt)">
+                        <div
+                          class="providers-view__quota-bar"
+                          :title="formatUnixTime(quota.resetAt)"
+                        >
                           <div class="providers-view__quota-title">
                             <span class="providers-view__quota-icon"></span>
-                            <span class="providers-view__quota-name">{{ quota.name }}</span>
+                            <span class="providers-view__quota-name">{{
+                              quota.name
+                            }}</span>
                           </div>
                           <span
                             class="providers-view__quota-fill"
@@ -781,14 +776,30 @@
                             :aria-valuenow="quota.remainingPercent ?? undefined"
                             aria-valuemin="0"
                             aria-valuemax="100"
-                            :style="{ width: formatRateWidth(quota.remainingPercent) }"
+                            :style="{
+                              width: formatRateWidth(quota.remainingPercent)
+                            }"
                           ></span>
                           <div class="providers-view__quota-meta">
-                            <span data-emphasis class="providers-view__quota-value">
-                              {{ quota.remainingPercent == null ? "未知" : `${quota.remainingPercent}%` }} ·
+                            <span
+                              data-emphasis
+                              class="providers-view__quota-value"
+                            >
+                              {{
+                                quota.remainingPercent == null
+                                  ? "未知"
+                                  : `${quota.remainingPercent}%`
+                              }}
+                              ·
                             </span>
                             <span class="providers-view__quota-reset">
-                              {{ !quota.resetAt ? "重置时间未知" : quota.resetAt <= countdownNow ? "待刷新" : `${formatResetCountdown(quota.resetAt)}后重置` }}
+                              {{
+                                !quota.resetAt
+                                  ? "重置时间未知"
+                                  : quota.resetAt <= countdownNow
+                                    ? "待刷新"
+                                    : `${formatResetCountdown(quota.resetAt)}后重置`
+                              }}
                             </span>
                           </div>
                         </div>
@@ -796,12 +807,15 @@
                     </div>
                   </div>
                 </div>
-                <span v-else class="providers-view__provider-note">分组配额尚未获取</span>
+                <span v-else class="providers-view__provider-note"
+                  >分组配额尚未获取</span
+                >
                 <span
                   v-if="item.provider.google?.quotaWarning"
                   class="providers-view__provider-note"
                   :title="item.provider.google.quotaWarning"
-                >分组配额刷新失败，请重试</span>
+                  >分组配额刷新失败，请重试</span
+                >
                 <span
                   v-if="item.provider.google?.message"
                   class="providers-view__provider-note"
@@ -884,15 +898,23 @@
                   <Eye :size="16" />
                 </button>
                 <button
-                  v-if="item.provider.type === 'google-account' && item.provider.enabled !== false"
+                  v-if="
+                    item.provider.type === 'google-account' &&
+                    item.provider.enabled !== false
+                  "
                   :class="[
                     'providers-view__icon-button',
-                    { 'providers-view__icon-button--loading': googleAccountRefreshingMap[item.provider.id] }
+                    {
+                      'providers-view__icon-button--loading':
+                        googleAccountRefreshingMap[item.provider.id]
+                    }
                   ]"
                   type="button"
                   title="刷新模型与分组配额"
                   aria-label="刷新模型与分组配额"
-                  :disabled="pending || googleAccountRefreshingMap[item.provider.id]"
+                  :disabled="
+                    pending || googleAccountRefreshingMap[item.provider.id]
+                  "
                   @click.stop="refreshGoogleAccount(item.provider)"
                 >
                   <RefreshCw :size="16" />
@@ -1198,11 +1220,39 @@
           <div class="providers-view__section-title">
             <div>
               <h2>模型映射</h2>
-              <p>每行填写一个上游模型；留空恢复官方默认列表。保存后自动同步已启用的 Codex。</p>
+              <p>
+                每行填写一个上游模型；仅勾选同步模型列表并启用此 Provider
+                时同步到 Codex，未勾选或留空时使用官方默认列表。
+              </p>
             </div>
-            <div v-if="draft.cli === 'codex'" class="providers-view__section-actions">
-              <button type="button" :disabled="codexModelsPending || pending" @click="fetchCodexModels">{{ codexModelsPending ? '获取中…' : '获取上游模型' }}</button>
-              <button type="button" :disabled="codexModelsPending || pending" @click="resetCodexDraftModels">恢复官方默认</button>
+            <div
+              v-if="draft.cli === 'codex'"
+              class="providers-view__section-actions"
+            >
+              <button
+                type="button"
+                :disabled="codexModelsPending || pending"
+                @click="fetchCodexModels"
+              >
+                {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
+              </button>
+              <label
+                class="providers-model-sync"
+                title="默认关闭；保存后，仅启用此 Provider 时同步模型列表，停用或切换到未勾选的 Provider 时恢复默认"
+              >
+                <input
+                  v-model="draft.syncModelList"
+                  type="checkbox"
+                  :disabled="codexModelsPending || pending"
+                />同步模型列表
+              </label>
+              <button
+                type="button"
+                :disabled="codexModelsPending || pending"
+                @click="resetCodexDraftModels"
+              >
+                恢复默认模型
+              </button>
             </div>
             <!-- <div class="providers-view__section-actions">
               <button type="button">获取模型列表</button>
@@ -1505,11 +1555,39 @@
           <div class="providers-view__section-title">
             <div>
               <h2>模型映射</h2>
-              <p>每行填写一个上游模型；留空恢复官方默认列表。保存后自动同步已启用的 Codex。</p>
+              <p>
+                每行填写一个上游模型；仅勾选同步模型列表并启用此 Provider
+                时同步到 Codex，未勾选或留空时使用官方默认列表。
+              </p>
             </div>
-            <div v-if="draft.cli === 'codex'" class="providers-view__section-actions">
-              <button type="button" :disabled="codexModelsPending || pending" @click="fetchCodexModels">{{ codexModelsPending ? '获取中…' : '获取上游模型' }}</button>
-              <button type="button" :disabled="codexModelsPending || pending" @click="resetCodexDraftModels">恢复官方默认</button>
+            <div
+              v-if="draft.cli === 'codex'"
+              class="providers-view__section-actions"
+            >
+              <button
+                type="button"
+                :disabled="codexModelsPending || pending"
+                @click="fetchCodexModels"
+              >
+                {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
+              </button>
+              <label
+                class="providers-model-sync"
+                title="默认关闭；保存后，仅启用此 Provider 时同步模型列表，停用或切换到未勾选的 Provider 时恢复默认"
+              >
+                <input
+                  v-model="draft.syncModelList"
+                  type="checkbox"
+                  :disabled="codexModelsPending || pending"
+                />同步模型列表
+              </label>
+              <button
+                type="button"
+                :disabled="codexModelsPending || pending"
+                @click="resetCodexDraftModels"
+              >
+                恢复默认模型
+              </button>
             </div>
             <!-- <div class="providers-view__section-actions">
               <button type="button">获取模型列表</button>
@@ -1720,8 +1798,8 @@
       @close="closeApiKeyManager"
       @save="saveApiKeyManager"
       @add="addApiKey(apiKeyManagerDraft)"
-      @remove="(index) => removeApiKey(index, apiKeyManagerDraft)"
-      @activate="(id) => activateApiKey(id, apiKeyManagerDraft)"
+      @remove="index => removeApiKey(index, apiKeyManagerDraft)"
+      @activate="id => activateApiKey(id, apiKeyManagerDraft)"
       @update-key="updateApiKeyManagerItem"
       @refresh="refreshApiKeyUsage"
     />
@@ -1848,7 +1926,7 @@
                 type="button"
                 title="复制链接"
                 aria-label="复制链接"
-                @click="copyAuthUrl"
+                @click="copyAuthUrl(codexLoginState.authUrl)"
               >
                 <Copy :size="16" />
               </button>
@@ -1877,7 +1955,7 @@
               <button
                 type="button"
                 :disabled="!manualCallbackUrl"
-                @click="openManualCallbackUrl"
+                @click="openExternalLink(manualCallbackUrl)"
               >
                 <Check :size="15" />
                 我已授权，继续
@@ -1905,6 +1983,28 @@
             粘贴已有 Codex 登录 JSON 数据，Monkey Thief 会使用 access_token
             解析并验证账号。
           </p>
+          <div class="providers-auth-session">
+            <span
+              >在浏览器登录 ChatGPT 后，打开下方地址并复制页面 JSON
+              到这里。</span
+            >
+            <div class="providers-auth-session-row">
+              <a
+                class="providers-auth-session-link"
+                :href="codexSessionUrl"
+                @click.prevent="openExternalLink(codexSessionUrl)"
+                >{{ codexSessionUrl }}</a
+              >
+              <button
+                class="providers-auth-session-copy"
+                type="button"
+                @click="copyAuthUrl(codexSessionUrl)"
+              >
+                <Copy :size="15" />复制地址
+              </button>
+            </div>
+            <small>JSON 包含登录凭据，请勿分享给他人。</small>
+          </div>
           <label class="providers-view__login-field">
             <span>JSON 数据</span>
             <textarea
@@ -2888,6 +2988,7 @@ const draft = reactive({
   maxThinking: true,
   disableUpgrade: false,
   modelContextWindowEnabled: false,
+  syncModelList: false,
   serviceTierFast: false,
   modelReasoningEffort: "low",
   modelAutoCompactTokenLimit: 900000
@@ -2915,6 +3016,7 @@ const modelDrafts = reactive({
 
 const codexModelsPending = ref(false)
 const codexModelCatalog = ref(null)
+const codexSessionUrl = "https://chatgpt.com/api/auth/session"
 
 async function fetchCodexModels() {
   codexModelsPending.value = true
@@ -2929,9 +3031,13 @@ async function fetchCodexModels() {
     })
     if (draft.id !== providerId) return
     codexModelCatalog.value = catalog
-    modelDrafts.modelList = catalog.models.map(model => model.slug).join('\n')
-    modelDrafts.mainModel = catalog.models.find(model => model.visibility !== 'hide')?.slug || catalog.models[0].slug
-    createMessage.success(`已获取 ${catalog.models.length} 个模型，保存后同步到 Codex。`)
+    modelDrafts.modelList = catalog.models.map(model => model.slug).join("\n")
+    modelDrafts.mainModel =
+      catalog.models.find(model => model.visibility !== "hide")?.slug ||
+      catalog.models[0].slug
+    createMessage.success(
+      `已获取 ${catalog.models.length} 个模型；勾选同步模型列表并保存后，启用此 Provider 时生效。`
+    )
   } catch (error) {
     createMessage.error(String(error))
   } finally {
@@ -2940,32 +3046,20 @@ async function fetchCodexModels() {
 }
 
 function resetCodexDraftModels() {
-  modelDrafts.modelList = ''
-  modelDrafts.mainModel = ''
+  modelDrafts.modelList = ""
+  modelDrafts.mainModel = ""
   codexModelCatalog.value = null
   draft.modelContextWindowEnabled = false
 }
 
-async function syncCodexModels(restore) {
-  codexModelsPending.value = true
-  try {
-    await providerApi.syncCodexModels({ restore })
-    createMessage.success(`${restore ? '已恢复官方默认模型' : '已同步模型列表'}，请重新打开 Codex 应用或 CLI 会话生效。`)
-  } catch (error) {
-    createMessage.error(String(error))
-  } finally {
-    codexModelsPending.value = false
-  }
-}
-W
 // 预览配置与后端保持同一套默认模型和壳位分配顺序。
 function getCodexDraftModels() {
   const models = String(modelDrafts.modelList || "")
     .split(/[\n,;]+/)
-    .map((item) => item.trim())
+    .map(item => item.trim())
     .filter(Boolean)
   const seenModels = new Set()
-  const uniqueModels = models.filter((model) => {
+  const uniqueModels = models.filter(model => {
     const key = model.toLowerCase()
     if (seenModels.has(key)) {
       return false
@@ -2982,7 +3076,9 @@ function getCodexDraftCatalog() {
   const template = props.runtimeConfigSchemas.codex?.modelTemplate || {}
   return {
     models: models.map((model, index) => {
-      const metadata = codexModelCatalog.value?.models.find(item => item.slug === model)
+      const metadata = codexModelCatalog.value?.models.find(
+        item => item.slug === model
+      )
       const contextWindow = metadata?.context_window || template.context_window
       return {
         ...template,
@@ -2990,7 +3086,11 @@ function getCodexDraftCatalog() {
         slug: model,
         display_name: metadata?.display_name || model,
         description: metadata?.description || `上游模型：${model}`,
-        visibility: /^(gpt-image|dall-e)|auto-review/i.test(model) || metadata?.visibility === 'hide' ? 'hide' : 'list',
+        visibility:
+          /^(gpt-image|dall-e)|auto-review/i.test(model) ||
+          metadata?.visibility === "hide"
+            ? "hide"
+            : "list",
         comp_hash: "3000",
         priority: index,
         context_window: contextWindow,
@@ -3009,9 +3109,8 @@ const showGoogleAccountModal = ref(false)
 const googleProviderId = ref("")
 const googleProvider = computed(
   () =>
-    props.providers.find(
-      (provider) => provider.id === googleProviderId.value
-    ) || null
+    props.providers.find(provider => provider.id === googleProviderId.value) ||
+    null
 )
 const showProviderCreateModal = ref(false)
 const showApiKeyManager = ref(false)
@@ -3075,13 +3174,13 @@ const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
   import: "default"
 })
 const iconOptions = Object.keys(iconModules)
-  .map((item) => item.split("/").pop())
+  .map(item => item.split("/").pop())
   .sort((left, right) => left.localeCompare(right))
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
   return [
-    ...props.cliTargets.filter((item) => {
+    ...props.cliTargets.filter(item => {
       return props.runtimeConfigSchemas[item.id]?.enabled
     }),
     { id: "claude-desktop", name: "Claude Desktop", icon: "claude" }
@@ -3089,18 +3188,25 @@ const visibleCliTargets = computed(() => {
 })
 
 const activeRuntimeSchema = computed(() => {
-  const schema = (
-    props.runtimeConfigSchemas[activeCli.value] || {
-      modelFields: [],
-      optionFields: [],
-      advancedFields: [],
-      configFiles: [],
-      authFields: [],
-      defaultProviderType: "custom"
-    }
+  const schema = props.runtimeConfigSchemas[activeCli.value] || {
+    modelFields: [],
+    optionFields: [],
+    advancedFields: [],
+    configFiles: [],
+    authFields: [],
+    defaultProviderType: "custom"
+  }
+  if (
+    activeCli.value !== "codex" ||
+    (draft.syncModelList && getCodexDraftModels().length)
   )
-  if (activeCli.value !== 'codex' || getCodexDraftModels().length) return schema
-  return { ...schema, configFiles: schema.configFiles.filter(file => file.name !== '.cockpit_model_catalog.json') }
+    return schema
+  return {
+    ...schema,
+    configFiles: schema.configFiles.filter(
+      file => file.name !== ".cockpit_model_catalog.json"
+    )
+  }
 })
 
 function runtimeFieldOptions(field) {
@@ -3137,50 +3243,73 @@ function normalizeModelReasoningEffort(model, effort) {
 
 const activeCliName = computed(() => {
   return (
-    visibleCliTargets.value.find((item) => item.id === activeCli.value)?.name ||
+    visibleCliTargets.value.find(item => item.id === activeCli.value)?.name ||
     activeCli.value ||
     "Runtime"
   )
 })
 
 const activeDraftApiKey = computed(() => {
-  return draft.apiKeys.find((item) => item.id === draft.activeApiKeyId) || null
+  return draft.apiKeys.find(item => item.id === draft.activeApiKeyId) || null
 })
 
 const scopedProviders = computed(() => {
-  return props.providers.filter((item) => item.cli === activeCli.value)
+  return props.providers.filter(item => item.cli === activeCli.value)
 })
 
 // 分组额度直接使用 Google 返回的窗口，复用列表已有的卡片、颜色和倒计时。
-const googleQuotaGroupsMap = computed(() => Object.fromEntries(
-  scopedProviders.value.filter(provider => provider.type === "google-account").map(provider => [
-    provider.id,
-    (provider.google?.quotaGroups || []).map(group => ({
-      name: group.displayName || "共享额度",
-      windows: (group.buckets || []).map(bucket => {
-        const window = String(bucket.window || "").replace(/^WINDOW_/i, "").toLowerCase()
-        const seconds = { "5h": 18000, "weekly": 604800 }[window]
-        const remainingPercent = bucket.remainingFraction == null ? null : Math.round(Math.max(0, Math.min(1, bucket.remainingFraction)) * 1000) / 10
-        return {
-          name: seconds ? formatRateWindowName(seconds) : bucket.displayName || bucket.window || "额度",
-          order: seconds || Number.MAX_SAFE_INTEGER,
-          remainingPercent,
-          resetAt: Date.parse(bucket.resetTime) || 0,
-          levelClass: remainingPercent == null ? "providers-google-quota-unknown" : quotaLevelClass({ used_percent: 100 - remainingPercent })
-        }
-      }).sort((left, right) => left.order - right.order)
-    })).filter(group => group.windows.length)
-  ])
-))
+const googleQuotaGroupsMap = computed(() =>
+  Object.fromEntries(
+    scopedProviders.value
+      .filter(provider => provider.type === "google-account")
+      .map(provider => [
+        provider.id,
+        (provider.google?.quotaGroups || [])
+          .map(group => ({
+            name: group.displayName || "共享额度",
+            windows: (group.buckets || [])
+              .map(bucket => {
+                const window = String(bucket.window || "")
+                  .replace(/^WINDOW_/i, "")
+                  .toLowerCase()
+                const seconds = { "5h": 18000, weekly: 604800 }[window]
+                const remainingPercent =
+                  bucket.remainingFraction == null
+                    ? null
+                    : Math.round(
+                        Math.max(0, Math.min(1, bucket.remainingFraction)) *
+                          1000
+                      ) / 10
+                return {
+                  name: seconds
+                    ? formatRateWindowName(seconds)
+                    : bucket.displayName || bucket.window || "额度",
+                  order: seconds || Number.MAX_SAFE_INTEGER,
+                  remainingPercent,
+                  resetAt: Date.parse(bucket.resetTime) || 0,
+                  levelClass:
+                    remainingPercent == null
+                      ? "providers-google-quota-unknown"
+                      : quotaLevelClass({
+                          used_percent: 100 - remainingPercent
+                        })
+                }
+              })
+              .sort((left, right) => left.order - right.order)
+          }))
+          .filter(group => group.windows.length)
+      ])
+  )
+)
 
 // 统计当前 CLI 下可按需展示的禁用项。
 const disabledItemCount = computed(() => {
   const disabledProviderCount = scopedProviders.value.filter(
-    (provider) => provider.enabled === false
+    provider => provider.enabled === false
   ).length
   const disabledAccountCount =
     activeCli.value === "codex"
-      ? props.codexAccounts.filter((account) => account.disabled).length
+      ? props.codexAccounts.filter(account => account.disabled).length
       : 0
 
   return disabledProviderCount + disabledAccountCount
@@ -3188,8 +3317,8 @@ const disabledItemCount = computed(() => {
 
 const mixedItems = computed(() => {
   const providerItems = scopedProviders.value
-    .filter((provider) => showDisabledItems.value || provider.enabled !== false)
-    .map((provider) => ({
+    .filter(provider => showDisabledItems.value || provider.enabled !== false)
+    .map(provider => ({
       type: "provider",
       provider,
       key: `provider:${provider.id}`,
@@ -3212,8 +3341,8 @@ const mixedItems = computed(() => {
   const accountItems =
     activeCli.value === "codex"
       ? props.codexAccounts
-          .filter((account) => showDisabledItems.value || !account.disabled)
-          .map((account) => ({
+          .filter(account => showDisabledItems.value || !account.disabled)
+          .map(account => ({
             type: "account",
             account,
             key: `account:${account.id}`,
@@ -3238,9 +3367,7 @@ const mixedItems = computed(() => {
 })
 
 const profileMap = computed(() => {
-  return Object.fromEntries(
-    props.runtimeProfiles.map((item) => [item.cli, item])
-  )
+  return Object.fromEntries(props.runtimeProfiles.map(item => [item.cli, item]))
 })
 
 const runtimeState = computed(() => {
@@ -3288,7 +3415,7 @@ const runtimeConfigDescription = computed(() => {
 const filteredIconOptions = computed(() => {
   const keyword = iconKeyword.value.toLowerCase()
 
-  return iconOptions.filter((item) =>
+  return iconOptions.filter(item =>
     iconLabel(item).toLowerCase().includes(keyword)
   )
 })
@@ -3299,7 +3426,7 @@ const codexLoginTitle = computed(() => {
 
 const configPreviewMap = computed(() => {
   return Object.fromEntries(
-    activeRuntimeSchema.value.configFiles.map((file) => [
+    activeRuntimeSchema.value.configFiles.map(file => [
       file.name,
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
@@ -3319,13 +3446,13 @@ const emptyUsageSummary = {
 // 额度阶段按重置时间持久化，当前阶段和历史阶段分别展示。
 const codexCurrentQuotaStages = computed(() => {
   return (codexAccountDetail.value?.quotaStages || []).filter(
-    (stage) => stage.active
+    stage => stage.active
   )
 })
 
 const codexQuotaStageHistory = computed(() => {
   return (codexAccountDetail.value?.quotaStages || [])
-    .filter((stage) => !stage.active)
+    .filter(stage => !stage.active)
     .slice(0, 12)
 })
 
@@ -3353,7 +3480,7 @@ const codexAccountUsageLogs = computed(() => {
     return []
   }
 
-  return (usageStats.value.logs || []).filter((item) =>
+  return (usageStats.value.logs || []).filter(item =>
     codexAccountUsageProviderIds.value.includes(item.providerId)
   )
 })
@@ -3364,7 +3491,7 @@ const codexAccountUsageSummary = computed(() => {
   }
 
   return mergeUsageSummaries(
-    (usageStats.value.providerStats || []).filter((item) =>
+    (usageStats.value.providerStats || []).filter(item =>
       codexAccountUsageProviderIds.value.includes(item.providerId)
     )
   )
@@ -3376,7 +3503,7 @@ const codexAccountUsageTodaySummary = computed(() => {
   }
 
   return mergeUsageLogSummaries(
-    codexAccountUsageLogs.value.filter((item) => isTodayUsageLog(item))
+    codexAccountUsageLogs.value.filter(item => isTodayUsageLog(item))
   )
 })
 
@@ -3386,13 +3513,13 @@ const codexAccountUsageTodayModelStats = computed(() => {
   }
 
   return mergeUsageLogModelStats(
-    codexAccountUsageLogs.value.filter((item) => isTodayUsageLog(item))
+    codexAccountUsageLogs.value.filter(item => isTodayUsageLog(item))
   )
 })
 
 const codexAccountUsageModelStats = computed(() => {
   return mergeUsageModelStats(
-    (usageStats.value.modelStats || []).filter((item) => {
+    (usageStats.value.modelStats || []).filter(item => {
       return (
         usageStatsTarget.value === codexAccountUsageTarget.value ||
         codexAccountUsageProviderIds.value.includes(item.providerId)
@@ -3425,7 +3552,7 @@ const providerUsageLogs = computed(() => {
     return []
   }
 
-  return (usageStats.value.logs || []).filter((item) => {
+  return (usageStats.value.logs || []).filter(item => {
     return (
       item.providerId === providerUsageProviderId.value &&
       (providerUsageAppType.value === "all" ||
@@ -3440,7 +3567,7 @@ const providerUsageSummary = computed(() => {
   }
 
   return mergeUsageSummaries(
-    (usageStats.value.modelStats || []).filter((item) => {
+    (usageStats.value.modelStats || []).filter(item => {
       return (
         item.providerId === providerUsageProviderId.value &&
         (providerUsageAppType.value === "all" ||
@@ -3456,7 +3583,7 @@ const providerUsageTodaySummary = computed(() => {
   }
 
   return mergeUsageLogSummaries(
-    providerUsageLogs.value.filter((item) => isTodayUsageLog(item))
+    providerUsageLogs.value.filter(item => isTodayUsageLog(item))
   )
 })
 
@@ -3466,13 +3593,13 @@ const providerUsageTodayModelStats = computed(() => {
   }
 
   return mergeUsageLogModelStats(
-    providerUsageLogs.value.filter((item) => isTodayUsageLog(item))
+    providerUsageLogs.value.filter(item => isTodayUsageLog(item))
   )
 })
 
 const providerUsageModelStats = computed(() => {
   return mergeUsageModelStats(
-    (usageStats.value.modelStats || []).filter((item) => {
+    (usageStats.value.modelStats || []).filter(item => {
       return (
         usageStatsTarget.value === providerUsageTarget.value ||
         (item.providerId === providerUsageProviderId.value &&
@@ -3490,9 +3617,9 @@ onMounted(() => {
   }, 1000)
 
   if (activeCli.value === "codex") {
-    const hasCodexAccounts = props.codexAccounts.some((a) => !a.disabled)
+    const hasCodexAccounts = props.codexAccounts.some(a => !a.disabled)
     const hasGoogleAccounts = props.providers.some(
-      (p) =>
+      p =>
         p.type === "google-account" &&
         p.enabled !== false &&
         (p.cli === "codex" || !p.cli)
@@ -3533,11 +3660,11 @@ function applyConfigTemplate(template) {
     hasApiKey: Boolean(activeApiKey || activeDraftApiKey.value?.masked),
     baseUrl: draft.baseUrl,
     hasBaseUrl: Boolean(draft.baseUrl),
-    mainModel: codexMainModel || '',
+    mainModel: codexMainModel || "",
     hasMainModel: Boolean(codexMainModel),
     modelList: codexModels.join("\n"),
     modelCatalog: JSON.stringify(getCodexDraftCatalog(), null, 2),
-    hasCustomModels: codexModels.length > 0,
+    hasCustomModels: draft.syncModelList && codexModels.length > 0,
     haikuModel: modelDrafts.haikuModel,
     hasHaikuModel: Boolean(modelDrafts.haikuModel),
     sonnetModel: modelDrafts.sonnetModel,
@@ -3571,7 +3698,7 @@ function applyConfigTemplate(template) {
 }
 
 function ensureActiveCli() {
-  if (visibleCliTargets.value.find((item) => item.id === activeCli.value)) {
+  if (visibleCliTargets.value.find(item => item.id === activeCli.value)) {
     return
   }
 
@@ -3607,7 +3734,8 @@ function openGoogleAccount(provider = null) {
 
 // 刷新接口会推送应用状态，使列表和已打开的账号弹窗同步更新。
 async function refreshGoogleAccount(provider, options = {}) {
-  if (provider.enabled === false || googleAccountRefreshingMap[provider.id]) return
+  if (provider.enabled === false || googleAccountRefreshingMap[provider.id])
+    return
   googleAccountRefreshingMap[provider.id] = true
   try {
     const result = await googleAccountApi.refresh(provider.id)
@@ -3628,7 +3756,7 @@ async function refreshGoogleAccount(provider, options = {}) {
 }
 
 function refreshGoogleAccounts() {
-  props.providers.forEach((provider) => {
+  props.providers.forEach(provider => {
     if (provider.type !== "google-account" || provider.enabled === false) {
       return
     }
@@ -3671,13 +3799,14 @@ function editProvider(provider) {
   draft.apiKeys = normalizeApiKeyDrafts(provider)
   draft.activeApiKeyId = provider.activeApiKeyId || draft.apiKeys[0]?.id || ""
   const activeApiKey = draft.apiKeys.find(
-    (item) => item.id === draft.activeApiKeyId
+    item => item.id === draft.activeApiKeyId
   )
   if (activeApiKey && provider.apiKey) {
     activeApiKey.apiKey = provider.apiKey
   }
   draft.authField = provider.authField || "ANTHROPIC_AUTH_TOKEN"
   draft.enabled = provider.enabled !== false
+  draft.syncModelList = provider.runtimeConfig?.syncModelList === true
   modelDrafts.mainModel = provider.runtimeConfig?.mainModel || ""
   codexModelCatalog.value = provider.runtimeConfig?.modelCatalog || null
   modelDrafts.modelList = Array.isArray(provider.runtimeConfig?.modelList)
@@ -3759,18 +3888,18 @@ function startCodexOfficialLogin() {
   })
 }
 
-async function copyAuthUrl() {
+async function copyAuthUrl(url) {
   try {
-    await navigator.clipboard.writeText(props.codexLoginState.authUrl || "")
-    createMessage.success("授权链接已复制。")
+    await navigator.clipboard.writeText(url || "")
+    createMessage.success("链接已复制。")
   } catch (error) {
     createMessage.error(error.message || String(error))
   }
 }
 
-async function openManualCallbackUrl() {
+async function openExternalLink(url) {
   try {
-    await systemApi.openExternal({ url: manualCallbackUrl.value })
+    await systemApi.openExternal({ url })
   } catch (error) {
     createMessage.error(error.message || String(error))
   }
@@ -3876,7 +4005,7 @@ function closeProviderDetail() {
   providerDetailTab.value = "config"
 }
 
-watch(showApiKeyManager, (visible) => {
+watch(showApiKeyManager, visible => {
   window.clearInterval(apiKeyUsageTimer)
   apiKeyUsageRequest += 1
   apiKeyUsage.value = {}
@@ -3911,7 +4040,7 @@ async function refreshApiKeyUsage() {
 }
 
 function updateApiKeyManagerItem(id, patch) {
-  const item = apiKeyManagerDraft.apiKeys.find((key) => key.id === id)
+  const item = apiKeyManagerDraft.apiKeys.find(key => key.id === id)
   if (item) Object.assign(item, patch)
 }
 
@@ -3926,7 +4055,7 @@ function openApiKeyManager(provider) {
     provider.activeApiKeyId || apiKeyManagerDraft.apiKeys[0]?.id || ""
 
   const activeApiKey = apiKeyManagerDraft.apiKeys.find(
-    (item) => item.id === apiKeyManagerDraft.activeApiKeyId
+    item => item.id === apiKeyManagerDraft.activeApiKeyId
   )
   if (activeApiKey && provider.apiKey) {
     activeApiKey.apiKey = provider.apiKey
@@ -3950,7 +4079,7 @@ function closeApiKeyManager() {
 }
 
 async function saveApiKeyManager() {
-  if (apiKeyManagerDraft.apiKeys.some((item) => !item.apiKey && !item.masked)) {
+  if (apiKeyManagerDraft.apiKeys.some(item => !item.apiKey && !item.masked)) {
     createMessage.error("请填写新增的 API Key，或删除空白项。")
     return
   }
@@ -3962,7 +4091,7 @@ async function saveApiKeyManager() {
     }
     const result = await desktopPanelRef.value.saveProvider({
       id: apiKeyManagerDraft.providerId,
-      apiKeys: apiKeyManagerDraft.apiKeys.map((item) => ({
+      apiKeys: apiKeyManagerDraft.apiKeys.map(item => ({
         id: item.id,
         name: item.name,
         note: item.note,
@@ -3979,7 +4108,7 @@ async function saveApiKeyManager() {
     {
       ...apiKeyManagerProvider.value,
       id: apiKeyManagerDraft.providerId,
-      apiKeys: apiKeyManagerDraft.apiKeys.map((item) => ({
+      apiKeys: apiKeyManagerDraft.apiKeys.map(item => ({
         id: item.id,
         name: item.name,
         note: item.note,
@@ -4044,14 +4173,19 @@ function rateLimitWindows(rateLimit) {
   return [
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
-  ].filter((item) => item.window)
+  ].filter(item => item.window)
 }
 
 function formatPlanName(value) {
-  const googlePlans = { "g1-pro-tier": "Google AI Pro", "g1-ultra-tier": "Google AI Ultra", "free-tier": "免费版", "FREE": "免费版" }
+  const googlePlans = {
+    "g1-pro-tier": "Google AI Pro",
+    "g1-ultra-tier": "Google AI Ultra",
+    "free-tier": "免费版",
+    FREE: "免费版"
+  }
   if (googlePlans[value]) return googlePlans[value]
-  if (value === 'free') {
-    return '免费版'
+  if (value === "free") {
+    return "免费版"
   }
   if (value === "pro") {
     return "Pro"
@@ -4194,7 +4328,7 @@ function mergeUsageLogSummaries(items) {
 
 function mergeUsageLogModelStats(items) {
   return mergeUsageModelStats(
-    items.map((item) => ({
+    items.map(item => ({
       appType: item.appType,
       model: item.model || "未识别模型",
       requestCount: 1,
@@ -4291,7 +4425,7 @@ function isCodexAccountRefreshing(account) {
 }
 
 function refreshCodexAccounts() {
-  props.codexAccounts.forEach((account) => {
+  props.codexAccounts.forEach(account => {
     if (account.disabled) {
       return
     }
@@ -4378,7 +4512,7 @@ function addApiKey(target = draft) {
 
 function activateApiKey(id, target = draft) {
   target.activeApiKeyId = id
-  target.apiKey = target.apiKeys.find((item) => item.id === id)?.apiKey || ""
+  target.apiKey = target.apiKeys.find(item => item.id === id)?.apiKey || ""
 }
 
 function removeApiKey(index, target = draft) {
@@ -4418,6 +4552,7 @@ function clearDraft() {
   draft.maxThinking = true
   draft.disableUpgrade = false
   draft.modelContextWindowEnabled = false
+  draft.syncModelList = false
   draft.serviceTierFast = false
   draft.modelReasoningEffort = "low"
   draft.modelAutoCompactTokenLimit = 900000
@@ -4433,8 +4568,7 @@ function clearDraft() {
 
 function firstModelName(providerId) {
   return (
-    props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
-    ""
+    props.runtimeModels.find(item => item.providerId === providerId)?.name || ""
   )
 }
 
@@ -4501,7 +4635,7 @@ async function submitProvider() {
     baseUrl: draft.baseUrl,
     proxy: draft.proxy,
     authField: draft.authField,
-    apiKeys: draft.apiKeys.map((item) => ({
+    apiKeys: draft.apiKeys.map(item => ({
       id: item.id,
       name: item.name,
       note: item.note,
@@ -4513,6 +4647,7 @@ async function submitProvider() {
       mainModel: modelDrafts.mainModel,
       modelList: modelDrafts.modelList,
       modelCatalog: codexModelCatalog.value,
+      syncModelList: draft.syncModelList,
       haikuModel: modelDrafts.haikuModel,
       sonnetModel: modelDrafts.sonnetModel,
       opusModel: modelDrafts.opusModel,
@@ -4535,7 +4670,7 @@ async function submitProvider() {
   if (draft.cli === "claude-desktop") {
     if (
       !draft.apiKeys.length ||
-      draft.apiKeys.some((item) => !item.apiKey && !item.masked)
+      draft.apiKeys.some(item => !item.apiKey && !item.masked)
     ) {
       createMessage.error("至少保留一个 API Key，并填写新增的 Key。")
       return
@@ -4588,11 +4723,12 @@ function enableProvider(provider) {
     return
   }
 
-  const model = activeCli.value === 'codex'
-    ? provider.runtimeConfig?.mainModel || ''
-    : provider.runtimeConfig?.mainModel || firstModelName(provider.id)
+  const model =
+    activeCli.value === "codex"
+      ? provider.runtimeConfig?.mainModel || ""
+      : provider.runtimeConfig?.mainModel || firstModelName(provider.id)
 
-  if (!model && activeCli.value !== 'codex') {
+  if (!model && activeCli.value !== "codex") {
     return
   }
 
@@ -4732,7 +4868,7 @@ function openDesktopProviderEditor(provider, defaultRoutes) {
     mode: provider.mode || "direct",
     apiFormat: provider.apiFormat || "anthropic",
     headersText: JSON.stringify(provider.headers || {}, null, 2),
-    routes: defaultRoutes.map((route) => {
+    routes: defaultRoutes.map(route => {
       const entry = Object.entries(provider.routes || {}).find(([name]) =>
         provider.mode === "proxy"
           ? name === route.id
@@ -4771,7 +4907,7 @@ async function openDesktopRuntimeConfig(status) {
     Object.assign(desktopConfigStatus, status)
     desktopConfigFiles.value = result.files
     selectDesktopConfigFile(
-      result.files.find((file) => file.path === runtimeConfigPath.value) ||
+      result.files.find(file => file.path === runtimeConfigPath.value) ||
         result.files[0]
     )
     showRuntimeConfig.value = true
@@ -4879,7 +5015,7 @@ watch(
       deleteConfirmation.value.kind === "account"
         ? props.codexAccounts
         : props.providers
-    const exists = items.some((item) => item.id === deleteConfirmation.value.id)
+    const exists = items.some(item => item.id === deleteConfirmation.value.id)
     deleteSubmitted.value = false
     if (exists) {
       deleteError.value = "删除未完成，请根据错误提示处理后重试。"
@@ -4902,9 +5038,9 @@ watch(
   () => [props.codexAccounts, props.providers],
   () => {
     if (activeCli.value === "codex" && !initialCodexRefreshDone.value) {
-      const hasCodexAccounts = props.codexAccounts.some((a) => !a.disabled)
+      const hasCodexAccounts = props.codexAccounts.some(a => !a.disabled)
       const hasGoogleAccounts = props.providers.some(
-        (p) =>
+        p =>
           p.type === "google-account" &&
           p.enabled !== false &&
           (p.cli === "codex" || !p.cli)
@@ -4920,7 +5056,7 @@ watch(
 
 watch(
   () => props.usage,
-  (usage) => {
+  usage => {
     if (!usageStatsLoading.value) {
       usageStats.value = usage || {}
       usageStatsTarget.value = ""
@@ -4943,13 +5079,13 @@ watch(
   }
 )
 
-watch(codexAccountDetailTab, (tab) => {
+watch(codexAccountDetailTab, tab => {
   if (tab === "usage") {
     ensureUsageStatsReady()
   }
 })
 
-watch(providerDetailTab, (tab) => {
+watch(providerDetailTab, tab => {
   if (tab === "usage") {
     ensureUsageStatsReady()
   }
@@ -4957,8 +5093,8 @@ watch(providerDetailTab, (tab) => {
 
 watch(
   () => props.codexAccounts,
-  (accounts) => {
-    accounts.forEach((account) => {
+  accounts => {
+    accounts.forEach(account => {
       codexAccountProxyDrafts[account.id] = account.proxy || ""
     })
   },
@@ -4974,7 +5110,7 @@ watch(
 
 watch(
   () => activeProxyState.value?.enabled,
-  (enabled) => {
+  enabled => {
     proxySwitchEnabled.value = Boolean(enabled)
     proxyTab.value = enabled ? "proxy" : "providers"
   },
@@ -4983,7 +5119,7 @@ watch(
 
 watch(
   () => props.pending,
-  (pending) => {
+  pending => {
     if (!pending) {
       proxySwitchEnabled.value = activeProxyEnabled.value
     }
@@ -4992,10 +5128,10 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  (accounts) => {
+  accounts => {
     if (codexAuthUpdateAccountId.value) {
       const account = accounts.find(
-        (item) => item.id === codexAuthUpdateAccountId.value
+        item => item.id === codexAuthUpdateAccountId.value
       )
 
       if (account && account.refresh_status !== "failed") {
@@ -5006,7 +5142,7 @@ watch(
 
     if (
       codexAccountDetail.value &&
-      !accounts.find((item) => item.id === codexAccountDetail.value.id)
+      !accounts.find(item => item.id === codexAccountDetail.value.id)
     ) {
       closeCodexAccountDetail()
     }
@@ -5016,11 +5152,11 @@ watch(
 
 watch(
   () => props.providers,
-  (providers) => {
+  providers => {
     if (
       providerDetail.value &&
       providerDetail.value.cli !== "claude-desktop" &&
-      !providers.find((item) => item.id === providerDetail.value.id)
+      !providers.find(item => item.id === providerDetail.value.id)
     ) {
       closeProviderDetail()
     }
@@ -5223,12 +5359,6 @@ watch(
   &__system-config:disabled {
     cursor: not-allowed;
     opacity: 0.55;
-  }
-
-  .providers-model-action {
-    width: auto;
-    padding: 0 12px;
-    white-space: nowrap;
   }
 
   &-proxy-switch {
@@ -5585,7 +5715,9 @@ watch(
     transform: none;
   }
 
-  &__provider-card--refreshing:not(.providers-view__provider-card--active):hover,
+  &__provider-card--refreshing:not(
+      .providers-view__provider-card--active
+    ):hover,
   &__account-card--refreshing:not(.providers-view__account-card--active):not(
       .providers-view__account-card--error
     ):hover {
@@ -7419,6 +7551,46 @@ watch(
     color: var(--color-text-muted);
     font-size: var(--font-size-base);
     line-height: 1.6;
+  }
+
+  .providers-model-sync {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+  }
+  .providers-auth-session {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    .providers-auth-session-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      .providers-auth-session-link {
+        flex: 1;
+        min-width: 0;
+        color: var(--color-primary);
+        overflow-wrap: anywhere;
+        text-decoration: underline;
+      }
+      .providers-auth-session-copy {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 6px 9px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        background: var(--color-panel);
+        color: inherit;
+        white-space: nowrap;
+        cursor: pointer;
+      }
+    }
   }
 
   &__login-field {

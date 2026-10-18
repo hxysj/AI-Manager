@@ -91,7 +91,11 @@ export function renderDocument(canvas, image, annotations) {
       if (item.type === "rectangle") ctx.rect(x, y, w, h)
       if (item.type === "ellipse")
         ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
-      if (item.type === "pen" || item.type === "arrow") {
+      if (item.type === "highlighter") {
+        ctx.globalAlpha = 0.3
+        ctx.lineWidth = item.width * 4
+      }
+      if (["pen", "arrow", "line", "highlighter"].includes(item.type)) {
         ctx.moveTo(start.x, start.y)
         for (const point of item.points.slice(1)) ctx.lineTo(point.x, point.y)
       }

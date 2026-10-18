@@ -754,7 +754,6 @@ async function bootstrap() {
     try {
       updateState(await appApi.bootstrap())
       quickSwitchReady.value = true
-      await refreshLocalBackups(false)
       unsubscribe = appApi.onStateChanged((nextState) => {
         const previousLocalBackupAt =
           state.appSettings.localBackup?.lastBackupAt || 0
@@ -770,6 +769,7 @@ async function bootstrap() {
       showErrorMessage(error)
     }
   })
+  refreshLocalBackups(false)
 }
 
 function updateState(nextState) {

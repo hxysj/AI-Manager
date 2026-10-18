@@ -2031,6 +2031,21 @@ async fn create_local_backup_inner(
     paths: &AppPaths,
     app_settings: &mut AppSettings,
 ) -> Result<Value, ManagerError> {
+    let backup = create_local_backup_snapshot(app_data_path, paths, app_settings).await?;
+    app_settings.local_backup.last_backup_at = number_value(backup.get("createdAt"), 0);
+    write_json_file(
+        Path::new(&app_settings.settings_file_path),
+        &serialize_app_settings(app_settings),
+    )
+    .await?;
+    Ok(backup)
+}
+
+pub(crate) async fn create_local_backup_snapshot(
+    app_data_path: &Path,
+    paths: &AppPaths,
+    app_settings: &AppSettings,
+) -> Result<Value, ManagerError> {
     let backup_dir = get_local_backup_directory_path(app_data_path);
     let created_at = now_millis();
     let file_name = format!(
@@ -2045,12 +2060,6 @@ async fn create_local_backup_inner(
     tokio::fs::create_dir_all(&backup_dir).await?;
     tokio::fs::write(&file_path, create_data_backup(paths, app_settings).await?).await?;
     prune_local_backups(app_data_path, app_settings).await?;
-    app_settings.local_backup.last_backup_at = created_at;
-    write_json_file(
-        Path::new(&app_settings.settings_file_path),
-        &serialize_app_settings(app_settings),
-    )
-    .await?;
 
     local_backup_file_payload(&file_path).await
 }

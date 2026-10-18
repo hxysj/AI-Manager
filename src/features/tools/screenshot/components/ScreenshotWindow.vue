@@ -11,6 +11,7 @@
   >
     <img
       v-if="frame"
+      ref="captureBackground"
       :src="frame.source"
       class="capture-background"
       draggable="false"
@@ -66,9 +67,12 @@
     class="pin-window"
     :style="{ opacity }"
     @pointerdown="dragPin"
+    @pointermove="movePin"
+    @pointerup="cancelPinDrag"
+    @pointercancel="cancelPinDrag"
     @wheel.prevent="zoomPin"
-    @contextmenu.prevent="menu = !menu"
-    @dblclick="!editing && pinAction('edit')"
+    @contextmenu.prevent="openPinMenu"
+    @dblclick="!editing && pinAction('destroy')"
   >
     <ImageEditor
       v-if="editing && document"
@@ -87,7 +91,9 @@
     />
     <div
       v-if="menu && !editing"
+      ref="pinMenu"
       class="pin-menu"
+      :style="{ left: `${menuPosition.x}px`, top: `${menuPosition.y}px` }"
       @pointerdown.stop
       @dblclick.stop
     >
@@ -111,7 +117,7 @@
           :value="opacity"
           @input="setOpacity"
       /></label>
-      <span class="pin-help">滚轮缩放 · 拖动移动 · 右键菜单</span>
+      <span class="pin-help">滚轮缩放 · 拖动移动 · 右键菜单 · 双击移除</span>
     </div>
     <div v-if="error" class="pin-error" role="alert" @pointerdown.stop>
       {{ error }}
@@ -131,6 +137,7 @@ const mode = query.get("mode")
 const id = query.get("id")
 const frame = ref(null)
 const desktop = ref(null)
+const captureBackground = ref(null)
 const selection = ref(null)
 const editorSource = ref("")
 const pointer = ref(null)
@@ -141,6 +148,8 @@ const error = ref("")
 const document = ref(null)
 const editing = ref(false)
 const menu = ref(false)
+const pinMenu = ref(null)
+const menuPosition = ref({ x: 0, y: 0 })
 const opacity = ref(1)
 const drag = ref(null)
 const handles = ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
@@ -156,8 +165,12 @@ const pinActions = [
 let originalImage
 let pixelCanvas
 let unlisten
+let unlistenFrame
+let unlistenReset
+let frameGeneration = 0
 let resizeFrame
 let pinWidth = 0
+let pinDragStart = null
 let pinHeight = 0
 let currentZoom = 1
 let lastViewport
@@ -176,8 +189,8 @@ const toolbarStyle = computed(() => {
   const x = (r.x / frame.value.width) * innerWidth
   const y = ((r.y + r.height) / frame.value.height) * innerHeight
   return {
-    left: `${Math.max(4, Math.min(x, innerWidth - 640))}px`,
-    top: `${Math.max(4, Math.min(y + 10, innerHeight - 58))}px`,
+    left: `${Math.max(4, Math.min(x, innerWidth - 620))}px`,
+    top: `${Math.max(4, Math.min(y + 8, innerHeight - 84))}px`,
     maxWidth: "calc(100vw - 8px)"
   }
 })
@@ -268,11 +281,17 @@ async function movePointer(event) {
         ...r,
         x: Math.max(
           0,
-            Math.min(frame.value.width - r.width, Math.round(r.x + point.x - start.x))
+          Math.min(
+            frame.value.width - r.width,
+            Math.round(r.x + point.x - start.x)
+          )
         ),
         y: Math.max(
           0,
-            Math.min(frame.value.height - r.height, Math.round(r.y + point.y - start.y))
+          Math.min(
+            frame.value.height - r.height,
+            Math.round(r.y + point.y - start.y)
+          )
         )
       }
     } else {
@@ -387,7 +406,15 @@ async function output(data) {
       const newId = await screenshotApi.call("save-document", {
         source: data.source,
         output: data.output,
-        annotations: data.annotations
+        annotations: data.annotations,
+        editingPinId: mode === "capture" ? null : id,
+        origin:
+          mode === "capture"
+            ? {
+                x: frame.value.left + selection.value.x,
+                y: frame.value.top + selection.value.y
+              }
+            : { x: document.value.pin.x, y: document.value.pin.y }
       })
       savedOutput = { id: newId, output: data.output }
     }
@@ -400,7 +427,6 @@ async function output(data) {
     if (data.action === "pin") await screenshotApi.call("pin", { id: newId })
     if (mode === "capture") await screenshotApi.call("cancel")
     else {
-      await stopEditing()
       if (data.action !== "pin") await screenshotApi.call("pin", { id: newId })
       await screenshotApi.call("pin-action", { id, action: "close" })
     }
@@ -408,6 +434,24 @@ async function output(data) {
     error.value = `操作失败：${String(cause)}`
   } finally {
     busy.value = false
+  }
+}
+
+async function openPinMenu(event) {
+  if (editing.value) return
+  menuPosition.value = { x: event.clientX, y: event.clientY }
+  menu.value = true
+  await nextTick()
+  if (!pinMenu.value) return
+  menuPosition.value = {
+    x: Math.max(
+      0,
+      Math.min(event.clientX, innerWidth - pinMenu.value.offsetWidth)
+    ),
+    y: Math.max(
+      0,
+      Math.min(event.clientY, innerHeight - pinMenu.value.offsetHeight)
+    )
   }
 }
 
@@ -431,8 +475,31 @@ async function stopEditing() {
   await screenshotApi.call("pin-action", { id, action: "display" })
 }
 
-async function dragPin(event) {
-  if (event.button !== 0 || editing.value || menu.value) return
+function dragPin(event) {
+  if (event.button !== 0 || event.detail > 1 || editing.value) return
+  if (menu.value) {
+    menu.value = false
+    return
+  }
+  pinDragStart = { x: event.clientX, y: event.clientY }
+}
+
+function cancelPinDrag() {
+  pinDragStart = null
+}
+
+async function movePin(event) {
+  if (!pinDragStart) return
+  if (!(event.buttons & 1) || editing.value || menu.value) {
+    cancelPinDrag()
+    return
+  }
+  if (
+    Math.hypot(event.clientX - pinDragStart.x, event.clientY - pinDragStart.y) <
+    4
+  )
+    return
+  cancelPinDrag()
   try {
     await screenshotApi.call("pin-action", { id, action: "drag" })
   } catch (cause) {
@@ -506,8 +573,48 @@ async function keydown(event) {
 function checkViewport() {
   // 采集期间屏幕布局变化时终止本次会话，不继续使用旧的像素映射。
   const size = `${innerWidth}:${innerHeight}:${devicePixelRatio}`
-  if (mode === "capture" && lastViewport && size !== lastViewport) cancel()
+  if (
+    mode === "capture" &&
+    frame.value &&
+    lastViewport &&
+    size !== lastViewport
+  )
+    cancel()
   lastViewport = size
+}
+
+function resetCapture() {
+  frameGeneration += 1
+  frame.value = null
+  originalImage = null
+  pixelCanvas = null
+  pointer.value = null
+  savedOutput = null
+  error.value = ""
+  lastViewport = null
+  cancelDrag()
+}
+
+async function loadFrame() {
+  resetCapture()
+  const generation = frameGeneration
+  const current = await screenshotApi.call("frame")
+  if (!current || generation !== frameGeneration) return
+  const image = await loadImage(current.source)
+  if (generation !== frameGeneration) return
+  originalImage = image
+  pixelCanvas = window.document.createElement("canvas")
+  pixelCanvas.width = current.width
+  pixelCanvas.height = current.height
+  pixelCanvas
+    .getContext("2d", { willReadFrequently: true })
+    .drawImage(image, 0, 0)
+  frame.value = current
+  await nextTick()
+  await captureBackground.value?.decode()
+  if (generation !== frameGeneration) return
+  checkViewport()
+  await screenshotApi.call("ready")
 }
 
 onMounted(async () => {
@@ -515,16 +622,13 @@ onMounted(async () => {
   window.addEventListener("resize", checkViewport)
   try {
     if (mode === "capture") {
-      frame.value = await screenshotApi.call("frame")
-      originalImage = await loadImage(frame.value.source)
-      pixelCanvas = window.document.createElement("canvas")
-      pixelCanvas.width = frame.value.width
-      pixelCanvas.height = frame.value.height
-      pixelCanvas
-        .getContext("2d", { willReadFrequently: true })
-        .drawImage(originalImage, 0, 0)
-      await screenshotApi.call("ready")
-      checkViewport()
+      unlistenFrame = await subscribeReady("screenshot:frame", () => {
+        loadFrame().catch(cause => {
+          error.value = String(cause)
+        })
+      })
+      unlistenReset = await subscribeReady("screenshot:reset", resetCapture)
+      await loadFrame()
     } else {
       document.value = await screenshotApi.call("document", { id })
       opacity.value = document.value.pin?.opacity ?? 1
@@ -539,9 +643,12 @@ onMounted(async () => {
   }
 })
 onBeforeUnmount(() => {
+  frameGeneration += 1
   window.removeEventListener("keydown", keydown)
   window.removeEventListener("resize", checkViewport)
   unlisten?.()
+  unlistenFrame?.()
+  unlistenReset?.()
   if (resizeFrame) cancelAnimationFrame(resizeFrame)
 })
 </script>
@@ -553,7 +660,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   cursor: crosshair;
   touch-action: none;
-  background: #000;
+  background: transparent;
   user-select: none;
   .capture-background {
     position: absolute;
@@ -685,7 +792,7 @@ onBeforeUnmount(() => {
   }
   .pin-menu {
     position: absolute;
-    inset: 4px auto auto 4px;
+    box-sizing: border-box;
     z-index: 10;
     display: flex;
     flex-direction: column;
@@ -695,6 +802,7 @@ onBeforeUnmount(() => {
     background: #17212bf5;
     color: #fff;
     max-height: calc(100% - 8px);
+    max-width: 100%;
     overflow: auto;
     .pin-menu-button {
       padding: 6px 10px;

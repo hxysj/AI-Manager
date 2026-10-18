@@ -27,6 +27,14 @@ pub struct Entry {
     height: u32,
     #[serde(default)]
     pin: Option<Pin>,
+    #[serde(default)]
+    origin: Option<Position>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Position {
+    x: i32,
+    y: i32,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -47,6 +55,14 @@ pub struct Settings {
     pub hotkeys: bool,
     pub shortcut_style: String,
     pub restore_pins: bool,
+    #[serde(default = "default_history_limit")]
+    pub history_limit: usize,
+    #[serde(default)]
+    pub shortcuts: std::collections::HashMap<String, String>,
+}
+
+fn default_history_limit() -> usize {
+    50
 }
 
 impl Default for Settings {
@@ -55,8 +71,69 @@ impl Default for Settings {
             hotkeys: true,
             shortcut_style: "alt".into(),
             restore_pins: true,
+            history_limit: default_history_limit(),
+            shortcuts: std::collections::HashMap::new(),
         }
     }
+}
+
+impl Settings {
+    fn shortcut_bindings(&self) -> Vec<(i32, &'static str, String)> {
+        let prefix = if self.shortcut_style == "shift" { "Ctrl+Shift" } else { "Ctrl+Alt" };
+        [(1, "capture", "A"), (2, "clipboard", "P"), (3, "toggle", "H"), (4, "resetInput", "R")]
+            .into_iter()
+            .map(|(id, name, key)| (id, name, self.shortcuts.get(name).cloned().unwrap_or_else(|| format!("{prefix}+{key}"))))
+            .collect()
+    }
+
+    fn validate(&self) -> Result<(), ManagerError> {
+        if !matches!(self.shortcut_style.as_str(), "alt" | "shift") {
+            return Err(failure("不支持的快捷键组合"));
+        }
+        if !(1..=500).contains(&self.history_limit) {
+            return Err(failure("历史记录上限必须为 1 到 500 的整数"));
+        }
+        let mut bindings = std::collections::HashSet::new();
+        for (_, _, shortcut) in self.shortcut_bindings() {
+            if !bindings.insert(parse_shortcut(&shortcut)?) {
+                return Err(failure("截图快捷键不能重复"));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn parse_shortcut(value: &str) -> Result<(u32, u32), ManagerError> {
+    let mut modifiers = 0;
+    let mut key = None;
+    for part in value.split('+') {
+        let part = part.trim().to_ascii_uppercase();
+        let modifier = match part.as_str() {
+            "ALT" => 1,
+            "CTRL" => 2,
+            "SHIFT" => 4,
+            "WIN" => 8,
+            _ => 0,
+        };
+        if modifier != 0 {
+            if modifiers & modifier != 0 { return Err(failure("快捷键包含重复修饰键")); }
+            modifiers |= modifier;
+            continue;
+        }
+        let code = match part.as_str() {
+            "PRINTSCREEN" => 0x2c,
+            "SPACE" => 0x20,
+            value if value.len() == 1 && value.as_bytes()[0].is_ascii_alphanumeric() => u32::from(value.as_bytes()[0]),
+            value if value.starts_with('F') => value[1..].parse::<u32>().ok().filter(|number| (1..=24).contains(number)).map(|number| 0x70 + number - 1).ok_or_else(|| failure("不支持的功能键"))?,
+            _ => return Err(failure("快捷键请使用字母、数字、F1–F24、PrintScreen 或 Space")),
+        };
+        if key.replace(code).is_some() { return Err(failure("每组快捷键只能包含一个主键")); }
+    }
+    let key = key.ok_or_else(|| failure("快捷键缺少主键"))?;
+    if modifiers == 0 && !(0x70..=0x87).contains(&key) && key != 0x2c {
+        return Err(failure("字母、数字和空格快捷键至少需要一个修饰键"));
+    }
+    Ok((modifiers, key))
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -73,6 +150,7 @@ pub struct ScreenshotService {
     session: Mutex<Session>,
     frame: Mutex<Option<Value>>,
     capturing: AtomicBool,
+    hotkeys_paused: AtomicBool,
     view_save_pending: AtomicBool,
     pub hotkey_errors: Mutex<Vec<String>>,
     pub startup_errors: Mutex<Vec<String>>,
@@ -101,6 +179,7 @@ impl ScreenshotService {
             if value.schema_version != 1 {
                 return Err(failure("截图贴图数据版本不受支持，原文件已保留"));
             }
+            value.settings.validate()?;
             for entry in &value.entries {
                 if uuid::Uuid::parse_str(&entry.id).is_err() {
                     return Err(failure("截图清单包含无效文档标识"));
@@ -122,16 +201,29 @@ impl ScreenshotService {
                 entries: Vec::new(),
             }
         };
-        Ok(Self {
+        let service = Self {
             root,
             _instance_lock: instance_lock,
             session: Mutex::new(session),
             frame: Mutex::new(None),
             capturing: AtomicBool::new(false),
+            hotkeys_paused: AtomicBool::new(false),
             view_save_pending: AtomicBool::new(false),
             hotkey_errors: Mutex::new(Vec::new()),
             startup_errors: Mutex::new(errors),
-        })
+        };
+        {
+            let mut guard = service.session.lock().unwrap();
+            let mut next = guard.clone();
+            let expired = service.prune_history(&mut next);
+            if !expired.is_empty() {
+                service.commit(&next)?;
+                *guard = next;
+            }
+            drop(guard);
+            service.remove_expired_documents(&expired);
+        }
+        Ok(service)
     }
 
     fn commit(&self, session: &Session) -> Result<(), ManagerError> {
@@ -144,6 +236,68 @@ impl ScreenshotService {
     fn document_dir(&self, id: &str) -> Result<PathBuf, ManagerError> {
         uuid::Uuid::parse_str(id).map_err(|_| failure("无效截图标识"))?;
         Ok(self.root.join("documents").join(id))
+    }
+
+    fn prune_history(&self, session: &mut Session) -> Vec<String> {
+        session.entries.sort_by_cached_key(|entry| {
+            std::cmp::Reverse(
+                chrono::DateTime::parse_from_rfc3339(&entry.created_at)
+                    .map(|date| date.timestamp_millis())
+                    .unwrap_or(i64::MIN),
+            )
+        });
+        let mut retained = 0;
+        let mut ordinary = 0;
+        let mut history_bytes = 0_u64;
+        let mut expired = Vec::new();
+        session.entries.retain(|entry| {
+            if retained >= session.settings.history_limit {
+                expired.push(entry.id.clone());
+                return false;
+            }
+            if entry
+                .pin
+                .as_ref()
+                .is_some_and(|pin| pin.lifecycle != "destroyed")
+            {
+                retained += 1;
+                return true;
+            }
+            ordinary += 1;
+            let dir = self.root.join("documents").join(&entry.id);
+            let bytes: u64 = ["source.png", "output.png", "thumbnail.png", "document.json"]
+                .iter()
+                .filter_map(|name| std::fs::metadata(dir.join(name)).ok())
+                .map(|metadata| metadata.len())
+                .sum();
+            history_bytes = history_bytes.saturating_add(bytes);
+            let old = chrono::DateTime::parse_from_rfc3339(&entry.created_at)
+                .is_ok_and(|date| chrono::Utc::now().signed_duration_since(date).num_days() > 30);
+            if ordinary > 1 && (history_bytes > 512 * 1024 * 1024 || old) {
+                expired.push(entry.id.clone());
+                return false;
+            }
+            retained += 1;
+            true
+        });
+        expired
+    }
+
+    fn remove_expired_documents(&self, ids: &[String]) {
+        for id in ids {
+            let result = self.document_dir(id).and_then(|dir| {
+                if dir.exists() {
+                    std::fs::remove_dir_all(dir)?;
+                }
+                Ok(())
+            });
+            if let Err(error) = result {
+                self.startup_errors
+                    .lock()
+                    .unwrap()
+                    .push(format!("清理截图 {id} 的历史文件失败：{error}"));
+            }
+        }
     }
 
     pub fn settings(&self) -> Settings {
@@ -276,14 +430,20 @@ pub async fn dispatch(
         }
         "settings" => {
             let settings: Settings = serde_json::from_value(payload)?;
-            if !matches!(settings.shortcut_style.as_str(), "alt" | "shift") {
-                return Err(failure("不支持的快捷键组合"));
-            }
+            settings.validate()?;
             let mut guard = service.session.lock().unwrap();
             let mut next = guard.clone();
             next.settings = settings;
+            let expired = service.prune_history(&mut next);
             service.commit(&next)?;
             *guard = next;
+            drop(guard);
+            remove_expired_history(&app, &service, &expired, None);
+            changed(&app);
+            Ok(json!(true))
+        }
+        "pause-hotkeys" => {
+            service.hotkeys_paused.store(payload["paused"].as_bool().unwrap_or(false), Ordering::SeqCst);
             Ok(json!(true))
         }
         "capture" => {
@@ -296,8 +456,9 @@ pub async fn dispatch(
             .lock()
             .unwrap()
             .clone()
-            .ok_or_else(|| failure("截图会话已结束")),
+            .map_or(Ok(Value::Null), Ok),
         "ready" => {
+            if !service.capturing.load(Ordering::SeqCst) { return Ok(json!(false)); }
             let window = app
                 .get_webview_window("screenshot-capture")
                 .ok_or_else(|| failure("截图窗口已关闭"))?;
@@ -457,7 +618,12 @@ pub async fn dispatch(
                     window.set_focus().map_err(failure)?;
                 }
                 "display" => {
-                    window.set_focusable(false).map_err(failure)?;
+                    let retained = service.session.lock().unwrap().entries.iter().any(|entry| entry.id == id);
+                    if retained {
+                        window.set_focusable(false).map_err(failure)?;
+                    } else {
+                        window.destroy().map_err(failure)?;
+                    }
                 }
                 "opacity" => {
                     let opacity = payload["opacity"]
@@ -498,6 +664,18 @@ pub async fn dispatch(
 
 fn changed(app: &AppHandle) {
     let _ = app.emit("screenshot:changed", ());
+}
+
+fn remove_expired_history(app: &AppHandle, service: &ScreenshotService, ids: &[String], editing_pin_id: Option<&str>) {
+    for id in ids {
+        if editing_pin_id == Some(id.as_str()) { continue; }
+        if let Some(window) = app.get_webview_window(&format!("screenshot-pin-{id}")) {
+            if let Err(error) = window.destroy() {
+                let _ = app.emit("screenshot:error", format!("关闭过期贴图失败：{error}"));
+            }
+        }
+    }
+    service.remove_expired_documents(ids);
 }
 
 fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError> {
@@ -547,43 +725,38 @@ fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError
             width: output.width(),
             height: output.height(),
             pin: None,
+            origin: payload.get("origin").filter(|value| !value.is_null()).map(|value| serde_json::from_value(value.clone())).transpose()?,
         },
     );
-    // 有活动或可恢复贴图的文档保留；普通历史最多保留 50 条。
-    let mut ordinary = 0;
-    let mut history_bytes = 0_u64;
-    let mut expired = Vec::new();
-    next.entries.retain(|entry| {
-        if entry
-            .pin
-            .as_ref()
-            .is_some_and(|p| p.lifecycle != "destroyed")
-        {
-            return true;
-        }
-        ordinary += 1;
-        let dir = service.root.join("documents").join(&entry.id);
-        let bytes: u64 = ["source.png", "output.png", "thumbnail.png", "document.json"].iter()
-            .filter_map(|name| std::fs::metadata(dir.join(name)).ok()).map(|m| m.len()).sum();
-        history_bytes = history_bytes.saturating_add(bytes);
-        let old = chrono::DateTime::parse_from_rfc3339(&entry.created_at)
-            .is_ok_and(|date| chrono::Utc::now().signed_duration_since(date).num_days() > 30);
-        // 至少保留刚提交的输出，防止超预算导致后续复制或贴图引用失效。
-        if ordinary > 1 && (ordinary > 50 || history_bytes > 512 * 1024 * 1024 || old) {
-            expired.push(entry.id.clone());
-            false
-        } else {
-            true
-        }
-    });
+    let expired = service.prune_history(&mut next);
     service.commit(&next)?;
     *guard = next;
     drop(guard);
-    for old_id in expired {
-        let _ = std::fs::remove_dir_all(service.document_dir(&old_id)?);
-    }
+    remove_expired_history(app, &service, &expired, payload["editingPinId"].as_str());
     changed(app);
     Ok(id)
+}
+
+fn ensure_capture_window(app: &AppHandle) -> Result<tauri::WebviewWindow, ManagerError> {
+    if let Some(window) = app.get_webview_window("screenshot-capture") { return Ok(window); }
+    WebviewWindowBuilder::new(app, "screenshot-capture", WebviewUrl::App("index.html?panel=screenshot&mode=capture".into()))
+        .title("截图贴图").decorations(false).resizable(false).skip_taskbar(true).always_on_top(true)
+        .transparent(true).background_color(tauri::window::Color(0, 0, 0, 0)).focused(false)
+        .shadow(false).visible(false).build().map_err(failure)
+}
+
+fn capture_frame_data(image: &DynamicImage) -> Result<String, ManagerError> {
+    let rgba = image.to_rgba8();
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, image.width(), image.height());
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_filter(png::FilterType::NoFilter);
+        encoder.write_header().map_err(failure)?.write_image_data(&rgba).map_err(failure)?;
+    }
+    Ok(format!("data:image/png;base64,{}", STANDARD.encode(bytes)))
 }
 
 pub async fn begin_capture(app: &AppHandle) -> Result<(), ManagerError> {
@@ -601,15 +774,17 @@ pub async fn begin_capture(app: &AppHandle) -> Result<(), ManagerError> {
         let width = (right - i64::from(left)) as u32;
         let height = (bottom - i64::from(top)) as u32;
         if u64::from(width) * u64::from(height) > 40_000_000 { return Err(failure("虚拟桌面超过 4000 万像素，请减少显示区域")); }
-        #[cfg(windows)]
-        let frame = windows::capture(&monitors, left, top, width, height)?;
-        #[cfg(not(windows))]
-        let frame: DynamicImage = return Err(failure("桌面截图目前仅支持 Windows"));
-        *service.frame.lock().unwrap() = Some(json!({"source": image_data(&frame)?, "left": left, "top": top, "width": width, "height": height}));
-        let window = WebviewWindowBuilder::new(app, "screenshot-capture", WebviewUrl::App("index.html?panel=screenshot&mode=capture".into()))
-            .title("截图贴图").decorations(false).resizable(false).skip_taskbar(true).always_on_top(true).shadow(false).visible(false).build().map_err(failure)?;
+        let source = tauri::async_runtime::spawn_blocking(move || {
+            #[cfg(windows)]
+            { capture_frame_data(&windows::capture(&monitors, left, top, width, height)?) }
+            #[cfg(not(windows))]
+            { Err::<String, ManagerError>(failure("桌面截图目前仅支持 Windows")) }
+        }).await.map_err(failure)??;
+        let window = ensure_capture_window(app)?;
         window.set_position(PhysicalPosition::new(left, top)).map_err(failure)?;
         window.set_size(PhysicalSize::new(width, height)).map_err(failure)?;
+        *service.frame.lock().unwrap() = Some(json!({"source": source, "left": left, "top": top, "width": width, "height": height}));
+        window.emit("screenshot:frame", ()).map_err(failure)?;
         Ok(())
     }.await;
     if result.is_err() {
@@ -620,7 +795,8 @@ pub async fn begin_capture(app: &AppHandle) -> Result<(), ManagerError> {
 
 fn cancel_capture(app: &AppHandle) -> Result<(), ManagerError> {
     if let Some(window) = app.get_webview_window("screenshot-capture") {
-        window.destroy().map_err(failure)?;
+        window.hide().map_err(failure)?;
+        window.emit("screenshot:reset", ()).map_err(failure)?;
     }
     let service = app.state::<ScreenshotService>();
     *service.frame.lock().unwrap() = None;
@@ -665,17 +841,14 @@ fn open_pin_with_visibility(app: &AppHandle, id: &str, show: bool) -> Result<(),
         .map_err(failure)?
         .or_else(|| monitors.first().cloned())
         .ok_or_else(|| failure("没有可用显示器"))?;
-    let initial_scale = (monitor.size().width as f64 * 0.75 / entry.width.max(1) as f64)
-        .min(monitor.size().height as f64 * 0.75 / entry.height.max(1) as f64)
-        .min(1.0);
     let mut pin = entry
         .pin
         .filter(|p| p.lifecycle != "destroyed")
         .unwrap_or(Pin {
-            x: monitor.position().x + 80,
-            y: monitor.position().y + 80,
-            width: (entry.width as f64 * initial_scale).round().max(48.0) as u32,
-            height: (entry.height as f64 * initial_scale).round().max(48.0) as u32,
+            x: entry.origin.as_ref().map(|origin| origin.x).unwrap_or(monitor.position().x + 80),
+            y: entry.origin.as_ref().map(|origin| origin.y).unwrap_or(monitor.position().y + 80),
+            width: entry.width.max(1),
+            height: entry.height.max(1),
             opacity: 1.0,
             lifecycle: "open".into(),
             visible: true,
@@ -683,16 +856,11 @@ fn open_pin_with_visibility(app: &AppHandle, id: &str, show: bool) -> Result<(),
     if pin.height == 0 {
         pin.height = ((pin.width as f64 / entry.width as f64 * entry.height as f64) as u32).max(48);
     }
-    let fit = (monitor.size().width as f64 / pin.width.max(1) as f64)
-        .min(monitor.size().height as f64 / pin.height.max(1) as f64)
-        .min(1.0);
-    pin.width = (pin.width as f64 * fit).round().max(48.0) as u32;
-    pin.height = (pin.height as f64 * fit).round().max(48.0) as u32;
     if !monitors.iter().any(|m| {
-        pin.x < m.position().x + m.size().width as i32 - 32
-            && pin.x + 32 > m.position().x
-            && pin.y < m.position().y + m.size().height as i32 - 32
-            && pin.y + 32 > m.position().y
+        i64::from(pin.x) < i64::from(m.position().x) + i64::from(m.size().width)
+            && i64::from(pin.x) + i64::from(pin.width) > i64::from(m.position().x)
+            && i64::from(pin.y) < i64::from(m.position().y) + i64::from(m.size().height)
+            && i64::from(pin.y) + i64::from(pin.height) > i64::from(m.position().y)
     }) {
         pin.x = monitor.position().x + 40;
         pin.y = monitor.position().y + 40;
@@ -860,6 +1028,9 @@ pub fn paste_clipboard(app: &AppHandle) -> Result<(), ManagerError> {
 }
 
 pub fn start(app: AppHandle) {
+    if let Err(error) = ensure_capture_window(&app) {
+        let _ = app.emit("screenshot:error", format!("截图窗口预加载失败：{error}"));
+    }
     #[cfg(windows)]
     windows::start_hotkeys(app.clone());
     let service = app.state::<ScreenshotService>();
@@ -917,6 +1088,150 @@ mod tests {
         }
     }
 
+    fn history_entry(age_seconds: i64, lifecycle: Option<&str>) -> Entry {
+        Entry {
+            id: uuid::Uuid::new_v4().to_string(),
+            created_at: (chrono::Utc::now() - chrono::Duration::seconds(age_seconds)).to_rfc3339(),
+            width: 800,
+            height: 600,
+            origin: None,
+            pin: lifecycle.map(|lifecycle| Pin {
+                x: 0,
+                y: 0,
+                width: 400,
+                height: 300,
+                opacity: 1.0,
+                lifecycle: lifecycle.into(),
+                visible: lifecycle == "open",
+            }),
+        }
+    }
+
+    #[test]
+    fn history_limit_counts_all_pin_lifecycles_and_evicts_oldest() {
+        let root = TestRoot::new();
+        let service = ScreenshotService::new(&root.0).unwrap();
+        let mut session = service.session.lock().unwrap().clone();
+        let lifecycles = [None, Some("open"), Some("closed"), Some("destroyed")];
+        session.entries = (0..55)
+            .rev()
+            .map(|age| history_entry(age, lifecycles[age as usize % lifecycles.len()]))
+            .collect();
+        let expected: Vec<_> = session.entries.iter().rev().take(50).map(|entry| entry.id.clone()).collect();
+        let expected_expired: Vec<_> = session.entries.iter().take(5).rev().map(|entry| entry.id.clone()).collect();
+        let expired = service.prune_history(&mut session);
+        assert_eq!(expired, expected_expired);
+        assert_eq!(session.entries.iter().map(|entry| entry.id.clone()).collect::<Vec<_>>(), expected);
+        assert!(service.prune_history(&mut session).is_empty());
+        assert_eq!(session.entries.len(), 50);
+        session.entries.clear();
+        assert!(service.prune_history(&mut session).is_empty());
+    }
+
+    #[test]
+    fn startup_prunes_history_files_and_persists_the_limit() {
+        let root = TestRoot::new();
+        let service = ScreenshotService::new(&root.0).unwrap();
+        let mut session = service.session.lock().unwrap().clone();
+        session.entries = (0..53).map(|age| history_entry(age, Some("closed"))).collect();
+        for entry in &session.entries {
+            let dir = service.document_dir(&entry.id).unwrap();
+            std::fs::create_dir_all(&dir).unwrap();
+            for file in ["source.png", "output.png", "thumbnail.png", "document.json"] {
+                std::fs::write(dir.join(file), b"test").unwrap();
+            }
+        }
+        let retained: Vec<_> = session.entries[..50].iter().map(|entry| entry.id.clone()).collect();
+        let expired: Vec<_> = session.entries[50..].iter().map(|entry| entry.id.clone()).collect();
+        service.commit(&session).unwrap();
+        drop(service);
+        let restored = ScreenshotService::new(&root.0).unwrap();
+        assert_eq!(restored.session.lock().unwrap().entries.len(), 50);
+        assert!(restored.startup_errors.lock().unwrap().is_empty());
+        for id in &retained {
+            assert!(restored.document_dir(id).unwrap().join("output.png").exists());
+        }
+        for id in &expired {
+            assert!(!restored.document_dir(id).unwrap().exists());
+        }
+        let persisted: Session = serde_json::from_slice(&std::fs::read(restored.root.join("session.json")).unwrap()).unwrap();
+        assert_eq!(persisted.entries.iter().map(|entry| entry.id.clone()).collect::<Vec<_>>(), retained);
+        drop(restored);
+        let reloaded = ScreenshotService::new(&root.0).unwrap();
+        assert_eq!(reloaded.session.lock().unwrap().entries.len(), 50);
+    }
+
+    #[test]
+    fn ordinary_history_still_expires_but_keeps_latest_output() {
+        let root = TestRoot::new();
+        let service = ScreenshotService::new(&root.0).unwrap();
+        let mut session = service.session.lock().unwrap().clone();
+        session.entries = (40..43).map(|days| history_entry(days * 24 * 60 * 60, None)).collect();
+        let latest_id = session.entries[0].id.clone();
+        assert_eq!(service.prune_history(&mut session).len(), 2);
+        assert_eq!(session.entries.len(), 1);
+        assert_eq!(session.entries[0].id, latest_id);
+    }
+
+    #[test]
+    fn custom_history_limit_is_applied_and_old_settings_keep_defaults() {
+        let root = TestRoot::new();
+        let service = ScreenshotService::new(&root.0).unwrap();
+        let mut session = service.session.lock().unwrap().clone();
+        session.entries = (0..5).map(|age| history_entry(age, Some("open"))).collect();
+        session.settings.history_limit = 2;
+        assert_eq!(service.prune_history(&mut session).len(), 3);
+        assert_eq!(session.entries.len(), 2);
+        session.settings.history_limit = 1;
+        assert_eq!(service.prune_history(&mut session).len(), 1);
+        assert_eq!(session.entries.len(), 1);
+        let old: Settings = serde_json::from_value(json!({"hotkeys":true,"shortcutStyle":"shift","restorePins":true})).unwrap();
+        assert_eq!(old.history_limit, 50);
+        assert_eq!(old.shortcut_bindings()[0].2, "Ctrl+Shift+A");
+        old.validate().unwrap();
+    }
+
+    #[test]
+    fn settings_validate_shortcuts_and_history_bounds() {
+        let mut settings = Settings::default();
+        for limit in [0, 501] {
+            settings.history_limit = limit;
+            assert!(settings.validate().is_err());
+        }
+        settings.history_limit = 100;
+        settings.shortcuts.insert("capture".into(), "Shift+Alt+F12".into());
+        settings.validate().unwrap();
+        assert_eq!(parse_shortcut("Shift+Alt+F12").unwrap(), (5, 0x7b));
+        assert_eq!(parse_shortcut("PrintScreen").unwrap(), (0, 0x2c));
+        assert_eq!(parse_shortcut("Win+Space").unwrap(), (8, 0x20));
+        for shortcut in ["A", "Ctrl", "Ctrl+Ctrl+A", "Ctrl+A+B", "F25", "Ctrl+Escape", ""] {
+            assert!(parse_shortcut(shortcut).is_err(), "{shortcut}");
+        }
+        settings.shortcuts.insert("clipboard".into(), "alt+shift+F12".into());
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn capture_encoding_is_lossless_and_origin_survives_reload() {
+        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8 * 30, y as u8 * 60, 255, 255])));
+        assert_eq!(decode(&capture_frame_data(&image).unwrap()).unwrap().to_rgba8(), image.to_rgba8());
+        let root = TestRoot::new();
+        let service = ScreenshotService::new(&root.0).unwrap();
+        let mut session = service.session.lock().unwrap().clone();
+        let mut entry = history_entry(0, None);
+        entry.origin = Some(Position { x: -1275, y: 146 });
+        entry.width = 527;
+        entry.height = 314;
+        session.entries.push(entry);
+        service.commit(&session).unwrap();
+        drop(service);
+        let restored = ScreenshotService::new(&root.0).unwrap();
+        let session = restored.session.lock().unwrap();
+        let entry = &session.entries[0];
+        let origin = entry.origin.as_ref().unwrap();
+        assert_eq!((origin.x, origin.y, entry.width, entry.height), (-1275, 146, 527, 314));
+    }
+
     #[test]
     fn session_roundtrip_preserves_pin_lifecycle_and_negative_coordinates() {
         let root = TestRoot::new();
@@ -928,6 +1243,7 @@ mod tests {
             width: 800,
             height: 600,
             created_at: chrono::Local::now().to_rfc3339(),
+            origin: None,
             pin: Some(Pin {
                 x: -1200,
                 y: -90,

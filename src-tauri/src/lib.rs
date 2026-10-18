@@ -196,8 +196,14 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 loop {
                     if let Some(state) = app_handle.try_state::<AppState>() {
-                        if let Err(error) = state.create_local_backup_if_due().await {
-                            eprintln!("{error}");
+                        match state.create_local_backup_if_due().await {
+                            Ok(true) => {
+                                if let Err(error) = app_handle.emit("state:changed", state.state_snapshot().await) {
+                                    eprintln!("{error}");
+                                }
+                            }
+                            Ok(false) => {}
+                            Err(error) => eprintln!("{error}"),
                         }
                     }
                     tokio::time::sleep(std::time::Duration::from_secs(60)).await;

@@ -252,21 +252,52 @@ impl AppState {
         (manager.app_settings.clone(), manager.quick_switch_collapsed)
     }
 
-    pub async fn create_local_backup_if_due(&self) -> Result<(), ManagerError> {
+    pub async fn create_local_backup_if_due(&self) -> Result<bool, ManagerError> {
+        let (user_data_path, paths, app_settings) = {
+            let mut manager = self.manager.lock().await;
+            let backup = &manager.app_settings.local_backup;
+            if !backup.enabled
+                || runtime_provider::now_millis().saturating_sub(backup.last_backup_at)
+                    < backup.interval_minutes * 60 * 1000
+                || !manager.data_backup_cache.begin_local_backup()
+            {
+                return Ok(false);
+            }
+            (
+                manager.user_data_path.clone(),
+                manager.paths.clone(),
+                manager.app_settings.clone(),
+            )
+        };
+        let backup_data_path = paths.user_data_path.clone();
+        let backup_result = tauri::async_runtime::spawn_blocking(move || {
+            tauri::async_runtime::block_on(data::create_local_backup_snapshot(
+                &user_data_path,
+                &paths,
+                &app_settings,
+            ))
+        })
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()));
         let mut manager = self.manager.lock().await;
-        let user_data_path = manager.user_data_path.clone();
-        let paths = manager.paths.clone();
-
-        if !manager.data_backup_cache.begin_local_backup() {
-            return Ok(());
-        }
-        let backup_result =
-            data::create_local_backup_if_due(&user_data_path, &paths, &mut manager.app_settings)
-                .await;
         manager.data_backup_cache.finish_local_backup();
-        backup_result?;
+        let backup = backup_result??;
+        if manager.paths.user_data_path != backup_data_path {
+            return Ok(false);
+        }
+        let mut app_settings = manager.app_settings.clone();
+        app_settings.local_backup.last_backup_at = app_settings
+            .local_backup
+            .last_backup_at
+            .max(backup["createdAt"].as_u64().unwrap_or(0));
+        crate::core::settings::write_json_file(
+            Path::new(&app_settings.settings_file_path),
+            &crate::core::settings::serialize_app_settings(&app_settings),
+        )
+        .await?;
+        manager.app_settings = app_settings;
         manager.state["appSettings"] = serde_json::to_value(&manager.app_settings)?;
-        Ok(())
+        Ok(true)
     }
 
     pub async fn start_enabled_proxy_servers(&self) -> Result<(), ManagerError> {
@@ -420,7 +451,13 @@ impl ManagerState {
             return Ok(result);
         }
         match channel {
-            "app:bootstrap" | "app:refresh" => {
+            "app:bootstrap" => {
+                ensure_app_directories(&self.paths).await?;
+                runtime_provider::refresh_drift(&self.paths, &self.state["cliTargets"]).await?;
+                refresh_runtime_provider_state(&self.paths, &mut self.state)?;
+                Ok(self.state.clone())
+            }
+            "app:refresh" => {
                 self.refresh_state().await?;
                 Ok(self.state.clone())
             }
@@ -1404,81 +1441,15 @@ impl ManagerState {
                 .await
             }
             "codex-models:sync" => {
-                let restore = payload
-                    .as_ref()
-                    .and_then(|value| value.get("restore"))
-                    .and_then(Value::as_bool)
-                    == Some(true);
-                let proxy_state = proxy::read_proxy_state(&self.paths, "codex")?;
-                let profiles = provider_store::read_profiles(&self.paths)?;
-                let profile = profiles.iter().find(|profile| profile["cli"] == "codex");
-                let target_id = if proxy::is_proxy_enabled(&self.paths, "codex")? {
-                    proxy_state["activeProviderId"].as_str().unwrap_or("")
-                } else {
-                    profile
-                        .and_then(|profile| profile["providerId"].as_str())
-                        .unwrap_or("")
-                };
-                let provider = provider_store::read_providers(&self.paths)?
-                    .into_iter()
-                    .find(|provider| provider["id"] == target_id);
-                let mut official_catalog = None;
-                if let Some(mut provider) = provider {
-                    if restore {
-                        if provider["type"] == "google-account" {
-                            return Err(ManagerError::System(
-                                "Google 账号的模型由专用设置维护，请在 Google 账号设置中选择模型"
-                                    .into(),
-                            ));
-                        }
-                        provider["runtimeConfig"]["modelList"] = json!([]);
-                        provider["runtimeConfig"]["mainModel"] = json!("");
-                        provider["runtimeConfig"]["modelCatalog"] = Value::Null;
-                        provider["runtimeConfig"]["modelContextWindowEnabled"] = json!(false);
-                        runtime_provider::save_provider(&self.paths, provider).await?;
-                    }
-                    runtime_provider::sync_active_provider_config(
-                        &self.paths,
-                        target_id,
-                        &self.state["cliTargets"],
-                    )
-                    .await?;
-                } else {
-                    let cli_target =
-                        runtime_provider::find_cli_target(&self.state["cliTargets"], "codex")?;
-                    if restore {
-                        runtime_provider::sync_codex_catalog(&cli_target, None).await?;
-                    } else {
-                        let account_id = target_id
-                            .strip_prefix("account:")
-                            .map(str::to_string)
-                            .unwrap_or(provider_store::read_active_codex_account_id(&self.paths)?);
-                        if account_id.is_empty() {
-                            return Err(ManagerError::System(
-                                "请先启用 Codex Provider 或官方账号".into(),
-                            ));
-                        }
-                        let catalog =
-                            codex_account::fetch_models(&self.paths, &account_id, &cli_target)
-                                .await?;
-                        official_catalog = Some((cli_target, catalog));
-                    }
-                }
-                if proxy::is_proxy_enabled(&self.paths, "codex")? {
-                    proxy::activate_provider(
-                        &self.paths,
-                        &self.state["cliTargets"],
-                        "codex",
-                        json!({ "providerId": proxy_state["activeProviderId"] }),
-                    )
-                    .await?;
-                }
-                if let Some((cli_target, catalog)) = official_catalog {
-                    runtime_provider::sync_codex_catalog(&cli_target, Some(&catalog)).await?;
-                }
+                let synced = runtime_provider::sync_codex_provider_models(
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                    &self.state["cliTargets"],
+                )
+                .await?;
                 self.refresh_state().await?;
                 self.emit_state_changed(&app)?;
-                Ok(self.state.clone())
+                Ok(json!({ "synced": synced }))
             }
             "runtime-model:save" => {
                 runtime_provider::save_runtime_model(
@@ -2466,5 +2437,68 @@ fn remove_empty_dir(path: &Path) -> Result<(), ManagerError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => Ok(()),
         Err(error) => Err(ManagerError::Io(error)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{database, settings::normalize_app_settings};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    #[test]
+    fn scheduled_backup_releases_state_lock_and_preserves_concurrent_settings() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let root = std::env::temp_dir().join(format!("ai-manager-startup-test-{}", uuid::Uuid::new_v4()));
+            let paths = resolve_app_paths(&root);
+            ensure_app_directories(&paths).await.unwrap();
+            provider_store::initialize(&paths).unwrap();
+            let app_settings = normalize_app_settings(root.join("app-settings.json"), Some(json!({
+                "dataPath": root.to_string_lossy(), "cliConfigPaths": { "codex": root.join("codex").to_string_lossy() },
+                "localBackup": { "enabled": true, "lastBackupAt": 0 }
+            })));
+            let state = Arc::new(AppState::new(ManagerState {
+                user_data_path: root.clone(),
+                workspace_root: root.clone(),
+                resource_dir: root.clone(),
+                paths: paths.clone(),
+                app_settings,
+                quick_switch_collapsed: true,
+                data_backup_cache: data::DataBackupCache::new(),
+                codex_login_cache: codex_account::CodexLoginCache::new(),
+                google_login: google_account::GoogleLogin::default(),
+                proxy_server_registry: proxy::ProxyServerRegistry::new(),
+                desktop_manager: claude_desktop::DesktopManager::new(),
+                lan_share_registry: lan_share::LanShareServerRegistry::new(),
+                state: json!({ "ready": true })
+            }));
+            let database_guard = database::open(&paths).unwrap();
+            database_guard.execute_batch("BEGIN IMMEDIATE;").unwrap();
+            let backup_state = state.clone();
+            let backup = tokio::spawn(async move { backup_state.create_local_backup_if_due().await });
+            tokio::task::yield_now().await;
+            let snapshot = tokio::time::timeout(Duration::from_secs(1), state.state_snapshot()).await.expect("备份等待磁盘时，首屏仍须能读取状态");
+            assert_eq!(snapshot["ready"], true);
+            {
+                let mut manager = state.manager.lock().await;
+                assert!(!manager.data_backup_cache.begin_local_backup());
+                manager.app_settings.system.close_action = "quit".into();
+                manager.app_settings.local_backup.interval_minutes = 120;
+            }
+            database_guard.execute_batch("ROLLBACK;").unwrap();
+            drop(database_guard);
+            backup.await.unwrap().unwrap();
+            let settings: Value = serde_json::from_str(&std::fs::read_to_string(root.join("app-settings.json")).unwrap()).unwrap();
+            assert_eq!(settings["system"]["closeAction"], "quit");
+            assert_eq!(settings["localBackup"]["intervalMinutes"], 120);
+            assert!(settings["localBackup"]["lastBackupAt"].as_u64().unwrap() > 0);
+            assert_eq!(data::list_local_backups(&root).await.unwrap()["backups"].as_array().unwrap().len(), 1);
+            state.create_local_backup_if_due().await.unwrap();
+            assert_eq!(data::list_local_backups(&root).await.unwrap()["backups"].as_array().unwrap().len(), 1);
+            drop(state);
+            assert_eq!(root.parent(), Some(std::env::temp_dir().as_path()));
+            std::fs::remove_dir_all(root).unwrap();
+        });
     }
 }
