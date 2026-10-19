@@ -537,6 +537,15 @@ impl ManagerState {
                 }
                 Ok(result)
             }
+            "tool-window:open" | "tool-window:ready" => {
+                let tool_id = payload.as_ref().and_then(|value| value.get("toolId"))
+                    .and_then(Value::as_str).unwrap_or_default();
+                if channel == "tool-window:open" {
+                    app::open_tool_window(&app, tool_id)
+                } else {
+                    app::mark_tool_window_ready(&app, tool_id)
+                }
+            }
             "quick-switch:show-main" => {
                 app::show_main_panel(
                     &app,

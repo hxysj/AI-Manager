@@ -5,6 +5,31 @@
     :ready="quickSwitchReady"
   />
 
+  <section v-else-if="isToolWindow" class="tool-window">
+    <ToolsView
+      v-if="quickSwitchReady"
+      standalone
+      :tool-request="toolRequest"
+      :cli-targets="state.cliTargets"
+      :providers="state.providers"
+      :repos="state.repos"
+      :runtime-models="state.runtimeModels"
+      :runtime-profiles="state.runtimeProfiles"
+      :theme-mode="themeMode"
+      @add-repo="showAddRepo = true"
+      @ready="markToolWindowReady"
+      @show-main="openMainFromTool"
+      @tool-request-handled="toolRequest = null"
+      @toggle-theme="toggleTheme"
+    />
+    <AddRepoModal
+      v-if="showAddRepo"
+      @close="showAddRepo = false"
+      @submit="addRepo"
+    />
+    <GlobalLoading />
+  </section>
+
   <div
     v-else
     :class="['app-shell', { 'app-shell--tool-workspace': toolWorkspaceActive }]"
@@ -510,6 +535,7 @@ applyTheme(themeMode.value)
 const queryParams = new URLSearchParams(window.location.search)
 const queryView = queryParams.get("view")
 const isQuickSwitchPanel = queryParams.get("panel") === "quick-switch"
+const isToolWindow = queryParams.get("panel") === "tool"
 // 浮窗读到真实配置后再展示，避免桌宠模式先闪出默认信息卡。
 const quickSwitchReady = ref(false)
 
@@ -740,10 +766,14 @@ const selectedCloudBackupEntry = computed(() => {
 
 async function bootstrap() {
   // 预热浮窗复用内存状态，仅主页面执行完整初始化和备份加载。
-  if (isQuickSwitchPanel) {
+  if (isQuickSwitchPanel || isToolWindow) {
     try {
       unsubscribe = await appApi.onStateChangedReady(updateState)
-      updateState(await appApi.bootstrapQuickSwitch())
+      updateState(
+        await (isToolWindow
+          ? appApi.bootstrapToolWindow()
+          : appApi.bootstrapQuickSwitch())
+      )
       quickSwitchReady.value = true
     } catch (error) {
       showErrorMessage(error)
@@ -770,6 +800,23 @@ async function bootstrap() {
     }
   })
   refreshLocalBackups(false)
+}
+
+// 只在独立工具页面挂载完成后显示窗口，主面板已打开时由后端保持隐藏。
+async function markToolWindowReady() {
+  try {
+    await appApi.markToolWindowReady({ toolId: queryTool })
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function openMainFromTool(toolId) {
+  try {
+    await appApi.showMainPanel({ toolId })
+  } catch (error) {
+    showErrorMessage(error)
+  }
 }
 
 function updateState(nextState) {
@@ -2109,10 +2156,12 @@ onMounted(() => {
   }
 
   bootstrap()
-  if (isQuickSwitchPanel) return
+  if (isQuickSwitchPanel || isToolWindow) return
 
   // 托盘和全局快捷键触发的截图错误统一在主面板提示。
-  unsubscribeScreenshotError = appApi.onScreenshotError(message => createMessage.error(String(message)))
+  unsubscribeScreenshotError = appApi.onScreenshotError((message) =>
+    createMessage.error(String(message))
+  )
 
   unsubscribeTool = appApi.onToolRequested((request) => {
     toolRequest.value = request
@@ -2185,6 +2234,16 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped lang="less">
+.tool-window {
+  width: 125vw;
+  height: 125vh;
+  padding: 14px;
+  overflow: hidden;
+  background: var(--color-page);
+  transform: scale(0.8);
+  transform-origin: left top;
+}
+
 :global(html.quick-switch-html),
 :global(html.quick-switch-html body),
 :global(html.quick-switch-html #app) {

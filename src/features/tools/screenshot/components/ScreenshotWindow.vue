@@ -104,6 +104,7 @@
   <div
     v-else
     class="pin-window"
+    tabindex="0"
     :class="pinWindowClass"
     :style="{ opacity: pinReady ? opacity : 0 }"
     @pointerdown="dragPin"
@@ -519,7 +520,7 @@ const magnifierStyle = computed(() => {
     top: `${Math.max(0, Math.min(clientY + gap + height <= innerHeight ? clientY + gap : clientY - height - gap, innerHeight - height))}px`
   }
 })
-// 阴影开关同时控制边框颜色，保留占位避免图片尺寸跳动。
+// 阴影开关同时控制边框颜色，轮廓线不占用原图的显示尺寸。
 const pinWindowClass = computed(() => ({
   "has-shadow": windowShadow.value,
   "has-border": windowShadow.value
@@ -1105,6 +1106,7 @@ async function setOpacity(event) {
 async function keydown(event) {
   if (
     event.isComposing ||
+    event.target.isContentEditable ||
     ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)
   )
     return
@@ -1114,6 +1116,40 @@ async function keydown(event) {
       : editing.value
         ? await stopEditing()
         : await pinAction("close")
+  // 普通贴图聚焦后处理图片快捷键，编辑和菜单内的方向键保持原有用途。
+  if (mode === "pin" && !editing.value) {
+    if (
+      event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === "c"
+    ) {
+      event.preventDefault()
+      if (!event.repeat) await pinAction("copy")
+      return
+    }
+    if (
+      !menu.value &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)
+    ) {
+      event.preventDefault()
+      try {
+        await screenshotApi.call("pin-action", {
+          id,
+          action: "move",
+          direction: event.key.slice(5).toLowerCase()
+        })
+      } catch (cause) {
+        error.value = String(cause)
+      }
+      return
+    }
+  }
   if (mode !== "capture" || !frame.value || !pointer.value) return
   // 松开框选后仍可切换和复制颜色；输入文字和带修饰键的编辑操作不受影响。
   if (
@@ -1518,12 +1554,13 @@ onBeforeUnmount(() => {
   inset: 0;
   overflow: visible;
   user-select: none;
+  outline: none;
   &.has-shadow {
     filter: drop-shadow(0 2px 7px #0008);
   }
   &.has-border {
     .pin-image {
-      border-color: #627080;
+      outline-color: #627080;
     }
   }
   .pin-image {
@@ -1534,9 +1571,13 @@ onBeforeUnmount(() => {
     left: 0;
     width: 100%;
     height: 100%;
-    border: 2px solid transparent;
+    outline: 2px solid transparent;
+    outline-offset: -2px;
     object-fit: contain;
     cursor: move;
+    &:hover {
+      outline-color: #627080;
+    }
   }
   .pin-menu {
     position: absolute;

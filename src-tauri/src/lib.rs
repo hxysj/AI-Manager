@@ -34,13 +34,14 @@ async fn dispatch_api(
         return result;
     }
     // 悬浮窗复用内存状态，初始化不扫描磁盘，也不更新托盘和操作日志。
-    if channel == "quick-switch:bootstrap" {
+    if matches!(channel.as_str(), "quick-switch:bootstrap" | "tool-window:bootstrap") {
         return Ok(state.state_snapshot().await);
     }
     // 拖动和悬浮尺寸调整不改变业务状态，不逐帧写日志和重建托盘菜单。
     if matches!(
         channel.as_str(),
         "quick-switch:move-by" | "quick-switch:set-collapsed" | "quick-switch:ready"
+            | "tool-window:open" | "tool-window:ready" | "quick-switch:show-main"
     ) {
         return state
             .dispatch(app, &channel, payload)

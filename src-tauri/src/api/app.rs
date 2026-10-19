@@ -2,6 +2,7 @@ use crate::core::error::ManagerError;
 use crate::core::settings::{serialize_app_settings, write_json_file, AppSettings};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 #[cfg(windows)]
 use std::io::{Cursor, Read};
 #[cfg(windows)]
@@ -28,6 +29,9 @@ static QUICK_SWITCH_WINDOW_POSITION: SyncMutex<Option<PhysicalPosition<f64>>> =
     SyncMutex::new(None);
 // 隐藏窗口提前加载，配置和布局就绪后才允许显示。
 static QUICK_SWITCH_WINDOW_READY: AtomicBool = AtomicBool::new(false);
+// 工具窗口与主面板共用窗口锁，避免迟到的初始化在主面板打开后重新显示。
+static READY_TOOL_WINDOWS: LazyLock<SyncMutex<HashSet<String>>> =
+    LazyLock::new(|| SyncMutex::new(HashSet::new()));
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -445,6 +449,8 @@ pub fn show_main_panel(
         None => create_main_window(app, tool_id)?,
     };
 
+    hide_tool_windows(app)?;
+
     if window
         .is_minimized()
         .map_err(|error| ManagerError::System(error.to_string()))?
@@ -462,6 +468,110 @@ pub fn show_main_panel(
         .map_err(|error| ManagerError::System(error.to_string()))?;
     hide_quick_switch_window(app)?;
     Ok(json!(true))
+}
+
+fn tool_window_title(tool_id: &str) -> Result<&'static str, ManagerError> {
+    match tool_id {
+        "screenshot" => Ok("截图贴图"),
+        "image-workbench" => Ok("图片工作台"),
+        "json-agent" => Ok("JSON 智能解析"),
+        "string-diff" => Ok("差异对比"),
+        "image-link-extractor" => Ok("图片链接提取"),
+        "coordinate-overlay" => Ok("坐标框预览"),
+        "port-monitor" => Ok("端口监测"),
+        "network-quality" => Ok("网络质量监测"),
+        "git" => Ok("Git 管理"),
+        "lan-share" => Ok("设备快传"),
+        "codex-pets" => Ok("Codex 宠物"),
+        _ => Err(ManagerError::System("工具不存在".to_string())),
+    }
+}
+
+pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, ManagerError> {
+    let title = tool_window_title(tool_id)?;
+    let _guard = QUICK_SWITCH_WINDOW_POSITION
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let label = format!("tool-window-{tool_id}");
+    if let Some(window) = app.get_webview_window(&label) {
+        let ready = READY_TOOL_WINDOWS
+            .lock()
+            .map_err(|error| ManagerError::System(error.to_string()))?
+            .contains(&label);
+        if ready {
+            return show_tool_window(app, &window).map(|visible| json!({ "visible": visible }));
+        }
+        return Ok(json!({ "visible": false }));
+    }
+
+    READY_TOOL_WINDOWS
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .remove(&label);
+    let large = matches!(tool_id, "image-workbench" | "git" | "network-quality" | "lan-share");
+    let window = WebviewWindowBuilder::new(
+        app,
+        &label,
+        WebviewUrl::App(format!("index.html?panel=tool&tool={tool_id}").into()),
+    )
+    .title(format!("{title} · Monkey Thief"))
+    .inner_size(if large { 1120.0 } else { 960.0 }, if large { 760.0 } else { 680.0 })
+    .min_inner_size(896.0, 576.0)
+    .center()
+    .focused(false)
+    .visible(false)
+    .build()
+    .map_err(|error| ManagerError::System(error.to_string()))?;
+
+    // 多个工具错开摆放，保留原生标题栏、缩放、最小化和单独关闭能力。
+    let count = app.webview_windows().keys().filter(|name| name.starts_with("tool-window-")).count();
+    let offset = ((count.saturating_sub(1) % 5) * 24) as i32;
+    let position = window.outer_position().map_err(|error| ManagerError::System(error.to_string()))?;
+    window.set_position(PhysicalPosition::new(position.x + offset, position.y + offset))
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    Ok(json!({ "visible": false }))
+}
+
+pub fn mark_tool_window_ready(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, ManagerError> {
+    tool_window_title(tool_id)?;
+    let _guard = QUICK_SWITCH_WINDOW_POSITION
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let label = format!("tool-window-{tool_id}");
+    let Some(window) = app.get_webview_window(&label) else {
+        return Ok(json!({ "visible": false }));
+    };
+    READY_TOOL_WINDOWS
+        .lock()
+        .map_err(|error| ManagerError::System(error.to_string()))?
+        .insert(label);
+    show_tool_window(app, &window).map(|visible| json!({ "visible": visible }))
+}
+
+fn show_tool_window(app: &tauri::AppHandle, window: &WebviewWindow) -> Result<bool, ManagerError> {
+    if let Some(main) = app.get_webview_window("main") {
+        if main.is_visible().map_err(|error| ManagerError::System(error.to_string()))?
+            && !main.is_minimized().map_err(|error| ManagerError::System(error.to_string()))?
+        {
+            return Ok(false);
+        }
+    }
+    window.unminimize().map_err(|error| ManagerError::System(error.to_string()))?;
+    window.show().map_err(|error| ManagerError::System(error.to_string()))?;
+    window.set_focus().map_err(|error| ManagerError::System(error.to_string()))?;
+    Ok(true)
+}
+
+fn hide_tool_windows(app: &tauri::AppHandle) -> Result<(), ManagerError> {
+    // 仅隐藏工具面板，截图选区与桌面贴图继续使用各自的窗口生命周期。
+    for (label, window) in app.webview_windows() {
+        if label.starts_with("tool-window-")
+            && window.is_visible().map_err(|error| ManagerError::System(error.to_string()))?
+        {
+            window.hide().map_err(|error| ManagerError::System(error.to_string()))?;
+        }
+    }
+    Ok(())
 }
 
 pub fn mark_quick_switch_ready(
@@ -594,10 +704,6 @@ pub fn sync_quick_switch_window(
     let mut center = QUICK_SWITCH_WINDOW_POSITION
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    if !app_settings.system.quick_switch_visible {
-        destroy_quick_switch_window(app)?;
-        return Ok(());
-    }
     let Some(main_window) = app.get_webview_window("main") else {
         destroy_quick_switch_window(app)?;
         return Ok(());
@@ -608,6 +714,14 @@ pub fn sync_quick_switch_window(
     let main_minimized = main_window
         .is_minimized()
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    // 托盘、任务栏还原和工具按钮打开主面板时，统一隐藏独立工具。
+    if main_visible && !main_minimized {
+        hide_tool_windows(app)?;
+    }
+    if !app_settings.system.quick_switch_visible {
+        destroy_quick_switch_window(app)?;
+        return Ok(());
+    }
     // 主页面显示期间预热并保留 WebView，切换时只改变可见性。
     let window = create_quick_switch_window(app, true, &mut center)?;
     let visible = window

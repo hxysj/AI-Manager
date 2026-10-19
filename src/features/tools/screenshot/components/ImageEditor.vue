@@ -7,7 +7,37 @@
       @pointermove="draw"
       @pointerup="finishDrawing"
       @pointercancel="cancelDrawing"
+      @wheel="resizeRectangleWidth"
     />
+    <div
+      v-if="activeRectangle"
+      ref="rectangleSelection"
+      class="rectangle-selection"
+      tabindex="0"
+      aria-label="调整矩形，滚轮调整线宽"
+      :style="rectangleStyle"
+      @blur="commitRectangle"
+      @wheel="resizeRectangleWidth"
+    >
+      <button
+        v-for="corner in ['nw', 'ne', 'se', 'sw']"
+        :key="corner"
+        type="button"
+        class="rectangle-handle"
+        tabindex="-1"
+        :aria-label="`调整矩形 ${corner}`"
+        :style="{
+          left: corner.includes('w') ? '0' : '100%',
+          top: corner.includes('n') ? '0' : '100%',
+          cursor: ['nw', 'se'].includes(corner) ? 'nwse-resize' : 'nesw-resize'
+        }"
+        :disabled="busy || outputting"
+        @pointerdown.stop.prevent="startRectangleResize($event, corner)"
+        @pointermove.stop="resizeRectangle"
+        @pointerup.stop="finishRectangleResize"
+        @pointercancel.stop="cancelRectangleResize"
+      />
+    </div>
     <textarea
       v-if="textPosition"
       ref="textInput"
@@ -67,6 +97,9 @@
               :aria-label="tool === 'text' ? '字号' : '线宽'"
               :disabled="busy || outputting"
             >
+              <option v-if="!lineWidths.includes(width)" :value="width">
+                {{ tool === "text" ? Math.max(14, width * 7) : width }} px
+              </option>
               <option v-for="size in lineWidths" :key="size" :value="size">
                 {{ tool === "text" ? Math.max(14, size * 7) : size }} px
               </option>
@@ -245,6 +278,7 @@ import {
   canvasSource,
   loadImage,
   renderDocument,
+  selectionRect,
   thumbnailSource
 } from "../renderer"
 
@@ -285,8 +319,11 @@ const redoStack = ref([])
 const textPosition = ref(null)
 const text = ref("")
 const textInput = ref(null)
+const activeRectangle = ref(null)
+const rectangleSelection = ref(null)
 let image = null
 let pending = null
+let rectangleResize = null
 let sourceGeneration = 0
 const tools = [
   { id: "select", label: "调整选区", icon: MousePointer2 },
@@ -349,11 +386,21 @@ const textStyle = computed(() => {
     color: color.value
   }
 })
+const rectangleStyle = computed(() => {
+  const [start, end] = activeRectangle.value.points
+  return {
+    left: `${(Math.min(start.x, end.x) / image.naturalWidth) * 100}%`,
+    top: `${(Math.min(start.y, end.y) / image.naturalHeight) * 100}%`,
+    width: `${(Math.abs(end.x - start.x) / image.naturalWidth) * 100}%`,
+    height: `${(Math.abs(end.y - start.y) / image.naturalHeight) * 100}%`
+  }
+})
 
 function repaint() {
   if (image && canvas.value)
     renderDocument(canvas.value, image, [
       ...annotations.value,
+      ...(activeRectangle.value ? [activeRectangle.value] : []),
       ...(pending ? [pending] : [])
     ])
 }
@@ -398,6 +445,7 @@ function commitText() {
 }
 
 function setTool(value) {
+  commitRectangle()
   commitText()
   dropdown.value = ""
   tool.value = value
@@ -411,6 +459,7 @@ function selectLineOption(key, value) {
 // 图标菜单在点击外部、移出键盘焦点时关闭，不拦截画布操作。
 function closeDropdown(event) {
   if (!event.target.closest(".toolbar-dropdown")) dropdown.value = ""
+  if (!event.target.closest(".rectangle-selection")) commitRectangle()
 }
 
 function closeDropdownOnBlur(event) {
@@ -419,6 +468,7 @@ function closeDropdownOnBlur(event) {
 
 async function startDrawing(event) {
   if (!image || props.busy || outputting.value || event.button !== 0) return
+  commitRectangle()
   if (tool.value === "select") {
     emit("selection-start", event, annotations.value.length > 0)
     return
@@ -465,6 +515,26 @@ function draw(event) {
 function finishDrawing(event) {
   if (!pending) return
   draw(event)
+  if (pending.type === "rectangle") {
+    // 新矩形先保留为草稿，四个角点和线宽只在本次聚焦期间可调整。
+    const rect = selectionRect(
+      pending.points[0],
+      pending.points[1],
+      image.naturalWidth,
+      image.naturalHeight
+    )
+    pending.points = [
+      { x: rect.x, y: rect.y },
+      { x: rect.x + rect.width, y: rect.y + rect.height }
+    ]
+    activeRectangle.value = pending
+    pending = null
+    repaint()
+    nextTick(() => rectangleSelection.value?.focus({ preventScroll: true }))
+    if (canvas.value.hasPointerCapture(event.pointerId))
+      canvas.value.releasePointerCapture(event.pointerId)
+    return
+  }
   // 一次拖动只提交一条命令，撤销不复制整张原图。
   undoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
   annotations.value.push(pending)
@@ -481,7 +551,90 @@ function cancelDrawing(event) {
   pending = null
   repaint()
 }
+
+function commitRectangle() {
+  if (!activeRectangle.value) return
+  // 失焦后合入标注层，后续点击不再命中这一个矩形；撤销仍按一次绘制处理。
+  undoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
+  annotations.value.push(activeRectangle.value)
+  activeRectangle.value = null
+  rectangleResize = null
+  redoStack.value = []
+  repaint()
+}
+
+function startRectangleResize(event, corner) {
+  if (
+    !activeRectangle.value ||
+    props.busy ||
+    outputting.value ||
+    event.button !== 0
+  )
+    return
+  const [start, end] = activeRectangle.value.points
+  rectangleResize = {
+    corner,
+    points: JSON.parse(JSON.stringify(activeRectangle.value.points)),
+    anchor: {
+      x: corner.includes("w")
+        ? Math.max(start.x, end.x)
+        : Math.min(start.x, end.x),
+      y: corner.includes("n")
+        ? Math.max(start.y, end.y)
+        : Math.min(start.y, end.y)
+    }
+  }
+  event.currentTarget.setPointerCapture(event.pointerId)
+}
+
+function resizeRectangle(event) {
+  if (!rectangleResize || !activeRectangle.value) return
+  const { corner, anchor } = rectangleResize
+  const end = point(event)
+  // 固定对角点，避免拖过对角后控制点跳到另一侧。
+  end.x = corner.includes("w")
+    ? Math.min(end.x, anchor.x - 1)
+    : Math.max(end.x, anchor.x + 1)
+  end.y = corner.includes("n")
+    ? Math.min(end.y, anchor.y - 1)
+    : Math.max(end.y, anchor.y + 1)
+  activeRectangle.value.points = [anchor, end]
+  repaint()
+}
+
+function finishRectangleResize(event) {
+  if (!rectangleResize) return
+  resizeRectangle(event)
+  rectangleResize = null
+  if (event.currentTarget.hasPointerCapture(event.pointerId))
+    event.currentTarget.releasePointerCapture(event.pointerId)
+}
+
+function cancelRectangleResize(event) {
+  if (!rectangleResize) return
+  activeRectangle.value.points = rectangleResize.points
+  rectangleResize = null
+  if (event.currentTarget.hasPointerCapture(event.pointerId))
+    event.currentTarget.releasePointerCapture(event.pointerId)
+  repaint()
+}
+
+function resizeRectangleWidth(event) {
+  if (!activeRectangle.value || props.busy || outputting.value || !event.deltaY)
+    return
+  event.preventDefault()
+  event.stopPropagation()
+  // 滚轮逐像素调整，沿用标注线宽，导出不包含定位点。
+  activeRectangle.value.width = Math.max(
+    1,
+    Math.min(64, activeRectangle.value.width - Math.sign(event.deltaY))
+  )
+  width.value = activeRectangle.value.width
+  repaint()
+}
+
 function undo() {
+  commitRectangle()
   commitText()
   const previous = undoStack.value.pop()
   if (previous) {
@@ -491,6 +644,7 @@ function undo() {
   repaint()
 }
 function redo() {
+  commitRectangle()
   const next = redoStack.value.pop()
   if (next) {
     undoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
@@ -502,6 +656,7 @@ function redo() {
 async function output(action) {
   if (!image || pending || outputting.value) return
   outputting.value = true
+  commitRectangle()
   commitText()
   const generation = sourceGeneration
   try {
@@ -573,6 +728,8 @@ watch(
       )
       redoStack.value = []
       pending = null
+      activeRectangle.value = null
+      rectangleResize = null
       textPosition.value = null
       dropdown.value = ""
       await nextTick()
@@ -586,12 +743,14 @@ watch(
 onMounted(() => {
   window.addEventListener("keydown", keydown)
   window.addEventListener("pointerdown", closeDropdown, true)
+  window.addEventListener("blur", commitRectangle)
 })
 onBeforeUnmount(() => {
   emit("toolbar-hover", false)
   sourceGeneration++
   window.removeEventListener("keydown", keydown)
   window.removeEventListener("pointerdown", closeDropdown, true)
+  window.removeEventListener("blur", commitRectangle)
 })
 </script>
 
@@ -621,6 +780,22 @@ onBeforeUnmount(() => {
     text-align: left;
     resize: none;
     overflow: hidden;
+  }
+  .rectangle-selection {
+    position: absolute;
+    outline: none;
+    pointer-events: none;
+    .rectangle-handle {
+      position: absolute;
+      width: 9px;
+      height: 9px;
+      padding: 0;
+      border: 1px solid #0284c7;
+      background: #fff;
+      transform: translate(-50%, -50%);
+      pointer-events: auto;
+      touch-action: none;
+    }
   }
 }
 .screenshot-toolbar {

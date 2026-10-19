@@ -740,6 +740,26 @@ pub async fn dispatch(
                 .ok_or_else(|| failure("贴图窗口不存在"))?;
             match payload["action"].as_str().unwrap_or("") {
                 "drag" => window.start_dragging().map_err(failure)?,
+                "move" => {
+                    let (x, y) = match payload["direction"].as_str() {
+                        Some("up") => (0, -1),
+                        Some("down") => (0, 1),
+                        Some("left") => (-1, 0),
+                        Some("right") => (1, 0),
+                        _ => return Err(failure("无效的贴图移动方向")),
+                    };
+                    let (sender, receiver) = tokio::sync::oneshot::channel();
+                    let moving = window.clone();
+                    // 读取和设置位置在同一个窗口线程任务中完成，长按方向键不会丢步。
+                    window.run_on_main_thread(move || {
+                        let result = moving.outer_position().map_err(failure).and_then(|position| {
+                            moving.set_position(PhysicalPosition::new(position.x + x, position.y + y)).map_err(failure)
+                        });
+                        let _ = sender.send(result);
+                    }).map_err(failure)?;
+                    receiver.await.map_err(failure)??;
+                    return Ok(json!(true));
+                }
                 "hide" => {
                     window.hide().map_err(failure)?;
                     service.update_pin(id, |p| p.visible = false)?;
@@ -828,7 +848,7 @@ pub async fn dispatch(
                 "display" => {
                     let retained = service.session.lock().unwrap().entries.iter().any(|entry| entry.id == id);
                     if retained {
-                        window.set_focusable(false).map_err(failure)?;
+                        window.set_focusable(true).map_err(failure)?;
                     } else {
                         window.destroy().map_err(failure)?;
                     }
@@ -1036,7 +1056,9 @@ fn ensure_capture_window(
     .transparent(true)
     .background_color(tauri::window::Color(0, 0, 0, 0))
     .focused(false)
-    .shadow(false);
+    .shadow(false)
+    // 框选画布和遮罩不参与桌面采集，连续截图不会把上一帧的暗色遮罩拍进去。
+    .content_protected(true);
     if let Some((left, top, width, height)) = bounds {
         builder = builder
             .position(f64::from(left), f64::from(top))
@@ -1253,7 +1275,8 @@ fn open_pin_with_visibility(
     window
         .set_size(PhysicalSize::new(pin.width, pin.height))
         .map_err(failure)?;
-    window.set_focusable(false).map_err(failure)?;
+    // 创建时不抢焦点，点击贴图后允许接收移动和复制快捷键。
+    window.set_focusable(true).map_err(failure)?;
     {
         let mut guard = service.session.lock().unwrap();
         let mut next = guard.clone();

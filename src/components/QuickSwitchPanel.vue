@@ -62,7 +62,7 @@
           }"
           type="button"
           :title="tool.summary"
-          @click="showMainPanel(tool.id)"
+          @click="openToolWindow(tool.id)"
         >
           <span class="quick-switch-tool-icon">
             <component :is="tool.icon" :size="24" :stroke-width="1.7" />
@@ -480,9 +480,18 @@ function handleFocusOut(event) {
   if (!event.currentTarget.contains(event.relatedTarget)) leavePanel()
 }
 
-async function showMainPanel(toolId) {
+async function openToolWindow(toolId) {
   try {
-    await appApi.showMainPanel(toolId ? { toolId } : undefined)
+    await appApi.openToolWindow({ toolId })
+    await setExpanded(false)
+  } catch (error) {
+    createMessage.error(error.message || String(error))
+  }
+}
+
+async function showMainPanel() {
+  try {
+    await appApi.showMainPanel()
   } catch (error) {
     createMessage.error(error.message || String(error))
   }

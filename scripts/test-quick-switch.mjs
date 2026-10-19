@@ -298,6 +298,7 @@ const fixture = () =>
 handlers.setQuickSwitchCollapsed = () => true
 handlers.moveQuickSwitchBy = () => true
 handlers.showMainPanel = () => true
+handlers.openToolWindow = () => true
 handlers.onQuickSwitchVisibilityChanged = (callback) => {
   visibilityListeners.add(callback)
   return () => visibilityListeners.delete(callback)
@@ -620,9 +621,9 @@ await collapseAfterMove
 await tick()
 assert.deepEqual(panel.state.centerPosition, { x: 64, y: 64 })
 assert.equal(panel.state.expanded, false)
-await panel.state.showMainPanel("git")
+await panel.state.openToolWindow("git")
 assert.deepEqual(calls.at(-1), {
-  name: "showMainPanel",
+  name: "openToolWindow",
   payload: { toolId: "git" }
 })
 panel.state.handleMainClick({ detail: 0 })
@@ -1389,7 +1390,7 @@ const mainInitialized = createBootstrap(
   },
   () => {},
   mainReady,
-  async action => {
+  async (action) => {
     mainLoading = true
     try {
       return await action()
@@ -1397,10 +1398,17 @@ const mainInitialized = createBootstrap(
       mainLoading = false
     }
   },
-  () => new Promise(resolve => { finishBackupListing = resolve }),
-  error => { throw error }
+  () =>
+    new Promise((resolve) => {
+      finishBackupListing = resolve
+    }),
+  (error) => {
+    throw error
+  }
 )
-const mainInitializing = mainInitialized.bootstrap().then(() => { mainBootstrapped = true })
+const mainInitializing = mainInitialized.bootstrap().then(() => {
+  mainBootstrapped = true
+})
 await tick()
 assert.equal(mainReady.value, true)
 assert.equal(mainLoading, false)

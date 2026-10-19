@@ -13,6 +13,10 @@ export const appApi = {
   dismissUpdate: () => request('app:update-dismiss'),
   uninstallWithoutTrace: () => request('app:uninstall-without-trace'),
   showMainPanel: payload => request('quick-switch:show-main', payload),
+  // 工具窗口独立打开并复用，首次页面就绪后再显示原生窗口。
+  openToolWindow: payload => request('tool-window:open', payload),
+  bootstrapToolWindow: () => request('tool-window:bootstrap'),
+  markToolWindowReady: payload => request('tool-window:ready', payload),
   // 悬浮窗只读取已有状态，监听注册完成后再通知原生窗口显示。
   bootstrapQuickSwitch: () => request('quick-switch:bootstrap'),
   markQuickSwitchReady: () => request('quick-switch:ready'),

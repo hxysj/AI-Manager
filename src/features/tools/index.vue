@@ -32,7 +32,12 @@
 
     <section v-else class="tools-view-detail-page">
       <header class="tools-view-detail-head">
-        <button class="tools-view-back" type="button" @click="closeTool">
+        <button
+          v-if="!standalone"
+          class="tools-view-back"
+          type="button"
+          @click="closeTool"
+        >
           <ArrowLeft :size="15" />
           工具列表
         </button>
@@ -158,6 +163,15 @@
           </button>
         </div>
         <button
+          v-if="standalone"
+          class="tools-view-open-main"
+          type="button"
+          @click="$emit('show-main', activeTool)"
+        >
+          <PanelsTopLeft :size="15" />
+          打开主面板
+        </button>
+        <button
           v-if="activeTool !== 'git'"
           class="tools-view-theme"
           type="button"
@@ -210,6 +224,7 @@ import {
   computed,
   defineAsyncComponent,
   onBeforeUnmount,
+  onMounted,
   ref,
   watch
 } from "vue"
@@ -220,11 +235,12 @@ import {
   GitBranchIcon,
   Image as ImageIcon,
   Moon,
+  PanelsTopLeft,
   RefreshCw,
   ScanLine,
   Sun
 } from "lucide-vue-next"
-import { getToolItems } from '@/features/tools/constant'
+import { getToolItems } from "@/features/tools/constant"
 import GitToolView from "@/features/gitTool/index.vue"
 import LanShareView from "@/features/lanShare/index.vue"
 import CodexPetManager from "@/features/tools/codexPetManager/index.vue"
@@ -253,6 +269,10 @@ const ImageWorkbench = defineAsyncComponent(
 )
 
 const props = defineProps({
+  standalone: {
+    type: Boolean,
+    default: false
+  },
   toolRequest: {
     type: Object,
     default: null
@@ -283,7 +303,14 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(["add-repo", "detail-change", "toggle-theme", "tool-request-handled"])
+const emit = defineEmits([
+  "add-repo",
+  "detail-change",
+  "toggle-theme",
+  "tool-request-handled",
+  "show-main",
+  "ready"
+])
 
 const activeTool = ref("")
 const gitToolStatus = ref([])
@@ -320,7 +347,9 @@ function closeTool() {
 }
 
 // 工具详情独占工作区，退出详情或组件卸载时恢复全局侧栏。
-watch(activeTool, (toolId) => emit("detail-change", Boolean(toolId)), { immediate: true })
+watch(activeTool, (toolId) => emit("detail-change", Boolean(toolId)), {
+  immediate: true
+})
 
 // 跨窗口入口只消费一次，关闭详情后不会因应用状态刷新重新打开。
 let appliedToolRequest = null
@@ -329,14 +358,18 @@ watch(
   () => {
     const request = props.toolRequest
     if (!request || request === appliedToolRequest) return
-    if (!toolItems.value.some(tool => tool.id === request.toolId)) return
+    if (!toolItems.value.some((tool) => tool.id === request.toolId)) return
     appliedToolRequest = request
     openTool(request.toolId)
-    emit('tool-request-handled')
+    emit("tool-request-handled")
   },
   { immediate: true }
 )
 onBeforeUnmount(() => emit("detail-change", false))
+// 独立窗口等工具视图挂载完成后再显示，避免初始化时闪出工具列表。
+onMounted(() => {
+  if (props.standalone) emit("ready")
+})
 </script>
 
 <style scoped lang="less">
@@ -634,6 +667,31 @@ onBeforeUnmount(() => emit("detail-change", false))
     gap: 12px;
     padding-bottom: 8px;
     border-bottom: 1px solid var(--color-line);
+
+    .tools-view-open-main {
+      display: inline-flex;
+      flex: none;
+      align-items: center;
+      gap: 7px;
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      color: var(--color-primary);
+      font: inherit;
+      cursor: pointer;
+
+      &:hover {
+        border-color: var(--color-primary);
+        background: var(--color-primary-soft);
+      }
+
+      &:focus-visible {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 2px;
+      }
+    }
 
     .tools-view-header-divider {
       width: 1px;

@@ -17,6 +17,11 @@ import {
 } from "../src/features/tools/screenshot/renderer.js"
 
 const require = createRequire(import.meta.url)
+// 贴图和编辑原图使用 Blob 地址，实际入口的安全策略也必须允许加载。
+const imageSources = readFileSync("index.html", "utf8")
+  .match(/\bimg-src\s+([^;"\n]+)/)?.[1]
+  .split(/\s+/)
+assert.ok(imageSources?.includes("blob:"), "页面安全策略必须允许贴图 Blob 图片")
 const filename = "src/features/tools/screenshot/components/ScreenshotWindow.vue"
 const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
   filename
@@ -49,15 +54,18 @@ let captureFrame = null
 let saveFailure = false
 const imageRequests = []
 const imageUrls = new Set()
+const imageBlobs = new Map()
 const createObjectURL = URL.createObjectURL.bind(URL)
 const revokeObjectURL = URL.revokeObjectURL.bind(URL)
 URL.createObjectURL = (blob) => {
   const url = createObjectURL(blob)
   imageUrls.add(url)
+  imageBlobs.set(url, blob)
   return url
 }
 URL.revokeObjectURL = (url) => {
   imageUrls.delete(url)
+  imageBlobs.delete(url)
   revokeObjectURL(url)
 }
 // 与原生二进制响应保持一致，验证框选直接使用 RGBA 而不加载图片。
@@ -74,6 +82,55 @@ function frameResponse() {
   new Uint8ClampedArray(bytes, 20, 4).set([10, 20, 30, 255])
   return bytes
 }
+// 使用真实 PNG 和 API 转换代码覆盖 Tauri 的两种 IPC 返回格式。
+const pngBytes = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAFElEQVR4AQEJAPb/AABaZAA8WmRkCAECHYDE5XcAAAAASUVORK5CYII=",
+  "base64"
+)
+let nativeImageResponse = null
+let nativeFrameResponse = null
+const apiModule = { exports: {} }
+new Function(
+  "require",
+  "module",
+  "exports",
+  transformSync(readFileSync("src/api/modules/screenshot.js", "utf8"), {
+    format: "cjs"
+  }).code
+)(
+  (name) => {
+    if (name === "@tauri-apps/api/core")
+      return {
+        invoke: async (command) =>
+          command === "screenshot_image"
+            ? nativeImageResponse
+            : (nativeFrameResponse ?? frameResponse())
+      }
+    if (name === "@/api/request") return { request() {} }
+    return require(name)
+  },
+  apiModule,
+  apiModule.exports
+)
+const binaryApi = apiModule.exports.screenshotApi
+const paddedPng = new Uint8Array(pngBytes.length + 8)
+paddedPng.set(pngBytes, 4)
+for (const response of [
+  Uint8Array.from(pngBytes).buffer,
+  Array.from(pngBytes),
+  new Uint8Array(paddedPng.buffer, 4, pngBytes.length),
+  new DataView(paddedPng.buffer, 4, pngBytes.length)
+]) {
+  nativeImageResponse = response
+  nativeFrameResponse = response
+  const image = await binaryApi.image("test-pin", "output")
+  assert.deepEqual(Buffer.from(await new Blob([image]).arrayBuffer()), pngBytes)
+  assert.deepEqual(Buffer.from(await binaryApi.frame()), pngBytes)
+}
+nativeImageResponse = { invalid: true }
+await assert.rejects(binaryApi.image("test-pin", "output"), /数据格式无效/)
+nativeImageResponse = Array.from(pngBytes)
+nativeFrameResponse = null
 const module = { exports: {} }
 const localRequire = (name) => {
   if (name === "@/api/modules/screenshot")
@@ -81,11 +138,11 @@ const localRequire = (name) => {
       screenshotApi: {
         image: async (id, kind) => {
           imageRequests.push({ id, kind })
-          return new Uint8Array([137, 80, 78, 71]).buffer
+          return binaryApi.image(id, kind)
         },
         frame: async () => {
           requests.push({ action: "frame" })
-          return frameResponse()
+          return binaryApi.frame()
         },
         call: async (action, payload) => {
           requests.push({ action, payload })
@@ -210,14 +267,20 @@ const node = (type) => {
     parent: null,
     offsetWidth: 220,
     offsetHeight: 300,
-    decode: async () => {},
+    async decode() {
+      const blob = imageBlobs.get(this.props.src)
+      assert.ok(blob, "贴图解码必须使用仍有效的图片 URL")
+      assert.deepEqual(Buffer.from(await blob.arrayBuffer()), pngBytes)
+    },
     setPointerCapture() {},
     hasPointerCapture: () => false,
     releasePointerCapture() {},
     getContext: () => canvasContext,
     toDataURL: () => "edited.png",
     toBlob: (callback) => callback({ data: "edited.png" }),
-    focus() {},
+    focus() {
+      document.activeElement = this
+    },
     addEventListener() {},
     removeEventListener() {},
     getRootNode: () => ({}),
@@ -312,6 +375,49 @@ const pin = root.children.find(
     typeof element.props.class === "string" &&
     element.props.class.includes("pin-window")
 )
+const pinState = app._instance.setupState
+assert.equal(pin.props.tabindex, "0")
+// 方向键移动与复制只作用于普通贴图，不接管输入、编辑或菜单操作。
+const pinKey = (key, options = {}) => ({
+  key,
+  target: { tagName: "DIV" },
+  preventDefault() {
+    this.prevented = true
+  },
+  ...options
+})
+for (const [key, direction] of [
+  ["ArrowUp", "up"],
+  ["ArrowDown", "down"],
+  ["ArrowLeft", "left"],
+  ["ArrowRight", "right"]
+]) {
+  const event = pinKey(key)
+  await pinState.keydown(event)
+  assert.equal(event.prevented, true)
+  assert.deepEqual(requests.at(-1).payload, {
+    id: "test-pin",
+    action: "move",
+    direction
+  })
+}
+await pinState.keydown(pinKey("ArrowUp", { repeat: true }))
+assert.equal(requests.at(-1).payload.direction, "up")
+await pinState.keydown(pinKey("c", { ctrlKey: true }))
+assert.deepEqual(requests.at(-1), {
+  action: "copy",
+  payload: { id: "test-pin" }
+})
+const afterPinKeys = requests.length
+for (const event of [
+  pinKey("c", { ctrlKey: true, repeat: true }),
+  pinKey("c", { ctrlKey: true, target: { tagName: "TEXTAREA" } }),
+  pinKey("ArrowUp", { target: { isContentEditable: true } }),
+  pinKey("ArrowUp", { ctrlKey: true }),
+  pinKey("ArrowUp", { isComposing: true })
+])
+  await pinState.keydown(event)
+assert.equal(requests.length, afterPinKeys)
 const menu = () =>
   pin.children.find((element) => element.props.class === "pin-menu")
 async function openMenu(clientX, clientY) {
@@ -334,8 +440,10 @@ await openMenu(790, 590)
 assert.deepEqual(menu().props.style, { left: "790px", top: "590px" })
 await openMenu(0, 0)
 assert.deepEqual(menu().props.style, { left: "0px", top: "0px" })
+const beforeMenuKey = requests.length
+await pinState.keydown(pinKey("ArrowUp"))
+assert.equal(requests.length, beforeMenuKey)
 // 取消阴影后同时取消边框，重新开启时两者一起恢复。
-const pinState = app._instance.setupState
 assert.deepEqual(pinState.pinWindowClass, {
   "has-shadow": true,
   "has-border": true
@@ -380,6 +488,10 @@ await openMenu(80, 80)
 // 工具栏样式调整后按动作进入编辑，避免依赖菜单按钮的排列顺序。
 await app._instance.setupState.pinAction("edit")
 await tick()
+const beforeEditorKeys = requests.length
+await pinState.keydown(pinKey("ArrowUp"))
+await pinState.keydown(pinKey("c", { ctrlKey: true }))
+assert.equal(requests.length, beforeEditorKeys)
 assert.deepEqual(imageRequests.at(-1), { id: "test-pin", kind: "source" })
 assert.equal(imageUrls.size, 2)
 await pinState.stopEditing()
@@ -820,6 +932,7 @@ const Editor = await loadTestComponent(
       loadImage: async () => ({ naturalWidth: 800, naturalHeight: 600 }),
       canvasSource,
       thumbnailSource,
+      selectionRect,
       renderDocument(canvas, image) {
         editorPaints += 1
         canvas.width = image.naturalWidth
@@ -878,6 +991,86 @@ const drawingEvent = (clientX, clientY) => ({
   clientY,
   stopPropagation() {}
 })
+// 矩形画完默认聚焦，四个角点固定对角缩放，滚轮只修改当前草稿。
+editor.setTool("rectangle")
+await editor.startDrawing(drawingEvent(100, 100))
+editor.finishDrawing(drawingEvent(300, 240))
+await tick()
+assert.equal(editor.annotations.length, 0)
+assert.equal(document.activeElement, editor.rectangleSelection)
+assert.equal(
+  editor.rectangleSelection.children.filter(
+    (element) => element.props.class === "rectangle-handle"
+  ).length,
+  4
+)
+const originalRectangle = [
+  { x: 100, y: 100 },
+  { x: 300, y: 240 }
+]
+for (const [corner, x, y, anchor] of [
+  ["nw", 80, 70, { x: 300, y: 240 }],
+  ["ne", 340, 70, { x: 100, y: 240 }],
+  ["se", 340, 280, { x: 100, y: 100 }],
+  ["sw", 80, 280, { x: 300, y: 100 }]
+]) {
+  editor.activeRectangle.points = structuredClone(originalRectangle)
+  const handle = node("button")
+  const event = { ...drawingEvent(x, y), currentTarget: handle }
+  editor.startRectangleResize(event, corner)
+  editor.finishRectangleResize(event)
+  assert.deepEqual(editor.activeRectangle.points, [anchor, { x, y }])
+}
+const resizedRectangle = structuredClone(
+  vue.toRaw(editor.activeRectangle.points)
+)
+const cornerEvent = { ...drawingEvent(10, 10), currentTarget: node("button") }
+editor.startRectangleResize(cornerEvent, "nw")
+editor.resizeRectangle(cornerEvent)
+editor.cancelRectangleResize(cornerEvent)
+assert.deepEqual(editor.activeRectangle.points, resizedRectangle)
+let wheelPrevented = false
+const rectangleWheel = {
+  deltaY: -120,
+  preventDefault() {
+    wheelPrevented = true
+  },
+  stopPropagation() {}
+}
+editor.resizeRectangleWidth(rectangleWheel)
+assert.equal(wheelPrevented, true)
+assert.equal(editor.activeRectangle.width, 5)
+assert.equal(editor.width, 5)
+editor.rectangleSelection.props.onBlur()
+await tick()
+assert.equal(editor.activeRectangle, null)
+assert.equal(editor.rectangleSelection, null)
+assert.equal(editor.annotations.length, 1)
+assert.equal(editor.annotations[0].width, 5)
+assert.deepEqual(editor.annotations[0].points, resizedRectangle)
+// 失焦后的原矩形不再参与控制点或滚轮调整，撤销与重做仍视为一次绘制。
+editor.resizeRectangleWidth(rectangleWheel)
+editor.startRectangleResize(cornerEvent, "nw")
+assert.equal(editor.annotations[0].width, 5)
+assert.equal(editor.activeRectangle, null)
+editor.undo()
+assert.equal(editor.annotations.length, 0)
+editor.redo()
+assert.equal(editor.annotations.length, 1)
+editor.undo()
+await editor.startDrawing(drawingEvent(20, 30))
+editor.finishDrawing(drawingEvent(80, 90))
+await tick()
+await editor.output("pin")
+assert.equal(editor.activeRectangle, null)
+assert.equal(outputs.at(-1).annotations.length, 1)
+assert.equal(outputs.at(-1).annotations[0].type, "rectangle")
+assert.deepEqual(outputs.at(-1).annotations[0].points, [
+  { x: 20, y: 30 },
+  { x: 80, y: 90 }
+])
+editor.undo()
+editor.width = 4
 editor.setTool("line")
 await editor.startDrawing(drawingEvent(10, 10))
 editor.finishDrawing(drawingEvent(50, 50))
