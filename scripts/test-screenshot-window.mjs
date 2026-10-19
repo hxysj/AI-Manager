@@ -10,6 +10,8 @@ import {
 import { transformSync } from "esbuild"
 import * as vue from "vue"
 import {
+  canvasSource,
+  thumbnailSource,
   selectionRect,
   renderDocument
 } from "../src/features/tools/screenshot/renderer.js"
@@ -44,6 +46,20 @@ for (const style of descriptor.styles) {
 const requests = []
 const listeners = new Map()
 let captureFrame = null
+let saveFailure = false
+const imageRequests = []
+const imageUrls = new Set()
+const createObjectURL = URL.createObjectURL.bind(URL)
+const revokeObjectURL = URL.revokeObjectURL.bind(URL)
+URL.createObjectURL = (blob) => {
+  const url = createObjectURL(blob)
+  imageUrls.add(url)
+  return url
+}
+URL.revokeObjectURL = (url) => {
+  imageUrls.delete(url)
+  revokeObjectURL(url)
+}
 // 与原生二进制响应保持一致，验证框选直接使用 RGBA 而不加载图片。
 function frameResponse() {
   if (!captureFrame) return new ArrayBuffer(0)
@@ -63,20 +79,31 @@ const localRequire = (name) => {
   if (name === "@/api/modules/screenshot")
     return {
       screenshotApi: {
+        image: async (id, kind) => {
+          imageRequests.push({ id, kind })
+          return new Uint8Array([137, 80, 78, 71]).buffer
+        },
         frame: async () => {
           requests.push({ action: "frame" })
           return frameResponse()
         },
         call: async (action, payload) => {
           requests.push({ action, payload })
-          if (action === "document")
+          if (action === "document") {
+            assert.equal(payload.metadataOnly, true)
             return {
-              output: "image.png",
-              source: "image.png",
               annotations: [],
+              width: 800,
+              height: 600,
               pin: { width: 800, height: 600 }
             }
-          if (action === "save-document") return "saved-pin"
+          }
+          if (action === "save-document") {
+            if (saveFailure) throw new Error("保存失败")
+            return "saved-pin"
+          }
+          if (action === "pin-show")
+            return { visible: true, width: 1600, height: 1200 }
           if (action === "cancel") listeners.get("screenshot:reset")?.()
           // 原生贴图首帧就绪后才结束框选，模拟对应的重置通知。
           if (action === "pin" && payload?.capture)
@@ -101,6 +128,8 @@ const localRequire = (name) => {
   if (name === "../renderer")
     return {
       loadImage: async () => ({ naturalWidth: 1600, naturalHeight: 1200 }),
+      canvasSource,
+      thumbnailSource,
       selectionRect
     }
   return require(name)
@@ -119,6 +148,14 @@ globalThis.location = { search: "?mode=pin&id=test-pin" }
 globalThis.innerWidth = 800
 globalThis.innerHeight = 600
 globalThis.devicePixelRatio = 2
+let animationFrameId = 0
+const animationFrames = new Map()
+globalThis.requestAnimationFrame = (callback) => {
+  const id = ++animationFrameId
+  animationFrames.set(id, callback)
+  return id
+}
+globalThis.cancelAnimationFrame = (id) => animationFrames.delete(id)
 globalThis.Document = class {}
 globalThis.ShadowRoot = class {}
 const copiedColors = []
@@ -156,10 +193,14 @@ globalThis.window = {
       width: 0,
       height: 0,
       getContext: context,
-      toDataURL: () => "crop.png"
+      toDataURL: () => {
+        throw new Error("截图不应同步编码")
+      },
+      toBlob: (callback) => callback({ data: "crop.png" })
     })
   }
 }
+globalThis.document = window.document
 const node = (type) => {
   const element = {
     type,
@@ -239,11 +280,33 @@ const root = node("root")
 const app = renderer.createApp(module.exports.default)
 const failures = []
 app.config.errorHandler = (error) => failures.push(String(error))
+globalThis.innerWidth = 400
 app.mount(root)
 const tick = async () => {
-  for (let index = 0; index < 10; index += 1) await vue.nextTick()
+  for (let index = 0; index < 10; index += 1) {
+    await vue.nextTick()
+    const callbacks = [...animationFrames.values()]
+    animationFrames.clear()
+    for (const callback of callbacks) callback()
+  }
 }
 await tick()
+// 图片解码完成也不能按错误视口露出，实际尺寸同步并绘制后才结束框选。
+assert.equal(app._instance.setupState.pinReady, false)
+assert.equal(
+  requests.some((request) => request.action === "pin-show"),
+  true
+)
+assert.equal(
+  requests.some((request) => request.action === "pin-ready"),
+  false
+)
+globalThis.innerWidth = 800
+await tick()
+assert.equal(app._instance.setupState.pinReady, true)
+assert.equal(requests.at(-1).action, "pin-ready")
+assert.deepEqual(imageRequests, [{ id: "test-pin", kind: "output" }])
+assert.equal(imageUrls.size, 1)
 const pin = root.children.find(
   (element) =>
     typeof element.props.class === "string" &&
@@ -317,6 +380,14 @@ await openMenu(80, 80)
 // 工具栏样式调整后按动作进入编辑，避免依赖菜单按钮的排列顺序。
 await app._instance.setupState.pinAction("edit")
 await tick()
+assert.deepEqual(imageRequests.at(-1), { id: "test-pin", kind: "source" })
+assert.equal(imageUrls.size, 2)
+await pinState.stopEditing()
+await pinState.pinAction("edit")
+assert.equal(
+  imageRequests.filter((request) => request.kind === "source").length,
+  1
+)
 await pin.props.onDblclick({})
 await openMenu(80, 80)
 assert.equal(Boolean(menu()), false)
@@ -324,7 +395,10 @@ assert.equal(
   requests.some((request) => request.payload?.action === "destroy"),
   false
 )
+await pinState.loadDocument()
+assert.equal(imageUrls.size, 1)
 app.unmount()
+assert.equal(imageUrls.size, 0)
 
 const secondApp = renderer.createApp(module.exports.default)
 secondApp.config.errorHandler = (error) => failures.push(String(error))
@@ -377,7 +451,15 @@ assert.equal(
   false
 )
 assert.deepEqual(failures, [])
+await tick()
+const cancelledPaint = secondApp._instance.setupState.waitForPinPaint({
+  width: 1,
+  height: 1
+})
 secondApp.unmount()
+assert.equal(await cancelledPaint, false)
+assert.equal(imageUrls.size, 0)
+assert.equal(animationFrames.size, 0)
 globalThis.location.search = "?mode=capture"
 const captureApp = renderer.createApp(module.exports.default)
 captureApp.config.errorHandler = (error) => failures.push(String(error))
@@ -410,7 +492,7 @@ assert.equal(
   true
 )
 assert.deepEqual(state.selection, { x: 200, y: 200, width: 527, height: 314 })
-state.finishSelection()
+await state.finishSelection()
 await tick()
 // 工具栏及边框悬停时隐藏取色；离开后恢复，且不销毁取色画布。
 const captureMagnifier = teleportTarget.children.find(
@@ -459,6 +541,23 @@ assert.equal(copiedColors.length, colorCopyCount)
 assert.equal(state.colorValue, "10, 20, 30")
 await state.movePointer({ clientX: 790, clientY: 590 })
 assert.deepEqual(state.magnifierStyle, { left: "582px", top: "342px" })
+// 保存失败时保留选区并恢复按钮，允许直接重试。
+saveFailure = true
+await state.output({
+  source: "crop.png",
+  output: "crop.png",
+  annotations: [],
+  action: "pin"
+})
+assert.equal(state.busy, false)
+assert.ok(state.selection)
+assert.match(state.error, /保存失败/)
+assert.equal(
+  requests.findLast((request) => request.action === "save-document").payload
+    .output,
+  null
+)
+saveFailure = false
 await state.output({
   source: "crop.png",
   output: "annotated.png",
@@ -525,10 +624,32 @@ for (const item of edgeCases) {
   await tick()
   assert.deepEqual(state.selection, item.expected)
   assert.equal(state.desktop.props.style.cursor, state.resizeCursors[item.edge])
-  state.finishSelection()
+  await state.finishSelection()
   await tick()
   assert.equal(state.magnifierVisible, true)
 }
+// 异步编码不能把已取消的截图带回来，也不能覆盖后一次框选结果。
+const createCanvas = document.createElement
+const cropCallbacks = []
+document.createElement = () => ({
+  ...createCanvas(),
+  toBlob: (callback) => cropCallbacks.push(callback)
+})
+state.cancelDrag()
+state.startSelection({ button: 0, pointerId: 4, clientX: 20, clientY: 30 })
+await state.movePointer({ clientX: 100, clientY: 90 })
+const oldCrop = state.finishSelection()
+state.cancelDrag()
+state.startSelection({ button: 0, pointerId: 5, clientX: 30, clientY: 40 })
+await state.movePointer({ clientX: 120, clientY: 100 })
+const newCrop = state.finishSelection()
+cropCallbacks[1]({ data: "new-crop.png" })
+await newCrop
+cropCallbacks[0]({ data: "old-crop.png" })
+await oldCrop
+assert.equal(state.editorSource, "new-crop.png")
+assert.deepEqual(state.selection, { x: 60, y: 80, width: 180, height: 120 })
+document.createElement = createCanvas
 await state.cancel()
 assert.equal(captureCanvas.width, 1600)
 assert.equal(captureCanvas.height, 1200)
@@ -540,7 +661,7 @@ await tick()
 assert.equal(state.captureBackground, captureCanvas)
 state.startSelection({ button: 0, pointerId: 2, clientX: 20, clientY: 30 })
 await state.movePointer({ clientX: 100, clientY: 90 })
-state.finishSelection()
+await state.finishSelection()
 await tick()
 assert.equal(
   requests.findLast((request) => request.action === "copy").payload.id,
@@ -691,27 +812,41 @@ assert.deepEqual(settingsRequests.at(-1), {
   payload: { paused: false }
 })
 
+let editorPaints = 0
 const Editor = await loadTestComponent(
   "src/features/tools/screenshot/components/ImageEditor.vue",
   {
     "../renderer": {
       loadImage: async () => ({ naturalWidth: 800, naturalHeight: 600 }),
-      renderDocument() {}
+      canvasSource,
+      thumbnailSource,
+      renderDocument(canvas, image) {
+        editorPaints += 1
+        canvas.width = image.naturalWidth
+        canvas.height = image.naturalHeight
+      }
     }
   }
 )
 const outputs = []
+const editorErrors = []
 const toolbarHovers = []
 const editorApp = renderer.createApp(Editor, {
   source: "image.png",
   reselect: true,
   onOutput: (value) => outputs.push(value),
+  onError: (value) => editorErrors.push(value),
   onToolbarHover: (value) => toolbarHovers.push(value)
 })
 editorApp.config.errorHandler = (error) => failures.push(String(error))
 editorApp.mount(node("root"))
 await tick()
 const editor = editorApp._instance.setupState
+// 没有标注时直接复用源图，点击贴图不再重绘整张画布。
+const initialPaints = editorPaints
+await editor.output("pin")
+assert.equal(editorPaints, initialPaints)
+assert.equal(outputs.at(-1).output, "image.png")
 const editorToolbar = teleportTarget.children.find(
   (element) => element.props.class === "screenshot-toolbar"
 )
@@ -845,9 +980,44 @@ assert.equal(editor.annotations.at(-1).text, "第一行\n第二行")
 await editor.output("pin")
 assert.equal(outputs.at(-1).action, "pin")
 assert.equal(outputs.at(-1).output, "edited.png")
+assert.equal(outputs.at(-1).thumbnail, "crop.png")
+const encodeEditor = editor.canvas.toBlob
+editor.canvas.toBlob = (callback) => callback(null)
+await editor.output("pin")
+assert.deepEqual(editorErrors, ["截图编码失败"])
+assert.equal(editor.outputting, false)
+editor.canvas.toBlob = encodeEditor
+await editor.output("pin")
+assert.equal(outputs.at(-1).output, "edited.png")
 editorApp.unmount()
 assert.equal(toolbarHovers.at(-1), false)
 assert.deepEqual(failures, [])
+// 未标注的大图只绘制原图，且不保留无用的全尺寸透明标注缓冲区。
+const layer = { width: 7680, height: 4320 }
+const largeCanvas = {
+  width: 7680,
+  height: 4320,
+  annotationLayer: layer,
+  getContext: context
+}
+renderDocument(largeCanvas, { naturalWidth: 7680, naturalHeight: 4320 }, [])
+assert.equal(largeCanvas.annotationLayer, null)
+assert.deepEqual(layer, { width: 0, height: 0 })
+let previewSize = null
+document.createElement = () => {
+  const canvas = createCanvas()
+  canvas.toBlob = (callback) => {
+    previewSize = [canvas.width, canvas.height]
+    callback({ data: "preview.png" })
+  }
+  return canvas
+}
+assert.equal(
+  await thumbnailSource({ width: 7680, height: 4320 }),
+  "preview.png"
+)
+assert.deepEqual(previewSize, [320, 180])
+document.createElement = createCanvas
 console.log("截图设置、历史上限、原位坐标和标注工具回归通过")
 console.log(
   "Screenshot window: cursor menu positioning, overflow, editor guards and double-click removal passed"

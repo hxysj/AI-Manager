@@ -380,7 +380,7 @@ import { screenshotApi } from "@/api/modules/screenshot"
 import { systemApi } from "@/api/modules/system"
 import { subscribeReady } from "@/api/request"
 import ImageEditor from "./ImageEditor.vue"
-import { selectionRect } from "../renderer"
+import { canvasSource, selectionRect, thumbnailSource } from "../renderer"
 
 const query = new URLSearchParams(location.search)
 const mode = query.get("mode")
@@ -428,6 +428,10 @@ const smoothScaling = ref(true)
 const pinGroup = ref("Default")
 const pinGroups = ref(["Default"])
 const drag = ref(null)
+let selectionGeneration = 0
+let documentGeneration = 0
+let disposed = false
+let cancelPinPaint = null
 // 边框、控制点和拖动期间使用相同的方向光标，取色仅在画面区域显示。
 const resizeCursors = {
   nw: "nwse-resize",
@@ -547,6 +551,7 @@ function desktopPoint(event) {
 function startSelection(event) {
   if (!frame.value || busy.value || event.button !== 0) return
   if (selection.value && editorSource.value) return
+  selectionGeneration += 1
   desktop.value.setPointerCapture(event.pointerId)
   const start = desktopPoint(event)
   drag.value = { kind: "select", start }
@@ -564,6 +569,7 @@ function startMove(event, hasAnnotations) {
     (hasAnnotations && !window.confirm("移动选区会清除当前标注，继续移动？"))
   )
     return
+  selectionGeneration += 1
   desktop.value.setPointerCapture(event.pointerId)
   drag.value = {
     kind: "move",
@@ -580,6 +586,7 @@ function startResize(event, handle) {
     !window.confirm("调整区域会清除当前标注，继续调整？")
   )
     return
+  selectionGeneration += 1
   desktop.value.setPointerCapture(event.pointerId)
   drag.value = { kind: "resize", handle, original: { ...selection.value } }
   editorSource.value = ""
@@ -670,9 +677,10 @@ async function movePointer(event) {
   }
 }
 
-function finishSelection() {
+async function finishSelection() {
   if (!drag.value || !selection.value) return
   drag.value = null
+  const generation = ++selectionGeneration
   const rect = selection.value
   const canvas = window.document.createElement("canvas")
   canvas.width = rect.width
@@ -690,16 +698,34 @@ function finishSelection() {
       rect.width,
       rect.height
     )
-  const source = canvas.toDataURL("image/png")
-  if (autoCopy.value) {
-    // 自动复制快捷键在框选结束后直接进入复制流程，不再等待编辑器按钮。
-    output({ action: "copy", source, output: source, annotations: [] })
-    return
+  try {
+    const [source, thumbnail] = await Promise.all([
+      canvasSource(canvas),
+      autoCopy.value ? thumbnailSource(canvas) : null
+    ])
+    // 大图编码期间可能已取消或重新框选，旧结果不能覆盖新选区。
+    if (disposed || generation !== selectionGeneration) return
+    if (autoCopy.value) {
+      await output({
+        action: "copy",
+        source,
+        output: source,
+        thumbnail,
+        annotations: []
+      })
+      return
+    }
+    editorSource.value = source
+  } catch (cause) {
+    if (generation === selectionGeneration) error.value = String(cause)
+  } finally {
+    canvas.width = 0
+    canvas.height = 0
   }
-  editorSource.value = source
 }
 
 function cancelDrag() {
+  selectionGeneration += 1
   drag.value = null
   resizeHovered.value = false
   selection.value = null
@@ -734,7 +760,8 @@ async function output(data) {
     if (savedOutput?.output !== data.output) {
       const newId = await screenshotApi.call("save-document", {
         source: data.source,
-        output: data.output,
+        output: data.output === data.source ? null : data.output,
+        thumbnail: data.thumbnail,
         annotations: data.annotations,
         editingPinId: mode === "capture" ? null : id,
         origin:
@@ -836,12 +863,83 @@ async function pinAction(action) {
       await screenshotApi.call(action, { id })
     else if (action === "paste") await screenshotApi.call("restore-previous")
     else if (action === "edit") {
-      editing.value = true
-      await screenshotApi.call("pin-action", { id, action: "edit" })
+      if (busy.value) return
+      busy.value = true
+      try {
+        // 显示贴图不读取原图，首次编辑时才加载可编辑源图。
+        if (!document.value.source) {
+          const generation = documentGeneration
+          const bytes = await screenshotApi.image(id, "source")
+          if (disposed || generation !== documentGeneration) return
+          document.value.source = URL.createObjectURL(
+            new Blob([bytes], { type: "image/png" })
+          )
+        }
+        editing.value = true
+        await screenshotApi.call("pin-action", { id, action: "edit" })
+      } finally {
+        busy.value = false
+      }
     } else await screenshotApi.call("pin-action", { id, action })
   } catch (cause) {
     error.value = String(cause)
   }
+}
+
+function releaseDocumentImages(value) {
+  for (const source of new Set([value?.source, value?.output])) {
+    if (source) URL.revokeObjectURL(source)
+  }
+}
+
+async function loadDocument() {
+  const generation = ++documentGeneration
+  const metadata = await screenshotApi.call("document", {
+    id,
+    metadataOnly: true
+  })
+  const bytes = await screenshotApi.image(id, "output")
+  if (disposed || generation !== documentGeneration) return false
+  const previous = document.value
+  document.value = {
+    ...metadata,
+    source: "",
+    output: URL.createObjectURL(new Blob([bytes], { type: "image/png" }))
+  }
+  await nextTick()
+  releaseDocumentImages(previous)
+  return true
+}
+
+function waitForPinPaint(size) {
+  return new Promise((resolve, reject) => {
+    let frame = 0
+    let matching = 0
+    const finish = (ready, cause) => {
+      cancelAnimationFrame(frame)
+      clearTimeout(timeout)
+      cancelPinPaint = null
+      if (cause) reject(cause)
+      else resolve(ready)
+    }
+    const timeout = setTimeout(
+      () => finish(false, new Error("贴图窗口尺寸未就绪，请重新贴图")),
+      2000
+    )
+    cancelPinPaint = () => finish(false)
+    const check = () => {
+      if (disposed) return finish(false)
+      const scale = devicePixelRatio || 1
+      // 原生窗口是物理像素；等 WebView 的视口和 DPI 同步后再露出图片。
+      const matches =
+        Math.abs(innerWidth * scale - size.width) <= scale &&
+        Math.abs(innerHeight * scale - size.height) <= scale
+      matching = matches ? matching + 1 : 0
+      if (matching >= 2) finish(true)
+      else frame = requestAnimationFrame(check)
+    }
+    frame = requestAnimationFrame(check)
+  })
 }
 
 function isCurrentZoom(value) {
@@ -876,7 +974,7 @@ async function processImage(operation) {
   await closePinMenu()
   try {
     await screenshotApi.call("process-image", { id, operation })
-    document.value = await screenshotApi.call("document", { id })
+    if (!(await loadDocument())) return
     pinWidth = document.value.pin.width
     pinHeight = document.value.pin.height
     syncImageMetrics()
@@ -896,7 +994,7 @@ async function replaceImage() {
     })
     if (!path) return
     await screenshotApi.call("replace-file", { id, path })
-    document.value = await screenshotApi.call("document", { id })
+    if (!(await loadDocument())) return
     pinWidth = document.value.pin.width
     pinHeight = document.value.pin.height
     syncImageMetrics()
@@ -1132,7 +1230,7 @@ onMounted(async () => {
       await loadFrame()
       if (!frame.value) await screenshotApi.call("capture-window-ready")
     } else {
-      document.value = await screenshotApi.call("document", { id })
+      if (!(await loadDocument())) return
       opacity.value = document.value.pin?.opacity ?? 1
       pinGroup.value = document.value.pin?.group || "Default"
       if (!pinGroups.value.includes(pinGroup.value))
@@ -1143,12 +1241,19 @@ onMounted(async () => {
       unlisten = await subscribeReady("screenshot:opacity", (value) => {
         opacity.value = value
       })
+      if (disposed) {
+        unlisten?.()
+        return
+      }
       await nextTick()
       await pinImage.value?.decode()
-      // 等待图片完成首帧绘制后再显示原生窗口，避免透明窗口先闪出空白帧。
+      if (disposed) return
+      // 先以透明内容激活窗口，让浏览器真正完成最终尺寸的布局和绘制。
+      const size = await screenshotApi.call("pin-show", { id })
+      if (size.visible && !(await waitForPinPaint(size))) return
       pinReady.value = true
       await nextTick()
-      await new Promise((resolve) => setTimeout(resolve, 16))
+      if (size.visible && !(await waitForPinPaint(size))) return
       await screenshotApi.call("pin-ready", { id, dismissCapture })
     }
   } catch (cause) {
@@ -1156,11 +1261,16 @@ onMounted(async () => {
     if (mode === "pin") pinReady.value = true
     if (mode === "pin")
       await screenshotApi
-        .call("pin-ready", { id, dismissCapture })
+        .call("pin-ready", { id, dismissCapture: false })
         .catch(() => {})
   }
 })
 onBeforeUnmount(() => {
+  disposed = true
+  cancelPinPaint?.()
+  selectionGeneration += 1
+  documentGeneration += 1
+  releaseDocumentImages(document.value)
   frameGeneration += 1
   window.removeEventListener("keydown", keydown)
   window.removeEventListener("resize", checkViewport)

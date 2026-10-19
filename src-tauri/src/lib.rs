@@ -219,7 +219,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![dispatch_api, screenshot::screenshot_frame])
+        .invoke_handler(tauri::generate_handler![dispatch_api, screenshot::screenshot_frame, screenshot::screenshot_image])
         .build(tauri::generate_context!())
         .expect("启动 Monkey Thief 失败")
         .run(|app, event| {

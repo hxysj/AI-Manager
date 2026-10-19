@@ -519,7 +519,7 @@ pub async fn dispatch(
             if !window.is_visible().unwrap_or(false) { window.show().map_err(failure)?; }
             Ok(json!(true))
         }
-        "pin-ready" => {
+        "pin-show" | "pin-ready" => {
             let id = id_from(&payload)?;
             let window = app
                 .get_webview_window(&format!("screenshot-pin-{id}"))
@@ -534,12 +534,18 @@ pub async fn dispatch(
                 .and_then(|entry| entry.pin.as_ref())
                 .is_some_and(|pin| pin.visible && pin.lifecycle == "open");
             if visible {
-                window.show().map_err(failure)?;
-                if payload["dismissCapture"].as_bool().unwrap_or(false)
+                if !window.is_visible().map_err(failure)? {
+                    window.show().map_err(failure)?;
+                }
+                if action == "pin-ready" && payload["dismissCapture"].as_bool().unwrap_or(false)
                     && service.capturing.load(Ordering::SeqCst)
                 {
                     cancel_capture(&app)?;
                 }
+            }
+            if action == "pin-show" {
+                let size = window.inner_size().map_err(failure)?;
+                return Ok(json!({"visible": visible, "width": size.width, "height": size.height}));
             }
             Ok(json!(visible))
         }
@@ -570,21 +576,26 @@ pub async fn dispatch(
         }
         "save-document" => {
             drop(service);
-            Ok(json!(save_document(&app, payload)?))
+            // PNG 解码、缩略图和文件提交不占用处理窗口命令的线程。
+            let id = tauri::async_runtime::spawn_blocking(move || save_document(&app, payload))
+                .await.map_err(failure)??;
+            Ok(json!(id))
         }
         "document" => {
             let id = id_from(&payload)?;
             let dir = service.document_dir(id)?;
             let mut document: Value =
                 serde_json::from_slice(&std::fs::read(dir.join("document.json"))?)?;
-            document["source"] = json!(format!(
-                "data:image/png;base64,{}",
-                STANDARD.encode(std::fs::read(dir.join("source.png"))?)
-            ));
-            document["output"] = json!(format!(
-                "data:image/png;base64,{}",
-                STANDARD.encode(std::fs::read(dir.join("output.png"))?)
-            ));
+            if !payload["metadataOnly"].as_bool().unwrap_or(false) {
+                document["source"] = json!(format!(
+                    "data:image/png;base64,{}",
+                    STANDARD.encode(std::fs::read(dir.join("source.png"))?)
+                ));
+                document["output"] = json!(format!(
+                    "data:image/png;base64,{}",
+                    STANDARD.encode(std::fs::read(dir.join("output.png"))?)
+                ));
+            }
             let entry = service
                 .session
                 .lock()
@@ -877,21 +888,15 @@ fn remove_expired_history(app: &AppHandle, service: &ScreenshotService, ids: &[S
 
 fn save_png(
     path: &Path,
-    data: &str,
     bytes: &[u8],
     image: &DynamicImage,
 ) -> Result<(), ManagerError> {
     // 截图和编辑器都传 PNG，直接落盘可以避免再次解码后编码整张大图。
-    let is_png = !bytes.is_empty()
-        && data
-        .split_once(',')
-        .is_some_and(|(header, _)| header.eq_ignore_ascii_case("data:image/png;base64"));
-    let encoded = if is_png {
-        bytes.to_vec()
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        std::fs::write(path, bytes)?;
     } else {
-        encode_png_fast(image)?
-    };
-    std::fs::write(path, encoded)?;
+        write_png(path, image)?;
+    }
     Ok(())
 }
 
@@ -900,16 +905,38 @@ fn write_png(path: &Path, image: &DynamicImage) -> Result<(), ManagerError> {
     Ok(())
 }
 
+fn save_thumbnail(path: &Path, image: &DynamicImage, preview: Option<&str>) -> Result<(), ManagerError> {
+    if let Some(data) = preview {
+        let (bytes, thumbnail) = decode_data(data)?;
+        if thumbnail.width() > 320 || thumbnail.height() > 200 {
+            return Err(failure("截图缩略图尺寸无效"));
+        }
+        save_png(path, &bytes, &thumbnail)
+    } else {
+        // 导入文件、粘贴剪贴板等旧调用仍可由后端生成预览。
+        write_png(path, &image.thumbnail(320, 200))
+    }
+}
+
 fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError> {
     let service = app.state::<ScreenshotService>();
     let source_data = payload["source"]
         .as_str()
         .ok_or_else(|| failure("缺少原图"))?;
-    let output_data = payload["output"]
-        .as_str()
-        .ok_or_else(|| failure("缺少渲染结果"))?;
+    // 未标注截图只传一份原图，兼容已有的双图调用。
+    let output_data = match payload.get("output") {
+        None | Some(Value::Null) => source_data,
+        Some(value) => value.as_str().ok_or_else(|| failure("渲染结果无效"))?,
+    };
     let (source_bytes, source) = decode_data(source_data)?;
-    let (output_bytes, output) = decode_data(output_data)?;
+    let rendered = if source_data == output_data {
+        None
+    } else {
+        Some(decode_data(output_data)?)
+    };
+    let (output_bytes, output) = rendered.as_ref()
+        .map(|(bytes, image)| (bytes.as_slice(), image))
+        .unwrap_or((&source_bytes, &source));
     let annotations = payload
         .get("annotations")
         .cloned()
@@ -921,10 +948,9 @@ fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError
     let id = uuid::Uuid::new_v4().to_string();
     let dir = service.document_dir(&id)?;
     std::fs::create_dir_all(&dir)?;
-    save_png(&dir.join("source.png"), source_data, &source_bytes, &source)?;
-    save_png(&dir.join("output.png"), output_data, &output_bytes, &output)?;
-    let thumbnail = output.thumbnail(320, 200);
-    write_png(&dir.join("thumbnail.png"), &thumbnail)?;
+    save_png(&dir.join("source.png"), &source_bytes, &source)?;
+    save_png(&dir.join("output.png"), output_bytes, output)?;
+    save_thumbnail(&dir.join("thumbnail.png"), output, payload["thumbnail"].as_str())?;
     atomic_write(
         &dir.join("document.json"),
         &serde_json::to_vec(&json!({"schemaVersion": 1, "annotations": annotations}))?,
@@ -1052,6 +1078,25 @@ pub async fn screenshot_frame(app: AppHandle) -> tauri::ipc::Response {
     tauri::ipc::Response::new(bytes)
 }
 
+fn document_image_path(service: &ScreenshotService, id: &str, kind: &str) -> Result<PathBuf, ManagerError> {
+    let file = match kind {
+        "source" => "source.png",
+        "output" => "output.png",
+        _ => return Err(failure("不支持的截图图片类型")),
+    };
+    Ok(service.document_dir(id)?.join(file))
+}
+
+#[tauri::command]
+pub async fn screenshot_image(app: AppHandle, id: String, kind: String) -> Result<tauri::ipc::Response, String> {
+    let path = {
+        let service = app.try_state::<ScreenshotService>().ok_or("截图服务未就绪")?;
+        document_image_path(&service, &id, &kind).map_err(|error| error.to_string())?
+    };
+    let bytes = tokio::fs::read(path).await.map_err(|error| error.to_string())?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 pub async fn begin_capture(app: &AppHandle, auto_copy: bool) -> Result<(), ManagerError> {
     let service = app.state::<ScreenshotService>();
     if service.capturing.swap(true, Ordering::SeqCst) {
@@ -1169,6 +1214,12 @@ fn open_pin_with_visibility(
         pin.visible = true;
     }
     pin.lifecycle = "open".into();
+    let scale = monitors.iter().find(|m| {
+        i64::from(pin.x) >= i64::from(m.position().x)
+            && i64::from(pin.x) < i64::from(m.position().x) + i64::from(m.size().width)
+            && i64::from(pin.y) >= i64::from(m.position().y)
+            && i64::from(pin.y) < i64::from(m.position().y) + i64::from(m.size().height)
+    }).unwrap_or(&monitor).scale_factor();
     let url = if dismiss_capture {
         format!("index.html?panel=screenshot&mode=pin&id={id}&capture=1")
     } else {
@@ -1188,11 +1239,14 @@ fn open_pin_with_visibility(
     .transparent(true)
     .background_color(tauri::window::Color(0, 0, 0, 0))
     .shadow(false)
-    .position(f64::from(pin.x), f64::from(pin.y))
-    .inner_size(f64::from(pin.width), f64::from(pin.height))
+    // 构造器使用逻辑像素，文档保存的是物理像素；不能直接混用。
+    .position(f64::from(pin.x) / scale, f64::from(pin.y) / scale)
+    .inner_size(f64::from(pin.width) / scale, f64::from(pin.height) / scale)
     .visible(false)
     .build()
     .map_err(failure)?;
+    #[cfg(windows)]
+    windows::disable_window_transitions(&window)?;
     window
         .set_position(PhysicalPosition::new(pin.x, pin.y))
         .map_err(failure)?;
@@ -1207,7 +1261,7 @@ fn open_pin_with_visibility(
         service.commit(&next)?;
         *guard = next;
     }
-    // 等贴图页面完成图片解码后，由 pin-ready 显示窗口，避免透明窗口先闪出空白帧。
+    // 页面先透明显示并确认最终视口，再绘制图片、结束框选，避免首帧缩放和闪烁。
     changed(app);
     Ok(())
 }
@@ -1719,6 +1773,42 @@ mod tests {
             .document_dir(&id)
             .unwrap()
             .starts_with(root.0.join("screenshots/documents")));
+        for kind in ["source", "output"] {
+            assert_eq!(document_image_path(&service, &id, kind).unwrap(), service.document_dir(&id).unwrap().join(format!("{kind}.png")));
+        }
+        assert!(document_image_path(&service, "../other", "output").is_err());
+        assert!(document_image_path(&service, &id, "../session.json").is_err());
+    }
+
+    #[test]
+    fn saved_png_reuses_bytes_and_preserves_transparency() {
+        let root = TestRoot::new();
+        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8 * 60, y as u8 * 90, 100, x as u8 * 100])));
+        let bytes = encode_png_fast(&image).unwrap();
+        let path = root.0.join("image.png");
+        save_png(&path, &bytes, &image).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(decode_bytes(&std::fs::read(&path).unwrap()).unwrap().to_rgba8(), image.to_rgba8());
+        // 非 PNG 输入仍编码为 PNG，保留旧导入流程的格式转换能力。
+        save_png(&path, &[], &image).unwrap();
+        assert_eq!(decode_bytes(&std::fs::read(&path).unwrap()).unwrap().to_rgba8(), image.to_rgba8());
+    }
+
+    #[test]
+    fn supplied_thumbnail_is_saved_without_resampling_the_original() {
+        let root = TestRoot::new();
+        let original = DynamicImage::new_rgba8(800, 600);
+        let preview = DynamicImage::new_rgba8(320, 180);
+        let data = image_data(&preview).unwrap();
+        let path = root.0.join("thumbnail.png");
+        save_thumbnail(&path, &original, Some(&data)).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), encode_png_fast(&preview).unwrap());
+        let oversized = image_data(&DynamicImage::new_rgba8(321, 180)).unwrap();
+        assert!(save_thumbnail(&path, &original, Some(&oversized)).is_err());
+        assert!(save_thumbnail(&path, &original, Some("broken")).is_err());
+        save_thumbnail(&path, &original, None).unwrap();
+        let fallback = decode_bytes(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!((fallback.width(), fallback.height()), (267, 200));
     }
 
     #[cfg(windows)]

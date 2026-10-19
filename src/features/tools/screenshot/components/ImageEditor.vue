@@ -45,7 +45,7 @@
               :style="{ backgroundColor: preset }"
               :title="`颜色 ${preset}`"
               :aria-label="`颜色 ${preset}`"
-              :disabled="busy"
+              :disabled="busy || outputting"
               @click="color = preset"
             />
             <input
@@ -54,7 +54,7 @@
               type="color"
               title="自定义颜色"
               aria-label="自定义颜色"
-              :disabled="busy"
+              :disabled="busy || outputting"
             />
           </div>
           <div class="toolbar-group">
@@ -65,7 +65,7 @@
               v-model.number="width"
               class="toolbar-select"
               :aria-label="tool === 'text' ? '字号' : '线宽'"
-              :disabled="busy"
+              :disabled="busy || outputting"
             >
               <option v-for="size in lineWidths" :key="size" :value="size">
                 {{ tool === "text" ? Math.max(14, size * 7) : size }} px
@@ -91,7 +91,7 @@
                   :title="control.label"
                   :aria-label="control.label"
                   :aria-expanded="dropdown === control.id"
-                  :disabled="busy"
+                  :disabled="busy || outputting"
                   @click="dropdown = dropdown === control.id ? '' : control.id"
                 >
                   <component
@@ -120,7 +120,7 @@
                     :title="option.label"
                     :aria-label="option.label"
                     :aria-pressed="lineOptions[control.id] === option.value"
-                    :disabled="busy"
+                    :disabled="busy || outputting"
                     @click="selectLineOption(control.id, option.value)"
                   >
                     <component
@@ -146,7 +146,7 @@
             :title="item.label"
             :aria-label="item.label"
             :aria-pressed="tool === item.id"
-            :disabled="busy"
+            :disabled="busy || outputting"
             @click="setTool(item.id)"
           >
             <component
@@ -164,7 +164,7 @@
             type="button"
             title="取消 Esc"
             aria-label="取消"
-            :disabled="busy"
+            :disabled="busy || outputting"
             @click="$emit('cancel')"
           >
             <X :size="17" />
@@ -174,7 +174,7 @@
             type="button"
             title="撤销 Ctrl+Z"
             aria-label="撤销"
-            :disabled="!undoStack.length || busy"
+            :disabled="!undoStack.length || busy || outputting"
             @click="undo"
           >
             <Undo2 :size="17" />
@@ -184,7 +184,7 @@
             type="button"
             title="重做 Ctrl+Shift+Z"
             aria-label="重做"
-            :disabled="!redoStack.length || busy"
+            :disabled="!redoStack.length || busy || outputting"
             @click="redo"
           >
             <Redo2 :size="17" />
@@ -195,7 +195,7 @@
             type="button"
             title="重新选择区域"
             aria-label="重新选择区域"
-            :disabled="busy"
+            :disabled="busy || outputting"
             @click="$emit('reselect', annotations.length > 0)"
           >
             <Crop :size="17" />
@@ -241,7 +241,12 @@ import {
   Undo2,
   X
 } from "lucide-vue-next"
-import { loadImage, renderDocument } from "../renderer"
+import {
+  canvasSource,
+  loadImage,
+  renderDocument,
+  thumbnailSource
+} from "../renderer"
 
 const props = defineProps({
   source: { type: String, required: true },
@@ -374,6 +379,8 @@ function point(event) {
 }
 
 function commitText() {
+  if (!textPosition.value) return
+  const changed = Boolean(text.value.trim())
   if (textPosition.value && text.value.trim()) {
     undoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
     annotations.value.push({
@@ -387,7 +394,7 @@ function commitText() {
   }
   textPosition.value = null
   text.value = ""
-  repaint()
+  if (changed) repaint()
 }
 
 function setTool(value) {
@@ -411,7 +418,7 @@ function closeDropdownOnBlur(event) {
 }
 
 async function startDrawing(event) {
-  if (!image || props.busy || event.button !== 0) return
+  if (!image || props.busy || outputting.value || event.button !== 0) return
   if (tool.value === "select") {
     emit("selection-start", event, annotations.value.length > 0)
     return
@@ -496,32 +503,23 @@ async function output(action) {
   if (!image || pending || outputting.value) return
   outputting.value = true
   commitText()
+  const generation = sourceGeneration
   try {
-    let output = props.source
-    if (annotations.value.length) {
-      // 异步编码大图，避免点击贴图按钮时同步阻塞渲染线程。
-      const blob = await new Promise((resolve, reject) => {
-        canvas.value.toBlob(
-          (value) =>
-            value ? resolve(value) : reject(new Error("截图编码失败")),
-          "image/png"
-        )
-      })
-      output = await new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(reader.result)
-        reader.onerror = () => reject(reader.error || new Error("截图读取失败"))
-        reader.readAsDataURL(blob)
-      })
-    }
+    const items = JSON.parse(JSON.stringify(annotations.value))
+    const [output, thumbnail] = await Promise.all([
+      items.length ? canvasSource(canvas.value) : props.source,
+      thumbnailSource(canvas.value)
+    ])
+    if (generation !== sourceGeneration) return
     emit("output", {
       action,
       source: props.source,
       output,
-      annotations: JSON.parse(JSON.stringify(annotations.value))
+      thumbnail,
+      annotations: items
     })
   } catch (error) {
-    emit("error", error.message)
+    if (generation === sourceGeneration) emit("error", error.message)
   } finally {
     outputting.value = false
   }
@@ -542,6 +540,7 @@ function textKeydown(event) {
 function keydown(event) {
   if (
     props.busy ||
+    outputting.value ||
     event.isComposing ||
     ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)
   )

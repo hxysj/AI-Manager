@@ -28,10 +28,53 @@ export function loadImage(source) {
   })
 }
 
+// 浏览器异步编码，避免大选区同步生成 PNG 时卡住整个截图页面。
+export async function canvasSource(canvas) {
+  const blob = await new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (value) => (value ? resolve(value) : reject(new Error("截图编码失败"))),
+      "image/png"
+    )
+  })
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result)
+    reader.onerror = () => reject(reader.error || new Error("截图读取失败"))
+    reader.readAsDataURL(blob)
+  })
+}
+
+export async function thumbnailSource(image) {
+  const scale = Math.min(1, 320 / image.width, 200 / image.height)
+  const canvas = document.createElement("canvas")
+  canvas.width = Math.max(1, Math.round(image.width * scale))
+  canvas.height = Math.max(1, Math.round(image.height * scale))
+  const context = canvas.getContext("2d")
+  context.imageSmoothingQuality = "high"
+  context.drawImage(image, 0, 0, canvas.width, canvas.height)
+  try {
+    return await canvasSource(canvas)
+  } finally {
+    canvas.width = 0
+    canvas.height = 0
+  }
+}
+
 export function renderDocument(canvas, image, annotations) {
   if (canvas.width !== image.naturalWidth) canvas.width = image.naturalWidth
   if (canvas.height !== image.naturalHeight) canvas.height = image.naturalHeight
   const ctx = canvas.getContext("2d")
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(image, 0, 0)
+  if (!annotations.length) {
+    // 普通截图不分配整图大小的透明层，撤销完标注也释放该缓冲区。
+    if (canvas.annotationLayer) {
+      canvas.annotationLayer.width = 0
+      canvas.annotationLayer.height = 0
+      canvas.annotationLayer = null
+    }
+    return
+  }
   // 复用透明层，避免鼠标移动预览时反复分配整张大画布。
   const layer =
     canvas.annotationLayer ||
@@ -39,8 +82,6 @@ export function renderDocument(canvas, image, annotations) {
   if (layer.width !== canvas.width) layer.width = canvas.width
   if (layer.height !== canvas.height) layer.height = canvas.height
   const layerCtx = layer.getContext("2d")
-  ctx.clearRect(0, 0, canvas.width, canvas.height)
-  ctx.drawImage(image, 0, 0)
   layerCtx.clearRect(0, 0, layer.width, layer.height)
   for (const item of annotations) {
     const [start, end] = [item.points[0], item.points.at(-1)]

@@ -5,13 +5,31 @@ use std::{
     ptr::null_mut,
     time::Duration,
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use windows_sys::Win32::{
     Foundation::{GlobalFree, HGLOBAL},
-    Graphics::Gdi::*,
+    Graphics::{Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED}, Gdi::*},
     System::{DataExchange::*, Memory::*},
     UI::{Input::KeyboardAndMouse::*, Shell::DragQueryFileW, WindowsAndMessaging::*},
 };
+
+pub fn disable_window_transitions(window: &WebviewWindow) -> Result<(), ManagerError> {
+    let hwnd = window.hwnd().map_err(failure)?;
+    let disabled = 1_i32;
+    // 仅关闭贴图窗口自身的系统过渡动画，不修改用户的 Windows 设置。
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd.0 as _,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            std::ptr::from_ref(&disabled).cast(),
+            size_of::<i32>() as u32,
+        )
+    };
+    if result < 0 {
+        return Err(failure(format!("关闭贴图窗口过渡动画失败：{result:#x}")));
+    }
+    Ok(())
+}
 
 // 所有 GDI 所有权都在此处释放，剪贴板借用的位图不进入此包装。
 struct CaptureDc {

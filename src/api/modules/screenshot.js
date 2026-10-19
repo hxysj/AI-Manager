@@ -5,5 +5,7 @@ import { invoke } from "@tauri-apps/api/core"
 export const screenshotApi = {
   // 框选首帧直接接收二进制像素，避免图片压缩与解码等待。
   frame: () => invoke("screenshot_frame"),
+  // 贴图只加载需要的 PNG，避免两张大图经 Base64 和 JSON 重复传输。
+  image: (id, kind) => invoke("screenshot_image", { id, kind }),
   call: (action, payload) => request(`screenshot:${action}`, payload)
 }
