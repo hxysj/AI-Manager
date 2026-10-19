@@ -351,10 +351,12 @@ pub fn start_hotkeys(app: AppHandle) {
                     let action = message.wParam;
                     tauri::async_runtime::spawn(async move {
                         let result = match action {
-                            1 => super::begin_capture(&app).await,
-                            2 => super::paste_clipboard(&app),
-                            3 => super::toggle_pins(&app),
-                            4 => super::reset_input(&app),
+                            1 => super::begin_capture(&app, true).await,
+                            2 => super::begin_capture(&app, false).await,
+                            3 => super::paste_clipboard(&app),
+                            4 => super::toggle_pins(&app),
+                            5 => super::switch_pin_group(&app),
+                            6 => super::reset_input(&app),
                             _ => Ok(()),
                         };
                         if let Err(error) = result {

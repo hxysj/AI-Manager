@@ -1,8 +1,11 @@
 <template>
   <div
-    v-if="mode === 'capture' && frame"
+    v-if="mode === 'capture'"
     ref="desktop"
     class="capture-window"
+    :style="{
+      cursor: drag?.kind === 'resize' ? resizeCursors[drag.handle] : undefined
+    }"
     @pointerdown="startSelection"
     @pointermove="movePointer"
     @pointerup="finishSelection"
@@ -10,16 +13,20 @@
     @contextmenu.prevent="reselect"
   >
     <canvas
-      v-if="frame"
       ref="captureBackground"
-      :width="frame.width"
-      :height="frame.height"
+      width="1"
+      height="1"
       class="capture-background"
     />
-    <div v-if="!selection" class="capture-instructions">
+    <div v-if="frame && !selection" class="capture-instructions">
       拖动选择截图区域 · Esc 取消 · C 复制当前像素颜色
     </div>
-    <div v-if="selection" class="capture-selection" :style="selectionStyle">
+    <div
+      v-if="frame && selection"
+      class="capture-selection"
+      :class="{ 'is-resizing': drag?.kind === 'resize' }"
+      :style="selectionStyle"
+    >
       <ImageEditor
         v-if="editorSource && !drag"
         :source="editorSource"
@@ -31,35 +38,67 @@
         @error="error = $event"
         @reselect="reselect"
         @selection-start="startMove"
+        @toolbar-hover="toolbarHovered = $event"
       />
       <div class="selection-size">
         {{ selection.width }} × {{ selection.height }}
       </div>
       <button
+        v-for="edge in ['n', 'e', 's', 'w']"
+        :key="`edge-${edge}`"
+        type="button"
+        class="selection-edge"
+        :class="`edge-${edge}`"
+        :style="{ cursor: resizeCursors[edge] }"
+        :aria-label="`拖动选区边框 ${edge}`"
+        @pointerenter="resizeHovered = true"
+        @pointerleave="resizeHovered = false"
+        @pointerdown.stop="startResize($event, edge)"
+      />
+      <button
         v-for="handle in handles"
         :key="handle"
+        type="button"
         class="selection-handle"
         :class="`handle-${handle}`"
+        :style="{ cursor: resizeCursors[handle] }"
         :aria-label="`调整选区 ${handle}`"
+        @pointerenter="resizeHovered = true"
+        @pointerleave="resizeHovered = false"
         @pointerdown.stop="startResize($event, handle)"
       />
     </div>
-    <div
-      v-if="frame && pointer"
-      class="capture-magnifier"
-      :style="magnifierStyle"
-    >
-      <canvas
-        ref="magnifier"
-        class="magnifier-canvas"
-        width="132"
-        height="88"
-      />
-      <span class="magnifier-text"
-        >{{ pixelColor }} · {{ Math.floor(pointer.x) + frame.left }},
-        {{ Math.floor(pointer.y) + frame.top }}</span
+    <Teleport to="body">
+      <div
+        v-if="frame && pointer"
+        v-show="magnifierVisible"
+        class="capture-magnifier"
+        :style="magnifierStyle"
       >
-    </div>
+        <div class="magnifier-preview">
+          <canvas
+            ref="magnifier"
+            class="magnifier-canvas"
+            width="168"
+            height="120"
+          />
+          <span class="magnifier-crosshair" />
+          <span class="magnifier-pixel" :style="{ background: pixelColor }" />
+        </div>
+        <span class="magnifier-coordinates"
+          >({{ Math.min(frame.width - 1, Math.floor(pointer.x)) + frame.left }},
+          {{
+            Math.min(frame.height - 1, Math.floor(pointer.y)) + frame.top
+          }})</span
+        >
+        <div class="magnifier-color">
+          <span class="magnifier-swatch" :style="{ background: pixelColor }" />
+          <span class="magnifier-value">{{ colorValue }}</span>
+        </div>
+        <span class="magnifier-hint">按 C 复制颜色值</span>
+        <span class="magnifier-hint">按 Shift 切换 RGB/HEX</span>
+      </div>
+    </Teleport>
     <div v-if="error" class="capture-error" role="alert">{{ error }}</div>
   </div>
   <div
@@ -127,6 +166,8 @@
       <button
         class="pin-menu-button"
         type="button"
+        aria-label="窗口阴影"
+        :aria-pressed="windowShadow"
         @click="windowShadow = !windowShadow"
       >
         <span class="pin-menu-check">{{ windowShadow ? "✓" : "" }}</span>
@@ -339,13 +380,14 @@ import { screenshotApi } from "@/api/modules/screenshot"
 import { systemApi } from "@/api/modules/system"
 import { subscribeReady } from "@/api/request"
 import ImageEditor from "./ImageEditor.vue"
-import { loadImage, selectionRect } from "../renderer"
+import { selectionRect } from "../renderer"
 
 const query = new URLSearchParams(location.search)
 const mode = query.get("mode")
 const id = query.get("id")
 const dismissCapture = query.get("capture") === "1"
 const frame = ref(null)
+const autoCopy = ref(false)
 const desktop = ref(null)
 const captureBackground = ref(null)
 const pinImage = ref(null)
@@ -353,7 +395,20 @@ const selection = ref(null)
 const editorSource = ref("")
 const pointer = ref(null)
 const magnifier = ref(null)
+const toolbarHovered = ref(false)
+const resizeHovered = ref(false)
 const pixelColor = ref("#000000")
+// 取色模式每次截图默认使用 RGB，显示和复制始终共享同一个格式值。
+const colorFormat = ref("rgb")
+const colorValue = computed(() =>
+  colorFormat.value === "hex"
+    ? pixelColor.value
+    : [1, 3, 5]
+        .map((offset) =>
+          parseInt(pixelColor.value.slice(offset, offset + 2), 16)
+        )
+        .join(", ")
+)
 const busy = ref(false)
 const error = ref("")
 const document = ref(null)
@@ -373,7 +428,24 @@ const smoothScaling = ref(true)
 const pinGroup = ref("Default")
 const pinGroups = ref(["Default"])
 const drag = ref(null)
-const handles = ["nw", "n", "ne", "e", "se", "s", "sw", "w"]
+// 边框、控制点和拖动期间使用相同的方向光标，取色仅在画面区域显示。
+const resizeCursors = {
+  nw: "nwse-resize",
+  n: "ns-resize",
+  ne: "nesw-resize",
+  e: "ew-resize",
+  se: "nwse-resize",
+  s: "ns-resize",
+  sw: "nesw-resize",
+  w: "ew-resize"
+}
+const handles = Object.keys(resizeCursors)
+const magnifierVisible = computed(
+  () =>
+    !toolbarHovered.value &&
+    !resizeHovered.value &&
+    drag.value?.kind !== "resize"
+)
 let originalImage
 let pixelCanvas
 let unlisten
@@ -432,13 +504,21 @@ const toolbarStyle = computed(() => {
     maxWidth: "calc(100vw - 8px)"
   }
 })
-const magnifierStyle = computed(() => ({
-  left: `${Math.max(0, Math.min(pointer.value.clientX + 22, innerWidth - 240))}px`,
-  top: `${Math.max(0, Math.min(pointer.value.clientY + 22, innerHeight - 125))}px`
-}))
+const magnifierStyle = computed(() => {
+  // 靠近屏幕边缘时翻到鼠标另一侧，保持预览和操作提示完整可见。
+  const { clientX, clientY } = pointer.value
+  const width = 186
+  const height = 226
+  const gap = 22
+  return {
+    left: `${Math.max(0, Math.min(clientX + gap + width <= innerWidth ? clientX + gap : clientX - width - gap, innerWidth - width))}px`,
+    top: `${Math.max(0, Math.min(clientY + gap + height <= innerHeight ? clientY + gap : clientY - height - gap, innerHeight - height))}px`
+  }
+})
+// 阴影开关同时控制边框颜色，保留占位避免图片尺寸跳动。
 const pinWindowClass = computed(() => ({
   "has-shadow": windowShadow.value,
-  "has-border": true
+  "has-border": windowShadow.value
 }))
 
 function desktopPoint(event) {
@@ -554,6 +634,7 @@ async function movePointer(event) {
       )
     }
   }
+  if (!magnifierVisible.value) return
   if (pixelCanvas) {
     const data = pixelCanvas
       .getContext("2d")
@@ -572,21 +653,19 @@ async function movePointer(event) {
     if (!magnifier.value) await nextTick()
     if (magnifier.value) {
       const ctx = magnifier.value.getContext("2d")
-      ctx.clearRect(0, 0, 132, 88)
+      ctx.clearRect(0, 0, 168, 120)
       ctx.imageSmoothingEnabled = false
       ctx.drawImage(
         pixelCanvas,
-        point.x - 16,
-        point.y - 11,
-        33,
-        22,
+        Math.min(frame.value.width - 1, Math.floor(point.x)) - 10,
+        Math.min(frame.value.height - 1, Math.floor(point.y)) - 7,
+        21,
+        15,
         0,
         0,
-        132,
-        88
+        168,
+        120
       )
-      ctx.strokeStyle = "#38bdf8"
-      ctx.strokeRect(64, 40, 4, 4)
     }
   }
 }
@@ -611,11 +690,18 @@ function finishSelection() {
       rect.width,
       rect.height
     )
-  editorSource.value = canvas.toDataURL("image/png")
+  const source = canvas.toDataURL("image/png")
+  if (autoCopy.value) {
+    // 自动复制快捷键在框选结束后直接进入复制流程，不再等待编辑器按钮。
+    output({ action: "copy", source, output: source, annotations: [] })
+    return
+  }
+  editorSource.value = source
 }
 
 function cancelDrag() {
   drag.value = null
+  resizeHovered.value = false
   selection.value = null
   editorSource.value = ""
 }
@@ -930,13 +1016,27 @@ async function keydown(event) {
       : editing.value
         ? await stopEditing()
         : await pinAction("close")
+  if (mode !== "capture" || !frame.value || !pointer.value) return
+  // 松开框选后仍可切换和复制颜色；输入文字和带修饰键的编辑操作不受影响。
   if (
-    mode === "capture" &&
-    !editorSource.value &&
-    event.key.toLowerCase() === "c"
+    event.key === "Shift" &&
+    !event.repeat &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey
   ) {
+    event.preventDefault()
+    colorFormat.value = colorFormat.value === "rgb" ? "hex" : "rgb"
+  }
+  if (
+    event.key.toLowerCase() === "c" &&
+    !event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey
+  ) {
+    event.preventDefault()
     try {
-      await navigator.clipboard.writeText(pixelColor.value)
+      await navigator.clipboard.writeText(colorValue.value)
     } catch (cause) {
       error.value = String(cause)
     }
@@ -958,10 +1058,21 @@ function checkViewport() {
 
 function resetCapture() {
   frameGeneration += 1
+  // 仅清空像素，保留画布缓冲区，下一次唤出不再反复缩小和扩容。
+  if (captureBackground.value) {
+    const background = captureBackground.value
+    background
+      .getContext("2d")
+      .clearRect(0, 0, background.width, background.height)
+  }
   frame.value = null
+  autoCopy.value = false
+  colorFormat.value = "rgb"
   originalImage = null
   pixelCanvas = null
   pointer.value = null
+  toolbarHovered.value = false
+  resizeHovered.value = false
   savedOutput = null
   error.value = ""
   lastViewport = null
@@ -971,19 +1082,37 @@ function resetCapture() {
 async function loadFrame() {
   resetCapture()
   const generation = frameGeneration
-  const current = await screenshotApi.call("frame")
-  if (!current || generation !== frameGeneration) return
-  const image = await loadImage(current.source)
-  if (generation !== frameGeneration) return
-  frame.value = current
-  await nextTick()
-  if (generation !== frameGeneration) return
+  const bytes = await screenshotApi.frame()
+  if (!bytes.byteLength || generation !== frameGeneration) return
+  // 帧头和像素来自同一响应，避免连续截图时坐标与图像错配。
+  const header = new DataView(bytes, 0, 20)
+  const current = {
+    left: header.getInt32(0, true),
+    top: header.getInt32(4, true),
+    width: header.getUint32(8, true),
+    height: header.getUint32(12, true)
+  }
+  if (bytes.byteLength !== 20 + current.width * current.height * 4)
+    throw new Error("截图像素数据不完整")
   const background = captureBackground.value
   if (!background) return
+  // 尺寸只在显示器布局变化时更新，避免 Vue 重设 width/height 清掉已绘制的首帧。
+  if (background.width !== current.width) background.width = current.width
+  if (background.height !== current.height) background.height = current.height
   const context = background.getContext("2d", { willReadFrequently: true })
-  context.drawImage(image, 0, 0, current.width, current.height)
-  originalImage = image
+  context.putImageData(
+    new ImageData(
+      new Uint8ClampedArray(bytes, 20),
+      current.width,
+      current.height
+    ),
+    0,
+    0
+  )
+  originalImage = background
   pixelCanvas = background
+  frame.value = current
+  autoCopy.value = header.getUint32(16, true) === 1
   if (generation !== frameGeneration) return
   checkViewport()
   await screenshotApi.call("ready")
@@ -1076,8 +1205,11 @@ onBeforeUnmount(() => {
   }
   .capture-selection {
     position: absolute;
-    outline: 1px solid #38bdf8;
+    outline: 2px solid #38bdf8;
     box-shadow: 0 0 0 10000px #0007;
+    &.is-resizing {
+      outline-color: #7dd3fc;
+    }
     .selection-size {
       position: absolute;
       top: 0;
@@ -1090,75 +1222,88 @@ onBeforeUnmount(() => {
       transform: translateY(-100%);
       white-space: nowrap;
     }
+    .selection-edge {
+      position: absolute;
+      z-index: 4;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      touch-action: none;
+      &:hover {
+        background: #38bdf844;
+      }
+      &.edge-n,
+      &.edge-s {
+        left: 5px;
+        right: 5px;
+        height: 8px;
+      }
+      &.edge-n {
+        top: -4px;
+      }
+      &.edge-s {
+        bottom: -4px;
+      }
+      &.edge-e,
+      &.edge-w {
+        top: 5px;
+        bottom: 5px;
+        width: 8px;
+      }
+      &.edge-e {
+        right: -4px;
+      }
+      &.edge-w {
+        left: -4px;
+      }
+    }
     .selection-handle {
       position: absolute;
-      width: 8px;
-      height: 8px;
+      width: 10px;
+      height: 10px;
       padding: 0;
-      border: 1px solid #0e7490;
+      border: 2px solid #0284c7;
+      border-radius: 1px;
       background: #fff;
       transform: translate(-50%, -50%);
       z-index: 5;
+      touch-action: none;
+      &:hover {
+        border-color: #fff;
+        background: #38bdf8;
+      }
       &.handle-nw {
         left: 0;
         top: 0;
-        cursor: nwse-resize;
       }
       &.handle-n {
         left: 50%;
         top: 0;
-        cursor: ns-resize;
       }
       &.handle-ne {
         left: 100%;
         top: 0;
-        cursor: nesw-resize;
       }
       &.handle-e {
         left: 100%;
         top: 50%;
-        cursor: ew-resize;
       }
       &.handle-se {
         left: 100%;
         top: 100%;
-        cursor: nwse-resize;
       }
       &.handle-s {
         left: 50%;
         top: 100%;
-        cursor: ns-resize;
       }
       &.handle-sw {
         left: 0;
         top: 100%;
-        cursor: nesw-resize;
       }
       &.handle-w {
         left: 0;
         top: 50%;
-        cursor: ew-resize;
       }
-    }
-  }
-  .capture-magnifier {
-    position: fixed;
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    border: 1px solid #59718a;
-    border-radius: 5px;
-    background: #17212b;
-    color: #fff;
-    pointer-events: none;
-    .magnifier-canvas {
-      width: 132px;
-      height: 88px;
-    }
-    .magnifier-text {
-      padding: 4px 8px;
-      font-size: var(--font-size-xs);
     }
   }
   .capture-error {
@@ -1172,6 +1317,92 @@ onBeforeUnmount(() => {
     font-size: var(--font-size-sm);
   }
 }
+.capture-magnifier {
+  position: fixed;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+  width: 186px;
+  padding: 8px;
+  gap: 4px;
+  border: 1px solid #b7b7b7;
+  background: #1b1b1bf2;
+  color: #fff;
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  pointer-events: none;
+  .magnifier-preview {
+    position: relative;
+    width: 168px;
+    height: 120px;
+    overflow: hidden;
+    background: #252525;
+    .magnifier-canvas {
+      display: block;
+      width: 168px;
+      height: 120px;
+      image-rendering: pixelated;
+    }
+    .magnifier-crosshair {
+      position: absolute;
+      inset: 0;
+      &::before,
+      &::after {
+        position: absolute;
+        content: "";
+        background: #4aa3df66;
+      }
+      &::before {
+        left: 80px;
+        top: 0;
+        width: 8px;
+        height: 100%;
+      }
+      &::after {
+        left: 0;
+        top: 56px;
+        width: 100%;
+        height: 8px;
+      }
+    }
+    .magnifier-pixel {
+      position: absolute;
+      left: 80px;
+      top: 56px;
+      box-sizing: border-box;
+      width: 8px;
+      height: 8px;
+      border: 1px solid #fff;
+      outline: 1px solid #111;
+    }
+  }
+  .magnifier-coordinates,
+  .magnifier-hint {
+    white-space: nowrap;
+  }
+  .magnifier-color {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    .magnifier-swatch {
+      box-sizing: border-box;
+      width: 14px;
+      height: 14px;
+      border: 1px solid #ddd;
+    }
+    .magnifier-value {
+      white-space: nowrap;
+    }
+  }
+  .magnifier-hint {
+    color: #e6e6e6;
+  }
+}
 .pin-window {
   position: fixed;
   inset: 0;
@@ -1179,6 +1410,11 @@ onBeforeUnmount(() => {
   user-select: none;
   &.has-shadow {
     filter: drop-shadow(0 2px 7px #0008);
+  }
+  &.has-border {
+    .pin-image {
+      border-color: #627080;
+    }
   }
   .pin-image {
     box-sizing: border-box;
@@ -1188,7 +1424,7 @@ onBeforeUnmount(() => {
     left: 0;
     width: 100%;
     height: 100%;
-    border: 2px solid #627080;
+    border: 2px solid transparent;
     object-fit: contain;
     cursor: move;
   }
@@ -1210,11 +1446,12 @@ onBeforeUnmount(() => {
       position: relative;
     }
     .pin-menu-button {
+      position: relative;
       display: flex;
       align-items: center;
       width: 100%;
       min-height: 27px;
-      padding: 3px 8px;
+      padding: 3px 8px 3px 26px;
       border: 0;
       border-radius: 3px;
       background: transparent;
@@ -1228,12 +1465,12 @@ onBeforeUnmount(() => {
         background: #c7e4ff;
         color: #111;
       }
-    }
-    .pin-menu-check {
-      display: inline-block;
-      width: 18px;
-      flex-shrink: 0;
-      text-align: center;
+      .pin-menu-check {
+        position: absolute;
+        left: 8px;
+        width: 18px;
+        text-align: center;
+      }
     }
     .pin-menu-arrow {
       margin-left: auto;

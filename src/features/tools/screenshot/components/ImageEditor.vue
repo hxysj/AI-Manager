@@ -14,12 +14,22 @@
       v-model="text"
       class="editor-text"
       :style="textStyle"
-      placeholder="输入文字，Ctrl+Enter 确认"
+      rows="1"
+      wrap="off"
+      placeholder="输入文字"
+      aria-label="截图文字"
+      title="Enter 换行，Ctrl+Enter 确认"
       @pointerdown.stop
       @keydown.stop="textKeydown"
     />
     <Teleport to="body">
-      <div class="screenshot-toolbar" :style="toolbarStyle" @pointerdown.stop>
+      <div
+        class="screenshot-toolbar"
+        :style="toolbarStyle"
+        @pointerdown.stop
+        @pointerenter="$emit('toolbar-hover', true)"
+        @pointerleave="$emit('toolbar-hover', false)"
+      >
         <div v-if="tool !== 'select'" class="toolbar-options">
           <div
             v-if="!['eraser', 'mosaic'].includes(tool)"
@@ -51,48 +61,80 @@
             <span class="toolbar-label">{{
               tool === "text" ? "字号" : "线宽"
             }}</span>
-            <button
-              v-for="size in lineWidths"
-              :key="size"
-              type="button"
-              class="toolbar-size"
-              :class="{ active: width === size }"
+            <select
+              v-model.number="width"
+              class="toolbar-select"
+              :aria-label="tool === 'text' ? '字号' : '线宽'"
               :disabled="busy"
-              @click="width = size"
             >
-              <span
-                :style="{
-                  width: `${Math.min(size + 2, 12)}px`,
-                  height: `${Math.min(size + 2, 12)}px`
-                }"
-              />
-              {{ size }}
-            </button>
+              <option v-for="size in lineWidths" :key="size" :value="size">
+                {{ tool === "text" ? Math.max(14, size * 7) : size }} px
+              </option>
+            </select>
           </div>
-          <div
-            v-if="['rectangle', 'ellipse', 'line', 'arrow'].includes(tool)"
-            class="toolbar-group"
-          >
-            <span class="toolbar-label">样式</span>
-            <button
-              type="button"
-              class="toolbar-style"
-              :class="{ active: lineStyle === 'solid' }"
-              :disabled="busy"
-              @click="lineStyle = 'solid'"
+          <template v-if="['rectangle', 'ellipse', 'line'].includes(tool)">
+            <div
+              v-for="control in lineControls"
+              v-show="control.id === 'style' || tool === 'line'"
+              :key="control.id"
+              class="toolbar-group"
             >
-              实线
-            </button>
-            <button
-              type="button"
-              class="toolbar-style"
-              :class="{ active: lineStyle === 'dashed' }"
-              :disabled="busy"
-              @click="lineStyle = 'dashed'"
-            >
-              虚线
-            </button>
-          </div>
+              <div
+                class="toolbar-dropdown"
+                @keydown.stop
+                @keydown.esc.prevent="dropdown = ''"
+                @focusout="closeDropdownOnBlur"
+              >
+                <button
+                  type="button"
+                  class="toolbar-dropdown-toggle"
+                  :title="control.label"
+                  :aria-label="control.label"
+                  :aria-expanded="dropdown === control.id"
+                  :disabled="busy"
+                  @click="dropdown = dropdown === control.id ? '' : control.id"
+                >
+                  <component
+                    :is="
+                      lineOptions[control.id] === 'arrow' ? ArrowUpRight : Minus
+                    "
+                    :size="20"
+                    :stroke-dasharray="
+                      lineOptions[control.id] === 'dashed' ? '4 3' : undefined
+                    "
+                  />
+                  <ChevronDown :size="12" />
+                </button>
+                <div
+                  v-if="dropdown === control.id"
+                  class="toolbar-dropdown-menu"
+                >
+                  <button
+                    v-for="option in control.options"
+                    :key="option.value"
+                    type="button"
+                    class="toolbar-dropdown-option"
+                    :class="{
+                      active: lineOptions[control.id] === option.value
+                    }"
+                    :title="option.label"
+                    :aria-label="option.label"
+                    :aria-pressed="lineOptions[control.id] === option.value"
+                    :disabled="busy"
+                    @click="selectLineOption(control.id, option.value)"
+                  >
+                    <component
+                      :is="option.value === 'arrow' ? ArrowUpRight : Minus"
+                      :size="20"
+                      :stroke-dasharray="
+                        option.value === 'dashed' ? '4 3' : undefined
+                      "
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
         <div class="toolbar-buttons">
           <button
@@ -107,7 +149,14 @@
             :disabled="busy"
             @click="setTool(item.id)"
           >
-            <component :is="item.icon" :size="17" />
+            <component
+              :is="
+                item.id === 'line' && lineOptions.type === 'arrow'
+                  ? ArrowUpRight
+                  : item.icon
+              "
+              :size="17"
+            />
           </button>
           <span class="toolbar-separator" />
           <button
@@ -174,6 +223,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   ArrowUpRight,
+  ChevronDown,
   Circle,
   Copy,
   Crop,
@@ -213,14 +263,17 @@ const emit = defineEmits([
   "reselect",
   "cancel",
   "error",
-  "selection-start"
+  "selection-start",
+  "toolbar-hover"
 ])
 const canvas = ref(null)
 const tool = ref(props.reselect ? "select" : "pen")
 const outputting = ref(false)
 const color = ref("#f43f5e")
 const width = ref(4)
-const lineStyle = ref("solid")
+// 直线和箭头共用一个入口，首次使用默认绘制直线。
+const lineOptions = ref({ style: "solid", type: "line" })
+const dropdown = ref("")
 const annotations = ref(JSON.parse(JSON.stringify(props.initialAnnotations)))
 const undoStack = ref([])
 const redoStack = ref([])
@@ -234,8 +287,7 @@ const tools = [
   { id: "select", label: "调整选区", icon: MousePointer2 },
   { id: "rectangle", label: "矩形", icon: Square },
   { id: "ellipse", label: "椭圆", icon: Circle },
-  { id: "line", label: "直线", icon: Minus },
-  { id: "arrow", label: "箭头", icon: ArrowUpRight },
+  { id: "line", label: "直线 / 箭头", icon: Minus },
   { id: "pen", label: "画笔", icon: PenLine },
   { id: "highlighter", label: "荧光笔", icon: Highlighter },
   { id: "mosaic", label: "马赛克", icon: Grid2X2 },
@@ -261,11 +313,37 @@ const colorPresets = [
   "#111827"
 ]
 const lineWidths = [2, 4, 6, 10]
-const textStyle = computed(() => ({
-  left: `${(textPosition.value.x / image.naturalWidth) * 100}%`,
-  top: `${(textPosition.value.y / image.naturalHeight) * 100}%`,
-  color: color.value
-}))
+const lineControls = [
+  {
+    id: "style",
+    label: "线条样式",
+    options: [
+      { value: "solid", label: "实线" },
+      { value: "dashed", label: "虚线" }
+    ]
+  },
+  {
+    id: "type",
+    label: "直线或箭头",
+    options: [
+      { value: "line", label: "直线" },
+      { value: "arrow", label: "箭头" }
+    ]
+  }
+]
+const textStyle = computed(() => {
+  // 输入框按原图字号缩放，默认只占一行，换行后随内容增高。
+  const scale = canvas.value.getBoundingClientRect().width / image.naturalWidth
+  const size = Math.max(14, width.value * 7) * scale
+  return {
+    left: `${(textPosition.value.x / image.naturalWidth) * 100}%`,
+    top: `${(textPosition.value.y / image.naturalHeight) * 100}%`,
+    maxWidth: `calc(${100 - (textPosition.value.x / image.naturalWidth) * 100}% - 2px)`,
+    height: `${text.value.split("\n").length * size * 1.35}px`,
+    fontSize: `${size}px`,
+    color: color.value
+  }
+})
 
 function repaint() {
   if (image && canvas.value)
@@ -314,7 +392,22 @@ function commitText() {
 
 function setTool(value) {
   commitText()
+  dropdown.value = ""
   tool.value = value
+}
+
+function selectLineOption(key, value) {
+  lineOptions.value[key] = value
+  dropdown.value = ""
+}
+
+// 图标菜单在点击外部、移出键盘焦点时关闭，不拦截画布操作。
+function closeDropdown(event) {
+  if (!event.target.closest(".toolbar-dropdown")) dropdown.value = ""
+}
+
+function closeDropdownOnBlur(event) {
+  if (!event.currentTarget.contains(event.relatedTarget)) dropdown.value = ""
 }
 
 async function startDrawing(event) {
@@ -345,11 +438,11 @@ async function startDrawing(event) {
   canvas.value.setPointerCapture(event.pointerId)
   const start = point(event)
   pending = {
-    type: tool.value,
+    type: tool.value === "line" ? lineOptions.value.type : tool.value,
     points: [start, start],
     color: color.value,
     width: width.value,
-    style: lineStyle.value
+    style: lineOptions.value.style
   }
 }
 
@@ -482,6 +575,7 @@ watch(
       redoStack.value = []
       pending = null
       textPosition.value = null
+      dropdown.value = ""
       await nextTick()
       repaint()
     } catch (error) {
@@ -490,10 +584,15 @@ watch(
   },
   { immediate: true }
 )
-onMounted(() => window.addEventListener("keydown", keydown))
+onMounted(() => {
+  window.addEventListener("keydown", keydown)
+  window.addEventListener("pointerdown", closeDropdown, true)
+})
 onBeforeUnmount(() => {
+  emit("toolbar-hover", false)
   sourceGeneration++
   window.removeEventListener("keydown", keydown)
+  window.removeEventListener("pointerdown", closeDropdown, true)
 })
 </script>
 
@@ -511,14 +610,18 @@ onBeforeUnmount(() => {
   }
   .editor-text {
     position: absolute;
+    box-sizing: content-box;
     width: 240px;
-    min-height: 70px;
-    padding: 4px;
+    min-height: 0;
+    padding: 0;
     border: 1px solid #38bdf8;
-    background: #18222de6;
-    font: inherit;
-    font-size: var(--font-size-base);
-    resize: both;
+    outline: none;
+    background: transparent;
+    font-family: "Microsoft YaHei", sans-serif;
+    line-height: 1.35;
+    text-align: left;
+    resize: none;
+    overflow: hidden;
   }
 }
 .screenshot-toolbar {
@@ -554,6 +657,82 @@ onBeforeUnmount(() => {
     padding: 2px 4px;
     border-top: 1px solid #b8c1cb;
     background: #eef2f6;
+    .toolbar-group {
+      .toolbar-select {
+        flex-shrink: 0;
+        height: 23px;
+        min-width: 56px;
+        padding: 0 3px;
+        border: 1px solid #8f9aa7;
+        border-radius: 0;
+        background: #fff;
+        color: inherit;
+        color-scheme: light;
+        font-size: var(--font-size-xs);
+        cursor: pointer;
+        &:disabled {
+          opacity: 0.35;
+          cursor: default;
+        }
+      }
+      .toolbar-dropdown {
+        position: relative;
+        .toolbar-dropdown-toggle {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 2px;
+          height: 23px;
+          padding: 0 4px;
+          border: 1px solid #8f9aa7;
+          border-radius: 0;
+          background: #fff;
+          color: inherit;
+          cursor: pointer;
+          &:hover,
+          &[aria-expanded="true"] {
+            border-color: #1677d2;
+            background: #d6e9fb;
+          }
+          &:disabled {
+            opacity: 0.35;
+            cursor: default;
+          }
+        }
+        .toolbar-dropdown-menu {
+          position: absolute;
+          right: 0;
+          bottom: calc(100% + 4px);
+          z-index: 1;
+          display: flex;
+          padding: 3px;
+          border: 1px solid #8f9aa7;
+          background: #f8fafc;
+          box-shadow: 0 1px 3px #0005;
+          .toolbar-dropdown-option {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 26px;
+            padding: 0;
+            border: 1px solid transparent;
+            background: transparent;
+            color: inherit;
+            cursor: pointer;
+            &:hover,
+            &.active {
+              border-color: #1677d2;
+              background: #d6e9fb;
+            }
+            &:disabled {
+              opacity: 0.35;
+              cursor: default;
+            }
+          }
+        }
+      }
+    }
   }
   .toolbar-group {
     display: flex;
@@ -574,8 +753,6 @@ onBeforeUnmount(() => {
   .toolbar-button,
   .toolbar-color,
   .toolbar-color-preset,
-  .toolbar-size,
-  .toolbar-style,
   .toolbar-separator {
     flex-shrink: 0;
   }
@@ -625,42 +802,6 @@ onBeforeUnmount(() => {
       opacity: 0.35;
       cursor: default;
     }
-  }
-  .toolbar-size,
-  .toolbar-style {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 23px;
-    padding: 0 5px;
-    border: 1px solid transparent;
-    border-radius: 0;
-    background: transparent;
-    color: inherit;
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-    &:hover,
-    &.active {
-      border-color: #1677d2;
-      background: #d6e9fb;
-      color: #0b5fae;
-    }
-    &:disabled {
-      opacity: 0.35;
-      cursor: default;
-    }
-  }
-  .toolbar-size {
-    gap: 3px;
-    span {
-      display: block;
-      flex-shrink: 0;
-      border-radius: 50%;
-      background: currentColor;
-    }
-  }
-  .toolbar-style {
-    height: 23px;
   }
   .toolbar-separator {
     width: 1px;

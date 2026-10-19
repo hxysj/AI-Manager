@@ -22,8 +22,16 @@ async fn dispatch_api(
 ) -> Result<Value, String> {
     // 截图数据走独立服务，不写操作日志，也不重建 Provider 托盘。
     if let Some(action) = channel.strip_prefix("screenshot:") {
-        return screenshot::dispatch(app, action.to_string(), payload.unwrap_or_else(|| serde_json::json!({})))
+        let result = screenshot::dispatch(app.clone(), action.to_string(), payload.unwrap_or_else(|| serde_json::json!({})))
             .await.map_err(|error| error.to_string());
+        // 只有保存快捷键设置才刷新菜单，截图首帧和逐帧操作不触发托盘重建。
+        if action == "settings" && result.is_ok() {
+            let snapshot = state.state_snapshot().await;
+            if let Err(error) = update_tray_menu(&app, &snapshot) {
+                eprintln!("更新截图托盘快捷键失败：{error}");
+            }
+        }
+        return result;
     }
     // 悬浮窗复用内存状态，初始化不扫描磁盘，也不更新托盘和操作日志。
     if channel == "quick-switch:bootstrap" {
@@ -211,7 +219,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![dispatch_api])
+        .invoke_handler(tauri::generate_handler![dispatch_api, screenshot::screenshot_frame])
         .build(tauri::generate_context!())
         .expect("启动 Monkey Thief 失败")
         .run(|app, event| {
@@ -235,7 +243,7 @@ fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             match item_id.as_str() {
                 "show-main" => show_main_from_tray(app),
                 "quit" => app.exit(0),
-                "screenshot:capture" | "screenshot:clipboard" | "screenshot:toggle" | "screenshot:reset-input" => {
+                "screenshot:capture-auto-copy" | "screenshot:capture" | "screenshot:clipboard" | "screenshot:toggle" | "screenshot:switch-group" | "screenshot:reset-input" => {
                     let action = item_id.trim_start_matches("screenshot:").to_string();
                     let handle = app.clone();
                     tauri::async_runtime::spawn(async move {
@@ -280,8 +288,19 @@ fn build_tray_menu(app: &tauri::AppHandle, state: &Value) -> tauri::Result<Menu<
 
     append_quick_switch_tray_items(app, &switch_menu, state)?;
     menu.append(&show_item)?;
-    for (id, label) in [("capture", "区域截图"), ("clipboard", "剪贴板贴图"), ("toggle", "显示/隐藏全部贴图"), ("reset-input", "取消全部贴图鼠标穿透")] {
-        menu.append(&MenuItem::with_id(app, format!("screenshot:{id}"), label, true, None::<&str>)?)?;
+    let settings = app.try_state::<screenshot::ScreenshotService>().map(|service| service.settings()).unwrap_or_default();
+    for (_, name, shortcut) in settings.shortcut_bindings() {
+        let (id, label) = match name {
+            "captureAutoCopy" => ("capture-auto-copy", "截屏并自动复制"),
+            "capture" => ("capture", "自定义截屏"),
+            "clipboard" => ("clipboard", "贴图"),
+            "toggle" => ("toggle", "隐藏 / 显示所有贴图"),
+            "switchGroup" => ("switch-group", "切换到另一贴图组"),
+            "resetInput" => ("reset-input", "取消鼠标穿透"),
+            _ => continue,
+        };
+        // Tab 将组合键排在右侧；只显示文字，避免菜单再次注册同一全局快捷键。
+        menu.append(&MenuItem::with_id(app, format!("screenshot:{id}"), format!("{label}\t{shortcut}"), true, None::<&str>)?)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&switch_menu)?;

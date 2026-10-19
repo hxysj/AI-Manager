@@ -282,15 +282,18 @@ import BaseModal from "@/components/BaseModal.vue"
 
 const entries = ref([])
 function defaultSettings() {
+  // 默认组合与后端一致，已保存的用户组合在读取设置时覆盖默认值。
   return {
     hotkeys: true,
     shortcutStyle: "alt",
     restorePins: true,
     historyLimit: 50,
     shortcuts: {
-      capture: "Ctrl+Alt+A",
-      clipboard: "Ctrl+Alt+P",
-      toggle: "Ctrl+Alt+H",
+      captureAutoCopy: "Ctrl+F1",
+      capture: "Shift+F1",
+      clipboard: "F3",
+      toggle: "Shift+F3",
+      switchGroup: "Ctrl+F3",
       resetInput: "Ctrl+Alt+R"
     }
   }
@@ -298,9 +301,11 @@ function defaultSettings() {
 const settings = ref(defaultSettings())
 const settingsDraft = ref(defaultSettings())
 const shortcutFields = [
-  { id: "capture", label: "区域截图" },
-  { id: "clipboard", label: "剪贴板贴图" },
-  { id: "toggle", label: "显示 / 隐藏贴图" },
+  { id: "captureAutoCopy", label: "截屏并自动复制" },
+  { id: "capture", label: "自定义截屏" },
+  { id: "clipboard", label: "贴图" },
+  { id: "toggle", label: "隐藏 / 显示所有贴图" },
+  { id: "switchGroup", label: "切换到另一贴图组" },
   { id: "resetInput", label: "取消鼠标穿透" }
 ]
 const warnings = ref([])
@@ -309,14 +314,14 @@ const ready = ref(false)
 const busy = ref(false)
 const error = ref("")
 const showSettings = ref(false)
-watch(showSettings, paused => {
-  screenshotApi.call("pause-hotkeys", { paused }).catch(cause => {
+watch(showSettings, (paused) => {
+  screenshotApi.call("pause-hotkeys", { paused }).catch((cause) => {
     error.value = String(cause)
   })
 })
 const captureShortcut = computed(() => settings.value.shortcuts.capture)
 const openCount = computed(
-  () => entries.value.filter(entry => entry.pin?.lifecycle === "open").length
+  () => entries.value.filter((entry) => entry.pin?.lifecycle === "open").length
 )
 let unlisten
 let unlistenError
@@ -345,16 +350,11 @@ async function load() {
     const result = await screenshotApi.call("list")
     if (disposed) return
     entries.value = result.entries
-    const prefix =
-      result.settings.shortcutStyle === "shift" ? "Ctrl+Shift" : "Ctrl+Alt"
     settings.value = {
       ...defaultSettings(),
       ...result.settings,
       shortcuts: {
-        capture: `${prefix}+A`,
-        clipboard: `${prefix}+P`,
-        toggle: `${prefix}+H`,
-        resetInput: `${prefix}+R`,
+        ...defaultSettings().shortcuts,
         ...result.settings.shortcuts
       }
     }
@@ -392,7 +392,7 @@ async function importImage() {
       title: "打开图片并贴到桌面",
       filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp"] }]
     })
-    .catch(cause => {
+    .catch((cause) => {
       error.value = String(cause)
       return ""
     })
@@ -491,7 +491,7 @@ onMounted(async () => {
   try {
     // 先订阅再读取，避免初始化期间新截图被遗漏。
     unlisten = await subscribeReady("screenshot:changed", load)
-    unlistenError = await subscribeReady("screenshot:error", value => {
+    unlistenError = await subscribeReady("screenshot:error", (value) => {
       error.value = value
     })
     if (disposed) {

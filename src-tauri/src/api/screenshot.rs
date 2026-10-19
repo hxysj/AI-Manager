@@ -86,12 +86,20 @@ impl Default for Settings {
 }
 
 impl Settings {
-    fn shortcut_bindings(&self) -> Vec<(i32, &'static str, String)> {
-        let prefix = if self.shortcut_style == "shift" { "Ctrl+Shift" } else { "Ctrl+Alt" };
-        [(1, "capture", "A"), (2, "clipboard", "P"), (3, "toggle", "H"), (4, "resetInput", "R")]
-            .into_iter()
-            .map(|(id, name, key)| (id, name, self.shortcuts.get(name).cloned().unwrap_or_else(|| format!("{prefix}+{key}"))))
-            .collect()
+    pub fn shortcut_bindings(&self) -> Vec<(i32, &'static str, String)> {
+        [
+            (1, "captureAutoCopy", "Ctrl+F1"),
+            (2, "capture", "Shift+F1"),
+            (3, "clipboard", "F3"),
+            (4, "toggle", "Shift+F3"),
+            (5, "switchGroup", "Ctrl+F3"),
+            (6, "resetInput", "Ctrl+Alt+R"),
+        ]
+        .into_iter()
+        .map(|(id, name, default)| {
+            (id, name, self.shortcuts.get(name).cloned().unwrap_or_else(|| default.into()))
+        })
+        .collect()
     }
 
     fn validate(&self) -> Result<(), ManagerError> {
@@ -156,7 +164,7 @@ pub struct ScreenshotService {
     root: PathBuf,
     _instance_lock: std::fs::File,
     session: Mutex<Session>,
-    frame: Mutex<Option<Value>>,
+    frame: Mutex<Option<Vec<u8>>>,
     capturing: AtomicBool,
     hotkeys_paused: AtomicBool,
     view_save_pending: AtomicBool,
@@ -362,11 +370,10 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ManagerError> {
     Ok(())
 }
 
-fn encode_png_fast(image: &DynamicImage) -> Result<Vec<u8>, ManagerError> {
-    let rgba = image.to_rgba8();
+fn encode_rgba_png_fast(rgba: &[u8], width: u32, height: u32) -> Result<Vec<u8>, ManagerError> {
     let mut bytes = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut bytes, image.width(), image.height());
+        let mut encoder = png::Encoder::new(&mut bytes, width, height);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_compression(png::Compression::Fast);
@@ -374,10 +381,18 @@ fn encode_png_fast(image: &DynamicImage) -> Result<Vec<u8>, ManagerError> {
         encoder
             .write_header()
             .map_err(failure)?
-            .write_image_data(&rgba)
+            .write_image_data(rgba)
             .map_err(failure)?;
     }
     Ok(bytes)
+}
+
+fn encode_png_fast(image: &DynamicImage) -> Result<Vec<u8>, ManagerError> {
+    if let Some(rgba) = image.as_rgba8() {
+        return encode_rgba_png_fast(rgba.as_raw(), image.width(), image.height());
+    }
+    let rgba = image.to_rgba8();
+    encode_rgba_png_fast(rgba.as_raw(), image.width(), image.height())
 }
 
 fn image_data(image: &DynamicImage) -> Result<String, ManagerError> {
@@ -475,15 +490,14 @@ pub async fn dispatch(
         }
         "capture" => {
             drop(service);
-            begin_capture(&app).await?;
+            begin_capture(&app, false).await?;
             Ok(json!(true))
         }
-        "frame" => service
-            .frame
-            .lock()
-            .unwrap()
-            .clone()
-            .map_or(Ok(Value::Null), Ok),
+        "capture-auto-copy" => {
+            drop(service);
+            begin_capture(&app, true).await?;
+            Ok(json!(true))
+        }
         "ready" => {
             if !service.capturing.load(Ordering::SeqCst) { return Ok(json!(false)); }
             let window = app
@@ -695,6 +709,11 @@ pub async fn dispatch(
         "toggle" => {
             drop(service);
             toggle_pins(&app)?;
+            Ok(json!(true))
+        }
+        "switch-group" => {
+            drop(service);
+            switch_pin_group(&app)?;
             Ok(json!(true))
         }
         "reset-input" => {
@@ -1014,12 +1033,26 @@ fn capture_bounds(monitors: &[tauri::Monitor]) -> Result<(i32, i32, u32, u32), M
     Ok((left, top, width, height))
 }
 
-fn capture_frame_data(image: &DynamicImage) -> Result<String, ManagerError> {
-    // 快速 PNG 编码优先保证快捷键截图的首帧响应，避免无损 WebP 编码阻塞等待。
-    image_data(image)
+fn capture_frame_data(image: DynamicImage, left: i32, top: i32, auto_copy: bool) -> Vec<u8> {
+    let image = image.into_rgba8();
+    // 20 字节小端帧头后直接跟 RGBA，首帧不再经过 PNG、Base64 和浏览器图片解码。
+    let mut bytes = Vec::with_capacity(20 + image.as_raw().len());
+    for field in [left.to_le_bytes(), top.to_le_bytes(), image.width().to_le_bytes(), image.height().to_le_bytes(), u32::from(auto_copy).to_le_bytes()] {
+        bytes.extend_from_slice(&field);
+    }
+    bytes.extend_from_slice(image.as_raw());
+    bytes
 }
 
-pub async fn begin_capture(app: &AppHandle) -> Result<(), ManagerError> {
+#[tauri::command]
+pub async fn screenshot_frame(app: AppHandle) -> tauri::ipc::Response {
+    // 二进制响应避免把整屏像素序列化为 JSON 数字数组或脚本字符串。
+    let service = app.state::<ScreenshotService>();
+    let bytes = service.frame.lock().unwrap().clone().unwrap_or_default();
+    tauri::ipc::Response::new(bytes)
+}
+
+pub async fn begin_capture(app: &AppHandle, auto_copy: bool) -> Result<(), ManagerError> {
     let service = app.state::<ScreenshotService>();
     if service.capturing.swap(true, Ordering::SeqCst) {
         return Ok(());
@@ -1027,16 +1060,20 @@ pub async fn begin_capture(app: &AppHandle) -> Result<(), ManagerError> {
     let result = async {
         let monitors = app.available_monitors().map_err(failure)?;
         let (left, top, width, height) = capture_bounds(&monitors)?;
-        let source = tauri::async_runtime::spawn_blocking(move || {
+        let frame = tauri::async_runtime::spawn_blocking(move || {
             #[cfg(windows)]
-            { capture_frame_data(&windows::capture(&monitors, left, top, width, height)?) }
+            { Ok::<_, ManagerError>(capture_frame_data(windows::capture(&monitors, left, top, width, height)?, left, top, auto_copy)) }
             #[cfg(not(windows))]
-            { Err::<String, ManagerError>(failure("桌面截图目前仅支持 Windows")) }
+            { Err::<Vec<u8>, ManagerError>(failure("桌面截图目前仅支持 Windows")) }
         }).await.map_err(failure)??;
         let window = ensure_capture_window(app, Some((left, top, width, height)))?;
-        window.set_size(PhysicalSize::new(width, height)).map_err(failure)?;
-        window.set_position(PhysicalPosition::new(left, top)).map_err(failure)?;
-        *service.frame.lock().unwrap() = Some(json!({"source": source, "left": left, "top": top, "width": width, "height": height}));
+        if window.inner_size().map_err(failure)? != PhysicalSize::new(width, height) {
+            window.set_size(PhysicalSize::new(width, height)).map_err(failure)?;
+        }
+        if window.outer_position().map_err(failure)? != PhysicalPosition::new(left, top) {
+            window.set_position(PhysicalPosition::new(left, top)).map_err(failure)?;
+        }
+        *service.frame.lock().unwrap() = Some(frame);
         window.emit("screenshot:frame", ()).map_err(failure)?;
         Ok(())
     }.await;
@@ -1270,6 +1307,65 @@ pub fn toggle_pins(app: &AppHandle) -> Result<(), ManagerError> {
     Ok(())
 }
 
+pub fn switch_pin_group(app: &AppHandle) -> Result<(), ManagerError> {
+    let service = app.state::<ScreenshotService>();
+    let mut guard = service.session.lock().unwrap();
+    let mut next = guard.clone();
+    let mut groups = Vec::new();
+    for entry in &next.entries {
+        if let Some(pin) = entry.pin.as_ref().filter(|pin| pin.lifecycle == "open") {
+            if !groups.contains(&pin.group) {
+                groups.push(pin.group.clone());
+            }
+        }
+    }
+    if groups.len() < 2 {
+        return Ok(());
+    }
+    let current = next
+        .entries
+        .iter()
+        .find_map(|entry| {
+            entry
+                .pin
+                .as_ref()
+                .filter(|pin| pin.lifecycle == "open" && pin.visible)
+                .map(|pin| pin.group.clone())
+        })
+        .unwrap_or_else(|| groups[0].clone());
+    let current_index = groups.iter().position(|group| group == &current).unwrap_or(0);
+    let next_group = &groups[(current_index + 1) % groups.len()];
+    for entry in &mut next.entries {
+        if let Some(pin) = entry.pin.as_mut().filter(|pin| pin.lifecycle == "open") {
+            pin.visible = &pin.group == next_group;
+        }
+    }
+    service.commit(&next)?;
+    *guard = next;
+    drop(guard);
+    for (label, window) in app.webview_windows() {
+        let Some(id) = label.strip_prefix("screenshot-pin-") else {
+            continue;
+        };
+        let visible = service
+            .session
+            .lock()
+            .unwrap()
+            .entries
+            .iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.pin.as_ref())
+            .is_some_and(|pin| pin.lifecycle == "open" && pin.visible);
+        if visible {
+            window.show().map_err(failure)?;
+        } else {
+            window.hide().map_err(failure)?;
+        }
+    }
+    changed(app);
+    Ok(())
+}
+
 pub fn reset_input(app: &AppHandle) -> Result<(), ManagerError> {
     for (label, window) in app.webview_windows() {
         if label.starts_with("screenshot-pin-") {
@@ -1462,7 +1558,11 @@ mod tests {
         assert_eq!(session.entries.len(), 1);
         let old: Settings = serde_json::from_value(json!({"hotkeys":true,"shortcutStyle":"shift","restorePins":true})).unwrap();
         assert_eq!(old.history_limit, 50);
-        assert_eq!(old.shortcut_bindings()[0].2, "Ctrl+Shift+A");
+        assert_eq!(old.shortcut_bindings()[0].2, "Ctrl+F1");
+        assert_eq!(old.shortcut_bindings()[1].2, "Shift+F1");
+        assert_eq!(old.shortcut_bindings()[2].2, "F3");
+        assert_eq!(old.shortcut_bindings()[3].2, "Shift+F3");
+        assert_eq!(old.shortcut_bindings()[4].2, "Ctrl+F3");
         old.validate().unwrap();
     }
 
@@ -1487,9 +1587,18 @@ mod tests {
     }
 
     #[test]
-    fn capture_encoding_is_lossless_and_origin_survives_reload() {
+    fn capture_pixels_are_lossless_and_origin_survives_reload() {
         let image = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8 * 30, y as u8 * 60, 255, 255])));
-        assert_eq!(decode(&capture_frame_data(&image).unwrap()).unwrap().to_rgba8(), image.to_rgba8());
+        let pixels = image.to_rgba8().into_raw();
+        for auto_copy in [false, true] {
+            let frame = capture_frame_data(image.clone(), -1275, 146, auto_copy);
+            assert_eq!(i32::from_le_bytes(frame[0..4].try_into().unwrap()), -1275);
+            assert_eq!(i32::from_le_bytes(frame[4..8].try_into().unwrap()), 146);
+            assert_eq!(u32::from_le_bytes(frame[8..12].try_into().unwrap()), 3);
+            assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 2);
+            assert_eq!(u32::from_le_bytes(frame[16..20].try_into().unwrap()), u32::from(auto_copy));
+            assert_eq!(&frame[20..], pixels.as_slice());
+        }
         let root = TestRoot::new();
         let service = ScreenshotService::new(&root.0).unwrap();
         let mut session = service.session.lock().unwrap().clone();
@@ -1505,6 +1614,40 @@ mod tests {
         let entry = &session.entries[0];
         let origin = entry.origin.as_ref().unwrap();
         assert_eq!((origin.x, origin.y, entry.width, entry.height), (-1275, 146, 527, 314));
+    }
+
+    #[test]
+    fn custom_shortcuts_survive_reload_and_missing_actions_use_defaults() {
+        let root = TestRoot::new();
+        let service = ScreenshotService::new(&root.0).unwrap();
+        let mut session = service.session.lock().unwrap().clone();
+        let shortcuts = [
+            ("captureAutoCopy", "Alt+F6"),
+            ("capture", "Ctrl+Shift+F8"),
+            ("clipboard", "F9"),
+            ("toggle", "Shift+F9"),
+            ("switchGroup", "Ctrl+F9"),
+            ("resetInput", "Ctrl+Alt+F10"),
+        ];
+        for (action, shortcut) in shortcuts {
+            session.settings.shortcuts.insert(action.into(), shortcut.into());
+        }
+        session.settings.validate().unwrap();
+        service.commit(&session).unwrap();
+        drop(service);
+        let restored = ScreenshotService::new(&root.0).unwrap();
+        for ((_, action, shortcut), (expected_action, expected_shortcut)) in restored.settings().shortcut_bindings().into_iter().zip(shortcuts) {
+            assert_eq!((action, shortcut.as_str()), (expected_action, expected_shortcut));
+        }
+        let old: Settings = serde_json::from_value(json!({
+            "hotkeys": true, "shortcutStyle": "shift", "restorePins": true,
+            "shortcuts": {"capture": "Ctrl+Shift+A", "clipboard": "Ctrl+Shift+P"}
+        })).unwrap();
+        old.validate().unwrap();
+        assert_eq!(old.shortcut_bindings()[0].2, "Ctrl+F1");
+        assert_eq!(old.shortcut_bindings()[1].2, "Ctrl+Shift+A");
+        assert_eq!(old.shortcut_bindings()[2].2, "Ctrl+Shift+P");
+        assert_eq!(old.shortcut_bindings()[4].2, "Ctrl+F3");
     }
 
     #[test]
