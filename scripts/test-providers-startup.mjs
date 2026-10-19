@@ -98,7 +98,7 @@ const props = {
 }
 const schema = {
   enabled: true,
-  modelFields: [],
+  modelFields: [{ key: "modelList", label: "模型列表", type: "textarea" }],
   optionFields: [],
   advancedFields: [],
   configFiles: [],

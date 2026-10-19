@@ -20,29 +20,79 @@
     />
     <Teleport to="body">
       <div class="screenshot-toolbar" :style="toolbarStyle" @pointerdown.stop>
-        <div
-          v-if="!['select', 'eraser'].includes(tool)"
-          class="toolbar-options"
-        >
-          <input
-            v-model="color"
-            class="toolbar-color"
-            type="color"
-            title="标注颜色"
-            aria-label="标注颜色"
-            :disabled="busy"
-          />
-          <select
-            v-model.number="width"
-            class="toolbar-width"
-            title="线宽 / 文字大小"
-            aria-label="线宽 / 文字大小"
-            :disabled="busy"
+        <div v-if="tool !== 'select'" class="toolbar-options">
+          <div
+            v-if="!['eraser', 'mosaic'].includes(tool)"
+            class="toolbar-group"
           >
-            <option v-for="size in [2, 4, 6, 10]" :key="size" :value="size">
+            <span class="toolbar-label">颜色</span>
+            <button
+              v-for="preset in colorPresets"
+              :key="preset"
+              type="button"
+              class="toolbar-color-preset"
+              :class="{ active: color === preset }"
+              :style="{ backgroundColor: preset }"
+              :title="`颜色 ${preset}`"
+              :aria-label="`颜色 ${preset}`"
+              :disabled="busy"
+              @click="color = preset"
+            />
+            <input
+              v-model="color"
+              class="toolbar-color"
+              type="color"
+              title="自定义颜色"
+              aria-label="自定义颜色"
+              :disabled="busy"
+            />
+          </div>
+          <div class="toolbar-group">
+            <span class="toolbar-label">{{
+              tool === "text" ? "字号" : "线宽"
+            }}</span>
+            <button
+              v-for="size in lineWidths"
+              :key="size"
+              type="button"
+              class="toolbar-size"
+              :class="{ active: width === size }"
+              :disabled="busy"
+              @click="width = size"
+            >
+              <span
+                :style="{
+                  width: `${Math.min(size + 2, 12)}px`,
+                  height: `${Math.min(size + 2, 12)}px`
+                }"
+              />
               {{ size }}
-            </option>
-          </select>
+            </button>
+          </div>
+          <div
+            v-if="['rectangle', 'ellipse', 'line', 'arrow'].includes(tool)"
+            class="toolbar-group"
+          >
+            <span class="toolbar-label">样式</span>
+            <button
+              type="button"
+              class="toolbar-style"
+              :class="{ active: lineStyle === 'solid' }"
+              :disabled="busy"
+              @click="lineStyle = 'solid'"
+            >
+              实线
+            </button>
+            <button
+              type="button"
+              class="toolbar-style"
+              :class="{ active: lineStyle === 'dashed' }"
+              :disabled="busy"
+              @click="lineStyle = 'dashed'"
+            >
+              虚线
+            </button>
+          </div>
         </div>
         <div class="toolbar-buttons">
           <button
@@ -109,7 +159,7 @@
             type="button"
             :title="action.label"
             :aria-label="action.label"
-            :disabled="busy"
+            :disabled="busy || outputting"
             @click="output(action.id)"
           >
             <component :is="action.icon" :size="17" />
@@ -167,8 +217,10 @@ const emit = defineEmits([
 ])
 const canvas = ref(null)
 const tool = ref(props.reselect ? "select" : "pen")
+const outputting = ref(false)
 const color = ref("#f43f5e")
 const width = ref(4)
+const lineStyle = ref("solid")
 const annotations = ref(JSON.parse(JSON.stringify(props.initialAnnotations)))
 const undoStack = ref([])
 const redoStack = ref([])
@@ -188,13 +240,27 @@ const tools = [
   { id: "highlighter", label: "荧光笔", icon: Highlighter },
   { id: "mosaic", label: "马赛克", icon: Grid2X2 },
   { id: "text", label: "文字", icon: Type },
-  { id: "eraser", label: "橡皮擦（删除标注）", icon: Eraser }
-].filter(item => props.reselect || item.id !== "select")
+  { id: "eraser", label: "橡皮擦", icon: Eraser }
+].filter((item) => props.reselect || item.id !== "select")
 const outputs = [
   { id: "pin", label: "贴到桌面", icon: Pin },
   { id: "export", label: "保存 PNG", icon: Save },
   { id: "copy", label: "复制图片 Enter", icon: Copy }
 ]
+// 子工具栏按当前工具提供常用颜色和尺寸，避免打断绘制流程。
+const colorPresets = [
+  "#f43f5e",
+  "#ef4444",
+  "#f59e0b",
+  "#facc15",
+  "#22c55e",
+  "#06b6d4",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ffffff",
+  "#111827"
+]
+const lineWidths = [2, 4, 6, 10]
 const textStyle = computed(() => ({
   left: `${(textPosition.value.x / image.naturalWidth) * 100}%`,
   top: `${(textPosition.value.y / image.naturalHeight) * 100}%`,
@@ -260,32 +326,13 @@ async function startDrawing(event) {
   event.stopPropagation()
   commitText()
   if (tool.value === "eraser") {
-    const position = point(event)
-    const index = annotations.value.findLastIndex(item => {
-      const padding = Math.max(8, item.width * 3)
-      const xs = item.points.map(point => point.x)
-      const ys = item.points.map(point => point.y)
-      const textWidth =
-        item.type === "text"
-          ? Math.max(...item.text.split("\n").map(line => line.length)) *
-            Math.max(14, item.width * 7)
-          : 0
-      const textHeight =
-        item.type === "text"
-          ? item.text.split("\n").length * Math.max(14, item.width * 7) * 1.35
-          : 0
-      return (
-        position.x >= Math.min(...xs) - padding &&
-        position.x <= Math.max(...xs) + textWidth + padding &&
-        position.y >= Math.min(...ys) - padding &&
-        position.y <= Math.max(...ys) + textHeight + padding
-      )
-    })
-    if (index >= 0) {
-      undoStack.value.push(JSON.parse(JSON.stringify(annotations.value)))
-      annotations.value.splice(index, 1)
-      redoStack.value = []
-      repaint()
+    // 保留擦除路径，渲染器只在标注层局部擦除。
+    canvas.value.setPointerCapture(event.pointerId)
+    const start = point(event)
+    pending = {
+      type: "eraser",
+      points: [start, start],
+      width: width.value
     }
     return
   }
@@ -301,14 +348,16 @@ async function startDrawing(event) {
     type: tool.value,
     points: [start, start],
     color: color.value,
-    width: width.value
+    width: width.value,
+    style: lineStyle.value
   }
 }
 
 function draw(event) {
   if (!pending) return
   const value = point(event)
-  if (["pen", "highlighter"].includes(pending.type)) pending.points.push(value)
+  if (["pen", "highlighter", "eraser"].includes(pending.type))
+    pending.points.push(value)
   else pending.points[1] = value
   repaint()
 }
@@ -322,9 +371,13 @@ function finishDrawing(event) {
   pending = null
   redoStack.value = []
   repaint()
+  if (canvas.value.hasPointerCapture(event.pointerId))
+    canvas.value.releasePointerCapture(event.pointerId)
 }
 
-function cancelDrawing() {
+function cancelDrawing(event) {
+  if (event && canvas.value.hasPointerCapture(event.pointerId))
+    canvas.value.releasePointerCapture(event.pointerId)
   pending = null
   repaint()
 }
@@ -346,15 +399,39 @@ function redo() {
   repaint()
 }
 
-function output(action) {
+async function output(action) {
+  if (!image || pending || outputting.value) return
+  outputting.value = true
   commitText()
-  if (!image || pending) return
-  emit("output", {
-    action,
-    source: props.source,
-    output: canvas.value.toDataURL("image/png"),
-    annotations: JSON.parse(JSON.stringify(annotations.value))
-  })
+  try {
+    let output = props.source
+    if (annotations.value.length) {
+      // 异步编码大图，避免点击贴图按钮时同步阻塞渲染线程。
+      const blob = await new Promise((resolve, reject) => {
+        canvas.value.toBlob(
+          (value) =>
+            value ? resolve(value) : reject(new Error("截图编码失败")),
+          "image/png"
+        )
+      })
+      output = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = () => reject(reader.error || new Error("截图读取失败"))
+        reader.readAsDataURL(blob)
+      })
+    }
+    emit("output", {
+      action,
+      source: props.source,
+      output,
+      annotations: JSON.parse(JSON.stringify(annotations.value))
+    })
+  } catch (error) {
+    emit("error", error.message)
+  } finally {
+    outputting.value = false
+  }
 }
 
 function textKeydown(event) {
@@ -392,7 +469,7 @@ function keydown(event) {
 
 watch(
   () => props.source,
-  async source => {
+  async (source) => {
     const generation = ++sourceGeneration
     try {
       const loaded = await loadImage(source)
@@ -445,58 +522,80 @@ onBeforeUnmount(() => {
   }
 }
 .screenshot-toolbar {
-  .toolbar-buttons {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    overflow-x: auto;
-    max-width: 100%;
-  }
-  .toolbar-options {
-    position: absolute;
-    bottom: calc(100% + 5px);
-    left: 0;
-    display: flex;
-    gap: 8px;
-    padding: 5px 8px;
-    border: 1px solid #aeb4bc;
-    border-radius: 3px;
-    background: #f5f5f5;
-    box-shadow: 0 2px 5px #0002;
-  }
-  .toolbar-button,
-  .toolbar-color,
-  .toolbar-width,
-  .toolbar-separator {
-    flex-shrink: 0;
-  }
   position: fixed;
   z-index: 1000;
   display: flex;
-  gap: 2px;
-  align-items: center;
-  padding: 4px 6px;
-  border: 1px solid #aeb4bc;
-  border-radius: 3px;
-  background: #f5f5f5;
-  color: #353535;
-  box-shadow: 0 2px 6px #0003;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 2px;
+  border: 1px solid #8f9aa7;
+  border-radius: 1px;
+  background: #f8fafc;
+  color: #1f2933;
+  box-shadow: 0 1px 3px #0005;
+  overflow: visible;
+  .toolbar-buttons {
+    order: 1;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow-x: auto;
+    max-width: 100%;
+    min-height: 30px;
+  }
+  .toolbar-options {
+    order: 2;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 28px;
+    padding: 2px 4px;
+    border-top: 1px solid #b8c1cb;
+    background: #eef2f6;
+  }
+  .toolbar-group {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding-right: 5px;
+    border-right: 1px solid #c8d0d8;
+    &:last-child {
+      padding-right: 0;
+      border-right: 0;
+    }
+  }
+  .toolbar-label {
+    margin-right: 2px;
+    color: #69717a;
+    font-size: var(--font-size-xs);
+  }
+  .toolbar-button,
+  .toolbar-color,
+  .toolbar-color-preset,
+  .toolbar-size,
+  .toolbar-style,
+  .toolbar-separator {
+    flex-shrink: 0;
+  }
   .toolbar-button {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 31px;
-    height: 31px;
+    width: 29px;
+    height: 29px;
     padding: 0;
-    border: 0;
-    border-radius: 2px;
+    border: 1px solid transparent;
+    border-radius: 0;
     background: transparent;
     color: inherit;
     cursor: pointer;
     &:hover,
     &.active {
-      background: #dcecff;
-      color: #1478d4;
+      border-color: #1677d2;
+      background: #1677d2;
+      color: #fff;
     }
     &:disabled {
       opacity: 0.35;
@@ -504,26 +603,70 @@ onBeforeUnmount(() => {
     }
   }
   .toolbar-color {
-    width: 27px;
-    height: 27px;
-    padding: 2px;
-    border: 0;
+    width: 23px;
+    height: 23px;
+    padding: 1px;
+    border: 1px solid #8f9aa7;
     background: transparent;
   }
-  .toolbar-width {
-    width: 38px;
-    height: 27px;
-    border: 1px solid #b8bec6;
-    border-radius: 4px;
-    background: #fff;
+  .toolbar-color-preset {
+    width: 15px;
+    height: 15px;
+    padding: 0;
+    border: 1px solid #7f8994;
+    border-radius: 0;
+    cursor: pointer;
+    &:hover,
+    &.active {
+      outline: 2px solid #38bdf8;
+      outline-offset: 1px;
+    }
+    &:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+  }
+  .toolbar-size,
+  .toolbar-style {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 23px;
+    padding: 0 5px;
+    border: 1px solid transparent;
+    border-radius: 0;
+    background: transparent;
     color: inherit;
+    cursor: pointer;
     font-size: var(--font-size-xs);
+    &:hover,
+    &.active {
+      border-color: #1677d2;
+      background: #d6e9fb;
+      color: #0b5fae;
+    }
+    &:disabled {
+      opacity: 0.35;
+      cursor: default;
+    }
+  }
+  .toolbar-size {
+    gap: 3px;
+    span {
+      display: block;
+      flex-shrink: 0;
+      border-radius: 50%;
+      background: currentColor;
+    }
+  }
+  .toolbar-style {
+    height: 23px;
   }
   .toolbar-separator {
     width: 1px;
-    height: 22px;
-    margin: 0 3px;
-    background: #b8bec6;
+    height: 23px;
+    margin: 0 2px;
+    background: #b8c1cb;
   }
 }
 </style>

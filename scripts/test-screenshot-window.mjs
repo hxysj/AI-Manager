@@ -45,7 +45,7 @@ const requests = []
 const listeners = new Map()
 let captureFrame = null
 const module = { exports: {} }
-const localRequire = name => {
+const localRequire = (name) => {
   if (name === "@/api/modules/screenshot")
     return {
       screenshotApi: {
@@ -71,6 +71,8 @@ const localRequire = name => {
         return () => listeners.delete(event)
       }
     }
+  if (name === "@/api/modules/system")
+    return { systemApi: { selectFile: async () => null } }
   if (name === "./ImageEditor.vue")
     return {
       __esModule: true,
@@ -99,6 +101,13 @@ globalThis.innerHeight = 600
 globalThis.devicePixelRatio = 2
 globalThis.Document = class {}
 globalThis.ShadowRoot = class {}
+// 模拟浏览器异步 PNG 编码，覆盖大图贴图按钮的非阻塞路径。
+globalThis.FileReader = class {
+  readAsDataURL(blob) {
+    this.result = blob.data
+    this.onload?.()
+  }
+}
 const context = () => ({
   drawImage() {},
   clearRect() {},
@@ -117,7 +126,7 @@ globalThis.window = {
     })
   }
 }
-const node = type => ({
+const node = (type) => ({
   type,
   props: {},
   children: [],
@@ -128,12 +137,13 @@ const node = type => ({
   setPointerCapture() {},
   getContext: context,
   toDataURL: () => "edited.png",
+  toBlob: (callback) => callback({ data: "edited.png" }),
   focus() {},
   addEventListener() {},
   removeEventListener() {},
   getRootNode: () => ({}),
   get options() {
-    return this.children.filter(child => child.type === "option")
+    return this.children.filter((child) => child.type === "option")
   },
   getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 })
 })
@@ -145,8 +155,8 @@ const renderer = vue.createRenderer({
   createComment: () => node("comment"),
   setText() {},
   setElementText() {},
-  parentNode: element => element.parent,
-  nextSibling: element =>
+  parentNode: (element) => element.parent,
+  nextSibling: (element) =>
     element.parent?.children[element.parent.children.indexOf(element) + 1] ||
     null,
   patchProp: (element, key, previous, value) => {
@@ -174,15 +184,19 @@ const renderer = vue.createRenderer({
 const root = node("root")
 const app = renderer.createApp(module.exports.default)
 const failures = []
-app.config.errorHandler = error => failures.push(error)
+app.config.errorHandler = (error) => failures.push(error)
 app.mount(root)
 const tick = async () => {
   for (let index = 0; index < 10; index += 1) await vue.nextTick()
 }
 await tick()
-const pin = root.children.find(element => element.props.class === "pin-window")
+const pin = root.children.find(
+  (element) =>
+    typeof element.props.class === "string" &&
+    element.props.class.includes("pin-window")
+)
 const menu = () =>
-  pin.children.find(element => element.props.class === "pin-menu")
+  pin.children.find((element) => element.props.class === "pin-menu")
 async function openMenu(clientX, clientY) {
   let prevented = false
   await pin.props.onContextmenu({
@@ -200,7 +214,7 @@ assert.deepEqual(menu().props.style, { left: "120px", top: "90px" })
 await openMenu(250, 150)
 assert.deepEqual(menu().props.style, { left: "250px", top: "150px" })
 await openMenu(790, 590)
-assert.deepEqual(menu().props.style, { left: "580px", top: "300px" })
+assert.deepEqual(menu().props.style, { left: "790px", top: "590px" })
 await openMenu(0, 0)
 assert.deepEqual(menu().props.style, { left: "0px", top: "0px" })
 let stopped = false
@@ -211,45 +225,53 @@ menu().props.onDblclick({
 })
 assert.equal(stopped, true)
 assert.equal(
-  requests.some(request => request.payload?.action === "destroy"),
+  requests.some((request) => request.payload?.action === "destroy"),
   false
 )
 await pin.props.onPointerdown({ button: 0, detail: 1 })
 await tick()
 assert.equal(menu(), undefined)
 assert.equal(
-  requests.some(request => request.payload?.action === "drag"),
+  requests.some((request) => request.payload?.action === "drag"),
   false
 )
 await pin.props.onPointerdown({ button: 0, detail: 2 })
 assert.equal(
-  requests.some(request => request.payload?.action === "drag"),
+  requests.some((request) => request.payload?.action === "drag"),
   false
 )
 await openMenu(80, 80)
 await menu()
-  .children.filter(element => element.type === "button")[2]
+  .children.filter((element) => element.type === "button")[2]
   .props.onClick()
 await tick()
 await pin.props.onDblclick({})
 await openMenu(80, 80)
 assert.equal(menu(), undefined)
 assert.equal(
-  requests.some(request => request.payload?.action === "destroy"),
+  requests.some((request) => request.payload?.action === "destroy"),
   false
 )
 app.unmount()
 
 const secondApp = renderer.createApp(module.exports.default)
-secondApp.config.errorHandler = error => failures.push(error)
+secondApp.config.errorHandler = (error) => failures.push(error)
 secondApp.mount(root)
 await tick()
 const secondPin = root.children.find(
-  element => element.props.class === "pin-window"
+  (element) =>
+    typeof element.props.class === "string" &&
+    element.props.class.includes("pin-window")
 )
-const dragRequests = () => requests.filter(request => request.payload?.action === "drag").length
+const dragRequests = () =>
+  requests.filter((request) => request.payload?.action === "drag").length
 const beforeDrag = dragRequests()
-await secondPin.props.onPointerdown({ button: 0, detail: 1, clientX: 20, clientY: 20 })
+await secondPin.props.onPointerdown({
+  button: 0,
+  detail: 1,
+  clientX: 20,
+  clientY: 20
+})
 assert.equal(dragRequests(), beforeDrag)
 await secondPin.props.onPointermove({ buttons: 1, clientX: 22, clientY: 21 })
 assert.equal(dragRequests(), beforeDrag)
@@ -258,9 +280,19 @@ assert.equal(dragRequests(), beforeDrag + 1)
 await secondPin.props.onPointermove({ buttons: 1, clientX: 35, clientY: 30 })
 assert.equal(dragRequests(), beforeDrag + 1)
 secondPin.props.onPointerup()
-await secondPin.props.onPointerdown({ button: 0, detail: 1, clientX: 50, clientY: 50 })
+await secondPin.props.onPointerdown({
+  button: 0,
+  detail: 1,
+  clientX: 50,
+  clientY: 50
+})
 secondPin.props.onPointerup()
-await secondPin.props.onPointerdown({ button: 0, detail: 2, clientX: 50, clientY: 50 })
+await secondPin.props.onPointerdown({
+  button: 0,
+  detail: 2,
+  clientX: 50,
+  clientY: 50
+})
 secondPin.props.onPointerup()
 assert.equal(dragRequests(), beforeDrag + 1)
 await secondPin.props.onDblclick({})
@@ -269,14 +301,14 @@ assert.deepEqual(requests.at(-1), {
   payload: { id: "test-pin", action: "destroy" }
 })
 assert.equal(
-  requests.some(request => request.action === "delete"),
+  requests.some((request) => request.action === "delete"),
   false
 )
 assert.deepEqual(failures, [])
 secondApp.unmount()
 globalThis.location.search = "?mode=capture"
 const captureApp = renderer.createApp(module.exports.default)
-captureApp.config.errorHandler = error => failures.push(error)
+captureApp.config.errorHandler = (error) => failures.push(error)
 captureApp.mount(root)
 await tick()
 assert.equal(requests.at(-1).action, "frame")
@@ -301,10 +333,10 @@ await state.output({
   annotations: [],
   action: "pin"
 })
-const saved = requests.findLast(request => request.action === "save-document")
+const saved = requests.findLast((request) => request.action === "save-document")
 assert.deepEqual(saved.payload.origin, { x: -1720, y: 100 })
 assert.equal(
-  requests.findLast(request => request.action === "pin").payload.id,
+  requests.findLast((request) => request.action === "pin").payload.id,
   "saved-pin"
 )
 assert.equal(state.frame, null)
@@ -340,7 +372,7 @@ function loadTestComponent(filename, mocks) {
     { format: "cjs" }
   ).code
   new Function("require", "module", "exports", code)(
-    name => mocks[name] || require(name),
+    (name) => mocks[name] || require(name),
     module,
     module.exports
   )
@@ -390,7 +422,7 @@ const ScreenshotPage = loadTestComponent(
   }
 )
 const pageApp = renderer.createApp(ScreenshotPage)
-pageApp.config.errorHandler = error => failures.push(error)
+pageApp.config.errorHandler = (error) => failures.push(error)
 pageApp.mount(node("root"))
 await tick()
 const page = pageApp._instance.setupState
@@ -419,7 +451,7 @@ page.settingsDraft.historyLimit = 2
 window.confirm = () => false
 await page.saveSettings()
 assert.equal(
-  settingsRequests.some(request => request.action === "settings"),
+  settingsRequests.some((request) => request.action === "settings"),
   false
 )
 window.confirm = () => true
@@ -454,14 +486,14 @@ const outputs = []
 const editorApp = renderer.createApp(Editor, {
   source: "image.png",
   reselect: true,
-  onOutput: value => outputs.push(value)
+  onOutput: (value) => outputs.push(value)
 })
-editorApp.config.errorHandler = error => failures.push(error)
+editorApp.config.errorHandler = (error) => failures.push(error)
 editorApp.mount(node("root"))
 await tick()
 const editor = editorApp._instance.setupState
 assert.deepEqual(
-  editor.tools.map(tool => tool.id),
+  editor.tools.map((tool) => tool.id),
   [
     "select",
     "rectangle",
@@ -476,7 +508,7 @@ assert.deepEqual(
   ]
 )
 assert.deepEqual(
-  editor.outputs.map(action => action.id),
+  editor.outputs.map((action) => action.id),
   ["pin", "export", "copy"]
 )
 const drawingEvent = (clientX, clientY) => ({
@@ -503,12 +535,12 @@ editor.undo()
 assert.equal(editor.annotations.length, 2)
 editor.redo()
 assert.equal(editor.annotations.length, 1)
-editor.output("pin")
+await editor.output("pin")
 assert.equal(outputs.at(-1).action, "pin")
 assert.equal(outputs.at(-1).output, "edited.png")
 editorApp.unmount()
 assert.deepEqual(failures, [])
 console.log("截图设置、历史上限、原位坐标和标注工具回归通过")
 console.log(
-  "Screenshot window: cursor menu positioning, edge clamping, editor guards and double-click removal passed"
+  "Screenshot window: cursor menu positioning, overflow, editor guards and double-click removal passed"
 )

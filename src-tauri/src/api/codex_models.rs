@@ -2,7 +2,7 @@ use crate::core::error::ManagerError;
 use serde_json::{json, Value};
 use std::path::Path;
 
-pub(crate) const CATALOG_FILE: &str = ".cockpit_model_catalog.json";
+pub(crate) const CATALOG_FILE: &str = ".monkey_thief_model_catalog.json";
 
 pub(crate) fn normalize_catalog(value: &Value) -> Result<Value, ManagerError> {
     let items = value

@@ -769,7 +769,7 @@ pub async fn launch_codex_provider_instance(
         config_lines.push(format!("model = {}", to_toml_string(client_model)));
     }
     if catalog_provider.as_ref().is_some_and(codex_has_custom_models) {
-        config_lines.push("model_catalog_json = \".cockpit_model_catalog.json\"".to_string());
+        config_lines.push("model_catalog_json = \".monkey_thief_model_catalog.json\"".to_string());
     }
 
     if runtime_config
@@ -1406,10 +1406,10 @@ pub fn runtime_config_schemas() -> Value {
             "name": "config.toml",
             "format": "TOML",
             "description": "Codex config.toml 配置内容",
-            "template": "model_provider = \"custom\"\n{{#hasCustomModels}}\nmodel = \"{{mainModel}}\"\nmodel_catalog_json = \".cockpit_model_catalog.json\"\n{{/hasCustomModels}}\nmodel_reasoning_effort = \"{{modelReasoningEffort}}\"\ndisable_response_storage = true\n{{#serviceTierFast}}\nservice_tier = \"fast\"\n{{/serviceTierFast}}\n{{#modelContextWindowEnabled}}\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = {{modelAutoCompactTokenLimit}}\n{{/modelContextWindowEnabled}}\n\n[model_providers]\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"{{baseUrl}}\""
+            "template": "model_provider = \"custom\"\n{{#hasCustomModels}}\nmodel = \"{{mainModel}}\"\nmodel_catalog_json = \".monkey_thief_model_catalog.json\"\n{{/hasCustomModels}}\nmodel_reasoning_effort = \"{{modelReasoningEffort}}\"\ndisable_response_storage = true\n{{#serviceTierFast}}\nservice_tier = \"fast\"\n{{/serviceTierFast}}\n{{#modelContextWindowEnabled}}\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = {{modelAutoCompactTokenLimit}}\n{{/modelContextWindowEnabled}}\n\n[model_providers]\n[model_providers.custom]\nname = \"custom\"\nwire_api = \"responses\"\nrequires_openai_auth = true\nbase_url = \"{{baseUrl}}\""
           },
           {
-            "name": ".cockpit_model_catalog.json",
+            "name": ".monkey_thief_model_catalog.json",
             "format": "JSON",
             "description": "Codex 模型列表目录",
             "template": "{{modelCatalog}}"
@@ -1862,7 +1862,7 @@ fn build_codex_config_files(
         config_lines.push(format!("model = {}", to_toml_string(client_model)));
     }
     if has_custom_models {
-        config_lines.push("model_catalog_json = \".cockpit_model_catalog.json\"".to_string());
+        config_lines.push("model_catalog_json = \".monkey_thief_model_catalog.json\"".to_string());
     }
 
     if values.get("serviceTierFast").and_then(Value::as_bool) == Some(true) {
@@ -1908,7 +1908,7 @@ fn build_codex_config_files(
     ];
     if has_custom_models {
         files.push(json!({
-          "name": ".cockpit_model_catalog.json",
+          "name": ".monkey_thief_model_catalog.json",
           "content": format!("{}\n", serde_json::to_string_pretty(&codex_model_catalog_for_mode(provider, proxy_enabled))?)
         }));
     }
@@ -2392,7 +2392,7 @@ pub(crate) fn combine_managed_config_contents(
     // 模型目录只供 Codex 运行时读取，不参与 Provider 与配置文件差异判断。
     let comparable_files = files
         .iter()
-        .filter(|file| string_value(file.get("name")) != ".cockpit_model_catalog.json")
+        .filter(|file| string_value(file.get("name")) != ".monkey_thief_model_catalog.json")
         .cloned()
         .collect::<Vec<_>>();
 
@@ -2493,7 +2493,7 @@ fn normalize_codex_config_file(file: &Value) -> Result<Value, ManagerError> {
         }));
     }
 
-    if name == ".cockpit_model_catalog.json" {
+    if name == ".monkey_thief_model_catalog.json" {
         let catalog = if content.trim().is_empty() {
             json!({ "models": [] })
         } else {
@@ -3892,7 +3892,7 @@ mod tests {
                 .await
                 .unwrap();
             let config = fs::read_to_string(config_dir.join("config.toml")).unwrap();
-            assert!(config.contains("model_catalog_json = \".cockpit_model_catalog.json\""));
+            assert!(config.contains("model_catalog_json = \".monkey_thief_model_catalog.json\""));
             assert!(config.contains("model = \"custom-model\""));
             let catalog: Value = serde_json::from_str(
                 &fs::read_to_string(config_dir.join(codex_models::CATALOG_FILE)).unwrap(),
@@ -4289,14 +4289,14 @@ web_search = true
         let manager = vec![
             config.clone(),
             json!({
-              "name": ".cockpit_model_catalog.json",
+              "name": ".monkey_thief_model_catalog.json",
               "content": "{\"models\":[{\"slug\":\"gpt-5.6-sol\",\"display_name\":\"gpt-6-astra\"}]}"
             }),
         ];
         let runtime = vec![
             config,
             json!({
-              "name": ".cockpit_model_catalog.json",
+              "name": ".monkey_thief_model_catalog.json",
               "content": "{\"models\":[{\"slug\":\"gpt-5.6-sol\",\"display_name\":\"another-model\"}]}"
             }),
         ];
@@ -4307,7 +4307,7 @@ web_search = true
         );
         assert!(!combine_managed_config_contents("codex", &manager)
             .unwrap()
-            .contains("### .cockpit_model_catalog.json"));
+            .contains("### .monkey_thief_model_catalog.json"));
     }
 
     fn create_codex_runtime_fixture() -> (PathBuf, AppPaths, PathBuf) {

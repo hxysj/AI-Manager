@@ -1937,7 +1937,7 @@ mod tests {
                 let config_dir = Path::new(&paths.workspace_root).join("codex");
                 tokio::fs::create_dir_all(&config_dir).await.unwrap();
                 let config_file = config_dir.join("config.toml");
-                tokio::fs::write(&config_file, "model_provider = \"custom\"\nmodel = \"custom-model\"\nmodel_catalog_json = \".cockpit_model_catalog.json\"\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = 900000\nsandbox_mode = \"workspace-write\"\n\n[model_providers.custom]\nbase_url = \"https://example.com\"\n\n[mcp_servers.demo]\ncommand = \"keep\"\n\n[profiles.user]\nmodel = \"keep-profile-model\"\n").await.unwrap();
+                tokio::fs::write(&config_file, "model_provider = \"custom\"\nmodel = \"custom-model\"\nmodel_catalog_json = \".monkey_thief_model_catalog.json\"\nmodel_context_window = 1000000\nmodel_auto_compact_token_limit = 900000\nsandbox_mode = \"workspace-write\"\n\n[model_providers.custom]\nbase_url = \"https://example.com\"\n\n[mcp_servers.demo]\ncommand = \"keep\"\n\n[profiles.user]\nmodel = \"keep-profile-model\"\n").await.unwrap();
                 let target = json!({ "configPath": config_dir.to_string_lossy() });
                 write_account_bundle(&cached_account(), &target)
                     .await

@@ -1225,56 +1225,77 @@
                 时同步到 Codex，未勾选或留空时使用官方默认列表。
               </p>
             </div>
-            <div
-              v-if="draft.cli === 'codex'"
-              class="providers-view__section-actions"
-            >
-              <button
-                type="button"
-                :disabled="codexModelsPending || pending"
-                @click="fetchCodexModels"
-              >
-                {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
-              </button>
-              <label
-                class="providers-model-sync"
-                title="默认关闭；保存后，仅启用此 Provider 时同步模型列表，停用或切换到未勾选的 Provider 时恢复默认"
-              >
-                <input
-                  v-model="draft.syncModelList"
-                  type="checkbox"
-                  :disabled="codexModelsPending || pending"
-                />同步模型列表
-              </label>
-              <button
-                type="button"
-                :disabled="codexModelsPending || pending"
-                @click="resetCodexDraftModels"
-              >
-                恢复默认模型
-              </button>
-            </div>
             <!-- <div class="providers-view__section-actions">
               <button type="button">获取模型列表</button>
             </div> -->
           </div>
 
           <div class="providers-view__form-grid">
-            <label
+            <div
               v-for="field in activeRuntimeSchema.modelFields"
               :key="field.key"
               class="providers-view__field"
             >
-              <span>{{ field.label }}</span>
+              <div class="providers-model-field-header">
+                <label
+                  class="providers-model-field-label"
+                  :for="`provider-edit-model-${field.key}`"
+                >{{ field.label }}</label>
+                <div
+                  v-if="draft.cli === 'codex' && field.key === 'modelList'"
+                  class="providers-model-actions"
+                >
+                  <button
+                    class="providers-model-action providers-model-fetch"
+                    type="button"
+                    :disabled="codexModelsPending || pending"
+                    :aria-busy="codexModelsPending"
+                    @click="fetchCodexModels"
+                  >
+                    <RefreshCw
+                      class="providers-model-fetch-icon"
+                      :class="{ 'providers-model-fetch-pending': codexModelsPending }"
+                      :size="14"
+                    />
+                    {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
+                  </button>
+                  <button
+                    class="providers-model-action"
+                    type="button"
+                    :disabled="codexModelsPending || pending"
+                    @click="resetCodexDraftModels"
+                  >
+                    <RotateCcw :size="14" />
+                    恢复默认模型
+                  </button>
+                  <label
+                    class="providers-model-sync"
+                    title="默认关闭；保存后，仅启用此 Provider 时同步模型列表，停用或切换到未勾选的 Provider 时恢复默认"
+                  >
+                    <input
+                      v-model="draft.syncModelList"
+                      class="providers-model-sync-input"
+                      type="checkbox"
+                      :disabled="codexModelsPending || pending"
+                    />同步模型列表
+                  </label>
+                </div>
+              </div>
               <textarea
                 v-if="field.type === 'textarea'"
+                :id="`provider-edit-model-${field.key}`"
                 v-model="modelDrafts[field.key]"
                 rows="5"
                 placeholder="每行一个模型，也支持逗号分隔"
               />
-              <input v-else v-model.trim="modelDrafts[field.key]" type="text" />
+              <input
+                v-else
+                :id="`provider-edit-model-${field.key}`"
+                v-model.trim="modelDrafts[field.key]"
+                type="text"
+              />
               <small v-if="field.description">{{ field.description }}</small>
-            </label>
+            </div>
           </div>
         </section>
 
@@ -1560,56 +1581,77 @@
                 时同步到 Codex，未勾选或留空时使用官方默认列表。
               </p>
             </div>
-            <div
-              v-if="draft.cli === 'codex'"
-              class="providers-view__section-actions"
-            >
-              <button
-                type="button"
-                :disabled="codexModelsPending || pending"
-                @click="fetchCodexModels"
-              >
-                {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
-              </button>
-              <label
-                class="providers-model-sync"
-                title="默认关闭；保存后，仅启用此 Provider 时同步模型列表，停用或切换到未勾选的 Provider 时恢复默认"
-              >
-                <input
-                  v-model="draft.syncModelList"
-                  type="checkbox"
-                  :disabled="codexModelsPending || pending"
-                />同步模型列表
-              </label>
-              <button
-                type="button"
-                :disabled="codexModelsPending || pending"
-                @click="resetCodexDraftModels"
-              >
-                恢复默认模型
-              </button>
-            </div>
             <!-- <div class="providers-view__section-actions">
               <button type="button">获取模型列表</button>
             </div> -->
           </div>
 
           <div class="providers-view__form-grid">
-            <label
+            <div
               v-for="field in activeRuntimeSchema.modelFields"
               :key="field.key"
               class="providers-view__field"
             >
-              <span>{{ field.label }}</span>
+              <div class="providers-model-field-header">
+                <label
+                  class="providers-model-field-label"
+                  :for="`provider-create-model-${field.key}`"
+                >{{ field.label }}</label>
+                <div
+                  v-if="draft.cli === 'codex' && field.key === 'modelList'"
+                  class="providers-model-actions"
+                >
+                  <button
+                    class="providers-model-action providers-model-fetch"
+                    type="button"
+                    :disabled="codexModelsPending || pending"
+                    :aria-busy="codexModelsPending"
+                    @click="fetchCodexModels"
+                  >
+                    <RefreshCw
+                      class="providers-model-fetch-icon"
+                      :class="{ 'providers-model-fetch-pending': codexModelsPending }"
+                      :size="14"
+                    />
+                    {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
+                  </button>
+                  <button
+                    class="providers-model-action"
+                    type="button"
+                    :disabled="codexModelsPending || pending"
+                    @click="resetCodexDraftModels"
+                  >
+                    <RotateCcw :size="14" />
+                    恢复默认模型
+                  </button>
+                  <label
+                    class="providers-model-sync"
+                    title="默认关闭；保存后，仅启用此 Provider 时同步模型列表，停用或切换到未勾选的 Provider 时恢复默认"
+                  >
+                    <input
+                      v-model="draft.syncModelList"
+                      class="providers-model-sync-input"
+                      type="checkbox"
+                      :disabled="codexModelsPending || pending"
+                    />同步模型列表
+                  </label>
+                </div>
+              </div>
               <textarea
                 v-if="field.type === 'textarea'"
+                :id="`provider-create-model-${field.key}`"
                 v-model="modelDrafts[field.key]"
                 rows="5"
                 placeholder="每行一个模型，也支持逗号分隔"
               />
-              <input v-else v-model.trim="modelDrafts[field.key]" type="text" />
+              <input
+                v-else
+                :id="`provider-create-model-${field.key}`"
+                v-model.trim="modelDrafts[field.key]"
+                type="text"
+              />
               <small v-if="field.description">{{ field.description }}</small>
-            </label>
+            </div>
           </div>
         </section>
 
@@ -2831,6 +2873,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Server,
   ShieldCheck,
@@ -3204,7 +3247,7 @@ const activeRuntimeSchema = computed(() => {
   return {
     ...schema,
     configFiles: schema.configFiles.filter(
-      file => file.name !== ".cockpit_model_catalog.json"
+      file => file.name !== ".monkey_thief_model_catalog.json"
     )
   }
 })
@@ -7553,13 +7596,125 @@ watch(
     line-height: 1.6;
   }
 
-  .providers-model-sync {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-    font-size: var(--font-size-sm);
-    cursor: pointer;
+  .providers-view__models {
+    .providers-model-field-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+
+      .providers-model-field-label {
+        flex: none;
+        color: var(--color-text-muted);
+        font-size: var(--font-size-base);
+        line-height: 1.6;
+      }
+
+      .providers-model-actions {
+        display: flex;
+        flex: none;
+        align-items: center;
+        gap: 8px;
+
+        .providers-model-action {
+          display: inline-flex;
+          flex: none;
+          height: 30px;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          padding: 0 10px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          background: var(--color-panel);
+          color: var(--color-text-muted);
+          font-size: var(--font-size-sm);
+          white-space: nowrap;
+          cursor: pointer;
+          transition: background-color 0.15s ease, border-color 0.15s ease;
+
+          &:hover:not(:disabled) {
+            border-color: var(--color-line-strong);
+            background: var(--color-panel-soft);
+            color: var(--color-text);
+          }
+
+          &:focus-visible {
+            outline: 2px solid var(--color-primary);
+            outline-offset: 2px;
+          }
+
+          &:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
+
+          &.providers-model-fetch {
+            border-color: var(--color-info-line);
+            background: var(--color-primary-soft);
+            color: var(--color-primary);
+
+            &:hover:not(:disabled) {
+              border-color: var(--color-primary);
+            }
+
+            .providers-model-fetch-icon {
+              &.providers-model-fetch-pending {
+                animation: providers-refresh-spin 1s linear infinite;
+              }
+            }
+          }
+        }
+
+        .providers-model-sync {
+          display: inline-flex;
+          box-sizing: border-box;
+          height: 30px;
+          align-items: center;
+          gap: 6px;
+          margin-left: 4px;
+          padding: 0 10px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          background: var(--color-panel-soft);
+          color: var(--color-text-muted);
+          font-size: var(--font-size-sm);
+          white-space: nowrap;
+          cursor: pointer;
+          transition: background-color 0.15s ease, border-color 0.15s ease;
+
+          &:has(:checked) {
+            border-color: var(--color-info-line);
+            background: var(--color-primary-soft);
+            color: var(--color-primary);
+          }
+
+          &:hover:not(:has(:disabled)) {
+            border-color: var(--color-primary);
+          }
+
+          &:has(:disabled) {
+            opacity: 0.5;
+            cursor: not-allowed;
+          }
+
+          .providers-model-sync-input {
+            width: 14px;
+            height: 14px;
+            flex: none;
+            margin: 0;
+            padding: 0;
+            accent-color: var(--color-primary-solid);
+            cursor: inherit;
+
+            &:focus-visible {
+              outline: 2px solid var(--color-primary);
+              outline-offset: 2px;
+            }
+          }
+        }
+      }
+    }
   }
   .providers-auth-session {
     display: flex;

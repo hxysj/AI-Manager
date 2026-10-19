@@ -32,22 +32,66 @@ export function renderDocument(canvas, image, annotations) {
   if (canvas.width !== image.naturalWidth) canvas.width = image.naturalWidth
   if (canvas.height !== image.naturalHeight) canvas.height = image.naturalHeight
   const ctx = canvas.getContext("2d")
+  // 复用透明层，避免鼠标移动预览时反复分配整张大画布。
+  const layer =
+    canvas.annotationLayer ||
+    (canvas.annotationLayer = document.createElement("canvas"))
+  if (layer.width !== canvas.width) layer.width = canvas.width
+  if (layer.height !== canvas.height) layer.height = canvas.height
+  const layerCtx = layer.getContext("2d")
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   ctx.drawImage(image, 0, 0)
+  layerCtx.clearRect(0, 0, layer.width, layer.height)
   for (const item of annotations) {
     const [start, end] = [item.points[0], item.points.at(-1)]
-    ctx.save()
-    ctx.strokeStyle = item.color
-    ctx.fillStyle = item.color
-    ctx.lineWidth = item.width
-    ctx.lineCap = "round"
-    ctx.lineJoin = "round"
-    const x = Math.min(start.x, end.x)
-    const y = Math.min(start.y, end.y)
-    const w = Math.abs(end.x - start.x)
-    const h = Math.abs(end.y - start.y)
-    if (item.type === "mosaic" && w >= 1 && h >= 1) {
+    if (!start) continue
+    if (item.type === "eraser") {
+      // 橡皮擦只作用于透明标注层，擦除后会露出原图。
+      layerCtx.save()
+      layerCtx.globalCompositeOperation = "destination-out"
+      layerCtx.strokeStyle = "#000"
+      layerCtx.lineWidth = Math.max(8, item.width * 3)
+      layerCtx.lineCap = "round"
+      layerCtx.lineJoin = "round"
+      layerCtx.beginPath()
+      layerCtx.moveTo(start.x, start.y)
+      for (const point of item.points.slice(1))
+        layerCtx.lineTo(point.x, point.y)
+      layerCtx.stroke()
+      layerCtx.restore()
+      continue
+    }
+    if (item.type === "mosaic") {
+      const w = Math.abs(end.x - start.x)
+      const h = Math.abs(end.y - start.y)
+      if (w < 1 || h < 1) continue
       const rect = selectionRect(start, end, canvas.width, canvas.height)
+      const sample = document.createElement("canvas")
+      sample.width = rect.width
+      sample.height = rect.height
+      const sampleCtx = sample.getContext("2d")
+      sampleCtx.drawImage(
+        image,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        0,
+        0,
+        rect.width,
+        rect.height
+      )
+      sampleCtx.drawImage(
+        layer,
+        rect.x,
+        rect.y,
+        rect.width,
+        rect.height,
+        0,
+        0,
+        rect.width,
+        rect.height
+      )
       const tile = document.createElement("canvas")
       const block = Math.max(4, item.width * 3)
       tile.width = Math.max(1, Math.ceil(rect.width / block))
@@ -55,9 +99,9 @@ export function renderDocument(canvas, image, annotations) {
       tile
         .getContext("2d")
         .drawImage(
-          canvas,
-          rect.x,
-          rect.y,
+          sample,
+          0,
+          0,
           rect.width,
           rect.height,
           0,
@@ -65,8 +109,9 @@ export function renderDocument(canvas, image, annotations) {
           tile.width,
           tile.height
         )
-      ctx.imageSmoothingEnabled = false
-      ctx.drawImage(
+      layerCtx.save()
+      layerCtx.imageSmoothingEnabled = false
+      layerCtx.drawImage(
         tile,
         0,
         0,
@@ -77,49 +122,67 @@ export function renderDocument(canvas, image, annotations) {
         rect.width,
         rect.height
       )
-    } else if (item.type === "text") {
+      layerCtx.restore()
+      continue
+    }
+    layerCtx.save()
+    layerCtx.strokeStyle = item.color
+    layerCtx.fillStyle = item.color
+    layerCtx.lineWidth = item.width
+    layerCtx.lineCap = "round"
+    layerCtx.lineJoin = "round"
+    layerCtx.setLineDash(
+      item.style === "dashed" ? [item.width * 3, item.width * 2] : []
+    )
+    const x = Math.min(start.x, end.x)
+    const y = Math.min(start.y, end.y)
+    const w = Math.abs(end.x - start.x)
+    const h = Math.abs(end.y - start.y)
+    if (item.type === "text") {
       const size = Math.max(14, item.width * 7)
-      ctx.font = `${size}px "Microsoft YaHei", sans-serif`
-      ctx.textBaseline = "top"
+      layerCtx.font = `${size}px "Microsoft YaHei", sans-serif`
+      layerCtx.textBaseline = "top"
       item.text
         .split("\n")
         .forEach((line, index) =>
-          ctx.fillText(line, start.x, start.y + index * size * 1.35)
+          layerCtx.fillText(line, start.x, start.y + index * size * 1.35)
         )
     } else {
-      ctx.beginPath()
-      if (item.type === "rectangle") ctx.rect(x, y, w, h)
+      layerCtx.beginPath()
+      if (item.type === "rectangle") layerCtx.rect(x, y, w, h)
       if (item.type === "ellipse")
-        ctx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
+        layerCtx.ellipse(x + w / 2, y + h / 2, w / 2, h / 2, 0, 0, Math.PI * 2)
       if (item.type === "highlighter") {
-        ctx.globalAlpha = 0.3
-        ctx.lineWidth = item.width * 4
+        layerCtx.globalAlpha = 0.3
+        layerCtx.lineWidth = item.width * 4
       }
       if (["pen", "arrow", "line", "highlighter"].includes(item.type)) {
-        ctx.moveTo(start.x, start.y)
-        for (const point of item.points.slice(1)) ctx.lineTo(point.x, point.y)
+        layerCtx.moveTo(start.x, start.y)
+        for (const point of item.points.slice(1))
+          layerCtx.lineTo(point.x, point.y)
       }
-      ctx.stroke()
+      layerCtx.stroke()
       if (
         item.type === "arrow" &&
         Math.hypot(end.x - start.x, end.y - start.y) > 1
       ) {
         const angle = Math.atan2(end.y - start.y, end.x - start.x)
         const size = Math.max(10, item.width * 4)
-        ctx.beginPath()
-        ctx.moveTo(end.x, end.y)
-        ctx.lineTo(
+        layerCtx.beginPath()
+        layerCtx.moveTo(end.x, end.y)
+        layerCtx.lineTo(
           end.x - size * Math.cos(angle - Math.PI / 6),
           end.y - size * Math.sin(angle - Math.PI / 6)
         )
-        ctx.lineTo(
+        layerCtx.lineTo(
           end.x - size * Math.cos(angle + Math.PI / 6),
           end.y - size * Math.sin(angle + Math.PI / 6)
         )
-        ctx.closePath()
-        ctx.fill()
+        layerCtx.closePath()
+        layerCtx.fill()
       }
     }
-    ctx.restore()
+    layerCtx.restore()
   }
+  ctx.drawImage(layer, 0, 0)
 }

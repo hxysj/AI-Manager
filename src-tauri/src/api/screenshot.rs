@@ -1,9 +1,10 @@
 use crate::core::error::ManagerError;
 use base64::{engine::general_purpose::STANDARD, Engine};
-use image::{DynamicImage, ImageFormat, ImageReader};
+use image::{DynamicImage, ImageDecoder, ImageReader};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    collections::HashMap,
     io::Cursor,
     path::{Path, PathBuf},
     sync::{
@@ -14,6 +15,7 @@ use std::{
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
 };
+use tauri_plugin_opener::OpenerExt;
 
 #[cfg(windows)]
 mod windows;
@@ -45,6 +47,8 @@ struct Pin {
     width: u32,
     height: u32,
     opacity: f64,
+    #[serde(default = "default_pin_group")]
+    group: String,
     lifecycle: String,
     visible: bool,
 }
@@ -63,6 +67,10 @@ pub struct Settings {
 
 fn default_history_limit() -> usize {
     50
+}
+
+fn default_pin_group() -> String {
+    "Default".into()
 }
 
 impl Default for Settings {
@@ -152,6 +160,7 @@ pub struct ScreenshotService {
     capturing: AtomicBool,
     hotkeys_paused: AtomicBool,
     view_save_pending: AtomicBool,
+    menu_windows: Mutex<HashMap<String, (PhysicalPosition<i32>, PhysicalSize<u32>)>>,
     pub hotkey_errors: Mutex<Vec<String>>,
     pub startup_errors: Mutex<Vec<String>>,
 }
@@ -211,6 +220,7 @@ impl ScreenshotService {
             view_save_pending: AtomicBool::new(false),
             hotkey_errors: Mutex::new(Vec::new()),
             startup_errors: Mutex::new(errors),
+            menu_windows: Mutex::new(HashMap::new()),
         };
         {
             let mut guard = service.session.lock().unwrap();
@@ -352,25 +362,45 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ManagerError> {
     Ok(())
 }
 
+fn encode_png_fast(image: &DynamicImage) -> Result<Vec<u8>, ManagerError> {
+    let rgba = image.to_rgba8();
+    let mut bytes = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut bytes, image.width(), image.height());
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_filter(png::FilterType::NoFilter);
+        encoder
+            .write_header()
+            .map_err(failure)?
+            .write_image_data(&rgba)
+            .map_err(failure)?;
+    }
+    Ok(bytes)
+}
+
 fn image_data(image: &DynamicImage) -> Result<String, ManagerError> {
-    let mut buffer = Cursor::new(Vec::new());
-    image
-        .write_to(&mut buffer, ImageFormat::Png)
-        .map_err(failure)?;
     Ok(format!(
         "data:image/png;base64,{}",
-        STANDARD.encode(buffer.into_inner())
+        STANDARD.encode(encode_png_fast(image)?)
     ))
 }
 
-fn decode(data: &str) -> Result<DynamicImage, ManagerError> {
+fn decode_data(data: &str) -> Result<(Vec<u8>, DynamicImage), ManagerError> {
     if data.len() > 128 * 1024 * 1024 {
         return Err(failure("图片文件超过 96 MiB 限制"));
     }
     let bytes = STANDARD
         .decode(data.split_once(',').map(|(_, b)| b).unwrap_or(data))
         .map_err(failure)?;
-    decode_bytes(&bytes)
+    let image = decode_bytes(&bytes)?;
+    Ok((bytes, image))
+}
+
+#[cfg(test)]
+fn decode(data: &str) -> Result<DynamicImage, ManagerError> {
+    decode_data(data).map(|(_, image)| image)
 }
 
 fn decode_bytes(bytes: &[u8]) -> Result<DynamicImage, ManagerError> {
@@ -382,15 +412,12 @@ fn decode_bytes(bytes: &[u8]) -> Result<DynamicImage, ManagerError> {
     limits.max_image_height = Some(32768);
     limits.max_alloc = Some(256 * 1024 * 1024);
     reader.limits(limits);
-    let (w, h) = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(failure)?
-        .into_dimensions()
-        .map_err(failure)?;
-    if u64::from(w) * u64::from(h) > 40_000_000 {
+    let decoder = reader.into_decoder().map_err(failure)?;
+    let (width, height) = decoder.dimensions();
+    if u64::from(width) * u64::from(height) > 40_000_000 {
         return Err(failure("图片超过 4000 万像素限制"));
     }
-    reader.decode().map_err(failure)
+    DynamicImage::from_decoder(decoder).map_err(failure)
 }
 
 fn id_from(payload: &Value) -> Result<&str, ManagerError> {
@@ -462,9 +489,45 @@ pub async fn dispatch(
             let window = app
                 .get_webview_window("screenshot-capture")
                 .ok_or_else(|| failure("截图窗口已关闭"))?;
-            window.show().map_err(failure)?;
+            window.set_focusable(true).map_err(failure)?;
+            window.set_ignore_cursor_events(false).map_err(failure)?;
+            if !window.is_visible().unwrap_or(false) { window.show().map_err(failure)?; }
             window.set_focus().map_err(failure)?;
             Ok(json!(true))
+        }
+        "capture-window-ready" => {
+            if service.capturing.load(Ordering::SeqCst) { return Ok(json!(false)); }
+            let window = app
+                .get_webview_window("screenshot-capture")
+                .ok_or_else(|| failure("截图窗口已关闭"))?;
+            window.set_focusable(false).map_err(failure)?;
+            window.set_ignore_cursor_events(true).map_err(failure)?;
+            if !window.is_visible().unwrap_or(false) { window.show().map_err(failure)?; }
+            Ok(json!(true))
+        }
+        "pin-ready" => {
+            let id = id_from(&payload)?;
+            let window = app
+                .get_webview_window(&format!("screenshot-pin-{id}"))
+                .ok_or_else(|| failure("贴图窗口不存在"))?;
+            let visible = service
+                .session
+                .lock()
+                .unwrap()
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .and_then(|entry| entry.pin.as_ref())
+                .is_some_and(|pin| pin.visible && pin.lifecycle == "open");
+            if visible {
+                window.show().map_err(failure)?;
+                if payload["dismissCapture"].as_bool().unwrap_or(false)
+                    && service.capturing.load(Ordering::SeqCst)
+                {
+                    cancel_capture(&app)?;
+                }
+            }
+            Ok(json!(visible))
         }
         "cancel" => {
             cancel_capture(&app)?;
@@ -496,7 +559,8 @@ pub async fn dispatch(
             Ok(json!(save_document(&app, payload)?))
         }
         "document" => {
-            let dir = service.document_dir(id_from(&payload)?)?;
+            let id = id_from(&payload)?;
+            let dir = service.document_dir(id)?;
             let mut document: Value =
                 serde_json::from_slice(&std::fs::read(dir.join("document.json"))?)?;
             document["source"] = json!(format!(
@@ -507,19 +571,27 @@ pub async fn dispatch(
                 "data:image/png;base64,{}",
                 STANDARD.encode(std::fs::read(dir.join("output.png"))?)
             ));
-            document["pin"] = json!(service
+            let entry = service
                 .session
                 .lock()
                 .unwrap()
                 .entries
                 .iter()
-                .find(|entry| entry.id == id_from(&payload).unwrap_or(""))
-                .and_then(|entry| entry.pin.clone()));
+                .find(|entry| entry.id == id)
+                .cloned();
+            document["pin"] = json!(entry.as_ref().and_then(|entry| entry.pin.clone()));
+            document["width"] = json!(entry.as_ref().map(|entry| entry.width).unwrap_or(0));
+            document["height"] = json!(entry.as_ref().map(|entry| entry.height).unwrap_or(0));
             Ok(document)
         }
         "pin" => {
             drop(service);
-            open_pin(&app, id_from(&payload)?)?;
+            open_pin_with_visibility(
+                &app,
+                id_from(&payload)?,
+                true,
+                payload["capture"].as_bool().unwrap_or(false),
+            )?;
             Ok(json!(true))
         }
         "copy" => {
@@ -533,23 +605,92 @@ pub async fn dispatch(
             Ok(json!(true))
         }
         "export" => {
-            let dir = service.document_dir(id_from(&payload)?)?;
+            let id = id_from(&payload)?.to_string();
+            let dir = service.document_dir(&id)?;
             drop(service);
             use tauri_plugin_dialog::DialogExt;
-            let path = app
+            let (sender, receiver) = tokio::sync::oneshot::channel();
+            let mut dialog = app
                 .dialog()
                 .file()
                 .set_title("保存截图")
-                .set_file_name("截图.png")
-                .add_filter("PNG 图片", &["png"])
-                .blocking_save_file();
+                .set_file_name("monkey-tief-screenshot.png")
+                .add_filter("PNG 图片", &["png"]);
+            if let Some(window) = app
+                .get_webview_window(&format!("screenshot-pin-{id}"))
+                .or_else(|| {
+                    app.get_webview_window("screenshot-capture")
+                        .filter(|window| window.is_visible().unwrap_or(false))
+                })
+            {
+                dialog = dialog.set_parent(&window);
+            }
+            dialog.save_file(move |path| {
+                let _ = sender.send(path);
+            });
+            let path = receiver
+                .await
+                .map_err(|_| failure("保存对话框未返回结果"))?;
             if let Some(path) = path {
                 let path = path.into_path().map_err(failure)?;
-                std::fs::copy(dir.join("output.png"), &path)?;
+                tokio::fs::copy(dir.join("output.png"), &path).await?;
                 Ok(json!({"saved": true, "path": path}))
             } else {
                 Ok(json!({"saved": false}))
             }
+        }
+        "restore-previous" => {
+            let restore_id = service
+                .session
+                .lock()
+                .unwrap()
+                .entries
+                .iter()
+                .find(|entry| {
+                    entry
+                        .pin
+                        .as_ref()
+                        .is_some_and(|pin| pin.lifecycle == "closed")
+                })
+                .map(|entry| entry.id.clone())
+                .ok_or_else(|| failure("没有可恢复的上一张贴图"))?;
+            drop(service);
+            open_pin_with_visibility(&app, &restore_id, true, false)?;
+            Ok(json!({"id": restore_id}))
+        }
+        "process-image" => {
+            let id = id_from(&payload)?.to_string();
+            let operation = payload["operation"].as_str().unwrap_or("");
+            let dir = service.document_dir(&id)?;
+            let image = decode_bytes(&std::fs::read(dir.join("output.png"))?)?;
+            let image = match operation {
+                "rotate-left" => image.rotate270(),
+                "rotate-right" => image.rotate90(),
+                "flip-horizontal" => image.fliph(),
+                "flip-vertical" => image.flipv(),
+                _ => return Err(failure("不支持的图像处理操作")),
+            };
+            persist_flattened_image(&app, &service, &id, &image)?;
+            Ok(json!(true))
+        }
+        "replace-file" => {
+            let id = id_from(&payload)?.to_string();
+            let path = payload["path"]
+                .as_str()
+                .ok_or_else(|| failure("缺少图片路径"))?;
+            if std::fs::metadata(path)?.len() > 96 * 1024 * 1024 {
+                return Err(failure("图片文件过大"));
+            }
+            let image = decode_bytes(&std::fs::read(path)?)?;
+            persist_flattened_image(&app, &service, &id, &image)?;
+            Ok(json!(true))
+        }
+        "open-folder" => {
+            let dir = service.document_dir(id_from(&payload)?)?;
+            app.opener()
+                .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+                .map_err(|error| failure(error.to_string()))?;
+            Ok(json!(true))
         }
         "toggle" => {
             drop(service);
@@ -576,6 +717,34 @@ pub async fn dispatch(
                 "close" => {
                     window.close().map_err(failure)?;
                 }
+                "context-menu-open" => {
+                    let extra_width = payload["extraWidth"].as_u64().unwrap_or(560).min(4096) as u32;
+                    let extra_height = payload["extraHeight"].as_u64().unwrap_or(700).min(4096) as u32;
+                    let size = window.inner_size().map_err(failure)?;
+                    let position = window.outer_position().map_err(failure)?;
+                    let mut menu_windows = service.menu_windows.lock().unwrap();
+                    if let Some((_, original_size)) = menu_windows.get(id) {
+                        return Ok(json!({"width": original_size.width, "height": original_size.height}));
+                    }
+                    menu_windows.insert(id.to_string(), (position, size));
+                    drop(menu_windows);
+                    if let Err(error) = window.set_size(PhysicalSize::new(
+                        size.width.saturating_add(extra_width),
+                        size.height.saturating_add(extra_height),
+                    )) {
+                        service.menu_windows.lock().unwrap().remove(id);
+                        return Err(failure(error));
+                    }
+                    return Ok(json!({"width": size.width, "height": size.height}));
+                }
+                "context-menu-close" => {
+                    let original = service.menu_windows.lock().unwrap().remove(id);
+                    if let Some((position, size)) = original {
+                        window.set_size(size).map_err(failure)?;
+                        window.set_position(position).map_err(failure)?;
+                    }
+                    return Ok(json!(true));
+                }
                 "destroy" => {
                     service.update_pin(id, |p| {
                         p.lifecycle = "destroyed".into();
@@ -585,6 +754,15 @@ pub async fn dispatch(
                 }
                 "transparent" => {
                     window.set_ignore_cursor_events(true).map_err(failure)?;
+                }
+                "group" => {
+                    let group = payload["group"]
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|group| !group.is_empty() && group.len() <= 64)
+                        .ok_or_else(|| failure("分组名称无效"))?
+                        .to_string();
+                    service.update_pin(id, |pin| pin.group = group)?;
                 }
                 "resize" => {
                     let width = payload["width"]
@@ -678,18 +856,41 @@ fn remove_expired_history(app: &AppHandle, service: &ScreenshotService, ids: &[S
     service.remove_expired_documents(ids);
 }
 
+fn save_png(
+    path: &Path,
+    data: &str,
+    bytes: &[u8],
+    image: &DynamicImage,
+) -> Result<(), ManagerError> {
+    // 截图和编辑器都传 PNG，直接落盘可以避免再次解码后编码整张大图。
+    let is_png = !bytes.is_empty()
+        && data
+        .split_once(',')
+        .is_some_and(|(header, _)| header.eq_ignore_ascii_case("data:image/png;base64"));
+    let encoded = if is_png {
+        bytes.to_vec()
+    } else {
+        encode_png_fast(image)?
+    };
+    std::fs::write(path, encoded)?;
+    Ok(())
+}
+
+fn write_png(path: &Path, image: &DynamicImage) -> Result<(), ManagerError> {
+    std::fs::write(path, encode_png_fast(image)?)?;
+    Ok(())
+}
+
 fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError> {
     let service = app.state::<ScreenshotService>();
-    let source = decode(
-        payload["source"]
-            .as_str()
-            .ok_or_else(|| failure("缺少原图"))?,
-    )?;
-    let output = decode(
-        payload["output"]
-            .as_str()
-            .ok_or_else(|| failure("缺少渲染结果"))?,
-    )?;
+    let source_data = payload["source"]
+        .as_str()
+        .ok_or_else(|| failure("缺少原图"))?;
+    let output_data = payload["output"]
+        .as_str()
+        .ok_or_else(|| failure("缺少渲染结果"))?;
+    let (source_bytes, source) = decode_data(source_data)?;
+    let (output_bytes, output) = decode_data(output_data)?;
     let annotations = payload
         .get("annotations")
         .cloned()
@@ -701,16 +902,10 @@ fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError
     let id = uuid::Uuid::new_v4().to_string();
     let dir = service.document_dir(&id)?;
     std::fs::create_dir_all(&dir)?;
-    source
-        .save_with_format(dir.join("source.png"), ImageFormat::Png)
-        .map_err(failure)?;
-    output
-        .save_with_format(dir.join("output.png"), ImageFormat::Png)
-        .map_err(failure)?;
-    output
-        .thumbnail(320, 200)
-        .save_with_format(dir.join("thumbnail.png"), ImageFormat::Png)
-        .map_err(failure)?;
+    save_png(&dir.join("source.png"), source_data, &source_bytes, &source)?;
+    save_png(&dir.join("output.png"), output_data, &output_bytes, &output)?;
+    let thumbnail = output.thumbnail(320, 200);
+    write_png(&dir.join("thumbnail.png"), &thumbnail)?;
     atomic_write(
         &dir.join("document.json"),
         &serde_json::to_vec(&json!({"schemaVersion": 1, "annotations": annotations}))?,
@@ -737,26 +932,91 @@ fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError
     Ok(id)
 }
 
-fn ensure_capture_window(app: &AppHandle) -> Result<tauri::WebviewWindow, ManagerError> {
+fn persist_flattened_image(
+    app: &AppHandle,
+    service: &ScreenshotService,
+    id: &str,
+    image: &DynamicImage,
+) -> Result<(), ManagerError> {
+    let dir = service.document_dir(id)?;
+    write_png(&dir.join("source.png"), image)?;
+    write_png(&dir.join("output.png"), image)?;
+    write_png(&dir.join("thumbnail.png"), &image.thumbnail(320, 200))?;
+    atomic_write(
+        &dir.join("document.json"),
+        br#"{"schemaVersion":1,"annotations":[]}"#,
+    )?;
+    let width = image.width();
+    let height = image.height();
+    let mut guard = service.session.lock().unwrap();
+    let mut next = guard.clone();
+    let entry = next
+        .entries
+        .iter_mut()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| failure("截图记录不存在"))?;
+    entry.width = width;
+    entry.height = height;
+    if let Some(pin) = entry.pin.as_mut() {
+        pin.width = width;
+        pin.height = height;
+    }
+    service.commit(&next)?;
+    *guard = next;
+    drop(guard);
+    if let Some(window) = app.get_webview_window(&format!("screenshot-pin-{id}")) {
+        window
+            .set_size(PhysicalSize::new(width, height))
+            .map_err(failure)?;
+    }
+    changed(app);
+    Ok(())
+}
+
+fn ensure_capture_window(
+    app: &AppHandle,
+    bounds: Option<(i32, i32, u32, u32)>,
+) -> Result<tauri::WebviewWindow, ManagerError> {
     if let Some(window) = app.get_webview_window("screenshot-capture") { return Ok(window); }
-    WebviewWindowBuilder::new(app, "screenshot-capture", WebviewUrl::App("index.html?panel=screenshot&mode=capture".into()))
-        .title("截图贴图").decorations(false).resizable(false).skip_taskbar(true).always_on_top(true)
-        .transparent(true).background_color(tauri::window::Color(0, 0, 0, 0)).focused(false)
-        .shadow(false).visible(false).build().map_err(failure)
+    let mut builder = WebviewWindowBuilder::new(
+        app,
+        "screenshot-capture",
+        WebviewUrl::App("index.html?panel=screenshot&mode=capture".into()),
+    )
+    .title("截图贴图")
+    .decorations(false)
+    .resizable(false)
+    .skip_taskbar(true)
+    .always_on_top(true)
+    .transparent(true)
+    .background_color(tauri::window::Color(0, 0, 0, 0))
+    .focused(false)
+    .shadow(false);
+    if let Some((left, top, width, height)) = bounds {
+        builder = builder
+            .position(f64::from(left), f64::from(top))
+            .inner_size(f64::from(width), f64::from(height));
+    }
+    builder.visible(false).build().map_err(failure)
+}
+
+fn capture_bounds(monitors: &[tauri::Monitor]) -> Result<(i32, i32, u32, u32), ManagerError> {
+    if monitors.is_empty() { return Err(failure("没有可截图的显示器")); }
+    let left = monitors.iter().map(|m| m.position().x).min().unwrap();
+    let top = monitors.iter().map(|m| m.position().y).min().unwrap();
+    let right = monitors.iter().map(|m| i64::from(m.position().x) + i64::from(m.size().width)).max().unwrap();
+    let bottom = monitors.iter().map(|m| i64::from(m.position().y) + i64::from(m.size().height)).max().unwrap();
+    let width = (right - i64::from(left)) as u32;
+    let height = (bottom - i64::from(top)) as u32;
+    if u64::from(width) * u64::from(height) > 40_000_000 {
+        return Err(failure("虚拟桌面超过 4000 万像素，请减少显示区域"));
+    }
+    Ok((left, top, width, height))
 }
 
 fn capture_frame_data(image: &DynamicImage) -> Result<String, ManagerError> {
-    let rgba = image.to_rgba8();
-    let mut bytes = Vec::new();
-    {
-        let mut encoder = png::Encoder::new(&mut bytes, image.width(), image.height());
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.set_compression(png::Compression::Fast);
-        encoder.set_filter(png::FilterType::NoFilter);
-        encoder.write_header().map_err(failure)?.write_image_data(&rgba).map_err(failure)?;
-    }
-    Ok(format!("data:image/png;base64,{}", STANDARD.encode(bytes)))
+    // 快速 PNG 编码优先保证快捷键截图的首帧响应，避免无损 WebP 编码阻塞等待。
+    image_data(image)
 }
 
 pub async fn begin_capture(app: &AppHandle) -> Result<(), ManagerError> {
@@ -766,23 +1026,16 @@ pub async fn begin_capture(app: &AppHandle) -> Result<(), ManagerError> {
     }
     let result = async {
         let monitors = app.available_monitors().map_err(failure)?;
-        if monitors.is_empty() { return Err(failure("没有可截图的显示器")); }
-        let left = monitors.iter().map(|m| m.position().x).min().unwrap();
-        let top = monitors.iter().map(|m| m.position().y).min().unwrap();
-        let right = monitors.iter().map(|m| i64::from(m.position().x) + i64::from(m.size().width)).max().unwrap();
-        let bottom = monitors.iter().map(|m| i64::from(m.position().y) + i64::from(m.size().height)).max().unwrap();
-        let width = (right - i64::from(left)) as u32;
-        let height = (bottom - i64::from(top)) as u32;
-        if u64::from(width) * u64::from(height) > 40_000_000 { return Err(failure("虚拟桌面超过 4000 万像素，请减少显示区域")); }
+        let (left, top, width, height) = capture_bounds(&monitors)?;
         let source = tauri::async_runtime::spawn_blocking(move || {
             #[cfg(windows)]
             { capture_frame_data(&windows::capture(&monitors, left, top, width, height)?) }
             #[cfg(not(windows))]
             { Err::<String, ManagerError>(failure("桌面截图目前仅支持 Windows")) }
         }).await.map_err(failure)??;
-        let window = ensure_capture_window(app)?;
-        window.set_position(PhysicalPosition::new(left, top)).map_err(failure)?;
+        let window = ensure_capture_window(app, Some((left, top, width, height)))?;
         window.set_size(PhysicalSize::new(width, height)).map_err(failure)?;
+        window.set_position(PhysicalPosition::new(left, top)).map_err(failure)?;
         *service.frame.lock().unwrap() = Some(json!({"source": source, "left": left, "top": top, "width": width, "height": height}));
         window.emit("screenshot:frame", ()).map_err(failure)?;
         Ok(())
@@ -795,7 +1048,8 @@ pub async fn begin_capture(app: &AppHandle) -> Result<(), ManagerError> {
 
 fn cancel_capture(app: &AppHandle) -> Result<(), ManagerError> {
     if let Some(window) = app.get_webview_window("screenshot-capture") {
-        window.hide().map_err(failure)?;
+        window.set_focusable(false).map_err(failure)?;
+        window.set_ignore_cursor_events(true).map_err(failure)?;
         window.emit("screenshot:reset", ()).map_err(failure)?;
     }
     let service = app.state::<ScreenshotService>();
@@ -805,16 +1059,24 @@ fn cancel_capture(app: &AppHandle) -> Result<(), ManagerError> {
 }
 
 fn open_pin(app: &AppHandle, id: &str) -> Result<(), ManagerError> {
-    open_pin_with_visibility(app, id, true)
+    open_pin_with_visibility(app, id, true, false)
 }
 
-fn open_pin_with_visibility(app: &AppHandle, id: &str, show: bool) -> Result<(), ManagerError> {
+fn open_pin_with_visibility(
+    app: &AppHandle,
+    id: &str,
+    show: bool,
+    dismiss_capture: bool,
+) -> Result<(), ManagerError> {
     let label = format!("screenshot-pin-{id}");
     let service = app.state::<ScreenshotService>();
     service.document_dir(id)?;
     if let Some(window) = app.get_webview_window(&label) {
         window.show().map_err(failure)?;
         service.update_pin(id, |p| p.visible = true)?;
+        if dismiss_capture && service.capturing.load(Ordering::SeqCst) {
+            cancel_capture(app)?;
+        }
         changed(app);
         return Ok(());
     }
@@ -850,6 +1112,7 @@ fn open_pin_with_visibility(app: &AppHandle, id: &str, show: bool) -> Result<(),
             width: entry.width.max(1),
             height: entry.height.max(1),
             opacity: 1.0,
+            group: default_pin_group(),
             lifecycle: "open".into(),
             visible: true,
         });
@@ -868,12 +1131,16 @@ fn open_pin_with_visibility(app: &AppHandle, id: &str, show: bool) -> Result<(),
     if show {
         pin.visible = true;
     }
-    let visible = pin.visible;
     pin.lifecycle = "open".into();
+    let url = if dismiss_capture {
+        format!("index.html?panel=screenshot&mode=pin&id={id}&capture=1")
+    } else {
+        format!("index.html?panel=screenshot&mode=pin&id={id}")
+    };
     let window = WebviewWindowBuilder::new(
         app,
         &label,
-        WebviewUrl::App(format!("index.html?panel=screenshot&mode=pin&id={id}").into()),
+        WebviewUrl::App(url.into()),
     )
     .title("桌面贴图")
     .decorations(false)
@@ -884,6 +1151,8 @@ fn open_pin_with_visibility(app: &AppHandle, id: &str, show: bool) -> Result<(),
     .transparent(true)
     .background_color(tauri::window::Color(0, 0, 0, 0))
     .shadow(false)
+    .position(f64::from(pin.x), f64::from(pin.y))
+    .inner_size(f64::from(pin.width), f64::from(pin.height))
     .visible(false)
     .build()
     .map_err(failure)?;
@@ -901,9 +1170,7 @@ fn open_pin_with_visibility(app: &AppHandle, id: &str, show: bool) -> Result<(),
         service.commit(&next)?;
         *guard = next;
     }
-    if visible {
-        window.show().map_err(failure)?;
-    }
+    // 等贴图页面完成图片解码后，由 pin-ready 显示窗口，避免透明窗口先闪出空白帧。
     changed(app);
     Ok(())
 }
@@ -926,6 +1193,9 @@ pub fn window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent) {
         event,
         tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
     ) {
+        if service.menu_windows.lock().unwrap().contains_key(id) {
+            return;
+        }
         {
             let mut session = service.session.lock().unwrap();
             if let Some(pin) = session
@@ -1028,7 +1298,11 @@ pub fn paste_clipboard(app: &AppHandle) -> Result<(), ManagerError> {
 }
 
 pub fn start(app: AppHandle) {
-    if let Err(error) = ensure_capture_window(&app) {
+    let bounds = app
+        .available_monitors()
+        .ok()
+        .and_then(|monitors| capture_bounds(&monitors).ok());
+    if let Err(error) = ensure_capture_window(&app, bounds) {
         let _ = app.emit("screenshot:error", format!("截图窗口预加载失败：{error}"));
     }
     #[cfg(windows)]
@@ -1047,7 +1321,7 @@ pub fn start(app: AppHandle) {
         .map(|e| e.id.clone())
         .collect::<Vec<_>>();
     for id in ids {
-        if let Err(error) = open_pin_with_visibility(&app, &id, false) {
+        if let Err(error) = open_pin_with_visibility(&app, &id, false, false) {
             service
                 .startup_errors
                 .lock()
@@ -1101,6 +1375,7 @@ mod tests {
                 width: 400,
                 height: 300,
                 opacity: 1.0,
+                group: default_pin_group(),
                 lifecycle: lifecycle.into(),
                 visible: lifecycle == "open",
             }),
@@ -1250,6 +1525,7 @@ mod tests {
                 width: 400,
                 height: 300,
                 opacity: 0.55,
+                group: default_pin_group(),
                 lifecycle: "closed".into(),
                 visible: false,
             }),

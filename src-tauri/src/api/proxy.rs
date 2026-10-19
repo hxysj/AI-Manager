@@ -1957,7 +1957,7 @@ fn set_codex_proxy_config_toml(content: &str, local_base_url: &str, model: &str)
 
 fn set_codex_model_catalog_config(content: &str, enabled: bool) -> String {
     if enabled {
-        set_toml_root_value(content, "model_catalog_json", ".cockpit_model_catalog.json")
+        set_toml_root_value(content, "model_catalog_json", ".monkey_thief_model_catalog.json")
     } else {
         let mut content = content.to_string();
         for key in [
