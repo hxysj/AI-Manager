@@ -12,7 +12,6 @@ from pathlib import Path
 
 
 KEEP_TABLES = {
-    "schema_migrations",
     "app_metadata",
     "usage_requests",
     "usage_sessions",

@@ -9,8 +9,6 @@ use std::path::Path;
 
 mod requests;
 
-const SCHEMA_VERSION: i64 = 2;
-
 pub struct UsageLogQuery {
     pub app_type: String,
     pub provider_id: String,
@@ -46,7 +44,10 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
         "INSERT OR IGNORE INTO app_metadata(key,value) VALUES ('usage:revision','0')",
         [],
     )?;
-    migrate_session_fields(connection)
+    migrate_session_fields(connection)?;
+    // 迁移根据实际表结构判断，完成后移除旧的版本记录表。
+    connection.execute_batch("DROP TABLE IF EXISTS schema_migrations;")?;
+    Ok(())
 }
 
 pub fn read_pricing(paths: &AppPaths) -> Result<Value, ManagerError> {
@@ -639,11 +640,7 @@ fn open_connection(paths: &AppPaths) -> Result<Connection, ManagerError> {
 
 fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
     connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_migrations (
-           version INTEGER PRIMARY KEY,
-           applied_at INTEGER NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS usage_sessions (
+        "CREATE TABLE IF NOT EXISTS usage_sessions (
            raw_path TEXT PRIMARY KEY,
            app_type TEXT NOT NULL DEFAULT '',
            updated_at INTEGER NOT NULL DEFAULT 0
@@ -676,12 +673,7 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
            ON codex_quota_stages(account_id, reset_at DESC);
          CREATE TABLE IF NOT EXISTS app_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
-    requests::create_schema(connection)?;
-    connection.execute(
-        "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
-        params![SCHEMA_VERSION, now_millis() as i64],
-    )?;
-    Ok(())
+    requests::create_schema(connection)
 }
 
 fn migrate_session_fields(connection: &mut Connection) -> Result<(), ManagerError> {
@@ -1117,13 +1109,6 @@ fn to_i64(value: u64) -> i64 {
     value.min(i64::MAX as u64) as i64
 }
 
-fn now_millis() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1159,7 +1144,9 @@ mod tests {
              CREATE TABLE usage_request_records(request_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT 0, payload_json TEXT NOT NULL);
              CREATE TABLE usage_sessions(raw_path TEXT PRIMARY KEY, app_type TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0);
              CREATE TABLE usage_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-             CREATE TABLE usage_pricing_config(id INTEGER PRIMARY KEY,exchange_rate REAL NOT NULL);"
+             CREATE TABLE usage_pricing_config(id INTEGER PRIMARY KEY,exchange_rate REAL NOT NULL);
+             CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,applied_at INTEGER NOT NULL);
+             INSERT INTO schema_migrations VALUES(1,100),(2,200);"
         ).unwrap();
     }
 
@@ -1226,6 +1213,17 @@ mod tests {
         assert!(!Path::new(&paths.storage_files.usage_database).exists());
         assert!(!Path::new(&paths.storage_files.usage_logs).exists());
         assert!(!Path::new(&format!("{}.migrated", paths.storage_files.usage_logs)).exists());
+        let connection = Connection::open(&paths.storage_files.database).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='schema_migrations'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
     }
 
     #[test]
@@ -1709,6 +1707,7 @@ mod tests {
             "usage_request_records",
             "usage_metadata",
             "usage_pricing_config",
+            "schema_migrations",
         ] {
             assert_eq!(
                 connection
@@ -1749,6 +1748,13 @@ mod tests {
         connection.execute_batch("INSERT INTO usage_logs(request_id,created_at,payload_json) VALUES ('bad',100,'invalid-json');
             INSERT INTO usage_metadata VALUES ('revision','99'); INSERT INTO usage_pricing_config VALUES (1,7.4);").unwrap();
         assert!(initialize(&paths).is_err());
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
         assert_eq!(
             connection
                 .query_row("SELECT COUNT(*) FROM usage_requests", [], |row| row

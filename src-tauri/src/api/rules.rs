@@ -11,12 +11,9 @@ static PROMPT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 const COMMON_PROMPT_CLI: &str = "common";
 
 pub fn build_state(paths: &AppPaths, cli_targets: &Value) -> Result<Value, ManagerError> {
-    let runtime_state = refresh_drift_state(paths, cli_targets)?;
-
-    rule_store::write_runtime_state(paths, &runtime_state)?;
-
     let prompts = load_prompts(paths)?;
     let profiles = load_profiles(paths)?;
+    let runtime_state = refresh_drift_state(paths, cli_targets, &prompts, &profiles)?;
 
     Ok(json!({
       "supportedClis": supported_clis(),
@@ -283,17 +280,18 @@ pub async fn move_rule(_: &AppPaths) -> Result<(), ManagerError> {
 }
 
 pub async fn refresh_drift(paths: &AppPaths, cli_targets: &Value) -> Result<(), ManagerError> {
-    let runtime_state = refresh_drift_state(paths, cli_targets)?;
-
-    rule_store::write_runtime_state(paths, &runtime_state)
+    let prompts = load_prompts(paths)?;
+    let profiles = load_profiles(paths)?;
+    refresh_drift_state(paths, cli_targets, &prompts, &profiles)?;
+    Ok(())
 }
 
 fn refresh_drift_state(
     paths: &AppPaths,
     cli_targets: &Value,
+    prompts: &[Value],
+    profiles: &Value,
 ) -> Result<serde_json::Map<String, Value>, ManagerError> {
-    let prompts = load_prompts(paths)?;
-    let profiles = load_profiles(paths)?;
     let mut runtime_state = rule_store::read_runtime_state(paths)?;
 
     for cli in ["claude", "codex"] {
@@ -352,6 +350,9 @@ fn refresh_drift_state(
 
         next_state.insert("activePromptId".to_string(), json!(active_prompt_id));
         if status == "SYNCED" {
+            if previous_hash != runtime_hash {
+                rule_store::update_synced_hash(paths, cli, &active_prompt_id, &runtime_hash)?;
+            }
             next_state.insert("runtimeHash".to_string(), json!(runtime_hash));
         }
         next_state.insert("runtimePath".to_string(), json!(runtime_path));
@@ -475,21 +476,13 @@ async fn enable_prompt(
         tokio::fs::create_dir_all(parent).await?;
     }
     tokio::fs::write(&runtime_path, &runtime_content).await?;
-    rule_store::write_profile(paths, &cli, &json!({ "activePromptId": prompt_id }))?;
-
-    let mut runtime_state = rule_store::read_runtime_state(paths)?;
-
-    runtime_state.insert(
-        cli.to_string(),
-        json!({
-          "activePromptId": prompt_id,
-          "runtimeHash": sha256_text(&runtime_content),
-          "lastSyncAt": now_millis(),
-          "runtimePath": runtime_path,
-          "status": "SYNCED"
-        }),
-    );
-    rule_store::write_runtime_state(paths, &runtime_state)
+    rule_store::set_active_prompt(
+        paths,
+        cli,
+        prompt_id,
+        &sha256_text(&runtime_content),
+        now_millis() as i64,
+    )
 }
 
 async fn disable_prompt(
@@ -530,19 +523,7 @@ async fn disable_prompt(
         remove_file_if_exists(&runtime_path).await?;
     }
 
-    rule_store::write_profile(paths, &cli, &json!({ "activePromptId": "" }))?;
-    let mut runtime_state = rule_store::read_runtime_state(paths)?;
-    let mut next_state = runtime_state
-        .get(&cli)
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-
-    next_state.insert("activePromptId".to_string(), json!(""));
-    next_state.insert("runtimePath".to_string(), json!(runtime_path));
-    next_state.insert("status".to_string(), json!("NO_ACTIVE"));
-    runtime_state.insert(cli, Value::Object(next_state));
-    rule_store::write_runtime_state(paths, &runtime_state)
+    rule_store::set_active_prompt(paths, &cli, "", "", 0)
 }
 
 async fn read_global_prompt_content(
@@ -893,4 +874,118 @@ fn now_millis() -> u64 {
 
 fn number_desc(value: Option<&Value>) -> u64 {
     value.and_then(Value::as_u64).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{database, paths::resolve_app_paths};
+
+    fn fixture() -> (AppPaths, Value) {
+        let paths = resolve_app_paths(
+            &std::env::temp_dir().join(format!("rules-api-{}", uuid::Uuid::new_v4())),
+        );
+        let targets = json!([
+            {"id":"claude","configPath":Path::new(&paths.user_data_path).join("claude")},
+            {"id":"codex","configPath":Path::new(&paths.user_data_path).join("codex")}
+        ]);
+        (paths, targets)
+    }
+
+    #[test]
+    fn drift_detection_retains_baseline_and_does_not_write_on_unchanged_refresh() {
+        let (paths, targets) = fixture();
+        let prompt_dir = prompt_dir(&paths, "common");
+        std::fs::create_dir_all(&prompt_dir).unwrap();
+        let prompt_path = prompt_dir.join("shared.md");
+        std::fs::write(&prompt_path, "original").unwrap();
+        rule_store::upsert_prompt(
+            &paths,
+            &json!({"id":"shared","cli":"common","name":"Shared","fileName":"shared.md"}),
+        )
+        .unwrap();
+        let runtime_path = Path::new(&paths.user_data_path).join("claude/CLAUDE.md");
+        std::fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+        std::fs::write(&runtime_path, "original").unwrap();
+        rule_store::set_active_prompt(&paths, "claude", "shared", &sha256_text("original"), 123)
+            .unwrap();
+        let observer = database::open(&paths).unwrap();
+        let version = || {
+            observer
+                .query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+                .unwrap()
+        };
+        let before = version();
+        assert_eq!(
+            build_state(&paths, &targets).unwrap()["runtimeState"]["claude"]["status"],
+            "SYNCED"
+        );
+        assert_eq!(version(), before);
+        std::fs::write(&runtime_path, "external").unwrap();
+        assert_eq!(
+            build_state(&paths, &targets).unwrap()["runtimeState"]["claude"]["status"],
+            "MODIFIED_EXTERNALLY"
+        );
+        std::fs::write(&prompt_path, "manager").unwrap();
+        assert_eq!(
+            build_state(&paths, &targets).unwrap()["runtimeState"]["claude"]["status"],
+            "CONFLICT"
+        );
+        std::fs::write(&runtime_path, "manager").unwrap();
+        assert_eq!(
+            build_state(&paths, &targets).unwrap()["runtimeState"]["claude"]["status"],
+            "SYNCED"
+        );
+        let baseline = rule_store::read_runtime_state(&paths).unwrap();
+        assert_eq!(baseline["claude"]["runtimeHash"], sha256_text("manager"));
+        assert_eq!(baseline["claude"]["lastSyncAt"], 123);
+        std::fs::write(&prompt_path, "next edit").unwrap();
+        assert_eq!(
+            build_state(&paths, &targets).unwrap()["runtimeState"]["claude"]["status"],
+            "DIRTY_MANAGER"
+        );
+        std::fs::remove_file(&runtime_path).unwrap();
+        assert_eq!(
+            build_state(&paths, &targets).unwrap()["runtimeState"]["claude"]["status"],
+            "DIRTY_MANAGER"
+        );
+        drop(observer);
+        std::fs::remove_dir_all(&paths.user_data_path).unwrap();
+    }
+
+    #[test]
+    fn common_rule_enable_disable_and_delete_keeps_cli_files_and_state_consistent() {
+        let (paths, targets) = fixture();
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let prompt = save_prompt(
+                &paths,
+                json!({"cli":"common","name":"Shared","content":"rule content"}),
+            )
+            .await
+            .unwrap();
+            let id = prompt["id"].as_str().unwrap();
+            for cli in ["claude", "codex"] {
+                enable_prompt(&paths, id, cli, &targets).await.unwrap();
+            }
+            assert!(delete_prompt(&paths, id).await.is_err());
+            disable_prompt(&paths, json!({"ruleId":id,"targetCli":"claude"}), &targets)
+                .await
+                .unwrap();
+            let state = build_state(&paths, &targets).unwrap();
+            assert_eq!(state["runtimeState"]["claude"]["status"], "NO_ACTIVE");
+            assert_eq!(state["runtimeState"]["codex"]["status"], "SYNCED");
+            assert!(!Path::new(&paths.user_data_path)
+                .join("claude/CLAUDE.md")
+                .exists());
+            assert!(Path::new(&paths.user_data_path)
+                .join("codex/AGENTS.md")
+                .exists());
+            disable_prompt(&paths, json!({"ruleId":id,"targetCli":"codex"}), &targets)
+                .await
+                .unwrap();
+            delete_prompt(&paths, id).await.unwrap();
+            assert!(rule_store::read_prompts(&paths).unwrap().is_empty());
+        });
+        std::fs::remove_dir_all(&paths.user_data_path).unwrap();
+    }
 }

@@ -137,7 +137,12 @@ fn comparable_row(
             value.remove(*column);
         }
     }
-    if table.starts_with("skill") {
+    if table == "rules" {
+        for column in RULE_LOCAL_COLUMNS {
+            value.remove(*column);
+        }
+    }
+    if table.starts_with("skill") || table == "rules" {
         value.remove("created_at");
         value.remove("updated_at");
     }
@@ -204,6 +209,39 @@ pub(super) fn merge_table(
         } else if row.contains_key("sort_order") {
             row.insert("sort_order".into(), json!(next_order));
             next_order += 1;
+        }
+        if table == "rules" {
+            // 只恢复规则元数据；启用关系和同步基线沿用本机，新增规则默认不启用。
+            let rule_type = row
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let enabled = existing
+                .and_then(|item| item.get("enabled_clis"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let mut enabled_clis = Vec::new();
+            for cli in ["claude", "codex"] {
+                let keep = (rule_type == "common" || rule_type == cli)
+                    && enabled.split(',').any(|item| item == cli);
+                if keep {
+                    enabled_clis.push(cli);
+                }
+                for (suffix, default) in [("synced_hash", json!("")), ("synced_at", json!(0))] {
+                    let column = format!("{cli}_{suffix}");
+                    let value = if keep {
+                        existing
+                            .and_then(|item| item.get(&column))
+                            .cloned()
+                            .unwrap_or(default)
+                    } else {
+                        default
+                    };
+                    row.insert(column, value);
+                }
+            }
+            row.insert("enabled_clis".into(), json!(enabled_clis.join(",")));
         }
         let values = columns
             .iter()

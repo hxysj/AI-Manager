@@ -727,7 +727,6 @@ async fn restore_data_backup_content(
     let providers_changed = restored_paths.contains("storage/providers.json");
     let provider_models_changed = restored_paths.contains("storage/runtime-models.json");
     let codex_accounts_changed = restored_paths.contains("storage/codex-accounts.json");
-    let rule_prompts_changed = restored_paths.contains("storage/rules.json");
     let refresh_skills = restored_paths.contains("storage/skills.json")
         || restored_paths
             .iter()
@@ -757,7 +756,6 @@ async fn restore_data_backup_content(
         providers_changed,
         provider_models_changed,
         codex_accounts_changed,
-        rule_prompts_changed,
     )?;
 
     if let Some(runtime_provider_keys) = runtime_provider_keys {
@@ -3543,8 +3541,7 @@ fn restore_database_table_name(table: &str) -> &'static str {
         "skills" => "Skill 索引",
         "skill_groups" => "Skill 分组",
         "skill_repositories" => "Skill 仓库",
-        "rule_prompts" => "Rule 内容",
-        "rule_profiles" => "Rule 配置",
+        "rules" => "规则",
         "providers" => "Provider",
         "provider_models" => "Provider 模型",
         "claude_desktop_providers" => "Claude Desktop 供应商",

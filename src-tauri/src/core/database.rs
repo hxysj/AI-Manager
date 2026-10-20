@@ -1,5 +1,6 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
+use crate::core::rule_store::LOCAL_COLUMNS as RULE_LOCAL_COLUMNS;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -17,7 +18,7 @@ const BACKUP_INCLUDED_TABLES: [&str; 10] = [
     "skills",
     "skill_groups",
     "skill_repositories",
-    "rule_prompts",
+    "rules",
     "app_metadata",
     "usage_pricing_items",
 ];
@@ -82,6 +83,7 @@ pub fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
 pub fn backup(paths: &AppPaths) -> Result<Vec<u8>, ManagerError> {
     crate::core::skill_store::initialize(paths)?;
     crate::core::usage_store::initialize(paths)?;
+    crate::core::rule_store::initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
     cleanup_backup_snapshots(Path::new(&paths.temp_dir))?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
@@ -183,6 +185,10 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
     transaction.execute_batch(
         "UPDATE skills SET disabled=1, installed_targets='', status='disabled',
          source_path='', entry_path='', repo_name='', is_deleted=0, deleted_at=0, trash_id='', trash_path='';"
+    )?;
+    transaction.execute_batch(
+        "UPDATE rules SET enabled_clis='', claude_synced_hash='', claude_synced_at=0,
+         codex_synced_hash='', codex_synced_at=0;",
     )?;
     strip_json_fields(&transaction, "codex_accounts", &["usage", "disabled"])?;
     transaction.commit()?;
@@ -305,13 +311,8 @@ pub fn reconcile_local_state(
     providers_changed: bool,
     provider_models_changed: bool,
     codex_accounts_changed: bool,
-    rule_prompts_changed: bool,
 ) -> Result<(), ManagerError> {
-    if !providers_changed
-        && !provider_models_changed
-        && !codex_accounts_changed
-        && !rule_prompts_changed
-    {
+    if !providers_changed && !provider_models_changed && !codex_accounts_changed {
         return Ok(());
     }
     initialize(paths)?;
@@ -323,9 +324,6 @@ pub fn reconcile_local_state(
     }
     if codex_accounts_changed {
         clear_missing_codex_active_account(&transaction)?;
-    }
-    if rule_prompts_changed {
-        clear_missing_rule_prompt_state(&transaction)?;
     }
     transaction.commit()?;
     Ok(())
@@ -369,8 +367,6 @@ fn restore_tables(
                 restore_skills(&transaction)?;
             } else if table == "codex_accounts" {
                 restore_codex_accounts(&transaction)?;
-            } else if table == "rule_prompts" {
-                restore_rule_prompts(&transaction)?;
             } else {
                 restore_table(&transaction, &table)?;
             }
@@ -396,6 +392,7 @@ fn with_restore_snapshot<T>(
 ) -> Result<T, ManagerError> {
     crate::core::skill_store::initialize(paths)?;
     crate::core::usage_store::initialize(paths)?;
+    crate::core::rule_store::initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
         "ai-manager-restore-{}-{}.db",
@@ -408,6 +405,7 @@ fn with_restore_snapshot<T>(
         let mut source = Connection::open(&snapshot_path)?;
         crate::core::skill_store::migrate_connection(&mut source)?;
         crate::core::usage_store::migrate_connection(&mut source)?;
+        crate::core::rule_store::migrate_connection(&mut source)?;
         drop(source);
         action(&snapshot_path)
     })();
@@ -734,57 +732,6 @@ fn restore_skills(transaction: &rusqlite::Transaction<'_>) -> Result<(), Manager
     Ok(())
 }
 
-fn restore_rule_prompts(transaction: &rusqlite::Transaction<'_>) -> Result<(), ManagerError> {
-    restore_table(transaction, "rule_prompts")?;
-    clear_missing_rule_prompt_state(transaction)
-}
-
-fn clear_missing_rule_prompt_state(
-    transaction: &rusqlite::Transaction<'_>,
-) -> Result<(), ManagerError> {
-    let profiles = {
-        let mut statement = transaction.prepare("SELECT cli, payload_json FROM rule_profiles")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows
-    };
-
-    for (cli, payload) in profiles {
-        let mut profile: serde_json::Value = serde_json::from_str(&payload)?;
-        let active_prompt_id = profile
-            .get("activePromptId")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("")
-            .trim();
-        if active_prompt_id.is_empty()
-            || transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM rule_prompts WHERE prompt_id = ?1)",
-                params![active_prompt_id],
-                |row| row.get::<_, bool>(0),
-            )?
-        {
-            continue;
-        }
-
-        // 当前启用的 Rule 已不在恢复结果中，只清空悬空状态，不启用备份中的新 Rule。
-        let profile = profile
-            .as_object_mut()
-            .ok_or_else(|| ManagerError::System(format!("Rule Profile {cli} 的数据格式无效。")))?;
-        profile.insert(
-            "activePromptId".to_string(),
-            serde_json::Value::String(String::new()),
-        );
-        transaction.execute(
-            "UPDATE rule_profiles SET payload_json = ?1 WHERE cli = ?2",
-            params![serde_json::to_string(&profile)?, cli],
-        )?;
-    }
-    Ok(())
-}
-
 fn restore_codex_accounts(transaction: &rusqlite::Transaction<'_>) -> Result<(), ManagerError> {
     let current_state = {
         let mut statement =
@@ -959,7 +906,8 @@ fn comparison_column(table: &str, column: &str) -> String {
 
     if column != "\"payload_json\"" {
         if (table == "skills" && SKILL_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
-            || (table.starts_with("skill")
+            || (table == "rules" && RULE_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
+            || ((table.starts_with("skill") || table == "rules")
                 && ["created_at", "updated_at"].contains(&column.trim_matches('"')))
         {
             return "NULL".to_string();
@@ -1107,10 +1055,15 @@ mod tests {
             .unwrap();
         drop(connection);
 
+        rule_store::set_active_prompt(&paths, "claude", "rule-a", "local-hash", 100).unwrap();
         let snapshot_path = root.join("snapshot.db");
         std::fs::write(&snapshot_path, backup(&paths).unwrap()).unwrap();
         let snapshot = Connection::open(snapshot_path).unwrap();
 
+        assert_eq!(snapshot.query_row(
+            "SELECT enabled_clis,claude_synced_hash,claude_synced_at FROM rules WHERE id='rule-a'",
+            [], |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,i64>(2)?))
+        ).unwrap(), ("".into(), "".into(), 0));
         for table in read_table_names(&snapshot, "main").unwrap() {
             let count = snapshot
                 .query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |row| {
@@ -1288,18 +1241,10 @@ mod tests {
             &json!({"id": "rule-local", "cli": "codex", "fileName": "rule-local.md"}),
         )
         .unwrap();
-        rule_store::write_profile(
-            &target_paths,
-            "claude",
-            &json!({"activePromptId": "rule-a"}),
-        )
-        .unwrap();
-        rule_store::write_profile(
-            &target_paths,
-            "codex",
-            &json!({"activePromptId": "rule-local"}),
-        )
-        .unwrap();
+        rule_store::set_active_prompt(&target_paths, "claude", "rule-a", "claude-hash", 123)
+            .unwrap();
+        rule_store::set_active_prompt(&target_paths, "codex", "rule-local", "codex-hash", 456)
+            .unwrap();
         let target = open(&target_paths).unwrap();
         target
             .execute_batch(
@@ -1318,7 +1263,7 @@ mod tests {
         assert!(differences.iter().any(|item| item.table == "skills"));
         assert!(differences
             .iter()
-            .any(|difference| difference.table == "rule_prompts"));
+            .any(|difference| difference.table == "rules"));
         assert!(!differences
             .iter()
             .any(|difference| difference.table == "rule_profiles"));
@@ -1331,7 +1276,7 @@ mod tests {
                 "providers".to_string(),
                 "skills".to_string(),
                 "codex_accounts".to_string(),
-                "rule_prompts".to_string(),
+                "rules".to_string(),
             ],
         )
         .unwrap();
@@ -1459,32 +1404,27 @@ mod tests {
         let installs = skill_store::read_installs(&target_paths).unwrap();
         assert_eq!(installs["skill-a"], json!(["codex"]));
         assert_eq!(installs["skill-local"], json!(["codex"]));
-        let claude_profile: serde_json::Value = serde_json::from_str(
-            &restored
-                .query_row(
-                    "SELECT payload_json FROM rule_profiles WHERE cli = 'claude'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(claude_profile["activePromptId"], "rule-a");
-        let codex_profile: serde_json::Value = serde_json::from_str(
-            &restored
-                .query_row(
-                    "SELECT payload_json FROM rule_profiles WHERE cli = 'codex'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(codex_profile["activePromptId"], "rule-local");
+        let profiles = rule_store::read_profiles(&target_paths).unwrap();
+        assert_eq!(profiles["claude"]["activePromptId"], "rule-a");
+        assert_eq!(profiles["codex"]["activePromptId"], "rule-local");
+        let runtime = rule_store::read_runtime_state(&target_paths).unwrap();
+        assert_eq!(runtime["claude"]["runtimeHash"], "claude-hash");
+        assert_eq!(runtime["claude"]["lastSyncAt"], 123);
+        assert_eq!(runtime["codex"]["runtimeHash"], "codex-hash");
         assert_eq!(
             restored
                 .query_row(
-                    "SELECT COUNT(*) FROM rule_prompts WHERE prompt_id = 'rule-b'",
+                    "SELECT enabled_clis FROM rules WHERE id='rule-b'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            ""
+        );
+        assert_eq!(
+            restored
+                .query_row(
+                    "SELECT COUNT(*) FROM rules WHERE id = 'rule-b'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )
@@ -1721,8 +1661,26 @@ mod tests {
         )
         .unwrap();
 
+        for paths in [&source_paths, &target_paths] {
+            rule_store::upsert_prompt(
+                paths,
+                &json!({"id":"rule-a","cli":"common","fileName":"rule-a.md","name":"same"}),
+            )
+            .unwrap();
+        }
+        rule_store::set_active_prompt(&source_paths, "claude", "rule-a", "source-hash", 100)
+            .unwrap();
+        rule_store::set_active_prompt(&target_paths, "codex", "rule-a", "target-hash", 200)
+            .unwrap();
         let differences = preview_restore(&target_paths, &backup(&source_paths).unwrap()).unwrap();
 
+        assert!(!differences.iter().any(|item| item.table == "rules"));
+        assert!(
+            super::preview_rows(&target_paths, &backup(&source_paths).unwrap())
+                .unwrap()
+                .iter()
+                .all(|item| item.table != "rules")
+        );
         assert!(!differences.iter().any(|item| item.table == "providers"));
         assert!(!differences.iter().any(|item| item.table == "skills"));
         assert!(!differences
@@ -1773,7 +1731,9 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let legacy_path = root.join("legacy.db");
         let source = Connection::open(&legacy_path).unwrap();
-        source.execute_batch("CREATE TABLE app_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+        source.execute_batch("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,applied_at INTEGER NOT NULL);
+            INSERT INTO schema_migrations VALUES (1,100),(2,200);
+            CREATE TABLE app_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             INSERT INTO app_metadata VALUES ('local_guard','from-other-device');
             CREATE TABLE usage_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
             INSERT INTO usage_metadata VALUES ('revision','777'),('session_parser_version:codex','99');
@@ -1840,6 +1800,113 @@ mod tests {
                 .unwrap(),
             "7.4"
         );
-        assert_eq!(backup.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('usage_metadata','usage_pricing_config','usage_logs','usage_request_records')",[],|row| row.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(backup.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('schema_migrations','usage_metadata','usage_pricing_config','usage_logs','usage_request_records')",[],|row| row.get::<_,i64>(0)).unwrap(),0);
+    }
+    #[test]
+    fn restores_legacy_rule_backup_without_reintroducing_old_tables_or_local_state() {
+        let root =
+            std::env::temp_dir().join(format!("legacy-rule-backup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let snapshot_path = root.join("legacy.db");
+        let snapshot = Connection::open(&snapshot_path).unwrap();
+        snapshot.execute_batch(r#"
+            CREATE TABLE app_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            CREATE TABLE rule_prompts(prompt_id TEXT PRIMARY KEY,cli TEXT NOT NULL,
+              file_name TEXT NOT NULL,updated_at INTEGER NOT NULL,payload_json TEXT NOT NULL);
+            CREATE TABLE rule_profiles(cli TEXT PRIMARY KEY,payload_json TEXT NOT NULL);
+            CREATE TABLE rule_runtime_state(cli TEXT PRIMARY KEY,payload_json TEXT NOT NULL);
+            CREATE TABLE rule_schema_migrations(version INTEGER PRIMARY KEY,applied_at INTEGER NOT NULL);
+            INSERT INTO rule_prompts VALUES('legacy','common','legacy.md',42,
+              '{"id":"legacy","cli":"common","name":"Legacy","fileName":"legacy.md","createdAt":12}');
+            INSERT INTO rule_profiles VALUES('claude','{"activePromptId":"legacy"}');
+            INSERT INTO rule_runtime_state VALUES('claude',
+              '{"activePromptId":"legacy","runtimeHash":"old-device","lastSyncAt":100}');
+        "#).unwrap();
+        drop(snapshot);
+        let content = std::fs::read(&snapshot_path).unwrap();
+        let paths = resolve_app_paths(&root.join("target"));
+        rule_store::upsert_prompt(
+            &paths,
+            &json!({"id":"local","cli":"claude","fileName":"local.md"}),
+        )
+        .unwrap();
+        rule_store::set_active_prompt(&paths, "claude", "local", "local-hash", 999).unwrap();
+        let differences = super::preview_rows(&paths, &content).unwrap();
+        assert!(differences
+            .iter()
+            .any(|row| row.table == "rules" && row.row_key == "legacy"));
+        restore_selected(&paths, &content, &["rules".into()]).unwrap();
+        let connection = open(&paths).unwrap();
+        let tables = read_table_names(&connection, "main").unwrap();
+        assert!(!tables.iter().any(|table| table.starts_with("rule_")));
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT type,name,enabled_clis FROM rules WHERE id='legacy'",
+                    [],
+                    |row| Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?
+                    ))
+                )
+                .unwrap(),
+            ("common".into(), "Legacy".into(), "".into())
+        );
+        assert_eq!(
+            rule_store::read_runtime_state(&paths).unwrap()["claude"]["runtimeHash"],
+            "local-hash"
+        );
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn restoring_rules_keeps_local_activation_and_clears_incompatible_targets() {
+        let root =
+            std::env::temp_dir().join(format!("rule-restore-scope-{}", uuid::Uuid::new_v4()));
+        let source_paths = resolve_app_paths(&root.join("source"));
+        let paths = resolve_app_paths(&root.join("target"));
+        for (id, cli) in [("shared", "common"), ("new", "common")] {
+            rule_store::upsert_prompt(
+                &source_paths,
+                &json!({"id":id,"cli":cli,"name":"Backup","fileName":format!("{id}.md")}),
+            )
+            .unwrap();
+        }
+        // 模拟直接复制的旧设备数据库，包含与本机不同的启用关系。
+        rule_store::set_active_prompt(&source_paths, "claude", "new", "source-hash", 100).unwrap();
+        rule_store::upsert_prompt(
+            &paths,
+            &json!({"id":"shared","cli":"common","name":"Local","fileName":"shared.md"}),
+        )
+        .unwrap();
+        rule_store::set_active_prompt(&paths, "claude", "shared", "claude-local", 11).unwrap();
+        rule_store::set_active_prompt(&paths, "codex", "shared", "codex-local", 22).unwrap();
+        let source = open(&source_paths).unwrap();
+        source
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+            .unwrap();
+        drop(source);
+        let raw_backup = std::fs::read(&source_paths.storage_files.database).unwrap();
+        restore_selected(&paths, &raw_backup, &["rules".into()]).unwrap();
+        let runtime = rule_store::read_runtime_state(&paths).unwrap();
+        assert_eq!(runtime["claude"]["activePromptId"], "shared");
+        assert_eq!(runtime["claude"]["runtimeHash"], "claude-local");
+        assert_eq!(runtime["codex"]["runtimeHash"], "codex-local");
+        // 备份把公共规则改为 Claude 专用时，保留 Claude 并清除 Codex 的挂载。
+        rule_store::upsert_prompt(
+            &source_paths,
+            &json!({"id":"shared","cli":"claude","name":"Backup scoped","fileName":"shared.md"}),
+        )
+        .unwrap();
+        let content = backup(&source_paths).unwrap();
+        let choices = Map::from_iter([(super::row_choice_key("rules", "shared"), json!("backup"))]);
+        super::restore_merged(&paths, &content, &choices).unwrap();
+        let runtime = rule_store::read_runtime_state(&paths).unwrap();
+        assert_eq!(runtime["claude"]["activePromptId"], "shared");
+        assert_eq!(runtime["claude"]["runtimeHash"], "claude-local");
+        assert_eq!(runtime["codex"]["activePromptId"], "");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
