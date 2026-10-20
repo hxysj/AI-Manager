@@ -901,6 +901,7 @@ async function compareBranches() {
   try {
     const nextResult = await gitToolApi.getGitToolBranchDiff({
       repoId: props.repoId,
+      worktreePath: props.projectPath,
       baseBranch: baseBranch.value,
       targetBranch: targetBranch.value
     })

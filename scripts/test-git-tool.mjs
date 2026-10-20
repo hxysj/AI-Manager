@@ -13,6 +13,39 @@ import { transformSync } from "esbuild"
 // 使用 Vue 原生渲染器运行交互，只替换 IPC 和宿主节点，不操作真实仓库。
 const require = createRequire(import.meta.url)
 const vue = require("vue")
+// 交互回归使用轻量选择器宿主，真实下拉层另在浏览器中核对。
+const selectComponents = {
+  ElSelect: vue.defineComponent({
+    props: ["modelValue", "disabled"],
+    emits: ["change"],
+    setup:
+      (props, { emit, slots }) =>
+      () =>
+        vue.h(
+          "select",
+          {
+            value: props.modelValue,
+            disabled: props.disabled,
+            onChange: (event) => emit("change", event.target.value)
+          },
+          slots.default?.()
+        )
+  }),
+  ElOption: vue.defineComponent({
+    props: ["value", "label", "disabled"],
+    setup:
+      (props, { slots }) =>
+      () =>
+        vue.h(
+          "option",
+          {
+            value: props.value,
+            disabled: props.disabled
+          },
+          slots.default?.() || props.label
+        )
+  })
+}
 const calls = []
 const messages = []
 let handlers = {}
@@ -54,6 +87,8 @@ function loadComponent(path) {
   ).code
   const module = { exports: {} }
   const localRequire = (name) => {
+    if (name === "element-plus") return selectComponents
+    if (name === "element-plus/es/components/select/style/css") return {}
     if (name === "@/api") return { gitToolApi: api, systemApi: api }
     if (name === "@/utils/message")
       return {
@@ -287,6 +322,11 @@ const workspace = mount(Workspace, {
 await tick()
 assert.equal(findNodes(workspace.root, "git-workspace-file").length, 2)
 assert.equal(workspace.state.detail.patch, "+worktree")
+assert.equal(
+  calls.findLast((call) => call.name === "getGitToolWorktreeDiff").payload
+    .worktreePath,
+  status.projectPath
+)
 await workspace.state.selectFile("both.txt", "staged")
 assert.equal(workspace.state.detail.patch, "+index")
 workspace.state.message = "feat: 保留提交草稿"
@@ -348,6 +388,8 @@ await reset.state.submit()
 assert.equal(submitted.revision, preview.hash)
 assert.equal(submitted.expectedBranch, "main")
 assert.equal(submitted.expectedHead, status.headHash)
+assert.equal(submitted.worktreePath, status.projectPath)
+assert.equal(submitted.expectedWorktreePath, status.projectPath)
 assert.equal(submitted.confirmedDiscard, true)
 reset.state.form.revision = "new-target"
 await tick()
@@ -383,11 +425,82 @@ await tick()
 resolveOldPreview({ ...preview, hash: "stale" })
 await tick()
 assert.equal(pick.state.preview.hash, preview.hash)
-assert.equal(findNodes(pick.root, "git-operation-field").length, 2)
+assert.equal(findNodes(pick.root, "git-operation-field").length, 3)
 pick.state.form.mainline = 2
 await pick.state.submit()
 assert.equal(submitted.mainline, 2)
 pick.unmount()
+
+// Checkout 明确标明实际工作树，被其他工作树占用的分支不能选中。
+const linkedPath = "D:/linked 中文 worktree"
+const linkedStatus = {
+  ...clone(status),
+  projectPath: linkedPath,
+  branch: "linked"
+}
+const occupiedBranches = [
+  { name: "main", isCurrent: false, worktreePath: status.projectPath },
+  { name: "linked", isCurrent: true, worktreePath: linkedPath },
+  { name: "feature", isCurrent: false, worktreePath: "" }
+]
+const checkoutBranch = mount(Modal, {
+  action: "switch-branch",
+  repoId: "repo",
+  status: linkedStatus,
+  branches: occupiedBranches,
+  execute: async (payload) => {
+    submitted = payload
+    return { success: true }
+  }
+})
+const branchSelect = findNodes(
+  checkoutBranch.root,
+  "git-operation-control"
+).find((node) => node.type === "select")
+assert.equal(
+  branchSelect.options.find((option) => option.props.value === "main").props
+    .disabled,
+  true
+)
+assert.equal(
+  findNodes(checkoutBranch.root, "git-operation-control")[0].text,
+  linkedPath
+)
+checkoutBranch.state.form.branchName = "main"
+assert.equal(checkoutBranch.state.canSubmit, false)
+checkoutBranch.state.form.branchName = "feature"
+assert.equal(checkoutBranch.state.canSubmit, true)
+await checkoutBranch.state.submit()
+assert.equal(submitted.branchName, "feature")
+assert.equal(submitted.expectedWorktreePath, linkedPath)
+assert.deepEqual(checkoutBranch.errors, [])
+checkoutBranch.unmount()
+
+handlers.previewGitToolRevision = () => clone(preview)
+const checkoutCommit = mount(Modal, {
+  action: "checkout-commit",
+  repoId: "repo",
+  status: linkedStatus,
+  branches: occupiedBranches,
+  initial: { revision: "v1.0" },
+  execute: async (payload) => {
+    submitted = payload
+    return { success: true }
+  }
+})
+await delay(280)
+await tick()
+assert.equal(
+  calls.findLast((call) => call.name === "previewGitToolRevision").payload
+    .worktreePath,
+  linkedPath
+)
+await checkoutCommit.state.submit()
+assert.equal(submitted.action, "checkout-commit")
+assert.equal(submitted.revision, preview.hash)
+assert.equal(submitted.expectedWorktreePath, linkedPath)
+assert.deepEqual(checkoutCommit.errors, [])
+checkoutCommit.unmount()
 
 const ComparePanel = loadComponent(
   "src/features/gitTool/components/GitBranchComparePanel.vue"
@@ -520,11 +633,191 @@ assert.deepEqual(
   calls.findLast((call) => call.name === "getGitToolBranchDiff").payload,
   {
     repoId: "new-repo",
+    worktreePath: "",
     baseBranch: "feature",
     targetBranch: "feature"
   }
 )
 waitingCompare.unmount()
+
+// 搜索只定位和展开祖先目录，其他文件仍留在完整树中。
+const FileHistoryTree = loadComponent(
+  "src/features/gitTool/components/GitFileHistoryTree.vue"
+)
+const FileHistory = loadComponent(
+  "src/features/gitTool/components/GitFileHistoryPanel.vue"
+)
+let pickedFile
+const fileTree = mount(FileHistoryTree, {
+  files: [
+    "README.md",
+    "src/alpha.js",
+    "src/nested/target.js",
+    "src/nested/other.js",
+    "tests/target.test.js"
+  ],
+  onSelectFile: (path) => {
+    pickedFile = path
+  }
+})
+await tick()
+fileTree.state.query = "target"
+await tick()
+assert.equal(fileTree.state.matches.length, 2)
+assert.equal(fileTree.state.locatedPath, "src/nested/target.js")
+assert.ok(fileTree.state.visibleNodes.some((node) => node.path === "README.md"))
+assert.ok(
+  fileTree.state.visibleNodes.some((node) => node.path === "src/alpha.js")
+)
+assert.ok(
+  fileTree.state.visibleNodes.some(
+    (node) => node.path === "src/nested/other.js"
+  )
+)
+await fileTree.state.locate(1)
+assert.equal(fileTree.state.locatedPath, "tests/target.test.js")
+fileTree.state.selectNode(
+  fileTree.state.visibleNodes.find(
+    (node) => node.path === "tests/target.test.js"
+  )
+)
+assert.equal(pickedFile, "tests/target.test.js")
+const completeCount = fileTree.state.visibleNodes.length
+fileTree.state.query = "不存在的文件"
+await tick()
+assert.equal(fileTree.state.visibleNodes.length, completeCount)
+assert.equal(fileTree.state.matches.length, 0)
+assert.deepEqual(fileTree.errors, [])
+fileTree.unmount()
+
+const largeTree = mount(FileHistoryTree, {
+  files: Array.from({ length: 3000 }, (_, index) => `src/file-${index}.js`)
+})
+largeTree.state.query = "file-2999.js"
+await tick()
+assert.equal(largeTree.state.visibleNodes.length, 3001)
+assert.ok(findNodes(largeTree.root, "git-history-tree-row").length < 40)
+assert.equal(
+  findNodes(largeTree.root, "git-history-tree-row-located").length,
+  1
+)
+// 深处滚动后目录收起，旧滚动位置也应显示剩下的目录行。
+largeTree.state.selectNode(largeTree.state.tree[0])
+await tick()
+assert.equal(findNodes(largeTree.root, "git-history-tree-row").length, 1)
+largeTree.unmount()
+
+const historyCommit = {
+  hash: "c".repeat(40),
+  shortHash: "ccccccc",
+  subject: "fix: 修复文件历史",
+  author: "测试作者",
+  date: "2026-04-29T09:30:00+08:00",
+  filePath: "src/current.js",
+  oldPath: "",
+  checkStatus: "exists-hash",
+  checkTargetBranch: "release"
+}
+const historyResponse = (payload) => ({
+  commits: [{ ...historyCommit, filePath: payload.filePath }],
+  offset: payload.offset,
+  hasMore: payload.offset === 0,
+  filePath: payload.filePath,
+  revision: "d".repeat(40),
+  branchName: payload.allBranches ? "所有分支" : payload.branchName
+})
+handlers.listGitToolWorktreeFiles = () => ["README.md", "src/current.js"]
+handlers.listGitToolFileHistory = historyResponse
+let openedHistoryCommit
+const history = mount(FileHistory, {
+  repoId: "repo",
+  projectPath: linkedPath,
+  worktreePath: linkedPath,
+  branchName: "feature",
+  branches,
+  onSelectCommit: (commit) => {
+    openedHistoryCommit = commit
+  }
+})
+await tick()
+assert.deepEqual(Array.from(history.state.files), [
+  "README.md",
+  "src/current.js"
+])
+assert.equal(
+  calls.findLast((call) => call.name === "listGitToolWorktreeFiles").payload
+    .worktreePath,
+  linkedPath
+)
+await history.state.selectFile("src/current.js")
+await tick()
+assert.equal(findNodes(history.root, "git-file-history-record").length, 1)
+assert.equal(
+  findNodes(history.root, "git-file-history-check")[0].text,
+  "已合入"
+)
+assert.match(
+  findNodes(history.root, "git-file-history-check")[0].props.title,
+  /「release」.*哈希一致/
+)
+assert.match(
+  findNodes(history.root, "git-file-history-date").at(-1).text,
+  /29 Apr 2026/
+)
+assert.equal(
+  calls.findLast((call) => call.name === "listGitToolFileHistory").payload
+    .followRenames,
+  true
+)
+history.state.filePath = "尚未提交的输入.txt"
+await history.state.loadPage(60)
+assert.equal(
+  calls.findLast((call) => call.name === "listGitToolFileHistory").payload
+    .filePath,
+  "src/current.js"
+)
+assert.equal(
+  calls.findLast((call) => call.name === "listGitToolFileHistory").payload
+    .revision,
+  "d".repeat(40)
+)
+assert.equal(history.state.result.commits.length, 1)
+history.state.openCommit(history.state.result.commits[0])
+assert.equal(openedHistoryCommit.historyBranchName, "feature")
+history.state.scope = ":all"
+await history.state.search()
+assert.equal(
+  calls.findLast((call) => call.name === "listGitToolFileHistory").payload
+    .followRenames,
+  false
+)
+assert.equal(
+  calls.findLast((call) => call.name === "listGitToolFileHistory").payload
+    .allBranches,
+  true
+)
+let finishOldHistory
+handlers.listGitToolFileHistory = (payload) =>
+  payload.filePath === "old.js"
+    ? new Promise((resolve) => {
+        finishOldHistory = () => resolve(historyResponse(payload))
+      })
+    : historyResponse(payload)
+history.state.filePath = "old.js"
+const oldHistory = history.state.search()
+history.state.filePath = "latest.js"
+await history.state.search()
+finishOldHistory()
+await oldHistory
+assert.equal(history.state.result.filePath, "latest.js")
+handlers.listGitToolFileHistory = () => {
+  throw new Error("读取失败")
+}
+await history.state.search()
+assert.equal(history.state.result, null)
+assert.match(history.state.error, /读取失败/)
+assert.deepEqual(history.errors, [])
+history.unmount()
 
 handlers = {
   getGitToolStatus: () => clone(status),
@@ -551,7 +844,24 @@ const page = mount(Page, {
 })
 await delay(60)
 await tick()
-assert.equal(findNodes(page.root, "git-tool-operation-button").length, 7)
+assert.equal(findNodes(page.root, "git-tool-operation-button").length, 8)
+const operationButtons = findNodes(page.root, "git-tool-operation-button")
+assert.deepEqual(
+  operationButtons.map((button) => button.text),
+  [
+    "创建分支",
+    "切换分支",
+    "切换到提交",
+    "合并",
+    "保存改动",
+    "获取更新",
+    "拉取",
+    "推送"
+  ]
+)
+for (const button of operationButtons)
+  assert.match(button.props.title, /命令：git /)
+assert.match(operationButtons[2].props.title, /git switch --detach/)
 page.state.branchCompareVisible = true
 await tick()
 assert.equal(findNodes(page.root, "git-tool-branch-panel").length, 0)
@@ -560,11 +870,77 @@ assert.equal(findNodes(page.root, "git-branch-compare").length, 1)
 page.state.branchCompareVisible = false
 await tick()
 assert.equal(findNodes(page.root, "git-tool-branch-panel").length, 1)
-assert.equal(findNodes(page.root, "git-tool-operation-button").length, 7)
+assert.equal(findNodes(page.root, "git-tool-operation-button").length, 8)
 await page.state.openGitOperation("merge", { revision: "feature" })
 assert.equal(page.state.operationDialog.status.branch, "main")
 page.state.operationDialog = null
 await tick()
+// 右键菜单的每项操作都有图标，并在悬停提示中说明对应命令。
+page.state.openCommitContextMenu(
+  { clientX: 40, clientY: 50 },
+  { hash: status.headHash }
+)
+await tick()
+const commitMenuButtons = findNodes(page.root, "git-tool-context-menu-button")
+assert.equal(commitMenuButtons.length, 7)
+for (const button of commitMenuButtons) {
+  assert.ok(button.children.some((child) => child.type === "svg"))
+  assert.match(button.props.title, /命令：git /)
+}
+page.state.closeContextMenus()
+page.state.openBranchContextMenu({ clientX: 40, clientY: 50 }, branches[1])
+await tick()
+const branchMenuButtons = findNodes(page.root, "git-tool-context-menu-button")
+assert.equal(branchMenuButtons.length, 4)
+for (const button of branchMenuButtons.slice(1)) {
+  assert.ok(button.children.some((child) => child.type === "svg"))
+  assert.match(button.props.title, /命令：git /)
+}
+page.state.closeContextMenus()
+// 单条检查和列表回显都保留“改动一致”状态，避免降级成疑似匹配。
+page.state.project = { ...page.state.project, checkBranchName: "release" }
+const checkedCommit = {
+  hash: status.headHash,
+  rowId: status.headHash,
+  subject: "fix: 修复图片工作台的运行内存占用",
+  author: "测试作者",
+  date: "2026-10-20T08:00:00+08:00",
+  checkStatus: "none"
+}
+handlers.checkGitToolCommitOnBranch = () => ({ matchedBy: "similar-content" })
+page.state.commits = [checkedCommit]
+page.state.openCommitContextMenu({ clientX: 40, clientY: 50 }, checkedCommit)
+await page.state.checkContextCommitOnBranch()
+await tick()
+assert.equal(page.state.commits[0].checkStatus, "exists-content")
+assert.equal(page.state.commits[0].checkTargetBranch, "release")
+assert.equal(page.state.formatCheckStatus("exists-content"), "改动一致")
+assert.equal(page.state.formatCheckStatus("exists-hash"), "已合入")
+assert.equal(page.state.formatCheckStatus("exists-subject"), "疑似已合入")
+assert.equal(messages.at(-1).text, "改动一致")
+// 各种检查状态都在实际徽标上显示目标分支与判断依据。
+for (const [checkStatus, label, reason] of [
+  ["exists-hash", "已合入", /提交历史.*哈希一致/],
+  ["exists-subject", "疑似已合入", /标题和作者时间完全相同.*哈希不同/],
+  ["exists-content", "改动一致", /85%.*改动指纹一致/],
+  ["missing", "未合入", /未找到相同提交哈希/]
+]) {
+  page.state.commits = [
+    { ...checkedCommit, checkStatus, checkTargetBranch: "release" }
+  ]
+  await tick()
+  const badges = findNodes(page.root, "git-tool-check")
+  assert.equal(badges.length, 1)
+  assert.equal(badges[0].text, label)
+  assert.match(badges[0].props.title, /「release」/)
+  assert.match(badges[0].props.title, reason)
+}
+assert.equal(
+  calls.findLast((call) => call.name === "checkGitToolCommitOnBranch").payload
+    .targetBranchName,
+  "release"
+)
+page.state.commits = []
 const before = calls.filter(
   (call) => call.name === "executeGitToolOperation"
 ).length
@@ -696,6 +1072,171 @@ await pending
 assert.deepEqual(page.warnings, [])
 assert.deepEqual(page.errors, [])
 page.unmount()
+
+// 同一仓库切换工作树时，路径、请求目标和草稿必须一同切换。
+const worktreeList = [
+  { path: status.projectPath, branch: "main", isMain: true },
+  { path: linkedPath, branch: "linked", isMain: false },
+  { path: "D:/gone", branch: "gone", prunable: true }
+]
+let detached = false
+function worktreeStatus(path = status.projectPath) {
+  return {
+    ...clone(status),
+    projectPath: path,
+    branch: path === linkedPath ? (detached ? "" : "linked") : "main",
+    detached: path === linkedPath && detached,
+    headHash: path === linkedPath && detached ? preview.hash : status.headHash,
+    worktrees: clone(worktreeList)
+  }
+}
+handlers = {
+  getGitToolStatus: (payload) =>
+    worktreeStatus(payload.worktreePath || status.projectPath),
+  scanGitToolBranches: (payload) => ({
+    project: {
+      projectPath: payload.worktreePath,
+      worktrees: clone(worktreeList)
+    },
+    currentBranch: worktreeStatus(payload.worktreePath).branch,
+    branches: occupiedBranches.map((branch) => ({
+      ...branch,
+      isCurrent: branch.name === worktreeStatus(payload.worktreePath).branch
+    }))
+  }),
+  listGitToolCommits: () => [],
+  getGitToolCommitDetail: () =>
+    new Promise((resolve) => {
+      finishOldDetail = resolve
+    }),
+  getGitToolWorktreeDiff: (payload) => ({
+    selectedFilePath: payload.filePath,
+    patch: "+selected worktree"
+  }),
+  executeGitToolOperation: (payload) => {
+    if (payload.action === "checkout-commit") detached = true
+    return {
+      success: true,
+      output: "完成",
+      status: worktreeStatus(payload.worktreePath)
+    }
+  }
+}
+let finishOldDetail
+const worktreePage = mount(Page, {
+  repos: [{ id: "repo", name: "测试仓库", localPath: status.projectPath }]
+})
+await delay(60)
+await tick()
+const worktreeSelector = () =>
+  findNodes(worktreePage.root, "git-tool-worktree-picker")[0]
+assert.equal(worktreeSelector().options.length, 3)
+assert.equal(worktreeSelector().options.at(-1).props.disabled, true)
+const oldDetail = worktreePage.state.loadCommitDetail(status.headHash, "")
+worktreePage.state.gitWorkspace = "worktree"
+await tick()
+const mainWorkspace = findComponent(worktreePage.component.subTree, Workspace)
+mainWorkspace.setupState.message = "main 草稿"
+// 后台刷新返回较晚，也不能覆盖已经选中的工作树。
+let finishOldStatus
+const freshStatus = handlers.getGitToolStatus
+handlers.getGitToolStatus = () =>
+  new Promise((resolve) => {
+    finishOldStatus = resolve
+  })
+const oldRefresh = worktreePage.state.refreshGitProject({ silent: true })
+handlers.getGitToolStatus = freshStatus
+worktreeSelector().props.onChange({ target: { value: linkedPath } })
+await delay(60)
+await tick()
+assert.equal(worktreePage.state.activeProjectPath, linkedPath)
+assert.equal(worktreePage.state.gitStatus.branch, "linked")
+const linkedWorkspace = findComponent(worktreePage.component.subTree, Workspace)
+assert.notEqual(linkedWorkspace, mainWorkspace)
+assert.equal(linkedWorkspace.setupState.message, "")
+assert.equal(
+  calls.findLast((call) => call.name === "getGitToolWorktreeDiff").payload
+    .worktreePath,
+  linkedPath
+)
+finishOldStatus(worktreeStatus())
+finishOldDetail({ hash: status.headHash, files: [] })
+await Promise.all([oldRefresh, oldDetail])
+await tick()
+assert.equal(worktreePage.state.gitStatus.branch, "linked")
+assert.equal(worktreePage.state.selectedCommitDetail, null)
+assert.equal(worktreePage.state.commitDetailLoading, false)
+await worktreePage.state.executeGitOperation({
+  action: "stage",
+  filePaths: ["both.txt"]
+})
+const stageRequest = calls.findLast(
+  (call) => call.name === "executeGitToolOperation"
+).payload
+assert.equal(stageRequest.worktreePath, linkedPath)
+assert.equal(stageRequest.expectedWorktreePath, linkedPath)
+await worktreePage.state.openGitOperation("switch-branch", {
+  branchName: "feature"
+})
+assert.equal(worktreePage.state.operationDialog.status.projectPath, linkedPath)
+assert.equal(worktreeSelector().props.disabled, true)
+worktreePage.state.handleWorktreeChange(status.projectPath)
+assert.equal(worktreePage.state.selectedWorktreePath, linkedPath)
+worktreePage.state.operationDialog = null
+await worktreePage.state.executeGitOperation({
+  action: "checkout-commit",
+  revision: preview.hash
+})
+await tick()
+assert.equal(worktreePage.state.gitStatus.detached, true)
+assert.equal(worktreePage.state.selectedBranch, preview.hash)
+worktreePage.state.selectGitWorkspace("branch")
+await tick()
+assert.equal(
+  calls.findLast((call) => call.name === "listGitToolCommits").payload
+    .branchName,
+  preview.hash
+)
+// 从页签进入文件历史，再打开旧路径的提交详情，保持所选工作树和查询分支。
+handlers.listGitToolWorktreeFiles = () => ["src/current.js"]
+handlers.listGitToolFileHistory = (payload) => ({
+  ...historyResponse(payload),
+  commits: [{ ...historyCommit, filePath: "src/旧名称 [1].js" }]
+})
+handlers.getGitToolCommitDetail = (payload) => ({
+  hash: payload.commitHash,
+  selectedFilePath: payload.filePath,
+  files: [],
+  patch: "+历史文件改动"
+})
+findNodes(worktreePage.root, "git-tool-tab")
+  .find((button) => button.children.some((child) => child.text === "文件历史"))
+  .props.onClick()
+await tick()
+const pageHistory = findComponent(worktreePage.component.subTree, FileHistory)
+assert.ok(pageHistory)
+assert.equal(pageHistory.props.worktreePath, linkedPath)
+pageHistory.setupState.scope = "feature"
+await pageHistory.setupState.selectFile("src/current.js")
+await tick()
+findNodes(worktreePage.root, "git-file-history-record")[0].props.onClick()
+await tick()
+assert.deepEqual(
+  calls.findLast((call) => call.name === "getGitToolCommitDetail").payload,
+  {
+    repoId: "repo",
+    worktreePath: linkedPath,
+    commitHash: historyCommit.hash,
+    filePath: "src/旧名称 [1].js"
+  }
+)
+assert.equal(worktreePage.state.commitModalBranchName, "feature")
+assert.equal(worktreePage.state.commitModalProjectPath, linkedPath)
+assert.equal(worktreePage.state.commitModalCommits.length, 0)
+assert.equal(worktreePage.state.selectedCommitDetail.patch, "+历史文件改动")
+assert.deepEqual(worktreePage.warnings, [])
+assert.deepEqual(worktreePage.errors, [])
+worktreePage.unmount()
 
 for (const { path, style } of styles) {
   const result = await compileStyleAsync({

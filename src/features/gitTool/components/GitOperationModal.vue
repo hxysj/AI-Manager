@@ -16,13 +16,17 @@
       </button>
     </template>
     <form class="git-operation-form" @submit.prevent="submit">
+      <div class="git-operation-field">
+        <span class="git-operation-field-label">实际操作工作树</span>
+        <code class="git-operation-control">{{ status.projectPath }}</code>
+      </div>
       <div class="git-operation-current">
         <span class="git-operation-current-label">实际操作分支</span>
         <span class="git-operation-current-branch">{{
-          status.branch || '分离 HEAD'
+          status.branch || "未关联分支"
         }}</span>
         <code class="git-operation-current-hash">{{
-          status.headHash.slice(0, 8) || '尚无提交'
+          status.headHash.slice(0, 8) || "尚无提交"
         }}</code>
         <span class="git-operation-current-changes"
           >{{ status.files.length }} 个未提交文件</span
@@ -33,7 +37,9 @@
         v-if="action === 'switch-branch' || action === 'rename-branch'"
         class="git-operation-field"
       >
-        <span class="git-operation-field-label">本地分支</span>
+        <span class="git-operation-field-label">{{
+          action === "switch-branch" ? "切换到本地分支" : "本地分支"
+        }}</span>
         <select
           v-model="form.branchName"
           class="git-operation-control"
@@ -44,8 +50,20 @@
             v-for="branch in branches"
             :key="branch.name"
             :value="branch.name"
+            :disabled="
+              action === 'switch-branch' &&
+              !!branch.worktreePath &&
+              !branch.isCurrent
+            "
           >
-            {{ branch.name }}{{ branch.isCurrent ? '（当前）' : '' }}
+            {{ branch.name
+            }}{{
+              branch.isCurrent
+                ? "（当前）"
+                : branch.worktreePath
+                  ? `（已在 ${branch.worktreePath} 检出）`
+                  : ""
+            }}
           </option>
         </select>
       </label>
@@ -54,7 +72,7 @@
         class="git-operation-field"
       >
         <span class="git-operation-field-label">{{
-          action === 'create-branch' ? '新分支名称' : '修改为'
+          action === "create-branch" ? "新分支名称" : "修改为"
         }}</span>
         <input
           v-model.trim="form.newBranchName"
@@ -64,16 +82,13 @@
           required
         />
       </label>
-      <label
-        v-if="
-          ['create-branch', 'merge', 'cherry-pick', 'revert', 'reset'].includes(
-            action
-          )
-        "
-        class="git-operation-field"
-      >
+      <label v-if="revisionRequired" class="git-operation-field">
         <span class="git-operation-field-label">{{
-          action === 'create-branch' ? '起始分支或提交' : '目标分支或提交'
+          action === "create-branch"
+            ? "起始分支或提交"
+            : action === "checkout-commit"
+              ? "目标提交或标签"
+              : "目标分支或提交"
         }}</span>
         <input
           v-model.trim="form.revision"
@@ -157,7 +172,7 @@
       </label>
 
       <label v-if="action === 'stash-save'" class="git-operation-field">
-        <span class="git-operation-field-label">Stash 说明（可选）</span>
+        <span class="git-operation-field-label">贮藏说明（可选）</span>
         <input
           v-model="form.message"
           class="git-operation-control"
@@ -201,7 +216,7 @@
               :value="remote.name"
             >
               {{ remote.name }} ·
-              {{ action === 'push' ? remote.pushUrl : remote.fetchUrl }}
+              {{ action === "push" ? remote.pushUrl : remote.fetchUrl }}
             </option>
           </select>
         </label>
@@ -225,8 +240,8 @@
             <option
               v-for="mode in [
                 { value: 'ff-only', label: '仅快进：发生分叉时停止' },
-                { value: 'merge', label: 'Merge：保留分支历史' },
-                { value: 'rebase', label: 'Rebase：重放本地提交' }
+                { value: 'merge', label: '合并：保留分支历史' },
+                { value: 'rebase', label: '变基：重放本地提交' }
               ]"
               :key="mode.value"
               :value="mode.value"
@@ -242,7 +257,7 @@
 
       <template v-if="action === 'reset'">
         <label class="git-operation-field">
-          <span class="git-operation-field-label">Reset 模式</span>
+          <span class="git-operation-field-label">重置模式</span>
           <select
             v-model="form.resetMode"
             class="git-operation-control"
@@ -250,9 +265,9 @@
           >
             <option
               v-for="mode in [
-                { value: 'soft', label: 'Soft：保留工作区和暂存区' },
-                { value: 'mixed', label: 'Mixed：保留工作区，重置暂存区' },
-                { value: 'hard', label: 'Hard：重置工作区和暂存区' }
+                { value: 'soft', label: '软重置：保留工作区和暂存区' },
+                { value: 'mixed', label: '混合重置：保留工作区，重置暂存区' },
+                { value: 'hard', label: '硬重置：重置工作区和暂存区' }
               ]"
               :key="mode.value"
               :value="mode.value"
@@ -264,9 +279,7 @@
         <div v-if="form.resetMode === 'hard'" class="git-operation-danger">
           <span class="git-operation-danger-text"
             >将丢弃已跟踪文件的未提交修改，并可能删除阻碍恢复目标文件的未跟踪文件。当前有
-            {{
-              status.files.filter(file => !file.untracked).length
-            }}
+            {{ status.files.filter((file) => !file.untracked).length }}
             个已跟踪改动文件。</span
           >
           <label class="git-operation-danger-check"
@@ -274,13 +287,13 @@
               v-model="form.confirmedDiscard"
               type="checkbox"
               :disabled="busy"
-            />我已核对目标提交和影响范围，确认执行 Hard Reset</label
+            />我已核对目标提交和影响范围，确认执行 硬重置</label
           >
         </div>
       </template>
       <div class="git-operation-footer">
         <span class="git-operation-footer-note">{{
-          busy ? '正在执行 Git 操作…' : '操作会应用到上方标明的当前分支'
+          busy ? "正在执行 Git 操作…" : "操作会在上方标明的工作树中执行"
         }}</span>
         <button
           class="git-operation-cancel"
@@ -299,9 +312,10 @@
             }
           ]"
           type="submit"
+          :title="`命令：${definition.command}`"
           :disabled="!canSubmit"
         >
-          {{ busy ? '执行中…' : `确认${definition.label}` }}
+          {{ busy ? "执行中…" : `确认${definition.label}` }}
         </button>
       </div>
     </form>
@@ -309,12 +323,12 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { X } from 'lucide-vue-next'
-import BaseModal from '@/components/BaseModal.vue'
-import { gitToolApi } from '@/api'
-import { formatDateTime } from '@/utils/formatters'
-import { gitOperationDefinitions } from '@/features/gitTool/constant'
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue"
+import { X } from "lucide-vue-next"
+import BaseModal from "@/components/BaseModal.vue"
+import { gitToolApi } from "@/api"
+import { formatDateTime } from "@/utils/formatters"
+import { gitOperationDefinitions } from "@/features/gitTool/constant"
 
 const props = defineProps({
   action: { type: String, required: true },
@@ -325,43 +339,48 @@ const props = defineProps({
   busy: { type: Boolean, default: false },
   execute: { type: Function, required: true }
 })
-const emit = defineEmits(['close'])
+const emit = defineEmits(["close"])
 const definition = computed(() => gitOperationDefinitions[props.action])
 const revisionRequired = computed(() =>
-  ['create-branch', 'merge', 'cherry-pick', 'revert', 'reset'].includes(
-    props.action
-  )
+  [
+    "create-branch",
+    "checkout-commit",
+    "merge",
+    "cherry-pick",
+    "revert",
+    "reset"
+  ].includes(props.action)
 )
 const remote =
-  props.status.remotes.find(item =>
+  props.status.remotes.find((item) =>
     props.status.upstream.startsWith(`${item.name}/`)
   )?.name ||
-  props.status.remotes.find(item => item.name === 'origin')?.name ||
+  props.status.remotes.find((item) => item.name === "origin")?.name ||
   props.status.remotes[0]?.name ||
-  ''
+  ""
 const form = reactive({
   branchName: props.initial.branchName || props.status.branch,
-  newBranchName: '',
+  newBranchName: "",
   revision:
     props.initial.revision ||
-    (props.action === 'merge'
-      ? props.branches.find(branch => !branch.isCurrent)?.name || ''
-      : 'HEAD'),
+    (props.action === "merge"
+      ? props.branches.find((branch) => !branch.isCurrent)?.name || ""
+      : "HEAD"),
   switchAfterCreate: true,
-  message: '',
+  message: "",
   includeUntracked: true,
   restoreIndex: true,
   remote,
   remoteBranch: props.status.upstream.startsWith(`${remote}/`)
     ? props.status.upstream.slice(remote.length + 1)
     : props.status.branch,
-  pullMode: 'ff-only',
-  resetMode: 'soft',
+  pullMode: "ff-only",
+  resetMode: "soft",
   confirmedDiscard: false,
   mainline: 1
 })
 const preview = ref(null)
-const previewError = ref('')
+const previewError = ref("")
 const previewLoading = ref(false)
 let previewTimer = 0
 let previewSequence = 0
@@ -374,22 +393,32 @@ const canSubmit = computed(() => {
   )
     return false
   if (
-    ['create-branch', 'rename-branch'].includes(props.action) &&
+    ["create-branch", "rename-branch"].includes(props.action) &&
     !form.newBranchName
   )
     return false
   if (
-    ['switch-branch', 'rename-branch'].includes(props.action) &&
+    ["switch-branch", "rename-branch"].includes(props.action) &&
     !form.branchName
   )
     return false
-  if (['fetch', 'pull', 'push'].includes(props.action) && !form.remote)
+  if (
+    props.action === "switch-branch" &&
+    props.branches.some(
+      (branch) =>
+        branch.name === form.branchName &&
+        branch.worktreePath &&
+        !branch.isCurrent
+    )
+  )
     return false
-  if (['pull', 'push'].includes(props.action) && !form.remoteBranch)
+  if (["fetch", "pull", "push"].includes(props.action) && !form.remote)
+    return false
+  if (["pull", "push"].includes(props.action) && !form.remoteBranch)
     return false
   return (
-    props.action !== 'reset' ||
-    form.resetMode !== 'hard' ||
+    props.action !== "reset" ||
+    form.resetMode !== "hard" ||
     form.confirmedDiscard
   )
 })
@@ -397,12 +426,12 @@ const canSubmit = computed(() => {
 // 输入稍作停顿后核对目标，旧请求结果不能覆盖当前输入的预览。
 watch(
   () => form.revision,
-  revision => {
+  (revision) => {
     form.confirmedDiscard = false
     window.clearTimeout(previewTimer)
     const sequence = ++previewSequence
     preview.value = null
-    previewError.value = ''
+    previewError.value = ""
     if (!revisionRequired.value || !revision) {
       previewLoading.value = false
       return
@@ -412,6 +441,7 @@ watch(
       try {
         const result = await gitToolApi.previewGitToolRevision({
           repoId: props.repoId,
+          worktreePath: props.status.projectPath,
           revision
         })
         if (sequence === previewSequence) preview.value = result
@@ -426,10 +456,13 @@ watch(
   { immediate: true }
 )
 
-// 目标或模式改变后重新核对，避免沿用上一轮 Hard Reset 确认。
-watch(() => form.resetMode, () => {
-  form.confirmedDiscard = false
-})
+// 目标或模式改变后重新核对，避免沿用上一轮 硬重置 确认。
+watch(
+  () => form.resetMode,
+  () => {
+    form.confirmedDiscard = false
+  }
+)
 
 async function submit() {
   if (!canSubmit.value) return
@@ -437,22 +470,24 @@ async function submit() {
     ...form,
     action: props.action,
     branchName:
-      props.action === 'create-branch' ? form.newBranchName : form.branchName,
+      props.action === "create-branch" ? form.newBranchName : form.branchName,
     revision: preview.value?.hash || form.revision,
-    stashHash: props.initial.stashHash || '',
+    stashHash: props.initial.stashHash || "",
     expectedHead: props.status.headHash,
+    worktreePath: props.status.projectPath,
+    expectedWorktreePath: props.status.projectPath,
     expectedBranch: props.status.branch
   })
   if (
     result?.success ||
     result?.status.operation ||
-    result?.status.files.some(file => file.conflicted)
+    result?.status.files.some((file) => file.conflicted)
   )
-    emit('close')
+    emit("close")
 }
 
 function close() {
-  if (!props.busy) emit('close')
+  if (!props.busy) emit("close")
 }
 
 onBeforeUnmount(() => {

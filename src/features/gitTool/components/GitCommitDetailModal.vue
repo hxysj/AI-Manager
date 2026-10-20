@@ -204,7 +204,7 @@
               </h3>
               <div class="git-commit-modal-detail-meta">
                 <span class="git-commit-modal-meta-item">
-                  <span class="git-commit-modal-meta-label">完整 hash</span>
+                  <span class="git-commit-modal-meta-label">完整哈希</span>
                   <code
                     class="git-commit-modal-meta-hash"
                     title="点击复制完整哈希"
@@ -702,7 +702,7 @@ const displayDate = computed(() => {
 // 面包屑前缀文案
 const breadcrumbPrefix = computed(() => {
   if (props.type === "archive") return "归档列表"
-  if (props.type === "stash") return "Stash 记录"
+  if (props.type === "stash") return "贮藏记录"
   return "分支列表"
 })
 

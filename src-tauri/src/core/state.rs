@@ -940,6 +940,22 @@ impl ManagerState {
                 )
                 .await
             }
+            "git-tool:file-history" => {
+                git_tool::list_file_history(
+                    &self.paths,
+                    &self.state["repos"],
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
+            "git-tool:worktree-files" => {
+                git_tool::list_worktree_files(
+                    &self.paths,
+                    &self.state["repos"],
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await
+            }
             "git-tool:commit-detail" => {
                 git_tool::get_commit_detail(
                     &self.paths,

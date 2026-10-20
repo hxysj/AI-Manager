@@ -5,7 +5,11 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::process::Command;
 
+mod commit_checks;
+mod file_history;
 mod operations;
+mod worktrees;
+pub use file_history::{list_file_history, list_worktree_files};
 pub use operations::{execute_operation, get_branch_diff, get_status, get_worktree_diff, preview_revision};
 
 #[cfg(windows)]
@@ -19,8 +23,15 @@ pub async fn scan_branches(
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let repo_id = string_value(payload.get("repoId"));
-    let project = get_repo_project(paths, repos, &repo_id)?;
-    let branch_scan = get_local_branch_scan(&string_value(project.get("projectPath"))).await?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
+    let mut branch_scan = get_local_branch_scan(&string_value(project.get("projectPath"))).await?;
+    if let Some(branches) = branch_scan["branches"].as_array_mut() {
+        for branch in branches {
+            branch["worktreePath"] = project["worktrees"].as_array().and_then(|trees| {
+                trees.iter().find(|tree| tree["branch"] == branch["name"])
+            }).map(|tree| tree["path"].clone()).unwrap_or_else(|| json!(""));
+        }
+    }
     let archives = list_archives(paths, repos, json!({ "repoId": repo_id })).await?;
     let stash_archives = list_stash_archives(paths, repos, json!({ "repoId": repo_id })).await?;
 
@@ -44,7 +55,7 @@ pub async fn list_commits(
     let skip_check = payload.get("skipCheck").and_then(Value::as_bool) == Some(true);
     let offset = payload.get("offset").and_then(Value::as_u64).unwrap_or(0) as usize;
     let limit = payload.get("limit").and_then(Value::as_u64).unwrap_or(80) as usize;
-    let project = get_repo_project(paths, repos, &repo_id)?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
     let project_path = string_value(project.get("projectPath"));
     let commits = get_commits(&project_path, &branch_name, offset, limit).await?;
     let check_branch_name = string_value(project.get("checkBranchName"));
@@ -90,10 +101,10 @@ pub async fn list_commits(
             if let Some(cached_commit) = commit_check_cache_map.get(&cache_key) {
                 let mut commit = commit.clone();
                 commit["checkStatus"] =
-                    json!(if string_value(cached_commit.get("matchedBy")) == "hash" {
-                        "exists-hash"
-                    } else {
-                        "exists-subject"
+                    json!(match string_value(cached_commit.get("matchedBy")).as_str() {
+                        "hash" => "exists-hash",
+                        "similar-content" => "exists-content",
+                        _ => "exists-subject",
                     });
                 commit["checkTargetBranch"] = json!(check_branch_name);
                 return commit;
@@ -178,10 +189,10 @@ pub async fn get_commit_detail(
     let repo_id = string_value(payload.get("repoId"));
     let commit_hash = string_value(payload.get("commitHash"));
     let file_path = string_value(payload.get("filePath"));
-    let project = get_repo_project(paths, repos, &repo_id)?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
 
     get_commit_detail_by_args(
-        Vec::new(),
+        vec!["--literal-pathspecs".to_string()],
         &string_value(project.get("projectPath")),
         &commit_hash,
         &file_path,
@@ -243,7 +254,7 @@ pub async fn check_commit_on_branch_api(
     let commit_hash = string_value(payload.get("commitHash"));
     let subject = string_value(payload.get("subject"));
     let date = string_value(payload.get("date"));
-    let project = get_repo_project(paths, repos, &repo_id)?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
     let mut commit_check_cache = read_commit_check_cache(paths, &repo_id)?;
     let cache_key = format!(
         "{}\u{0}{}\u{0}{}\u{0}{}\u{0}{}",
@@ -299,7 +310,7 @@ pub async fn archive_branch(
 ) -> Result<Value, ManagerError> {
     let repo_id = string_value(payload.get("repoId"));
     let branch_name = string_value(payload.get("branchName"));
-    let project = get_repo_project(paths, repos, &repo_id)?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
     let project_path = string_value(project.get("projectPath"));
     let current_branch = get_current_branch(&project_path).await?;
 
@@ -311,6 +322,14 @@ pub async fn archive_branch(
 
     if !branch_exists(&project_path, &branch_name).await? {
         return Err(ManagerError::System("本地分支不存在".to_string()));
+    }
+    if let Some(tree) = project["worktrees"].as_array().and_then(|trees| {
+        trees.iter().find(|tree| tree["branch"] == branch_name)
+    }) {
+        return Err(ManagerError::System(format!(
+            "此分支正在工作树 {} 中使用，请先在该工作树切换分支。",
+            string_value(tree.get("path"))
+        )));
     }
 
     let commit_hash = get_branch_commit(&project_path, &branch_name).await?;
@@ -447,7 +466,8 @@ pub async fn restore_archive(
         return Err(ManagerError::System("请输入恢复分支名".to_string()));
     }
 
-    let (repo_id, project, archive) = find_archive_with_project(paths, repos, &archive_id)?;
+    let (repo_id, _, archive) = find_archive_with_project(paths, repos, &archive_id)?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
     let project_path = string_value(project.get("projectPath"));
 
     if branch_exists(&project_path, &target_branch_name).await? {
@@ -535,7 +555,7 @@ pub async fn list_stashes(
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let repo_id = string_value(payload.get("repoId").or(Some(&payload)));
-    let project = get_repo_project(paths, repos, &repo_id)?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
 
     Ok(json!(
         get_stashes(&string_value(project.get("projectPath"))).await?
@@ -566,7 +586,7 @@ pub async fn get_stash_detail(
         return Err(ManagerError::System("请选择要查看的 stash".to_string()));
     }
 
-    let project = get_repo_project(paths, repos, &repo_id)?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
     let project_path = string_value(project.get("projectPath"));
     let stashes = get_stashes(&project_path).await?;
     let Some(stash) = stashes
@@ -621,7 +641,7 @@ pub async fn archive_stash(
         return Err(ManagerError::System("请选择要归档的 stash".to_string()));
     }
 
-    let project = get_repo_project(paths, repos, &repo_id)?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
     let project_path = string_value(project.get("projectPath"));
     let stashes = get_stashes(&project_path).await?;
     let Some(stash) = stashes
@@ -700,8 +720,9 @@ pub async fn restore_stash_archive(
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let stash_archive_id = string_value(payload.get("stashArchiveId").or(Some(&payload)));
-    let (repo_id, project, stash_archive) =
+    let (repo_id, _, stash_archive) =
         find_stash_archive_with_project(paths, repos, &stash_archive_id)?;
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
     let archive_git_dir = get_archive_git_dir(paths, &repo_id);
     let archive_git_remote = git_local_remote_path(&archive_git_dir);
     let project_path = string_value(project.get("projectPath"));
@@ -1172,6 +1193,7 @@ async fn check_commits_on_branch(
 
     let mut checked_commits = Vec::new();
     let mut matched_commits = Vec::new();
+    let mut patches = HashMap::new();
 
     for commit in commits {
         if commit.get("isGraphOnly").and_then(Value::as_bool) == Some(true) {
@@ -1198,18 +1220,36 @@ async fn check_commits_on_branch(
             continue;
         }
 
-        let matched_commit = target_subject_date_map.get(&format!(
-            "{}\u{0}{}",
-            string_value(commit.get("subject")),
-            string_value(commit.get("date"))
-        ));
+        let mut matched_commit = target_subject_date_map
+            .get(&format!(
+                "{}\u{0}{}",
+                string_value(commit.get("subject")),
+                string_value(commit.get("date"))
+            ))
+            .cloned();
+        let mut matched_by = "subject-date";
+        if matched_commit.is_none() {
+            matched_commit = commit_checks::find_similar_content_commit(
+                project_path,
+                &commit,
+                &target_commits,
+                &mut patches,
+            )
+            .await?;
+            matched_by = "similar-content";
+        }
         let mut checked_commit = commit.clone();
 
-        checked_commit["checkStatus"] = json!(if matched_commit.is_some() {
-            "exists-subject"
+        let check_status = if matched_commit.is_some() {
+            if matched_by == "similar-content" {
+                "exists-content"
+            } else {
+                "exists-subject"
+            }
         } else {
             "missing"
-        });
+        };
+        checked_commit["checkStatus"] = json!(check_status);
         checked_commit["checkTargetBranch"] = json!(branch_name);
         checked_commits.push(checked_commit);
 
@@ -1219,7 +1259,7 @@ async fn check_commits_on_branch(
               "subject": commit["subject"],
               "date": commit["date"],
               "targetBranchName": branch_name,
-              "matchedBy": "subject-date",
+              "matchedBy": matched_by,
               "matchedCommit": {
                 "rowId": matched_commit["rowId"],
                 "hash": matched_commit["hash"],
@@ -1229,7 +1269,7 @@ async fn check_commits_on_branch(
                 "date": matched_commit["date"],
                 "graph": matched_commit["graph"],
                 "isGraphOnly": matched_commit["isGraphOnly"],
-                "checkStatus": "exists-subject",
+                "checkStatus": check_status,
                 "checkTargetBranch": branch_name
               }
             }));
@@ -1280,14 +1320,49 @@ async fn check_commit_on_branch(
     let matched_commit =
         find_commit_by_subject_and_date(project_path, branch_name, subject, date).await?;
 
-    if matched_commit.is_null() {
-        return Ok(Value::Null);
+    if !matched_commit.is_null() {
+        return Ok(json!({
+          "matchedBy": "subject-date",
+          "commit": matched_commit
+        }));
     }
 
-    Ok(json!({
-      "matchedBy": "subject-date",
-      "commit": matched_commit
-    }))
+    let source_output = run_git(
+        &[
+            "show",
+            "-s",
+            "--date=iso-strict",
+            "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ad",
+            commit_hash,
+        ],
+        project_path,
+    )
+    .await?;
+    let source = parse_commit_log(&source_output)?
+        .into_iter()
+        .next()
+        .unwrap_or(Value::Null);
+    let target_output = run_git(
+        &[
+            "log",
+            branch_name,
+            "--date=iso-strict",
+            "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ad",
+        ],
+        project_path,
+    )
+    .await?;
+    let targets = parse_commit_log(&target_output)?;
+    let matched = commit_checks::find_similar_content_commit(
+        project_path,
+        &source,
+        &targets,
+        &mut HashMap::new(),
+    )
+    .await?;
+    Ok(matched
+        .map(|commit| json!({ "matchedBy": "similar-content", "commit": commit }))
+        .unwrap_or(Value::Null))
 }
 
 fn parse_commit_files(output: &str) -> Vec<Value> {

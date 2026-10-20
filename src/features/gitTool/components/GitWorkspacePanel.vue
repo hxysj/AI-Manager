@@ -298,6 +298,7 @@ async function loadDiff() {
   try {
     const result = await gitToolApi.getGitToolWorktreeDiff({
       repoId: props.repoId,
+      worktreePath: props.status.projectPath,
       filePath: selectedPath.value,
       staged: selectedGroup.value === 'staged'
     })
