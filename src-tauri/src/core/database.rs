@@ -55,7 +55,7 @@ pub fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
 }
 
 pub fn backup(paths: &AppPaths) -> Result<Vec<u8>, ManagerError> {
-    initialize(paths)?;
+    crate::core::skill_store::initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
     cleanup_backup_snapshots(Path::new(&paths.temp_dir))?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
@@ -119,7 +119,10 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
         rows.collect::<Result<Vec<_>, _>>()?
     };
 
-    for (_, _, sql) in schema.iter().filter(|(object_type, _, _)| object_type == "table") {
+    for (_, _, sql) in schema
+        .iter()
+        .filter(|(object_type, _, _)| object_type == "table")
+    {
         connection.execute_batch(sql)?;
     }
 
@@ -137,7 +140,12 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
         transaction.execute(
             &format!(
                 "INSERT INTO main.{table} ({columns})
-                 SELECT {columns} FROM source.{table}",
+                 SELECT {columns} FROM source.{table} {filter}",
+                filter = if table == "skills" {
+                    "WHERE is_deleted = 0"
+                } else {
+                    ""
+                },
                 table = quote_identifier(table),
             ),
             [],
@@ -146,23 +154,17 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
 
     // 本机启用态、安装态和用量不随业务数据跨设备恢复。
     strip_json_fields(&transaction, "providers", &["enabled"])?;
-    strip_json_fields(
-        &transaction,
-        "skills",
-        &[
-            "disabled",
-            "installedTargets",
-            "installStates",
-            "status",
-            "sourcePath",
-            "entryPath",
-            "repoName",
-        ],
+    transaction.execute_batch(
+        "UPDATE skills SET disabled=1, installed_targets='', status='disabled',
+         source_path='', entry_path='', repo_name='', is_deleted=0, deleted_at=0, trash_id='', trash_path='';"
     )?;
     strip_json_fields(&transaction, "codex_accounts", &["usage", "disabled"])?;
     transaction.commit()?;
 
-    for (_, _, sql) in schema.iter().filter(|(object_type, _, _)| object_type != "table") {
+    for (_, _, sql) in schema
+        .iter()
+        .filter(|(object_type, _, _)| object_type != "table")
+    {
         connection.execute_batch(sql)?;
     }
     connection.execute_batch("DETACH DATABASE source; VACUUM;")?;
@@ -366,7 +368,7 @@ fn with_restore_snapshot<T>(
     content: &[u8],
     action: impl FnOnce(&Path) -> Result<T, ManagerError>,
 ) -> Result<T, ManagerError> {
-    initialize(paths)?;
+    crate::core::skill_store::initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
         "ai-manager-restore-{}-{}.db",
@@ -376,6 +378,9 @@ fn with_restore_snapshot<T>(
     std::fs::write(&snapshot_path, content)?;
     let result = (|| {
         validate_restore_snapshot(&snapshot_path)?;
+        let mut source = Connection::open(&snapshot_path)?;
+        crate::core::skill_store::migrate_connection(&mut source)?;
+        drop(source);
         action(&snapshot_path)
     })();
 
@@ -638,103 +643,66 @@ fn reconcile_provider_runtime_state(
     Ok(())
 }
 
+// 安装、启用和回收站信息属于本机，恢复业务数据时保留当前值。
+const SKILL_LOCAL_COLUMNS: &[&str] = &[
+    "disabled",
+    "installed_targets",
+    "status",
+    "source_path",
+    "entry_path",
+    "repo_name",
+    "is_deleted",
+    "deleted_at",
+    "trash_id",
+    "trash_path",
+];
+
 fn restore_skills(transaction: &rusqlite::Transaction<'_>) -> Result<(), ManagerError> {
+    use rusqlite::{params_from_iter, types::Value as SqlValue};
     let current_state = {
-        let mut statement =
-            transaction.prepare("SELECT item_key, sort_order, payload_json FROM skills")?;
+        let mut statement = transaction.prepare(&format!(
+            "SELECT item_key, {} FROM skills",
+            SKILL_LOCAL_COLUMNS.join(",")
+        ))?;
         let rows = statement
             .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
+                let values = (1..=SKILL_LOCAL_COLUMNS.len())
+                    .map(|index| row.get::<_, SqlValue>(index))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok((row.get::<_, String>(0)?, values))
             })?
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut state = HashMap::new();
-
-        for (item_key, sort_order, payload) in rows {
-            let skill: serde_json::Value = serde_json::from_str(&payload)?;
-            state.insert(item_key, (sort_order, skill));
-        }
-        state
-    };
-
-    restore_table(transaction, "skills")?;
-    let restored = {
-        let mut statement = transaction.prepare("SELECT item_key, payload_json FROM skills WHERE item_key IN (SELECT row_key FROM restore_applied WHERE table_name = 'skills')")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<HashMap<_, _>, _>>()?;
         rows
     };
-    for (item_key, payload) in restored {
-        let mut skill: serde_json::Value = serde_json::from_str(&payload)?;
-        let skill = skill
-            .as_object_mut()
-            .ok_or_else(|| ManagerError::System(format!("Skill {item_key} 的数据格式无效。")))?;
-        let current = current_state.get(&item_key).map(|(_, value)| value);
-        for field in ["sourcePath", "entryPath", "repoName"] {
-            if let Some(value) = current.and_then(|value| value.get(field)) {
-                skill.insert(field.to_string(), value.clone());
-            }
-        }
-        let disabled = current
-            .and_then(|value| value.get("disabled"))
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(current.is_none());
-        skill.insert("disabled".to_string(), serde_json::Value::Bool(disabled));
-        skill.insert(
-            "installedTargets".to_string(),
-            current
-                .and_then(|value| value.get("installedTargets"))
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!([])),
-        );
-        skill.insert(
-            "installStates".to_string(),
-            current
-                .and_then(|value| value.get("installStates"))
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!({})),
-        );
-        skill.insert(
-            "status".to_string(),
-            current
-                .and_then(|value| value.get("status"))
-                .cloned()
-                .unwrap_or_else(|| serde_json::json!("disabled")),
-        );
+    restore_table(transaction, "skills")?;
+    let restored = transaction.prepare("SELECT item_key FROM skills WHERE item_key IN (SELECT row_key FROM restore_applied WHERE table_name='skills')")?
+        .query_map([], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+    let updates = SKILL_LOCAL_COLUMNS
+        .iter()
+        .map(|column| format!("{column}=?"))
+        .collect::<Vec<_>>()
+        .join(",");
+    for key in restored {
+        let mut values = current_state.get(&key).cloned().unwrap_or_else(|| {
+            vec![
+                SqlValue::Integer(1),
+                SqlValue::Text(String::new()),
+                SqlValue::Text("disabled".into()),
+                SqlValue::Text(String::new()),
+                SqlValue::Text(String::new()),
+                SqlValue::Text(String::new()),
+                SqlValue::Integer(0),
+                SqlValue::Integer(0),
+                SqlValue::Text(String::new()),
+                SqlValue::Text(String::new()),
+            ]
+        });
+        values.push(SqlValue::Text(key));
         transaction.execute(
-            "UPDATE skills SET payload_json = ?1 WHERE item_key = ?2",
-            params![serde_json::to_string(&skill)?, item_key],
+            &format!("UPDATE skills SET {updates} WHERE item_key=?"),
+            params_from_iter(values),
         )?;
     }
-
-    let installed_skills = {
-        let mut statement = transaction.prepare("SELECT skill_name FROM skill_installs")?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
-    for skill_name in installed_skills {
-        let exists = transaction.query_row(
-            "SELECT EXISTS(
-               SELECT 1 FROM skills
-               WHERE item_key = ?1 OR json_extract(payload_json, '$.name') = ?1
-             )",
-            params![skill_name],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if !exists {
-            transaction.execute(
-                "DELETE FROM skill_installs WHERE skill_name = ?1",
-                params![skill_name],
-            )?;
-        }
-    }
-
     Ok(())
 }
 
@@ -948,6 +916,12 @@ fn comparison_column(table: &str, column: &str) -> String {
     let column = quote_identifier(column);
 
     if column != "\"payload_json\"" {
+        if (table == "skills" && SKILL_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
+            || (table.starts_with("skill")
+                && ["created_at", "updated_at"].contains(&column.trim_matches('"')))
+        {
+            return "NULL".to_string();
+        }
         return column;
     }
 
@@ -1118,16 +1092,11 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let skill: serde_json::Value = serde_json::from_str(
-            &snapshot
-                .query_row(
-                    "SELECT payload_json FROM skills WHERE item_key = 'skill-a'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
+        let skill = snapshot
+            .query_row("SELECT * FROM skills WHERE item_key='skill-a'", [], |row| {
+                skill_store::item_from_row("skills", row)
+            })
+            .unwrap();
         let account: serde_json::Value = serde_json::from_str(
             &snapshot
                 .query_row(
@@ -1140,20 +1109,17 @@ mod tests {
         .unwrap();
 
         assert!(provider.get("enabled").is_none());
+        assert_eq!(skill["disabled"], true);
+        assert_eq!(skill["installedTargets"], json!([]));
+        assert!(skill.get("installStates").is_none());
         for field in [
-            "disabled",
-            "installedTargets",
-            "installStates",
-            "status",
             "sourcePath",
             "entryPath",
             "repoName",
+            "trashId",
+            "trashPath",
         ] {
-            assert_eq!(
-                skill.get(field),
-                None,
-                "Skill 本机字段 {field} 不应进入备份"
-            );
+            assert_eq!(skill[field], "", "Skill 本机字段 {field} 不应进入备份");
         }
         assert!(account.get("usage").is_none());
         assert!(account.get("disabled").is_none());
@@ -1411,33 +1377,23 @@ mod tests {
                 .unwrap(),
             "account-local"
         );
-        let skill_a: serde_json::Value = serde_json::from_str(
-            &restored
-                .query_row(
-                    "SELECT payload_json FROM skills WHERE item_key = 'skill-a'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
-        let skill_b: serde_json::Value = serde_json::from_str(
-            &restored
-                .query_row(
-                    "SELECT payload_json FROM skills WHERE item_key = 'skill-b'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
+        let skill_a = restored
+            .query_row("SELECT * FROM skills WHERE item_key='skill-a'", [], |row| {
+                skill_store::item_from_row("skills", row)
+            })
+            .unwrap();
+        let skill_b = restored
+            .query_row("SELECT * FROM skills WHERE item_key='skill-b'", [], |row| {
+                skill_store::item_from_row("skills", row)
+            })
+            .unwrap();
         assert_eq!(skill_a["description"], "backup");
         assert_eq!(skill_a["disabled"], false);
         assert_eq!(skill_a["installedTargets"], json!(["codex"]));
         assert_eq!(skill_a["status"], "installed");
         assert_eq!(skill_b["disabled"], true);
         assert_eq!(skill_b["installedTargets"], json!([]));
-        assert_eq!(skill_b["installStates"], json!({}));
+        assert!(skill_b.get("installStates").is_none());
         assert_eq!(skill_b["status"], "disabled");
         assert_eq!(
             restored
@@ -1449,18 +1405,15 @@ mod tests {
                 .unwrap(),
             1
         );
-        let skill_local: serde_json::Value = serde_json::from_str(
-            &restored
-                .query_row(
-                    "SELECT payload_json FROM skills WHERE item_key = 'skill-local'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
+        let skill_local = restored
+            .query_row(
+                "SELECT * FROM skills WHERE item_key='skill-local'",
+                [],
+                |row| skill_store::item_from_row("skills", row),
+            )
+            .unwrap();
         assert_eq!(skill_local["disabled"], false);
-        assert!(skill_local.get("status").is_none());
+        assert_eq!(skill_local["status"], "");
         let installs = skill_store::read_installs(&target_paths).unwrap();
         assert_eq!(installs["skill-a"], json!(["codex"]));
         assert_eq!(installs["skill-local"], json!(["codex"]));
@@ -1733,5 +1686,37 @@ mod tests {
         assert!(!differences
             .iter()
             .any(|item| item.table == "codex_accounts"));
+    }
+    #[test]
+    fn restores_legacy_skill_backup_into_structured_fields() {
+        let root =
+            std::env::temp_dir().join(format!("legacy-skill-backup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let legacy_path = root.join("legacy.db");
+        let source = Connection::open(&legacy_path).unwrap();
+        source.execute_batch("CREATE TABLE app_metadata(key TEXT PRIMARY KEY,value TEXT);
+            CREATE TABLE skills(item_key TEXT PRIMARY KEY,sort_order INTEGER,payload_json TEXT);
+            CREATE TABLE skill_groups(item_key TEXT PRIMARY KEY,sort_order INTEGER,payload_json TEXT);").unwrap();
+        source.execute("INSERT INTO skills VALUES ('a',0,?1)",[json!({"id":"stable-id","name":"a","description":"描述","content":"旧正文","installedTargets":["codex"]}).to_string()]).unwrap();
+        source
+            .execute(
+                "INSERT INTO skill_groups VALUES ('g',0,?1)",
+                [json!({"id":"g","name":"分组","skillIds":["stable-id"]}).to_string()],
+            )
+            .unwrap();
+        drop(source);
+        let paths = resolve_app_paths(&root.join("target"));
+        let snapshot = std::fs::read(legacy_path).unwrap();
+        restore_selected(&paths, &snapshot, &["skills".into(), "skill_groups".into()]).unwrap();
+        let skills = skill_store::read_skills(&paths).unwrap();
+        assert_eq!(skills[0]["description"], "描述");
+        assert_eq!(skills[0]["groupId"], "g");
+        assert_eq!(skills[0]["disabled"], true);
+        assert!(skills[0].get("content").is_none());
+        assert_eq!(
+            skill_store::read_groups(&paths).unwrap()[0]["skillIds"],
+            json!(["stable-id"])
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }

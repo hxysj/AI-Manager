@@ -100,7 +100,11 @@
         class="skill-repository-list-card"
       >
         <div class="skill-repository-list-card-head">
-          <span data-emphasis class="skill-repository-list-card-name" :title="skill.name">
+          <span
+            data-emphasis
+            class="skill-repository-list-card-name"
+            :title="skill.name"
+          >
             {{ skill.name }}
           </span>
           <span
@@ -156,7 +160,8 @@
             ]"
             type="button"
             :disabled="
-              isRepositorySkillInstalled(skill) || isRepositorySkillDisabled(skill)
+              isRepositorySkillInstalled(skill) ||
+              isRepositorySkillDisabled(skill)
             "
             @click="$emit('install-skill', skill)"
           >
@@ -254,14 +259,16 @@
           <section class="skill-repository-list-detail-section">
             <span class="skill-repository-list-detail-label">标签</span>
             <div class="skill-repository-list-detail-tags">
-              <span data-emphasis
+              <span
+                data-emphasis
                 v-for="tag in repositoryDetailSkill.tags"
                 :key="tag"
                 class="skill-repository-list-detail-tag"
               >
                 {{ tag }}
               </span>
-              <span data-emphasis
+              <span
+                data-emphasis
                 v-if="!repositoryDetailSkill.tags.length"
                 class="skill-repository-list-detail-tag"
               >
@@ -272,7 +279,9 @@
           <section class="skill-repository-list-detail-section content">
             <span class="skill-repository-list-detail-label">SKILL.md</span>
             <pre class="skill-repository-list-detail-content">{{
-              repositoryDetailSkill.content || "未提供详细内容。"
+              detailContentLoading
+                ? "正在读取正文…"
+                : detailContentError || detailContent || "未提供详细内容。"
             }}</pre>
           </section>
         </div>
@@ -282,7 +291,8 @@
 </template>
 
 <script setup>
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
+import { skillApi } from "@/api"
 import {
   ArrowLeft,
   Download,
@@ -309,16 +319,45 @@ const searchQuery = ref("")
 const repositoryFilter = ref("all")
 const installFilter = ref("all")
 const repositoryDetailSkill = ref(null)
+const detailContent = ref("")
+const detailContentLoading = ref(false)
+const detailContentError = ref("")
+
+// 仓库列表只保存元数据，打开详情时从已有压缩包读取正文。
+watch(repositoryDetailSkill, async (skill, previousSkill, onCleanup) => {
+  detailContent.value = ""
+  detailContentError.value = ""
+  detailContentLoading.value = false
+  if (!skill) return
+  let active = true
+  onCleanup(() => {
+    active = false
+  })
+  detailContentLoading.value = true
+  try {
+    const result = await skillApi.getSkillContent({
+      repositoryId: skill.repositoryId,
+      skillPath: skill.skillPath
+    })
+    if (active) detailContent.value = result.content || ""
+  } catch (error) {
+    if (active) detailContentError.value = error.message || String(error)
+  } finally {
+    if (active) detailContentLoading.value = false
+  }
+})
 
 const repositorySkillItems = computed(() => {
   return props.repositories.flatMap((repository) =>
-    (Array.isArray(repository.skills) ? repository.skills : []).map((skill) => ({
-      ...skill,
-      repositoryId: repository.id,
-      repositoryName: repository.name,
-      repositoryBranch: repository.branch,
-      repositorySource: repository.source
-    }))
+    (Array.isArray(repository.skills) ? repository.skills : []).map(
+      (skill) => ({
+        ...skill,
+        repositoryId: repository.id,
+        repositoryName: repository.name,
+        repositoryBranch: repository.branch,
+        repositorySource: repository.source
+      })
+    )
   )
 })
 

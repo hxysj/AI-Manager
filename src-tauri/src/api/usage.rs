@@ -16,12 +16,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 const DEFAULT_EXCHANGE_RATE: f64 = 7.2;
 const CODEX_USAGE_PARSER_VERSION: u64 = 2;
 const DESKTOP_USAGE_PARSER_VERSION: u64 = 2;
-const SKILL_USAGE_PARSER_VERSION: u64 = 1;
 static PRICING_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static USAGE_LOG_CACHE: OnceLock<Mutex<Option<UsageLogCache>>> = OnceLock::new();
 static USAGE_PROVIDER_STATS_CACHE: OnceLock<Mutex<HashMap<String, UsageProviderStatsCache>>> =
-    OnceLock::new();
-static SKILL_SESSION_RECORD_CACHE: OnceLock<Mutex<HashMap<String, SkillSessionRecordCache>>> =
     OnceLock::new();
 
 #[derive(Clone)]
@@ -64,11 +61,6 @@ struct SkillInvocation {
 struct SkillReference {
     alias: String,
     discoverable: bool,
-}
-
-struct SkillSessionRecordCache {
-    updated_at: u64,
-    records: Arc<Vec<Value>>,
 }
 
 struct UsageLogCache {
@@ -190,14 +182,10 @@ pub async fn get_skill_usage_stats(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
+    let diagnostics = refresh_usage(paths, state).await?;
     let usage_logs = read_priced_usage_logs(paths)?;
     let mut skills = collect_skills(&cli_targets, &managed_skills).await?;
     let mut alias_map = create_alias_map(&skills);
-    let files = collect_cli_session_files(&cli_targets)?;
-    usage_store::ensure_skill_session_parser_version(paths, SKILL_USAGE_PARSER_VERSION)?;
-    let stored_session_records = usage_store::read_skill_session_records(paths)?;
-    let mut session_record_updates = Vec::new();
-    let mut diagnostics = Vec::new();
     let mut invocations = Vec::new();
     let mut discovered_skills: HashMap<String, SkillInfo> = HashMap::new();
     let filters = json!({
@@ -207,89 +195,47 @@ pub async fn get_skill_usage_stats(
       "trendMode": normalize_skill_trend_mode(payload.get("trendMode"))
     });
 
-    for item in files {
-        let raw_path = string_value(item.get("filePath"));
-        let (records, records_changed) =
-            match read_session_records(&item, stored_session_records.get(&raw_path)) {
-                Ok(records) => records,
-                Err(error) => {
-                    diagnostics.push(json!({
-                      "type": "skill-usage-parse-error",
-                      "message": error.to_string(),
-                      "sourcePath": string_value(item.get("filePath"))
-                    }));
-                    continue;
-                }
-            };
-
-        if records_changed {
-            session_record_updates.push((
-                raw_path,
-                file_modified_at(&string_value(item.get("filePath"))),
-                records.as_ref().clone(),
-            ));
-        }
-
-        for record in records.iter() {
-            let display = string_value(record.get("display")).trim().to_string();
-            let skill_references = extract_skill_references(&display);
-
-            if skill_references.is_empty() {
-                continue;
-            }
-
-            let created_at = to_timestamp_ms(record.get("timestamp"), 0);
-
-            for reference in skill_references {
-                let alias = reference.alias.to_lowercase();
-                let leaf_alias = alias.rsplit(':').next().unwrap_or(&alias);
-                let skill_name = alias_map
-                    .get(&alias)
-                    .or_else(|| alias_map.get(leaf_alias))
-                    .cloned()
-                    .or_else(|| reference.discoverable.then(|| leaf_alias.to_string()));
-                let Some(skill_name) = skill_name else {
-                    continue;
-                };
-
-                if reference.discoverable && !alias_map.contains_key(&alias) {
-                    alias_map.insert(alias, skill_name.clone());
-                    let discovered =
-                        discovered_skills
-                            .entry(skill_name.clone())
-                            .or_insert_with(|| SkillInfo {
-                                name: skill_name.clone(),
-                                description: String::new(),
-                                source_paths: Vec::new(),
-                                cli_types: Vec::new(),
-                                aliases: vec![skill_name.clone(), reference.alias.clone()],
-                            });
-                    let cli = string_value(item.get("cli"));
-
-                    if !cli.is_empty()
-                        && !discovered
-                            .cli_types
-                            .iter()
-                            .any(|target| string_value(target.get("id")) == cli)
-                    {
-                        discovered.cli_types.push(json!({
-                          "id": cli,
-                          "name": non_empty_text(item.get("cliName"), &cli)
-                        }));
-                    }
-                }
-
-                invocations.push(SkillInvocation {
-                    skill_name,
-                    cli: string_value(item.get("cli")),
-                    raw_path: string_value(record.get("rawPath")),
-                    created_at,
+    for call in usage_store::read_session_skill_calls(paths, "all", 0, 0)? {
+        let reference_alias = string_value(call.get("alias"));
+        let alias = reference_alias.to_lowercase();
+        let leaf_alias = alias.rsplit(':').next().unwrap_or(&alias);
+        let discoverable = call["discoverable"].as_bool().unwrap_or(false);
+        let skill_name = alias_map
+            .get(&alias)
+            .or_else(|| alias_map.get(leaf_alias))
+            .cloned()
+            .or_else(|| discoverable.then(|| leaf_alias.to_string()));
+        let Some(skill_name) = skill_name else {
+            continue;
+        };
+        let cli = string_value(call.get("cli"));
+        if discoverable && !alias_map.contains_key(&alias) {
+            alias_map.insert(alias, skill_name.clone());
+            let discovered = discovered_skills
+                .entry(skill_name.clone())
+                .or_insert_with(|| SkillInfo {
+                    name: skill_name.clone(),
+                    description: String::new(),
+                    source_paths: Vec::new(),
+                    cli_types: Vec::new(),
+                    aliases: vec![skill_name.clone(), reference_alias],
                 });
+            if !cli.is_empty()
+                && !discovered
+                    .cli_types
+                    .iter()
+                    .any(|target| string_value(target.get("id")) == cli)
+            {
+                discovered.cli_types.push(json!({"id": cli, "name": cli}));
             }
         }
+        invocations.push(SkillInvocation {
+            skill_name,
+            cli,
+            raw_path: string_value(call.get("rawPath")),
+            created_at: number_value(call.get("createdAt"), 0),
+        });
     }
-
-    usage_store::write_skill_session_records(paths, &session_record_updates)?;
 
     for (name, mut skill) in discovered_skills {
         if skills.iter().any(|item| item.name == name) {
@@ -795,6 +741,8 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         DESKTOP_USAGE_PARSER_VERSION,
     )?;
     let session_versions = usage_store::read_session_versions(paths)?;
+    let skill_versions = usage_store::read_session_skill_versions(paths)?;
+    let mut skill_updates = Vec::new();
     let pricing_config = read_pricing(paths)?;
     let pricing_index = create_pricing_index(&pricing_config);
 
@@ -811,6 +759,26 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
         let session_updated_at = session_file_modified_at(&app_type, &raw_path);
         session["updatedAt"] = json!(session_updated_at);
 
+        if !skill_versions
+            .get(&raw_path)
+            .is_some_and(|(modified, version)| {
+                *modified == session_updated_at
+                    && *version == usage_store::SESSION_SKILL_PARSER_VERSION
+            })
+        {
+            match read_session_records(&json!({"filePath": raw_path, "cli": app_type})) {
+                Ok(calls) => {
+                    let created_at = calls.iter().filter_map(|call| call["createdAt"].as_u64()).filter(|time| *time > 0).min()
+                        .unwrap_or_else(|| number_value(session.get("createdAt"), 0));
+                    skill_updates.push(usage_store::SessionSkillUpdate {
+                        raw_path: raw_path.clone(), app_type: app_type.clone(),
+                        session_id: string_value(session.get("id")), created_at,
+                        updated_at: session_updated_at, calls,
+                    });
+                }
+                Err(error) => diagnostics.push(json!({"type": "skill-usage-parse-error", "message": error.to_string(), "sourcePath": raw_path})),
+            }
+        }
         if session_versions
             .get(&raw_path)
             .is_some_and(|(source, version)| source == &app_type && *version == session_updated_at)
@@ -861,6 +829,7 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
     }
 
     usage_store::replace_sessions(paths, &updates)?;
+    usage_store::write_session_skills(paths, &skill_updates)?;
     usage_store::bind_key_usage(paths)?;
     Ok(diagnostics)
 }
@@ -2746,103 +2715,79 @@ fn file_modified_at(path: &str) -> u64 {
         .unwrap_or(0)
 }
 
-fn read_session_records(
-    item: &Value,
-    stored_records: Option<&(u64, Vec<Value>)>,
-) -> Result<(Arc<Vec<Value>>, bool), ManagerError> {
+// 旧缓存只提取调用信息，迁移后不再存储会话正文。
+pub(crate) fn compact_skill_records(records: &[Value]) -> Vec<Value> {
+    records.iter().flat_map(|record| {
+        let created_at = to_timestamp_ms(record.get("timestamp"), 0);
+        extract_skill_references(&string_value(record.get("display"))).into_iter().map(move |reference|
+            json!({"alias": reference.alias, "discoverable": reference.discoverable, "createdAt": created_at}))
+    }).collect()
+}
+
+fn read_session_records(item: &Value) -> Result<Vec<Value>, ManagerError> {
     let raw_path = string_value(item.get("filePath"));
-    let updated_at = session_file_modified_at(&string_value(item.get("cli")), &raw_path);
-    let cache = SKILL_SESSION_RECORD_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-
-    if let Some(records) = cache
-        .lock()
-        .map_err(|error| ManagerError::System(error.to_string()))?
-        .get(&raw_path)
-        .filter(|cached| cached.updated_at == updated_at)
-        .map(|cached| cached.records.clone())
-    {
-        return Ok((records, false));
-    }
-
-    if let Some((_, records)) = stored_records.filter(|(stored_at, _)| *stored_at == updated_at) {
-        let records = Arc::new(records.clone());
-        cache
-            .lock()
-            .map_err(|error| ManagerError::System(error.to_string()))?
-            .insert(
-                raw_path,
-                SkillSessionRecordCache {
-                    updated_at,
-                    records: records.clone(),
-                },
-            );
-        return Ok((records, false));
-    }
-
-    let content = read_session_content(&string_value(item.get("cli")), &raw_path)?;
-    let is_codex = string_value(item.get("cli")) == "codex";
+    let cli = string_value(item.get("cli"));
+    let is_codex = cli == "codex";
     let mut subagent_boundary = CodexSubagentBoundary::default();
-    let mut records = Vec::new();
-
-    for line in content.lines() {
-        let text = line.trim();
-
-        if text.is_empty() {
-            continue;
-        }
-
-        let record: Value = serde_json::from_str(text)?;
-
+    let mut calls = Vec::new();
+    let mut append_record = |record: Value| {
         if is_codex {
             let reset = subagent_boundary.observe(&record);
-
             if reset {
-                records.clear();
+                calls.clear();
             }
             if reset || !subagent_boundary.should_collect() {
-                continue;
+                return;
             }
         }
-
         let mut texts = Vec::new();
-
         collect_session_record_texts(&record, &mut texts);
-
-        if texts.is_empty() {
-            continue;
-        }
-
-        let display = texts.join("\n");
-
-        if extract_skill_references(&display).is_empty() {
-            continue;
-        }
-
-        records.push(json!({
-          "display": display,
-          "timestamp": first_defined_value(&[
+        let timestamp = first_defined_value(&[
             record.get("timestamp"),
             record.get("createdAt"),
             record.get("created_at"),
-            record.get("payload").and_then(|value| value.get("timestamp")),
-            record.get("message").and_then(|value| value.get("timestamp"))
-          ]),
-          "rawPath": raw_path.clone()
-        }));
+            record
+                .get("payload")
+                .and_then(|value| value.get("timestamp")),
+            record
+                .get("message")
+                .and_then(|value| value.get("timestamp")),
+        ]);
+        let created_at = to_timestamp_ms(Some(&timestamp), 0);
+        for reference in extract_skill_references(&texts.join("\n")) {
+            calls.push(json!({"alias": reference.alias, "discoverable": reference.discoverable, "createdAt": created_at}));
+        }
+    };
+    // Gemini 会话是单个 JSON 文档，其他 CLI 使用 JSONL。
+    if Path::new(&raw_path)
+        .extension()
+        .is_some_and(|ext| ext == "json")
+        || cli == "claude-desktop"
+    {
+        let content = read_session_content(&cli, &raw_path)?;
+        if let Ok(document) = serde_json::from_str::<Value>(&content) {
+            if let Some(messages) = document.get("messages").and_then(Value::as_array) {
+                for record in messages {
+                    append_record(record.clone());
+                }
+            } else {
+                append_record(document);
+            }
+        } else {
+            for line in content.lines().filter(|line| !line.trim().is_empty()) {
+                append_record(serde_json::from_str(line)?);
+            }
+        }
+    } else {
+        use std::io::{BufRead, BufReader};
+        for line in BufReader::new(std::fs::File::open(&raw_path)?).lines() {
+            let line = line?;
+            if !line.trim().is_empty() {
+                append_record(serde_json::from_str(&line)?);
+            }
+        }
     }
-
-    let records = Arc::new(records);
-    cache
-        .lock()
-        .map_err(|error| ManagerError::System(error.to_string()))?
-        .insert(
-            raw_path,
-            SkillSessionRecordCache {
-                updated_at,
-                records: records.clone(),
-            },
-        );
-    Ok((records, true))
+    Ok(calls)
 }
 
 fn collect_session_record_texts(record: &Value, output: &mut Vec<String>) {
@@ -4610,20 +4555,14 @@ mod tests {
             ),
         )
         .unwrap();
-        let (records, _) = read_session_records(
-            &json!({
-              "cli": "codex",
-              "filePath": session_path.to_string_lossy()
-            }),
-            None,
-        )
+        let records = read_session_records(&json!({
+          "cli": "codex",
+          "filePath": session_path.to_string_lossy()
+        }))
         .unwrap();
 
         assert_eq!(records.len(), 1);
-        assert!(records[0]["display"]
-            .as_str()
-            .unwrap()
-            .contains("persona-imitation"));
+        assert_eq!(records[0]["alias"], "persona-imitation");
 
         let _ = std::fs::remove_dir_all(root);
     }

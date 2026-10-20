@@ -33,6 +33,7 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
     create_schema(&connection)?;
     migrate_legacy_database(paths, &mut connection)?;
     migrate_legacy_json(paths, &mut connection)?;
+    migrate_session_fields(&mut connection)?;
     remove_legacy_usage_files(paths)
 }
 
@@ -151,6 +152,7 @@ pub fn write_usage_cost_snapshots(paths: &AppPaths, logs: &[Value]) -> Result<()
     let mut connection = open_connection(paths)?;
     let transaction = connection.transaction()?;
     let mut changed = false;
+    let mut changed_paths = std::collections::HashSet::new();
 
     for log in logs {
         let request_id = text(log.get("requestId"));
@@ -159,12 +161,22 @@ pub fn write_usage_cost_snapshots(paths: &AppPaths, logs: &[Value]) -> Result<()
             continue;
         }
 
-        changed |= transaction.execute(
-            "UPDATE usage_logs SET payload_json = ?1 WHERE request_id = ?2",
-            params![serde_json::to_string(log)?, request_id],
-        )? > 0;
+        let updated_path: Option<String> = transaction
+            .query_row(
+                "UPDATE usage_logs SET payload_json = ?1 WHERE request_id = ?2 RETURNING raw_path",
+                params![serde_json::to_string(log)?, request_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(path) = updated_path {
+            changed = true;
+            changed_paths.insert(path);
+        }
     }
 
+    for path in changed_paths {
+        update_session_totals(&transaction, Some(&path))?;
+    }
     if changed {
         bump_revision(&transaction)?;
     }
@@ -332,91 +344,93 @@ pub fn read_session_versions(
     Ok(items.collect::<Result<HashMap<_, _>, _>>()?)
 }
 
-pub fn read_skill_session_records(
+pub const SESSION_SKILL_PARSER_VERSION: u64 = 1;
+
+pub struct SessionSkillUpdate {
+    pub raw_path: String,
+    pub app_type: String,
+    pub session_id: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub calls: Vec<Value>,
+}
+
+pub fn read_session_skill_versions(
     paths: &AppPaths,
-) -> Result<HashMap<String, (u64, Vec<Value>)>, ManagerError> {
+) -> Result<HashMap<String, (u64, u64)>, ManagerError> {
     initialize(paths)?;
     let connection = open_connection(paths)?;
     let mut statement = connection
-        .prepare("SELECT raw_path, updated_at, payload_json FROM skill_usage_session_records")?;
-    let rows = statement.query_map([], |row| {
+        .prepare("SELECT raw_path, skill_updated_at, skill_parser_version FROM usage_sessions")?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, i64>(1)? as u64, row.get::<_, i64>(2)? as u64),
+            ))
+        })?
+        .collect::<Result<HashMap<_, _>, _>>()?;
+    Ok(rows)
+}
+
+pub fn read_session_skill_calls(
+    paths: &AppPaths,
+    cli: &str,
+    start_at: u64,
+    end_at: u64,
+) -> Result<Vec<Value>, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    let mut statement = connection.prepare(
+        "SELECT s.raw_path, s.session_id, s.app_type, j.value FROM usage_sessions s, json_each(s.skill_calls) j
+         WHERE (?1 = '' OR ?1 = 'all' OR s.app_type = ?1)
+           AND (?2 = 0 OR json_extract(j.value, '$.createdAt') >= ?2)
+           AND (?3 = 0 OR json_extract(j.value, '$.createdAt') <= ?3)
+         ORDER BY json_extract(j.value, '$.createdAt'), s.raw_path, j.key"
+    )?;
+    let rows = statement.query_map(params![cli, to_i64(start_at), to_i64(end_at)], |row| {
+        let raw: String = row.get(3)?;
         Ok((
             row.get::<_, String>(0)?,
-            row.get::<_, i64>(1)? as u64,
+            row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
+            raw,
         ))
     })?;
-    let mut records = HashMap::new();
-
+    let mut calls = Vec::new();
     for row in rows {
-        let (raw_path, updated_at, payload) = row?;
-        let payload = serde_json::from_str::<Value>(&payload)?;
-        records.insert(
-            raw_path,
-            (updated_at, payload.as_array().cloned().unwrap_or_default()),
-        );
+        let (path, session, cli, raw) = row?;
+        let mut call: Value = serde_json::from_str(&raw)?;
+        call["rawPath"] = json!(path);
+        call["sessionId"] = json!(session);
+        call["cli"] = json!(cli);
+        calls.push(call);
     }
-
-    Ok(records)
+    Ok(calls)
 }
 
-pub fn write_skill_session_records(
+pub fn write_session_skills(
     paths: &AppPaths,
-    records: &[(String, u64, Vec<Value>)],
+    updates: &[SessionSkillUpdate],
 ) -> Result<(), ManagerError> {
-    if records.is_empty() {
+    if updates.is_empty() {
         return Ok(());
     }
-
     initialize(paths)?;
     let mut connection = open_connection(paths)?;
     let transaction = connection.transaction()?;
-
-    for (raw_path, updated_at, payload) in records {
+    for update in updates {
         transaction.execute(
-            "INSERT INTO skill_usage_session_records(raw_path, updated_at, payload_json)
-             VALUES (?1, ?2, ?3)
+            "INSERT INTO usage_sessions(raw_path, app_type, updated_at, session_id, created_at, skill_calls, skill_updated_at, skill_parser_version)
+             VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(raw_path) DO UPDATE SET
-               updated_at = excluded.updated_at,
-               payload_json = excluded.payload_json",
-            params![
-                raw_path,
-                to_i64(*updated_at),
-                serde_json::to_string(payload)?
-            ],
+               app_type=excluded.app_type, session_id=excluded.session_id,
+               created_at=CASE WHEN usage_sessions.created_at > 0 THEN usage_sessions.created_at ELSE excluded.created_at END,
+               skill_calls=excluded.skill_calls, skill_updated_at=excluded.skill_updated_at, skill_parser_version=excluded.skill_parser_version",
+            params![update.raw_path, update.app_type, update.session_id, to_i64(update.created_at),
+                serde_json::to_string(&update.calls)?, to_i64(update.updated_at), to_i64(SESSION_SKILL_PARSER_VERSION)],
         )?;
     }
-
-    transaction.commit()?;
-    Ok(())
-}
-
-pub fn ensure_skill_session_parser_version(
-    paths: &AppPaths,
-    version: u64,
-) -> Result<(), ManagerError> {
-    initialize(paths)?;
-    let mut connection = open_connection(paths)?;
-    let key = "skill_session_parser_version";
-    let current_version = connection
-        .query_row(
-            "SELECT value FROM usage_metadata WHERE key = ?1",
-            params![key],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-
-    if current_version.as_deref() == Some(&version.to_string()) {
-        return Ok(());
-    }
-
-    let transaction = connection.transaction()?;
-    transaction.execute("DELETE FROM skill_usage_session_records", [])?;
-    transaction.execute(
-        "INSERT INTO usage_metadata(key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, version.to_string()],
-    )?;
     transaction.commit()?;
     Ok(())
 }
@@ -456,10 +470,13 @@ pub fn ensure_session_parser_version(
             params![app_type],
         )?;
         transaction.execute(
-            "DELETE FROM usage_sessions WHERE app_type = ?1",
+            "UPDATE usage_sessions SET updated_at = 0 WHERE app_type = ?1",
             params![app_type],
         )?;
     }
+    transaction.execute("UPDATE usage_sessions SET request_count=0, input_tokens=0, output_tokens=0, cache_read_tokens=0,
+        cache_creation_tokens=0, actual_tokens=0, total_cost_usd=0 WHERE app_type=?1 AND NOT EXISTS(
+        SELECT 1 FROM usage_logs WHERE usage_logs.raw_path=usage_sessions.raw_path)", [app_type])?;
     transaction.execute(
         "INSERT INTO usage_metadata(key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -588,6 +605,7 @@ pub fn replace_sessions(
                updated_at = excluded.updated_at",
             params![update.raw_path, update.app_type, to_i64(update.updated_at)],
         )?;
+        update_session_totals(&transaction, Some(&update.raw_path))?;
     }
 
     bump_revision(&transaction)?;
@@ -659,11 +677,6 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
          );
          CREATE INDEX IF NOT EXISTS idx_usage_request_records_created_at
            ON usage_request_records(created_at DESC);
-         CREATE TABLE IF NOT EXISTS skill_usage_session_records (
-           raw_path TEXT PRIMARY KEY,
-           updated_at INTEGER NOT NULL DEFAULT 0,
-           payload_json TEXT NOT NULL
-         );
          CREATE TABLE IF NOT EXISTS usage_pricing_config (
            id INTEGER PRIMARY KEY CHECK(id = 1),
            exchange_rate REAL NOT NULL
@@ -700,6 +713,114 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
         "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
         params![SCHEMA_VERSION, now_millis() as i64],
     )?;
+    Ok(())
+}
+
+fn migrate_session_fields(connection: &mut Connection) -> Result<(), ManagerError> {
+    let columns = connection
+        .prepare("PRAGMA table_info(usage_sessions)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let has_old: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='skill_usage_session_records')", [], |row| row.get(0),
+    )?;
+    if columns.iter().any(|column| column == "skill_calls") && !has_old {
+        return Ok(());
+    }
+    let transaction = connection.transaction()?;
+    for (column, definition) in [
+        ("session_id", "TEXT NOT NULL DEFAULT ''"),
+        ("created_at", "INTEGER NOT NULL DEFAULT 0"),
+        ("skill_calls", "TEXT NOT NULL DEFAULT '[]'"),
+        ("skill_updated_at", "INTEGER NOT NULL DEFAULT 0"),
+        ("skill_parser_version", "INTEGER NOT NULL DEFAULT 0"),
+        ("request_count", "INTEGER NOT NULL DEFAULT 0"),
+        ("input_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("output_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cache_read_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("cache_creation_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("actual_tokens", "INTEGER NOT NULL DEFAULT 0"),
+        ("total_cost_usd", "REAL NOT NULL DEFAULT 0"),
+    ] {
+        if !columns.iter().any(|name| name == column) {
+            transaction.execute_batch(&format!(
+                "ALTER TABLE usage_sessions ADD COLUMN {column} {definition}"
+            ))?;
+        }
+    }
+    // 将请求明细汇总到现有会话，不复制正文；明细仍保留模型和 Provider 的准确归属。
+    update_session_totals(&transaction, None)?;
+    if has_old {
+        let mut statement = transaction.prepare(
+            "SELECT raw_path, updated_at, payload_json FROM skill_usage_session_records",
+        )?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let path: String = row.get(0)?;
+            let updated_at: i64 = row.get(1)?;
+            let payload: Vec<Value> = serde_json::from_str(&row.get::<_, String>(2)?)?;
+            let calls = crate::api::usage::compact_skill_records(&payload);
+            let lowered = path.to_lowercase();
+            let cli = if lowered.contains("codex") {
+                "codex"
+            } else if lowered.contains("claude") {
+                "claude"
+            } else if lowered.contains("gemini") {
+                "gemini"
+            } else {
+                ""
+            };
+            let created_at = calls
+                .iter()
+                .filter_map(|call| call["createdAt"].as_u64())
+                .filter(|time| *time > 0)
+                .min()
+                .unwrap_or(0);
+            transaction.execute(
+                "INSERT INTO usage_sessions(raw_path, app_type, updated_at, session_id, created_at, skill_calls, skill_updated_at, skill_parser_version)
+                 VALUES (?1, ?2, 0, ?1, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(raw_path) DO UPDATE SET
+                   app_type=CASE WHEN usage_sessions.app_type='' THEN excluded.app_type ELSE usage_sessions.app_type END,
+                   created_at=CASE WHEN usage_sessions.created_at>0 THEN usage_sessions.created_at ELSE excluded.created_at END,
+                   skill_calls=excluded.skill_calls, skill_updated_at=excluded.skill_updated_at, skill_parser_version=excluded.skill_parser_version",
+                params![path, cli, to_i64(created_at), serde_json::to_string(&calls)?, updated_at, to_i64(SESSION_SKILL_PARSER_VERSION)],
+            )?;
+        }
+        drop(rows);
+        drop(statement);
+        transaction.execute_batch("DROP TABLE skill_usage_session_records;")?;
+    }
+    transaction.execute_batch("CREATE INDEX IF NOT EXISTS idx_usage_sessions_cli_session ON usage_sessions(app_type, session_id);")?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn update_session_totals(
+    transaction: &Transaction<'_>,
+    raw_path: Option<&str>,
+) -> Result<(), ManagerError> {
+    transaction.execute(
+        "INSERT INTO usage_sessions(raw_path, app_type, updated_at, session_id, created_at, request_count,
+           input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, actual_tokens, total_cost_usd)
+         SELECT raw_path, MAX(app_type), MAX(session_updated_at),
+           COALESCE(MAX(NULLIF(json_extract(payload_json, '$.sessionId'), '')), raw_path), MIN(created_at), COUNT(*),
+           SUM(COALESCE(json_extract(payload_json, '$.inputTokens'),0)), SUM(COALESCE(json_extract(payload_json, '$.outputTokens'),0)),
+           SUM(COALESCE(json_extract(payload_json, '$.cacheReadTokens'),0)), SUM(COALESCE(json_extract(payload_json, '$.cacheCreationTokens'),0)),
+           SUM(COALESCE(json_extract(payload_json, '$.actualTokens'),0)), SUM(COALESCE(json_extract(payload_json, '$.totalCostUsd'),0))
+         FROM usage_logs WHERE raw_path <> '' AND (?1 IS NULL OR raw_path=?1) GROUP BY raw_path
+         ON CONFLICT(raw_path) DO UPDATE SET app_type=excluded.app_type, session_id=excluded.session_id, created_at=excluded.created_at,
+           request_count=excluded.request_count, input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
+           cache_read_tokens=excluded.cache_read_tokens, cache_creation_tokens=excluded.cache_creation_tokens,
+           actual_tokens=excluded.actual_tokens, total_cost_usd=excluded.total_cost_usd",
+        params![raw_path],
+    )?;
+    if let Some(path) = raw_path {
+        transaction.execute(
+            "UPDATE usage_sessions SET request_count=0, input_tokens=0, output_tokens=0, cache_read_tokens=0,
+             cache_creation_tokens=0, actual_tokens=0, total_cost_usd=0 WHERE raw_path=?1
+             AND NOT EXISTS(SELECT 1 FROM usage_logs WHERE raw_path=?1)", [path],
+        )?;
+    }
     Ok(())
 }
 
@@ -769,8 +890,8 @@ fn migrate_legacy_database(
         transaction.execute_batch(
             "INSERT OR REPLACE INTO usage_logs
                SELECT * FROM legacy_usage.usage_logs;
-             INSERT OR REPLACE INTO usage_sessions
-               SELECT * FROM legacy_usage.usage_sessions;
+             INSERT OR REPLACE INTO usage_sessions(raw_path, app_type, updated_at)
+               SELECT raw_path, app_type, updated_at FROM legacy_usage.usage_sessions;
              INSERT OR REPLACE INTO usage_request_records
                SELECT * FROM legacy_usage.usage_request_records;
              INSERT OR REPLACE INTO usage_pricing_config
@@ -1095,10 +1216,10 @@ fn now_millis() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::{
-        create_schema, ensure_skill_session_parser_version, initialize, query_logs,
-        read_codex_quota_stages, read_pricing, read_request_records, read_session_versions,
-        read_skill_session_records, record_codex_quota_stages, replace_sessions, write_pricing,
-        write_skill_session_records, UsageLogQuery, UsageSessionUpdate,
+        create_schema, initialize, query_logs, read_codex_quota_stages, read_pricing,
+        read_request_records, read_session_skill_calls, read_session_skill_versions,
+        read_session_versions, record_codex_quota_stages, replace_sessions, write_pricing,
+        write_session_skills, SessionSkillUpdate, UsageLogQuery, UsageSessionUpdate,
     };
     use crate::core::paths::resolve_app_paths;
     use rusqlite::{params, Connection};
@@ -1483,43 +1604,124 @@ mod tests {
     }
 
     #[test]
-    fn persists_skill_session_records_by_file_version() {
-        let paths = create_test_paths("skill-session-records");
-
-        write_skill_session_records(
+    fn session_skill_updates_preserve_usage_and_duplicate_calls() {
+        let paths = create_test_paths("session-skills");
+        let update = SessionSkillUpdate {
+            raw_path: "session.jsonl".into(),
+            app_type: "codex".into(),
+            session_id: "session-a".into(),
+            created_at: 100,
+            updated_at: 123,
+            calls: vec![
+                json!({"alias":"imagegen", "discoverable":true, "createdAt":100}),
+                json!({"alias":"imagegen", "discoverable":true, "createdAt":110}),
+            ],
+        };
+        write_session_skills(&paths, &[update]).unwrap();
+        replace_sessions(
             &paths,
-            &[(
-                "session.jsonl".to_string(),
-                123,
-                vec![json!({"display": "$imagegen", "timestamp": 100})],
-            )],
+            &[UsageSessionUpdate {
+                raw_path: "session.jsonl".into(),
+                app_type: "codex".into(),
+                updated_at: 124,
+                logs: vec![
+                    json!({"requestId":"r1", "sessionId":"session-a", "rawPath":"session.jsonl",
+                "appType":"codex", "createdAt":100, "inputTokens":40, "outputTokens":10,
+                "actualTokens":50, "totalCostUsd":0.5}),
+                ],
+                records: vec![],
+            }],
         )
         .unwrap();
-
-        let records = read_skill_session_records(&paths).unwrap();
-        assert_eq!(records["session.jsonl"].0, 123);
-        assert_eq!(records["session.jsonl"].1.len(), 1);
-        assert_eq!(records["session.jsonl"].1[0]["display"], "$imagegen");
+        let calls = read_session_skill_calls(&paths, "codex", 0, 0).unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["sessionId"], "session-a");
+        assert_eq!(
+            read_session_skill_calls(&paths, "codex", 105, 115)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(read_session_skill_calls(&paths, "claude", 0, 0)
+            .unwrap()
+            .is_empty());
+        let connection = Connection::open(&paths.storage_files.database).unwrap();
+        let totals: (i64, i64, f64) = connection.query_row(
+            "SELECT request_count, actual_tokens, total_cost_usd FROM usage_sessions WHERE raw_path='session.jsonl'",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
+        assert_eq!(totals, (1, 50, 0.5));
+        assert_eq!(
+            read_session_skill_versions(&paths).unwrap()["session.jsonl"].0,
+            123
+        );
+        write_session_skills(
+            &paths,
+            &[SessionSkillUpdate {
+                raw_path: "session.jsonl".into(),
+                app_type: "codex".into(),
+                session_id: "session-a".into(),
+                created_at: 100,
+                updated_at: 125,
+                calls: vec![],
+            }],
+        )
+        .unwrap();
+        assert_eq!(
+            read_session_versions(&paths).unwrap()["session.jsonl"].1,
+            124
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT actual_tokens FROM usage_sessions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            50
+        );
     }
 
     #[test]
-    fn invalidates_skill_records_when_parser_version_changes() {
-        let paths = create_test_paths("skill-session-parser-version");
-        let records = [(
-            "session.jsonl".to_string(),
-            123,
-            vec![json!({"display": "$imagegen", "timestamp": 100})],
-        )];
-
-        write_skill_session_records(&paths, &records).unwrap();
-        ensure_skill_session_parser_version(&paths, 1).unwrap();
-        assert!(read_skill_session_records(&paths).unwrap().is_empty());
-
-        write_skill_session_records(&paths, &records).unwrap();
-        ensure_skill_session_parser_version(&paths, 1).unwrap();
-        assert_eq!(read_skill_session_records(&paths).unwrap().len(), 1);
-
-        ensure_skill_session_parser_version(&paths, 2).unwrap();
-        assert!(read_skill_session_records(&paths).unwrap().is_empty());
+    fn migrates_legacy_skill_cache_without_session_text() {
+        let paths = create_test_paths("legacy-skill-cache");
+        let connection = Connection::open(&paths.storage_files.database).unwrap();
+        create_schema(&connection).unwrap();
+        connection.execute_batch("CREATE TABLE skill_usage_session_records(raw_path TEXT PRIMARY KEY, updated_at INTEGER, payload_json TEXT);").unwrap();
+        connection
+            .execute(
+                "INSERT INTO skill_usage_session_records VALUES (?1,?2,?3)",
+                params![
+                    "codex/session.jsonl",
+                    123,
+                    json!([
+                        {"display":"$imagegen", "timestamp":100, "rawPath":"codex/session.jsonl"},
+                        {"display":"$imagegen", "timestamp":110, "rawPath":"codex/session.jsonl"}
+                    ])
+                    .to_string()
+                ],
+            )
+            .unwrap();
+        initialize(&paths).unwrap();
+        initialize(&paths).unwrap();
+        let calls = read_session_skill_calls(&paths, "codex", 0, 0).unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["alias"], "imagegen");
+        assert!(calls[0].get("display").is_none());
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='skill_usage_session_records'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        let stored: String = connection
+            .query_row("SELECT skill_calls FROM usage_sessions", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(!stored.contains("display"));
+        assert!(!stored.contains("rawPath"));
+        assert!(stored.len() < 200);
     }
 }

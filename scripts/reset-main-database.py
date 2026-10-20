@@ -17,7 +17,6 @@ KEEP_TABLES = {
     "usage_logs",
     "usage_sessions",
     "usage_request_records",
-    "skill_usage_session_records",
     "usage_pricing_config",
     "usage_pricing_items",
     "codex_quota_stages",

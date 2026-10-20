@@ -131,6 +131,15 @@ fn comparable_row(
     }
     let mut value = row.clone();
     value.remove("sort_order");
+    if table == "skills" {
+        for column in SKILL_LOCAL_COLUMNS {
+            value.remove(*column);
+        }
+    }
+    if table.starts_with("skill") {
+        value.remove("created_at");
+        value.remove("updated_at");
+    }
     Ok(Value::Object(value))
 }
 

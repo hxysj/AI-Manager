@@ -5270,12 +5270,12 @@ mod tests {
         assert_eq!(skill_a["description"], "backup");
         assert_eq!(skill_a["disabled"], false);
         assert_eq!(skill_a["installedTargets"], json!(["codex"]));
-        assert_eq!(skill_a["installStates"]["codex"]["state"], "installed");
+        assert!(skill_a.get("installStates").is_none());
         assert_eq!(skill_a["status"], "installed");
         assert_eq!(installs["skill-a"], json!(["codex"]));
         assert_eq!(skill_b["disabled"], true);
         assert_eq!(skill_b["installedTargets"], json!([]));
-        assert_eq!(skill_b["installStates"], json!({}));
+        assert!(skill_b.get("installStates").is_none());
         assert_eq!(skill_b["status"], "disabled");
         assert!(!installs.contains_key("skill-b"));
         assert_eq!(account_a["email"], "backup@example.com");

@@ -85,15 +85,23 @@
           <div class="skill-drawer__block">
             <span>详细内容</span>
             <pre class="skill-drawer__content-text">{{
-              skill.content || "未提供详细内容。"
+              skillContentLoading
+                ? "正在读取正文…"
+                : skillContentError || skillContent || "未提供详细内容。"
             }}</pre>
           </div>
 
           <div class="skill-drawer__block">
             <span>标签</span>
             <div class="skill-drawer__tag-list">
-              <span data-emphasis v-for="tag in skill.tags" :key="tag">{{ tag }}</span>
-              <span data-emphasis v-if="!skill.tags.length" class="skill-drawer__muted-tag">
+              <span data-emphasis v-for="tag in skill.tags" :key="tag">{{
+                tag
+              }}</span>
+              <span
+                data-emphasis
+                v-if="!skill.tags.length"
+                class="skill-drawer__muted-tag"
+              >
                 暂无标签
               </span>
             </div>
@@ -355,6 +363,9 @@ const tabs = [
 ]
 
 const activeTab = ref("overview")
+const skillContent = ref("")
+const skillContentLoading = ref(false)
+const skillContentError = ref("")
 const skillFiles = ref([])
 const skillFilesLoading = ref(false)
 const skillFilesError = ref("")
@@ -376,12 +387,31 @@ const selectedSkillFile = computed(() => {
 
 watch(
   () => props.skill?.name,
-  () => {
+  async (name, previousName, onCleanup) => {
     activeTab.value = "overview"
     skillFiles.value = []
     skillFilesError.value = ""
     selectedSkillFilePath.value = ""
-  }
+    skillContent.value = ""
+    skillContentError.value = ""
+    skillContentLoading.value = false
+    if (!name) return
+    // 切换或关闭详情后，忽略上一条请求的结果。
+    let active = true
+    onCleanup(() => {
+      active = false
+    })
+    skillContentLoading.value = true
+    try {
+      const result = await skillApi.getSkillContent({ skillName: name })
+      if (active) skillContent.value = result.content || ""
+    } catch (error) {
+      if (active) skillContentError.value = error.message || String(error)
+    } finally {
+      if (active) skillContentLoading.value = false
+    }
+  },
+  { immediate: true }
 )
 
 watch(activeTab, (value) => {

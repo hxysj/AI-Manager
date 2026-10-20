@@ -18,7 +18,7 @@ mod desktop_skill_link;
 
 const IGNORE_DIRS: [&str; 6] = [".git", "node_modules", "dist", "build", ".cache", "temp"];
 const SKILL_PREVIEW_MAX_SIZE: u64 = 512 * 1024;
-const SKILL_TRASH_RETENTION_MS: u128 = 10 * 24 * 60 * 60 * 1000;
+const SKILL_TRASH_RETENTION_MS: u128 = skill_store::SKILL_TRASH_RETENTION_MS;
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -1321,6 +1321,73 @@ pub async fn install_skill_from_repository(
     refresh_skills_state(paths, state).await
 }
 
+// 正文仅在打开详情时读取，扫描和数据库缓存都只保留描述与元数据。
+pub fn get_skill_content(
+    paths: &AppPaths,
+    state: &Value,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    use std::io::Read;
+    let repository_id = string_value(payload.get("repositoryId"));
+    let content = if repository_id.is_empty() {
+        let skill = find_skill(state, &string_value(payload.get("skillName")))?;
+        let path = Path::new(&string_value(skill.get("sourcePath"))).join("SKILL.md");
+        if std::fs::metadata(&path)?.len() > SKILL_PREVIEW_MAX_SIZE {
+            return Err(ManagerError::System(
+                "Skill 正文超过预览大小限制，请在文件中查看".into(),
+            ));
+        }
+        std::fs::read_to_string(path)?
+    } else {
+        let repositories = load_repositories(paths)?;
+        let repository = repositories
+            .iter()
+            .find(|item| string_value(item.get("id")) == repository_id)
+            .ok_or_else(|| ManagerError::System("Skill 仓库不存在".into()))?;
+        let skill_path = string_value(payload.get("skillPath"));
+        if !repository["skills"].as_array().is_some_and(|skills| {
+            skills
+                .iter()
+                .any(|item| string_value(item.get("skillPath")) == skill_path)
+        }) {
+            return Err(ManagerError::System("仓库中不存在该 Skill".into()));
+        }
+        let cache_path = repository_branch_candidates(repository)
+            .into_iter()
+            .map(|branch| repository_archive_cache_path(paths, repository, &branch))
+            .find(|path| path.exists())
+            .ok_or_else(|| ManagerError::System("仓库文件缓存不存在，请先刷新仓库".into()))?;
+        let mut archive = zip::ZipArchive::new(File::open(cache_path)?)
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        let relative = if skill_path.is_empty() {
+            "SKILL.md".to_string()
+        } else {
+            format!("{skill_path}/SKILL.md")
+        };
+        let name = archive
+            .file_names()
+            .find(|name| {
+                name.split_once('/')
+                    .is_some_and(|(_, path)| path == relative)
+            })
+            .map(str::to_string)
+            .ok_or_else(|| ManagerError::System("仓库缓存中找不到 SKILL.md，请刷新仓库".into()))?;
+        let mut file = archive
+            .by_name(&name)
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        if file.size() > SKILL_PREVIEW_MAX_SIZE {
+            return Err(ManagerError::System(
+                "Skill 正文超过预览大小限制，请在文件中查看".into(),
+            ));
+        }
+        let mut content = String::new();
+        file.read_to_string(&mut content)?;
+        content
+    };
+    let (_, body) = parse_frontmatter(&content);
+    Ok(json!({"content":body.trim()}))
+}
+
 pub fn get_skill_files(state: &Value, payload: Value) -> Result<Value, ManagerError> {
     let skill_name = string_value(payload.get("skillName"));
     let skill = find_skill(state, &skill_name)?;
@@ -1417,13 +1484,13 @@ pub async fn purge_skill_trash(paths: &AppPaths, payload: Value) -> Result<Value
             }));
             continue;
         };
-        let item = trash_items.remove(index);
+        let item = trash_items[index].clone();
 
         match remove_skill_trash_path(paths, &item).await {
-            Ok(_) => purged_items.push(json!({
-              "id": item["id"],
-              "name": item["name"]
-            })),
+            Ok(_) => {
+                trash_items.remove(index);
+                purged_items.push(json!({ "id": item["id"], "name": item["name"] }));
+            }
             Err(error) => errors.push(json!({
               "id": item_id,
               "message": error.to_string()
@@ -1568,7 +1635,7 @@ fn scan_root(
 fn parse_skill(skill_root: &str, repo_id: Value) -> Result<Value, ManagerError> {
     let skill_file = Path::new(skill_root).join("SKILL.md");
     let content = std::fs::read_to_string(&skill_file)?;
-    let (metadata, body) = parse_frontmatter(&content);
+    let (metadata, _) = parse_frontmatter(&content);
     let skill_name = metadata.get("name").cloned().unwrap_or_default();
 
     if skill_name.is_empty() {
@@ -1597,7 +1664,6 @@ fn parse_skill(skill_root: &str, repo_id: Value) -> Result<Value, ManagerError> 
       "id": sha1_hex(skill_root)[..16].to_string(),
       "name": skill_name,
       "description": metadata.get("description").cloned().unwrap_or_default(),
-      "content": body.trim(),
       "version": metadata.get("version").cloned().unwrap_or_default(),
       "author": metadata.get("author").cloned().unwrap_or_default(),
       "tags": metadata
@@ -1749,7 +1815,6 @@ fn scan_repository_archive(
           ))[..16].to_string(),
           "name": parsed["name"],
           "description": parsed["description"],
-          "content": parsed["content"],
           "version": parsed["version"],
           "author": parsed["author"],
           "tags": parsed["tags"],
@@ -3050,6 +3115,14 @@ async fn restore_skill_trash_item(paths: &AppPaths, item: &Value) -> Result<Valu
     }
 
     move_dir_all(&trash_path, &restore_path).await?;
+    if let Err(error) = skill_store::restore_trashed_skill(
+        paths,
+        &string_value(item.get("id")),
+        &path_text(&restore_path),
+    ) {
+        move_dir_all(&restore_path, &trash_path).await?;
+        return Err(error);
+    }
 
     Ok(json!({
       "id": item["id"],
@@ -3097,7 +3170,9 @@ async fn cleanup_expired_skill_trash(paths: &AppPaths) -> Result<(), ManagerErro
 
     for item in read_skill_trash(paths)? {
         if item.get("expiresAt").and_then(Value::as_u64).unwrap_or(0) as u128 <= now {
-            let _ = remove_skill_trash_path(paths, &item).await;
+            if remove_skill_trash_path(paths, &item).await.is_err() {
+                active_items.push(item);
+            }
             continue;
         }
 
@@ -3224,19 +3299,33 @@ async fn persist_skills(
         }
     }
 
-    skill_store::write_skills(paths, skills)?;
+    // 未能清理的孤立挂载仍保留在主表，下一次扫描继续重试。
+    let mut stored_skills = skills.to_vec();
+    for skill in &mut stored_skills {
+        let name = string_value(skill.get("name"));
+        if pending_cleanup_skills.contains(&name) {
+            if let Some(targets) = install_index.get(&name) {
+                skill["installedTargets"] = json!(targets);
+            }
+        }
+    }
+    for previous in skill_store::read_skills(paths)? {
+        let name = string_value(previous.get("name"));
+        if install_index.contains_key(&name)
+            && !stored_skills.iter().any(|skill| skill["name"] == name)
+        {
+            let mut previous = previous;
+            previous["installedTargets"] = json!(install_index[&name]);
+            stored_skills.push(previous);
+        }
+    }
+    skill_store::write_skills(paths, &stored_skills)?;
     write_json(
         &paths.storage_files.cli_targets,
         &json!(serialize_cli_targets(cli_targets)),
     )
     .await?;
-    skill_store::write_installs(
-        paths,
-        &install_index
-            .into_iter()
-            .map(|(key, value)| (key, json!(value)))
-            .collect(),
-    )
+    Ok(())
 }
 
 fn serialize_cli_targets(cli_targets: &[Value]) -> Vec<Value> {
@@ -4087,6 +4176,15 @@ mod tests {
                 super::create_uuid_like_id()
             ));
             let paths = resolve_app_paths(&root);
+            skill_store::write_skills(
+                &paths,
+                &[
+                    json!({"id":"skill-a","name":"a"}),
+                    json!({"id":"skill-b","name":"b"}),
+                    json!({"id":"skill-c","name":"c"}),
+                ],
+            )
+            .unwrap();
 
             save_skill_group(
                 &paths,
@@ -4122,6 +4220,15 @@ mod tests {
                 super::create_uuid_like_id()
             ));
             let paths = resolve_app_paths(&root);
+            skill_store::write_skills(
+                &paths,
+                &[
+                    json!({"id":"skill-a","name":"a"}),
+                    json!({"id":"skill-b","name":"b"}),
+                    json!({"id":"skill-c","name":"c"}),
+                ],
+            )
+            .unwrap();
 
             let first = save_skill_group(
                 &paths,
@@ -4178,6 +4285,15 @@ mod tests {
                 super::create_uuid_like_id()
             ));
             let paths = resolve_app_paths(&root);
+            skill_store::write_skills(
+                &paths,
+                &[
+                    json!({"id":"skill-a","name":"a"}),
+                    json!({"id":"skill-b","name":"b"}),
+                    json!({"id":"skill-c","name":"c"}),
+                ],
+            )
+            .unwrap();
             let result = save_skill_group(
                 &paths,
                 json!({
@@ -4226,6 +4342,15 @@ mod tests {
                 super::create_uuid_like_id()
             ));
             let paths = resolve_app_paths(&root);
+            skill_store::write_skills(
+                &paths,
+                &[
+                    json!({"id":"skill-a","name":"a"}),
+                    json!({"id":"skill-b","name":"b"}),
+                    json!({"id":"skill-c","name":"c"}),
+                ],
+            )
+            .unwrap();
             let result = save_skill_group(
                 &paths,
                 json!({
@@ -4628,15 +4753,67 @@ mod tests {
             skill.get("displayPath").and_then(serde_json::Value::as_str),
             Some("vue-debug-guides")
         );
-        assert_eq!(
-            skill.get("content").and_then(serde_json::Value::as_str),
-            Some("正文内容")
-        );
+        assert!(skill.get("content").is_none());
         assert_eq!(
             skill.get("readmeUrl").and_then(serde_json::Value::as_str),
             Some("https://github.com/vuejs-ai/skills/blob/main/skills/vue-debug-guides/SKILL.md")
         );
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn skill_content_is_read_on_demand_from_source_and_repository_zip() {
+        let root = std::env::temp_dir().join(format!(
+            "skill-lazy-content-{}",
+            super::create_uuid_like_id()
+        ));
+        let paths = resolve_app_paths(&root);
+        let source = Path::new(&paths.skills_dir).join("demo");
+        write_test_skill(&source, "demo");
+        let skill = super::parse_skill(&path_text(&source), serde_json::Value::Null).unwrap();
+        assert!(skill.get("content").is_none());
+        let state = json!({"skills":[skill]});
+        assert_eq!(
+            super::get_skill_content(&paths, &state, json!({"skillName":"demo"})).unwrap()
+                ["content"],
+            "content"
+        );
+        std::fs::write(
+            source.join("SKILL.md"),
+            "---\nname: demo\ndescription: test\n---\n新正文",
+        )
+        .unwrap();
+        assert_eq!(
+            super::get_skill_content(&paths, &state, json!({"skillName":"demo"})).unwrap()
+                ["content"],
+            "新正文"
+        );
+        let repository = json!({"id":"repo","source":"https://github.com/owner/repo","owner":"owner","repository":"repo","branch":"main"});
+        skill_store::write_repositories(&paths, &[repository.clone()]).unwrap();
+        skill_store::write_repository_cache(&paths,&[json!({"id":"repo","skills":[{"name":"demo","skillPath":"skills/demo","content":"不应缓存"}]})]).unwrap();
+        let cache_path = repository_archive_cache_path(&paths, &repository, "main");
+        std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+        write_test_repository_archive(&cache_path);
+        assert!(
+            skill_store::read_repository_cache(&paths).unwrap()[0]["skills"][0]
+                .get("content")
+                .is_none()
+        );
+        assert_eq!(
+            super::get_skill_content(
+                &paths,
+                &state,
+                json!({"repositoryId":"repo","skillPath":"skills/demo"})
+            )
+            .unwrap()["content"],
+            "Demo skill"
+        );
+        assert!(super::get_skill_content(
+            &paths,
+            &state,
+            json!({"repositoryId":"repo","skillPath":"../other"})
+        )
+        .is_err());
         let _ = std::fs::remove_dir_all(root);
     }
 }

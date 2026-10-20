@@ -1770,6 +1770,11 @@ impl ManagerState {
                     .map_err(|error| ManagerError::Path(error.to_string()))?;
                 Ok(self.state.clone())
             }
+            "skill:content" => skills::get_skill_content(
+                &self.paths,
+                &self.state,
+                payload.unwrap_or_else(|| json!({})),
+            ),
             "skill:files" => {
                 skills::get_skill_files(&self.state, payload.unwrap_or_else(|| json!({})))
             }
