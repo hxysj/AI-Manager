@@ -2814,7 +2814,7 @@ async function loadTasks() {
       conversationId: activeConversationId.value,
       pageSize: isBatchMode ? 100 : pageSize.value,
       groupByRound: !isBatchMode,
-      includeThumbnails: !isBatchMode
+      includeThumbnails: false
     }
     let result = await toolboxApi.listImageTasks(query)
     if (isBatchMode && result.total > result.items.length) {
@@ -3346,6 +3346,52 @@ async function deleteTasks() {
     deleting.value = false
   }
 }
+
+// 列表先显示任务，当前页的预览另行按需读取；完成通知同样触发加载，不把图片写回存储。
+watch(
+  [
+    tasks,
+    () =>
+      currentConversationIsBatch.value
+        ? ""
+        : tasks.value
+            .filter((task) => task.imageCount > 0)
+            .map((task) => `${task.id}:${task.revision || 0}`)
+            .join("|")
+  ],
+  async (_, __, onCleanup) => {
+    let stale = false
+    onCleanup(() => {
+      stale = true
+    })
+    if (currentConversationIsBatch.value || disposed) return
+    const pending = tasks.value
+      .filter((task) => task.imageCount > 0)
+      .map((task) => ({ id: task.id, revision: task.revision }))
+    try {
+      // 分段顺序加载，切页后停止后续请求，避免同时传输整页的所有预览。
+      for (let offset = 0; offset < pending.length; offset += 24) {
+        if (stale || disposed) return
+        const chunk = pending.slice(offset, offset + 24)
+        const items = await toolboxApi.imageTaskPreviews({
+          ids: chunk.map((task) => task.id)
+        })
+        if (stale || disposed) return
+        const revisions = new Map(chunk.map((task) => [task.id, task.revision]))
+        for (const item of items) {
+          const current = tasks.value[taskIndexById.get(item.id)]
+          if (
+            current?.id === item.id &&
+            current.revision === revisions.get(item.id)
+          )
+            current.thumbnail = item.thumbnail
+        }
+      }
+    } catch (error) {
+      if (!stale && !disposed) listError.value = `预览读取失败：${error}`
+    }
+  }
+)
 
 watch([() => form.accountId, () => form.generationMode], loadModels)
 watch(

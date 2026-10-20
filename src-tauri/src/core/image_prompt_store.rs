@@ -22,18 +22,7 @@ pub fn dispatch(
         .lock()
         .map_err(|_| ManagerError::System("提示词库锁不可用".into()))?;
     let mut connection = database::open(paths)?;
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS image_prompt_templates (
-           id TEXT PRIMARY KEY, position INTEGER NOT NULL, search_text TEXT NOT NULL,
-           summary_json TEXT NOT NULL, payload_json TEXT NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS image_prompt_categories (
-           template_id TEXT NOT NULL, category_id TEXT NOT NULL,
-           PRIMARY KEY(template_id, category_id)
-         );
-         CREATE INDEX IF NOT EXISTS idx_image_prompt_category ON image_prompt_categories(category_id, template_id);
-         CREATE TABLE IF NOT EXISTS image_prompt_catalog (id INTEGER PRIMARY KEY, payload_json TEXT NOT NULL);",
-    )?;
+    ensure_prompt_schema(&connection)?;
     if channel == "tools:image-prompts-import" {
         let path = Path::new(payload["path"].as_str().unwrap_or(""));
         if !path
@@ -51,14 +40,13 @@ pub fn dispatch(
             &path.file_name().unwrap_or_default().to_string_lossy(),
         );
     }
-    let catalog: Option<String> = connection
+    let prompt_count: u64 = connection
         .query_row(
-            "SELECT payload_json FROM image_prompt_catalog WHERE id = 1",
+            "SELECT COUNT(*) FROM image_prompt_templates",
             [],
             |row| row.get(0),
-        )
-        .optional()?;
-    if catalog.is_none() {
+        )?;
+    if prompt_count == 0 {
         let mut bytes = Vec::new();
         std::fs::File::open(seed_path)?
             .take(MAX_JSON_BYTES + 1)
@@ -67,27 +55,152 @@ pub fn dispatch(
     }
     match channel {
         "tools:image-prompts-catalog" => {
-            let catalog: String = connection.query_row(
-                "SELECT payload_json FROM image_prompt_catalog WHERE id = 1",
-                [],
-                |row| row.get(0),
-            )?;
-            Ok(serde_json::from_str(&catalog)?)
+            catalog_value(&connection)
         }
         "tools:image-prompts-detail" => {
-            let body: String = connection
+            connection
                 .query_row(
-                    "SELECT payload_json FROM image_prompt_templates WHERE id = ?1",
+                    "SELECT id, title, title_zh, prompt, prompt_localized, model, input_mode,
+                            preview_image_url, high_quality_image_url, variables,
+                            reference_image_count, aspect_ratio, tags, source, category_ids
+                     FROM image_prompt_templates WHERE id = ?1",
                     [payload["id"].as_str().unwrap_or("")],
-                    |row| row.get(0),
+                    |row| template_value(row, true),
                 )
                 .optional()?
-                .ok_or_else(|| ManagerError::System("提示词不存在，请刷新词库".into()))?;
-            Ok(serde_json::from_str(&body)?)
+                .ok_or_else(|| ManagerError::System("提示词不存在，请刷新词库".into()))
         }
         "tools:image-prompts-list" => list(&connection, &payload),
         _ => Err(ManagerError::UnknownChannel(channel.into())),
     }
+}
+
+pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
+    let _guard = CATALOG_LOCK
+        .lock()
+        .map_err(|_| ManagerError::System("提示词库锁不可用".into()))?;
+    let connection = database::open(paths)?;
+    ensure_prompt_schema(&connection)
+}
+
+fn ensure_prompt_schema(connection: &Connection) -> Result<(), ManagerError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS image_prompt_templates (
+           id TEXT PRIMARY KEY, position INTEGER NOT NULL, search_text TEXT NOT NULL,
+           title TEXT NOT NULL, title_zh TEXT NOT NULL DEFAULT '', prompt TEXT NOT NULL,
+           prompt_localized TEXT NOT NULL DEFAULT '{}', model TEXT NOT NULL DEFAULT '',
+           input_mode TEXT NOT NULL DEFAULT '', preview_image_url TEXT NOT NULL DEFAULT '',
+           high_quality_image_url TEXT NOT NULL DEFAULT '', variables TEXT NOT NULL DEFAULT '[]',
+           reference_image_count INTEGER NOT NULL DEFAULT 0, aspect_ratio TEXT NOT NULL DEFAULT '',
+           tags TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL DEFAULT '',
+           category_ids TEXT NOT NULL DEFAULT ''
+         );
+         CREATE TABLE IF NOT EXISTS image_prompt_categories (
+           id TEXT PRIMARY KEY, group_name TEXT NOT NULL DEFAULT '',
+           title TEXT NOT NULL, original_title TEXT NOT NULL DEFAULT ''
+         );
+         CREATE INDEX IF NOT EXISTS idx_image_prompt_category ON image_prompt_categories(id);
+         DROP TABLE IF EXISTS image_prompt_catalog;",
+    )?;
+    ensure_prompt_category_schema(connection)
+}
+
+fn ensure_prompt_category_schema(connection: &Connection) -> Result<(), ManagerError> {
+    let template_columns = {
+        let mut statement = connection.prepare("PRAGMA table_info(image_prompt_templates)")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+        rows.collect::<Result<HashSet<_>, _>>()?
+    };
+    if template_columns.contains("payload_json") {
+        let legacy_rows = {
+            let mut statement = connection.prepare(
+                "SELECT id, position, search_text, summary_json, payload_json
+                 FROM image_prompt_templates ORDER BY position",
+            )?;
+            let rows = statement.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        connection.execute_batch(
+            "ALTER TABLE image_prompt_templates RENAME TO image_prompt_templates_legacy;
+             CREATE TABLE image_prompt_templates (
+               id TEXT PRIMARY KEY, position INTEGER NOT NULL, search_text TEXT NOT NULL,
+               title TEXT NOT NULL, title_zh TEXT NOT NULL DEFAULT '', prompt TEXT NOT NULL,
+               prompt_localized TEXT NOT NULL DEFAULT '{}', model TEXT NOT NULL DEFAULT '',
+               input_mode TEXT NOT NULL DEFAULT '', preview_image_url TEXT NOT NULL DEFAULT '',
+               high_quality_image_url TEXT NOT NULL DEFAULT '', variables TEXT NOT NULL DEFAULT '[]',
+               reference_image_count INTEGER NOT NULL DEFAULT 0, aspect_ratio TEXT NOT NULL DEFAULT '',
+               tags TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL DEFAULT '',
+               category_ids TEXT NOT NULL DEFAULT ''
+             );",
+        )?;
+        for (id, position, search, summary_raw, detail_raw) in legacy_rows {
+            let summary: Value = serde_json::from_str(&summary_raw)?;
+            let detail: Value = serde_json::from_str(&detail_raw)?;
+            let category_ids = summary["categoryIds"].as_array().map(|items| {
+                items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(",")
+            }).unwrap_or_default();
+            connection.execute(
+                "INSERT INTO image_prompt_templates(
+                   id, position, search_text, title, title_zh, prompt, prompt_localized,
+                   model, input_mode, preview_image_url, high_quality_image_url, variables,
+                   reference_image_count, aspect_ratio, tags, source, category_ids
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                params![
+                    id, position, search,
+                    text(&detail["title"]), text(&summary["title"]), text(&detail["prompt"]),
+                    detail["promptLocalized"].to_string(), text(&summary["model"]), text(&summary["inputMode"]),
+                    text(&summary["previewImageUrl"]), text(&summary["highQualityImageUrl"]),
+                    detail["variables"].to_string(), detail["referenceImageCount"].as_i64().unwrap_or(0),
+                    text(&detail["aspectRatio"]), detail["tags"].to_string(), text(&detail["source"]), category_ids
+                ],
+            )?;
+        }
+        connection.execute_batch("DROP TABLE image_prompt_templates_legacy;")?;
+    }
+    let template_columns = table_columns(connection, "image_prompt_templates")?;
+    if !template_columns.contains("category_ids") {
+        connection.execute(
+            "ALTER TABLE image_prompt_templates ADD COLUMN category_ids TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
+    }
+    let category_columns = {
+        let mut statement = connection.prepare("PRAGMA table_info(image_prompt_categories)")?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+        rows.collect::<Result<HashSet<_>, _>>()?
+    };
+    if category_columns.contains("template_id") {
+        connection.execute_batch(
+            "ALTER TABLE image_prompt_categories RENAME TO image_prompt_categories_legacy;
+             CREATE TABLE image_prompt_categories(
+               id TEXT PRIMARY KEY, group_name TEXT NOT NULL DEFAULT '',
+               title TEXT NOT NULL, original_title TEXT NOT NULL DEFAULT ''
+             );
+             INSERT OR IGNORE INTO image_prompt_categories(id, group_name, title, original_title)
+             SELECT DISTINCT category_id, 'Category', category_id, category_id
+             FROM image_prompt_categories_legacy;
+             UPDATE image_prompt_templates SET category_ids = COALESCE(
+               (SELECT group_concat(category_id, ',') FROM image_prompt_categories_legacy
+                WHERE template_id = image_prompt_templates.id), '');
+             DROP TABLE image_prompt_categories_legacy;
+             CREATE INDEX IF NOT EXISTS idx_image_prompt_category ON image_prompt_categories(id);",
+        )?;
+    }
+    Ok(())
+}
+
+fn table_columns(connection: &Connection, table: &str) -> Result<HashSet<String>, ManagerError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    Ok(rows.collect::<Result<HashSet<_>, _>>()?)
 }
 
 fn text(value: &Value) -> &str {
@@ -101,6 +214,55 @@ fn image_url(value: &Value) -> String {
     } else {
         String::new()
     }
+}
+
+fn catalog_value(connection: &Connection) -> Result<Value, ManagerError> {
+    let count: u64 = connection.query_row("SELECT COUNT(*) FROM image_prompt_templates", [], |row| row.get(0))?;
+    let mut statement = connection.prepare(
+        "SELECT c.id,
+                (SELECT COUNT(*) FROM image_prompt_templates t
+                 WHERE instr(',' || t.category_ids || ',', ',' || c.id || ',') > 0),
+                c.title, c.group_name, c.original_title
+         FROM image_prompt_categories c ORDER BY c.id",
+    )?;
+    let categories = statement
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            Ok(json!({
+                "id": id,
+                "group": row.get::<_, String>(3)?,
+                "title": row.get::<_, String>(2)?,
+                "originalTitle": row.get::<_, String>(4)?,
+                "count": row.get::<_, u64>(1)?
+            }))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(json!({ "filename": "", "count": count, "categories": categories }))
+}
+
+fn template_value(row: &rusqlite::Row<'_>, detail: bool) -> rusqlite::Result<Value> {
+    let title: String = row.get(1)?;
+    let title_zh: String = row.get(2)?;
+    let title = if title_zh.is_empty() { title } else { title_zh };
+    let mut value = json!({
+        "id": row.get::<_, String>(0)?,
+        "title": title,
+        "model": row.get::<_, String>(5)?,
+        "inputMode": row.get::<_, String>(6)?,
+        "previewImageUrl": row.get::<_, String>(7)?,
+        "highQualityImageUrl": row.get::<_, String>(8)?,
+        "categoryIds": row.get::<_, String>(14)?.split(',').filter(|id| !id.is_empty()).collect::<Vec<_>>()
+    });
+    if detail {
+        value["prompt"] = json!(row.get::<_, String>(3)?);
+        value["promptLocalized"] = serde_json::from_str(&row.get::<_, String>(4)?).unwrap_or_else(|_| json!({}));
+        value["variables"] = serde_json::from_str(&row.get::<_, String>(9)?).unwrap_or_else(|_| json!([]));
+        value["referenceImageCount"] = json!(row.get::<_, i64>(10)?);
+        value["aspectRatio"] = json!(row.get::<_, String>(11)?);
+        value["tags"] = serde_json::from_str(&row.get::<_, String>(12)?).unwrap_or_else(|_| json!([]));
+        value["source"] = json!(row.get::<_, String>(13)?);
+    }
+    Ok(value)
 }
 
 fn replace(
@@ -165,16 +327,12 @@ fn replace(
                 "title": if localized.is_empty() { title } else { localized }, "originalTitle": title, "count": 0
             }));
             entry["count"] = json!(entry["count"].as_u64().unwrap_or(0) + 1);
-            transaction.execute(
-                "INSERT INTO image_prompt_categories(template_id, category_id) VALUES (?1, ?2)",
-                params![id, category_id],
-            )?;
             item_categories.push(category_id);
         }
         let title_zh = text(&item["titleLocalized"]["zh"]);
         let summary = json!({
             "id": id, "title": if title_zh.is_empty() { text(&item["title"]) } else { title_zh },
-            "categoryIds": item_categories, "model": item["model"], "inputMode": item["inputMode"],
+            "categoryIds": item_categories.clone(), "model": item["model"], "inputMode": item["inputMode"],
             "previewImageUrl": image_url(&item["previewImageUrl"]),
             "highQualityImageUrl": image_url(&item["highQualityImageUrl"])
         });
@@ -201,11 +359,36 @@ fn replace(
             item["category"]
         )
         .to_lowercase();
-        transaction.execute("INSERT INTO image_prompt_templates(id, position, search_text, summary_json, payload_json) VALUES (?1, ?2, ?3, ?4, ?5)", params![id, index, search, summary.to_string(), detail.to_string()])?;
+        transaction.execute(
+            "INSERT INTO image_prompt_templates(
+               id, position, search_text, title, title_zh, prompt, prompt_localized,
+               model, input_mode, preview_image_url, high_quality_image_url, variables,
+               reference_image_count, aspect_ratio, tags, source, category_ids
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+            params![
+                id, index, search, text(&item["title"]), title_zh, text(&item["prompt"]),
+                item["promptLocalized"].to_string(), text(&item["model"]), text(&item["inputMode"]),
+                image_url(&item["previewImageUrl"]), image_url(&item["highQualityImageUrl"]),
+                item["variables"].to_string(), item["referenceImageCount"].as_i64().unwrap_or(0),
+                text(&item["aspectRatio"]), item["tags"].to_string(), text(&item["source"]),
+                item_categories.join(",")
+            ],
+        )?;
+    }
+    for category in categories.values() {
+        transaction.execute(
+            "INSERT INTO image_prompt_categories(id, group_name, title, original_title)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                category["id"].as_str().unwrap_or(""),
+                category["group"].as_str().unwrap_or(""),
+                category["title"].as_str().unwrap_or(""),
+                category["originalTitle"].as_str().unwrap_or("")
+            ],
+        )?;
     }
     let catalog = json!({ "filename": filename, "count": templates.len(), "categories": categories.into_values().collect::<Vec<_>>(),
         "generatedAt": source["generatedAt"], "importedAt": chrono::Utc::now().timestamp_millis() });
-    transaction.execute("INSERT INTO image_prompt_catalog(id, payload_json) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET payload_json = excluded.payload_json", [catalog.to_string()])?;
     transaction.commit()?;
     Ok(catalog)
 }
@@ -214,24 +397,23 @@ fn list(connection: &Connection, payload: &Value) -> Result<Value, ManagerError>
     let category = text(&payload["category"]);
     let query = text(&payload["query"]).to_lowercase();
     let page = payload["page"].as_u64().unwrap_or(1).clamp(1, 100_000);
-    let filter = "(?1 = '' OR EXISTS (SELECT 1 FROM image_prompt_categories c WHERE c.template_id = t.id AND c.category_id = ?1)) AND (?2 = '' OR instr(t.search_text, ?2) > 0)";
+    let filter = "(?1 = '' OR instr(',' || t.category_ids || ',', ',' || ?1 || ',') > 0) AND (?2 = '' OR instr(t.search_text, ?2) > 0)";
     let total: u64 = connection.query_row(
         &format!("SELECT COUNT(*) FROM image_prompt_templates t WHERE {filter}"),
         params![category, query],
         |row| row.get(0),
     )?;
     let page = page.min(total.div_ceil(24).max(1));
-    let mut statement = connection.prepare(&format!("SELECT summary_json FROM image_prompt_templates t WHERE {filter} ORDER BY position LIMIT 24 OFFSET ?3"))?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT id, title, title_zh, prompt, prompt_localized, model, input_mode,
+                preview_image_url, high_quality_image_url, variables, reference_image_count,
+                aspect_ratio, tags, source, category_ids
+         FROM image_prompt_templates t WHERE {filter} ORDER BY position LIMIT 24 OFFSET ?3"
+    ))?;
     let rows = statement
-        .query_map(params![category, query, (page - 1) * 24], |row| {
-            row.get::<_, String>(0)
-        })?
+        .query_map(params![category, query, (page - 1) * 24], |row| template_value(row, false))?
         .collect::<Result<Vec<_>, _>>()?;
-    let items = rows
-        .iter()
-        .map(|row| serde_json::from_str::<Value>(row))
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(json!({ "items": items, "total": total, "page": page, "pageSize": 24 }))
+    Ok(json!({ "items": rows, "total": total, "page": page, "pageSize": 24 }))
 }
 
 #[cfg(test)]

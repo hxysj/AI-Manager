@@ -134,9 +134,11 @@ impl AppState {
             return match channel {
                 "tools:image-history" => crate::core::image_store::history(&paths),
                 "tools:image-web-conversations" => crate::core::image_store::list_web_conversations(&paths),
-                "tools:image-list" => crate::core::image_store::list(&paths, &payload),
+                "tools:image-list" => tauri::async_runtime::spawn_blocking(move || crate::core::image_store::list(&paths, &payload))
+                    .await.map_err(|error| ManagerError::System(error.to_string()))?,
                 "tools:image-wait" => image_workbench::wait_tasks(&paths, payload).await,
-                "tools:image-previews" => crate::core::image_store::previews(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
+                "tools:image-previews" => tauri::async_runtime::spawn_blocking(move || crate::core::image_store::previews(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?))
+                    .await.map_err(|error| ManagerError::System(error.to_string()))?,
                 "tools:image-detail" => crate::core::image_store::detail(&paths, payload["id"].as_str().unwrap_or("")),
                 "tools:image-inputs" => crate::core::image_store::inputs(&paths, payload["id"].as_str().unwrap_or("")),
                 "tools:image-clear-results" => crate::core::image_store::clear_results(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
@@ -354,6 +356,7 @@ impl ManagerState {
         migrate_tauri_app_data(&tauri_app_data_path, &user_data_path)?;
         let paths = resolve_app_paths(&user_data_path);
         crate::core::translation_store::initialize(&paths)?;
+        crate::core::image_prompt_store::initialize(&paths)?;
         crate::core::image_store::initialize(&paths)?;
         let state = create_initial_state(&paths, &app_settings)?;
         let workspace_root = translation::workspace_root_from_current_dir()?;

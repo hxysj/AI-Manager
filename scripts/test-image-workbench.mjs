@@ -569,6 +569,11 @@ try {
   await loading
   assert.equal(restored.tasks[0].status, "completed")
   assert.equal(restored.tasks[0].revision, 2)
+  // 完成事件只携带任务元数据，预览通过独立接口加载。
+  await settle()
+  assert.equal(restored.tasks[0].thumbnail, "preview-live-task")
+  assert.ok(calls.filter(([name]) => name === "list")
+    .every(([, payload]) => payload.includeThumbnails === false))
 
   restored.autoRefresh = false
   await settle()

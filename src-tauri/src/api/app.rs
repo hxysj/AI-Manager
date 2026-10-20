@@ -563,13 +563,21 @@ fn show_tool_window(app: &tauri::AppHandle, window: &WebviewWindow) -> Result<bo
 }
 
 fn hide_tool_windows(app: &tauri::AppHandle) -> Result<(), ManagerError> {
-    // 仅隐藏工具面板，截图选区与桌面贴图继续使用各自的窗口生命周期。
-    for (label, window) in app.webview_windows() {
-        if label.starts_with("tool-window-")
-            && window.is_visible().map_err(|error| ManagerError::System(error.to_string()))?
-        {
-            window.hide().map_err(|error| ManagerError::System(error.to_string()))?;
+    // 主面板显示后销毁工具 WebView，截图窗口和桌面贴图使用独立生命周期。
+    let labels = app
+        .webview_windows()
+        .keys()
+        .filter(|label| label.starts_with("tool-window-"))
+        .cloned()
+        .collect::<Vec<_>>();
+    for label in labels {
+        if let Some(window) = app.get_webview_window(&label) {
+            window.close().map_err(|error| ManagerError::System(error.to_string()))?;
         }
+        READY_TOOL_WINDOWS
+            .lock()
+            .map_err(|error| ManagerError::System(error.to_string()))?
+            .remove(&label);
     }
     Ok(())
 }

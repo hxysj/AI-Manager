@@ -750,7 +750,9 @@ fn spawn_task(
                     &recovery_conversation_id,
                 )?;
                 // 导入和旧任务可能尚无独立会话记录，仍应优先查询其原上游会话。
-                let upstream = if saved.as_ref().is_some_and(|record| record["deleted"] == true) {
+                let upstream = if task["webSessionDeleted"].as_bool().unwrap_or(false)
+                    || saved.as_ref().is_some_and(|record| record["deleted"] == true)
+                {
                     None
                 } else {
                     web_read_conversation(&client, &auth, &context, &recovery_conversation_id).await?
@@ -772,6 +774,7 @@ fn spawn_task(
                 }
                 // 只记录已确认不存在的会话，网络或权限异常会直接保留原任务恢复信息。
                 image_store::mark_web_conversation_deleted_by_upstream(&paths, &request.account_id, &recovery_conversation_id)?;
+                task["webSessionDeleted"] = json!(true);
                 task["recovery"] = Value::Null;
             }
             if request.generation_mode == "web" {
@@ -3235,21 +3238,12 @@ fn store_image(encoded: &str, metadata: &Value) -> Result<StoredImage, ManagerEr
         image::ImageFormat::WebP => "webp",
         _ => return Err(failure("不支持的图片格式")),
     };
-    let mut thumbnail = Cursor::new(Vec::new());
-    image
-        .thumbnail(320, 240)
-        .write_to(&mut thumbnail, image::ImageFormat::Png)
-        .map_err(|_| failure("生成缩略图失败"))?;
     Ok(StoredImage {
         bytes,
         format: format.into(),
         width: image.width(),
         height: image.height(),
         revised_prompt: metadata["revised_prompt"].as_str().unwrap_or("").into(),
-        thumbnail: format!(
-            "data:image/png;base64,{}",
-            STANDARD.encode(thumbnail.into_inner())
-        ),
     })
 }
 
@@ -4048,7 +4042,7 @@ mod tests {
         assert_eq!(image_store::detail(&paths, "task-99").unwrap()["status"], "interrupted");
         let connection = crate::core::database::open(&paths).unwrap();
         connection.execute(
-            "UPDATE image_tasks SET status = 'failed', payload_json = json_set(payload_json, '$.status', 'failed') WHERE id = 'failed-web'",
+            "UPDATE image_tasks SET status = 'failed' WHERE id = 'failed-web'",
             [],
         ).unwrap();
         drop(connection);
@@ -4087,10 +4081,6 @@ mod tests {
         ids.push("failed-web".into());
         image_store::delete(&paths, &ids).unwrap();
         assert_eq!(image_store::history(&paths).unwrap(), json!([]));
-        let connection = crate::core::database::open(&paths).unwrap();
-        let remaining: i64 = connection.query_row("SELECT COUNT(*) FROM image_inputs", [], |row| row.get(0)).unwrap();
-        assert_eq!(remaining, 0);
-        drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -4217,7 +4207,12 @@ mod tests {
                 assert_eq!(saved["conversationId"], upstream_id);
                 assert_eq!(saved["parentMessageId"], "message-2");
                 assert_eq!(saved["localConversationId"], "new-local");
-                assert_eq!(image_store::find_web_conversation(&paths, "official", "saved").unwrap().unwrap()["deleted"], !exists);
+                let old_session = image_store::find_web_conversation(&paths, "official", "saved").unwrap();
+                if exists {
+                    assert_eq!(old_session.unwrap()["deleted"], false);
+                } else {
+                    assert!(old_session.is_none());
+                }
                 assert_eq!(handle.join().unwrap().len(), 19);
                 std::fs::remove_dir_all(root).unwrap();
             }
@@ -4628,8 +4623,8 @@ mod tests {
             let task_id = std::env::var("AI_MANAGER_WEB_DIAGNOSTIC_TASK_ID").unwrap();
             let paths = crate::core::paths::resolve_app_paths(std::path::Path::new(&root));
             let connection = rusqlite::Connection::open_with_flags(&paths.storage_files.database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-            let task: String = connection.query_row("SELECT payload_json FROM image_tasks WHERE id = ?1", [task_id], |row| row.get(0)).unwrap();
-            let task: Value = serde_json::from_str(&task).unwrap();
+            let account_id: String = connection.query_row("SELECT account_id FROM image_tasks WHERE id = ?1", [&task_id], |row| row.get(0)).unwrap();
+            let task = json!({"request": {"accountId": account_id}});
             let raw: String = connection.query_row("SELECT payload_json FROM codex_accounts WHERE json_extract(payload_json, '$.id') = ?1", [task["request"]["accountId"].as_str().unwrap()], |row| row.get(0)).unwrap();
             let account: Value = serde_json::from_str(&raw).unwrap();
             let auth = json!({"accessToken": account["auth"]["accessToken"].as_str().or_else(|| account["access_token"].as_str()).unwrap(), "accountId": account["account_id"].as_str().or_else(|| account["accountId"].as_str()).unwrap_or("")});

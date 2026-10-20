@@ -1,6 +1,6 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
-use rusqlite::{params, Connection, OptionalExtension, MAIN_DB};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -57,15 +57,14 @@ pub fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
 pub fn backup(paths: &AppPaths) -> Result<Vec<u8>, ManagerError> {
     initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
+    cleanup_backup_snapshots(Path::new(&paths.temp_dir))?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
         "ai-manager-backup-{}-{}.db",
         std::process::id(),
         now_millis()
     ));
     let result = (|| {
-        let connection = open(paths)?;
-        connection.backup(MAIN_DB, &snapshot_path, None)?;
-        strip_non_backup_tables(&snapshot_path)?;
+        create_filtered_backup(paths, &snapshot_path)?;
         Ok(std::fs::read(&snapshot_path)?)
     })();
 
@@ -75,16 +74,76 @@ pub fn backup(paths: &AppPaths) -> Result<Vec<u8>, ManagerError> {
     result
 }
 
-fn strip_non_backup_tables(snapshot_path: &Path) -> Result<(), ManagerError> {
-    let mut connection = Connection::open(snapshot_path)?;
-    let tables = read_table_names(&connection, "main")?;
-    let transaction = connection.transaction()?;
-
-    for table in tables {
-        if !BACKUP_INCLUDED_TABLES.contains(&table.as_str()) {
-            transaction.execute(&format!("DELETE FROM {}", quote_identifier(&table)), [])?;
+fn cleanup_backup_snapshots(temp_dir: &Path) -> Result<(), ManagerError> {
+    for entry in std::fs::read_dir(temp_dir)? {
+        let path = entry?.path();
+        let is_backup = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("ai-manager-backup-") && name.ends_with(".db"));
+        if is_backup {
+            let _ = std::fs::remove_file(path);
         }
     }
+    Ok(())
+}
+
+fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), ManagerError> {
+    let mut connection = Connection::open(snapshot_path)?;
+    connection.pragma_update(None, "foreign_keys", false)?;
+    connection.execute(
+        "ATTACH DATABASE ?1 AS source",
+        params![paths.storage_files.database.clone()],
+    )?;
+
+    let schema = {
+        let mut statement = connection.prepare(
+            "SELECT type, name, sql
+             FROM source.sqlite_schema
+             WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+             ORDER BY CASE type
+               WHEN 'table' THEN 0
+               WHEN 'index' THEN 1
+               WHEN 'trigger' THEN 2
+               WHEN 'view' THEN 3
+               ELSE 4
+             END, name",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    for (_, _, sql) in schema.iter().filter(|(object_type, _, _)| object_type == "table") {
+        connection.execute_batch(sql)?;
+    }
+
+    let transaction = connection.transaction()?;
+    for table in BACKUP_INCLUDED_TABLES {
+        let columns = read_table_columns(&transaction, "source", table)?;
+        if columns.is_empty() {
+            continue;
+        }
+        let columns = columns
+            .iter()
+            .map(|column| quote_identifier(column))
+            .collect::<Vec<_>>()
+            .join(", ");
+        transaction.execute(
+            &format!(
+                "INSERT INTO main.{table} ({columns})
+                 SELECT {columns} FROM source.{table}",
+                table = quote_identifier(table),
+            ),
+            [],
+        )?;
+    }
+
     // 本机启用态、安装态和用量不随业务数据跨设备恢复。
     strip_json_fields(&transaction, "providers", &["enabled"])?;
     strip_json_fields(
@@ -101,9 +160,12 @@ fn strip_non_backup_tables(snapshot_path: &Path) -> Result<(), ManagerError> {
         ],
     )?;
     strip_json_fields(&transaction, "codex_accounts", &["usage", "disabled"])?;
-
     transaction.commit()?;
-    connection.execute_batch("VACUUM;")?;
+
+    for (_, _, sql) in schema.iter().filter(|(object_type, _, _)| object_type != "table") {
+        connection.execute_batch(sql)?;
+    }
+    connection.execute_batch("DETACH DATABASE source; VACUUM;")?;
     Ok(())
 }
 
@@ -1014,7 +1076,17 @@ mod tests {
         connection
             .execute_batch(
                 "CREATE TABLE future_runtime_data(id INTEGER PRIMARY KEY);
-                 INSERT INTO future_runtime_data(id) VALUES (1);",
+                 INSERT INTO future_runtime_data(id) VALUES (1);
+                 CREATE TABLE image_outputs(
+                   task_id TEXT NOT NULL,
+                   position INTEGER NOT NULL,
+                   format TEXT NOT NULL,
+                   bytes BLOB NOT NULL,
+                   file_path TEXT NOT NULL DEFAULT '',
+                   PRIMARY KEY(task_id, position)
+                 );
+                 INSERT INTO image_outputs(task_id, position, format, bytes)
+                 VALUES ('large-image', 0, 'png', zeroblob(1048576));",
             )
             .unwrap();
         drop(connection);
