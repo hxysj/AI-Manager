@@ -18,7 +18,7 @@ const BACKUP_INCLUDED_TABLES: [&str; 10] = [
     "skill_groups",
     "skill_repositories",
     "rule_prompts",
-    "usage_pricing_config",
+    "app_metadata",
     "usage_pricing_items",
 ];
 
@@ -49,13 +49,39 @@ pub fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
 
     let connection = Connection::open(&paths.storage_files.database)?;
     connection.busy_timeout(Duration::from_secs(5))?;
-    connection.pragma_update(None, "journal_mode", "WAL")?;
+    // WAL 在文件级持久化。已有连接无需重复切换；首次并发打开时可能发生
+    // 读锁升级冲突，SQLite 的 busy_timeout 不会等待这类冲突，需要短暂重试。
+    let started = std::time::Instant::now();
+    loop {
+        let result = connection
+            .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+            .and_then(|mode| {
+                if mode.eq_ignore_ascii_case("wal") {
+                    Ok(())
+                } else {
+                    connection.pragma_update(None, "journal_mode", "WAL")
+                }
+            });
+        match result {
+            Ok(()) => break,
+            Err(error)
+                if matches!(
+                    error.sqlite_error_code(),
+                    Some(rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+                ) && started.elapsed() < Duration::from_secs(5) =>
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
     connection.pragma_update(None, "synchronous", "NORMAL")?;
     Ok(connection)
 }
 
 pub fn backup(paths: &AppPaths) -> Result<Vec<u8>, ManagerError> {
     crate::core::skill_store::initialize(paths)?;
+    crate::core::usage_store::initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
     cleanup_backup_snapshots(Path::new(&paths.temp_dir))?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
@@ -144,7 +170,7 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
                 filter = if table == "skills" {
                     "WHERE is_deleted = 0"
                 } else {
-                    ""
+                    restore_row_filter(table)
                 },
                 table = quote_identifier(table),
             ),
@@ -369,6 +395,7 @@ fn with_restore_snapshot<T>(
     action: impl FnOnce(&Path) -> Result<T, ManagerError>,
 ) -> Result<T, ManagerError> {
     crate::core::skill_store::initialize(paths)?;
+    crate::core::usage_store::initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
         "ai-manager-restore-{}-{}.db",
@@ -380,6 +407,7 @@ fn with_restore_snapshot<T>(
         validate_restore_snapshot(&snapshot_path)?;
         let mut source = Connection::open(&snapshot_path)?;
         crate::core::skill_store::migrate_connection(&mut source)?;
+        crate::core::usage_store::migrate_connection(&mut source)?;
         drop(source);
         action(&snapshot_path)
     })();
@@ -879,12 +907,25 @@ fn read_table_columns(
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
+// 只跨设备同步明确的业务配置，解析器版本、缓存修订号等始终属于本机。
+fn restore_row_filter(table: &str) -> &'static str {
+    if table == "app_metadata" {
+        "WHERE key='usage:exchange_rate'"
+    } else {
+        ""
+    }
+}
+
 fn count_table_rows(
     connection: &Connection,
     schema: &str,
     table: &str,
 ) -> Result<i64, ManagerError> {
-    let sql = format!("SELECT COUNT(*) FROM {schema}.{}", quote_identifier(table));
+    let sql = format!(
+        "SELECT COUNT(*) FROM {schema}.{} {}",
+        quote_identifier(table),
+        restore_row_filter(table)
+    );
     Ok(connection.query_row(&sql, [], |row| row.get::<_, i64>(0))?)
 }
 
@@ -900,12 +941,13 @@ fn count_table_difference(
         .map(|column| comparison_column(table, column))
         .collect::<Vec<_>>()
         .join(", ");
+    let filter = restore_row_filter(table);
     let table = quote_identifier(table);
     let sql = format!(
         "SELECT COUNT(*) FROM (
-           SELECT {columns} FROM {left_schema}.{table}
+           SELECT {columns} FROM {left_schema}.{table} {filter}
            EXCEPT
-           SELECT {columns} FROM {right_schema}.{table}
+           SELECT {columns} FROM {right_schema}.{table} {filter}
          )"
     );
 
@@ -1718,5 +1760,86 @@ mod tests {
             json!(["stable-id"])
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn restores_legacy_exchange_rate_without_restoring_local_usage_metadata() {
+        let root = std::env::temp_dir().join(format!(
+            "monkey-thief-legacy-usage-pricing-{}",
+            std::process::id()
+        ));
+        if root.exists() {
+            std::fs::remove_dir_all(&root).unwrap();
+        }
+        std::fs::create_dir_all(&root).unwrap();
+        let legacy_path = root.join("legacy.db");
+        let source = Connection::open(&legacy_path).unwrap();
+        source.execute_batch("CREATE TABLE app_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            INSERT INTO app_metadata VALUES ('local_guard','from-other-device');
+            CREATE TABLE usage_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+            INSERT INTO usage_metadata VALUES ('revision','777'),('session_parser_version:codex','99');
+            CREATE TABLE usage_pricing_config(id INTEGER PRIMARY KEY,exchange_rate REAL NOT NULL);
+            INSERT INTO usage_pricing_config VALUES (1,7.4);").unwrap();
+        drop(source);
+        let paths = resolve_app_paths(&root.join("target"));
+        usage_store::initialize(&paths).unwrap();
+        let local = open(&paths).unwrap();
+        local
+            .execute_batch(
+                "UPDATE app_metadata SET value='42' WHERE key='usage:revision';
+            INSERT INTO app_metadata VALUES ('local_guard','this-device');",
+            )
+            .unwrap();
+        let snapshot = std::fs::read(&legacy_path).unwrap();
+        let differences = preview_restore(&paths, &snapshot).unwrap();
+        assert_eq!(
+            differences
+                .iter()
+                .map(|item| item.table.as_str())
+                .collect::<Vec<_>>(),
+            vec!["app_metadata"]
+        );
+        assert_eq!(differences[0].current_rows, 0);
+        assert_eq!(differences[0].backup_rows, 1);
+        let rows = super::preview_rows(&paths, &snapshot).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].row_key, "usage:exchange_rate");
+        restore_selected(&paths, &snapshot, &["app_metadata".into()]).unwrap();
+        assert_eq!(
+            usage_store::read_pricing(&paths).unwrap()["exchangeRate"],
+            7.4
+        );
+        assert_eq!(usage_store::revision(&paths).unwrap(), 42);
+        assert_eq!(
+            local
+                .query_row(
+                    "SELECT value FROM app_metadata WHERE key='local_guard'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "this-device"
+        );
+        assert!(preview_restore(&paths, &snapshot).unwrap().is_empty());
+        let new_path = root.join("new-backup.db");
+        std::fs::write(&new_path, backup(&paths).unwrap()).unwrap();
+        let backup = Connection::open(new_path).unwrap();
+        assert_eq!(
+            backup
+                .query_row("SELECT COUNT(*) FROM app_metadata", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            backup
+                .query_row(
+                    "SELECT value FROM app_metadata WHERE key='usage:exchange_rate'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .unwrap(),
+            "7.4"
+        );
+        assert_eq!(backup.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('usage_metadata','usage_pricing_config','usage_logs','usage_request_records')",[],|row| row.get::<_,i64>(0)).unwrap(),0);
     }
 }

@@ -3516,7 +3516,13 @@ fn create_database_row_restore_preview(
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
     })
-    .unwrap_or(&difference.row_key);
+    .unwrap_or_else(|| {
+        if difference.table == "app_metadata" && difference.row_key == "usage:exchange_rate" {
+            "美元兑人民币汇率"
+        } else {
+            &difference.row_key
+        }
+    });
     Ok(json!({
         "key": database::row_choice_key(&difference.table, &difference.row_key),
         "type": restore_database_table_name(&difference.table),
@@ -3531,9 +3537,8 @@ fn create_database_row_restore_preview(
 
 fn restore_database_table_name(table: &str) -> &'static str {
     match table {
-        "usage_metadata" => "用量元数据",
-        "usage_logs" => "使用记录",
-        "usage_pricing_config" => "模型费用配置",
+        "app_metadata" => "应用配置",
+        "usage_requests" => "使用记录",
         "usage_pricing_items" => "模型费用明细",
         "skills" => "Skill 索引",
         "skill_groups" => "Skill 分组",
@@ -4207,7 +4212,7 @@ mod tests {
         assert!(!entry_paths.iter().any(|path| path.contains("usage")));
         assert_eq!(
             restore_tables,
-            vec!["providers", "usage_pricing_config", "usage_pricing_items"]
+            vec!["app_metadata", "providers", "usage_pricing_items"]
         );
         database::restore_selected(&restore_paths, &database, &restore_tables).unwrap();
         assert_eq!(
@@ -4215,7 +4220,7 @@ mod tests {
             usage_store::read_pricing(&paths).unwrap()
         );
         let restore_connection = database::open(&restore_paths).unwrap();
-        for table in ["usage_logs", "usage_request_records"] {
+        for table in ["usage_requests"] {
             assert_eq!(
                 restore_connection
                     .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {

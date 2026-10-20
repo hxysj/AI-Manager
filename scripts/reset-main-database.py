@@ -13,12 +13,15 @@ from pathlib import Path
 
 KEEP_TABLES = {
     "schema_migrations",
-    "usage_metadata",
-    "usage_logs",
+    "app_metadata",
+    "usage_requests",
     "usage_sessions",
-    "usage_request_records",
-    "usage_pricing_config",
     "usage_pricing_items",
+    # 兼容尚未启动新版本、还没有完成迁移的数据库。
+    "usage_logs",
+    "usage_request_records",
+    "usage_metadata",
+    "usage_pricing_config",
     "codex_quota_stages",
     "provider_key_usage",
     "provider_key_bindings",

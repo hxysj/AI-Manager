@@ -78,13 +78,14 @@ fn read_rows(
     key_column: &str,
 ) -> Result<HashMap<String, Map<String, Value>>, ManagerError> {
     let sql = format!(
-        "SELECT {} FROM {schema}.{}",
+        "SELECT {} FROM {schema}.{} {}",
         columns
             .iter()
             .map(|column| quote_identifier(column))
             .collect::<Vec<_>>()
             .join(", "),
-        quote_identifier(table)
+        quote_identifier(table),
+        restore_row_filter(table)
     );
     let mut statement = connection.prepare(&sql)?;
     let mut rows = statement.query([])?;

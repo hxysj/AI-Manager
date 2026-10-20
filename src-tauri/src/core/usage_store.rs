@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::Path;
 
+mod requests;
+
 const SCHEMA_VERSION: i64 = 2;
 
 pub struct UsageLogQuery {
@@ -30,11 +32,21 @@ pub struct UsageSessionUpdate {
 pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
     database::initialize(paths)?;
     let mut connection = open_connection(paths)?;
-    create_schema(&connection)?;
+    migrate_connection(&mut connection)?;
     migrate_legacy_database(paths, &mut connection)?;
     migrate_legacy_json(paths, &mut connection)?;
-    migrate_session_fields(&mut connection)?;
     remove_legacy_usage_files(paths)
+}
+
+// 备份恢复和旧独立库同样经过这一入口，避免恢复后重新出现旧表。
+pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), ManagerError> {
+    create_schema(connection)?;
+    requests::migrate(connection)?;
+    connection.execute(
+        "INSERT OR IGNORE INTO app_metadata(key,value) VALUES ('usage:revision','0')",
+        [],
+    )?;
+    migrate_session_fields(connection)
 }
 
 pub fn read_pricing(paths: &AppPaths) -> Result<Value, ManagerError> {
@@ -42,7 +54,7 @@ pub fn read_pricing(paths: &AppPaths) -> Result<Value, ManagerError> {
     let connection = open_connection(paths)?;
     let exchange_rate = connection
         .query_row(
-            "SELECT exchange_rate FROM usage_pricing_config WHERE id = 1",
+            "SELECT CAST(value AS REAL) FROM app_metadata WHERE key = 'usage:exchange_rate'",
             [],
             |row| row.get::<_, f64>(0),
         )
@@ -92,7 +104,8 @@ pub fn query_logs(paths: &AppPaths, query: &UsageLogQuery) -> Result<Vec<Value>,
     let connection = open_connection(paths)?;
     let (where_sql, parameters) = build_log_where(query);
     let sql = format!(
-        "SELECT payload_json FROM usage_logs {where_sql} ORDER BY created_at DESC, request_id ASC"
+        "SELECT {} FROM usage_requests {where_sql} ORDER BY created_at DESC, request_id ASC",
+        requests::columns()
     );
     read_log_query(&connection, &sql, parameters)
 }
@@ -102,14 +115,21 @@ pub fn read_all_logs(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     let connection = open_connection(paths)?;
     read_log_query(
         &connection,
-        "SELECT payload_json FROM usage_logs ORDER BY created_at DESC, request_id ASC",
+        &format!("SELECT {} FROM usage_requests WHERE record_state=1 ORDER BY created_at DESC, request_id ASC", requests::columns()),
         Vec::new(),
     )
 }
 
 pub fn bind_key_usage(paths: &AppPaths) -> Result<(), ManagerError> {
     let mut logs = read_all_logs(paths)?;
-    let original = logs.clone();
+    let key_fields = |log: &Value| {
+        [
+            text(log.get("apiKeyId")),
+            text(log.get("apiKeyHash")),
+            text(log.get("apiKeyAttribution")),
+        ]
+    };
+    let original = logs.iter().map(key_fields).collect::<Vec<_>>();
     crate::core::provider_key_usage::bind_logs(paths, &mut logs)?;
     let mut connection = open_connection(paths)?;
     let transaction = connection.transaction()?;
@@ -117,24 +137,14 @@ pub fn bind_key_usage(paths: &AppPaths) -> Result<(), ManagerError> {
     for (log, before) in logs
         .iter()
         .zip(&original)
-        .filter(|(log, before)| log != before)
+        .filter(|(log, before)| key_fields(log) != **before)
     {
         let request_id = text(log.get("requestId"));
         transaction.execute(
-            "UPDATE usage_logs SET payload_json = ?1 WHERE request_id = ?2",
-            params![serde_json::to_string(log)?, request_id],
+            "UPDATE usage_requests SET api_key_id=?1, api_key_hash=?2, api_key_attribution=?3 WHERE request_id=?4",
+            params![text(log.get("apiKeyId")), text(log.get("apiKeyHash")), text(log.get("apiKeyAttribution")), request_id],
         )?;
-        transaction.execute(
-            "UPDATE usage_request_records SET payload_json = json_set(payload_json,
-            '$.apiKeyId', ?1, '$.apiKeyHash', ?2, '$.apiKeyAttribution', ?3) WHERE request_id = ?4",
-            params![
-                text(log.get("apiKeyId")),
-                text(log.get("apiKeyHash")),
-                text(log.get("apiKeyAttribution")),
-                request_id
-            ],
-        )?;
-        changed |= log != before;
+        changed |= key_fields(log) != *before;
     }
     if changed {
         bump_revision(&transaction)?;
@@ -163,11 +173,14 @@ pub fn write_usage_cost_snapshots(paths: &AppPaths, logs: &[Value]) -> Result<()
 
         let updated_path: Option<String> = transaction
             .query_row(
-                "UPDATE usage_logs SET payload_json = ?1 WHERE request_id = ?2 RETURNING raw_path",
-                params![serde_json::to_string(log)?, request_id],
+                "SELECT COALESCE(raw_path,'') FROM usage_requests WHERE request_id=?1 AND record_state=1",
+                [&request_id],
                 |row| row.get(0),
             )
             .optional()?;
+        if updated_path.is_some() {
+            insert_usage_log(&transaction, log)?;
+        }
         if let Some(path) = updated_path {
             changed = true;
             changed_paths.insert(path);
@@ -318,7 +331,7 @@ pub fn read_app_types(paths: &AppPaths) -> Result<Vec<String>, ManagerError> {
     initialize(paths)?;
     let connection = open_connection(paths)?;
     let mut statement = connection.prepare(
-        "SELECT DISTINCT app_type FROM usage_logs WHERE app_type <> '' ORDER BY app_type ASC",
+        "SELECT DISTINCT app_type FROM usage_requests WHERE record_state=1 AND app_type <> '' ORDER BY app_type ASC",
     )?;
 
     let items = statement
@@ -442,10 +455,10 @@ pub fn ensure_session_parser_version(
 ) -> Result<(), ManagerError> {
     initialize(paths)?;
     let mut connection = open_connection(paths)?;
-    let key = format!("session_parser_version:{app_type}");
+    let key = format!("usage:session_parser_version:{app_type}");
     let current_version = connection
         .query_row(
-            "SELECT value FROM usage_metadata WHERE key = ?1",
+            "SELECT value FROM app_metadata WHERE key = ?1",
             params![key],
             |row| row.get::<_, String>(0),
         )
@@ -463,8 +476,8 @@ pub fn ensure_session_parser_version(
         )?;
     } else {
         transaction.execute(
-            "DELETE FROM usage_logs
-             WHERE raw_path IN (
+            "UPDATE usage_requests SET record_state=2
+             WHERE record_state=1 AND raw_path IN (
                SELECT raw_path FROM usage_sessions WHERE app_type = ?1
              )",
             params![app_type],
@@ -476,9 +489,9 @@ pub fn ensure_session_parser_version(
     }
     transaction.execute("UPDATE usage_sessions SET request_count=0, input_tokens=0, output_tokens=0, cache_read_tokens=0,
         cache_creation_tokens=0, actual_tokens=0, total_cost_usd=0 WHERE app_type=?1 AND NOT EXISTS(
-        SELECT 1 FROM usage_logs WHERE usage_logs.raw_path=usage_sessions.raw_path)", [app_type])?;
+        SELECT 1 FROM usage_requests WHERE record_state=1 AND usage_requests.raw_path=usage_sessions.raw_path)", [app_type])?;
     transaction.execute(
-        "INSERT INTO usage_metadata(key, value) VALUES (?1, ?2)
+        "INSERT INTO app_metadata(key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         params![key, version.to_string()],
     )?;
@@ -504,21 +517,16 @@ pub fn read_request_records(
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "SELECT request_id, payload_json FROM usage_request_records WHERE request_id IN ({placeholders})"
+            "SELECT {} FROM usage_requests WHERE request_id IN ({placeholders})",
+            requests::columns()
         );
-        let mut statement = connection.prepare(&sql)?;
-        let parameters = chunk
-            .iter()
-            .cloned()
-            .map(SqlValue::Text)
-            .collect::<Vec<_>>();
-        let rows = statement.query_map(params_from_iter(parameters.iter()), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-
-        for row in rows {
-            let (request_id, payload) = row?;
-            output.insert(request_id, serde_json::from_str(&payload)?);
+        let records = read_log_query(
+            &connection,
+            &sql,
+            chunk.iter().cloned().map(SqlValue::Text).collect(),
+        )?;
+        for record in records {
+            output.insert(text(record.get("requestId")), record);
         }
     }
 
@@ -547,22 +555,19 @@ pub fn replace_sessions(
     let transaction = connection.transaction()?;
 
     for update in updates {
-        let existing_logs = {
-            let mut statement = transaction
-                .prepare("SELECT request_id, payload_json FROM usage_logs WHERE raw_path = ?1")?;
-            let rows = statement.query_map(params![update.raw_path], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?;
-            let mut logs = HashMap::new();
-
-            for row in rows {
-                let (request_id, payload) = row?;
-                logs.insert(request_id, serde_json::from_str::<Value>(&payload)?);
-            }
-            logs
-        };
+        let existing_logs = read_log_query(
+            &transaction,
+            &format!(
+                "SELECT {} FROM usage_requests WHERE raw_path=?",
+                requests::columns()
+            ),
+            vec![SqlValue::Text(update.raw_path.clone())],
+        )?
+        .into_iter()
+        .map(|log| (text(log.get("requestId")), log))
+        .collect::<HashMap<_, _>>();
         transaction.execute(
-            "DELETE FROM usage_logs WHERE raw_path = ?1",
+            "UPDATE usage_requests SET record_state=2 WHERE raw_path=?1 AND record_state=1",
             params![update.raw_path],
         )?;
 
@@ -619,7 +624,7 @@ pub fn revision(paths: &AppPaths) -> Result<u64, ManagerError> {
 
     Ok(connection
         .query_row(
-            "SELECT value FROM usage_metadata WHERE key = 'revision'",
+            "SELECT value FROM app_metadata WHERE key = 'usage:revision'",
             [],
             |row| row.get::<_, String>(0),
         )
@@ -638,48 +643,10 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
            version INTEGER PRIMARY KEY,
            applied_at INTEGER NOT NULL
          );
-         CREATE TABLE IF NOT EXISTS usage_metadata (
-           key TEXT PRIMARY KEY,
-           value TEXT NOT NULL
-         );
-         CREATE TABLE IF NOT EXISTS usage_logs (
-           request_id TEXT PRIMARY KEY,
-           raw_path TEXT NOT NULL DEFAULT '',
-           created_at INTEGER NOT NULL,
-           session_updated_at INTEGER NOT NULL DEFAULT 0,
-           app_type TEXT NOT NULL DEFAULT '',
-           provider_id TEXT NOT NULL DEFAULT '',
-           model TEXT NOT NULL DEFAULT '',
-           request_source TEXT NOT NULL DEFAULT 'session',
-           payload_json TEXT NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at
-           ON usage_logs(created_at DESC);
-         CREATE INDEX IF NOT EXISTS idx_usage_logs_raw_path
-           ON usage_logs(raw_path);
-         CREATE INDEX IF NOT EXISTS idx_usage_logs_app_created_at
-           ON usage_logs(app_type, created_at DESC);
-         CREATE INDEX IF NOT EXISTS idx_usage_logs_provider_created_at
-           ON usage_logs(provider_id, created_at DESC);
-         CREATE INDEX IF NOT EXISTS idx_usage_logs_model_created_at
-           ON usage_logs(model, created_at DESC);
-         CREATE INDEX IF NOT EXISTS idx_usage_logs_source_created_at
-           ON usage_logs(request_source, created_at DESC);
          CREATE TABLE IF NOT EXISTS usage_sessions (
            raw_path TEXT PRIMARY KEY,
            app_type TEXT NOT NULL DEFAULT '',
            updated_at INTEGER NOT NULL DEFAULT 0
-         );
-         CREATE TABLE IF NOT EXISTS usage_request_records (
-           request_id TEXT PRIMARY KEY,
-           created_at INTEGER NOT NULL DEFAULT 0,
-           payload_json TEXT NOT NULL
-         );
-         CREATE INDEX IF NOT EXISTS idx_usage_request_records_created_at
-           ON usage_request_records(created_at DESC);
-         CREATE TABLE IF NOT EXISTS usage_pricing_config (
-           id INTEGER PRIMARY KEY CHECK(id = 1),
-           exchange_rate REAL NOT NULL
          );
          CREATE TABLE IF NOT EXISTS usage_pricing_items (
            id TEXT PRIMARY KEY,
@@ -707,8 +674,9 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
          );
          CREATE INDEX IF NOT EXISTS idx_codex_quota_stages_account_reset
            ON codex_quota_stages(account_id, reset_at DESC);
-         INSERT OR IGNORE INTO usage_metadata(key, value) VALUES ('revision', '0');",
+         CREATE TABLE IF NOT EXISTS app_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
+    requests::create_schema(connection)?;
     connection.execute(
         "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?1, ?2)",
         params![SCHEMA_VERSION, now_millis() as i64],
@@ -802,12 +770,12 @@ fn update_session_totals(
     transaction.execute(
         "INSERT INTO usage_sessions(raw_path, app_type, updated_at, session_id, created_at, request_count,
            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, actual_tokens, total_cost_usd)
-         SELECT raw_path, MAX(app_type), MAX(session_updated_at),
-           COALESCE(MAX(NULLIF(json_extract(payload_json, '$.sessionId'), '')), raw_path), MIN(created_at), COUNT(*),
-           SUM(COALESCE(json_extract(payload_json, '$.inputTokens'),0)), SUM(COALESCE(json_extract(payload_json, '$.outputTokens'),0)),
-           SUM(COALESCE(json_extract(payload_json, '$.cacheReadTokens'),0)), SUM(COALESCE(json_extract(payload_json, '$.cacheCreationTokens'),0)),
-           SUM(COALESCE(json_extract(payload_json, '$.actualTokens'),0)), SUM(COALESCE(json_extract(payload_json, '$.totalCostUsd'),0))
-         FROM usage_logs WHERE raw_path <> '' AND (?1 IS NULL OR raw_path=?1) GROUP BY raw_path
+         SELECT raw_path, COALESCE(MAX(app_type),''), COALESCE(MAX(session_updated_at),0),
+           COALESCE(MAX(NULLIF(session_id, '')), raw_path), COALESCE(MIN(created_at),0), COUNT(*),
+           SUM(COALESCE(input_tokens,0)), SUM(COALESCE(output_tokens,0)),
+           SUM(COALESCE(cache_read_tokens,0)), SUM(COALESCE(cache_creation_tokens,0)),
+           SUM(COALESCE(actual_tokens,0)), SUM(COALESCE(total_cost_usd,0))
+         FROM usage_requests WHERE record_state=1 AND raw_path <> '' AND (?1 IS NULL OR raw_path=?1) GROUP BY raw_path
          ON CONFLICT(raw_path) DO UPDATE SET app_type=excluded.app_type, session_id=excluded.session_id, created_at=excluded.created_at,
            request_count=excluded.request_count, input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
            cache_read_tokens=excluded.cache_read_tokens, cache_creation_tokens=excluded.cache_creation_tokens,
@@ -818,7 +786,7 @@ fn update_session_totals(
         transaction.execute(
             "UPDATE usage_sessions SET request_count=0, input_tokens=0, output_tokens=0, cache_read_tokens=0,
              cache_creation_tokens=0, actual_tokens=0, total_cost_usd=0 WHERE raw_path=?1
-             AND NOT EXISTS(SELECT 1 FROM usage_logs WHERE raw_path=?1)", [path],
+             AND NOT EXISTS(SELECT 1 FROM usage_requests WHERE record_state=1 AND raw_path=?1)", [path],
         )?;
     }
     Ok(())
@@ -852,6 +820,7 @@ fn migrate_legacy_json(paths: &AppPaths, connection: &mut Connection) -> Result<
 
     if !logs.is_empty() {
         rebuild_session_versions(&transaction)?;
+        update_session_totals(&transaction, None)?;
     }
     bump_revision(&transaction)?;
     transaction.commit()?;
@@ -869,7 +838,7 @@ fn migrate_legacy_database(
         return Ok(());
     }
 
-    let legacy_connection = Connection::open(legacy_path)?;
+    let mut legacy_connection = Connection::open(legacy_path)?;
     let integrity =
         legacy_connection.query_row("PRAGMA integrity_check", [], |row| row.get::<_, String>(0))?;
 
@@ -878,6 +847,7 @@ fn migrate_legacy_database(
             "旧 Usage 数据库校验失败：{integrity}"
         )));
     }
+    migrate_connection(&mut legacy_connection)?;
     legacy_connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
     drop(legacy_connection);
 
@@ -887,18 +857,19 @@ fn migrate_legacy_database(
     )?;
     let migration_result = (|| {
         let transaction = connection.transaction()?;
-        transaction.execute_batch(
-            "INSERT OR REPLACE INTO usage_logs
-               SELECT * FROM legacy_usage.usage_logs;
-             INSERT OR REPLACE INTO usage_sessions(raw_path, app_type, updated_at)
-               SELECT raw_path, app_type, updated_at FROM legacy_usage.usage_sessions;
-             INSERT OR REPLACE INTO usage_request_records
-               SELECT * FROM legacy_usage.usage_request_records;
-             INSERT OR REPLACE INTO usage_pricing_config
-               SELECT * FROM legacy_usage.usage_pricing_config;
-             INSERT OR REPLACE INTO usage_pricing_items
-               SELECT * FROM legacy_usage.usage_pricing_items;",
-        )?;
+        let request_columns = format!("{},record_state", requests::columns());
+        let session_columns = "raw_path,app_type,updated_at,session_id,created_at,skill_calls,skill_updated_at,skill_parser_version,
+            request_count,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,actual_tokens,total_cost_usd";
+        let pricing_columns = "id,sort_order,model_id,model_category,currency,input_cost_per_million,output_cost_per_million,
+            cache_read_cost_per_million,cache_creation_cost_per_million";
+        transaction.execute_batch(&format!(
+            "INSERT OR REPLACE INTO usage_requests({request_columns}) SELECT {request_columns} FROM legacy_usage.usage_requests;
+             INSERT OR REPLACE INTO usage_sessions({session_columns}) SELECT {session_columns} FROM legacy_usage.usage_sessions;
+             INSERT OR REPLACE INTO usage_pricing_items({pricing_columns}) SELECT {pricing_columns} FROM legacy_usage.usage_pricing_items;
+             INSERT INTO app_metadata(key,value) SELECT key,value FROM legacy_usage.app_metadata
+             WHERE key LIKE 'usage:%' AND key<>'usage:revision'
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
+        ))?;
         bump_revision(&transaction)?;
         transaction.commit()?;
         Ok::<(), ManagerError>(())
@@ -908,76 +879,23 @@ fn migrate_legacy_database(
 }
 
 fn insert_usage_log(transaction: &Transaction<'_>, log: &Value) -> Result<(), ManagerError> {
-    let request_id = non_empty_text(log.get("requestId"), &text(log.get("id")));
-
-    if request_id.is_empty() {
-        return Ok(());
-    }
-
-    let mut stored_log = log.clone();
-    stored_log["requestId"] = json!(request_id);
-
-    transaction.execute(
-        "INSERT INTO usage_logs(
-           request_id, raw_path, created_at, session_updated_at,
-           app_type, provider_id, model, request_source, payload_json
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT(request_id) DO UPDATE SET
-           raw_path = excluded.raw_path,
-           created_at = excluded.created_at,
-           session_updated_at = excluded.session_updated_at,
-           app_type = excluded.app_type,
-           provider_id = excluded.provider_id,
-           model = excluded.model,
-           request_source = excluded.request_source,
-           payload_json = excluded.payload_json",
-        params![
-            request_id,
-            text(stored_log.get("rawPath")),
-            number(stored_log.get("createdAt")),
-            number(stored_log.get("sessionUpdatedAt")),
-            text(stored_log.get("appType")),
-            text(stored_log.get("providerId")),
-            text(stored_log.get("model")),
-            non_empty_text(stored_log.get("requestSource"), "session"),
-            serde_json::to_string(&stored_log)?
-        ],
-    )?;
-    Ok(())
+    requests::upsert(transaction, log, true)
 }
 
 fn insert_request_record(
     transaction: &Transaction<'_>,
     record: &Value,
 ) -> Result<(), ManagerError> {
-    let request_id = text(record.get("requestId"));
-
-    if request_id.is_empty() {
-        return Ok(());
-    }
-
-    transaction.execute(
-        "INSERT INTO usage_request_records(request_id, created_at, payload_json)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(request_id) DO UPDATE SET
-           created_at = excluded.created_at,
-           payload_json = excluded.payload_json",
-        params![
-            request_id,
-            number(record.get("createdAt")),
-            serde_json::to_string(record)?
-        ],
-    )?;
-    Ok(())
+    requests::upsert(transaction, record, false)
 }
 
 fn replace_pricing(transaction: &Transaction<'_>, pricing: &Value) -> Result<(), ManagerError> {
     let exchange_rate = decimal(pricing.get("exchangeRate"), 7.2);
 
     transaction.execute(
-        "INSERT INTO usage_pricing_config(id, exchange_rate) VALUES (1, ?1)
-         ON CONFLICT(id) DO UPDATE SET exchange_rate = excluded.exchange_rate",
-        params![exchange_rate],
+        "INSERT INTO app_metadata(key, value) VALUES ('usage:exchange_rate', ?1)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![exchange_rate.to_string()],
     )?;
     transaction.execute("DELETE FROM usage_pricing_items", [])?;
 
@@ -1023,9 +941,9 @@ fn replace_pricing(transaction: &Transaction<'_>, pricing: &Value) -> Result<(),
 fn rebuild_session_versions(transaction: &Transaction<'_>) -> Result<(), ManagerError> {
     transaction.execute_batch(
         "INSERT INTO usage_sessions(raw_path, app_type, updated_at)
-         SELECT raw_path, MAX(app_type), MAX(session_updated_at)
-         FROM usage_logs
-         WHERE raw_path <> ''
+         SELECT raw_path, COALESCE(MAX(app_type),''), COALESCE(MAX(session_updated_at),0)
+         FROM usage_requests
+         WHERE record_state=1 AND raw_path <> ''
          GROUP BY raw_path
          ON CONFLICT(raw_path) DO UPDATE SET
            app_type = excluded.app_type,
@@ -1036,16 +954,16 @@ fn rebuild_session_versions(transaction: &Transaction<'_>) -> Result<(), Manager
 
 fn bump_revision(transaction: &Transaction<'_>) -> Result<(), ManagerError> {
     transaction.execute(
-        "UPDATE usage_metadata
+        "UPDATE app_metadata
          SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)
-         WHERE key = 'revision'",
+         WHERE key = 'usage:revision'",
         [],
     )?;
     Ok(())
 }
 
 fn build_log_where(query: &UsageLogQuery) -> (String, Vec<SqlValue>) {
-    let mut clauses: Vec<String> = Vec::new();
+    let mut clauses: Vec<String> = vec!["record_state=1".to_string()];
     let mut parameters = Vec::new();
 
     if query.app_type != "all" {
@@ -1098,15 +1016,8 @@ fn read_log_query(
     parameters: Vec<SqlValue>,
 ) -> Result<Vec<Value>, ManagerError> {
     let mut statement = connection.prepare(sql)?;
-    let rows = statement.query_map(params_from_iter(parameters.iter()), |row| {
-        row.get::<_, String>(0)
-    })?;
-    let mut logs = Vec::new();
-
-    for row in rows {
-        logs.push(serde_json::from_str(&row?)?);
-    }
-    Ok(logs)
+    let rows = statement.query_map(params_from_iter(parameters.iter()), requests::from_row)?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 fn read_json_array(path: &Path) -> Result<Vec<Value>, ManagerError> {
@@ -1239,6 +1150,19 @@ mod tests {
         resolve_app_paths(Path::new(&root))
     }
 
+    fn create_legacy_schema(connection: &Connection) {
+        connection.execute_batch(
+            "CREATE TABLE usage_logs(request_id TEXT PRIMARY KEY, raw_path TEXT NOT NULL DEFAULT '',
+             created_at INTEGER NOT NULL, session_updated_at INTEGER NOT NULL DEFAULT 0,
+             app_type TEXT NOT NULL DEFAULT '', provider_id TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '',
+             request_source TEXT NOT NULL DEFAULT 'session', payload_json TEXT NOT NULL);
+             CREATE TABLE usage_request_records(request_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL DEFAULT 0, payload_json TEXT NOT NULL);
+             CREATE TABLE usage_sessions(raw_path TEXT PRIMARY KEY, app_type TEXT NOT NULL DEFAULT '', updated_at INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE usage_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+             CREATE TABLE usage_pricing_config(id INTEGER PRIMARY KEY,exchange_rate REAL NOT NULL);"
+        ).unwrap();
+    }
+
     fn all_query() -> UsageLogQuery {
         UsageLogQuery {
             app_type: "all".to_string(),
@@ -1308,7 +1232,7 @@ mod tests {
     fn migrates_legacy_usage_database_into_main_database() {
         let paths = create_test_paths("database-migration");
         let legacy = Connection::open(&paths.storage_files.usage_database).unwrap();
-        create_schema(&legacy).unwrap();
+        create_legacy_schema(&legacy);
         legacy
             .execute(
                 "INSERT INTO usage_logs(
@@ -1723,5 +1647,225 @@ mod tests {
         assert!(!stored.contains("display"));
         assert!(!stored.contains("rawPath"));
         assert!(stored.len() < 200);
+    }
+    #[test]
+    fn merges_legacy_requests_without_payload_and_removes_old_tables() {
+        let paths = create_test_paths("merged-requests");
+        let connection = Connection::open(&paths.storage_files.database).unwrap();
+        create_legacy_schema(&connection);
+        let log = json!({"requestId":"shared", "rawPath":"session.jsonl", "sessionId":"session-a",
+            "appType":"codex", "providerId":"historical", "apiKeyId":"key-old", "createdAt":100,
+            "inputTokens":20, "outputTokens":2, "actualTokens":22, "totalCostUsd":0.5, "costLockedAt":90,
+            "latencyMs":250, "pricingSnapshot":{"pricingId":"old-price", "modelId":"gpt-test",
+            "currency":"CNY", "exchangeRate":7.3, "inputCostPerMillion":1.5,
+            "outputCostPerMillion":3.5, "cacheReadCostPerMillion":0.2, "cacheCreationCostPerMillion":0.8, "lockedAt":90}});
+        connection.execute("INSERT INTO usage_logs(request_id,raw_path,created_at,payload_json) VALUES ('shared','session.jsonl',100,?1)", [log.to_string()]).unwrap();
+        connection.execute("INSERT INTO usage_logs(request_id,created_at,payload_json) VALUES ('log-only',101,?1)",
+            [json!({"requestId":"log-only", "createdAt":101}).to_string()]).unwrap();
+        for record in [
+            json!({"requestId":"shared", "requestTime":100, "providerId":"historical"}),
+            json!({"requestId":"pending", "createdAt":102, "providerId":"captured", "inputTokens":5}),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO usage_request_records VALUES (?1,100,?2)",
+                    params![record["requestId"].as_str().unwrap(), record.to_string()],
+                )
+                .unwrap();
+        }
+        connection.execute_batch("INSERT INTO usage_metadata VALUES ('revision','451'),('session_parser_version:codex','2');
+            INSERT INTO usage_pricing_config VALUES (1,7.3);").unwrap();
+        initialize(&paths).unwrap();
+        initialize(&paths).unwrap();
+        let logs = query_logs(&paths, &all_query()).unwrap();
+        assert_eq!(logs.len(), 2);
+        let migrated = logs
+            .iter()
+            .find(|item| item["requestId"] == "shared")
+            .unwrap();
+        assert_eq!(migrated["pricingSnapshot"], log["pricingSnapshot"]);
+        assert_eq!(migrated["latencyMs"], 250);
+        assert_eq!(migrated["inputTokens"], 20);
+        assert_eq!(migrated["totalCostUsd"], 0.5);
+        assert_eq!(migrated["requestTime"], 100);
+        assert_eq!(super::revision(&paths).unwrap(), 451);
+        assert_eq!(read_pricing(&paths).unwrap()["exchangeRate"], 7.3);
+        let count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM usage_requests", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 3);
+        let columns = connection
+            .prepare("PRAGMA table_info(usage_requests)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(!columns
+            .iter()
+            .any(|column| column.contains("json") || column.contains("payload")));
+        for table in [
+            "usage_logs",
+            "usage_request_records",
+            "usage_metadata",
+            "usage_pricing_config",
+        ] {
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE name=?1",
+                        [table],
+                        |row| row.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+        }
+        super::ensure_session_parser_version(&paths, "codex", 2).unwrap();
+        assert_eq!(query_logs(&paths, &all_query()).unwrap().len(), 2);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT request_count FROM usage_sessions WHERE raw_path='session.jsonl'",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_request_migration_rolls_back_and_keeps_old_tables() {
+        let paths = create_test_paths("merged-rollback");
+        let connection = Connection::open(&paths.storage_files.database).unwrap();
+        create_legacy_schema(&connection);
+        connection
+            .execute(
+                "INSERT INTO usage_request_records VALUES ('good',100,?1)",
+                [json!({"requestId":"good","providerId":"historical"}).to_string()],
+            )
+            .unwrap();
+        connection.execute_batch("INSERT INTO usage_logs(request_id,created_at,payload_json) VALUES ('bad',100,'invalid-json');
+            INSERT INTO usage_metadata VALUES ('revision','99'); INSERT INTO usage_pricing_config VALUES (1,7.4);").unwrap();
+        assert!(initialize(&paths).is_err());
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM usage_requests", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('usage_logs','usage_request_records','usage_metadata','usage_pricing_config')",[],|row| row.get::<_,i64>(0)).unwrap(),4);
+        connection
+            .execute(
+                "UPDATE usage_logs SET payload_json=?1",
+                [json!({"requestId":"bad","createdAt":100}).to_string()],
+            )
+            .unwrap();
+        initialize(&paths).unwrap();
+        assert_eq!(super::revision(&paths).unwrap(), 99);
+        assert_eq!(query_logs(&paths, &all_query()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn parser_upgrade_preserves_attribution_and_locked_cost_for_rescan() {
+        let paths = create_test_paths("merged-parser-upgrade");
+        let log = json!({"requestId":"r1", "rawPath":"session.jsonl", "sessionId":"s1", "createdAt":100,
+            "appType":"codex", "providerId":"historical", "apiKeyId":"historical-key", "model":"gpt-test",
+            "inputTokens":10, "actualTokens":12, "totalCostUsd":0.25, "costLockedAt":90,
+            "pricingSnapshot":{"pricingId":"old-price"}});
+        replace_sessions(
+            &paths,
+            &[UsageSessionUpdate {
+                raw_path: "session.jsonl".into(),
+                app_type: "codex".into(),
+                updated_at: 100,
+                logs: vec![log],
+                records: vec![],
+            }],
+        )
+        .unwrap();
+        super::ensure_session_parser_version(&paths, "codex", 3).unwrap();
+        assert!(query_logs(&paths, &all_query()).unwrap().is_empty());
+        let records = read_request_records(&paths, &["r1".into()]).unwrap();
+        assert_eq!(records["r1"]["providerId"], "historical");
+        assert_eq!(records["r1"]["apiKeyId"], "historical-key");
+        // 重扫暂时不再产出该请求，也不能删除历史快照。
+        replace_sessions(
+            &paths,
+            &[UsageSessionUpdate {
+                raw_path: "session.jsonl".into(),
+                app_type: "codex".into(),
+                updated_at: 101,
+                logs: vec![],
+                records: vec![],
+            }],
+        )
+        .unwrap();
+        let mut rescanned = records["r1"].clone();
+        rescanned.as_object_mut().unwrap().remove("costLockedAt");
+        rescanned.as_object_mut().unwrap().remove("pricingSnapshot");
+        rescanned["inputTokens"] = json!(20);
+        rescanned["totalCostUsd"] = json!(99);
+        replace_sessions(
+            &paths,
+            &[UsageSessionUpdate {
+                raw_path: "session.jsonl".into(),
+                app_type: "codex".into(),
+                updated_at: 102,
+                logs: vec![rescanned],
+                records: vec![json!({"requestId":"r1","inputTokens":999,"totalCostUsd":999})],
+            }],
+        )
+        .unwrap();
+        let logs = query_logs(&paths, &all_query()).unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["inputTokens"], 20);
+        assert_eq!(logs[0]["totalCostUsd"], 0.25);
+        assert_eq!(logs[0]["costLockedAt"], 90);
+        assert_eq!(logs[0]["pricingSnapshot"]["pricingId"], "old-price");
+        assert_eq!(logs[0]["providerId"], "historical");
+    }
+
+    #[test]
+    fn captured_request_is_completed_in_place_and_late_snapshot_does_not_overwrite_usage() {
+        let paths = create_test_paths("merged-captured-request");
+        let captured = json!({"requestId":"desktop-response:message-a", "appType":"claude-desktop",
+            "providerId":"captured", "apiKeyId":"captured-key", "createdAt":100});
+        super::write_request_record(&paths, &captured).unwrap();
+        assert!(query_logs(&paths, &all_query()).unwrap().is_empty());
+        let mut completed = read_request_records(&paths, &["desktop-response:message-a".into()])
+            .unwrap()
+            .remove("desktop-response:message-a")
+            .unwrap();
+        completed["inputTokens"] = json!(50);
+        completed["rawPath"] = json!("desktop.json");
+        completed["costLockedAt"] = json!(110);
+        completed["totalCostUsd"] = json!(0.75);
+        replace_sessions(
+            &paths,
+            &[UsageSessionUpdate {
+                raw_path: "desktop.json".into(),
+                app_type: "claude-desktop".into(),
+                updated_at: 120,
+                logs: vec![completed],
+                records: vec![],
+            }],
+        )
+        .unwrap();
+        super::write_request_record(&paths, &captured).unwrap();
+        let connection = Connection::open(&paths.storage_files.database).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM usage_requests", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        let logs = query_logs(&paths, &all_query()).unwrap();
+        assert_eq!(logs[0]["inputTokens"], 50);
+        assert_eq!(logs[0]["totalCostUsd"], 0.75);
+        assert_eq!(logs[0]["apiKeyId"], "captured-key");
     }
 }
