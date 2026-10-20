@@ -4467,8 +4467,7 @@ mod tests {
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
             )
             .unwrap();
-            let raw: String = connection.query_row("SELECT payload_json FROM codex_accounts WHERE json_extract(payload_json, '$.id') = ?1", [account_id], |row| row.get(0)).unwrap();
-            let account: Value = serde_json::from_str(&raw).unwrap();
+            let account = connection.query_row("SELECT * FROM providers WHERE id=?1 AND type='codex-account'", [format!("account:{}",account_id)], provider_store::item_from_row).unwrap();
             let auth = json!({
                 "accessToken": account["auth"]["accessToken"].as_str().or_else(|| account["access_token"].as_str()).unwrap(),
                 "accountId": account["account_id"].as_str().or_else(|| account["accountId"].as_str()).unwrap_or("")
@@ -4625,8 +4624,7 @@ mod tests {
             let connection = rusqlite::Connection::open_with_flags(&paths.storage_files.database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
             let account_id: String = connection.query_row("SELECT account_id FROM image_tasks WHERE id = ?1", [&task_id], |row| row.get(0)).unwrap();
             let task = json!({"request": {"accountId": account_id}});
-            let raw: String = connection.query_row("SELECT payload_json FROM codex_accounts WHERE json_extract(payload_json, '$.id') = ?1", [task["request"]["accountId"].as_str().unwrap()], |row| row.get(0)).unwrap();
-            let account: Value = serde_json::from_str(&raw).unwrap();
+            let account = connection.query_row("SELECT * FROM providers WHERE id=?1 AND type='codex-account'", [format!("account:{}",task["request"]["accountId"].as_str().unwrap())], provider_store::item_from_row).unwrap();
             let auth = json!({"accessToken": account["auth"]["accessToken"].as_str().or_else(|| account["access_token"].as_str()).unwrap(), "accountId": account["account_id"].as_str().or_else(|| account["accountId"].as_str()).unwrap_or("")});
             drop(connection);
             let mut builder = reqwest::Client::builder().cookie_store(true).user_agent(WEB_USER_AGENT);

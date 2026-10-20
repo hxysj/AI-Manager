@@ -2330,7 +2330,7 @@ mod tests {
           "proxy": "",
           "headers": { "x-provider-header": "provider-value" },
           "enabled": true,
-          "runtimeConfig": { "mainModel": "model-active" }
+          "runtimeConfig": { "mainModel": "model-active", "syncModelList": true }
         })];
         let models = vec![json!({
           "id": "model-active",

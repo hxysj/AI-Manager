@@ -1980,6 +1980,7 @@ mod tests {
                 ] {
                     let account = cached_account();
                     provider_store::write_codex_accounts(paths, &[account.clone()]).unwrap();
+                    let account = provider_store::read_codex_accounts(paths).unwrap().remove(0);
                     let error = if status_code == 0 {
                         ManagerError::System(message.to_string())
                     } else {

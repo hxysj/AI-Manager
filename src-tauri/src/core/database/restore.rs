@@ -120,18 +120,22 @@ fn read_rows(
 }
 
 fn comparable_row(
-    connection: &Connection,
+    _connection: &Connection,
     table: &str,
     row: &Map<String, Value>,
 ) -> Result<Value, ManagerError> {
-    if let Some(payload) = row.get("payload_json").and_then(Value::as_str) {
-        let expression = comparison_column(table, "payload_json").replace("\"payload_json\"", "?1");
-        let normalized: String =
-            connection.query_row(&format!("SELECT {expression}"), [payload], |row| row.get(0))?;
-        return Ok(serde_json::from_str(&normalized)?);
-    }
     let mut value = row.clone();
     value.remove("sort_order");
+    if table == "providers" {
+        for column in PROVIDER_LOCAL_COLUMNS.iter().copied().chain([
+            "created_at",
+            "updated_at",
+            "last_refresh",
+            "token_updated_at",
+        ]) {
+            value.remove(column);
+        }
+    }
     if table == "skills" {
         for column in SKILL_LOCAL_COLUMNS {
             value.remove(*column);
@@ -209,6 +213,24 @@ pub(super) fn merge_table(
         } else if row.contains_key("sort_order") {
             row.insert("sort_order".into(), json!(next_order));
             next_order += 1;
+        }
+        if table == "providers" {
+            // 在写入前恢复本机状态，防止备份中的激活记录触发唯一约束。
+            let same_scope = existing.is_some_and(|old| {
+                old.get("cli") == row.get("cli") && old.get("type") == row.get("type")
+            });
+            for column in PROVIDER_LOCAL_COLUMNS {
+                let keep = same_scope || ["enabled", "oauth_credentials", "quota"].contains(column);
+                let value = if keep {
+                    existing.and_then(|old| old.get(*column)).cloned()
+                } else {
+                    None
+                };
+                row.insert(
+                    (*column).into(),
+                    value.unwrap_or_else(|| provider_local_default(column)),
+                );
+            }
         }
         if table == "rules" {
             // 只恢复规则元数据；启用关系和同步基线沿用本机，新增规则默认不启用。

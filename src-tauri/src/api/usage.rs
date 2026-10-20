@@ -4203,7 +4203,7 @@ mod tests {
         ];
         runtime_provider::set_provider_keys(&mut keys, "provider", &key_records, "first".into())
             .unwrap();
-        provider_store::write_keys(&paths, &keys).unwrap();
+        provider_store::write_provider_bundle(&paths,&[json!({"id":"provider","cli":"claude"})],&[],&[],&keys).unwrap();
         provider_key_usage::sync_bindings(&paths, &serde_json::Map::from_iter([("provider".into(), json!({
             "apiKeyId": "first", "apiKeyHash": provider_key_usage::fingerprint("first-secret"), "singleKey": false
         }))]), 100).unwrap();

@@ -215,17 +215,14 @@ fn save_login(paths: &AppPaths, provider: &Value, tokens: &Value) -> Result<(), 
     let id = provider["id"].as_str().unwrap();
     let mut connection = database::open(paths)?;
     let transaction = connection.transaction()?;
-    transaction.execute("INSERT INTO providers(item_key, sort_order, payload_json) VALUES (?1, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM providers), ?2) ON CONFLICT(item_key) DO UPDATE SET payload_json=excluded.payload_json", params![id, provider.to_string()])?;
-    transaction.execute("INSERT INTO provider_keys(provider_id, payload_json) VALUES (?1, ?2) ON CONFLICT(provider_id) DO UPDATE SET payload_json=excluded.payload_json",
-        params![format!("google-oauth:{id}"), json!(runtime_provider::encrypt_provider_key(&tokens.to_string())?).to_string()])?;
-    let token = json!(runtime_provider::encrypt_provider_key(
-        &uuid::Uuid::new_v4().to_string()
-    )?)
-    .to_string();
-    transaction.execute(
-        "INSERT OR IGNORE INTO provider_keys(provider_id, payload_json) VALUES (?1, ?2)",
-        params![id, token],
-    )?;
+    provider_store::upsert_provider(&transaction,provider)?;
+    let oauth=json!(runtime_provider::encrypt_provider_key(&tokens.to_string())?);
+    provider_store::set_key(&transaction,&format!("google-oauth:{id}"),Some(&oauth))?;
+    let has_key=transaction.query_row("SELECT EXISTS(SELECT 1 FROM provider_keys WHERE provider_id=?1)",[id],|row|row.get::<_,bool>(0))?;
+    if !has_key {
+        let token=json!(runtime_provider::encrypt_provider_key(&uuid::Uuid::new_v4().to_string())?);
+        provider_store::set_key(&transaction,id,Some(&token))?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -241,10 +238,10 @@ fn read_tokens(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
 fn save_tokens(paths: &AppPaths, id: &str, tokens: &Value) -> Result<(), ManagerError> {
     let connection = database::open(paths)?;
     let count = connection.execute(
-        "UPDATE provider_keys SET payload_json=?2 WHERE provider_id=?1",
+        "UPDATE providers SET oauth_credentials=?2 WHERE id=?1",
         params![
-            format!("google-oauth:{id}"),
-            json!(runtime_provider::encrypt_provider_key(&tokens.to_string())?).to_string()
+            id,
+            runtime_provider::encrypt_provider_key(&tokens.to_string())?
         ],
     )?;
     if count == 0 {
@@ -383,12 +380,11 @@ pub async fn refresh(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> 
         // 模型同步只改当前账号的行，避免覆盖其他服务商并发保存的结果。
         let mut connection = database::open(paths)?;
         let transaction = connection.transaction()?;
-        transaction.execute("DELETE FROM provider_models WHERE json_extract(payload_json, '$.providerId')=?1", [id])?;
-        for (index, model) in models.iter().enumerate() {
-            let key = format!("{id}:{}", model["id"].as_str().unwrap());
-            let record = json!({"id": key, "providerId": id, "name": model["id"], "contextWindow": model["maxTokens"], "enabled": true});
-            transaction.execute("INSERT INTO provider_models(item_key, sort_order, payload_json) VALUES (?1, ?2, ?3)", params![key, index, record.to_string()])?;
-        }
+        let records=models.iter().map(|model| {
+            let key=format!("{id}:{}",model["id"].as_str().unwrap());
+            json!({"id":key,"providerId":id,"name":model["id"],"contextWindow":model["maxTokens"],"enabled":true})
+        }).collect::<Vec<_>>();
+        provider_store::set_provider_models(&transaction,id,&records)?;
         transaction.commit()?;
         Ok::<_, ManagerError>(provider)
     }.await;
@@ -514,15 +510,7 @@ pub(crate) fn update_metadata(
 }
 
 fn write_provider(paths: &AppPaths, provider: &Value) -> Result<(), ManagerError> {
-    let connection = database::open(paths)?;
-    let count = connection.execute(
-        "UPDATE providers SET payload_json=?2 WHERE item_key=?1",
-        params![provider["id"].as_str().unwrap(), provider.to_string()],
-    )?;
-    if count == 0 {
-        return Err(error("Google 账号已删除"));
-    }
-    Ok(())
+    provider_store::update_provider(paths,provider)
 }
 
 async fn token_json(response: reqwest::Response) -> Result<Value, ManagerError> {

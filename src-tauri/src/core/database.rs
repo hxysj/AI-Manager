@@ -1,7 +1,10 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
+use crate::core::provider_store::{
+    local_default as provider_local_default, LOCAL_COLUMNS as PROVIDER_LOCAL_COLUMNS,
+};
 use crate::core::rule_store::LOCAL_COLUMNS as RULE_LOCAL_COLUMNS;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
@@ -10,11 +13,8 @@ mod restore;
 pub use restore::{preview_rows, row_choice_key, RestoreRowDifference};
 
 // 仅跨设备恢复的业务数据进入备份，其他表只保留结构。
-const BACKUP_INCLUDED_TABLES: [&str; 10] = [
+const BACKUP_INCLUDED_TABLES: [&str; 7] = [
     "providers",
-    "claude_desktop_providers",
-    "provider_models",
-    "codex_accounts",
     "skills",
     "skill_groups",
     "skill_repositories",
@@ -77,6 +77,7 @@ pub fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
         }
     }
     connection.pragma_update(None, "synchronous", "NORMAL")?;
+    connection.pragma_update(None, "foreign_keys", true)?;
     Ok(connection)
 }
 
@@ -84,6 +85,7 @@ pub fn backup(paths: &AppPaths) -> Result<Vec<u8>, ManagerError> {
     crate::core::skill_store::initialize(paths)?;
     crate::core::usage_store::initialize(paths)?;
     crate::core::rule_store::initialize(paths)?;
+    crate::core::provider_store::initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
     cleanup_backup_snapshots(Path::new(&paths.temp_dir))?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
@@ -181,7 +183,10 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
     }
 
     // 本机启用态、安装态和用量不随业务数据跨设备恢复。
-    strip_json_fields(&transaction, "providers", &["enabled"])?;
+    transaction.execute_batch("UPDATE providers SET enabled=0,is_active=0,oauth_credentials='',
+      profile_id='',selected_model=NULL,profile_base_url=NULL,profile_proxy=NULL,profile_env=NULL,profile_updated_at=NULL,
+      synced_hash='',synced_at=0,runtime_path='',sync_status='NO_ACTIVE',
+      instance_profile_dir='',instance_sessions_path='',instance_updated_at=0,quota=NULL;")?;
     transaction.execute_batch(
         "UPDATE skills SET disabled=1, installed_targets='', status='disabled',
          source_path='', entry_path='', repo_name='', is_deleted=0, deleted_at=0, trash_id='', trash_path='';"
@@ -190,7 +195,7 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
         "UPDATE rules SET enabled_clis='', claude_synced_hash='', claude_synced_at=0,
          codex_synced_hash='', codex_synced_at=0;",
     )?;
-    strip_json_fields(&transaction, "codex_accounts", &["usage", "disabled"])?;
+
     transaction.commit()?;
 
     for (_, _, sql) in schema
@@ -200,56 +205,6 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
         connection.execute_batch(sql)?;
     }
     connection.execute_batch("DETACH DATABASE source; VACUUM;")?;
-    Ok(())
-}
-
-fn strip_json_fields(
-    transaction: &rusqlite::Transaction<'_>,
-    table: &str,
-    fields: &[&str],
-) -> Result<(), ManagerError> {
-    let exists = transaction.query_row(
-        "SELECT EXISTS(
-           SELECT 1 FROM sqlite_master
-           WHERE type = 'table' AND name = ?1
-         )",
-        params![table],
-        |row| row.get::<_, bool>(0),
-    )?;
-
-    if !exists {
-        return Ok(());
-    }
-
-    let rows = {
-        let mut statement = transaction.prepare(&format!(
-            "SELECT item_key, payload_json FROM {}",
-            quote_identifier(table)
-        ))?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows
-    };
-
-    for (item_key, payload) in rows {
-        let mut value: serde_json::Value = serde_json::from_str(&payload)?;
-
-        if let Some(value) = value.as_object_mut() {
-            for field in fields {
-                value.remove(*field);
-            }
-        }
-        transaction.execute(
-            &format!(
-                "UPDATE {} SET payload_json = ?1 WHERE item_key = ?2",
-                quote_identifier(table)
-            ),
-            params![serde_json::to_string(&value)?, item_key],
-        )?;
-    }
     Ok(())
 }
 
@@ -306,29 +261,6 @@ pub fn restore_merged(
     restore_tables(paths, content, &tables, Some(choices))
 }
 
-pub fn reconcile_local_state(
-    paths: &AppPaths,
-    providers_changed: bool,
-    provider_models_changed: bool,
-    codex_accounts_changed: bool,
-) -> Result<(), ManagerError> {
-    if !providers_changed && !provider_models_changed && !codex_accounts_changed {
-        return Ok(());
-    }
-    initialize(paths)?;
-    let mut connection = open(paths)?;
-    let transaction = connection.transaction()?;
-
-    if providers_changed || provider_models_changed {
-        reconcile_provider_relations(&transaction, providers_changed)?;
-    }
-    if codex_accounts_changed {
-        clear_missing_codex_active_account(&transaction)?;
-    }
-    transaction.commit()?;
-    Ok(())
-}
-
 fn restore_tables(
     paths: &AppPaths,
     content: &[u8],
@@ -341,10 +273,6 @@ fn restore_tables(
             .into_iter()
             .filter(|table| selected_tables.contains(table))
             .collect::<Vec<_>>();
-        let restores_providers = restore_tables.iter().any(|table| table == "providers");
-        let restores_provider_models = restore_tables
-            .iter()
-            .any(|table| table == "provider_models");
         let transaction = connection.transaction()?;
         transaction.execute_batch(
             "CREATE TEMP TABLE restore_choices(choice_key TEXT PRIMARY KEY);
@@ -361,18 +289,11 @@ fn restore_tables(
         }
 
         for table in restore_tables {
-            if table == "providers" {
-                restore_providers(&transaction)?;
-            } else if table == "skills" {
+            if table == "skills" {
                 restore_skills(&transaction)?;
-            } else if table == "codex_accounts" {
-                restore_codex_accounts(&transaction)?;
             } else {
                 restore_table(&transaction, &table)?;
             }
-        }
-        if restores_providers || restores_provider_models {
-            reconcile_provider_relations(&transaction, restores_providers)?;
         }
         transaction.execute(
             "INSERT INTO app_metadata(key, value) VALUES ('restored_at', ?1)
@@ -393,6 +314,7 @@ fn with_restore_snapshot<T>(
     crate::core::skill_store::initialize(paths)?;
     crate::core::usage_store::initialize(paths)?;
     crate::core::rule_store::initialize(paths)?;
+    crate::core::provider_store::initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
         "ai-manager-restore-{}-{}.db",
@@ -406,6 +328,7 @@ fn with_restore_snapshot<T>(
         crate::core::skill_store::migrate_connection(&mut source)?;
         crate::core::usage_store::migrate_connection(&mut source)?;
         crate::core::rule_store::migrate_connection(&mut source)?;
+        crate::core::provider_store::migrate_connection(&mut source)?;
         drop(source);
         action(&snapshot_path)
     })();
@@ -485,190 +408,6 @@ fn restore_table(transaction: &rusqlite::Transaction<'_>, table: &str) -> Result
     restore::merge_table(transaction, table)
 }
 
-fn restore_providers(transaction: &rusqlite::Transaction<'_>) -> Result<(), ManagerError> {
-    let current_enabled = {
-        let mut statement = transaction.prepare("SELECT item_key, payload_json FROM providers")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut enabled = HashMap::new();
-
-        for (item_key, payload) in rows {
-            let provider: serde_json::Value = serde_json::from_str(&payload)?;
-            enabled.insert(
-                item_key,
-                provider
-                    .get("enabled")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(true),
-            );
-        }
-        enabled
-    };
-
-    restore_table(transaction, "providers")?;
-    let restored = {
-        let mut statement = transaction.prepare("SELECT item_key, payload_json FROM providers WHERE item_key IN (SELECT row_key FROM restore_applied WHERE table_name = 'providers')")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows
-    };
-
-    // enabled 属于本机状态：已有 Provider 保留当前值，备份新增的 Provider 默认禁用。
-    for (item_key, payload) in restored {
-        let mut provider: serde_json::Value = serde_json::from_str(&payload)?;
-        let provider = provider
-            .as_object_mut()
-            .ok_or_else(|| ManagerError::System(format!("Provider {item_key} 的数据格式无效。")))?;
-        provider.insert(
-            "enabled".to_string(),
-            serde_json::Value::Bool(current_enabled.get(&item_key).copied().unwrap_or(false)),
-        );
-        transaction.execute(
-            "UPDATE providers SET payload_json = ?1 WHERE item_key = ?2",
-            params![serde_json::to_string(&provider)?, item_key],
-        )?;
-    }
-
-    Ok(())
-}
-
-fn reconcile_provider_relations(
-    transaction: &rusqlite::Transaction<'_>,
-    providers_changed: bool,
-) -> Result<(), ManagerError> {
-    let providers = {
-        let mut statement = transaction.prepare("SELECT item_key, payload_json FROM providers")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut providers = HashMap::new();
-
-        for (item_key, payload) in rows {
-            let provider: serde_json::Value = serde_json::from_str(&payload)?;
-            providers.insert(
-                item_key,
-                provider
-                    .get("cli")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            );
-        }
-        providers
-    };
-    if providers_changed {
-        reconcile_provider_runtime_state(transaction, &providers)?;
-        transaction.execute(
-            "DELETE FROM provider_keys
-             WHERE provider_id NOT IN (SELECT item_key FROM providers)
-               AND provider_id NOT IN (SELECT 'claude-desktop:' || item_key FROM claude_desktop_providers)",
-            [],
-        )?;
-    }
-    transaction.execute(
-        "DELETE FROM provider_models
-         WHERE COALESCE(json_extract(payload_json, '$.providerId'), '') = ''
-            OR json_extract(payload_json, '$.providerId') NOT IN (
-              SELECT item_key FROM providers
-            )",
-        [],
-    )?;
-
-    Ok(())
-}
-
-fn reconcile_provider_runtime_state(
-    transaction: &rusqlite::Transaction<'_>,
-    providers: &HashMap<String, String>,
-) -> Result<(), ManagerError> {
-    let profiles = {
-        let mut statement = transaction.prepare(
-            "SELECT item_key, payload_json FROM provider_runtime_profiles ORDER BY item_key",
-        )?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows
-    };
-
-    for (item_key, payload) in profiles {
-        let profile: serde_json::Value = serde_json::from_str(&payload)?;
-        let provider_id = profile
-            .get("providerId")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let cli = profile
-            .get("cli")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-        let provider_matches_cli = providers
-            .get(provider_id)
-            .is_some_and(|provider_cli| provider_cli == cli);
-
-        if provider_matches_cli {
-            continue;
-        }
-
-        transaction.execute(
-            "DELETE FROM provider_runtime_profiles WHERE item_key = ?1",
-            params![item_key],
-        )?;
-    }
-
-    let runtime_states = {
-        let mut statement = transaction
-            .prepare("SELECT cli, payload_json FROM provider_runtime_state ORDER BY cli")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows
-    };
-    for (cli, payload) in runtime_states {
-        let mut runtime_state: serde_json::Value = serde_json::from_str(&payload)?;
-        let active_provider_id = runtime_state
-            .get("activeProviderId")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default();
-
-        if active_provider_id.is_empty()
-            || providers
-                .get(active_provider_id)
-                .is_some_and(|provider_cli| provider_cli == &cli)
-        {
-            continue;
-        }
-        let runtime_state = runtime_state.as_object_mut().ok_or_else(|| {
-            ManagerError::System(format!("Provider Runtime State {cli} 的数据格式无效。"))
-        })?;
-        runtime_state.insert(
-            "activeProviderId".to_string(),
-            serde_json::Value::String(String::new()),
-        );
-        runtime_state.insert(
-            "status".to_string(),
-            serde_json::Value::String("NO_ACTIVE".to_string()),
-        );
-        transaction.execute(
-            "UPDATE provider_runtime_state SET payload_json = ?1 WHERE cli = ?2",
-            params![serde_json::to_string(&runtime_state)?, cli],
-        )?;
-    }
-
-    Ok(())
-}
-
 // 安装、启用和回收站信息属于本机，恢复业务数据时保留当前值。
 const SKILL_LOCAL_COLUMNS: &[&str] = &[
     "disabled",
@@ -727,99 +466,6 @@ fn restore_skills(transaction: &rusqlite::Transaction<'_>) -> Result<(), Manager
         transaction.execute(
             &format!("UPDATE skills SET {updates} WHERE item_key=?"),
             params_from_iter(values),
-        )?;
-    }
-    Ok(())
-}
-
-fn restore_codex_accounts(transaction: &rusqlite::Transaction<'_>) -> Result<(), ManagerError> {
-    let current_state = {
-        let mut statement =
-            transaction.prepare("SELECT item_key, payload_json FROM codex_accounts")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        let mut state = HashMap::new();
-
-        for (item_key, payload) in rows {
-            let account: serde_json::Value = serde_json::from_str(&payload)?;
-            state.insert(
-                item_key,
-                (
-                    account
-                        .get("usage")
-                        .filter(|value| is_json_truthy(value))
-                        .cloned(),
-                    account
-                        .get("disabled")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false),
-                ),
-            );
-        }
-        state
-    };
-
-    restore_table(transaction, "codex_accounts")?;
-    let restored = {
-        let mut statement =
-            transaction.prepare("SELECT item_key, payload_json FROM codex_accounts WHERE item_key IN (SELECT row_key FROM restore_applied WHERE table_name = 'codex_accounts')")?;
-        let rows = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows
-    };
-
-    // usage 和 disabled 都属于本机状态；备份新增的官方账号默认禁用。
-    for (item_key, payload) in restored {
-        let mut account: serde_json::Value = serde_json::from_str(&payload)?;
-        let account = account.as_object_mut().ok_or_else(|| {
-            ManagerError::System(format!("Codex 账号 {item_key} 的数据格式无效。"))
-        })?;
-        let current = current_state.get(&item_key);
-        if let Some(usage) = current.and_then(|(usage, _)| usage.as_ref()) {
-            account.insert("usage".to_string(), usage.clone());
-        } else {
-            account.remove("usage");
-        }
-        account.insert(
-            "disabled".to_string(),
-            serde_json::Value::Bool(current.map(|(_, disabled)| *disabled).unwrap_or(true)),
-        );
-        transaction.execute(
-            "UPDATE codex_accounts SET payload_json = ?1 WHERE item_key = ?2",
-            params![serde_json::to_string(&account)?, item_key],
-        )?;
-    }
-
-    clear_missing_codex_active_account(transaction)
-}
-
-fn clear_missing_codex_active_account(
-    transaction: &rusqlite::Transaction<'_>,
-) -> Result<(), ManagerError> {
-    let active_account_id = transaction
-        .query_row(
-            "SELECT account_id FROM codex_active_account WHERE singleton_id = 1",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?
-        .unwrap_or_default();
-    if !active_account_id.is_empty()
-        && !transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM codex_accounts WHERE item_key = ?1)",
-            params![active_account_id],
-            |row| row.get::<_, bool>(0),
-        )?
-    {
-        transaction.execute(
-            "UPDATE codex_active_account SET account_id = '' WHERE singleton_id = 1",
-            [],
         )?;
     }
     Ok(())
@@ -904,44 +550,23 @@ fn count_table_difference(
 fn comparison_column(table: &str, column: &str) -> String {
     let column = quote_identifier(column);
 
-    if column != "\"payload_json\"" {
-        if (table == "skills" && SKILL_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
-            || (table == "rules" && RULE_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
-            || ((table.starts_with("skill") || table == "rules")
-                && ["created_at", "updated_at"].contains(&column.trim_matches('"')))
-        {
-            return "NULL".to_string();
-        }
-        return column;
+    if (table == "skills" && SKILL_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
+        || (table == "rules" && RULE_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
+        || (table == "providers" && PROVIDER_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
+        || (table == "providers"
+            && [
+                "created_at",
+                "updated_at",
+                "last_refresh",
+                "token_updated_at",
+            ]
+            .contains(&column.trim_matches('"')))
+        || ((table.starts_with("skill") || table == "rules")
+            && ["created_at", "updated_at"].contains(&column.trim_matches('"')))
+    {
+        return "NULL".to_string();
     }
-
-    // 与旧 JSON 恢复一致，运行态字段不参与跨设备备份差异比较。
-    let runtime_paths = "'$.createdAt', '$.updatedAt', '$.lastUpdatedAt', '$.lastSyncAt',
-         '$.uploadedAt', '$.downloadedAt', '$.lastBackupAt', '$.created_at', '$.updated_at',
-         '$.last_refresh', '$.token_updated_at'";
-    match table {
-        "providers" => format!("json_remove({column}, '$.enabled', {runtime_paths})"),
-        "skills" => format!(
-            "json_remove({column}, '$.disabled', '$.installedTargets', '$.installStates', '$.status',
-             '$.sourcePath', '$.entryPath', '$.repoName', {runtime_paths})"
-        ),
-        "codex_accounts" => format!(
-            "json_remove({column}, '$.usage', '$.disabled', {runtime_paths},
-             '$.auth.createdAt', '$.auth.updatedAt', '$.auth.lastUpdatedAt', '$.auth.lastSyncAt',
-             '$.auth.created_at', '$.auth.updated_at', '$.auth.last_refresh', '$.auth.token_updated_at')"
-        ),
-        _ => column,
-    }
-}
-
-fn is_json_truthy(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Null => false,
-        serde_json::Value::Bool(value) => *value,
-        serde_json::Value::Number(value) => value.as_f64().is_none_or(|value| value != 0.0),
-        serde_json::Value::String(value) => !value.is_empty(),
-        serde_json::Value::Array(_) | serde_json::Value::Object(_) => true,
-    }
+    column
 }
 
 fn quote_identifier(value: &str) -> String {
@@ -962,7 +587,7 @@ mod tests {
     };
     use crate::core::paths::resolve_app_paths;
     use crate::core::{provider_store, rule_store, skill_store, usage_store};
-    use rusqlite::Connection;
+    use rusqlite::{params, Connection};
     use serde_json::{json, Map};
     use std::path::Path;
 
@@ -1077,33 +702,27 @@ mod tests {
                 assert_eq!(count, 0, "{table} 不应包含备份数据");
             }
         }
-        let provider: serde_json::Value = serde_json::from_str(
-            &snapshot
-                .query_row(
-                    "SELECT payload_json FROM providers WHERE item_key = 'provider-a'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
+        let provider = snapshot
+            .query_row(
+                "SELECT * FROM providers WHERE id='provider-a'",
+                [],
+                provider_store::item_from_row,
+            )
+            .unwrap();
         let skill = snapshot
             .query_row("SELECT * FROM skills WHERE item_key='skill-a'", [], |row| {
                 skill_store::item_from_row("skills", row)
             })
             .unwrap();
-        let account: serde_json::Value = serde_json::from_str(
-            &snapshot
-                .query_row(
-                    "SELECT payload_json FROM codex_accounts WHERE item_key = 'account-a'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
+        let account = snapshot
+            .query_row(
+                "SELECT * FROM providers WHERE id='account:account-a'",
+                [],
+                provider_store::item_from_row,
+            )
+            .unwrap();
 
-        assert!(provider.get("enabled").is_none());
+        assert_eq!(provider["enabled"], false);
         assert_eq!(skill["disabled"], true);
         assert_eq!(skill["installedTargets"], json!([]));
         assert!(skill.get("installStates").is_none());
@@ -1117,7 +736,111 @@ mod tests {
             assert_eq!(skill[field], "", "Skill 本机字段 {field} 不应进入备份");
         }
         assert!(account.get("usage").is_none());
-        assert!(account.get("disabled").is_none());
+        assert_eq!(account["disabled"], true);
+    }
+
+    #[test]
+    fn restores_legacy_provider_backup_without_old_tables_or_backup_activation() {
+        let root =
+            std::env::temp_dir().join(format!("legacy-provider-backup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let legacy_path = root.join("legacy.db");
+        let source = Connection::open(&legacy_path).unwrap();
+        source.execute_batch("CREATE TABLE app_metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+          CREATE TABLE providers(item_key TEXT PRIMARY KEY,sort_order INTEGER,payload_json TEXT);
+          CREATE TABLE claude_desktop_providers(item_key TEXT PRIMARY KEY,sort_order INTEGER,payload_json TEXT);
+          CREATE TABLE codex_accounts(item_key TEXT PRIMARY KEY,sort_order INTEGER,payload_json TEXT);
+          CREATE TABLE provider_models(item_key TEXT PRIMARY KEY,sort_order INTEGER,payload_json TEXT);
+          CREATE TABLE provider_keys(provider_id TEXT PRIMARY KEY,payload_json TEXT);").unwrap();
+        for (table, id, value) in [
+            (
+                "providers",
+                "p",
+                json!({"id":"p","cli":"codex","name":"备份配置","enabled":true}),
+            ),
+            (
+                "claude_desktop_providers",
+                "p",
+                json!({"id":"p","mode":"direct","name":"桌面配置"}),
+            ),
+            (
+                "codex_accounts",
+                "official",
+                json!({"id":"official","email":"backup@example.test","auth":{"accessToken":"backup-access"}}),
+            ),
+            ("provider_models", "m", json!({"id":"m","providerId":"p"})),
+        ] {
+            source
+                .execute(
+                    &format!("INSERT INTO {table} VALUES(?1,0,?2)"),
+                    params![id, value.to_string()],
+                )
+                .unwrap();
+        }
+        source
+            .execute(
+                "INSERT INTO provider_keys VALUES('p','\"backup-secret\"')",
+                [],
+            )
+            .unwrap();
+        drop(source);
+        let content = std::fs::read(&legacy_path).unwrap();
+        let paths = resolve_app_paths(&root.join("target"));
+        provider_store::write_provider_bundle(
+            &paths,
+            &[json!({"id":"p","cli":"codex","name":"本机配置"})],
+            &[],
+            &[json!({"id":"codex","cli":"codex","providerId":"p"})],
+            &Map::from_iter([("p".into(), json!("local-secret"))]),
+        )
+        .unwrap();
+        restore_selected(&paths, &content, &["providers".into()]).unwrap();
+        assert_eq!(
+            provider_store::read_providers(&paths).unwrap()[0]["name"],
+            "备份配置"
+        );
+        assert_eq!(provider_store::read_models(&paths).unwrap()[0]["id"], "m");
+        assert_eq!(
+            provider_store::read_keys(&paths).unwrap()["p"]["keys"][0]["value"],
+            "local-secret"
+        );
+        assert_eq!(
+            provider_store::read_profiles(&paths).unwrap()[0]["providerId"],
+            "p"
+        );
+        assert_eq!(
+            provider_store::read_codex_accounts(&paths).unwrap()[0]["auth"]["accessToken"],
+            "backup-access"
+        );
+        assert_eq!(
+            provider_store::read_active_codex_account_id(&paths).unwrap(),
+            ""
+        );
+        assert_eq!(
+            provider_store::read_desktop_settings(&paths).unwrap()["currentProviderId"],
+            ""
+        );
+        let connection = open(&paths).unwrap();
+        for table in [
+            "provider_models",
+            "codex_accounts",
+            "claude_desktop_providers",
+            "provider_schema_migrations",
+        ] {
+            assert!(!read_table_names(&connection, "main")
+                .unwrap()
+                .contains(&table.to_string()));
+        }
+        assert!(connection
+            .prepare("SELECT * FROM pragma_foreign_key_check")
+            .unwrap()
+            .query([])
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none());
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1275,7 +998,6 @@ mod tests {
                 "retained_data".to_string(),
                 "providers".to_string(),
                 "skills".to_string(),
-                "codex_accounts".to_string(),
                 "rules".to_string(),
             ],
         )
@@ -1289,28 +1011,22 @@ mod tests {
                 .unwrap(),
             "current"
         );
-        let provider_a: serde_json::Value = serde_json::from_str(
-            &restored
-                .query_row(
-                    "SELECT payload_json FROM providers WHERE item_key = 'provider-a'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
+        let provider_a = restored
+            .query_row(
+                "SELECT * FROM providers WHERE id='provider-a'",
+                [],
+                provider_store::item_from_row,
+            )
+            .unwrap();
         assert_eq!(provider_a["name"], "backup");
         assert_eq!(provider_a["enabled"], true);
-        let provider_b: serde_json::Value = serde_json::from_str(
-            &restored
-                .query_row(
-                    "SELECT payload_json FROM providers WHERE item_key = 'provider-b'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
+        let provider_b = restored
+            .query_row(
+                "SELECT * FROM providers WHERE id='provider-b'",
+                [],
+                provider_store::item_from_row,
+            )
+            .unwrap();
         assert_eq!(provider_b["enabled"], false);
         assert!(provider_store::read_profiles(&target_paths)
             .unwrap()
@@ -1329,35 +1045,29 @@ mod tests {
         assert!(provider_store::read_keys(&target_paths)
             .unwrap()
             .contains_key("provider-local"));
-        let account_a: serde_json::Value = serde_json::from_str(
-            &restored
-                .query_row(
-                    "SELECT payload_json FROM codex_accounts WHERE item_key = 'account-a'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
+        let account_a = restored
+            .query_row(
+                "SELECT * FROM providers WHERE id='account:account-a'",
+                [],
+                provider_store::item_from_row,
+            )
+            .unwrap();
         assert_eq!(account_a["email"], "backup@example.com");
         assert_eq!(account_a["usage"]["source"], "current");
         assert_eq!(account_a["disabled"], true);
-        let account_b: serde_json::Value = serde_json::from_str(
-            &restored
-                .query_row(
-                    "SELECT payload_json FROM codex_accounts WHERE item_key = 'account-b'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .unwrap(),
-        )
-        .unwrap();
+        let account_b = restored
+            .query_row(
+                "SELECT * FROM providers WHERE id='account:account-b'",
+                [],
+                provider_store::item_from_row,
+            )
+            .unwrap();
         assert!(account_b.get("usage").is_none());
         assert_eq!(account_b["disabled"], true);
         assert_eq!(
             restored
                 .query_row(
-                    "SELECT account_id FROM codex_active_account WHERE singleton_id = 1",
+                    "SELECT substr(id,9) FROM providers WHERE type='codex-account' AND is_active=1",
                     [],
                     |row| row.get::<_, String>(0),
                 )
@@ -1500,7 +1210,7 @@ mod tests {
         restore_selected(
             &target_paths,
             &backup(&source_paths).unwrap(),
-            &["providers".to_string(), "provider_models".to_string()],
+            &["providers".to_string()],
         )
         .unwrap();
 
@@ -1528,7 +1238,7 @@ mod tests {
         assert_eq!(provider_a["enabled"], true);
         assert_eq!(provider_new["enabled"], false);
         assert_eq!(profile_ids, vec!["profile-removed"]);
-        assert_eq!(runtime_state["codex"]["activeProviderId"], "provider-valid");
+        assert_eq!(runtime_state["codex"]["activeProviderId"], "");
         assert_eq!(
             runtime_state["gemini"]["activeProviderId"],
             "provider-removed"
@@ -1538,7 +1248,7 @@ mod tests {
     }
 
     #[test]
-    fn restoring_providers_preserves_local_only_providers_and_models() {
+    fn restoring_providers_restores_models_and_preserves_local_only_providers() {
         let source_root = std::env::temp_dir().join(format!(
             "monkey-thief-provider-model-cleanup-source-{}",
             std::process::id()
@@ -1586,9 +1296,8 @@ mod tests {
         .unwrap();
 
         let models = provider_store::read_models(&target_paths).unwrap();
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[0]["id"], "model-a");
-        assert_eq!(models[1]["id"], "model-removed");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["id"], "model-removed");
     }
 
     #[test]

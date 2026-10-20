@@ -4032,9 +4032,9 @@ mod tests {
             )
             .unwrap();
         }
-        provider_store::write_keys(&paths, &keys).unwrap();
-        let settings = Map::from_iter([("activeProviderId".to_string(), json!("provider-a"))]);
-        provider_store::write_desktop_bundle(&paths, &[], &settings, &keys).unwrap();
+        provider_store::write_provider_bundle(&paths,&[json!({"id":"provider-a","cli":"claude"})],&[],&[],&keys).unwrap();
+        let settings = Map::from_iter([("currentProviderId".to_string(), json!("provider-a"))]);
+        provider_store::write_desktop_bundle(&paths, &[json!({"id":"provider-a","mode":"direct"})], &settings, &keys).unwrap();
         let runtime_state = provider_store::read_runtime_state(&paths).unwrap();
         let config_path = config_dir.join("config.toml");
         fs::write(&config_path, "model = 'unchanged'\n").unwrap();
@@ -4090,7 +4090,7 @@ mod tests {
             "active".to_string(),
         )
         .unwrap();
-        provider_store::write_keys(&paths, &keys).unwrap();
+        provider_store::write_provider_bundle(&paths,&[json!({"id":"provider-a","cli":"codex"})],&[],&[],&keys).unwrap();
         for payload in [
             json!({}),
             json!({ "providerId": "provider-a" }),
@@ -4113,7 +4113,8 @@ mod tests {
             "legacy-provider".to_string(),
             json!(encrypt_provider_key("sk-legacy-test").unwrap()),
         )]);
-        provider_store::write_keys(&paths, &keys).unwrap();
+        provider_store::write_provider_bundle(&paths,&[json!({"id":"legacy-provider","cli":"codex"})],&[],&[],&keys).unwrap();
+        let keys=provider_store::read_keys(&paths).unwrap();
         let result = read_provider_key_value(
             &paths,
             &json!({ "providerId": "legacy-provider", "keyId": "default", "cli": "codex" }),

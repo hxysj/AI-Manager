@@ -497,7 +497,7 @@ impl DesktopData {
         {
             data.providers.insert(
                 0,
-                json!({"id": OFFICIAL_ID, "name": "Claude 官方", "mode": "official"}),
+                json!({"id": OFFICIAL_ID, "name": "Claude 官方", "mode": "official", "cli":"claude-desktop", "type":"official", "enabled":true}),
             );
             data.save(paths)?;
         }
@@ -1772,7 +1772,7 @@ mod tests {
             manager.apply_at(&fixture.paths, &mut data, &fixture.desktop).await.unwrap();
             let before = fixture.contents();
             let connection = crate::core::database::open(&fixture.paths).unwrap();
-            connection.execute_batch("CREATE TRIGGER reject_desktop_settings BEFORE INSERT ON claude_desktop_settings BEGIN SELECT RAISE(FAIL, '模拟事务失败'); END;").unwrap();
+            connection.execute_batch("CREATE TRIGGER reject_desktop_settings BEFORE INSERT ON app_metadata BEGIN SELECT RAISE(FAIL, '模拟事务失败'); END;").unwrap();
             drop(connection);
             data.settings.insert("currentProviderId".to_string(), json!(""));
             assert!(manager.apply_at(&fixture.paths, &mut data, &fixture.desktop).await.is_err());
@@ -1935,6 +1935,7 @@ mod tests {
             ];
             provider_store::write_provider_bundle(&fixture.paths, &sources, &[], &[], &keys)
                 .unwrap();
+            let sources=provider_store::read_providers(&fixture.paths).unwrap();
             let mut data = DesktopData::load(&fixture.paths).unwrap();
             data.upsert_provider(&json!({"id": "existing", "name": "Desktop 已编辑", "mode": "direct", "baseUrl": "https://desktop.invalid", "apiKey": "desktop-secret", "routes": {}})).unwrap();
             data.save(&fixture.paths).unwrap();
@@ -2424,7 +2425,7 @@ mod tests {
             data.settings.insert("port".to_string(), json!(port));
             data.settings.insert("currentProviderId".to_string(), json!("example"));
             let connection = crate::core::database::open(&fixture.paths).unwrap();
-            connection.execute_batch("CREATE TRIGGER reject_desktop_settings BEFORE INSERT ON claude_desktop_settings BEGIN SELECT RAISE(FAIL, '模拟事务失败'); END;").unwrap();
+            connection.execute_batch("CREATE TRIGGER reject_desktop_settings BEFORE INSERT ON app_metadata BEGIN SELECT RAISE(FAIL, '模拟事务失败'); END;").unwrap();
             drop(connection);
             let manager = DesktopManager::new();
             assert!(manager.apply_at(&fixture.paths, &mut data, &fixture.desktop).await.is_err());

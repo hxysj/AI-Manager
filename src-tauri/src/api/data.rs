@@ -724,9 +724,6 @@ async fn restore_data_backup_content(
         .iter()
         .filter_map(|entry| entry.get("path").and_then(Value::as_str))
         .collect::<HashSet<_>>();
-    let providers_changed = restored_paths.contains("storage/providers.json");
-    let provider_models_changed = restored_paths.contains("storage/runtime-models.json");
-    let codex_accounts_changed = restored_paths.contains("storage/codex-accounts.json");
     let refresh_skills = restored_paths.contains("storage/skills.json")
         || restored_paths
             .iter()
@@ -751,13 +748,6 @@ async fn restore_data_backup_content(
     rule_store::initialize(paths)?;
     provider_store::initialize(paths)?;
     restore_database_entries(paths, &workspace_entries, &choices).await?;
-    database::reconcile_local_state(
-        paths,
-        providers_changed,
-        provider_models_changed,
-        codex_accounts_changed,
-    )?;
-
     if let Some(runtime_provider_keys) = runtime_provider_keys {
         merge_provider_keys(paths, &runtime_provider_keys, &choices).await?;
     }
@@ -3543,9 +3533,6 @@ fn restore_database_table_name(table: &str) -> &'static str {
         "skill_repositories" => "Skill 仓库",
         "rules" => "规则",
         "providers" => "Provider",
-        "provider_models" => "Provider 模型",
-        "claude_desktop_providers" => "Claude Desktop 供应商",
-        "codex_accounts" => "Codex 官方账号",
         _ => "应用数据",
     }
 }
@@ -3975,7 +3962,7 @@ mod tests {
         let connection = rusqlite::Connection::open(&snapshot_path).unwrap();
         assert_eq!(
             connection
-                .query_row("SELECT COUNT(*) FROM claude_desktop_providers", [], |row| {
+                .query_row("SELECT COUNT(*) FROM providers WHERE cli='claude-desktop'", [], |row| {
                     row.get::<_, i64>(0)
                 })
                 .unwrap(),
@@ -3983,7 +3970,7 @@ mod tests {
         );
         assert_eq!(
             connection
-                .query_row("SELECT COUNT(*) FROM claude_desktop_settings", [], |row| {
+                .query_row("SELECT COUNT(*) FROM app_metadata WHERE key LIKE 'desktop:%'", [], |row| {
                     row.get::<_, i64>(0)
                 })
                 .unwrap(),
@@ -4001,7 +3988,7 @@ mod tests {
             .unwrap();
         keys.remove("claude-desktop:same-id");
         provider_store::write_keys(&paths, &keys).unwrap();
-        let choices = json!({"database:storage/ai-manager.db:claude_desktop_providers": "backup"});
+        let choices = json!({"database:storage/ai-manager.db:providers": "backup"});
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -4925,7 +4912,7 @@ mod tests {
         )
         .unwrap();
         let choices = json!({
-          "database:storage/ai-manager.db:codex_accounts": "backup"
+          "database:storage/ai-manager.db:providers": "backup"
         })
         .as_object()
         .cloned()
