@@ -3,13 +3,11 @@ use crate::core::paths::AppPaths;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::process::Command;
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-static REPO_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,20 +225,7 @@ fn slugify_name(value: &str) -> String {
 }
 
 fn create_repo_id() -> String {
-    let now = now_millis();
-    let counter = REPO_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let process_id = std::process::id() as u128;
-    let seed = now ^ (counter as u128) ^ (process_id << 32);
-    let text = format!("{:032x}", seed);
-
-    format!(
-        "{}-{}-{}-{}-{}",
-        &text[0..8],
-        &text[8..12],
-        &text[12..16],
-        &text[16..20],
-        &text[20..32]
-    )
+    uuid::Uuid::new_v4().to_string()
 }
 
 async fn directory_exists(target_path: &str) -> Result<bool, ManagerError> {

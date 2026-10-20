@@ -10,13 +10,11 @@ use serde_json::{json, Map, Value};
 use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 const DEFAULT_EXCHANGE_RATE: f64 = 7.2;
 const CODEX_USAGE_PARSER_VERSION: u64 = 2;
 const DESKTOP_USAGE_PARSER_VERSION: u64 = 2;
-static PRICING_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static USAGE_LOG_CACHE: OnceLock<Mutex<Option<UsageLogCache>>> = OnceLock::new();
 static USAGE_PROVIDER_STATS_CACHE: OnceLock<Mutex<HashMap<String, UsageProviderStatsCache>>> =
     OnceLock::new();
@@ -2555,6 +2553,7 @@ pub(crate) fn collect_cli_session_files(cli_targets: &[Value]) -> Result<Vec<Val
 }
 
 fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
+    let mut stored_ids = None;
     let mut sessions = state
         .get("sessions")
         .and_then(Value::as_array)
@@ -2597,7 +2596,14 @@ fn collect_usage_sessions(paths: &AppPaths, state: &Value) -> Result<Vec<Value>,
         }
 
         seen_paths.insert(raw_path.clone(), sessions.len());
-        sessions.push(create_scanned_usage_session(&item, &raw_path));
+        if stored_ids.is_none() {
+            stored_ids = Some(usage_store::read_session_ids(paths)?);
+        }
+        let mut session = create_scanned_usage_session(&item, &raw_path);
+        if let Some(id) = stored_ids.as_ref().and_then(|items| items.get(&raw_path)) {
+            session["id"] = json!(id);
+        }
+        sessions.push(session);
     }
 
     Ok(sessions)
@@ -2623,10 +2629,7 @@ fn create_scanned_usage_session(item: &Value, raw_path: &str) -> Value {
     let cli = string_value(item.get("cli"));
 
     json!({
-      "id": create_hash_id(&[
-        cli.clone(),
-        raw_path.to_string()
-      ]),
+      "id": uuid::Uuid::new_v4().to_string(),
       "cli": cli,
       "cliName": non_empty_text(item.get("cliName"), &string_value(item.get("cli"))),
       "title": title,
@@ -4074,11 +4077,7 @@ fn create_hash_id(parts: &[String]) -> String {
 }
 
 fn create_pricing_id() -> String {
-    format!(
-        "pricing-{}-{}",
-        now_millis(),
-        PRICING_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
-    )
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn slash_skill_regex() -> &'static Regex {
@@ -4151,6 +4150,30 @@ mod tests {
     use crate::core::{paths::resolve_app_paths, usage_store};
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn discovered_session_uuid_is_shared_by_usage_and_session_refreshes() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+            let paths = resolve_app_paths(&root);
+            std::fs::create_dir_all(&paths.workspace_root).unwrap();
+            let source = root.join("session.jsonl");
+            std::fs::write(&source, concat!(
+                "{\"timestamp\":\"2026-10-20T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"external-session\",\"cwd\":\"D:/project\"}}\n",
+                "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"你好\"}]}}\n"
+            )).unwrap();
+            let mut state = json!({"providers":[],"sessions":[],"cliTargets":[{"id":"codex","sessionsPath":root}]});
+            refresh_usage(&paths, &state).await.unwrap();
+            let sessions = super::collect_usage_sessions(&paths, &state).unwrap();
+            let id = sessions[0]["id"].as_str().unwrap();
+            assert_eq!(uuid::Uuid::parse_str(id).unwrap().get_version_num(), 4);
+            crate::api::sessions::refresh_sessions_state(&paths, &mut state).await.unwrap();
+            assert_eq!(state["sessions"][0]["id"], id);
+            refresh_usage(&paths, &state).await.unwrap();
+            assert_eq!(super::collect_usage_sessions(&paths, &state).unwrap()[0]["id"], id);
+            std::fs::remove_dir_all(root).unwrap();
+        });
+    }
 
     #[test]
     fn key_usage_counts_scanned_tokens_without_double_counting_gateway_requests() {

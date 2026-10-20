@@ -284,6 +284,9 @@ fn replace(
         ));
     }
     let transaction = connection.transaction()?;
+    let mut previous_categories = transaction.prepare("SELECT group_name, original_title, id FROM image_prompt_categories")?
+        .query_map([], |row| Ok(((row.get::<_, String>(0)?, row.get::<_, String>(1)?), row.get::<_, String>(2)?)))?
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     transaction.execute("DELETE FROM image_prompt_templates", [])?;
     transaction.execute("DELETE FROM image_prompt_categories", [])?;
     let mut ids = HashSet::new();
@@ -316,14 +319,18 @@ fn replace(
                 continue;
             }
             let slug = text(&category["slug"]);
-            let category_id = format!("{group}:{}", if slug.is_empty() { title } else { slug });
+            let category_key = format!("{group}:{}", if slug.is_empty() { title } else { slug });
+            let localized = text(&category["localized"]["zh"]["title"]);
+            let localized_group = text(&category["localized"]["zh"]["group"]);
+            let group_name = if localized_group.is_empty() { group } else { localized_group };
+            let category_id = categories.get(&category_key).map(|item| text(&item["id"]).to_string())
+                .or_else(|| previous_categories.remove(&(group_name.to_string(), title.to_string())))
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             if item_categories.contains(&category_id) {
                 continue;
             }
-            let localized = text(&category["localized"]["zh"]["title"]);
-            let localized_group = text(&category["localized"]["zh"]["group"]);
-            let entry = categories.entry(category_id.clone()).or_insert_with(|| json!({
-                "id": category_id, "group": if localized_group.is_empty() { group } else { localized_group },
+            let entry = categories.entry(category_key).or_insert_with(|| json!({
+                "id": category_id, "group": group_name,
                 "title": if localized.is_empty() { title } else { localized }, "originalTitle": title, "count": 0
             }));
             entry["count"] = json!(entry["count"].as_u64().unwrap_or(0) + 1);
@@ -445,6 +452,7 @@ mod tests {
         let detail = dispatch(&paths, "tools:image-prompts-detail", json!({ "id": id })).unwrap();
         assert!(!text(&detail["prompt"]).is_empty());
         let category = &catalog["categories"][0];
+        assert_eq!(uuid::Uuid::parse_str(category["id"].as_str().unwrap()).unwrap().get_version_num(), 4);
         let filtered = dispatch(
             &paths,
             "tools:image-prompts-list",
@@ -478,6 +486,9 @@ mod tests {
             dispatch(&paths, "tools:image-prompts-detail", json!({"id":"custom"})).unwrap();
         assert_eq!(detail["previewImageUrl"], "");
         assert_eq!(detail["prompt"], "Text");
+        let before = dispatch(&paths, "tools:image-prompts-catalog", json!({})).unwrap();
+        dispatch(&paths, "tools:image-prompts-import", json!({"path":custom})).unwrap();
+        assert_eq!(dispatch(&paths, "tools:image-prompts-catalog", json!({})).unwrap()["categories"], before["categories"]);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

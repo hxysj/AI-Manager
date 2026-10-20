@@ -193,8 +193,8 @@ impl LanShareServerRegistry {
     }
 }
 
-pub fn create_id(prefix: &str) -> String {
-    format!("{}_{}_{}", prefix, now_millis(), uuid::Uuid::new_v4())
+pub fn create_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 pub fn now_millis() -> u64 {
@@ -339,33 +339,30 @@ fn format_file_size(size: u64) -> String {
 }
 
 pub fn create_file_id(path: &str) -> String {
-    use sha1::{Digest, Sha1};
-
-    let mut hasher = Sha1::new();
-    hasher.update(path.as_bytes());
-    format!("file_{:x}", hasher.finalize())
+    create_stable_id(&format!("lan-file:{path}"))
 }
 
 pub fn device_id_from_ip(ip: &str) -> String {
-    use sha1::{Digest, Sha1};
+    create_stable_id(&format!("lan-device:{}", ip.trim()))
+}
 
+fn create_stable_id(value: &str) -> String {
+    use sha1::{Digest, Sha1};
+    // 复用已有 SHA-1 依赖，按 UUID v5 规范计算稳定身份，避免扫描时重复创建记录。
     let mut hasher = Sha1::new();
-    hasher.update(ip.trim().as_bytes());
-    format!("device_{:x}", hasher.finalize())
+    hasher.update(uuid::Uuid::NAMESPACE_URL.as_bytes());
+    hasher.update(value.as_bytes());
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&hasher.finalize()[..16]);
+    uuid::Builder::from_sha1_bytes(bytes).into_uuid().to_string()
 }
 
 fn create_session_file_id(session_id: &str, path: &str) -> String {
-    use sha1::{Digest, Sha1};
-
     if session_id.is_empty() {
         return create_file_id(path);
     }
 
-    let mut hasher = Sha1::new();
-    hasher.update(session_id.as_bytes());
-    hasher.update(b":");
-    hasher.update(path.as_bytes());
-    format!("file_{:x}", hasher.finalize())
+    create_stable_id(&format!("lan-session-file:{session_id}:{path}"))
 }
 
 fn create_invite_code() -> String {
@@ -427,7 +424,7 @@ pub async fn add_files(
     if files.is_empty() {
         return get_state(registry, paths).await;
     }
-    let message_id = create_id("message");
+    let message_id = create_id();
     let content = if files.len() == 1 {
         format!(
             "共享文件：{}（{}）",
@@ -866,7 +863,7 @@ pub async fn delete_device(
             }
         }
         let mut runtime = registry.inner.lock().await;
-        if device_id.starts_with("native-") {
+        if runtime.native.config.peers.iter().any(|trusted| trusted.peer.id == device_id) {
             runtime.native.forget(paths, &device_id).await?;
         }
         write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
@@ -905,9 +902,9 @@ pub async fn create_group(
     let message_visibility =
         normalize_message_visibility(&string_value(payload.get("messageVisibility")));
     let now = now_millis();
-    let group_id = create_id("group");
+    let group_id = create_id();
     let session = LanShareSession {
-        id: create_id("session"),
+        id: create_id(),
         device_id: String::new(),
         device_name: "群聊".to_string(),
         ip: String::new(),
@@ -2056,7 +2053,13 @@ fn mobile_page_html() -> String {
       document.getElementById("chooseAttachments").disabled = true;
       inputEl.disabled = true;
       renderPendingAttachments();
-      pendingMessageId ||= "message-" + Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, "0")).join("");
+      if (!pendingMessageId) {
+        const bytes = crypto.getRandomValues(new Uint8Array(16));
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, "0")).join("");
+        pendingMessageId = [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
+      }
       try {
         const sessionId = currentSessionId;
         for (const [index, item] of pendingAttachments.entries()) {
@@ -2488,7 +2491,7 @@ fn ensure_session(
     }
 
     let session = LanShareSession {
-        id: create_id("session"),
+        id: create_id(),
         device_id: device_id.to_string(),
         device_name: device_name.to_string(),
         ip: ip.to_string(),
@@ -2746,7 +2749,7 @@ fn upsert_group_session(
     }
 
     let session = LanShareSession {
-        id: create_id("session"),
+        id: create_id(),
         device_id: device.id.clone(),
         device_name,
         ip: ip.to_string(),
@@ -2782,7 +2785,7 @@ pub async fn create_session(
         let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
         let now = now_millis();
         let session = LanShareSession {
-            id: create_id("session"),
+            id: create_id(),
             device_id: device_id.to_string(),
             device_name,
             ip: device.ip,
@@ -2943,7 +2946,7 @@ async fn append_message_with_attachments(
     let message = LanShareMessage {
         id: message_id
             .map(str::to_string)
-            .unwrap_or_else(|| create_id("message")),
+            .unwrap_or_else(|| create_id()),
         session_id: session.id,
         device_id: device_id.to_string(),
         device_name,
@@ -3005,7 +3008,7 @@ pub async fn send_message(
     }
     let requested_id = string_value(payload.get("messageId"));
     let message_id = if requested_id.is_empty() {
-        create_id("message")
+        create_id()
     } else {
         requested_id
     };
@@ -3035,18 +3038,11 @@ pub async fn send_message(
         emit_state_changed(&app, registry, paths).await?;
         return Ok(lan_share_response(json!([stored])));
     }
-    let is_native = target_device_id.starts_with("native-");
-    let is_trusted_peer = if is_native {
-        let runtime = registry.inner.lock().await;
-        runtime
-            .native
-            .config
-            .peers
-            .iter()
-            .any(|trusted| trusted.peer.id == target_device_id)
-    } else {
-        false
-    };
+    let is_trusted_peer = registry.inner.lock().await.native.config.peers.iter()
+        .any(|trusted| trusted.peer.id == target_device_id);
+    let is_native = is_trusted_peer || target_device_id.starts_with("native-") || target_device_id.starts_with("native_")
+        || read_array::<LanShareDevice>(&paths.lan_share_files.devices)?.iter()
+            .any(|device| device.id == target_device_id && device.user_agent == "MonkeyThief/Desktop");
     if is_native && !is_trusted_peer {
         return Err(ManagerError::System("请先连接并配对这台设备。".into()));
     }
@@ -3078,7 +3074,7 @@ pub async fn send_message(
         let stored_id = if device_id == target_device_id {
             message_id.clone()
         } else {
-            format!("{message_id}-{device_id}")
+            create_stable_id(&format!("lan-message:{message_id}:{device_id}"))
         };
         let stored = append_message_with_attachments(
             registry,
@@ -3674,7 +3670,7 @@ async fn append_download_record(
     downloads.insert(
         0,
         LanShareDownload {
-            id: create_id("download"),
+            id: create_id(),
             file_id: file.id.clone(),
             file_name: file.name.clone(),
             device_id: device.id,
@@ -4157,7 +4153,7 @@ async fn store_guest_message(
     .await?;
     let requested_id = string_value(payload.get("messageId"));
     let message_id = if requested_id.is_empty() {
-        create_id("message")
+        create_id()
     } else {
         format!("{device_id}-{requested_id}")
     };
@@ -4230,7 +4226,7 @@ mod tests {
     #[test]
     fn delete_device_removes_direct_records_without_losing_shared_group_history() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("device-delete-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
             let removed = upsert_device(&registry, &paths, "", "待删除", "Chrome", "192.168.1.31")
@@ -4375,7 +4371,7 @@ mod tests {
     #[test]
     fn group_creation_rejects_missing_or_invalid_invitees_without_creating_records() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("group-invite-validation"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -4425,7 +4421,7 @@ mod tests {
     #[test]
     fn group_creation_adds_unique_invitees_persists_sessions_and_notifies_online_devices() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("group-invite-members"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -4498,7 +4494,7 @@ mod tests {
             device_id_from_ip("192.168.1.8"),
             device_id_from_ip("192.168.1.9")
         );
-        assert!(device_id_from_ip("192.168.1.8").starts_with("device_"));
+        assert_eq!(uuid::Uuid::parse_str(&device_id_from_ip("192.168.1.8")).unwrap().get_version_num(), 5);
     }
 
     #[test]
@@ -4508,19 +4504,16 @@ mod tests {
     }
 
     #[test]
-    fn create_id_includes_uuid_suffix() {
-        let id = create_id("msg");
-        let parts: Vec<&str> = id.splitn(3, '_').collect();
-
-        assert_eq!(parts.len(), 3);
-        assert_eq!(parts[0], "msg");
-        uuid::Uuid::parse_str(parts[2]).expect("create_id should include a uuid suffix");
+    fn create_id_returns_uuid() {
+        let id = create_id();
+        assert_eq!(uuid::Uuid::parse_str(&id).unwrap().get_version_num(), 4);
+        assert_ne!(id, create_id());
     }
 
     #[test]
     fn appends_message_without_content_length_limit() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             let content = "长".repeat(1200);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
@@ -4549,7 +4542,7 @@ mod tests {
     #[test]
     fn list_messages_searches_keyword_in_content_only() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -4604,7 +4597,7 @@ mod tests {
     #[test]
     fn bulk_actions_delete_selected_messages_only() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -4670,7 +4663,7 @@ mod tests {
     #[test]
     fn empty_mobile_session_id_prefers_direct_session() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -4722,7 +4715,7 @@ mod tests {
     #[test]
     fn bulk_actions_delete_session_removes_related_records() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -4838,7 +4831,7 @@ mod tests {
     #[test]
     fn bulk_actions_remove_selected_files_only() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -4886,7 +4879,7 @@ mod tests {
     #[test]
     fn save_file_copies_received_attachments_without_running_service() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan-share-save-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
             let uploads = Path::new(&paths.lan_share_dir).join("uploads");
@@ -4930,7 +4923,7 @@ mod tests {
     #[test]
     fn save_file_rejects_invalid_records_and_preserves_source_file() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan-share-save-validation-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
             tokio::fs::create_dir_all(&root).await.unwrap();
@@ -4971,7 +4964,7 @@ mod tests {
     #[test]
     fn bulk_actions_export_selected_files_to_zip() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             let first_file = root.join("first.txt");
             let second_file = root.join("second.txt");
@@ -5032,7 +5025,7 @@ mod tests {
     #[test]
     fn creates_new_session_bound_to_device_ip_without_reusing_previous_one() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -5075,7 +5068,7 @@ mod tests {
     #[test]
     fn upsert_device_uses_ip_bound_id_and_keeps_identity_when_name_changes() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -5122,7 +5115,7 @@ mod tests {
     #[test]
     fn state_backfills_missing_session_ip_from_device_record() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -5168,7 +5161,7 @@ mod tests {
     #[test]
     fn appends_message_to_requested_session() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -5233,7 +5226,7 @@ mod tests {
     #[test]
     fn appends_desktop_message_to_group_session_without_new_direct_session() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -5307,7 +5300,7 @@ mod tests {
     #[test]
     fn appends_desktop_message_to_last_activated_session_by_default() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -5375,7 +5368,7 @@ mod tests {
     #[test]
     fn appends_mobile_message_to_latest_session_matching_current_ip() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -5440,7 +5433,7 @@ mod tests {
     #[test]
     fn refresh_files_keeps_existing_id_and_path() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             let shared_file = root.join("shared.txt");
             tokio::fs::create_dir_all(&paths.lan_share_dir)
@@ -5480,7 +5473,7 @@ mod tests {
     #[test]
     fn session_files_are_only_visible_for_their_session() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             let first_file = root.join("first.txt");
             let second_file = root.join("second.txt");
@@ -5568,7 +5561,7 @@ mod tests {
     #[test]
     fn adding_files_creates_file_message() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             let shared_file = root.join("shared.txt");
             tokio::fs::create_dir_all(&paths.lan_share_dir)
@@ -5626,7 +5619,7 @@ mod tests {
     #[test]
     fn desktop_message_to_offline_session_is_kept_for_later_sync() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -5892,7 +5885,7 @@ mod service_tests {
     fn state_includes_qr_svg_for_running_access_url() {
         tauri::async_runtime::block_on(async {
             let registry = LanShareServerRegistry::new();
-            let root = std::env::temp_dir().join(create_id("lan_share_test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
 
             registry.inner.lock().await.access_url =

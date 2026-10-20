@@ -5,6 +5,7 @@ use serde_json::{json, Map, Value};
 // 明确列出每个业务字段；JSON 仅用于具名的列表、请求头和外部额度对象。
 pub(super) const FIELDS: &[(&str, &str, &str)] = &[
     ("name", "/name", "TEXT"),
+    ("source_provider_id", "/sourceProviderId", "TEXT"),
     ("icon", "/icon", "TEXT"),
     ("note", "/note", "TEXT"),
     ("website", "/website", "TEXT"),

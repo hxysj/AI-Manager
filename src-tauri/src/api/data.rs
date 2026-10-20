@@ -3560,22 +3560,7 @@ fn sha256_text(content: &str) -> String {
 }
 
 fn create_restore_id() -> Result<String, ManagerError> {
-    let mut bytes = [0u8; 16];
-
-    getrandom::getrandom(&mut bytes).map_err(|error| ManagerError::System(error.to_string()))?;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-
-    Ok(format!(
-        "{:08x}-{:04x}-{:04x}-{:04x}-{:012x}",
-        u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
-        u16::from_be_bytes([bytes[4], bytes[5]]),
-        u16::from_be_bytes([bytes[6], bytes[7]]),
-        u16::from_be_bytes([bytes[8], bytes[9]]),
-        u64::from_be_bytes([
-            0, 0, bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
-        ])
-    ))
+    Ok(uuid::Uuid::new_v4().to_string())
 }
 
 async fn remove_existing_path(target_path: &Path) -> Result<(), ManagerError> {
@@ -4819,8 +4804,9 @@ mod tests {
         let mut source_keys = Map::new();
         let mut local_keys = Map::new();
         for id in key_ids {
-            runtime_provider::set_provider_key(&mut local_keys, id, "primary-secret".into())
-                .unwrap();
+            runtime_provider::set_provider_keys(&mut local_keys, id,
+                &[json!({"id":"default","name":"默认 Key","note":"","apiKey":"primary-secret"})],
+                "default".into()).unwrap();
             runtime_provider::set_provider_keys(
                 &mut source_keys,
                 id,

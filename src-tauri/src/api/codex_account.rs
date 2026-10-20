@@ -1170,7 +1170,7 @@ async fn save_account(
             .get("account_id")
             .or_else(|| profile.get("user_id"))
             .or_else(|| profile.get("sub")),
-        &format!("codex-account-{}", uuid::Uuid::new_v4()),
+        &uuid::Uuid::new_v4().to_string(),
     );
     let email = first_string(
         profile.get("email"),
@@ -1179,14 +1179,16 @@ async fn save_account(
     );
     let current_account = provider_store::read_codex_accounts(paths)?
         .into_iter()
-        .find(|account| string_value(account.get("id")) == account_id);
+        .find(|account| ["id", "accountId", "account_id"].iter().any(|field| string_value(account.get(*field)) == account_id));
+    let id = current_account.as_ref().map(|account| string_value(account.get("id")))
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let token_updated_at = tokens
         .token_updated_at
         .max(parse_timestamp(&tokens.last_refresh))
         .max(now_millis());
     let quota_stages = create_quota_stage_samples(&usage, now_millis());
     let next_account = json!({
-      "id": account_id,
+      "id": id,
       "provider": "codex",
       "type": "codex",
       "accountId": account_id,
@@ -1231,7 +1233,7 @@ async fn save_account(
     });
 
     replace_account(paths, &next_account).await?;
-    usage_store::record_codex_quota_stages(paths, &account_id, &quota_stages)?;
+    usage_store::record_codex_quota_stages(paths, &id, &quota_stages)?;
     Ok(next_account)
 }
 
@@ -1928,6 +1930,24 @@ mod tests {
           "auth": { "accessToken": "old-access", "refreshToken": "old-refresh", "expiresAt": now_millis() + 3_600_000 },
           "requires_reauth": false
         })
+    }
+
+    #[test]
+    fn new_account_uses_local_uuid_and_refresh_reuses_it() {
+        with_account_paths(|paths| {
+            tauri::async_runtime::block_on(async {
+                let mut claims = json!({"account_id":"upstream-account"});
+                let profile = json!({"email":"test@example.com"});
+                let saved = save_account(paths, tokens_from_account(&cached_account()), profile.clone(), &mut claims, json!({}), String::new()).await.unwrap();
+                assert_eq!(uuid::Uuid::parse_str(saved["id"].as_str().unwrap()).unwrap().get_version_num(), 4);
+                assert_eq!(saved["accountId"], "upstream-account");
+                provider_store::write_active_codex_account_id(paths, saved["id"].as_str().unwrap()).unwrap();
+                let refreshed = save_account(paths, tokens_from_account(&saved), profile, &mut claims, json!({}), String::new()).await.unwrap();
+                assert_eq!(refreshed["id"], saved["id"]);
+                assert_eq!(provider_store::read_codex_accounts(paths).unwrap().len(), 1);
+                assert_eq!(provider_store::read_active_codex_account_id(paths).unwrap(), saved["id"]);
+            });
+        });
     }
 
     #[test]

@@ -261,14 +261,18 @@ fn normalize_provider(input: &Value, api_key: &str) -> Result<Value, ManagerErro
         reqwest::Proxy::all(text(input, "proxy")).map_err(|_| error("网络代理地址无效"))?;
     }
     let routes = model_routes(input)?;
-    Ok(json!({
+    let mut provider = json!({
         "id": if text(input, "id").is_empty() { uuid::Uuid::new_v4().to_string() } else { text(input, "id").to_string() },
         "name": text(input, "name"), "mode": text(input, "mode"), "icon": text(input, "icon"),
         "baseUrl": base_url, "apiFormat": if text(input, "apiFormat").is_empty() { "anthropic" } else { text(input, "apiFormat") }, "routes": routes,
         "authField": if text(input, "authField") == "ANTHROPIC_API_KEY" && ["", "anthropic"].contains(&text(input, "apiFormat")) { "ANTHROPIC_API_KEY" } else { "ANTHROPIC_AUTH_TOKEN" },
         "proxy": text(input, "proxy"), "headers": headers, "note": text(input, "note"),
         "website": text(input, "website"), "enabled": input["enabled"] != false
-    }))
+    });
+    if let Some(source) = input.get("sourceProviderId") {
+        provider["sourceProviderId"] = source.clone();
+    }
+    Ok(provider)
 }
 
 fn build_profile(
@@ -834,15 +838,14 @@ impl DesktopManager {
             return Err(error("供应商已禁用，请先取消禁用"));
         }
         if local && data.gateway_token()?.is_empty() {
-            runtime_provider::set_provider_key(
-                &mut data.settings,
-                GATEWAY_KEY,
-                format!(
+            data.settings.insert(
+                GATEWAY_KEY.into(),
+                json!(runtime_provider::encrypt_provider_key(&format!(
                     "{}{}",
                     uuid::Uuid::new_v4().simple(),
                     uuid::Uuid::new_v4().simple()
-                ),
-            )?;
+                ))?),
+            );
         }
         let profile = if data.current_id() == OFFICIAL_ID {
             None
@@ -976,7 +979,7 @@ impl DesktopManager {
                     if data
                         .providers
                         .iter()
-                        .any(|provider| text(provider, "id") == text(source, "id"))
+                        .any(|provider| text(provider, "id") == text(source, "id") || text(provider, "sourceProviderId") == text(source, "id"))
                     {
                         skipped.push(format!(
                             "{}：已导入，保留 Desktop 现有配置",
@@ -1086,7 +1089,7 @@ fn preview_import_providers(paths: &AppPaths) -> Result<Value, ManagerError> {
                 "apiKeyCount": runtime_provider::provider_key_records(keys.get(text(source, "id"))).len(),
                 "status": "available", "reason": ""
             });
-            if existing.iter().any(|provider| text(provider, "id") == text(source, "id")) {
+            if existing.iter().any(|provider| text(provider, "id") == text(source, "id") || text(provider, "sourceProviderId") == text(source, "id")) {
                 item["status"] = json!("existing");
                 item["reason"] = json!("已导入，保留 Desktop 现有配置");
                 return item;
@@ -1109,6 +1112,8 @@ fn preview_import_providers(paths: &AppPaths) -> Result<Value, ManagerError> {
 
 fn import_provider(source: &Value, key: &str) -> Result<Value, ManagerError> {
     let mut provider = source.clone();
+    provider["id"] = json!(uuid::Uuid::new_v4().to_string());
+    provider["sourceProviderId"] = source["id"].clone();
     provider["routes"] = json!({});
     let config = &source["runtimeConfig"];
     let models = ROUTES
@@ -1993,7 +1998,8 @@ mod tests {
                     .unwrap()["name"],
                 "Desktop 已编辑"
             );
-            assert!(after.keys.contains_key("claude-desktop:second"));
+            let imported_id = after.providers.iter().find(|provider| text(provider, "sourceProviderId") == "second").map(|provider| text(provider, "id")).unwrap();
+            assert!(after.keys.contains_key(&format!("claude-desktop:{imported_id}")));
             assert!(!after.keys.contains_key("claude-desktop:first"));
             assert_eq!(after.current_id(), "");
             assert_eq!(
@@ -2060,13 +2066,36 @@ mod tests {
             assert_eq!(result["providers"][1]["activeApiKeyId"], "backup");
             assert_eq!(result["providers"][1]["enabled"], false);
             assert!(!result.to_string().contains("cli-backup"));
+            let desktop_id = text(&result["providers"][1], "id");
+            assert_eq!(uuid::Uuid::parse_str(desktop_id).unwrap().get_version_num(), 4);
             let mut data = DesktopData::load(&fixture.paths).unwrap();
-            assert_eq!(data.keys["claude-desktop:cli-source"], data.keys["cli-source"]);
-            data.upsert_provider(&json!({"id": "cli-source", "apiKeys": [{"id": "backup", "apiKey": "desktop-new-secret"}], "activeApiKeyId": "backup"})).unwrap();
+            assert_eq!(data.keys[&format!("claude-desktop:{desktop_id}")], data.keys["cli-source"]);
+            data.upsert_provider(&json!({"id": desktop_id, "apiKeys": [{"id": "backup", "apiKey": "desktop-new-secret"}], "activeApiKeyId": "backup"})).unwrap();
             data.save(&fixture.paths).unwrap();
             assert_eq!(runtime_provider::get_provider_api_key(&fixture.paths, "cli-source").unwrap(), "cli-backup");
-            assert_eq!(data.key("cli-source").unwrap(), "desktop-new-secret");
+            assert_eq!(data.key(desktop_id).unwrap(), "desktop-new-secret");
             assert!(fixture.contents().iter().all(Option::is_none));
+        });
+    }
+
+    #[test]
+    fn uuid_cli_provider_import_has_its_own_uuid_and_preserves_source() {
+        runtime().block_on(async {
+            let fixture = Fixture::new();
+            let id = uuid::Uuid::new_v4().to_string();
+            let mut keys = Map::new();
+            runtime_provider::set_provider_key(&mut keys, &id, "source-secret".into()).unwrap();
+            provider_store::write_provider_bundle(&fixture.paths, &[json!({"id":id,"cli":"claude","name":"Source","baseUrl":"https://example.invalid"})], &[], &[], &keys).unwrap();
+            let manager = DesktopManager::new();
+            let result = manager.dispatch(&fixture.paths, "import", json!({"providerIds":[id]})).await.unwrap();
+            let imported = &result["providers"][1];
+            assert_eq!(uuid::Uuid::parse_str(text(imported, "id")).unwrap().get_version_num(), 4);
+            assert_ne!(imported["id"], id);
+            assert_eq!(imported["sourceProviderId"], id);
+            assert_eq!(provider_store::read_providers(&fixture.paths).unwrap()[0]["id"], id);
+            let repeated = manager.dispatch(&fixture.paths, "import", json!({"providerIds":[id]})).await.unwrap();
+            assert_eq!(repeated["importedCount"], 0);
+            assert_eq!(repeated["providers"][1]["id"], imported["id"]);
         });
     }
 
@@ -2533,12 +2562,7 @@ mod tests {
                 "upstream-secret".to_string(),
             )
             .unwrap();
-            runtime_provider::set_provider_key(
-                &mut data.settings,
-                GATEWAY_KEY,
-                "local-secret".to_string(),
-            )
-            .unwrap();
+            data.settings.insert(GATEWAY_KEY.into(), json!(runtime_provider::encrypt_provider_key("local-secret").unwrap()));
             data.settings
                 .insert("currentProviderId".to_string(), json!("example"));
             data.save(&fixture.paths).unwrap();

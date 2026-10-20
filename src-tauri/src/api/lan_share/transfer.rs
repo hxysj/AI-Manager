@@ -329,7 +329,7 @@ mod tests {
     #[test]
     fn browser_stream_holds_shared_file_slot_until_response_is_dropped() {
         tauri::async_runtime::block_on(async {
-            let path = std::env::temp_dir().join(create_id("limited-browser-file"));
+            let path = std::env::temp_dir().join(create_id());
             tokio::fs::write(&path, vec![9; SLICE_BYTES * 2])
                 .await
                 .unwrap();

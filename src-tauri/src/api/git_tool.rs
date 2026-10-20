@@ -1,7 +1,6 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::{path_text, AppPaths};
 use serde_json::{json, Value};
-use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::path::Path;
 use tokio::process::Command;
@@ -316,7 +315,7 @@ pub async fn archive_branch(
 
     let commit_hash = get_branch_commit(&project_path, &branch_name).await?;
     let archive_git_dir = ensure_archive_git(paths, &repo_id).await?;
-    let archive_id = create_archive_id(&repo_id, &branch_name, &commit_hash);
+    let archive_id = uuid::Uuid::new_v4().to_string();
     let archive_ref = format!("refs/archive/branches/{}", archive_id);
     let data_dir = git_tool_data_dir(paths);
     let project_git_remote = git_local_remote_path(&project_path);
@@ -642,7 +641,7 @@ pub async fn archive_stash(
     }
 
     let archive_git_dir = ensure_archive_git(paths, &repo_id).await?;
-    let stash_archive_id = create_stash_archive_id(&repo_id, &commit_hash);
+    let stash_archive_id = uuid::Uuid::new_v4().to_string();
     let archive_ref = format!("refs/archive/stashes/{}", stash_archive_id);
     let data_dir = git_tool_data_dir(paths);
     let project_git_remote = git_local_remote_path(&project_path);
@@ -1763,34 +1762,6 @@ async fn run_git_output(args: &[String], cwd: &str) -> Result<std::process::Outp
         .current_dir(cwd)
         .output()
         .await?)
-}
-
-fn create_archive_id(repo_id: &str, branch_name: &str, commit_hash: &str) -> String {
-    sha1_hex(&format!(
-        "{}:{}:{}:{}",
-        repo_id,
-        branch_name,
-        commit_hash,
-        now_millis()
-    ))[..16]
-        .to_string()
-}
-
-fn create_stash_archive_id(repo_id: &str, stash_hash: &str) -> String {
-    sha1_hex(&format!(
-        "{}:stash:{}:{}",
-        repo_id,
-        stash_hash,
-        now_millis()
-    ))[..16]
-        .to_string()
-}
-
-fn sha1_hex(value: &str) -> String {
-    let mut hasher = Sha1::new();
-
-    hasher.update(value.as_bytes());
-    format!("{:x}", hasher.finalize())
 }
 
 fn first_non_empty(values: &[String]) -> String {

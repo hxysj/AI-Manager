@@ -78,7 +78,7 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
         extra |= table_exists(connection, table)?;
     }
     let legacy_keys = has_column(connection, "provider_keys", "payload_json")?;
-    if !old && !columns.is_empty() && !extra && !legacy_keys {
+    if !old && columns.iter().any(|column| column == "source_provider_id") && !extra && !legacy_keys {
         return Ok(());
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -90,6 +90,9 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
         extra |= table_exists(&transaction, table)?;
     }
     if !old && !legacy_keys && !extra && table_exists(&transaction, "providers")? {
+        if !has_column(&transaction, "providers", "source_provider_id")? {
+            transaction.execute("ALTER TABLE providers ADD COLUMN source_provider_id TEXT", [])?;
+        }
         transaction.commit()?;
         return Ok(());
     }

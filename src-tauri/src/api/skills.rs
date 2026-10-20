@@ -521,7 +521,7 @@ pub async fn save_skill_group(paths: &AppPaths, payload: Value) -> Result<Value,
     }
 
     let next_group_id = if group_id.is_empty() {
-        format!("skill-group-{}", create_uuid_like_id())
+        create_id()
     } else {
         group_id
     };
@@ -964,7 +964,7 @@ pub async fn preview_skills_from_cli(
 
         if let Some(managed_skill) = managed_skill {
             let mut options = vec![json!({
-              "id": format!("managed:{}", string_value(managed_skill.get("sourcePath"))),
+              "id": managed_skill["id"],
               "name": managed_skill["name"],
               "description": managed_skill["description"],
               "signature": managed_signature.cloned().unwrap_or_default(),
@@ -1146,7 +1146,7 @@ pub async fn add_skill_repository(paths: &AppPaths, payload: Value) -> Result<Va
     ]);
     let now = now_millis();
     let mut repository = json!({
-      "id": format!("skill-repo-{}", create_uuid_like_id()),
+      "id": create_id(),
       "type": "github",
       "name": name,
       "source": github.source,
@@ -1536,7 +1536,7 @@ struct CandidateGroup {
 impl CandidateGroup {
     fn to_value(&self, already_managed: bool) -> Value {
         json!({
-          "id": self.source_paths.first().cloned().unwrap_or_default(),
+          "id": uuid::Uuid::new_v4().to_string(),
           "name": self.name,
           "description": self.description,
           "signature": self.signature,
@@ -1661,7 +1661,7 @@ fn parse_skill(skill_root: &str, repo_id: Value) -> Result<Value, ManagerError> 
     let stat = std::fs::metadata(skill_root)?;
 
     Ok(json!({
-      "id": sha1_hex(skill_root)[..16].to_string(),
+      "id": uuid::Uuid::new_v4().to_string(),
       "name": skill_name,
       "description": metadata.get("description").cloned().unwrap_or_default(),
       "version": metadata.get("version").cloned().unwrap_or_default(),
@@ -1806,13 +1806,11 @@ fn scan_repository_archive(
             format!("{}/SKILL.md", skill_path)
         };
 
+        let id = repository["skills"].as_array().and_then(|items| items.iter().find(|item| item["skillPath"] == skill_path))
+            .and_then(|item| item["id"].as_str()).map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         skills.push(json!({
-          "id": sha1_hex(&format!(
-            "{}:{}:{}",
-            string_value(repository.get("source")),
-            archive.branch,
-            skill_path
-          ))[..16].to_string(),
+          "id": id,
           "name": parsed["name"],
           "description": parsed["description"],
           "version": parsed["version"],
@@ -3055,7 +3053,7 @@ async fn trash_skill(
     }
 
     let now = now_millis();
-    let trash_id = format!("skill-trash-{}", create_uuid_like_id());
+    let trash_id = create_id();
     let source_dir_name = source_path
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
@@ -3605,20 +3603,8 @@ fn yaml_scalar(value: &str) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
 }
 
-fn create_uuid_like_id() -> String {
-    let now = now_millis();
-    let process_id = std::process::id() as u128;
-    let seed = now ^ (process_id << 32);
-    let text = format!("{:032x}", seed);
-
-    format!(
-        "{}-{}-{}-{}-{}",
-        &text[0..8],
-        &text[8..12],
-        &text[12..16],
-        &text[16..20],
-        &text[20..32]
-    )
+fn create_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn sha1_hex(value: &str) -> String {
@@ -4003,7 +3989,7 @@ mod tests {
     fn repository_archive_cache_path_uses_temp_archive_directory_and_hash_name() {
         let root = std::env::temp_dir().join(format!(
             "skill_archive_cache_path_test_{}",
-            super::create_uuid_like_id()
+            super::create_id()
         ));
         let paths = resolve_app_paths(&root);
         let repository = json!({
@@ -4030,7 +4016,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_archive_cache_reuse_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let cache_path = root.join("cache.zip");
             let zip_path = root.join("temp").join("repository.zip");
@@ -4054,7 +4040,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_archive_bad_cache_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let cache_path = root.join("cache.zip");
             let zip_path = root.join("temp").join("repository.zip");
@@ -4079,7 +4065,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_delete_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
@@ -4136,7 +4122,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_trash_expired_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             let trash_root = skill_trash_root(&paths);
@@ -4173,7 +4159,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_group_save_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             skill_store::write_skills(
@@ -4217,7 +4203,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_group_move_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             skill_store::write_skills(
@@ -4282,7 +4268,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_group_remove_items_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             skill_store::write_skills(
@@ -4339,7 +4325,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_group_rename_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             skill_store::write_skills(
@@ -4406,7 +4392,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_batch_target_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
@@ -4468,7 +4454,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_disabled_cleanup_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
@@ -4546,7 +4532,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_restore_default_disabled_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             let skill_root = Path::new(&paths.skills_dir).join("restored-skill");
@@ -4577,7 +4563,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(format!(
                 "skill_disabled_cleanup_retry_test_{}",
-                super::create_uuid_like_id()
+                super::create_id()
             ));
             let paths = resolve_app_paths(&root);
             let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
@@ -4654,7 +4640,7 @@ mod tests {
     fn archive_content_dir_removes_single_archive_root_prefix() {
         let root = std::env::temp_dir().join(format!(
             "skill_archive_root_test_{}",
-            super::create_uuid_like_id()
+            super::create_id()
         ));
         let archive_root = root.join("skills-main");
 
@@ -4671,7 +4657,7 @@ mod tests {
     fn archive_skill_source_dir_rejects_path_traversal() {
         let root = std::env::temp_dir().join(format!(
             "skill_archive_path_test_{}",
-            super::create_uuid_like_id()
+            super::create_id()
         ));
 
         std::fs::create_dir_all(&root).unwrap();
@@ -4689,7 +4675,7 @@ mod tests {
     fn archive_skill_source_dir_resolves_safe_nested_directory() {
         let root = std::env::temp_dir().join(format!(
             "skill_archive_safe_path_test_{}",
-            super::create_uuid_like_id()
+            super::create_id()
         ));
         let skill_dir = root.join("skills").join("vue-debug-guides");
 
@@ -4707,7 +4693,7 @@ mod tests {
     fn scan_repository_archive_reads_skill_from_local_archive_content() {
         let root = std::env::temp_dir().join(format!(
             "skill_archive_scan_test_{}",
-            super::create_uuid_like_id()
+            super::create_id()
         ));
         let content_dir = root.join("skills-main");
         let skill_dir = content_dir.join("skills").join("vue-debug-guides");
@@ -4765,7 +4751,7 @@ mod tests {
     fn skill_content_is_read_on_demand_from_source_and_repository_zip() {
         let root = std::env::temp_dir().join(format!(
             "skill-lazy-content-{}",
-            super::create_uuid_like_id()
+            super::create_id()
         ));
         let paths = resolve_app_paths(&root);
         let source = Path::new(&paths.skills_dir).join("demo");

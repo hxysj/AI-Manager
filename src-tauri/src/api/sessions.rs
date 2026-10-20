@@ -3,7 +3,6 @@ use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use crate::core::settings::string_value;
 use serde_json::{json, Value};
-use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -34,6 +33,7 @@ pub async fn refresh_sessions_state(
         .cloned()
         .unwrap_or_default();
     let mut seen_paths = HashSet::new();
+    let mut stored_ids = None;
     let mut sessions = Vec::new();
     let mut diagnostics = Vec::new();
 
@@ -62,7 +62,19 @@ pub async fn refresh_sessions_state(
         }
 
         match scan_session_metadata(&item).await {
-            Ok(Some(session)) => sessions.push(session),
+            Ok(Some(mut session)) => {
+                if let Some(id) = previous_session_map.get(&raw_path).and_then(|item| item.get("id")) {
+                    session["id"] = id.clone();
+                } else {
+                    if stored_ids.is_none() {
+                        stored_ids = Some(crate::core::usage_store::read_session_ids(paths)?);
+                    }
+                    if let Some(id) = stored_ids.as_ref().and_then(|items| items.get(&raw_path)) {
+                        session["id"] = json!(id);
+                    }
+                }
+                sessions.push(session);
+            }
             Ok(None) => {}
             Err(error) => diagnostics.push(json!({
               "type": "session-parse-error",
@@ -259,7 +271,7 @@ async fn scan_session_metadata(item: &Value) -> Result<Option<Value>, ManagerErr
         .to_string();
 
     Ok(Some(json!({
-      "id": create_session_id(&raw_path),
+      "id": uuid::Uuid::new_v4().to_string(),
       "cli": cli,
       "readOnly": cli == "claude-desktop",
       "cliName": first_string(item.get("cliName"), item.get("cli")),
@@ -1104,23 +1116,6 @@ fn first_string(value: Option<&Value>, fallback: Option<&Value>) -> String {
 
 fn parse_timestamp(value: &str) -> Value {
     value.parse::<u64>().map(Value::from).unwrap_or(Value::Null)
-}
-
-fn create_session_id(raw_path: &str) -> String {
-    let path = Path::new(raw_path);
-    let normalized_path = if path.is_absolute() {
-        raw_path.to_string()
-    } else {
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join(path)
-            .to_string_lossy()
-            .to_string()
-    };
-    let mut hasher = Sha1::new();
-
-    hasher.update(normalized_path.as_bytes());
-    format!("{:x}", hasher.finalize())
 }
 
 fn truncate_text(value: &str, length: usize) -> String {

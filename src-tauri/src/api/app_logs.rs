@@ -2,16 +2,12 @@ use crate::core::error::ManagerError;
 use crate::core::paths::path_text;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-use std::sync::{
-    atomic::{AtomicU64, Ordering},
-    OnceLock,
-};
+use std::sync::OnceLock;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 const LOG_COMPACT_SIZE: u64 = 2 * 1024 * 1024;
 
-static LOG_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 static LOG_FILE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 pub struct AppLogStart {
@@ -326,12 +322,7 @@ fn parse_log_content(content: &str) -> Result<(Value, bool), serde_json::Error> 
 }
 
 fn create_log_id() -> String {
-    format!(
-        "{}-{}-{}",
-        now_millis(),
-        std::process::id(),
-        LOG_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
-    )
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn now_millis() -> u128 {

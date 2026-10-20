@@ -1494,8 +1494,7 @@ function arrayOf(value) {
 }
 
 function createRunId() {
-  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
-  return `network-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  return crypto.randomUUID()
 }
 
 function unwrapReport(value) {

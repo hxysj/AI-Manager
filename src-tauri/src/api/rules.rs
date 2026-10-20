@@ -5,9 +5,7 @@ use crate::core::settings::{resolve_portable_path, string_value};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-static PROMPT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 const COMMON_PROMPT_CLI: &str = "common";
 
 pub fn build_state(paths: &AppPaths, cli_targets: &Value) -> Result<Value, ManagerError> {
@@ -403,7 +401,7 @@ async fn save_prompt(paths: &AppPaths, payload: Value) -> Result<Value, ManagerE
         .as_ref()
         .map(|item| string_value(item.get("id")))
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| create_prompt_id(&prompts, &cli, &name));
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let file_name = previous
         .as_ref()
         .map(|item| string_value(item.get("fileName")))
@@ -774,59 +772,6 @@ fn create_bigrams(value: &str) -> Vec<String> {
         .windows(2)
         .map(|items| items.iter().collect::<String>())
         .collect()
-}
-
-fn create_prompt_id(prompts: &[Value], cli: &str, name: &str) -> String {
-    let base_id = slugify_name(name);
-
-    if base_id.is_empty() {
-        return format!(
-            "prompt-{}-{}",
-            now_millis(),
-            PROMPT_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-    }
-
-    let used_ids = prompts
-        .iter()
-        .map(|item| string_value(item.get("id")))
-        .collect::<std::collections::HashSet<_>>();
-
-    if !used_ids.contains(&base_id) {
-        return base_id;
-    }
-
-    for index in 2..1000 {
-        let next_id = format!("{}-{}", base_id, index);
-
-        if !used_ids.contains(&next_id) {
-            return next_id;
-        }
-    }
-
-    format!(
-        "{}-{}-{}",
-        cli,
-        base_id,
-        PROMPT_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
-    )
-}
-
-fn slugify_name(value: &str) -> String {
-    let mut slug = String::new();
-    let mut last_dash = false;
-
-    for ch in value.trim().to_lowercase().chars() {
-        if ch.is_ascii_alphanumeric() {
-            slug.push(ch);
-            last_dash = false;
-        } else if !last_dash {
-            slug.push('-');
-            last_dash = true;
-        }
-    }
-
-    slug.trim_matches('-').to_string()
 }
 
 fn prompt_dir(paths: &AppPaths, cli: &str) -> PathBuf {

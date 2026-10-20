@@ -110,9 +110,10 @@ impl GoogleLogin {
                     .map_err(|_| error("Google 账号信息接口连接失败"))?;
                 let info = json_response(response).await?;
                 let subject = info["id"].as_str().filter(|value| !value.is_empty()).ok_or_else(|| error("Google 未返回账号 ID"))?;
-                let id = format!("google-{}", subject);
+                let old = provider_store::read_providers(&paths)?.into_iter().find(|item| item["type"] == "google-account" && item["google"]["subject"] == subject);
+                let id = old.as_ref().and_then(|item| item["id"].as_str()).map(str::to_string)
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 if !target.is_empty() && target != id { return Err(error("登录账号与待更新的 Google 账号不一致")); }
-                let old = provider_store::read_providers(&paths)?.into_iter().find(|item| item["id"] == id);
                 if tokens["refresh_token"].as_str().unwrap_or("").is_empty() {
                     if let Ok(previous) = read_tokens(&paths, &id) {
                         // refresh_token 只能在同一 OAuth client 下复用。
@@ -378,10 +379,12 @@ pub async fn refresh(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> 
             write_provider(paths, &provider)?;
         }
         // 模型同步只改当前账号的行，避免覆盖其他服务商并发保存的结果。
+        let previous_models = provider_store::read_models(paths)?;
         let mut connection = database::open(paths)?;
         let transaction = connection.transaction()?;
         let records=models.iter().map(|model| {
-            let key=format!("{id}:{}",model["id"].as_str().unwrap());
+            let key=previous_models.iter().find(|item| item["providerId"] == id && item["name"] == model["id"])
+                .and_then(|item| item["id"].as_str()).map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             json!({"id":key,"providerId":id,"name":model["id"],"contextWindow":model["maxTokens"],"enabled":true})
         }).collect::<Vec<_>>();
         provider_store::set_provider_models(&transaction,id,&records)?;

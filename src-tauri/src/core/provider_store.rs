@@ -67,18 +67,22 @@ pub fn read_codex_accounts(paths: &AppPaths) -> Result<Vec<Value>, ManagerError>
     rows(&database::open(paths)?, "type='codex-account'")
 }
 
-fn canonical_id(item: &Value, scope: &str) -> Result<String, ManagerError> {
+fn canonical_id(connection: &Connection, item: &Value, scope: &str) -> Result<String, ManagerError> {
     let id = text(item, "id");
     if id.is_empty() {
         return Err(ManagerError::System(
             "供应商或账号缺少 id，保留原始数据".into(),
         ));
     }
-    Ok(match scope {
+    let legacy = match scope {
         "account" => format!("account:{id}"),
         "desktop" => format!("claude-desktop:{id}"),
-        _ => id,
-    })
+        _ => return Ok(id),
+    };
+    // 旧记录保留原主键；新记录的 UUID 直接入库，不再拼接类型前缀。
+    let exists = connection.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1)", [&legacy], |row| row.get::<_, bool>(0))?;
+    let conflicts = connection.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND ((?2='account' AND type<>'codex-account') OR (?2='desktop' AND cli<>'claude-desktop')))", params![id, scope], |row| row.get::<_, bool>(0))?;
+    Ok(if exists || conflicts || uuid::Uuid::parse_str(&id).is_err() { legacy } else { id })
 }
 
 // 每次只更新这一类记录的业务列，本机激活、密钥、模型和同步信息分别维护。
@@ -88,7 +92,7 @@ fn upsert_record(
     scope: &str,
     order: i64,
 ) -> Result<String, ManagerError> {
-    let id = canonical_id(source, scope)?;
+    let id = canonical_id(connection, source, scope)?;
     let mut item = source.clone();
     let cli = match scope {
         "account" => "codex".to_string(),
@@ -249,7 +253,7 @@ fn replace_records(
     };
     let retained = items
         .iter()
-        .map(|item| canonical_id(item, scope))
+        .map(|item| canonical_id(connection, item, scope))
         .collect::<Result<HashSet<_>, _>>()?;
     if retained.len() != items.len() {
         return Err(ManagerError::System("供应商或账号 id 重复，未保存".into()));
@@ -282,7 +286,7 @@ pub fn read_active_codex_account_id(paths: &AppPaths) -> Result<String, ManagerE
     initialize(paths)?;
     Ok(database::open(paths)?
         .query_row(
-            "SELECT substr(id,9) FROM providers WHERE type='codex-account' AND is_active=1",
+            "SELECT CASE WHEN id LIKE 'account:%' THEN substr(id,9) ELSE id END FROM providers WHERE type='codex-account' AND is_active=1",
             [],
             |row| row.get(0),
         )
@@ -297,7 +301,7 @@ fn set_active_account(connection: &Connection, id: &str) -> Result<(), ManagerEr
             [],
         )?;
     } else {
-        let canonical = format!("account:{id}");
+        let canonical = canonical_id(connection, &json!({"id":id}), "account")?;
         if !connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND type='codex-account')",
             [&canonical],
@@ -519,7 +523,7 @@ pub fn read_keys(paths: &AppPaths) -> Result<Map<String, Value>, ManagerError> {
     initialize(paths)?;
     let connection = database::open(paths)?;
     let mut result = Map::new();
-    let mut statement=connection.prepare("SELECT provider_id,id,name,note,value,is_active FROM provider_keys ORDER BY provider_id,sort_order,id")?;
+    let mut statement=connection.prepare("SELECT CASE WHEN p.cli='claude-desktop' AND p.id NOT LIKE 'claude-desktop:%' THEN 'claude-desktop:'||p.id ELSE p.id END,k.id,k.name,k.note,k.value,k.is_active FROM provider_keys k JOIN providers p ON p.id=k.provider_id ORDER BY k.provider_id,k.sort_order,k.id")?;
     for row in statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -579,6 +583,10 @@ pub(crate) fn set_key(
         )?;
         return Ok(());
     }
+    let resolved = if let Some(id) = provider_id.strip_prefix("claude-desktop:") {
+        canonical_id(connection, &json!({"id":id}), "desktop")?
+    } else { provider_id.to_string() };
+    let provider_id = resolved.as_str();
     let records = if let Some(raw) = value
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
@@ -642,7 +650,7 @@ pub(crate) fn set_key(
 
 fn set_keys(connection: &Connection, keys: &Map<String, Value>) -> Result<(), ManagerError> {
     let ids = connection
-        .prepare("SELECT id FROM providers")?
+        .prepare("SELECT CASE WHEN cli='claude-desktop' AND id NOT LIKE 'claude-desktop:%' THEN 'claude-desktop:'||id ELSE id END FROM providers")?
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     for id in ids {
@@ -677,7 +685,7 @@ pub fn read_desktop_settings(paths: &AppPaths) -> Result<Map<String, Value>, Man
     }
     let active = connection
         .query_row(
-            "SELECT substr(id,16) FROM providers WHERE cli='claude-desktop' AND is_active=1",
+            "SELECT CASE WHEN id LIKE 'claude-desktop:%' THEN substr(id,16) ELSE id END FROM providers WHERE cli='claude-desktop' AND is_active=1",
             [],
             |row| row.get::<_, String>(0),
         )
@@ -711,7 +719,7 @@ fn set_desktop_settings(
         .get("currentProviderId")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let id = format!("claude-desktop:{requested}");
+    let id = if requested.is_empty() { String::new() } else { canonical_id(connection, &json!({"id":requested}), "desktop")? };
     connection.execute(
         "UPDATE providers SET is_active=0 WHERE cli='claude-desktop' AND is_active=1 AND id<>?1",
         [&id],
@@ -762,7 +770,7 @@ pub fn write_provider_bundle(
 pub fn read_instances(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     initialize(paths)?;
     let connection = database::open(paths)?;
-    let mut statement=connection.prepare("SELECT id,name,type,instance_profile_dir,instance_sessions_path,instance_updated_at FROM providers WHERE instance_updated_at>0 ORDER BY instance_updated_at DESC")?;
+    let mut statement=connection.prepare("SELECT CASE WHEN type='codex-account' AND id NOT LIKE 'account:%' THEN 'account:'||id ELSE id END,name,type,instance_profile_dir,instance_sessions_path,instance_updated_at FROM providers WHERE instance_updated_at>0 ORDER BY instance_updated_at DESC")?;
     let result=statement.query_map([],|row|Ok(json!({"id":row.get::<_,String>(0)?,"providerId":row.get::<_,String>(0)?,
         "providerName":row.get::<_,Option<String>>(1)?.unwrap_or_default(),"providerType":row.get::<_,String>(2)?,"profileDir":row.get::<_,String>(3)?,
         "sessionsPath":row.get::<_,String>(4)?,"updatedAt":row.get::<_,i64>(5)?})))?.collect::<Result<Vec<_>,_>>()?;
@@ -776,8 +784,9 @@ fn set_instances(connection: &Connection, items: &[Value]) -> Result<(), Manager
             .or_else(|| item.get("id"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        let resolved = if let Some(id) = id.strip_prefix("account:") { canonical_id(connection, &json!({"id":id}), "account")? } else { id.to_string() };
         connection.execute("UPDATE providers SET instance_profile_dir=?2,instance_sessions_path=?3,instance_updated_at=?4 WHERE id=?1 AND (instance_profile_dir<>?2 OR instance_sessions_path<>?3 OR instance_updated_at<>?4)",
-            params![id,text(item,"profileDir"),text(item,"sessionsPath"),item["updatedAt"].as_i64().unwrap_or(1)])?;
+            params![resolved,text(item,"profileDir"),text(item,"sessionsPath"),item["updatedAt"].as_i64().unwrap_or(1)])?;
     }
     Ok(())
 }

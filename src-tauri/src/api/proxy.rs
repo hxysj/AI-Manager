@@ -1633,7 +1633,7 @@ pub(crate) async fn append_log(
         .unwrap_or_default();
     let log = merge_object(
         json!({
-          "id": format!("proxy-log-{}-{}", now_millis(), uuid::Uuid::new_v4()),
+          "id": uuid::Uuid::new_v4().to_string(),
           "appType": cli,
           "dataSource": "proxy",
           "createdAt": now_millis()

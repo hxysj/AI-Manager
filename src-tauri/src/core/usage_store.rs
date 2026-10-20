@@ -261,7 +261,7 @@ pub fn record_codex_quota_stages(
             .max(decimal(stage.get("usedPercent"), 0.0))
             .clamp(0.0, 100.0);
         let payload = json!({
-          "id": format!("{account_id}:{window_key}:{reset_at}"),
+          "id": existing.as_ref().and_then(|item| item["id"].as_str()).map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
           "accountId": account_id,
           "windowKey": window_key,
           "limitWindowSeconds": number(stage.get("limitWindowSeconds")),
@@ -359,6 +359,14 @@ pub fn read_session_versions(
 }
 
 pub const SESSION_SKILL_PARSER_VERSION: u64 = 1;
+
+pub fn read_session_ids(paths: &AppPaths) -> Result<HashMap<String, String>, ManagerError> {
+    initialize(paths)?;
+    let connection = open_connection(paths)?;
+    let mut statement = connection.prepare("SELECT raw_path, session_id FROM usage_sessions WHERE session_id<>''")?;
+    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
+}
 
 pub struct SessionSkillUpdate {
     pub raw_path: String,

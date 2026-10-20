@@ -9,10 +9,8 @@ use base64::Engine;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::process::Command;
 
-static PROVIDER_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -80,11 +78,8 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
             default_models(&string_value(provider.get("type")))
                 .into_iter()
                 .map(|model| {
-                    let model_id = format!("{}:{}", provider_id, model);
-
                     normalize_model(
                         &json!({
-                          "id": model_id,
                           "providerId": provider_id,
                           "name": model
                         }),
@@ -120,32 +115,30 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
                 profile["model"] = provider["runtimeConfig"]["mainModel"].clone();
             }
         }
+        let previous_models = models.iter().filter(|item| item["providerId"] == provider_id).cloned().collect::<Vec<_>>();
         models.retain(|item| {
             item.get("providerId").and_then(Value::as_str) != Some(provider_id.as_str())
         });
         for model_name in codex_model_list(&provider) {
             models.push(normalize_model(
                 &json!({
-                  "id": format!("{}:{}", provider_id, model_name),
                   "providerId": provider_id,
                   "name": model_name
                 }),
-                None,
+                previous_models.iter().find(|item| item["providerId"] == provider_id && item["name"] == model_name),
             )?);
         }
     } else {
         let model_name = string_value(payload.get("model"));
         if !model_name.is_empty() {
-            let model_id = format!("{}:{}", provider_id, model_name);
             let model = normalize_model(
                 &json!({
-                  "id": model_id,
                   "providerId": provider_id,
                   "name": model_name
                 }),
                 models
                     .iter()
-                    .find(|item| item.get("id").and_then(Value::as_str) == Some(model_id.as_str())),
+                    .find(|item| item["providerId"] == provider_id && item["name"] == model_name),
             )?;
 
             if models.iter().any(|item| item.get("id") == model.get("id")) {
@@ -328,7 +321,7 @@ pub async fn save_runtime_model(paths: &AppPaths, payload: Value) -> Result<(), 
     let mut models = provider_store::read_models(paths)?;
     let previous = models
         .iter()
-        .find(|item| item.get("id") == payload.get("id"))
+        .find(|item| item.get("id") == payload.get("id") || (item["providerId"] == payload["providerId"] && item["name"] == payload["name"]))
         .cloned();
     let model = normalize_model(&payload, previous.as_ref())?;
     let provider_id = string_value(model.get("providerId"));
@@ -1528,7 +1521,7 @@ fn normalize_model(input: &Value, previous: Option<&Value>) -> Result<Value, Man
     }
 
     Ok(json!({
-      "id": non_empty_string(input.get("id"), previous.and_then(|item| item.get("id")), &name),
+      "id": non_empty_string(previous.and_then(|item| item.get("id")), input.get("id"), &uuid::Uuid::new_v4().to_string()),
       "providerId": provider_id,
       "name": name,
       "contextWindow": optional_number(input.get("contextWindow"), previous.and_then(|item| item.get("contextWindow"))),
@@ -1580,7 +1573,7 @@ fn normalize_profile(input: &Value, previous: Option<&Value>) -> Result<Value, M
     }
 
     Ok(json!({
-      "id": non_empty_string(input.get("id"), previous.and_then(|item| item.get("id")), &cli),
+      "id": non_empty_string(input.get("id"), previous.and_then(|item| item.get("id")), &uuid::Uuid::new_v4().to_string()),
       "cli": cli,
       "providerId": provider_id,
       "model": model,
@@ -2673,7 +2666,6 @@ async fn sync_claude_runtime_to_manager(
         save_runtime_model(
             paths,
             json!({
-              "id": format!("{}:{}", string_value(provider.get("id")), main_model),
               "providerId": provider["id"],
               "name": main_model
             }),
@@ -2819,7 +2811,6 @@ async fn sync_codex_runtime_to_manager(
         save_runtime_model(
             paths,
             json!({
-              "id": format!("{}:{}", string_value(provider.get("id")), model),
               "providerId": provider["id"],
               "name": model
             }),
@@ -3257,10 +3248,13 @@ pub(crate) fn set_provider_key(
     if api_key.is_empty() {
         keys.remove(provider_id);
     } else {
-        keys.insert(
-            provider_id.to_string(),
-            json!(encrypt_provider_key(&api_key)?),
-        );
+        let existing = provider_key_records(keys.get(provider_id));
+        let id = existing.first().map(|key| string_value(key.get("id")))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        keys.insert(provider_id.to_string(), json!({
+            "activeKeyId": id,
+            "keys": [{"id": id, "name": "默认 Key", "note": "", "value": encrypt_provider_key(&api_key)?}]
+        }));
     }
 
     Ok(())
@@ -3315,7 +3309,7 @@ pub(crate) fn set_provider_keys(
         let id = non_empty_string(
             requested.get("id"),
             None,
-            &format!("key-{}-{}", now_millis(), index),
+            &uuid::Uuid::new_v4().to_string(),
         );
         let name = non_empty_string(requested.get("name"), None, &format!("Key {}", index + 1));
         let note = string_value(requested.get("note"));
@@ -3663,11 +3657,7 @@ pub(crate) async fn write_json(path: &str, payload: &Value) -> Result<(), Manage
 }
 
 fn create_provider_id() -> String {
-    format!(
-        "provider-{}-{}",
-        now_millis(),
-        PROVIDER_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
-    )
+    uuid::Uuid::new_v4().to_string()
 }
 
 pub(crate) fn now_millis() -> u64 {
@@ -3747,6 +3737,34 @@ mod tests {
     use crate::core::paths::{resolve_app_paths, AppPaths};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn new_provider_records_use_uuid_and_model_refresh_preserves_ids() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+            let paths = resolve_app_paths(&root);
+            save_provider(&paths, json!({"cli":"codex","name":"UUID","type":"openai","apiKey":"test-key","runtimeConfig":{"modelList":["model-a"],"mainModel":"model-a"}})).await.unwrap();
+            let provider = provider_store::read_providers(&paths).unwrap().remove(0);
+            let id = string_value(provider.get("id"));
+            let models = provider_store::read_models(&paths).unwrap();
+            let keys = provider_store::read_keys(&paths).unwrap();
+            for record_id in [&id, models[0]["id"].as_str().unwrap(), keys[&id]["keys"][0]["id"].as_str().unwrap()] {
+                assert_eq!(uuid::Uuid::parse_str(record_id).unwrap().get_version_num(), 4);
+            }
+            let profile = normalize_profile(&json!({"cli":"codex","providerId":id,"model":"model-a"}), None).unwrap();
+            assert_eq!(uuid::Uuid::parse_str(profile["id"].as_str().unwrap()).unwrap().get_version_num(), 4);
+            save_provider(&paths, provider.clone()).await.unwrap();
+            assert_eq!(provider_store::read_models(&paths).unwrap(), models);
+            save_runtime_model(&paths, json!({"providerId":id,"name":"model-a","supportsVision":true})).await.unwrap();
+            let updated_models = provider_store::read_models(&paths).unwrap();
+            assert_eq!(updated_models.len(), models.len());
+            assert_eq!(updated_models[0]["id"], models[0]["id"]);
+            let mut changed_keys = keys.clone();
+            update_active_provider_key(&mut changed_keys, &id, "changed-key".into()).unwrap();
+            assert_eq!(changed_keys[&id]["activeKeyId"], keys[&id]["activeKeyId"]);
+            std::fs::remove_dir_all(root).unwrap();
+        });
+    }
 
     #[test]
     fn codex_model_sync_is_opt_in_even_when_a_model_list_exists() {

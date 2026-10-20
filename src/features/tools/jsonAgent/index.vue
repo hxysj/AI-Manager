@@ -606,7 +606,6 @@ const messages = ref([])
 const toolCalls = ref([])
 const agentPosition = ref({ left: 0, top: 0 })
 let copiedTimer = null
-let messageId = 0
 let positionInitialized = false
 let dragState = null
 let historySaveTimer = null
@@ -977,7 +976,7 @@ function saveHistory() {
 
   // 以格式化结果去重，连续输入不会生成同一条历史记录。
   const now = Date.now()
-  const id = `${now}-${Math.random().toString(36).slice(2, 8)}`
+  const id = crypto.randomUUID()
   const existing = historyEntries.value.find(
     (entry) => entry.formattedJson === formattedJson.value
   )
@@ -1039,10 +1038,7 @@ function loadStoredHistory() {
       ? stored
           .filter((entry) => entry && typeof entry.formattedJson === "string")
           .map((entry) => ({
-            id: String(
-              entry.id ||
-                `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-            ),
+            id: String(entry.id || crypto.randomUUID()),
             title: entry.title || "JSON 对象",
             sourceText: entry.sourceText || entry.formattedJson,
             formattedJson: entry.formattedJson,
@@ -1364,7 +1360,7 @@ async function providerFetch(input, init) {
 async function consumeAgentMessages(run, runMessageIds) {
   for await (const modelMessage of run.messages) {
     messages.value.push({
-      id: ++messageId,
+      id: crypto.randomUUID(),
       role: "assistant",
       content: "",
       reasoning: "",
@@ -1452,7 +1448,7 @@ async function runAgent() {
   instruction.value = ""
   agentTab.value = "chat"
   messages.value.push({
-    id: ++messageId,
+    id: crypto.randomUUID(),
     role: "user",
     content: nextInstruction
   })
@@ -1584,7 +1580,7 @@ async function runAgent() {
 
     if (!hasStreamedResponse) {
       messages.value.push({
-        id: ++messageId,
+        id: crypto.randomUUID(),
         role: "assistant",
         content:
           responseText ||
@@ -1594,7 +1590,7 @@ async function runAgent() {
   } catch (error) {
     const message = error.message || String(error)
     messages.value.push({
-      id: ++messageId,
+      id: crypto.randomUUID(),
       role: "error",
       content: message
     })

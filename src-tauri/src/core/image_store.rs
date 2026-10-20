@@ -1155,10 +1155,12 @@ fn migrate_legacy_inputs(paths: &AppPaths, connection: &Connection) -> Result<us
     if !columns.contains("data_url") {
         return Ok(0);
     }
-    connection.execute(
-        "UPDATE image_inputs SET image_id = lower(hex(randomblob(16))) WHERE image_id = ''",
-        [],
-    )?;
+    let missing_ids = connection.prepare("SELECT rowid FROM image_inputs WHERE image_id = ''")?
+        .query_map([], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<_>, _>>()?;
+    for row_id in missing_ids {
+        connection.execute("UPDATE image_inputs SET image_id = ?1 WHERE rowid = ?2",
+            params![uuid::Uuid::new_v4().to_string(), row_id])?;
+    }
     let rows = {
         let mut statement = connection.prepare(
             "SELECT task_id, position, image_id, format, data_url
@@ -1203,13 +1205,6 @@ fn migrate_legacy_inputs(paths: &AppPaths, connection: &Connection) -> Result<us
          SELECT task_id, position, image_id, format FROM image_inputs;
          DROP TABLE image_inputs;
          ALTER TABLE image_inputs_compact RENAME TO image_inputs;
-         CREATE TRIGGER trg_image_inputs_assign_id
-         AFTER INSERT ON image_inputs
-         WHEN NEW.image_id = ''
-         BEGIN
-           UPDATE image_inputs SET image_id = lower(hex(randomblob(16)))
-           WHERE task_id = NEW.task_id AND position = NEW.position;
-         END;
          PRAGMA wal_checkpoint(TRUNCATE);
          VACUUM;",
     )?;
@@ -1244,10 +1239,12 @@ fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<u
     let mut migrated = 0;
 
     // 为旧记录补发图片 ID，之后所有文件路径都只依赖会话、任务和图片 ID。
-    connection.execute(
-        "UPDATE image_outputs SET image_id = lower(hex(randomblob(16))) WHERE image_id = ''",
-        [],
-    )?;
+    let missing_ids = connection.prepare("SELECT rowid FROM image_outputs WHERE image_id = ''")?
+        .query_map([], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<_>, _>>()?;
+    for row_id in missing_ids {
+        connection.execute("UPDATE image_outputs SET image_id = ?1 WHERE rowid = ?2",
+            params![uuid::Uuid::new_v4().to_string(), row_id])?;
+    }
 
     if has_bytes {
         let legacy_blobs = {
@@ -1344,13 +1341,6 @@ fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<u
              SELECT task_id, position, image_id, format FROM image_outputs;
              DROP TABLE image_outputs;
              ALTER TABLE image_outputs_compact RENAME TO image_outputs;
-             CREATE TRIGGER trg_image_outputs_assign_id
-             AFTER INSERT ON image_outputs
-             WHEN NEW.image_id = ''
-             BEGIN
-               UPDATE image_outputs SET image_id = lower(hex(randomblob(16)))
-               WHERE task_id = NEW.task_id AND position = NEW.position;
-             END;
              PRAGMA wal_checkpoint(TRUNCATE);
              VACUUM;",
         )?;
@@ -1948,7 +1938,7 @@ pub fn import_task_bundle(
                     .as_str()
                     .filter(|value| !value.is_empty())
                     .map(str::to_string)
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 let (format, relative) = write_input_file(paths, input_id, &image_id, data_url)?;
                 input_guard.files.push(relative);
                 if position < 0 { has_mask = true; } else { imported_ids.push(image_id); }
@@ -1980,7 +1970,7 @@ pub fn import_task_bundle(
                 .as_str()
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
-                .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let format = output["format"]
                 .as_str()
                 .filter(|value| !value.is_empty())
@@ -2048,14 +2038,14 @@ pub fn create_batch(paths: &AppPaths, tasks: &[Value], images: &[String], mask: 
     let mut input_image_ids = Vec::with_capacity(images.len() + usize::from(!mask.is_empty()));
     let mut input_files = InputFileGuard::new(paths);
     for data_url in images {
-        let image_id = uuid::Uuid::new_v4().simple().to_string();
+        let image_id = uuid::Uuid::new_v4().to_string();
         let (format, relative) = write_input_file(paths, input_id, &image_id, data_url)?;
         input_files.files.push(relative);
         let _ = format;
         input_image_ids.push(image_id);
     }
     if !mask.is_empty() {
-        let image_id = uuid::Uuid::new_v4().simple().to_string();
+        let image_id = uuid::Uuid::new_v4().to_string();
         let (format, relative) = write_input_file(paths, input_id, &image_id, mask)?;
         input_files.files.push(relative);
         let _ = format;
@@ -2195,7 +2185,7 @@ pub fn finish(paths: &AppPaths, task: &Value, images: &[StoredImage]) -> Result<
         let mut image_records = Vec::with_capacity(images.len());
         for (index, image) in images.iter().enumerate() {
             let task_id = task["id"].as_str().unwrap_or("image");
-            let image_id = uuid::Uuid::new_v4().simple().to_string();
+            let image_id = uuid::Uuid::new_v4().to_string();
             write_output_file(
                 paths,
                 output_group_id(&task).as_str(),
@@ -2618,7 +2608,7 @@ mod tests {
             )
             .unwrap();
         let group_id = output_group_id(&task);
-        let image_id = uuid::Uuid::new_v4().simple().to_string();
+        let image_id = uuid::Uuid::new_v4().to_string();
         write_output_file(paths, &group_id, task_id, &image_id, format, bytes).unwrap();
         let current: String = connection.query_row("SELECT images_json FROM image_tasks WHERE id = ?1", [task_id], |row| row.get(0)).unwrap();
         let mut records = image_records_from_json(&current).into_iter()

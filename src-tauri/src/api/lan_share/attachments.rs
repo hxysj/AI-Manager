@@ -53,7 +53,10 @@ pub(super) async fn prepare(
         selected.push(file.clone());
     }
     for selected_path in selected_paths {
-        let file = file_payload(&selected_path, session_id).await?;
+        let mut file = file_payload(&selected_path, session_id).await?;
+        if let Some(previous) = saved.iter().find(|item| item.path == selected_path && item.session_id == session_id) {
+            file.id = previous.id.clone();
+        }
         if !selected.iter().any(|current| current.id == file.id) {
             selected.push(file);
         }
@@ -145,7 +148,7 @@ pub(super) async fn upload(
     let safe_name = safe_name(name)?;
     let directory = Path::new(&paths.lan_share_dir).join("uploads");
     tokio::fs::create_dir_all(&directory).await?;
-    let target = directory.join(format!("{}-{safe_name}", create_id("attachment")));
+    let target = directory.join(format!("{}-{safe_name}", create_id()));
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -373,7 +376,7 @@ where
     if final_size != total_size {
         return Err(ManagerError::System("文件拼接后的大小不匹配。".into()));
     }
-    let target = directory.join(format!("{}-{safe_name}", create_id("attachment")));
+    let target = directory.join(format!("{}-{safe_name}", create_id()));
     tokio::fs::rename(&part_path, &target).await?;
     let mut uploaded = match file_payload(&target.to_string_lossy(), session_id).await {
         Ok(file) => file,
@@ -507,7 +510,7 @@ mod tests {
     fn browser_upload_is_rate_limited_without_blocking_state_requests() {
         tauri::async_runtime::block_on(async {
             let temp_root = std::env::temp_dir();
-            let root = temp_root.join(create_id("browser-upload-rate-test"));
+            let root = temp_root.join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
             let device = upsert_device(&registry, &paths, "", "测试浏览器", "browser", "127.0.0.1").await.unwrap();
@@ -570,7 +573,7 @@ mod tests {
     #[test]
     fn batch_files_create_one_message_and_preserve_order() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("attachment-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -617,7 +620,7 @@ mod tests {
     #[test]
     fn attachments_cannot_cross_sessions_and_retry_does_not_duplicate_messages() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("attachment-scope-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -682,7 +685,7 @@ mod tests {
     #[test]
     fn mixed_attachment_sources_keep_composer_order() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("attachment-order-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -716,7 +719,7 @@ mod tests {
     #[test]
     fn expired_upload_cleanup_preserves_original_published_and_referenced_files() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("attachment-cleanup-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             let directory = Path::new(&paths.lan_share_dir).join("uploads");
             tokio::fs::create_dir_all(&directory).await.unwrap();
@@ -803,7 +806,7 @@ mod tests {
     #[test]
     fn chunk_upload_reassembles_file_and_cleans_failed_chunk() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("attachment-chunk-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await

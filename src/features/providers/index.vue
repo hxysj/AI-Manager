@@ -4503,9 +4503,7 @@ function refreshCodexAccount(account, options = {}) {
 // 已保存的 Key 只保留标识和掩码，留空时由后端复用原密文。
 function createApiKeyDraft(index, item = {}) {
   return {
-    id:
-      item.id ||
-      `key-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    id: item.id || crypto.randomUUID(),
     name: item.name || `Key ${index + 1}`,
     note: item.note || "",
     apiKey: item.apiKey || "",

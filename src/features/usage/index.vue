@@ -1160,9 +1160,7 @@ function createEmptyPricingConfig() {
 
 function createPricingItem(input = {}) {
   return {
-    id:
-      input.id ||
-      `pricing-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    id: input.id || crypto.randomUUID(),
     modelId: input.modelId || "",
     modelCategory: normalizeModelCategory(
       input.modelCategory ?? input.category

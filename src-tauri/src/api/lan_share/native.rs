@@ -241,7 +241,7 @@ fn pairing_code(secret: &str) -> String {
 }
 
 fn is_native_id(id: &str) -> bool {
-    (id.starts_with("native-") || id.starts_with("native_"))
+    (uuid::Uuid::parse_str(id).is_ok() || id.starts_with("native-") || id.starts_with("native_"))
         && id.len() <= 80
         && id.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '-' || character == '_'
@@ -249,11 +249,11 @@ fn is_native_id(id: &str) -> bool {
 }
 
 fn create_native_id() -> String {
-    format!("native-{}_{}", now_millis(), uuid::Uuid::new_v4())
+    uuid::Uuid::new_v4().to_string()
 }
 
 fn normalize_native_id(id: &mut String) {
-    if id.is_empty() || id.starts_with("native_") {
+    if id.is_empty() {
         *id = create_native_id();
     }
 }
@@ -720,7 +720,7 @@ pub async fn connect_peer(
         ));
     }
     let (private_key, public_key) = transport::keypair()?;
-    let request_id = create_id("pair");
+    let request_id = create_id();
     auth.receiver = peer.id.clone();
     let response = secure_call(&client, &peer, &auth, "pair", json!({
         "requestId": request_id, "publicKey": public_key, "peer": { "id": identity.id, "name": identity.name, "ip": "", "port": own_port }
@@ -962,10 +962,11 @@ async fn process_secure_operation(
         }
         "message-exists" => {
             let message_id = format!("{}-{}", peer.id, string_value(payload.get("messageId")));
+            let uuid_id = create_stable_id(&format!("lan-message:{message_id}"));
             let _storage = registry.storage.lock().await;
             let exists = read_array::<LanShareMessage>(&paths.lan_share_files.messages)?
                 .iter()
-                .any(|message| message.id == message_id && message.device_id == peer.id);
+                .any(|message| (message.id == message_id || message.id == uuid_id) && message.device_id == peer.id);
             Ok(json!({ "exists": exists }))
         }
         "file-chunk" => {
@@ -1028,6 +1029,15 @@ async fn process_secure_operation(
                 &json!({ "attachmentIds": payload["attachmentIds"] }),
             )
             .await?;
+            let legacy_id = format!("{}-{source_id}", peer.id);
+            let message_id = {
+                let _storage = registry.storage.lock().await;
+                if read_array::<LanShareMessage>(&paths.lan_share_files.messages)?.iter().any(|message| message.id == legacy_id && message.device_id == peer.id) {
+                    legacy_id
+                } else {
+                    create_stable_id(&format!("lan-message:{legacy_id}"))
+                }
+            };
             let stored = append_message_with_attachments(
                 registry,
                 paths,
@@ -1037,7 +1047,7 @@ async fn process_secure_operation(
                 &string_value(payload.get("content")),
                 true,
                 &files,
-                Some(&format!("{}-{source_id}", peer.id)),
+                Some(&message_id),
             )
             .await?;
             attachments::publish(registry, paths, &files).await?;
@@ -1306,7 +1316,7 @@ pub(super) async fn deliver(
             )));
         }
         let chunk_total = file.size.div_ceil(attachments::FILE_CHUNK_BYTES).max(1);
-        let upload_id = create_id("upload");
+        let upload_id = create_id();
         for chunk_index in 0..chunk_total {
             let offset = chunk_index * attachments::FILE_CHUNK_BYTES;
             let chunk_length = file
@@ -1396,7 +1406,7 @@ mod tests {
     fn encrypted_uploads_are_limited_while_heartbeats_remain_responsive() {
         tauri::async_runtime::block_on(async {
             let temp_root = std::env::temp_dir();
-            let root = temp_root.join(create_id("native-upload-rate-test"));
+            let root = temp_root.join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
             registry.inner.lock().await.native.config.id = "native-receiver".into();
@@ -1416,7 +1426,7 @@ mod tests {
                 let packet = transport::pack(&json!({
                     "operation": "file-chunk", "sentAt": now_millis(),
                     "payload": {
-                        "name": "rate-test.bin", "sessionId": "", "uploadId": create_id("upload"),
+                        "name": "rate-test.bin", "sessionId": "", "uploadId": create_id(),
                         "chunkIndex": 0, "chunkTotal": 1, "offset": 0, "totalSize": size,
                         "sha256": format!("{:x}", Sha256::digest(&content)),
                         "contentLength": size, "contentRange": format!("bytes 0-{}/{}", size - 1, size)
@@ -1487,7 +1497,7 @@ mod tests {
     #[test]
     fn secure_pairing_negotiates_keys_and_rejects_wrong_keys_plaintext_and_replays() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("native-handshake-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
             {
@@ -1685,7 +1695,7 @@ mod tests {
     #[test]
     fn verified_address_changes_are_saved_and_revoked_pairings_cannot_return() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("native-address-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
             registry.inner.lock().await.native.config.id = "native-local".into();
@@ -1796,7 +1806,7 @@ mod tests {
     #[test]
     fn discovery_heartbeats_continue_while_delivery_is_pending() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("native-heartbeat-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root.join("local"));
             let remote_paths = crate::core::paths::resolve_app_paths(&root.join("remote"));
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -1917,16 +1927,16 @@ mod tests {
         assert!(is_native_id("native-1789038628947-12096-997"));
         assert!(is_native_id("native_1789038628947_12096_997"));
         assert!(!is_native_id("desktop_1789038628947"));
-        assert!(create_native_id().starts_with("native-"));
+        assert_eq!(uuid::Uuid::parse_str(&create_native_id()).unwrap().get_version_num(), 4);
         let mut legacy_id = "native_1789038628947_12096_997".to_string();
         normalize_native_id(&mut legacy_id);
-        assert!(legacy_id.starts_with("native-"));
+        assert_eq!(legacy_id, "native_1789038628947_12096_997");
     }
 
     #[test]
     fn deleting_native_device_revokes_pairing_and_hides_future_discovery() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("native-delete-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             let removed = Peer {
                 id: "native-removed".into(),
@@ -2060,7 +2070,7 @@ mod tests {
     #[test]
     fn native_and_browser_devices_on_same_address_keep_separate_histories() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("native-identity-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             tokio::fs::create_dir_all(&paths.lan_share_dir)
                 .await
@@ -2092,7 +2102,7 @@ mod tests {
     #[test]
     fn native_batch_encrypts_chunks_reassembles_and_retry_is_idempotent() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("native-secure-transfer-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root.join("receiver"));
             tokio::fs::create_dir_all(&root).await.unwrap();
             let first_content = vec![b'a'; attachments::FILE_CHUNK_BYTES as usize + 3];
@@ -2243,7 +2253,7 @@ mod tests {
     #[test]
     fn transfer_settings_persist_without_replacing_existing_pairing() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id("transfer-settings-test"));
+            let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             let old_config = json!({
                 "id": "native-local", "name": "我的电脑", "peers": [{
