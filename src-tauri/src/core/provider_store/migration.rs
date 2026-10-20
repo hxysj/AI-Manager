@@ -68,6 +68,7 @@ fn legacy_map(
 }
 
 pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), ManagerError> {
+    crate::core::provider_key_usage::migrate_bindings(connection)?;
     let columns = connection
         .prepare("PRAGMA table_info(providers)")?
         .query_map([], |row| row.get::<_, String>(1))?
@@ -78,7 +79,13 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
         extra |= table_exists(connection, table)?;
     }
     let legacy_keys = has_column(connection, "provider_keys", "payload_json")?;
-    if !old && columns.iter().any(|column| column == "source_provider_id") && !extra && !legacy_keys {
+    if !old
+        && columns.iter().any(|column| column == "source_provider_id")
+        && !extra
+        && !legacy_keys
+        && has_column(connection, "provider_keys", "is_current")?
+        && !table_exists(connection, "provider_key_usage")?
+    {
         return Ok(());
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -91,8 +98,12 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
     }
     if !old && !legacy_keys && !extra && table_exists(&transaction, "providers")? {
         if !has_column(&transaction, "providers", "source_provider_id")? {
-            transaction.execute("ALTER TABLE providers ADD COLUMN source_provider_id TEXT", [])?;
+            transaction.execute(
+                "ALTER TABLE providers ADD COLUMN source_provider_id TEXT",
+                [],
+            )?;
         }
+        super::keys::migrate(&transaction)?;
         transaction.commit()?;
         return Ok(());
     }

@@ -1,10 +1,27 @@
 use crate::core::{database, error::ManagerError, paths::AppPaths};
 use rusqlite::{
     params, params_from_iter, types::Value as SqlValue, Connection, OptionalExtension, Row,
-    Transaction,
+    Transaction, TransactionBehavior,
 };
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
+
+// 仓库缓存属于本机，备份和恢复只传递仓库配置。
+pub(crate) const REPOSITORY_LOCAL_COLUMNS: &[&str] = &[
+    "cache_status",
+    "cached_skills",
+    "cache_error",
+    "last_synced_at",
+];
+
+pub(crate) fn repository_local_default(column: &str) -> Value {
+    match column {
+        "cache_status" => json!("ready"),
+        "cached_skills" => json!("[]"),
+        "last_synced_at" => json!(0),
+        _ => json!(""),
+    }
+}
 
 pub const SKILL_TRASH_RETENTION_MS: u128 = 10 * 24 * 60 * 60 * 1000;
 
@@ -66,14 +83,10 @@ fn fields(table: &str) -> &'static [Field] {
             ("html_url", "htmlUrl", Text),
             ("created_at", "createdAt", Integer),
             ("updated_at", "updatedAt", Integer),
-        ],
-        "skill_repository_cache" => &[
-            ("id", "id", Text),
-            ("status", "status", Text),
-            ("skills", "skills", Array),
-            ("error", "error", Text),
+            ("cache_status", "status", Text),
+            ("cached_skills", "skills", Array),
+            ("cache_error", "error", Text),
             ("last_synced_at", "lastSyncedAt", Integer),
-            ("updated_at", "updatedAt", Integer),
         ],
         _ => unreachable!("未知的 Skill 数据表"),
     }
@@ -86,6 +99,7 @@ fn create_table(connection: &Connection, table: &str) -> Result<(), ManagerError
             let definition = match kind {
                 Integer | Boolean => "INTEGER NOT NULL DEFAULT 0",
                 Array => "TEXT NOT NULL DEFAULT '[]'",
+                _ if *column == "cache_status" => "TEXT NOT NULL DEFAULT 'ready'",
                 _ => "TEXT NOT NULL DEFAULT ''",
             };
             format!("{column} {definition}")
@@ -107,12 +121,7 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
 }
 
 pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), ManagerError> {
-    let tables = [
-        "skills",
-        "skill_groups",
-        "skill_repositories",
-        "skill_repository_cache",
-    ];
+    let tables = ["skills", "skill_groups", "skill_repositories"];
     let mut legacy = Vec::new();
     let mut removed_columns = Vec::new();
     let mut add_group_id = false;
@@ -144,6 +153,15 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
             legacy.push((table, !columns.is_empty()));
         }
     }
+    let cache_exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='skill_repository_cache')",
+        [], |row| row.get(0))?;
+    let cache_columns_ready: bool = connection
+        .prepare("PRAGMA table_info(skill_repositories)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|column| column == "cached_skills");
     let obsolete: i64 = connection.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN ('skill_installs', 'skill_trash', 'skill_schema_migrations')",
         [], |row| row.get(0),
@@ -153,10 +171,12 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
         && removed_columns.is_empty()
         && !add_group_id
         && !remove_group_members
+        && !cache_exists
+        && cache_columns_ready
     {
         return Ok(());
     }
-    let transaction = connection.transaction()?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if add_group_id {
         transaction
             .execute_batch("ALTER TABLE skills ADD COLUMN group_id TEXT NOT NULL DEFAULT ''")?;
@@ -196,25 +216,46 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
     if !group_memberships.is_empty() {
         update_group_memberships(&transaction, &group_memberships)?;
     }
-    if !removed_columns.is_empty() {
-        let items = transaction
-            .prepare("SELECT item_key, sort_order, skills FROM skill_repository_cache")?
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        for (key, _, skills) in items {
-            let mut skills: Value = serde_json::from_str(&skills)?;
-            remove_cached_content(&mut skills);
-            transaction.execute(
-                "UPDATE skill_repository_cache SET skills=?1 WHERE item_key=?2",
-                params![skills.to_string(), key],
-            )?;
+    let repository_columns = transaction
+        .prepare("PRAGMA table_info(skill_repositories)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (column, _, kind) in fields("skill_repositories") {
+        if REPOSITORY_LOCAL_COLUMNS.contains(column)
+            && !repository_columns.iter().any(|name| name == column)
+        {
+            let definition = match kind {
+                Integer => "INTEGER NOT NULL DEFAULT 0",
+                Array => "TEXT NOT NULL DEFAULT '[]'",
+                _ if *column == "cache_status" => "TEXT NOT NULL DEFAULT 'ready'",
+                _ => "TEXT NOT NULL DEFAULT ''",
+            };
+            transaction.execute_batch(&format!(
+                "ALTER TABLE skill_repositories ADD COLUMN {column} {definition}"
+            ))?;
         }
+    }
+    let cache_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='skill_repository_cache')",
+        [], |row|row.get(0))?;
+    if cache_exists {
+        let mut statement = transaction.prepare("SELECT * FROM skill_repository_cache")?;
+        let legacy = statement.column_names().contains(&"payload_json");
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let item = if legacy {
+                serde_json::from_str::<Value>(&row.get::<_, String>("payload_json")?)?
+            } else {
+                json!({"id":row.get::<_,String>("id")?,"status":row.get::<_,String>("status")?,
+                    "skills":serde_json::from_str::<Value>(&row.get::<_,String>("skills")?)?,
+                    "error":row.get::<_,String>("error")?,"lastSyncedAt":row.get::<_,i64>("last_synced_at")?,
+                    "updatedAt":row.get::<_,i64>("updated_at")?})
+            };
+            merge_repository_cache(&transaction, &item)?;
+        }
+        drop(rows);
+        drop(statement);
+        transaction.execute_batch("DROP TABLE skill_repository_cache;")?;
     }
     let has_installs: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='skill_installs')",
@@ -280,6 +321,15 @@ pub(crate) fn item_from_row(table: &str, row: &Row<'_>) -> rusqlite::Result<Valu
         };
         item.insert((*key).into(), value);
     }
+    if table == "skill_repositories"
+        && item
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .is_empty()
+    {
+        item.insert("status".into(), json!("ready"));
+    }
     Ok(Value::Object(item))
 }
 
@@ -337,6 +387,13 @@ fn upsert_item(
         .iter()
         .skip(1)
         .filter(|column| table != "skills" || **column != "group_id")
+        .filter(|column| {
+            table != "skill_repositories"
+                || !REPOSITORY_LOCAL_COLUMNS.contains(column)
+                || fields(table)
+                    .iter()
+                    .any(|(name, key, _)| name == *column && item.get(*key).is_some())
+        })
         .map(|column| format!("{column}=excluded.{column}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -344,6 +401,13 @@ fn upsert_item(
         .iter()
         .skip(1)
         .filter(|column| table != "skills" || **column != "group_id")
+        .filter(|column| {
+            table != "skill_repositories"
+                || !REPOSITORY_LOCAL_COLUMNS.contains(column)
+                || fields(table)
+                    .iter()
+                    .any(|(name, key, _)| name == *column && item.get(*key).is_some())
+        })
         .map(|column| format!("{column} IS NOT excluded.{column}"))
         .collect::<Vec<_>>()
         .join(" OR ");
@@ -458,11 +522,34 @@ pub fn read_repositories(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
 pub fn write_repositories(paths: &AppPaths, items: &[Value]) -> Result<(), ManagerError> {
     write_collection(paths, "skill_repositories", items, &["id"])
 }
-pub fn read_repository_cache(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
-    read_collection(paths, "skill_repository_cache")
-}
-pub fn write_repository_cache(paths: &AppPaths, items: &[Value]) -> Result<(), ManagerError> {
-    write_collection(paths, "skill_repository_cache", items, &["id"])
+fn merge_repository_cache(transaction: &Transaction<'_>, item: &Value) -> Result<(), ManagerError> {
+    let id = item["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| ManagerError::System("仓库缓存缺少 ID，迁移已回滚".into()))?;
+    let mut skills = item
+        .get("skills")
+        .filter(|value| value.is_array())
+        .cloned()
+        .unwrap_or_else(|| json!([]));
+    remove_cached_content(&mut skills);
+    // 已删除仓库的缓存无需恢复成一个没有配置的仓库。
+    transaction.execute(
+        "UPDATE skill_repositories SET cache_status=?2,cached_skills=?3,cache_error=?4,
+        last_synced_at=?5,updated_at=CASE WHEN ?6>0 THEN ?6 ELSE updated_at END WHERE id=?1",
+        params![
+            id,
+            item["status"]
+                .as_str()
+                .filter(|status| !status.is_empty())
+                .unwrap_or("ready"),
+            skills.to_string(),
+            item["error"].as_str().unwrap_or(""),
+            item["lastSyncedAt"].as_i64().unwrap_or(0),
+            item["updatedAt"].as_i64().unwrap_or(0)
+        ],
+    )?;
+    Ok(())
 }
 
 pub fn read_installs(paths: &AppPaths) -> Result<Map<String, Value>, ManagerError> {
@@ -641,14 +728,9 @@ fn migrate_legacy_json(paths: &AppPaths, connection: &mut Connection) -> Result<
         return Ok(());
     }
     let transaction = connection.transaction()?;
-    for (index, table) in [
-        "skills",
-        "skill_groups",
-        "skill_repositories",
-        "skill_repository_cache",
-    ]
-    .iter()
-    .enumerate()
+    for (index, table) in ["skills", "skill_groups", "skill_repositories"]
+        .iter()
+        .enumerate()
     {
         if legacy_files[index].exists() {
             replace_collection(
@@ -662,6 +744,9 @@ fn migrate_legacy_json(paths: &AppPaths, connection: &mut Connection) -> Result<
                 },
             )?;
         }
+    }
+    for item in read_array_file(legacy_files[3])? {
+        merge_repository_cache(&transaction, &item)?;
     }
     for (name, targets) in read_object_file(legacy_files[4])? {
         merge_install(&transaction, &name, &targets)?;
@@ -753,7 +838,7 @@ fn collection_key(item: &Value, key_fields: &[&str], index: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_groups, read_installs, read_repository_cache, read_skills, write_groups};
+    use super::{read_groups, read_installs, read_repositories, read_skills, write_groups};
     use crate::core::paths::resolve_app_paths;
     use serde_json::json;
     use std::path::Path;
@@ -805,7 +890,7 @@ mod tests {
 
         assert_eq!(read_skills(&paths).unwrap().len(), 1);
         assert_eq!(read_groups(&paths).unwrap().len(), 1);
-        assert_eq!(read_repository_cache(&paths).unwrap().len(), 1);
+        assert_eq!(read_repositories(&paths).unwrap().len(), 1);
         assert_eq!(read_installs(&paths).unwrap()["skill-a"], json!(["codex"]));
         assert!(!Path::new(&paths.storage_files.skills).exists());
         assert!(!Path::new(&paths.storage_files.skill_groups).exists());
@@ -885,7 +970,7 @@ mod tests {
             "main"
         );
         assert_eq!(
-            read_repository_cache(&paths).unwrap()[0]["skills"][0]["name"],
+            read_repositories(&paths).unwrap()[0]["skills"][0]["name"],
             "cached-skill"
         );
         let trash = super::read_trash(&paths).unwrap();
@@ -908,7 +993,7 @@ mod tests {
                 .unwrap();
             assert!(!columns.iter().any(|column| column == "payload_json"));
         }
-        assert_eq!(connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('skill_trash','skill_installs','skill_schema_migrations')", [], |row| row.get::<_,i64>(0)).unwrap(),0);
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('skill_trash','skill_installs','skill_schema_migrations','skill_repository_cache')", [], |row| row.get::<_,i64>(0)).unwrap(),0);
         assert_eq!(
             connection
                 .query_row(
@@ -975,7 +1060,11 @@ mod tests {
             "skill_repositories",
             "skill_repository_cache",
         ] {
-            super::create_table(&connection, table).unwrap();
+            if table == "skill_repository_cache" {
+                connection.execute_batch("CREATE TABLE skill_repository_cache(item_key TEXT PRIMARY KEY,sort_order INTEGER NOT NULL,id TEXT NOT NULL,status TEXT NOT NULL DEFAULT '',skills TEXT NOT NULL DEFAULT '[]',error TEXT NOT NULL DEFAULT '',last_synced_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL DEFAULT 0)").unwrap();
+            } else {
+                super::create_table(&connection, table).unwrap();
+            }
         }
         connection.execute_batch("ALTER TABLE skills DROP COLUMN group_id;
             ALTER TABLE skills ADD COLUMN content TEXT DEFAULT '';
@@ -983,6 +1072,12 @@ mod tests {
             INSERT INTO skills(item_key,sort_order,id,name,description,content) VALUES ('a',0,'stable-id','a','描述','正文');
             ALTER TABLE skill_groups ADD COLUMN skill_ids TEXT DEFAULT '';
             INSERT INTO skill_groups(item_key,sort_order,id,name,skill_ids) VALUES ('g',0,'g','分组','stable-id');").unwrap();
+        connection
+            .execute(
+                "INSERT INTO skill_repositories(item_key,sort_order,id) VALUES ('repo',0,'repo')",
+                [],
+            )
+            .unwrap();
         connection.execute("INSERT INTO skill_repository_cache(item_key,sort_order,id,skills) VALUES ('repo',0,'repo',?1)",
             [json!([{"name":"demo","description":"描述","content":"正文"}]).to_string()]).unwrap();
         super::migrate_connection(&mut connection).unwrap();
@@ -991,7 +1086,7 @@ mod tests {
         assert_eq!(skill["groupId"], "g");
         assert!(skill.get("content").is_none());
         assert!(skill.get("installStates").is_none());
-        assert!(read_repository_cache(&paths).unwrap()[0]["skills"][0]
+        assert!(read_repositories(&paths).unwrap()[0]["skills"][0]
             .get("content")
             .is_none());
         super::write_skills(
@@ -1012,5 +1107,109 @@ mod tests {
             .is_err());
         super::write_groups(&paths, &[]).unwrap();
         assert_eq!(read_skills(&paths).unwrap()[0]["groupId"], "");
+    }
+    #[test]
+    fn merges_repository_cache_and_rolls_back_malformed_cache() {
+        for malformed in [false, true] {
+            let paths = test_paths(if malformed {
+                "cache-rollback"
+            } else {
+                "cache-merge"
+            });
+            super::initialize(&paths).unwrap();
+            let mut connection = crate::core::database::open(&paths).unwrap();
+            connection.execute_batch("ALTER TABLE skill_repositories DROP COLUMN cache_status;
+                ALTER TABLE skill_repositories DROP COLUMN cached_skills;
+                ALTER TABLE skill_repositories DROP COLUMN cache_error;
+                ALTER TABLE skill_repositories DROP COLUMN last_synced_at;
+                INSERT INTO skill_repositories(item_key,sort_order,id,name) VALUES('repo',0,'repo','仓库');
+                CREATE TABLE skill_repository_cache(item_key TEXT PRIMARY KEY,sort_order INTEGER,payload_json TEXT);").unwrap();
+            let payload = if malformed {
+                "bad json".into()
+            } else {
+                json!({"id":"repo","status":"ready","skills":[{"name":"demo","description":"说明","content":"不能保存"}],"lastSyncedAt":123}).to_string()
+            };
+            connection
+                .execute(
+                    "INSERT INTO skill_repository_cache VALUES('repo',0,?1)",
+                    [payload],
+                )
+                .unwrap();
+            if malformed {
+                assert!(super::migrate_connection(&mut connection).is_err());
+                assert!(connection
+                    .prepare("SELECT cached_skills FROM skill_repositories")
+                    .is_err());
+                assert_eq!(
+                    connection
+                        .query_row("SELECT COUNT(*) FROM skill_repository_cache", [], |row| row
+                            .get::<_, i64>(0))
+                        .unwrap(),
+                    1
+                );
+            } else {
+                super::migrate_connection(&mut connection).unwrap();
+                super::migrate_connection(&mut connection).unwrap();
+                let items = super::read_repositories(&paths).unwrap();
+                assert_eq!(items.len(), 1);
+                assert_eq!(items[0]["name"], "仓库");
+                assert_eq!(items[0]["lastSyncedAt"], 123);
+                assert_eq!(items[0]["skills"][0]["description"], "说明");
+                assert!(items[0]["skills"][0].get("content").is_none());
+                assert!(connection
+                    .prepare("SELECT * FROM skill_repository_cache")
+                    .is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn repository_backup_excludes_cache_and_restore_keeps_only_matching_local_cache() {
+        let paths = test_paths("repository-backup");
+        let original = json!({"id":"repo","name":"备份名称","source":"https://example.test/repo","branch":"main",
+            "status":"ready","skills":[{"name":"remote","description":"备份缓存","content":"不能保存"}],"lastSyncedAt":100});
+        super::write_repositories(&paths, &[original.clone()]).unwrap();
+        let content = crate::core::database::backup(&paths).unwrap();
+        let snapshot = std::path::Path::new(&paths.temp_dir).join("repo-backup-test.db");
+        std::fs::write(&snapshot, &content).unwrap();
+        let connection = rusqlite::Connection::open(snapshot).unwrap();
+        let cached: String = connection
+            .query_row("SELECT cached_skills FROM skill_repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(cached, "[]");
+        assert_eq!(
+            connection
+                .query_row("SELECT last_synced_at FROM skill_repositories", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        drop(connection);
+        let mut local = original.clone();
+        local["name"] = json!("本机名称");
+        local["skills"] = json!([{"name":"local","description":"本机缓存"}]);
+        local["lastSyncedAt"] = json!(200);
+        super::write_repositories(&paths, &[local.clone()]).unwrap();
+        crate::core::database::restore_selected(&paths, &content, &["skill_repositories".into()])
+            .unwrap();
+        let restored = super::read_repositories(&paths).unwrap().remove(0);
+        assert_eq!(restored["name"], "备份名称");
+        assert_eq!(restored["skills"], local["skills"]);
+        assert_eq!(restored["lastSyncedAt"], 200);
+        assert!(!crate::core::database::preview_rows(&paths, &content)
+            .unwrap()
+            .iter()
+            .any(|row| row.table == "skill_repositories"));
+        local["branch"] = json!("other");
+        super::write_repositories(&paths, &[local]).unwrap();
+        crate::core::database::restore_selected(&paths, &content, &["skill_repositories".into()])
+            .unwrap();
+        let restored = super::read_repositories(&paths).unwrap().remove(0);
+        assert_eq!(restored["branch"], "main");
+        assert_eq!(restored["skills"], json!([]));
+        assert_eq!(restored["lastSyncedAt"], 0);
     }
 }

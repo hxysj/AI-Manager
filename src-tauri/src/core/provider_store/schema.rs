@@ -163,14 +163,9 @@ pub(super) fn create(connection: &Connection) -> Result<(), ManagerError> {
          );
          CREATE INDEX IF NOT EXISTS idx_providers_cli_type ON providers(cli,type,sort_order);
          CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_active_cli ON providers(cli) WHERE is_active=1;
-         CREATE TABLE IF NOT EXISTS provider_keys (
-           provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-           id TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
-           value TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0,1)),
-           sort_order INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(provider_id,id)
-         );
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_provider_keys_active ON provider_keys(provider_id) WHERE is_active=1;"
+        "
     ))?;
+    super::keys::migrate(connection)?;
     Ok(())
 }
 

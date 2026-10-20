@@ -9,8 +9,10 @@ use std::{
     path::Path,
 };
 
+mod keys;
 mod migration;
 mod schema;
+pub(crate) use keys::usage_provider_id;
 pub(crate) use migration::migrate_connection;
 use migration::migrate_legacy_json;
 pub(crate) use schema::{item_from_row, local_default, LOCAL_COLUMNS};
@@ -67,7 +69,11 @@ pub fn read_codex_accounts(paths: &AppPaths) -> Result<Vec<Value>, ManagerError>
     rows(&database::open(paths)?, "type='codex-account'")
 }
 
-fn canonical_id(connection: &Connection, item: &Value, scope: &str) -> Result<String, ManagerError> {
+fn canonical_id(
+    connection: &Connection,
+    item: &Value,
+    scope: &str,
+) -> Result<String, ManagerError> {
     let id = text(item, "id");
     if id.is_empty() {
         return Err(ManagerError::System(
@@ -80,9 +86,19 @@ fn canonical_id(connection: &Connection, item: &Value, scope: &str) -> Result<St
         _ => return Ok(id),
     };
     // 旧记录保留原主键；新记录的 UUID 直接入库，不再拼接类型前缀。
-    let exists = connection.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1)", [&legacy], |row| row.get::<_, bool>(0))?;
+    let exists = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1)",
+        [&legacy],
+        |row| row.get::<_, bool>(0),
+    )?;
     let conflicts = connection.query_row("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND ((?2='account' AND type<>'codex-account') OR (?2='desktop' AND cli<>'claude-desktop')))", params![id, scope], |row| row.get::<_, bool>(0))?;
-    Ok(if exists || conflicts || uuid::Uuid::parse_str(&id).is_err() { legacy } else { id })
+    Ok(
+        if exists || conflicts || uuid::Uuid::parse_str(&id).is_err() {
+            legacy
+        } else {
+            id
+        },
+    )
 }
 
 // 每次只更新这一类记录的业务列，本机激活、密钥、模型和同步信息分别维护。
@@ -523,7 +539,7 @@ pub fn read_keys(paths: &AppPaths) -> Result<Map<String, Value>, ManagerError> {
     initialize(paths)?;
     let connection = database::open(paths)?;
     let mut result = Map::new();
-    let mut statement=connection.prepare("SELECT CASE WHEN p.cli='claude-desktop' AND p.id NOT LIKE 'claude-desktop:%' THEN 'claude-desktop:'||p.id ELSE p.id END,k.id,k.name,k.note,k.value,k.is_active FROM provider_keys k JOIN providers p ON p.id=k.provider_id ORDER BY k.provider_id,k.sort_order,k.id")?;
+    let mut statement=connection.prepare("SELECT CASE WHEN p.cli='claude-desktop' AND p.id NOT LIKE 'claude-desktop:%' THEN 'claude-desktop:'||p.id ELSE p.id END,k.id,k.name,k.note,k.value,k.is_active FROM provider_keys k JOIN providers p ON p.id=k.provider_id WHERE k.is_current=1 ORDER BY k.provider_id,k.sort_order,k.id")?;
     for row in statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -585,7 +601,9 @@ pub(crate) fn set_key(
     }
     let resolved = if let Some(id) = provider_id.strip_prefix("claude-desktop:") {
         canonical_id(connection, &json!({"id":id}), "desktop")?
-    } else { provider_id.to_string() };
+    } else {
+        provider_id.to_string()
+    };
     let provider_id = resolved.as_str();
     let records = if let Some(raw) = value
         .and_then(Value::as_str)
@@ -622,15 +640,12 @@ pub(crate) fn set_key(
             .unwrap_or_default()
     };
     let existing = connection
-        .prepare("SELECT id FROM provider_keys WHERE provider_id=?1")?
+        .prepare("SELECT id FROM provider_keys WHERE provider_id=?1 AND is_current=1")?
         .query_map([provider_id], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     for id in existing {
         if !retained.contains(&id) {
-            connection.execute(
-                "DELETE FROM provider_keys WHERE provider_id=?1 AND id=?2",
-                params![provider_id, id],
-            )?;
+            keys::archive(connection, provider_id, &id)?;
         }
     }
     // 先取消旧选择，避免切换时触发同一供应商只能有一个激活 Key 的约束。
@@ -640,10 +655,24 @@ pub(crate) fn set_key(
     )?;
     for (order, record) in records.iter().enumerate() {
         let id = text(record, "id");
-        connection.execute("INSERT INTO provider_keys(provider_id,id,name,note,value,is_active,sort_order) VALUES(?1,?2,?3,?4,?5,?6,?7)
-          ON CONFLICT(provider_id,id) DO UPDATE SET name=excluded.name,note=excluded.note,value=excluded.value,is_active=excluded.is_active,sort_order=excluded.sort_order
-          WHERE name IS NOT excluded.name OR note IS NOT excluded.note OR value IS NOT excluded.value OR is_active IS NOT excluded.is_active OR sort_order IS NOT excluded.sort_order",
-          params![provider_id,id,text(record,"name"),text(record,"note"),text(record,"value"),id==active,order as i64])?;
+        let encrypted = text(record, "value");
+        let hash = keys::credential_hash(&encrypted);
+        let current_hash: Option<String> = connection.query_row(
+            "SELECT key_hash FROM provider_keys WHERE provider_id=?1 AND id=?2 AND is_current=1",
+            params![provider_id,id],|row|row.get(0)).optional()?;
+        if current_hash
+            .as_ref()
+            .is_some_and(|current| current != &hash)
+        {
+            keys::archive(connection, provider_id, &id)?;
+        }
+        connection.execute("INSERT INTO provider_keys(provider_id,id,key_hash,name,note,value,is_current,is_active,sort_order)
+          VALUES(?1,?2,?3,?4,?5,?6,1,?7,?8)
+          ON CONFLICT(provider_id,id,key_hash) DO UPDATE SET name=excluded.name,note=excluded.note,value=excluded.value,
+          is_current=1,is_active=excluded.is_active,sort_order=excluded.sort_order
+          WHERE name IS NOT excluded.name OR note IS NOT excluded.note OR value IS NOT excluded.value
+          OR is_current<>1 OR is_active IS NOT excluded.is_active OR sort_order IS NOT excluded.sort_order",
+          params![provider_id,id,hash,text(record,"name"),text(record,"note"),encrypted,id==active,order as i64])?;
     }
     Ok(())
 }
@@ -719,7 +748,11 @@ fn set_desktop_settings(
         .get("currentProviderId")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let id = if requested.is_empty() { String::new() } else { canonical_id(connection, &json!({"id":requested}), "desktop")? };
+    let id = if requested.is_empty() {
+        String::new()
+    } else {
+        canonical_id(connection, &json!({"id":requested}), "desktop")?
+    };
     connection.execute(
         "UPDATE providers SET is_active=0 WHERE cli='claude-desktop' AND is_active=1 AND id<>?1",
         [&id],
@@ -784,7 +817,11 @@ fn set_instances(connection: &Connection, items: &[Value]) -> Result<(), Manager
             .or_else(|| item.get("id"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        let resolved = if let Some(id) = id.strip_prefix("account:") { canonical_id(connection, &json!({"id":id}), "account")? } else { id.to_string() };
+        let resolved = if let Some(id) = id.strip_prefix("account:") {
+            canonical_id(connection, &json!({"id":id}), "account")?
+        } else {
+            id.to_string()
+        };
         connection.execute("UPDATE providers SET instance_profile_dir=?2,instance_sessions_path=?3,instance_updated_at=?4 WHERE id=?1 AND (instance_profile_dir<>?2 OR instance_sessions_path<>?3 OR instance_updated_at<>?4)",
             params![resolved,text(item,"profileDir"),text(item,"sessionsPath"),item["updatedAt"].as_i64().unwrap_or(1)])?;
     }

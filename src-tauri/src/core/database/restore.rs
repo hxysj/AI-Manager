@@ -141,6 +141,11 @@ fn comparable_row(
             value.remove(*column);
         }
     }
+    if table == "skill_repositories" {
+        for column in REPOSITORY_LOCAL_COLUMNS {
+            value.remove(*column);
+        }
+    }
     if table == "rules" {
         for column in RULE_LOCAL_COLUMNS {
             value.remove(*column);
@@ -229,6 +234,31 @@ pub(super) fn merge_table(
                 row.insert(
                     (*column).into(),
                     value.unwrap_or_else(|| provider_local_default(column)),
+                );
+            }
+        }
+        if table == "skill_repositories" {
+            let same_source = existing.is_some_and(|old| {
+                [
+                    "type",
+                    "source",
+                    "owner",
+                    "repository",
+                    "branch",
+                    "root_path",
+                ]
+                .iter()
+                .all(|column| old.get(*column) == row.get(*column))
+            });
+            for column in REPOSITORY_LOCAL_COLUMNS {
+                let local = if same_source {
+                    existing.and_then(|old| old.get(*column)).cloned()
+                } else {
+                    None
+                };
+                row.insert(
+                    (*column).into(),
+                    local.unwrap_or_else(|| repository_local_default(column)),
                 );
             }
         }

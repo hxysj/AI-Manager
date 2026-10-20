@@ -3352,100 +3352,14 @@ fn serialize_cli_targets(cli_targets: &[Value]) -> Vec<Value> {
 }
 
 pub(crate) fn load_repositories(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
-    let caches = skill_store::read_repository_cache(paths)?;
-    let cache_map = caches
-        .into_iter()
-        .map(|item| (string_value(item.get("id")), item))
-        .collect::<HashMap<_, _>>();
-
-    Ok(skill_store::read_repositories(paths)?
-        .into_iter()
-        .map(|item| {
-            let repository = create_repository_runtime_item(&item);
-            let repository_id = string_value(repository.get("id"));
-
-            apply_repository_cache(repository, cache_map.get(&repository_id))
-        })
-        .collect())
+    skill_store::read_repositories(paths)
 }
 
 async fn persist_repositories(
     paths: &AppPaths,
     repositories: &[Value],
 ) -> Result<(), ManagerError> {
-    let storage_items = repositories
-        .iter()
-        .map(create_repository_storage_item)
-        .collect::<Vec<_>>();
-    let cache_items = repositories
-        .iter()
-        .map(|item| {
-            json!({
-              "id": item["id"],
-              "status": item["status"],
-              "skills": item["skills"],
-              "error": item["error"],
-              "lastSyncedAt": item["lastSyncedAt"],
-              "updatedAt": item["updatedAt"]
-            })
-        })
-        .collect::<Vec<_>>();
-
-    skill_store::write_repositories(paths, &storage_items)?;
-    skill_store::write_repository_cache(paths, &cache_items)
-}
-
-fn create_repository_storage_item(repository: &Value) -> Value {
-    json!({
-      "id": repository["id"],
-      "type": repository["type"],
-      "name": repository["name"],
-      "source": repository["source"],
-      "owner": repository["owner"],
-      "repository": repository["repository"],
-      "branch": repository["branch"],
-      "rootPath": repository["rootPath"],
-      "htmlUrl": repository["htmlUrl"],
-      "createdAt": repository["createdAt"],
-      "updatedAt": repository["updatedAt"]
-    })
-}
-
-fn create_repository_runtime_item(repository: &Value) -> Value {
-    let mut item = create_repository_storage_item(repository);
-
-    item["status"] = json!("ready");
-    item["skills"] = json!([]);
-    item["error"] = json!("");
-    item["lastSyncedAt"] = json!(0);
-    item
-}
-
-fn apply_repository_cache(mut repository: Value, cache: Option<&Value>) -> Value {
-    let Some(cache) = cache else {
-        return repository;
-    };
-
-    repository["status"] = json!(first_non_empty(&[
-        string_value(cache.get("status")),
-        "ready".to_string(),
-    ]));
-    repository["skills"] = cache
-        .get("skills")
-        .filter(|value| value.is_array())
-        .cloned()
-        .unwrap_or_else(|| json!([]));
-    repository["error"] = json!(string_value(cache.get("error")));
-    repository["lastSyncedAt"] = json!(cache
-        .get("lastSyncedAt")
-        .and_then(Value::as_u64)
-        .unwrap_or(0));
-    repository["updatedAt"] = json!(cache
-        .get("updatedAt")
-        .and_then(Value::as_u64)
-        .or_else(|| repository.get("updatedAt").and_then(Value::as_u64))
-        .unwrap_or(0));
-    repository
+    skill_store::write_repositories(paths, repositories)
 }
 
 fn repository_state_patch(repositories: &[Value]) -> Value {
@@ -4775,13 +4689,14 @@ mod tests {
             "新正文"
         );
         let repository = json!({"id":"repo","source":"https://github.com/owner/repo","owner":"owner","repository":"repo","branch":"main"});
-        skill_store::write_repositories(&paths, &[repository.clone()]).unwrap();
-        skill_store::write_repository_cache(&paths,&[json!({"id":"repo","skills":[{"name":"demo","skillPath":"skills/demo","content":"不应缓存"}]})]).unwrap();
+        let mut cached_repository=repository.clone();
+        cached_repository["skills"]=json!([{"name":"demo","skillPath":"skills/demo","content":"不应缓存"}]);
+        skill_store::write_repositories(&paths, &[cached_repository]).unwrap();
         let cache_path = repository_archive_cache_path(&paths, &repository, "main");
         std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
         write_test_repository_archive(&cache_path);
         assert!(
-            skill_store::read_repository_cache(&paths).unwrap()[0]["skills"][0]
+            skill_store::read_repositories(&paths).unwrap()[0]["skills"][0]
                 .get("content")
                 .is_none()
         );

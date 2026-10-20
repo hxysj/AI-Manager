@@ -11,11 +11,20 @@ static IN_FLIGHT: LazyLock<Mutex<HashMap<String, u64>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const MAX_ERROR_BUFFER: usize = 64 * 1024;
 
+#[derive(Default, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyBinding {
+    api_key_id: String,
+    api_key_hash: String,
+    single_key: bool,
+}
+
 pub struct KeyRequest {
     paths: AppPaths,
     provider_id: String,
     key_id: String,
     key_hash: String,
+    storage_provider_id: Option<String>,
     started: bool,
     finished: bool,
     status: Option<u16>,
@@ -28,26 +37,16 @@ pub struct KeyRequest {
 }
 
 fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
-    let connection = database::open(paths)?;
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS provider_key_usage (
-           provider_id TEXT NOT NULL,
-           key_id TEXT NOT NULL,
-           key_hash TEXT NOT NULL,
-           request_count INTEGER NOT NULL DEFAULT 0,
-           success_count INTEGER NOT NULL DEFAULT 0,
-           failure_count INTEGER NOT NULL DEFAULT 0,
-           consecutive_failures INTEGER NOT NULL DEFAULT 0,
-           last_used_at INTEGER NOT NULL DEFAULT 0,
-           last_success_at INTEGER NOT NULL DEFAULT 0,
-           last_failure_at INTEGER NOT NULL DEFAULT 0,
-           last_status_code INTEGER,
-           last_error_kind TEXT NOT NULL DEFAULT '',
-           last_failure_kind TEXT NOT NULL DEFAULT '',
-           last_outcome TEXT NOT NULL DEFAULT '',
-           PRIMARY KEY(provider_id, key_id, key_hash)
-         );",
-    )?;
+    let mut connection = database::open(paths)?;
+    let ready: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('provider_keys') WHERE name='is_current')
+            AND NOT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='provider_key_usage')
+            AND EXISTS(SELECT 1 FROM pragma_table_info('provider_key_bindings') WHERE name='api_key_id')
+            AND NOT EXISTS(SELECT 1 FROM pragma_table_info('provider_key_bindings') WHERE name='payload_json')",
+        [],|row|row.get(0))?;
+    if !ready {
+        crate::core::provider_store::migrate_connection(&mut connection)?;
+    }
     Ok(connection)
 }
 
@@ -58,6 +57,7 @@ impl KeyRequest {
             provider_id: provider_id.to_string(),
             key_id: key_id.to_string(),
             key_hash: format!("{:x}", Sha256::digest(api_key.as_bytes())),
+            storage_provider_id: None,
             started: false,
             finished: false,
             status: None,
@@ -93,18 +93,22 @@ impl KeyRequest {
             return;
         }
         let result = open(&self.paths).and_then(|connection| {
+            let provider_id=crate::core::provider_store::usage_provider_id(&connection, &self.provider_id)?;
             connection.execute(
-                "INSERT INTO provider_key_usage(provider_id, key_id, key_hash, request_count, last_used_at)
-                 VALUES (?1, ?2, ?3, 1, ?4)
-                 ON CONFLICT(provider_id, key_id, key_hash) DO UPDATE SET
+                "INSERT INTO provider_keys(provider_id, id, key_hash, is_current, request_count, last_used_at)
+                 VALUES (?1, ?2, ?3, 0, 1, ?4)
+                 ON CONFLICT(provider_id, id, key_hash) DO UPDATE SET
                    request_count = request_count + 1, last_used_at = MAX(last_used_at, excluded.last_used_at)",
-                params![self.provider_id, self.key_id, self.key_hash, chrono::Utc::now().timestamp_millis()],
+                params![provider_id, self.key_id, self.key_hash, chrono::Utc::now().timestamp_millis()],
             )?;
-            Ok(())
+            Ok(provider_id)
         });
-        if result.is_err() {
-            eprintln!("API Key 请求统计写入失败，请检查数据目录");
-            return;
+        match result {
+            Ok(provider_id) => self.storage_provider_id = Some(provider_id),
+            Err(_) => {
+                eprintln!("API Key 请求统计写入失败，请检查数据目录");
+                return;
+            }
         }
         self.started = true;
         if let Ok(mut active) = IN_FLIGHT.lock() {
@@ -225,7 +229,7 @@ impl KeyRequest {
         let now = chrono::Utc::now().timestamp_millis();
         let result = open(&self.paths).and_then(|connection| {
             connection.execute(
-                "UPDATE provider_key_usage SET
+                "UPDATE provider_keys SET
                    success_count = success_count + ?4,
                    failure_count = failure_count + ?5,
                    consecutive_failures = CASE WHEN ?5 = 1 THEN consecutive_failures + 1 ELSE 0 END,
@@ -234,9 +238,11 @@ impl KeyRequest {
                    last_status_code = ?7, last_error_kind = ?8,
                    last_failure_kind = CASE WHEN ?5 = 1 THEN ?8 ELSE last_failure_kind END,
                    last_outcome = ?9
-                 WHERE provider_id = ?1 AND key_id = ?2 AND key_hash = ?3",
+                 WHERE provider_id = ?1 AND id = ?2 AND key_hash = ?3",
                 params![
-                    self.provider_id,
+                    self.storage_provider_id
+                        .as_deref()
+                        .unwrap_or(&self.provider_id),
                     self.key_id,
                     self.key_hash,
                     i64::from(!failed),
@@ -284,8 +290,8 @@ pub fn read(
         "SELECT request_count, success_count, failure_count, consecutive_failures,
            last_used_at, last_success_at, last_failure_at, last_status_code,
            last_error_kind, last_failure_kind, last_outcome
-         FROM provider_key_usage WHERE provider_id = ?1 AND key_id = ?2 AND key_hash = ?3",
-        params![provider_id, key_id, identity.key_hash],
+         FROM provider_keys WHERE provider_id = ?1 AND id = ?2 AND key_hash = ?3",
+        params![crate::core::provider_store::usage_provider_id(&connection, provider_id)?, key_id, identity.key_hash],
         |row| Ok(json!({
             "requestCount": row.get::<_, i64>(0)?, "successCount": row.get::<_, i64>(1)?,
             "failureCount": row.get::<_, i64>(2)?, "consecutiveFailures": row.get::<_, i64>(3)?,
@@ -311,25 +317,90 @@ pub fn fingerprint(api_key: &str) -> String {
     format!("{:x}", Sha256::digest(api_key.as_bytes()))
 }
 
+pub(crate) fn migrate_bindings(connection: &mut Connection) -> Result<(), ManagerError> {
+    let ready: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('provider_key_bindings') WHERE name='api_key_id')
+            AND NOT EXISTS(SELECT 1 FROM pragma_table_info('provider_key_bindings') WHERE name='payload_json')",
+        [],
+        |row| row.get(0),
+    )?;
+    if ready {
+        return Ok(());
+    }
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    // 获取写锁后重新检查，兼容多个连接同时触发迁移。
+    let legacy: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('provider_key_bindings') WHERE name='payload_json')",
+        [],
+        |row| row.get(0),
+    )?;
+    if legacy {
+        transaction.execute_batch(
+            "ALTER TABLE provider_key_bindings RENAME TO provider_key_bindings_legacy;",
+        )?;
+    }
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS provider_key_bindings (
+           provider_id TEXT NOT NULL,
+           observed_at INTEGER NOT NULL,
+           api_key_id TEXT NOT NULL DEFAULT '',
+           api_key_hash TEXT NOT NULL DEFAULT '',
+           single_key INTEGER NOT NULL DEFAULT 0 CHECK(single_key IN (0,1)),
+           PRIMARY KEY(provider_id, observed_at)
+         );",
+    )?;
+    if legacy {
+        {
+            let mut statement = transaction.prepare(
+                "SELECT provider_id, observed_at, payload_json FROM provider_key_bindings_legacy",
+            )?;
+            let mut rows = statement.query([])?;
+            let mut insert = transaction.prepare(
+                "INSERT INTO provider_key_bindings(provider_id, observed_at, api_key_id, api_key_hash, single_key)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            while let Some(row) = rows.next()? {
+                let binding: KeyBinding = serde_json::from_str(&row.get::<_, String>(2)?)?;
+                insert.execute(params![
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    binding.api_key_id,
+                    binding.api_key_hash,
+                    binding.single_key
+                ])?;
+            }
+        }
+        // 转换和删除旧表在同一事务内完成，格式错误时保留全部原记录。
+        transaction.execute_batch("DROP TABLE provider_key_bindings_legacy;")?;
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 pub fn sync_bindings(
     paths: &AppPaths,
     bindings: &Map<String, Value>,
     observed_at: i64,
 ) -> Result<(), ManagerError> {
     let mut connection = open(paths)?;
-    connection.execute_batch(
-        "CREATE TABLE IF NOT EXISTS provider_key_bindings (
-        provider_id TEXT NOT NULL, observed_at INTEGER NOT NULL, payload_json TEXT NOT NULL,
-        PRIMARY KEY(provider_id, observed_at)
-    );",
-    )?;
-    let transaction = connection.transaction()?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let current = {
-        let mut statement = transaction.prepare("SELECT provider_id, payload_json FROM provider_key_bindings AS binding
-            WHERE observed_at = (SELECT MAX(observed_at) FROM provider_key_bindings WHERE provider_id = binding.provider_id)")?;
+        let mut statement = transaction.prepare(
+            "SELECT provider_id, api_key_id, api_key_hash, single_key FROM provider_key_bindings AS binding
+             WHERE observed_at = (SELECT MAX(observed_at) FROM provider_key_bindings WHERE provider_id = binding.provider_id)",
+        )?;
         let rows = statement
             .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    KeyBinding {
+                        api_key_id: row.get(1)?,
+                        api_key_hash: row.get(2)?,
+                        single_key: row.get(3)?,
+                    },
+                ))
             })?
             .collect::<Result<HashMap<_, _>, _>>()?;
         rows
@@ -342,15 +413,20 @@ pub fn sync_bindings(
         let binding = bindings
             .get(provider_id)
             .cloned()
-            .unwrap_or_else(|| json!({"apiKeyId": "", "apiKeyHash": "", "singleKey": false}));
-        if current.get(provider_id).is_some_and(|payload| {
-            serde_json::from_str::<Value>(payload).ok().as_ref() == Some(&binding)
-        }) {
+            .map(serde_json::from_value::<KeyBinding>)
+            .transpose()?
+            .unwrap_or_default();
+        if current.get(provider_id) == Some(&binding) {
             continue;
         }
-        transaction.execute("INSERT INTO provider_key_bindings(provider_id, observed_at, payload_json) VALUES (?1, ?2, ?3)
-            ON CONFLICT(provider_id, observed_at) DO UPDATE SET payload_json = excluded.payload_json",
-            params![provider_id, observed_at, serde_json::to_string(&binding)?])?;
+        transaction.execute(
+            "INSERT INTO provider_key_bindings(provider_id, observed_at, api_key_id, api_key_hash, single_key)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(provider_id, observed_at) DO UPDATE SET
+               api_key_id = excluded.api_key_id, api_key_hash = excluded.api_key_hash,
+               single_key = excluded.single_key",
+            params![provider_id, observed_at, binding.api_key_id, binding.api_key_hash, binding.single_key],
+        )?;
     }
     transaction.commit()?;
     Ok(())
@@ -358,20 +434,27 @@ pub fn sync_bindings(
 
 pub fn bind_logs(paths: &AppPaths, logs: &mut [Value]) -> Result<(), ManagerError> {
     let connection = open(paths)?;
-    let mut statement = connection.prepare("SELECT provider_id, observed_at, payload_json FROM provider_key_bindings ORDER BY observed_at")?;
-    let mut bindings: HashMap<String, Vec<(i64, Value)>> = HashMap::new();
+    let mut statement = connection.prepare(
+        "SELECT provider_id, observed_at, api_key_id, api_key_hash, single_key
+         FROM provider_key_bindings ORDER BY observed_at",
+    )?;
+    let mut bindings: HashMap<String, Vec<(i64, KeyBinding)>> = HashMap::new();
     for row in statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, i64>(1)?,
-            row.get::<_, String>(2)?,
+            KeyBinding {
+                api_key_id: row.get(2)?,
+                api_key_hash: row.get(3)?,
+                single_key: row.get(4)?,
+            },
         ))
     })? {
-        let (provider_id, observed_at, payload) = row?;
+        let (provider_id, observed_at, binding) = row?;
         bindings
             .entry(provider_id)
             .or_default()
-            .push((observed_at, serde_json::from_str(&payload)?));
+            .push((observed_at, binding));
     }
     for log in logs {
         if log["apiKeyAttribution"] == "mixed-keys" {
@@ -394,19 +477,15 @@ pub fn bind_logs(paths: &AppPaths, logs: &mut [Value]) -> Result<(), ManagerErro
             continue;
         };
         let created_at = log["createdAt"].as_i64().unwrap_or_default();
-        let historical = history
-            .iter()
-            .rev()
-            .find(|(observed_at, _)| *observed_at <= created_at);
+        let position = history.partition_point(|(observed_at, _)| *observed_at <= created_at);
+        let historical = position.checked_sub(1).and_then(|index| history.get(index));
         let inferred = historical.is_none();
-        let Some((_, binding)) = historical.or_else(|| {
-            history
-                .first()
-                .filter(|(_, value)| value["singleKey"] == true)
-        }) else {
+        let Some((_, binding)) =
+            historical.or_else(|| history.first().filter(|(_, binding)| binding.single_key))
+        else {
             continue;
         };
-        let key_id = binding["apiKeyId"].as_str().unwrap_or_default();
+        let key_id = binding.api_key_id.as_str();
         if key_id.is_empty()
             || log
                 .get("apiKeyId")
@@ -415,8 +494,8 @@ pub fn bind_logs(paths: &AppPaths, logs: &mut [Value]) -> Result<(), ManagerErro
         {
             continue;
         }
-        log["apiKeyId"] = binding["apiKeyId"].clone();
-        log["apiKeyHash"] = binding["apiKeyHash"].clone();
+        log["apiKeyId"] = json!(binding.api_key_id);
+        log["apiKeyHash"] = json!(binding.api_key_hash);
         log["apiKeyAttribution"] = json!(if inferred {
             "single-key-inferred"
         } else {
@@ -439,6 +518,226 @@ mod tests {
         let resolved = root.canonicalize().unwrap();
         assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
         std::fs::remove_dir_all(resolved).unwrap();
+    }
+
+    fn create_legacy_bindings(connection: &Connection) {
+        connection
+            .execute_batch(
+                "CREATE TABLE provider_key_bindings (
+               provider_id TEXT NOT NULL, observed_at INTEGER NOT NULL, payload_json TEXT NOT NULL,
+               PRIMARY KEY(provider_id, observed_at)
+             );",
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn migrates_binding_fields_and_preserves_historical_attribution() {
+        with_paths(|paths| {
+            let connection = database::open(paths).unwrap();
+            create_legacy_bindings(&connection);
+            let snapshots = [
+                (
+                    "provider",
+                    100,
+                    json!({"apiKeyId":"first", "apiKeyHash":"first-hash", "singleKey":true}),
+                ),
+                (
+                    "provider",
+                    200,
+                    json!({"apiKeyId":"second", "apiKeyHash":"second-hash", "singleKey":false}),
+                ),
+                (
+                    "provider",
+                    300,
+                    json!({"apiKeyId":"", "apiKeyHash":"", "singleKey":false}),
+                ),
+                (
+                    "claude-desktop:provider",
+                    100,
+                    json!({"apiKeyId":"desktop", "apiKeyHash":"desktop-hash", "singleKey":false}),
+                ),
+            ];
+            for (provider, observed_at, payload) in &snapshots {
+                connection
+                    .execute(
+                        "INSERT INTO provider_key_bindings VALUES (?1, ?2, ?3)",
+                        params![provider, observed_at, payload.to_string()],
+                    )
+                    .unwrap();
+            }
+            crate::core::provider_store::initialize(paths).unwrap();
+            crate::core::provider_store::initialize(paths).unwrap();
+            for (provider, observed_at, expected) in &snapshots {
+                let actual = connection
+                    .query_row(
+                        "SELECT api_key_id, api_key_hash, single_key FROM provider_key_bindings
+                     WHERE provider_id=?1 AND observed_at=?2",
+                        params![provider, observed_at],
+                        |row| {
+                            Ok(json!({"apiKeyId":row.get::<_,String>(0)?,
+                        "apiKeyHash":row.get::<_,String>(1)?, "singleKey":row.get::<_,bool>(2)?}))
+                        },
+                    )
+                    .unwrap();
+                assert_eq!(&actual, expected);
+            }
+            let columns = connection
+                .prepare("PRAGMA table_info(provider_key_bindings)")
+                .unwrap()
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(
+                columns,
+                [
+                    "provider_id",
+                    "observed_at",
+                    "api_key_id",
+                    "api_key_hash",
+                    "single_key"
+                ]
+            );
+            assert_eq!(connection.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='provider_key_bindings_legacy'",
+                [], |row| row.get::<_,i64>(0),
+            ).unwrap(), 0);
+
+            let mut logs = vec![
+                json!({"providerId":"provider", "createdAt":50}),
+                json!({"providerId":"provider", "createdAt":100}),
+                json!({"providerId":"provider", "createdAt":200}),
+                json!({"providerId":"provider", "createdAt":300}),
+                json!({"providerId":"provider", "appType":"claude-desktop", "createdAt":100}),
+            ];
+            bind_logs(paths, &mut logs).unwrap();
+            assert_eq!(logs[0]["apiKeyAttribution"], "single-key-inferred");
+            assert_eq!(logs[1]["apiKeyHash"], "first-hash");
+            assert_eq!(logs[2]["apiKeyHash"], "second-hash");
+            assert!(logs[3].get("apiKeyId").is_none());
+            assert_eq!(logs[4]["apiKeyHash"], "desktop-hash");
+
+            sync_bindings(
+                paths,
+                &Map::from_iter([
+                    ("provider".into(), snapshots[2].2.clone()),
+                    ("claude-desktop:provider".into(), snapshots[3].2.clone()),
+                ]),
+                400,
+            )
+            .unwrap();
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM provider_key_bindings", [], |row| row
+                        .get::<_, i64>(
+                        0
+                    ),)
+                    .unwrap(),
+                4
+            );
+        });
+    }
+
+    #[test]
+    fn invalid_binding_payload_rolls_back_without_losing_history() {
+        for invalid in [
+            "{",
+            "[]",
+            r#"{"apiKeyId":"key","apiKeyHash":"hash","singleKey":"false"}"#,
+        ] {
+            let mut connection = Connection::open_in_memory().unwrap();
+            create_legacy_bindings(&connection);
+            let valid =
+                json!({"apiKeyId":"key", "apiKeyHash":"hash", "singleKey":false}).to_string();
+            connection.execute(
+                "INSERT INTO provider_key_bindings VALUES ('provider',100,?1),('provider',200,?2)",
+                params![valid, invalid],
+            ).unwrap();
+            assert!(migrate_bindings(&mut connection).is_err());
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM provider_key_bindings", [], |row| row
+                        .get::<_, i64>(
+                        0
+                    ),)
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT payload_json FROM provider_key_bindings WHERE observed_at=200",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                invalid
+            );
+            assert_eq!(connection.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='provider_key_bindings_legacy'", [], |row| row.get::<_,i64>(0),
+            ).unwrap(), 0);
+            connection
+                .execute(
+                    "UPDATE provider_key_bindings SET payload_json=?1 WHERE observed_at=200",
+                    [valid],
+                )
+                .unwrap();
+            migrate_bindings(&mut connection).unwrap();
+            migrate_bindings(&mut connection).unwrap();
+            assert_eq!(connection.query_row(
+                "SELECT COUNT(*) FROM provider_key_bindings WHERE api_key_id='key' AND api_key_hash='hash' AND single_key=0",
+                [], |row| row.get::<_,i64>(0),
+            ).unwrap(), 2);
+        }
+    }
+
+    #[test]
+    fn concurrent_binding_migrations_and_syncs_do_not_duplicate_history() {
+        with_paths(|paths| {
+            let connection = database::open(paths).unwrap();
+            create_legacy_bindings(&connection);
+            connection
+                .execute(
+                    "INSERT INTO provider_key_bindings VALUES ('provider',100,?1)",
+                    [
+                        json!({"apiKeyId":"first", "apiKeyHash":"first-hash", "singleKey":true})
+                            .to_string(),
+                    ],
+                )
+                .unwrap();
+            let bindings = Map::from_iter([(
+                "provider".into(),
+                json!({"apiKeyId":"second", "apiKeyHash":"second-hash", "singleKey":true}),
+            )]);
+            let barrier = std::sync::Barrier::new(4);
+            std::thread::scope(|scope| {
+                for _ in 0..4 {
+                    let bindings = &bindings;
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        sync_bindings(paths, bindings, 200).unwrap();
+                    });
+                }
+            });
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM provider_key_bindings", [], |row| row
+                        .get::<_, i64>(
+                        0
+                    ),)
+                    .unwrap(),
+                2
+            );
+            let mut logs = [
+                json!({"providerId":"provider", "createdAt":199}),
+                json!({"providerId":"provider", "createdAt":200}),
+            ];
+            bind_logs(paths, &mut logs).unwrap();
+            assert_eq!(logs[0]["apiKeyId"], "first");
+            assert_eq!(logs[1]["apiKeyId"], "second");
+        });
     }
 
     #[test]
@@ -708,9 +1007,7 @@ mod tests {
             std::fs::write(&snapshot_path, database::backup(paths).unwrap()).unwrap();
             let snapshot = Connection::open(snapshot_path).unwrap();
             let count: i64 = snapshot
-                .query_row("SELECT COUNT(*) FROM provider_key_usage", [], |row| {
-                    row.get(0)
-                })
+                .query_row("SELECT COUNT(*) FROM provider_keys", [], |row| row.get(0))
                 .unwrap();
             assert_eq!(count, 0);
             assert_eq!(

@@ -39,6 +39,7 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
 // 备份恢复和旧独立库同样经过这一入口，避免恢复后重新出现旧表。
 pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), ManagerError> {
     create_schema(connection)?;
+    migrate_codex_quota_stages(connection)?;
     requests::migrate(connection)?;
     connection.execute(
         "INSERT OR IGNORE INTO app_metadata(key,value) VALUES ('usage:revision','0')",
@@ -234,64 +235,27 @@ pub fn record_codex_quota_stages(
             params![completed_at, account_id, window_key, reset_at],
         )?;
 
-        let existing = transaction
-            .query_row(
-                "SELECT payload_json FROM codex_quota_stages
-                 WHERE account_id = ?1 AND window_key = ?2 AND reset_at = ?3",
-                params![account_id, window_key, reset_at],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?
-            .map(|payload| serde_json::from_str::<Value>(&payload))
-            .transpose()?;
-        let first_observed_at = existing
-            .as_ref()
-            .map(|item| number(item.get("firstObservedAt")))
-            .filter(|value| *value > 0)
-            .unwrap_or(observed_at);
-        let first_used_percent = existing
-            .as_ref()
-            .and_then(|item| item.get("firstUsedPercent"))
-            .and_then(Value::as_f64)
-            .unwrap_or_else(|| decimal(stage.get("usedPercent"), 0.0));
-        let used_percent = existing
-            .as_ref()
-            .map(|item| decimal(item.get("usedPercent"), 0.0))
-            .unwrap_or(0.0)
-            .max(decimal(stage.get("usedPercent"), 0.0))
-            .clamp(0.0, 100.0);
-        let payload = json!({
-          "id": existing.as_ref().and_then(|item| item["id"].as_str()).map(str::to_string).unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-          "accountId": account_id,
-          "windowKey": window_key,
-          "limitWindowSeconds": number(stage.get("limitWindowSeconds")),
-          "startsAt": starts_at,
-          "resetAt": reset_at,
-          "firstObservedAt": first_observed_at,
-          "lastObservedAt": observed_at,
-          "firstUsedPercent": first_used_percent,
-          "usedPercent": used_percent,
-          "remainingPercent": (100.0 - used_percent).max(0.0)
-        });
-
+        let used_percent = decimal(stage.get("usedPercent"), 0.0).clamp(0.0, 100.0);
         transaction.execute(
             "INSERT INTO codex_quota_stages(
-               stage_id, account_id, window_key, reset_at, starts_at,
-               observed_at, completed_at, payload_json
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7)
+               id, account_id, window_key, limit_window_seconds, starts_at, reset_at,
+               first_observed_at, last_observed_at, completed_at, first_used_percent, used_percent
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, 0, ?8, ?8)
              ON CONFLICT(account_id, window_key, reset_at) DO UPDATE SET
+               limit_window_seconds = excluded.limit_window_seconds,
                starts_at = excluded.starts_at,
-               observed_at = excluded.observed_at,
+               last_observed_at = excluded.last_observed_at,
                completed_at = 0,
-               payload_json = excluded.payload_json",
+               used_percent = MAX(codex_quota_stages.used_percent, excluded.used_percent)",
             params![
-                format!("{account_id}:{window_key}:{reset_at}"),
+                uuid::Uuid::new_v4().to_string(),
                 account_id,
                 window_key,
-                reset_at,
+                number(stage.get("limitWindowSeconds")),
                 starts_at,
+                reset_at,
                 observed_at,
-                serde_json::to_string(&payload)?
+                used_percent
             ],
         )?;
     }
@@ -307,25 +271,32 @@ pub fn read_codex_quota_stages(
     initialize(paths)?;
     let connection = open_connection(paths)?;
     let mut statement = connection.prepare(
-        "SELECT completed_at, payload_json
+        "SELECT id, account_id, window_key, limit_window_seconds, starts_at, reset_at,
+                first_observed_at, last_observed_at, completed_at, first_used_percent, used_percent
          FROM codex_quota_stages
          WHERE account_id = ?1
          ORDER BY reset_at DESC, window_key ASC",
     )?;
     let rows = statement.query_map(params![account_id], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        let completed_at = row.get::<_, i64>(8)?;
+        let used_percent = row.get::<_, f64>(10)?;
+        Ok(json!({
+          "id": row.get::<_, String>(0)?,
+          "accountId": row.get::<_, String>(1)?,
+          "windowKey": row.get::<_, String>(2)?,
+          "limitWindowSeconds": row.get::<_, i64>(3)?,
+          "startsAt": row.get::<_, i64>(4)?,
+          "resetAt": row.get::<_, i64>(5)?,
+          "firstObservedAt": row.get::<_, i64>(6)?,
+          "lastObservedAt": row.get::<_, i64>(7)?,
+          "completedAt": completed_at.max(0),
+          "firstUsedPercent": row.get::<_, f64>(9)?,
+          "usedPercent": used_percent,
+          "remainingPercent": (100.0 - used_percent).max(0.0),
+          "active": completed_at == 0
+        }))
     })?;
-    let mut stages = Vec::new();
-
-    for row in rows {
-        let (completed_at, payload) = row?;
-        let mut stage = serde_json::from_str::<Value>(&payload)?;
-
-        stage["active"] = json!(completed_at == 0);
-        stage["completedAt"] = json!(completed_at.max(0));
-        stages.push(stage);
-    }
-    Ok(stages)
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 pub fn read_app_types(paths: &AppPaths) -> Result<Vec<String>, ManagerError> {
@@ -666,22 +637,108 @@ fn create_schema(connection: &Connection) -> Result<(), ManagerError> {
          );
          CREATE INDEX IF NOT EXISTS idx_usage_pricing_model_id
            ON usage_pricing_items(model_id);
-         CREATE TABLE IF NOT EXISTS codex_quota_stages (
-           stage_id TEXT PRIMARY KEY,
+         CREATE TABLE IF NOT EXISTS app_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+    )?;
+    create_codex_quota_stage_schema(connection)?;
+    requests::create_schema(connection)
+}
+
+fn create_codex_quota_stage_schema(connection: &Connection) -> Result<(), ManagerError> {
+    connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS codex_quota_stages (
+           id TEXT PRIMARY KEY NOT NULL,
            account_id TEXT NOT NULL,
            window_key TEXT NOT NULL,
-           reset_at INTEGER NOT NULL,
+           limit_window_seconds INTEGER NOT NULL DEFAULT 0,
            starts_at INTEGER NOT NULL DEFAULT 0,
-           observed_at INTEGER NOT NULL,
+           reset_at INTEGER NOT NULL,
+           first_observed_at INTEGER NOT NULL,
+           last_observed_at INTEGER NOT NULL,
            completed_at INTEGER NOT NULL DEFAULT 0,
-           payload_json TEXT NOT NULL,
+           first_used_percent REAL NOT NULL DEFAULT 0,
+           used_percent REAL NOT NULL DEFAULT 0,
            UNIQUE(account_id, window_key, reset_at)
          );
          CREATE INDEX IF NOT EXISTS idx_codex_quota_stages_account_reset
-           ON codex_quota_stages(account_id, reset_at DESC);
-         CREATE TABLE IF NOT EXISTS app_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+           ON codex_quota_stages(account_id, reset_at DESC);",
     )?;
-    requests::create_schema(connection)
+    Ok(())
+}
+
+fn migrate_codex_quota_stages(connection: &mut Connection) -> Result<(), ManagerError> {
+    let has_payload = |connection: &Connection| -> rusqlite::Result<bool> {
+        connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('codex_quota_stages') WHERE name='payload_json')",
+            [],
+            |row| row.get(0),
+        )
+    };
+    if !has_payload(connection)? {
+        return Ok(());
+    }
+
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    // 等待写锁期间其他连接可能已完成迁移，取得锁后再次确认。
+    if !has_payload(&transaction)? {
+        transaction.commit()?;
+        return Ok(());
+    }
+    transaction.execute_batch(
+        "ALTER TABLE codex_quota_stages RENAME TO codex_quota_stages_legacy;
+         DROP INDEX IF EXISTS idx_codex_quota_stages_account_reset;",
+    )?;
+    create_codex_quota_stage_schema(&transaction)?;
+    {
+        let mut statement = transaction.prepare(
+            "SELECT account_id, window_key, starts_at, reset_at, observed_at, completed_at, payload_json
+             FROM codex_quota_stages_legacy",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut insert = transaction.prepare(
+            "INSERT INTO codex_quota_stages(
+               id, account_id, window_key, limit_window_seconds, starts_at, reset_at,
+               first_observed_at, last_observed_at, completed_at, first_used_percent, used_percent
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        )?;
+        while let Some(row) = rows.next()? {
+            let payload: Value = serde_json::from_str(&row.get::<_, String>(6)?)?;
+            if !payload.is_object() {
+                return Err(ManagerError::System(
+                    "Codex 额度周期数据格式错误，已取消迁移。".to_string(),
+                ));
+            }
+            let id = text(payload.get("id"));
+            let observed_at = row.get::<_, i64>(4)?;
+            let first_observed_at = number(payload.get("firstObservedAt"));
+            let used_percent = decimal(payload.get("usedPercent"), 0.0);
+            insert.execute(params![
+                if id.is_empty() {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    id
+                },
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                number(payload.get("limitWindowSeconds")),
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                if first_observed_at > 0 {
+                    first_observed_at
+                } else {
+                    observed_at
+                },
+                observed_at,
+                row.get::<_, i64>(5)?,
+                decimal(payload.get("firstUsedPercent"), used_percent),
+                used_percent
+            ])?;
+        }
+    }
+    // 字段转换和旧表删除处于同一事务，失败时保留全部原始记录。
+    transaction.execute_batch("DROP TABLE codex_quota_stages_legacy;")?;
+    transaction.commit()?;
+    Ok(())
 }
 
 fn migrate_session_fields(connection: &mut Connection) -> Result<(), ManagerError> {
@@ -862,10 +919,13 @@ fn migrate_legacy_database(
             request_count,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,actual_tokens,total_cost_usd";
         let pricing_columns = "id,sort_order,model_id,model_category,currency,input_cost_per_million,output_cost_per_million,
             cache_read_cost_per_million,cache_creation_cost_per_million";
+        let quota_columns = "id,account_id,window_key,limit_window_seconds,starts_at,reset_at,
+            first_observed_at,last_observed_at,completed_at,first_used_percent,used_percent";
         transaction.execute_batch(&format!(
             "INSERT OR REPLACE INTO usage_requests({request_columns}) SELECT {request_columns} FROM legacy_usage.usage_requests;
              INSERT OR REPLACE INTO usage_sessions({session_columns}) SELECT {session_columns} FROM legacy_usage.usage_sessions;
              INSERT OR REPLACE INTO usage_pricing_items({pricing_columns}) SELECT {pricing_columns} FROM legacy_usage.usage_pricing_items;
+             INSERT OR IGNORE INTO codex_quota_stages({quota_columns}) SELECT {quota_columns} FROM legacy_usage.codex_quota_stages;
              INSERT INTO app_metadata(key,value) SELECT key,value FROM legacy_usage.app_metadata
              WHERE key LIKE 'usage:%' AND key<>'usage:revision'
              ON CONFLICT(key) DO UPDATE SET value=excluded.value;",
@@ -1158,6 +1218,58 @@ mod tests {
         ).unwrap();
     }
 
+    fn seed_legacy_quota_stages(connection: &Connection) -> Vec<serde_json::Value> {
+        connection
+            .execute_batch(
+                "CREATE TABLE codex_quota_stages (
+               stage_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, window_key TEXT NOT NULL,
+               reset_at INTEGER NOT NULL, starts_at INTEGER NOT NULL DEFAULT 0,
+               observed_at INTEGER NOT NULL, completed_at INTEGER NOT NULL DEFAULT 0,
+               payload_json TEXT NOT NULL, UNIQUE(account_id, window_key, reset_at)
+             );
+             CREATE INDEX idx_codex_quota_stages_account_reset
+               ON codex_quota_stages(account_id, reset_at DESC);",
+            )
+            .unwrap();
+        let stages = vec![
+            json!({
+                "id": uuid::Uuid::new_v4().to_string(), "accountId": "account-1", "windowKey": "primary",
+                "limitWindowSeconds": 1, "startsAt": 2_000, "resetAt": 3_000,
+                "firstObservedAt": 2_100, "lastObservedAt": 2_200,
+                "firstUsedPercent": 5.0, "usedPercent": 30.0, "remainingPercent": 70.0,
+                "completedAt": 0, "active": true
+            }),
+            json!({
+                "id": uuid::Uuid::new_v4().to_string(), "accountId": "account-1", "windowKey": "primary",
+                "limitWindowSeconds": 1, "startsAt": 1_000, "resetAt": 2_000,
+                "firstObservedAt": 1_100, "lastObservedAt": 1_900,
+                "firstUsedPercent": 10.0, "usedPercent": 75.0, "remainingPercent": 25.0,
+                "completedAt": 2_000, "active": false
+            }),
+        ];
+        for stage in &stages {
+            let mut payload = stage.clone();
+            payload.as_object_mut().unwrap().remove("completedAt");
+            payload.as_object_mut().unwrap().remove("active");
+            connection
+                .execute(
+                    "INSERT INTO codex_quota_stages VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+                    params![
+                        format!("account-1:primary:{}", stage["resetAt"]),
+                        "account-1",
+                        "primary",
+                        stage["resetAt"].as_i64().unwrap(),
+                        stage["startsAt"].as_i64().unwrap(),
+                        stage["lastObservedAt"].as_i64().unwrap(),
+                        stage["completedAt"].as_i64().unwrap(),
+                        payload.to_string()
+                    ],
+                )
+                .unwrap();
+        }
+        stages
+    }
+
     fn all_query() -> UsageLogQuery {
         UsageLogQuery {
             app_type: "all".to_string(),
@@ -1239,6 +1351,7 @@ mod tests {
         let paths = create_test_paths("database-migration");
         let legacy = Connection::open(&paths.storage_files.usage_database).unwrap();
         create_legacy_schema(&legacy);
+        let quota_stages = seed_legacy_quota_stages(&legacy);
         legacy
             .execute(
                 "INSERT INTO usage_logs(
@@ -1282,6 +1395,10 @@ mod tests {
 
         assert_eq!(query_logs(&paths, &all_query()).unwrap().len(), 1);
         assert_eq!(read_session_versions(&paths).unwrap().len(), 1);
+        assert_eq!(
+            read_codex_quota_stages(&paths, "account-1").unwrap(),
+            quota_stages
+        );
         assert_eq!(
             read_request_records(&paths, &["request-legacy".to_string()])
                 .unwrap()
@@ -1435,6 +1552,9 @@ mod tests {
             })],
         )
         .unwrap();
+        let original = read_codex_quota_stages(&paths, "account-1").unwrap();
+        let original_id = original[0]["id"].as_str().unwrap();
+        assert!(uuid::Uuid::parse_str(original_id).is_ok());
         record_codex_quota_stages(
             &paths,
             "account-1",
@@ -1451,6 +1571,7 @@ mod tests {
 
         let active_stages = read_codex_quota_stages(&paths, "account-1").unwrap();
         assert_eq!(active_stages.len(), 1);
+        assert_eq!(active_stages[0]["id"], original_id);
         assert_eq!(active_stages[0]["firstObservedAt"], 1_100);
         assert_eq!(active_stages[0]["lastObservedAt"], 1_200);
         assert_eq!(active_stages[0]["firstUsedPercent"], 10.0);
@@ -1477,8 +1598,151 @@ mod tests {
         assert_eq!(stages[0]["resetAt"], 3_000);
         assert_eq!(stages[0]["active"], true);
         assert_eq!(stages[1]["resetAt"], 2_000);
+        assert_eq!(stages[1]["id"], original_id);
+        assert_ne!(stages[0]["id"], stages[1]["id"]);
         assert_eq!(stages[1]["active"], false);
         assert_eq!(stages[1]["completedAt"], 2_000);
+    }
+
+    #[test]
+    fn migrates_codex_quota_stages_to_explicit_fields() {
+        let paths = create_test_paths("quota-field-migration");
+        let connection = Connection::open(&paths.storage_files.database).unwrap();
+        let mut expected = seed_legacy_quota_stages(&connection);
+
+        initialize(&paths).unwrap();
+        initialize(&paths).unwrap();
+        assert_eq!(
+            read_codex_quota_stages(&paths, "account-1").unwrap(),
+            expected
+        );
+        let columns = connection
+            .prepare("PRAGMA table_info(codex_quota_stages)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            columns,
+            [
+                "id",
+                "account_id",
+                "window_key",
+                "limit_window_seconds",
+                "starts_at",
+                "reset_at",
+                "first_observed_at",
+                "last_observed_at",
+                "completed_at",
+                "first_used_percent",
+                "used_percent"
+            ]
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name='codex_quota_stages_legacy'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        let index_columns = connection
+            .prepare("PRAGMA index_info(idx_codex_quota_stages_account_reset)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(2))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(index_columns, ["account_id", "reset_at"]);
+
+        record_codex_quota_stages(
+            &paths,
+            "account-1",
+            &[json!({
+                "windowKey": "primary", "limitWindowSeconds": 1, "startsAt": 2_000,
+                "resetAt": 3_000, "observedAt": 2_300, "usedPercent": 20.0
+            })],
+        )
+        .unwrap();
+        expected[0]["lastObservedAt"] = json!(2_300);
+        assert_eq!(
+            read_codex_quota_stages(&paths, "account-1").unwrap(),
+            expected
+        );
+        assert!(read_codex_quota_stages(&paths, "other-account")
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn rolls_back_codex_quota_migration_when_payload_is_invalid() {
+        for invalid_payload in ["{", "[]"] {
+            let mut connection = Connection::open_in_memory().unwrap();
+            let expected = seed_legacy_quota_stages(&connection);
+            let original: String = connection
+                .query_row(
+                    "SELECT payload_json FROM codex_quota_stages WHERE reset_at=2000",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "UPDATE codex_quota_stages SET payload_json=?1 WHERE reset_at=2000",
+                    [invalid_payload],
+                )
+                .unwrap();
+
+            assert!(super::migrate_connection(&mut connection).is_err());
+            assert_eq!(
+                connection
+                    .query_row("SELECT COUNT(*) FROM codex_quota_stages", [], |row| row
+                        .get::<_, i64>(0),)
+                    .unwrap(),
+                2
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT payload_json FROM codex_quota_stages WHERE reset_at=2000",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                invalid_payload
+            );
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE name='codex_quota_stages_legacy'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                0
+            );
+
+            connection
+                .execute(
+                    "UPDATE codex_quota_stages SET payload_json=?1 WHERE reset_at=2000",
+                    [original],
+                )
+                .unwrap();
+            super::migrate_connection(&mut connection).unwrap();
+            assert_eq!(
+                connection
+                    .query_row(
+                        "SELECT id FROM codex_quota_stages WHERE reset_at=2000",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap(),
+                expected[1]["id"].as_str().unwrap()
+            );
+        }
     }
 
     #[test]

@@ -4,6 +4,7 @@ use crate::core::provider_store::{
     local_default as provider_local_default, LOCAL_COLUMNS as PROVIDER_LOCAL_COLUMNS,
 };
 use crate::core::rule_store::LOCAL_COLUMNS as RULE_LOCAL_COLUMNS;
+use crate::core::skill_store::{repository_local_default, REPOSITORY_LOCAL_COLUMNS};
 use rusqlite::{params, Connection};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -162,6 +163,24 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
         if columns.is_empty() {
             continue;
         }
+        let selected_columns = columns
+            .iter()
+            .map(|column| {
+                if table == "skill_repositories"
+                    && REPOSITORY_LOCAL_COLUMNS.contains(&column.as_str())
+                {
+                    match repository_local_default(column) {
+                        serde_json::Value::String(value) => {
+                            format!("'{}'", value.replace('\'', "''"))
+                        }
+                        value => value.to_string(),
+                    }
+                } else {
+                    quote_identifier(column)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         let columns = columns
             .iter()
             .map(|column| quote_identifier(column))
@@ -170,7 +189,7 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
         transaction.execute(
             &format!(
                 "INSERT INTO main.{table} ({columns})
-                 SELECT {columns} FROM source.{table} {filter}",
+                 SELECT {selected_columns} FROM source.{table} {filter}",
                 filter = if table == "skills" {
                     "WHERE is_deleted = 0"
                 } else {
@@ -550,7 +569,9 @@ fn count_table_difference(
 fn comparison_column(table: &str, column: &str) -> String {
     let column = quote_identifier(column);
 
-    if (table == "skills" && SKILL_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
+    if (table == "skill_repositories"
+        && REPOSITORY_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
+        || (table == "skills" && SKILL_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
         || (table == "rules" && RULE_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
         || (table == "providers" && PROVIDER_LOCAL_COLUMNS.contains(&column.trim_matches('"')))
         || (table == "providers"
