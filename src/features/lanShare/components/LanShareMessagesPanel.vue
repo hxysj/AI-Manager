@@ -175,7 +175,7 @@
                   </div>
                   <div class="sending-file-state">
                     <span
-                      v-if="file.uploadedId || file.path"
+                      v-if="message.nativeDelivery ? file.transferred : file.uploadedId || file.path"
                       class="state-done"
                       title="已准备完成"
                     >
@@ -219,6 +219,10 @@
                     }}
                   </span>
                   <span class="progress-ratio">
+                    <template v-if="message.bytesPerSecond > 0">
+                      {{ formatFileSize(message.bytesPerSecond) }}/秒 ·
+                      约 {{ Math.ceil((message.totalBytes - message.loadedBytes) / message.bytesPerSecond) }} 秒
+                    </template>
                     <template
                       v-if="message.totalBytes > 0 && message.loadedBytes > 0"
                     >
@@ -530,6 +534,7 @@ const keyword = ref("")
 const timeFilter = ref("all")
 const selectedIds = ref([])
 let stopMessageListener = null
+let stopTransferListener = null
 let stopDropListener = null
 let disposed = false
 let loadSeed = 0
@@ -601,6 +606,21 @@ const allSelected = computed(
 watch(() => props.stateVersion, loadMessages)
 
 onMounted(async () => {
+  // 原生传输只更新对应任务，不重新获取历史；进度来自对端已确认的分块。
+  stopTransferListener = lanShareApi.onTransferProgress((progress) => {
+    const task = sendingTasks.value.find(item => item.id === progress.messageId)
+    if (!task || task.status !== "sending") return
+    task.loadedBytes = progress.loadedBytes
+    task.totalBytes = progress.totalBytes
+    task.bytesPerSecond = progress.bytesPerSecond
+    task.progress = task.totalBytes ? Math.min(99, task.loadedBytes / task.totalBytes * 100) : 0
+    if (progress.fileComplete && task.files[progress.fileIndex]) {
+      task.files[progress.fileIndex].transferred = true
+    }
+    task.statusText = task.loadedBytes === task.totalBytes
+      ? "文件已接收，等待消息确认…"
+      : "正在发送文件…"
+  })
   stopMessageListener = lanShareApi.onMessageCreated((message) => {
     if (
       message.sessionId === props.currentSessionId ||
@@ -651,6 +671,7 @@ onBeforeUnmount(() => {
   disposed = true
   loadSeed++
   stopMessageListener?.()
+  stopTransferListener?.()
   stopDropListener?.()
   for (const draft of Object.values(drafts)) {
     for (const file of draft.files)
@@ -937,6 +958,9 @@ async function executeSendingTask(task) {
   task.status = "uploading"
   task.errorMessage = ""
   task.progress = 0
+  task.loadedBytes = 0
+  task.bytesPerSecond = 0
+  for (const file of task.files) file.transferred = false
 
   try {
     const filesNeedingUpload = task.files.filter(
@@ -1002,9 +1026,10 @@ async function executeSendingTask(task) {
     task.statusText = task.files.length
       ? "正在投递文件与消息..."
       : "正在发送..."
-    task.progress = Math.max(task.progress, 90)
+    task.progress = task.nativeDelivery ? 0 : Math.max(task.progress, 90)
+    task.loadedBytes = 0
 
-    await lanShareApi.sendMessage({
+    const response = unwrap(await lanShareApi.sendMessage({
       sessionId: task.sessionId,
       deviceId: task.deviceId,
       messageId: task.id,
@@ -1014,11 +1039,13 @@ async function executeSendingTask(task) {
       attachmentOrder: task.files.map((item) =>
         item.path ? { path: item.path } : { id: item.uploadedId }
       )
-    })
+    }))
 
     task.status = "success"
     task.progress = 100
-    task.statusText = "已送达"
+    task.statusText = response?.every?.(message => message.delivered)
+      ? "已送达"
+      : "已保存，待对方接收"
 
     if (!disposed) {
       emit("refresh-state")
@@ -1068,6 +1095,7 @@ function sendMessage() {
     id: taskId,
     sessionId: props.currentSessionId,
     deviceId: props.chatMode === "direct" ? props.currentDevice?.id || "" : "",
+    nativeDelivery: props.chatMode === "direct" && Boolean(props.currentDevice?.native),
     direction: "desktop-to-mobile",
     content,
     createdAt: Date.now(),
@@ -1076,6 +1104,7 @@ function sendMessage() {
     status: "uploading",
     progress: 0,
     loadedBytes: 0,
+    bytesPerSecond: 0,
     totalBytes,
     statusText: files.length
       ? `准备发送 ${files.length} 个文件...`

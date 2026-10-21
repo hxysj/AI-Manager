@@ -1,6 +1,6 @@
 use super::*;
-use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Nonce};
+use aes_gcm::aead::{AeadInPlace, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use ring::{agreement, hkdf, rand::SystemRandom};
 
 pub(super) const VERSION: &str = "aes-256-gcm-v1";
@@ -95,47 +95,69 @@ pub(super) fn cipher(secret: &str) -> Aes256Gcm {
 }
 
 pub(super) fn encrypt(secret: &str, aad: &str, plaintext: &[u8]) -> Result<Vec<u8>, ManagerError> {
+    encrypt_owned(secret, aad, plaintext.to_vec())
+}
+
+// 文件分块复用原缓冲区，避免明文、密文和协议包同时各保留一份大数组。
+fn encrypt_owned(secret: &str, aad: &str, mut packet: Vec<u8>) -> Result<Vec<u8>, ManagerError> {
     let mut nonce = [0u8; 12];
     getrandom::getrandom(&mut nonce).map_err(|error| ManagerError::System(error.to_string()))?;
-    let encrypted = cipher(secret)
-        .encrypt(
+    let end = packet.len() + 12;
+    packet.resize(end + 16, 0);
+    packet.copy_within(..end - 12, 12);
+    packet[..12].copy_from_slice(&nonce);
+    let tag = cipher(secret)
+        .encrypt_in_place_detached(
             Nonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: aad.as_bytes(),
-            },
+            aad.as_bytes(),
+            &mut packet[12..end],
         )
         .map_err(|_| ManagerError::System("设备快传加密失败。".into()))?;
-    let mut result = Vec::with_capacity(12 + encrypted.len());
-    result.extend_from_slice(&nonce);
-    result.extend_from_slice(&encrypted);
-    Ok(result)
+    packet[end..].copy_from_slice(&tag);
+    Ok(packet)
 }
 
 pub(super) fn decrypt(secret: &str, aad: &str, ciphertext: &[u8]) -> Result<Vec<u8>, ManagerError> {
-    if ciphertext.len() < 28 || ciphertext.len() > MAX_BODY {
-        return Err(ManagerError::System("设备快传密文长度无效。".into()));
-    }
-    cipher(secret)
-        .decrypt(
-            Nonce::from_slice(&ciphertext[..12]),
-            Payload {
-                msg: &ciphertext[12..],
-                aad: aad.as_bytes(),
-            },
-        )
-        .map_err(|_| ManagerError::System("设备快传密钥不匹配或内容已被篡改。".into()))
+    decrypt_owned(secret, aad, ciphertext.to_vec())
 }
 
-pub(super) fn pack(metadata: &Value, bytes: &[u8]) -> Result<Vec<u8>, ManagerError> {
+pub(super) fn decrypt_owned(
+    secret: &str,
+    aad: &str,
+    mut packet: Vec<u8>,
+) -> Result<Vec<u8>, ManagerError> {
+    if packet.len() < 28 || packet.len() > MAX_BODY {
+        return Err(ManagerError::System("设备快传密文长度无效。".into()));
+    }
+    let nonce: [u8; 12] = packet[..12].try_into().unwrap();
+    let end = packet.len() - 16;
+    let tag = Tag::clone_from_slice(&packet[end..]);
+    cipher(secret)
+        .decrypt_in_place_detached(
+            Nonce::from_slice(&nonce),
+            aad.as_bytes(),
+            &mut packet[12..end],
+            &tag,
+        )
+        .map_err(|_| ManagerError::System("设备快传密钥不匹配或内容已被篡改。".into()))?;
+    packet.copy_within(12..end, 0);
+    packet.truncate(end - 12);
+    Ok(packet)
+}
+
+pub(super) fn pack(metadata: &Value, bytes: impl Into<Vec<u8>>) -> Result<Vec<u8>, ManagerError> {
     let metadata = serde_json::to_vec(metadata)?;
-    if metadata.len() > 256 * 1024 || bytes.len() > attachments::FILE_CHUNK_BYTES as usize {
+    let mut packet = bytes.into();
+    if metadata.len() > 256 * 1024 || packet.len() > attachments::FILE_CHUNK_BYTES as usize {
         return Err(ManagerError::System("设备快传载荷过大。".into()));
     }
-    let mut packet = Vec::with_capacity(4 + metadata.len() + bytes.len());
-    packet.extend_from_slice(&(metadata.len() as u32).to_be_bytes());
-    packet.extend_from_slice(&metadata);
-    packet.extend_from_slice(bytes);
+    let length = packet.len();
+    let prefix = 4 + metadata.len();
+    packet.reserve(prefix + 28);
+    packet.resize(length + prefix, 0);
+    packet.copy_within(..length, prefix);
+    packet[..4].copy_from_slice(&(metadata.len() as u32).to_be_bytes());
+    packet[4..prefix].copy_from_slice(&metadata);
     Ok(packet)
 }
 
@@ -180,7 +202,7 @@ pub(super) async fn secure_call(
     auth: &TransportAuth,
     operation: &str,
     payload: Value,
-    bytes: &[u8],
+    bytes: impl Into<Vec<u8>>,
     control: Option<&Arc<transfer::Control>>,
 ) -> Result<Value, ManagerError> {
     let origin = peer_origin(peer)?;
@@ -189,7 +211,7 @@ pub(super) async fn secure_call(
         &json!({ "operation": operation, "payload": payload, "sentAt": now_millis() }),
         bytes,
     )?;
-    let encrypted = encrypt(&auth.secret, &aad, &plaintext)?;
+    let encrypted = encrypt_owned(&auth.secret, &aad, plaintext)?;
     let request_nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&encrypted[..12]);
     let content_length = encrypted.len();
     let body = match control {
@@ -244,6 +266,35 @@ pub(super) async fn secure_call(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_buffers_are_reused_and_wire_format_remains_compatible() {
+        use aes_gcm::aead::{Aead, Payload};
+        let mut bytes = Vec::with_capacity(attachments::FILE_CHUNK_BYTES as usize + 4096);
+        bytes.resize(attachments::FILE_CHUNK_BYTES as usize, 7);
+        let pointer = bytes.as_ptr();
+        let packet = pack(&json!({ "file": "大文件.bin" }), bytes).unwrap();
+        assert_eq!(packet.as_ptr(), pointer);
+        let packet = encrypt_owned("secret", "context", packet).unwrap();
+        assert_eq!(packet.as_ptr(), pointer);
+        // 使用通用 AES-GCM 接口解密，验证仍兼容原协议的 nonce + 密文 + tag 格式。
+        let expected = cipher("secret")
+            .decrypt(
+                Nonce::from_slice(&packet[..12]),
+                Payload {
+                    msg: &packet[12..],
+                    aad: b"context",
+                },
+            )
+            .unwrap();
+        let plaintext = decrypt_owned("secret", "context", packet).unwrap();
+        assert_eq!(plaintext.as_ptr(), pointer);
+        assert_eq!(plaintext, expected);
+        let (metadata, content) = unpack(plaintext).unwrap();
+        assert_eq!(metadata["file"], "大文件.bin");
+        assert_eq!(content.len(), attachments::FILE_CHUNK_BYTES as usize);
+        assert!(content.iter().all(|byte| *byte == 7));
+    }
 
     #[test]
     fn encryption_rejects_wrong_keys_tampering_context_and_short_packets() {

@@ -1,6 +1,6 @@
 use super::*;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 pub(super) const MAX_ATTACHMENTS: usize = 100;
 pub(crate) const FILE_CHUNK_BYTES: u64 = 4 * 1024 * 1024;
@@ -54,7 +54,10 @@ pub(super) async fn prepare(
     }
     for selected_path in selected_paths {
         let mut file = file_payload(&selected_path, session_id).await?;
-        if let Some(previous) = saved.iter().find(|item| item.path == selected_path && item.session_id == session_id) {
+        if let Some(previous) = saved
+            .iter()
+            .find(|item| item.path == selected_path && item.session_id == session_id)
+        {
             file.id = previous.id.clone();
         }
         if !selected.iter().any(|current| current.id == file.id) {
@@ -180,6 +183,20 @@ pub(super) async fn upload(
     uploaded.name = safe_name;
     uploaded.enabled = false;
     let _storage = registry.storage.lock().await;
+    let devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices)?;
+    if !read_array::<LanShareSession>(&paths.lan_share_files.sessions)?
+        .iter()
+        .any(|session| {
+            session.id == session_id
+                && (session.device_id.is_empty()
+                    || devices.iter().any(|device| device.id == session.device_id))
+        })
+    {
+        tokio::fs::remove_file(&target).await?;
+        return Err(ManagerError::System(
+            "设备或会话已删除，接收已取消。".into(),
+        ));
+    }
     let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
     files.push(uploaded.clone());
     if let Err(error) = write_json(&paths.lan_share_files.files, &json!(files)).await {
@@ -290,7 +307,10 @@ where
             || metadata["name"] != safe_name
             || metadata["chunkTotal"] != chunk_total
             || metadata["totalSize"] != total_size
-            || metadata["nextIndex"] != chunk_index
+            || metadata["nextIndex"]
+                .as_u64()
+                .map(|next| next < chunk_index)
+                .unwrap_or(true)
         {
             return Err(ManagerError::System("分块顺序或上传信息不匹配。".into()));
         }
@@ -311,17 +331,59 @@ where
         .await?;
     }
 
+    let duplicate = stored_metadata
+        .as_ref()
+        .and_then(|metadata| metadata["nextIndex"].as_u64())
+        .map(|next| chunk_index < next)
+        .unwrap_or(false);
+    let completed = if let Some(file_id) = stored_metadata
+        .as_ref()
+        .and_then(|metadata| metadata["fileId"].as_str())
+    {
+        let _storage = registry.storage.lock().await;
+        Some(
+            read_array::<LanShareFile>(&paths.lan_share_files.files)?
+                .into_iter()
+                .find(|file| file.id == file_id && file.session_id == session_id)
+                .ok_or_else(|| ManagerError::System("已接收的附件已被移除，请重新发送。".into()))?,
+        )
+    } else {
+        None
+    };
+    let source_path = completed
+        .as_ref()
+        .map(|file| Path::new(&file.path))
+        .unwrap_or(&part_path);
     let mut file = tokio::fs::OpenOptions::new()
         .read(true)
-        .write(true)
-        .create(true)
-        .open(&part_path)
+        .write(!duplicate)
+        .create(!duplicate)
+        .open(source_path)
         .await?;
     let current_size = file.metadata().await?.len();
-    if current_size != offset {
+    if (!duplicate && current_size != offset)
+        || (duplicate && current_size < offset + content_length)
+    {
         return Err(ManagerError::System("分块偏移与已接收内容不匹配。".into()));
     }
     file.seek(std::io::SeekFrom::Start(offset)).await?;
+    if duplicate {
+        // 响应丢失后的重试先核对已落盘内容，不能覆盖文件或产生第二个附件。
+        let mut remaining = content_length;
+        let mut buffer = vec![0; 64 * 1024];
+        let mut digest = Sha256::new();
+        while remaining > 0 {
+            let length = remaining.min(buffer.len() as u64) as usize;
+            file.read_exact(&mut buffer[..length]).await?;
+            digest.update(&buffer[..length]);
+            remaining -= length as u64;
+        }
+        if format!("{:x}", digest.finalize()) != chunk_sha256.to_lowercase() {
+            return Err(ManagerError::System(
+                "重试分块与已接收的内容不同，请重新发送。".into(),
+            ));
+        }
+    }
     let result = async {
         let mut received = 0u64;
         let mut digest = Sha256::new();
@@ -333,7 +395,9 @@ where
                     return Err(ManagerError::System("分块大小超过声明值。".into()));
                 }
                 digest.update(&bytes);
-                file.write_all(&bytes).await?;
+                if !duplicate {
+                    file.write_all(&bytes).await?;
+                }
             }
         }
         if received != content_length
@@ -341,20 +405,55 @@ where
         {
             return Err(ManagerError::System("分块校验失败。".into()));
         }
-        file.flush().await?;
+        if !duplicate {
+            file.flush().await?;
+        }
         Ok::<(), ManagerError>(())
     }
     .await;
     if let Err(error) = result {
-        let _ = file.set_len(current_size).await;
+        if !duplicate {
+            let _ = file.set_len(current_size).await;
+        }
         drop(file);
-        if chunk_index == 0 && current_size == 0 {
+        if !duplicate && chunk_index == 0 && current_size == 0 {
             let _ = tokio::fs::remove_file(&part_path).await;
             let _ = tokio::fs::remove_file(&metadata_path).await;
         }
         return Err(error);
     }
     drop(file);
+
+    // 删除设备与分块提交共用存储锁，避免正在接收的文件重新生成已删除记录。
+    let _storage = registry.storage.lock().await;
+    let devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices)?;
+    if !read_array::<LanShareSession>(&paths.lan_share_files.sessions)?
+        .iter()
+        .any(|session| {
+            session.id == session_id
+                && (session.device_id.is_empty()
+                    || devices.iter().any(|device| device.id == session.device_id))
+        })
+    {
+        for path in [&part_path, &metadata_path] {
+            match tokio::fs::remove_file(path).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        return Err(ManagerError::System(
+            "设备或会话已删除，接收已取消。".into(),
+        ));
+    }
+
+    if duplicate {
+        return Ok(if chunk_index + 1 == chunk_total {
+            completed
+        } else {
+            None
+        });
+    }
 
     if chunk_index + 1 < chunk_total {
         write_json(
@@ -387,14 +486,22 @@ where
     };
     uploaded.name = safe_name;
     uploaded.enabled = false;
-    let _storage = registry.storage.lock().await;
     let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
     files.push(uploaded.clone());
     if let Err(error) = write_json(&paths.lan_share_files.files, &json!(files)).await {
         let _ = tokio::fs::remove_file(&target).await;
         return Err(error);
     }
-    let _ = tokio::fs::remove_file(&metadata_path).await;
+    // 完成回执保留到上传清理期限内，最后一块的响应丢失也能安全重试。
+    write_json(
+        &metadata_path.to_string_lossy(),
+        &json!({
+            "sessionId": session_id, "name": uploaded.name, "chunkTotal": chunk_total,
+            "totalSize": total_size, "nextIndex": chunk_total, "fileId": uploaded.id,
+            "updatedAt": now_millis()
+        }),
+    )
+    .await?;
     Ok(Some(uploaded))
 }
 
@@ -507,16 +614,97 @@ mod tests {
     use hyper::header::CONTENT_RANGE;
 
     #[test]
+    fn deleting_device_during_receive_does_not_restore_files_or_checkpoints() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id());
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            let device = upsert_device(
+                &registry,
+                &paths,
+                "native-receiving",
+                "对方",
+                "MonkeyThief/Desktop",
+                "192.168.1.8",
+            )
+            .await
+            .unwrap();
+            let state = create_session(&registry, &paths, json!({ "deviceId": device.id }))
+                .await
+                .unwrap();
+            let session_id = state["data"]["currentSession"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel::<()>();
+            let (resume_tx, resume_rx) = tokio::sync::oneshot::channel::<()>();
+            let body = StreamBody::new(Box::pin(futures_util::stream::once(async move {
+                started_tx.send(()).unwrap();
+                resume_rx.await.unwrap();
+                Ok::<_, std::io::Error>(Frame::data(Bytes::from_static(b"pending")))
+            })));
+            let receiving_registry = registry.clone();
+            let receiving_paths = paths.clone();
+            let receiving = tauri::async_runtime::spawn(async move {
+                upload_chunk(
+                    body,
+                    &receiving_registry,
+                    &receiving_paths,
+                    &session_id,
+                    "receiving",
+                    "pending.txt",
+                    0,
+                    1,
+                    0,
+                    7,
+                    7,
+                    "bytes 0-6/7",
+                    &format!("{:x}", Sha256::digest(b"pending")),
+                )
+                .await
+            });
+            started_rx.await.unwrap();
+            delete_device(
+                &registry,
+                &paths,
+                json!({ "deviceId": device.id, "deleteHistory": true }),
+            )
+            .await
+            .unwrap();
+            resume_tx.send(()).unwrap();
+            assert!(receiving.await.unwrap().is_err());
+            assert!(read_array::<LanShareFile>(&paths.lan_share_files.files)
+                .unwrap()
+                .is_empty());
+            let mut entries = tokio::fs::read_dir(Path::new(&paths.lan_share_dir).join("uploads"))
+                .await
+                .unwrap();
+            assert!(entries.next_entry().await.unwrap().is_none());
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
+
+    #[test]
     fn browser_upload_is_rate_limited_without_blocking_state_requests() {
         tauri::async_runtime::block_on(async {
             let temp_root = std::env::temp_dir();
             let root = temp_root.join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
-            let device = upsert_device(&registry, &paths, "", "测试浏览器", "browser", "127.0.0.1").await.unwrap();
-            let state = create_session(&registry, &paths, json!({ "deviceId": device.id })).await.unwrap();
-            let session_id = state["data"]["currentSession"]["id"].as_str().unwrap().to_string();
-            registry.transfer.configure(transfer::Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+            let device = upsert_device(&registry, &paths, "", "测试浏览器", "browser", "127.0.0.1")
+                .await
+                .unwrap();
+            let state = create_session(&registry, &paths, json!({ "deviceId": device.id }))
+                .await
+                .unwrap();
+            let session_id = state["data"]["currentSession"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            registry.transfer.configure(transfer::Settings {
+                send_mib_per_second: 1,
+                max_concurrent_files: 1,
+            });
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
             let (started_tx, mut started_rx) = mpsc::unbounded_channel();
@@ -538,25 +726,48 @@ mod tests {
                             async move {
                                 if request.method() == Method::PUT {
                                     started.send(()).unwrap();
-                                    let file = upload(request.into_body(), &registry, &paths, &session_id, "browser.bin").await.unwrap();
+                                    let file = upload(
+                                        request.into_body(),
+                                        &registry,
+                                        &paths,
+                                        &session_id,
+                                        "browser.bin",
+                                    )
+                                    .await
+                                    .unwrap();
                                     Ok::<_, Infallible>(api_success(json!(file.size)))
                                 } else {
                                     Ok(api_success(get_state(&registry, &paths).await.unwrap()))
                                 }
                             }
                         });
-                        let _ = http1::Builder::new().serve_connection(TokioIo::new(socket), service).await;
+                        let _ = http1::Builder::new()
+                            .serve_connection(TokioIo::new(socket), service)
+                            .await;
                     });
                 }
             });
             let client = reqwest::Client::builder().no_proxy().build().unwrap();
             let content = vec![8; 512 * 1024];
-            let request = client.put(format!("http://{address}/upload")).body(content.clone());
-            registry.transfer.configure(transfer::Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+            let request = client
+                .put(format!("http://{address}/upload"))
+                .body(content.clone());
+            registry.transfer.configure(transfer::Settings {
+                send_mib_per_second: 1,
+                max_concurrent_files: 1,
+            });
             let started = tokio::time::Instant::now();
-            let upload = tauri::async_runtime::spawn(async move { request.send().await.unwrap().json::<Value>().await.unwrap() });
+            let upload = tauri::async_runtime::spawn(async move {
+                request.send().await.unwrap().json::<Value>().await.unwrap()
+            });
             started_rx.recv().await.unwrap();
-            let state = tokio::time::timeout(std::time::Duration::from_millis(250), client.get(format!("http://{address}/state")).send()).await.unwrap().unwrap();
+            let state = tokio::time::timeout(
+                std::time::Duration::from_millis(250),
+                client.get(format!("http://{address}/state")).send(),
+            )
+            .await
+            .unwrap()
+            .unwrap();
             assert!(state.status().is_success());
             assert_eq!(upload.await.unwrap()["data"], content.len());
             assert!(started.elapsed() >= std::time::Duration::from_millis(475));
@@ -982,7 +1193,7 @@ mod tests {
                 format!("{:x}", Sha256::digest(&chunks[0])),
             )
             .await;
-            assert_eq!(duplicate["status"], "error");
+            assert_eq!(duplicate["data"]["complete"], false);
             let out_of_order = send_chunk(
                 2,
                 chunks[2].clone(),
@@ -1006,6 +1217,14 @@ mod tests {
             )
             .await;
             assert_eq!(third["data"]["complete"], true);
+            let repeated = send_chunk(
+                2,
+                chunks[2].clone(),
+                format!("{:x}", Sha256::digest(&chunks[2])),
+            )
+            .await;
+            assert_eq!(repeated["data"]["complete"], true);
+            assert_eq!(repeated["data"]["file"]["id"], third["data"]["file"]["id"]);
             drop(client);
             server.abort();
             let _ = server.await;

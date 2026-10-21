@@ -23,6 +23,7 @@ use std::io::{ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::Emitter;
 use tokio::fs::File;
 use tokio::net::TcpListener;
@@ -45,6 +46,8 @@ pub const DEFAULT_PORT: u16 = 17631;
 pub const EVENT_STATE_CHANGED: &str = "lan-share:state-changed";
 pub const EVENT_MESSAGE_CREATED: &str = "lan-share:message-created";
 pub const EVENT_DEVICES_CHANGED: &str = "lan-share:devices-changed";
+pub const EVENT_NATIVE_CHANGED: &str = "lan-share:native-changed";
+pub const EVENT_TRANSFER_PROGRESS: &str = "lan-share:transfer-progress";
 
 #[derive(Clone)]
 pub struct LanShareServerRegistry {
@@ -57,6 +60,7 @@ pub struct LanShareServerRegistry {
 pub struct LanShareRuntime {
     native: native::NativeRuntime,
     handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    token_rotation: Option<tauri::async_runtime::JoinHandle<()>>,
     token: String,
     access_url: String,
     lan_ip: String,
@@ -136,6 +140,10 @@ pub struct LanShareGroup {
     pub id: String,
     pub name: String,
     pub invite_code: String,
+    #[serde(default)]
+    pub owner_device_id: String,
+    #[serde(default)]
+    pub owner_device_name: String,
     #[serde(default = "default_message_visibility")]
     pub message_visibility: String,
     pub created_at: u64,
@@ -181,6 +189,7 @@ impl LanShareServerRegistry {
             inner: Arc::new(Mutex::new(LanShareRuntime {
                 native: native::NativeRuntime::default(),
                 handle: None,
+                token_rotation: None,
                 token: String::new(),
                 access_url: String::new(),
                 lan_ip: String::new(),
@@ -354,7 +363,9 @@ fn create_stable_id(value: &str) -> String {
     hasher.update(value.as_bytes());
     let mut bytes = [0u8; 16];
     bytes.copy_from_slice(&hasher.finalize()[..16]);
-    uuid::Builder::from_sha1_bytes(bytes).into_uuid().to_string()
+    uuid::Builder::from_sha1_bytes(bytes)
+        .into_uuid()
+        .to_string()
 }
 
 fn create_session_file_id(session_id: &str, path: &str) -> String {
@@ -434,8 +445,15 @@ pub async fn add_files(
     } else {
         format!("共享了 {} 个文件", files.len())
     };
-    let native_delivery =
-        native::deliver(registry, &session.device_id, &content, &files, &message_id).await?;
+    let native_delivery = native::deliver(
+        registry,
+        &session.device_id,
+        &content,
+        &files,
+        &message_id,
+        None,
+    )
+    .await?;
     let sender = registry
         .inner
         .lock()
@@ -511,26 +529,56 @@ pub async fn get_state(
             } else {
                 qr_svg(&invite_url).unwrap_or_default()
             };
-            let members = group
-                .members
-                .into_iter()
-                .map(|member| {
-                    json!({
-                        "deviceId": member.device_id,
-                        "deviceName": member.device_name,
-                        "ip": member.ip,
-                        "joinedAt": member.joined_at,
-                        "lastSeenAt": member.last_seen_at,
-                        "active": member.active,
-                        "online": online_device_ids.contains(&member.device_id)
-                    })
-                })
-                .collect::<Vec<_>>();
+            let owner_id = if group.owner_device_id.is_empty() {
+                runtime.native.config.id.clone()
+            } else {
+                group.owner_device_id.clone()
+            };
+            let owner_name = if group.owner_device_name.is_empty() {
+                if runtime.native.config.name.is_empty() {
+                    "本机".to_string()
+                } else {
+                    runtime.native.config.name.clone()
+                }
+            } else {
+                group.owner_device_name.clone()
+            };
+            let mut members = Vec::with_capacity(group.members.len() + 1);
+            if !owner_id.is_empty() {
+                members.push(json!({
+                    "deviceId": owner_id,
+                    "deviceName": owner_name,
+                    "ip": runtime.lan_ip,
+                    "joinedAt": group.created_at,
+                    "lastSeenAt": now_millis(),
+                    "active": true,
+                    "owner": true,
+                    "online": true
+                }));
+            }
+            members.extend(group.members.into_iter().filter_map(|member| {
+                if member.device_id == group.owner_device_id && !group.owner_device_id.is_empty() {
+                    return None;
+                }
+                Some(json!({
+                    "deviceId": member.device_id,
+                    "deviceName": member.device_name,
+                    "ip": member.ip,
+                    "joinedAt": member.joined_at,
+                    "lastSeenAt": member.last_seen_at,
+                    "active": member.active,
+                    "owner": false,
+                    "online": online_device_ids.contains(&member.device_id)
+                        || runtime.native.online(&member.device_id)
+                }))
+            }));
 
             json!({
                 "id": group.id,
                 "name": group.name,
                 "inviteCode": group.invite_code,
+                "ownerDeviceId": owner_id,
+                "ownerDeviceName": owner_name,
                 "inviteUrl": invite_url,
                 "qrSvg": qr_svg,
                 "messageVisibility": group.message_visibility,
@@ -804,6 +852,10 @@ pub async fn delete_device(
     if device_id.trim().is_empty() {
         return Err(ManagerError::System("设备标识不能为空。".into()));
     }
+    let delete_history = payload
+        .get("deleteHistory")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     {
         let _storage = registry.storage.lock().await;
         let mut devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices)?;
@@ -811,6 +863,18 @@ pub async fn delete_device(
         let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
         let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
         let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
+        {
+            let mut runtime = registry.inner.lock().await;
+            if runtime
+                .native
+                .config
+                .peers
+                .iter()
+                .any(|trusted| trusted.peer.id == device_id)
+            {
+                runtime.native.forget(paths, &device_id).await?;
+            }
+        }
         let direct_session_ids = sessions
             .iter()
             .filter(|session| session.device_id == device_id && session.mode != "group")
@@ -852,9 +916,71 @@ pub async fn delete_device(
             }
         }
         devices.retain(|device| device.id != device_id);
-        sessions.retain(|session| session.device_id != device_id);
-        messages.retain(|message| !direct_session_ids.contains(&message.session_id));
-        files.retain(|file| !direct_session_ids.contains(&file.session_id));
+        sessions.retain(|session| {
+            session.device_id != device_id || (!delete_history && session.mode != "group")
+        });
+        if delete_history {
+            messages.retain(|message| !direct_session_ids.contains(&message.session_id));
+            let removed_files = files
+                .iter()
+                .filter(|file| direct_session_ids.contains(&file.session_id))
+                .cloned()
+                .collect::<Vec<_>>();
+            files.retain(|file| !direct_session_ids.contains(&file.session_id));
+            // 只删除快传管理的副本；仍被其他会话引用的文件继续保留。
+            let uploads = Path::new(&paths.lan_share_dir).join("uploads");
+            let uploads = match tokio::fs::canonicalize(&uploads).await {
+                Ok(directory) => Some(directory),
+                Err(error) if error.kind() == ErrorKind::NotFound => None,
+                Err(error) => return Err(error.into()),
+            };
+            if let Some(directory) = uploads {
+                for file in &removed_files {
+                    if files.iter().any(|other| other.path == file.path) {
+                        continue;
+                    }
+                    let path = match tokio::fs::canonicalize(&file.path).await {
+                        Ok(path) => path,
+                        Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                        Err(error) => return Err(error.into()),
+                    };
+                    if path.parent() == Some(directory.as_path()) {
+                        tokio::fs::remove_file(path).await?;
+                    }
+                }
+                // 清除该设备所有单聊会话的分块回执和未完成接收内容。
+                let mut entries = tokio::fs::read_dir(&directory).await?;
+                while let Some(entry) = entries.next_entry().await? {
+                    let path = entry.path();
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if !name.starts_with(".lan-upload-") || !name.ends_with(".json") {
+                        continue;
+                    }
+                    let metadata: Value = serde_json::from_slice(&tokio::fs::read(&path).await?)?;
+                    if !direct_session_ids
+                        .iter()
+                        .any(|id| metadata["sessionId"] == *id)
+                    {
+                        continue;
+                    }
+                    let part = path.with_extension("part");
+                    match tokio::fs::remove_file(part).await {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == ErrorKind::NotFound => {}
+                        Err(error) => return Err(error.into()),
+                    }
+                    tokio::fs::remove_file(path).await?;
+                }
+            }
+            let mut downloads: Vec<LanShareDownload> =
+                read_array(&paths.lan_share_files.downloads)?;
+            downloads.retain(|download| {
+                download.device_id != device_id
+                    && !removed_files.iter().any(|file| file.id == download.file_id)
+            });
+            write_json(&paths.lan_share_files.downloads, &json!(downloads)).await?;
+        }
         for group in &mut groups {
             let count = group.members.len();
             group.members.retain(|member| member.device_id != device_id);
@@ -863,9 +989,6 @@ pub async fn delete_device(
             }
         }
         let mut runtime = registry.inner.lock().await;
-        if runtime.native.config.peers.iter().any(|trusted| trusted.peer.id == device_id) {
-            runtime.native.forget(paths, &device_id).await?;
-        }
         write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
         write_json(&paths.lan_share_files.files, &json!(files)).await?;
         write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
@@ -892,10 +1015,15 @@ pub async fn create_group(
     paths: &AppPaths,
     payload: Value,
 ) -> Result<Value, ManagerError> {
-    let device_ids = string_array_value(payload.get("deviceIds"));
-    if device_ids.is_empty() {
+    let mut device_ids = Vec::new();
+    for device_id in string_array_value(payload.get("deviceIds")) {
+        if !device_id.is_empty() && !device_ids.contains(&device_id) {
+            device_ids.push(device_id);
+        }
+    }
+    if device_ids.len() < 2 {
         return Err(ManagerError::System(
-            "请至少邀请一台设备后再创建群聊。".into(),
+            "群聊至少需要 3 人（包含本机），请至少邀请两台设备。".into(),
         ));
     }
     let name = normalize_group_name(&string_value(payload.get("name")));
@@ -903,6 +1031,21 @@ pub async fn create_group(
         normalize_message_visibility(&string_value(payload.get("messageVisibility")));
     let now = now_millis();
     let group_id = create_id();
+    let (owner_device_id, owner_device_name) = {
+        let runtime = registry.inner.lock().await;
+        (
+            if runtime.native.config.id.is_empty() {
+                create_id()
+            } else {
+                runtime.native.config.id.clone()
+            },
+            if runtime.native.config.name.is_empty() {
+                "本机".to_string()
+            } else {
+                runtime.native.config.name.clone()
+            },
+        )
+    };
     let session = LanShareSession {
         id: create_id(),
         device_id: String::new(),
@@ -920,6 +1063,8 @@ pub async fn create_group(
         id: group_id,
         name,
         invite_code: create_invite_code(),
+        owner_device_id,
+        owner_device_name,
         message_visibility,
         created_at: now,
         updated_at: now,
@@ -946,6 +1091,11 @@ pub async fn create_group(
             {
                 invited.push(device);
             }
+        }
+        if invited.len() < 2 {
+            return Err(ManagerError::System(
+                "群聊至少需要 3 人（包含本机），请至少邀请两台有效设备。".into(),
+            ));
         }
         let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
         let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
@@ -1029,12 +1179,25 @@ pub async fn remove_group_member(
         return Err(ManagerError::System("群聊和成员不能为空。".to_string()));
     }
 
+    let own_device_id = registry.inner.lock().await.native.config.id.clone();
+
     {
         let _storage = registry.storage.lock().await;
         let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
         let Some(group) = groups.iter_mut().find(|group| group.id == group_id) else {
             return Err(ManagerError::System("群聊不存在。".to_string()));
         };
+
+        let owner_id = if group.owner_device_id.is_empty() {
+            own_device_id.as_str()
+        } else {
+            group.owner_device_id.as_str()
+        };
+        if device_id == owner_id {
+            return Err(ManagerError::System(
+                "群主不能移出群聊，只能解散群聊。".to_string(),
+            ));
+        }
 
         group.members.retain(|member| member.device_id != device_id);
         group.updated_at = now_millis();
@@ -1140,7 +1303,9 @@ pub async fn save_file(
     if Path::new(&target_path).exists()
         && tokio::fs::canonicalize(&target_path).await? == source_path
     {
-        return Err(ManagerError::System("保存位置与原文件相同，请选择其他位置。".into()));
+        return Err(ManagerError::System(
+            "保存位置与原文件相同，请选择其他位置。".into(),
+        ));
     }
     tokio::fs::copy(&source_path, &target_path).await?;
     Ok(lan_share_response(json!({ "targetPath": target_path })))
@@ -2221,15 +2386,22 @@ pub async fn start_service(
         registry: registry.clone(),
     };
     let handle = tauri::async_runtime::spawn(async move {
+        let connection_slots = Arc::new(tokio::sync::Semaphore::new(64));
         loop {
             let Ok((stream, addr)) = listener.accept().await else {
                 break;
             };
+            // 限制连接任务数量，慢连接不能无限占用运行内存。
+            let Ok(permit) = connection_slots.clone().try_acquire_owned() else {
+                continue;
+            };
+            let _ = stream.set_nodelay(true);
             let io = TokioIo::new(stream);
             let context = context.clone();
 
             let connection_registry = context.registry.clone();
             let connection_handle = tauri::async_runtime::spawn(async move {
+                let _permit = permit;
                 let service =
                     service_fn(move |request| handle_http_request(request, context.clone(), addr));
 
@@ -2241,12 +2413,11 @@ pub async fn start_service(
                     eprintln!("{error}");
                 }
             });
-            connection_registry
-                .inner
-                .lock()
-                .await
+            let mut runtime = connection_registry.inner.lock().await;
+            runtime
                 .connections
-                .push(connection_handle);
+                .retain(|task| !task.inner().is_finished());
+            runtime.connections.push(connection_handle);
         }
     });
 
@@ -2255,9 +2426,35 @@ pub async fn start_service(
     runtime.access_url = access_url.clone();
     runtime.lan_ip = lan_ip.clone();
     runtime.port = port;
+    let rotation_registry = registry.clone();
+    let rotation_app = app.clone();
+    let rotation_paths = paths.clone();
+    runtime.token_rotation = Some(tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(15 * 60));
+        // interval 的第一次 tick 立即完成，跳过它，确保首次轮换发生在完整的 15 分钟之后。
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            let running = rotation_registry
+                .inner
+                .lock()
+                .await
+                .handle
+                .is_some();
+            if !running {
+                break;
+            }
+            if rotate_access_token(&rotation_app, &rotation_registry, &rotation_paths)
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    }));
     drop(runtime);
     if let Err(error) = native::start(app.clone(), registry, paths).await {
-        registry.inner.lock().await.native.error = format!("自动发现启动失败：{error}");
+        registry.inner.lock().await.native.error = format!("设备快传节点启动失败：{error}");
     }
     emit_state_changed(&app, registry, paths).await?;
 
@@ -2291,6 +2488,9 @@ fn stop_runtime(runtime: &mut LanShareRuntime) {
     if let Some(handle) = runtime.handle.take() {
         handle.abort();
     }
+    if let Some(handle) = runtime.token_rotation.take() {
+        handle.abort();
+    }
     for connection in runtime.connections.drain(..) {
         connection.abort();
     }
@@ -2298,6 +2498,26 @@ fn stop_runtime(runtime: &mut LanShareRuntime) {
     runtime.access_url.clear();
     runtime.clients.clear();
     runtime.active_sessions.clear();
+}
+
+async fn rotate_access_token(
+    app: &tauri::AppHandle,
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+) -> Result<(), ManagerError> {
+    let mut runtime = registry.inner.lock().await;
+    if runtime.handle.is_none() {
+        return Ok(());
+    }
+    let token = create_token()?;
+    runtime.token = token.clone();
+    runtime.access_url = format!(
+        "http://{}:{}/?token={}",
+        runtime.lan_ip, runtime.port, token
+    );
+    drop(runtime);
+    emit_state_changed(app, registry, paths).await?;
+    Ok(())
 }
 
 async fn emit_state_changed(
@@ -2917,6 +3137,20 @@ async fn append_message_with_attachments(
     };
     let _storage = registry.storage.lock().await;
     let device = find_device_for_session(paths, device_id)?;
+    if registry
+        .inner
+        .lock()
+        .await
+        .native
+        .config
+        .ignored_peers
+        .iter()
+        .any(|id| id == device_id)
+    {
+        return Err(ManagerError::System(
+            "设备已删除，请重新连接后发送。".into(),
+        ));
+    }
     let device_name = device_display_name(&device);
     let session = if let Some(group_session) = group_session_by_id(paths, &selected_session_id)? {
         group_session
@@ -3038,16 +3272,37 @@ pub async fn send_message(
         emit_state_changed(&app, registry, paths).await?;
         return Ok(lan_share_response(json!([stored])));
     }
-    let is_trusted_peer = registry.inner.lock().await.native.config.peers.iter()
+    let is_trusted_peer = registry
+        .inner
+        .lock()
+        .await
+        .native
+        .config
+        .peers
+        .iter()
         .any(|trusted| trusted.peer.id == target_device_id);
-    let is_native = is_trusted_peer || target_device_id.starts_with("native-") || target_device_id.starts_with("native_")
-        || read_array::<LanShareDevice>(&paths.lan_share_files.devices)?.iter()
-            .any(|device| device.id == target_device_id && device.user_agent == "MonkeyThief/Desktop");
+    let is_native = is_trusted_peer
+        || target_device_id.starts_with("native-")
+        || target_device_id.starts_with("native_")
+        || read_array::<LanShareDevice>(&paths.lan_share_files.devices)?
+            .iter()
+            .any(|device| {
+                device.id == target_device_id && device.user_agent == "MonkeyThief/Desktop"
+            });
     if is_native && !is_trusted_peer {
         return Err(ManagerError::System("请先连接并配对这台设备。".into()));
     }
     let native_delivery = if is_native {
-        match native::deliver(registry, &target_device_id, &content, &files, &message_id).await {
+        match native::deliver(
+            registry,
+            &target_device_id,
+            &content,
+            &files,
+            &message_id,
+            Some(&app),
+        )
+        .await
+        {
             Ok(delivered) => delivered,
             Err(_) => false,
         }
@@ -3138,6 +3393,7 @@ pub async fn retry_message(
         &message.content,
         &files,
         &message.id,
+        Some(&app),
     )
     .await?;
     if !delivered {
@@ -3196,7 +3452,7 @@ pub(super) async fn deliver_pending_messages_for_peer(
 
     let mut delivered_ids = Vec::new();
     for (m, files) in pending_items {
-        match native::deliver(registry, device_id, &m.content, &files, &m.id).await {
+        match native::deliver(registry, device_id, &m.content, &files, &m.id, Some(app)).await {
             Ok(true) => delivered_ids.push(m.id),
             _ => break,
         }
@@ -3218,13 +3474,18 @@ pub(super) async fn deliver_pending_messages_for_peer(
     }
 }
 
-pub async fn set_auto_discovery(
+pub async fn set_hidden(
+    app: tauri::AppHandle,
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
     payload: Value,
 ) -> Result<Value, ManagerError> {
-    let enabled = payload.get("enabled").and_then(Value::as_bool).unwrap_or(false);
-    let result = native::set_auto_discovery(registry, paths, enabled).await?;
+    let hidden = payload
+        .get("hidden")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| ManagerError::System("缺少节点可见性设置。".into()))?;
+    let result = native::set_hidden(registry, paths, hidden).await?;
+    emit_state_changed(&app, registry, paths).await?;
     Ok(lan_share_response(result))
 }
 
@@ -3240,9 +3501,7 @@ pub async fn set_transfer_settings(
     get_state(registry, paths).await
 }
 
-pub async fn scan_devices(
-    registry: &LanShareServerRegistry,
-) -> Result<Value, ManagerError> {
+pub async fn scan_devices(registry: &LanShareServerRegistry) -> Result<Value, ManagerError> {
     let result = native::scan_nearby(registry).await?;
     Ok(lan_share_response(result))
 }
@@ -3866,6 +4125,8 @@ async fn leave_mobile_group(
         return Ok(api_error(StatusCode::BAD_REQUEST, "群聊不能为空。"));
     }
 
+    let local_owner_id = context.registry.inner.lock().await.native.config.id.clone();
+
     let ip = client_ip(addr);
     let requested_device_id = string_value(payload.get("deviceId"));
     let device_id = if ip.is_empty() {
@@ -3885,19 +4146,66 @@ async fn leave_mobile_group(
             return Ok(api_error(StatusCode::NOT_FOUND, "群聊不存在。"));
         };
 
+        let owner_id = if group.owner_device_id.is_empty() {
+            local_owner_id.clone()
+        } else {
+            group.owner_device_id.clone()
+        };
+        if !owner_id.is_empty() && device_id == owner_id {
+            return Ok(api_error(
+                StatusCode::CONFLICT,
+                "群主不能退出群聊，请由群主解散群聊。",
+            ));
+        }
+
+        let mut removed_session_ids = Vec::new();
+        let sessions_before: Vec<LanShareSession> =
+            read_array(&context.paths.lan_share_files.sessions)?;
+        for session in sessions_before.iter().filter(|session| {
+            session.mode == "group" && session.group_id == group_id && session.device_id == device_id
+        }) {
+            removed_session_ids.push(session.id.clone());
+        }
+
         group.members.retain(|member| member.device_id != device_id);
         group.updated_at = now_millis();
 
-        let mut sessions: Vec<LanShareSession> =
-            read_array(&context.paths.lan_share_files.sessions)?;
+        let mut sessions = sessions_before;
         sessions.retain(|session| {
             !(session.mode == "group"
                 && session.group_id == group_id
                 && session.device_id == device_id)
         });
 
+        // 访客退出后彻底清除其本机群聊缓存，避免退出后仍能通过旧会话读取历史。
+        let mut messages: Vec<LanShareMessage> =
+            read_array(&context.paths.lan_share_files.messages)?;
+        messages.retain(|message| !removed_session_ids.contains(&message.session_id));
+        let mut files: Vec<LanShareFile> = read_array(&context.paths.lan_share_files.files)?;
+        let removed_files = files
+            .iter()
+            .filter(|file| removed_session_ids.contains(&file.session_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        files.retain(|file| !removed_session_ids.contains(&file.session_id));
+
+        // 仅删除快传上传目录中的缓存，用户原始文件路径不会被退出操作触碰。
+        let uploads = Path::new(&context.paths.lan_share_dir).join("uploads");
+        if let Ok(directory) = tokio::fs::canonicalize(&uploads).await {
+            for file in &removed_files {
+                let Ok(path) = tokio::fs::canonicalize(&file.path).await else {
+                    continue;
+                };
+                if path.parent() == Some(directory.as_path()) {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+            }
+        }
+
         write_json(&context.paths.lan_share_files.groups, &json!(groups)).await?;
         write_json(&context.paths.lan_share_files.sessions, &json!(sessions)).await?;
+        write_json(&context.paths.lan_share_files.messages, &json!(messages)).await?;
+        write_json(&context.paths.lan_share_files.files, &json!(files)).await?;
     }
 
     {
@@ -4224,6 +4532,103 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn deleting_device_optionally_purges_owned_files_and_keeps_originals() {
+        tauri::async_runtime::block_on(async {
+            for delete_history in [false, true] {
+                let root = std::env::temp_dir().join(create_id());
+                let paths = resolve_app_paths(&root);
+                let registry = LanShareServerRegistry::new();
+                let device = upsert_device(
+                    &registry,
+                    &paths,
+                    "native-delete",
+                    "对方",
+                    "MonkeyThief/Desktop",
+                    "192.168.1.8",
+                )
+                .await
+                .unwrap();
+                let state = create_session(&registry, &paths, json!({ "deviceId": device.id }))
+                    .await
+                    .unwrap();
+                let session = state["data"]["currentSession"]["id"].as_str().unwrap();
+                let uploads = Path::new(&paths.lan_share_dir).join("uploads");
+                tokio::fs::create_dir_all(&uploads).await.unwrap();
+                let received = uploads.join("received.txt");
+                let source = root.join("original.txt");
+                let partial = uploads.join(".lan-upload-partial.part");
+                let checkpoint = uploads.join(".lan-upload-partial.json");
+                for path in [&received, &source, &partial] {
+                    tokio::fs::write(path, "聊天文件").await.unwrap();
+                }
+                super::write_json(
+                    &checkpoint.to_string_lossy(),
+                    &json!({ "sessionId": session, "nextIndex": 1 }),
+                )
+                .await
+                .unwrap();
+                let mut files = Vec::new();
+                for path in [&received, &source] {
+                    files.push(
+                        super::file_payload(&path.to_string_lossy(), session)
+                            .await
+                            .unwrap(),
+                    );
+                }
+                super::write_json(&paths.lan_share_files.files, &json!(files))
+                    .await
+                    .unwrap();
+                super::append_message_with_attachments(
+                    &registry,
+                    &paths,
+                    &device.id,
+                    session,
+                    "mobile-to-desktop",
+                    "记录",
+                    true,
+                    &files,
+                    None,
+                )
+                .await
+                .unwrap();
+                super::delete_device(
+                    &registry,
+                    &paths,
+                    json!({ "deviceId": device.id, "deleteHistory": delete_history }),
+                )
+                .await
+                .unwrap();
+                assert!(read_array::<LanShareDevice>(&paths.lan_share_files.devices)
+                    .unwrap()
+                    .is_empty());
+                assert_eq!(received.exists(), !delete_history);
+                assert_eq!(partial.exists(), !delete_history);
+                assert_eq!(checkpoint.exists(), !delete_history);
+                assert!(source.exists());
+                assert_eq!(
+                    read_array::<LanShareMessage>(&paths.lan_share_files.messages)
+                        .unwrap()
+                        .is_empty(),
+                    delete_history
+                );
+                assert_eq!(
+                    read_array::<LanShareFile>(&paths.lan_share_files.files)
+                        .unwrap()
+                        .is_empty(),
+                    delete_history
+                );
+                assert_eq!(
+                    read_array::<LanShareSession>(&paths.lan_share_files.sessions)
+                        .unwrap()
+                        .is_empty(),
+                    delete_history
+                );
+                tokio::fs::remove_dir_all(root).await.unwrap();
+            }
+        });
+    }
+
+    #[test]
     fn delete_device_removes_direct_records_without_losing_shared_group_history() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id());
@@ -4306,9 +4711,13 @@ mod tests {
                 .await
                 .active_sessions
                 .insert(removed.id.clone(), removed_session_id);
-            let result = super::delete_device(&registry, &paths, json!({ "deviceId": removed.id }))
-                .await
-                .unwrap();
+            let result = super::delete_device(
+                &registry,
+                &paths,
+                json!({ "deviceId": removed.id, "deleteHistory": true }),
+            )
+            .await
+            .unwrap();
             assert_eq!(result["data"]["devices"].as_array().unwrap().len(), 1);
             assert_eq!(result["data"]["devices"][0]["id"], kept.id);
             assert_eq!(
@@ -4494,7 +4903,12 @@ mod tests {
             device_id_from_ip("192.168.1.8"),
             device_id_from_ip("192.168.1.9")
         );
-        assert_eq!(uuid::Uuid::parse_str(&device_id_from_ip("192.168.1.8")).unwrap().get_version_num(), 5);
+        assert_eq!(
+            uuid::Uuid::parse_str(&device_id_from_ip("192.168.1.8"))
+                .unwrap()
+                .get_version_num(),
+            5
+        );
     }
 
     #[test]
@@ -4900,7 +5314,9 @@ mod tests {
                 file.name = name.into();
                 files.push(file);
             }
-            super::attachments::publish(&registry, &paths, &files).await.unwrap();
+            super::attachments::publish(&registry, &paths, &files)
+                .await
+                .unwrap();
             for (file, (name, content)) in files.iter().zip(contents) {
                 let target = downloads.join(name);
                 let result = super::save_file(
@@ -4947,14 +5363,27 @@ mod tests {
                 json!({"fileId": file.id, "targetPath": source}),
             ] {
                 assert!(super::save_file(&registry, &paths, payload).await.is_err());
-                assert_eq!(tokio::fs::read_to_string(&source).await.unwrap(), "原文件内容");
-                assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "已有内容");
+                assert_eq!(
+                    tokio::fs::read_to_string(&source).await.unwrap(),
+                    "原文件内容"
+                );
+                assert_eq!(
+                    tokio::fs::read_to_string(&target).await.unwrap(),
+                    "已有内容"
+                );
             }
             tokio::fs::remove_file(&source).await.unwrap();
             assert!(super::save_file(
-                &registry, &paths, json!({"fileId": file.id, "targetPath": target}),
-            ).await.is_err());
-            assert_eq!(tokio::fs::read_to_string(&target).await.unwrap(), "已有内容");
+                &registry,
+                &paths,
+                json!({"fileId": file.id, "targetPath": target}),
+            )
+            .await
+            .is_err());
+            assert_eq!(
+                tokio::fs::read_to_string(&target).await.unwrap(),
+                "已有内容"
+            );
             let resolved = root.canonicalize().unwrap();
             assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
             tokio::fs::remove_dir_all(resolved).await.unwrap();

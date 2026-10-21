@@ -36,51 +36,12 @@
           }}</span>
         </div>
 
-        <!-- 自动发现广播开关 -->
-        <button
-          class="cyber-header-btn"
-          :class="{ 'cyber-header-btn--active': state.native.autoDiscovery }"
-          type="button"
-          :disabled="togglingAutoDiscovery || !state.service.running"
-          :title="
-            state.native.autoDiscovery
-              ? '自动广播开启中：定时发射 UDP 探测包'
-              : '静默模式：已停止自动广播，可手动点击雷达扫描'
-          "
-          @click="toggleAutoDiscovery"
-        >
-          <Wifi
-            v-if="state.native.autoDiscovery"
-            :size="13"
-            class="cyber-glow-icon"
-          />
-          <WifiOff v-else :size="13" />
-          <span>{{
-            state.native.autoDiscovery ? "自动广播: 开启" : "自动广播: 静音"
-          }}</span>
-        </button>
-
-        <!-- 手动雷达扫描 -->
-        <button
-          class="cyber-header-btn cyber-header-btn--radar"
-          :class="{ 'is-scanning': scanning }"
-          type="button"
-          :disabled="scanning || !state.service.running"
-          title="立即向局域网广播探测，检索在线设备"
-          @click="scanNearby"
-        >
-          <Radio :size="14" :class="{ 'cyber-spin': scanning }" />
-          <span>{{ scanning ? "直达探测中..." : "直达扫描" }}</span>
-        </button>
-
         <!-- 连接设备 -->
         <button
           class="cyber-header-btn"
           type="button"
           :disabled="loading"
-          @click="
-            state.service.running ? (connectDialogOpen = true) : startService()
-          "
+          @click="openConnectDialog"
         >
           <Link :size="13" />
           <span>{{ state.service.running ? "连接设备" : "上线" }}</span>
@@ -97,47 +58,128 @@
           <span>访客扫码</span>
         </button>
 
-        <!-- 设置下拉菜单 -->
-        <el-dropdown trigger="click">
-          <button
-            class="cyber-menu-btn"
-            type="button"
-            aria-label="快传网络设置"
-          >
-            <Settings2 :size="15" />
-          </button>
-          <template #dropdown>
-            <el-dropdown-menu class="cyber-dropdown-menu">
-              <el-dropdown-item disabled>{{ serviceSummary }}</el-dropdown-item>
-              <el-dropdown-item @click="openTransferSettings">
-                传输限速与并发
-              </el-dropdown-item>
-              <el-dropdown-item
-                v-for="ip in state.service.lanIps || []"
-                :key="ip"
-                :disabled="
-                  !state.service.running ||
-                  ip === state.service.lanIp ||
-                  loading
-                "
-                @click="setAccessIp(ip)"
-              >
-                二维码使用 {{ ip }}
-              </el-dropdown-item>
-              <el-dropdown-item
-                v-if="state.service.running"
-                @click="stopService"
-              >
-                暂停接收并离线
-              </el-dropdown-item>
-              <el-dropdown-item v-else @click="startService">
-                重新上线
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <!-- 设置改为居中弹框，避免下拉菜单被顶部区域裁剪。 -->
+        <button
+          class="cyber-menu-btn"
+          type="button"
+          aria-label="快传网络设置"
+          :aria-expanded="settingsOpen"
+          @click="settingsOpen = true"
+        >
+          <Settings2 :size="15" />
+        </button>
       </div>
     </header>
+
+    <BaseModal
+      v-if="settingsOpen"
+      class="drop-settings-modal"
+      title="设备快传设置"
+      description="管理传输、节点可见性和访问地址"
+      @close="settingsOpen = false"
+    >
+      <div class="drop-settings-content">
+        <div
+          class="drop-settings-status"
+          :class="{ 'is-online': state.service.running }"
+        >
+          <span class="drop-settings-status-dot"></span>
+          <div class="drop-settings-status-copy">
+            <span>{{ state.service.running ? "服务在线" : "服务已暂停" }}</span>
+            <small>{{ serviceSummary }}</small>
+          </div>
+        </div>
+
+        <div class="drop-settings-list">
+          <button
+            class="drop-settings-item"
+            type="button"
+            @click="openTransferSettings"
+          >
+            <span class="drop-settings-item-icon"
+              ><Settings2 :size="17"
+            /></span>
+            <span class="drop-settings-item-copy">
+              <span>传输限速与并发</span>
+              <small>控制文件传输速度和同时处理的文件数</small>
+            </span>
+            <ChevronRight :size="16" class="drop-settings-item-arrow" />
+          </button>
+
+          <button
+            class="drop-settings-item"
+            type="button"
+            :disabled="togglingHidden"
+            @click="toggleHidden"
+          >
+            <span class="drop-settings-item-icon"
+              ><ShieldCheck :size="17"
+            /></span>
+            <span class="drop-settings-item-copy">
+              <span>{{
+                state.native.hidden ? "恢复节点可见" : "隐藏本机节点"
+              }}</span>
+              <small>{{
+                state.native.hidden
+                  ? "已配对设备仍可连接本机"
+                  : "隐藏后不会回应新的发现和配对请求"
+              }}</small>
+            </span>
+            <ChevronRight :size="16" class="drop-settings-item-arrow" />
+          </button>
+        </div>
+
+        <div class="drop-settings-addresses">
+          <div class="drop-settings-section-title">
+            <QrCode :size="15" />
+            <span>二维码访问地址</span>
+          </div>
+          <div class="drop-settings-address-list">
+            <button
+              v-for="ip in state.service.lanIps || []"
+              :key="ip"
+              class="drop-settings-address"
+              :class="{ 'is-active': ip === state.service.lanIp }"
+              type="button"
+              :disabled="
+                !state.service.running || ip === state.service.lanIp || loading
+              "
+              @click="chooseAccessIp(ip)"
+            >
+              <span>{{ ip }}</span>
+              <span>{{
+                ip === state.service.lanIp ? "当前使用" : "切换"
+              }}</span>
+            </button>
+            <span
+              v-if="!(state.service.lanIps || []).length"
+              class="drop-settings-empty"
+            >
+              服务上线后显示局域网地址
+            </span>
+          </div>
+        </div>
+
+        <button
+          v-if="state.service.running"
+          class="drop-settings-offline"
+          type="button"
+          @click="stopService"
+        >
+          <Power :size="16" />
+          <span>暂停接收并离线</span>
+        </button>
+        <button
+          v-else
+          class="drop-settings-offline"
+          type="button"
+          @click="startService"
+        >
+          <Power :size="16" />
+          <span>重新上线</span>
+        </button>
+      </div>
+    </BaseModal>
 
     <!-- 中枢主体区 -->
     <div class="cyber-body">
@@ -244,12 +286,6 @@
                     <span class="telemetry-ip">{{
                       device.ip || "历史设备"
                     }}</span>
-                    <span
-                      v-if="device.requiresPairing"
-                      class="telemetry-pairing-action"
-                    >
-                      点击连接
-                    </span>
                   </div>
                 </div>
               </button>
@@ -276,7 +312,7 @@
               </div>
               <span class="cyber-empty-title">SEARCHING FOR NODES</span>
               <small class="cyber-empty-hint">
-                两台电脑打开设备快传即可发现彼此。点击上方「雷达扫描」发起主动探测。
+                点击「连接设备」扫描当前局域网，等待对方同意后建立连接。
               </small>
             </div>
           </template>
@@ -395,18 +431,29 @@
     <!-- 删除设备确认弹窗 -->
     <DeleteConfirmModal
       v-if="deleteDeviceTarget"
+      class="drop-delete-device-modal"
       title="删除设备"
       :name="deleteDeviceTarget.name"
       :description="
         deleteDeviceTarget.native
-          ? '删除此设备及其本机单聊记录，并解除客户端配对。移除后不会自动发现回来，可通过地址重新连接。不会删除磁盘上的原始文件。'
-          : '删除此设备及其本机单聊记录，并移除群聊成员关联。群聊历史和其他设备不受影响，不会删除磁盘上的原始文件；对方重新访问后可再次加入。'
+          ? '解除此设备的配对并从节点列表移除。聊天记录默认保留，重新连接后可以继续查看。'
+          : '移除此设备及其群聊成员关联。聊天记录默认保留，重新接入后可以继续查看。'
       "
       :pending="deleteDevicePending"
       :error="deleteDeviceError"
       @close="closeDeleteDevice"
       @confirm="confirmDeleteDevice"
-    />
+    >
+      <el-checkbox
+        v-model="deleteDeviceWithHistory"
+        :disabled="deleteDevicePending"
+      >
+        同时彻底删除聊天记录和接收文件
+      </el-checkbox>
+      <span v-if="deleteDeviceWithHistory" class="drop-delete-warning">
+        将永久删除本机与该设备的单聊记录、接收文件及未完成的接收缓存。发送的原始文件保留。
+      </span>
+    </DeleteConfirmModal>
 
     <!-- 访客访问二维码弹窗 -->
     <LanShareAccessDialog
@@ -450,35 +497,70 @@
       </div>
     </BaseModal>
 
-    <!-- 手动输入地址连接弹窗 -->
+    <!-- 扫描候选只在连接弹窗展示，双方确认后才加入设备节点列表。 -->
     <BaseModal
       v-if="connectDialogOpen"
       class="drop-connect-modal"
-      title="手动连接节点"
+      title="连接设备"
       @close="connectDialogOpen = false"
     >
       <div class="drop-connect-content">
         <p class="drop-connect-description">
-          输入对方局域网节点的 IP
-          与端口（或设备快传访问链接），向其发起安全直连配对请求。
+          选择局域网内发现的设备，核对安全校验码并等待对方同意后建立连接。
         </p>
         <el-input
-          v-model="connectAddress"
-          placeholder="例如：192.168.1.8:17631"
-          @keyup.enter="connectByAddress"
+          v-model="connectIpFilter"
+          placeholder="按 IP 地址过滤，例如：192.168.1"
+          aria-label="按 IP 地址过滤发现的设备"
+          clearable
         />
+        <div class="drop-connect-list" aria-label="发现的设备">
+          <button
+            v-for="peer in discoveredPeers"
+            :key="peer.id"
+            class="drop-connect-device"
+            type="button"
+            :disabled="loading || !!peer.pairingCode"
+            @click="connectDiscoveredPeer(peer)"
+          >
+            <MonitorSmartphone :size="18" />
+            <span class="drop-connect-device-info">
+              <span class="drop-connect-device-name">{{
+                peer.name || "未命名设备"
+              }}</span>
+              <span class="drop-connect-device-ip"
+                >{{ peer.ip }}:{{ peer.port }}</span
+              >
+            </span>
+            <span class="drop-connect-device-status">
+              {{ peer.pairingCode ? `等待同意 · ${peer.pairingCode}` : "连接" }}
+            </span>
+          </button>
+          <span v-if="!discoveredPeers.length" class="drop-connect-empty">
+            {{
+              scanning || state.native.scanning
+                ? "正在扫描局域网设备…"
+                : connectIpFilter.trim()
+                  ? "没有匹配该 IP 的设备"
+                  : "暂无可连接设备，请确认对方已上线且未隐藏节点"
+            }}
+          </span>
+        </div>
+        <p v-if="state.native.error" class="drop-connect-error" role="alert">
+          {{ state.native.error }}
+        </p>
         <span class="drop-connect-hint"
-          >连接后两台电脑屏幕上将显示安全校验码，确认后即建立可信信道。</span
+          >未确认、已拒绝和超时的设备不会加入设备节点列表。隐藏节点仍可被已配对设备识别。</span
         >
         <div class="drop-connect-actions">
-          <el-button @click="connectDialogOpen = false">取消</el-button>
+          <el-button @click="connectDialogOpen = false">关闭</el-button>
           <el-button
             type="primary"
-            :loading="loading"
-            :disabled="!connectAddress.trim()"
-            @click="connectByAddress"
+            :loading="scanning || state.native.scanning"
+            :disabled="loading || scanning || state.native.scanning"
+            @click="scanNearby"
           >
-            发起直连请求
+            重新扫描
           </el-button>
         </div>
       </div>
@@ -492,8 +574,8 @@
     >
       <form class="drop-transfer-form" @submit.prevent="saveTransferSettings">
         <p class="drop-transfer-hint">
-          限制本设备发送和接收文件的总速度，客户端和网页传输均生效。
-          默认 2 MiB/s，Wi-Fi 卡顿时可继续降低限速。
+          限制本设备发送和接收文件的总速度，客户端和网页传输均生效。 默认 2
+          MiB/s，Wi-Fi 卡顿时可继续降低限速。
         </p>
         <label class="drop-transfer-field">
           <span>文件传输总限速（MiB/s）</span>
@@ -528,7 +610,10 @@
             type="primary"
             native-type="submit"
             :loading="loading"
-            :disabled="!transferSettings.sendMibPerSecond || !transferSettings.maxConcurrentFiles"
+            :disabled="
+              !transferSettings.sendMibPerSecond ||
+              !transferSettings.maxConcurrentFiles
+            "
           >
             保存设置
           </el-button>
@@ -555,7 +640,7 @@
         <div class="drop-group-selection">
           <span>邀请设备 · 已选 {{ selectedGroupDeviceIds.length }} 台</span>
           <span class="drop-group-hint"
-            >至少选择一台设备，才会创建群聊。离线的网页设备重新连接后可查看邀请。</span
+            >群聊至少需要 3 人（包含本机），请至少选择两台设备。离线的网页设备重新连接后可查看邀请。</span
           >
         </div>
         <div class="drop-group-devices">
@@ -593,7 +678,7 @@
             native-type="submit"
             type="primary"
             :loading="loading"
-            :disabled="!selectedGroupDeviceIds.length || !newGroup.name.trim()"
+            :disabled="selectedGroupDeviceIds.length < 2 || !newGroup.name.trim()"
           >
             创建并邀请
           </el-button>
@@ -608,18 +693,15 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import {
   ElButton,
   ElCheckbox,
-  ElDropdown,
-  ElDropdownItem,
-  ElDropdownMenu,
   ElInput,
   ElInputNumber
 } from "element-plus"
 import "element-plus/es/components/button/style/css"
 import "element-plus/es/components/checkbox/style/css"
-import "element-plus/es/components/dropdown/style/css"
 import "element-plus/es/components/input/style/css"
 import "element-plus/es/components/input-number/style/css"
 import {
+  ChevronRight,
   Globe,
   Link,
   Lock,
@@ -633,8 +715,7 @@ import {
   ShieldCheck,
   Trash2,
   Users,
-  Wifi,
-  WifiOff
+  Power
 } from "lucide-vue-next"
 import { lanShareApi, systemApi } from "@/api"
 import { createMessage } from "@/utils/message"
@@ -663,7 +744,8 @@ const state = reactive({
     peers: [],
     pairingRequests: [],
     error: "",
-    autoDiscovery: false,
+    hidden: false,
+    scanning: false,
     transfer: { sendMibPerSecond: 2, maxConcurrentFiles: 1 }
   },
   messages: []
@@ -671,16 +753,22 @@ const state = reactive({
 
 const loading = ref(false)
 const scanning = ref(false)
-const togglingAutoDiscovery = ref(false)
+const togglingHidden = ref(false)
 const savingFile = ref(false)
 const savedFile = ref(null)
 const deleteDeviceTarget = ref(null)
 const deleteDevicePending = ref(false)
 const deleteDeviceError = ref("")
+const deleteDeviceWithHistory = ref(false)
 const createGroupOpen = ref(false)
 const transferSettingsOpen = ref(false)
+// 控制设备快传设置弹框。
+const settingsOpen = ref(false)
 // 默认使用较低的总速率，避免文件收发挤占同一无线网络。
-const transferSettings = reactive({ sendMibPerSecond: 2, maxConcurrentFiles: 1 })
+const transferSettings = reactive({
+  sendMibPerSecond: 2,
+  maxConcurrentFiles: 1
+})
 const newGroup = reactive({ name: "新的群聊", deviceIds: [] })
 
 const selectedGroupDeviceIds = computed(() =>
@@ -693,7 +781,7 @@ const selectedGroupDeviceIds = computed(() =>
 
 const deviceKeyword = ref("")
 const connectDialogOpen = ref(false)
-const connectAddress = ref("")
+const connectIpFilter = ref("")
 const accessDialogOpen = ref(false)
 const accessQrSvg = ref("")
 const selectedDeviceId = ref("")
@@ -711,6 +799,8 @@ const previewDialog = reactive({
 
 let stopStateListener = null
 let stopDevicesListener = null
+let stopNativeListener = null
+let scanTimer = null
 let initialSessionResolved = false
 
 const serviceSummary = computed(() => {
@@ -740,7 +830,9 @@ const currentSession = computed(() => {
 
 const currentDevice = computed(() => {
   return (
-    state.devices.find((device) => device.id === selectedDeviceId.value) || null
+    connectedDevices.value.find(
+      (device) => device.id === selectedDeviceId.value
+    ) || null
   )
 })
 
@@ -770,29 +862,47 @@ const visibleGroups = computed(() =>
   )
 )
 
-const visibleDevices = computed(() => {
+// 扫描候选和已配对设备使用同一发现状态，但主列表仅展示已确认的连接。
+const connectedDevices = computed(() => {
   const devices = new Map(
-    state.devices.map((device) => [
-      device.id,
-      { ...device, requiresPairing: false }
-    ])
+    state.devices
+      .filter((device) => !device.native)
+      .map((device) => [device.id, device])
   )
   for (const peer of state.native.peers || []) {
+    if (!peer.paired) continue
     devices.set(peer.id, {
-      ...devices.get(peer.id),
+      ...state.devices.find((device) => device.id === peer.id),
       ...peer,
-      native: true,
-      requiresPairing: !peer.paired
+      native: true
     })
   }
-  const query = deviceKeyword.value.trim().toLowerCase()
   return [...devices.values()]
+})
+
+const visibleDevices = computed(() => {
+  const query = deviceKeyword.value.trim().toLowerCase()
+  return connectedDevices.value
     .filter((device) =>
       `${device.name || device.autoName || ""} ${device.ip || ""}`
         .toLowerCase()
         .includes(query)
     )
     .sort((left, right) => Number(right.online) - Number(left.online))
+})
+
+const discoveredPeers = computed(() => {
+  const ip = connectIpFilter.value.trim().toLowerCase()
+  return (state.native.peers || [])
+    .filter(
+      (peer) =>
+        !peer.paired &&
+        (peer.online || peer.pairingCode) &&
+        peer.ip.toLowerCase().includes(ip)
+    )
+    .sort((left, right) =>
+      left.ip.localeCompare(right.ip, undefined, { numeric: true })
+    )
 })
 
 function deviceLastMessage(deviceId) {
@@ -832,55 +942,48 @@ function devicePreviewText(device) {
   if (device.pairingCode) {
     return `等待对方确认 · ${device.pairingCode}`
   }
-  if (device.requiresPairing) {
-    return "发现局域网客户端 · 点击连接"
-  }
   return deviceLastMessage(device.id)
 }
 
 async function chooseDevice(device) {
-  if (device.requiresPairing) {
-    if (device.pairingCode || loading.value) return
-    await runAction(() => lanShareApi.connectPeer({ peerId: device.id }))
-    return
-  }
   await openDeviceSessions(device.id)
 }
 
-async function connectByAddress() {
-  if (!connectAddress.value.trim() || loading.value) return
-  const result = await runAction(() =>
-    lanShareApi.connectPeer({ address: connectAddress.value.trim() })
-  )
-  if (result) {
-    connectDialogOpen.value = false
-    connectAddress.value = ""
-  }
+async function openConnectDialog() {
+  if (!state.service.running) await startService()
+  if (!state.service.running) return
+  connectIpFilter.value = ""
+  connectDialogOpen.value = true
+  await scanNearby()
 }
 
-async function toggleAutoDiscovery() {
-  if (togglingAutoDiscovery.value) return
-  togglingAutoDiscovery.value = true
+async function connectDiscoveredPeer(peer) {
+  if (loading.value || peer.pairingCode || peer.paired) return
+  await runAction(() => lanShareApi.connectPeer({ peerId: peer.id }))
+}
+
+async function toggleHidden() {
+  if (togglingHidden.value) return
+  settingsOpen.value = false
+  togglingHidden.value = true
   try {
-    const next = !state.native.autoDiscovery
-    await lanShareApi.setAutoDiscovery({ enabled: next })
-    state.native.autoDiscovery = next
-    if (next) {
-      createMessage.success("已开启后台自动广播发现")
-    } else {
-      createMessage.info(
-        "已切换为静默模式 (已停止后台广播，可手动点击雷达扫描)"
-      )
-    }
-  } catch (err) {
-    createMessage.error(err?.message || "切换自动广播失败")
+    const result = unwrapData(
+      await lanShareApi.setHidden({ hidden: !state.native.hidden })
+    )
+    state.native = result
+    createMessage.success(
+      result.hidden ? "节点已隐藏，已配对设备仍可连接" : "节点已恢复可见"
+    )
+  } catch (error) {
+    createMessage.error(error?.message || "设置节点可见性失败")
   } finally {
-    togglingAutoDiscovery.value = false
+    togglingHidden.value = false
   }
 }
 
 // 打开时读取已保存设置，后台状态事件不会覆盖正在编辑的数值。
 function openTransferSettings() {
+  settingsOpen.value = false
   Object.assign(transferSettings, state.native.transfer)
   transferSettingsOpen.value = true
 }
@@ -889,7 +992,7 @@ async function saveTransferSettings() {
   if (loading.value) return
   const result = await runAction(
     () => lanShareApi.setTransferSettings({ ...transferSettings }),
-    '传输设置已生效'
+    "传输设置已生效"
   )
   if (result) transferSettingsOpen.value = false
 }
@@ -899,12 +1002,12 @@ async function scanNearby() {
   scanning.value = true
   try {
     await lanShareApi.scanDevices()
-    createMessage.info("已发射雷达探测波，正在检索局域网节点...")
-    setTimeout(() => {
+    clearTimeout(scanTimer)
+    scanTimer = setTimeout(() => {
       scanning.value = false
     }, 2000)
   } catch (err) {
-    createMessage.error(err?.message || "雷达探测失败")
+    createMessage.error(err?.message || "设备扫描失败")
     scanning.value = false
   }
 }
@@ -913,6 +1016,21 @@ onMounted(async () => {
   stopStateListener = lanShareApi.onStateChanged(applyState)
   stopDevicesListener = lanShareApi.onDevicesChanged((devices) => {
     state.devices = devices || []
+  })
+  stopNativeListener = lanShareApi.onNativeChanged((native) => {
+    state.native = native
+    // 原生设备的心跳独立推送，收到后同步群聊成员在线状态，避免重新加载聊天记录。
+    const onlineById = new Map(
+      (native.peers || []).map((peer) => [peer.id, Boolean(peer.online)])
+    )
+    state.groups = state.groups.map((group) => ({
+      ...group,
+      members: (group.members || []).map((member) =>
+        onlineById.has(member.deviceId)
+          ? { ...member, online: onlineById.get(member.deviceId) }
+          : member
+      )
+    }))
   })
   await loadState()
   if (!state.service.running) await startService()
@@ -953,6 +1071,8 @@ watch(selectedSessionId, (sessionId) => {
 onBeforeUnmount(() => {
   if (stopStateListener) stopStateListener()
   if (stopDevicesListener) stopDevicesListener()
+  if (stopNativeListener) stopNativeListener()
+  clearTimeout(scanTimer)
 })
 
 function applyState(payload) {
@@ -985,9 +1105,9 @@ function applyState(payload) {
   if (
     chatMode.value === "direct" &&
     !selectedDeviceId.value &&
-    state.devices.length
+    connectedDevices.value.length
   ) {
-    selectedDeviceId.value = state.devices[0].id
+    selectedDeviceId.value = connectedDevices.value[0].id
     selectedSessionId.value = findDirectSessionId(selectedDeviceId.value)
   }
 }
@@ -1040,6 +1160,7 @@ async function loadState() {
 }
 
 async function startService() {
+  settingsOpen.value = false
   const result = await runAction(async () => lanShareApi.startService({}))
   if (result) {
     state.service = {
@@ -1077,6 +1198,7 @@ async function setAccessIp(lanIp) {
 }
 
 async function stopService() {
+  settingsOpen.value = false
   const result = await runAction(
     async () => lanShareApi.stopService(),
     "设备快传服务已关闭。"
@@ -1087,6 +1209,11 @@ async function stopService() {
     closePreviewDialog()
     await loadState()
   }
+}
+
+function chooseAccessIp(lanIp) {
+  settingsOpen.value = false
+  return setAccessIp(lanIp)
 }
 
 async function createNewSession() {
@@ -1108,7 +1235,7 @@ function openCreateGroup() {
 async function createGroup() {
   if (
     loading.value ||
-    !selectedGroupDeviceIds.value.length ||
+    selectedGroupDeviceIds.value.length < 2 ||
     !newGroup.name.trim()
   )
     return
@@ -1299,6 +1426,7 @@ function requestDeleteDevice(device) {
     native: Boolean(device.native)
   }
   deleteDeviceError.value = ""
+  deleteDeviceWithHistory.value = false
 }
 
 function closeDeleteDevice() {
@@ -1313,7 +1441,12 @@ async function confirmDeleteDevice() {
   deleteDevicePending.value = true
   deleteDeviceError.value = ""
   try {
-    const result = unwrapData(await lanShareApi.deleteDevice({ deviceId }))
+    const result = unwrapData(
+      await lanShareApi.deleteDevice({
+        deviceId,
+        deleteHistory: deleteDeviceWithHistory.value
+      })
+    )
     if (selectedDeviceId.value === deviceId) {
       selectedDeviceId.value = ""
       selectedSessionId.value = ""
@@ -1569,10 +1702,12 @@ function isTextPreviewFile(name, mimeType) {
 
       .cyber-header-btn {
         display: inline-flex;
+        flex-shrink: 0;
         align-items: center;
         gap: 6px;
         height: 31px;
         padding: 0 11px;
+        white-space: nowrap;
         border-radius: 6px;
         border: 1px solid var(--color-line);
         background: var(--color-panel-soft);
@@ -1606,12 +1741,22 @@ function isTextPreviewFile(name, mimeType) {
         &--primary {
           border-color: var(--color-primary);
           background: var(--color-primary-solid);
-          color: #ffffff;
+          color: #ffffff !important;
+          min-width: 82px;
+
+          svg,
+          span {
+            color: #ffffff !important;
+          }
 
           &:hover:not(:disabled) {
             background: var(--color-primary);
+            color: #ffffff !important;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
           }
+
+          &:hover:not(:disabled) svg,
+          &:hover:not(:disabled) span { color: #ffffff !important; }
         }
 
         &:disabled {
@@ -2083,6 +2228,182 @@ function isTextPreviewFile(name, mimeType) {
 }
 
 /* 弹窗通用样式 */
+.drop-settings-modal.base-modal {
+  :deep(.base-modal__panel) {
+    width: 460px;
+    max-width: calc(100vw - 48px);
+  }
+
+  .drop-settings-content {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding-top: 4px;
+    color: var(--color-text);
+
+    .drop-settings-status {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 12px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel-soft);
+
+      .drop-settings-status-dot {
+        width: 8px;
+        height: 8px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--color-text-soft);
+      }
+
+      &.is-online {
+        border-color: var(--color-success-line);
+        background: var(--color-success-soft);
+
+        .drop-settings-status-dot {
+          background: var(--color-success);
+          box-shadow: 0 0 0 3px var(--color-success-soft);
+        }
+      }
+
+      .drop-settings-status-copy {
+        display: flex;
+        min-width: 0;
+        flex-direction: column;
+        gap: 3px;
+
+        span { font-size: 13px; }
+        small { color: var(--color-text-muted); font-size: 11.5px; }
+      }
+    }
+
+    .drop-settings-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+
+    .drop-settings-item {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 11px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      color: var(--color-text);
+      text-align: left;
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        border-color: var(--color-primary);
+        background: var(--color-primary-soft);
+      }
+
+      &:disabled { cursor: wait; opacity: 0.6; }
+
+      .drop-settings-item-icon {
+        display: grid;
+        width: 30px;
+        height: 30px;
+        flex: none;
+        place-items: center;
+        border-radius: 7px;
+        background: var(--color-primary-soft);
+        color: var(--color-primary);
+      }
+
+      .drop-settings-item-copy {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        gap: 3px;
+
+        span { font-size: 12.5px; }
+        small {
+          overflow: hidden;
+          color: var(--color-text-muted);
+          font-size: 11px;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+
+      .drop-settings-item-arrow {
+        flex: none;
+        color: var(--color-text-soft);
+      }
+    }
+
+    .drop-settings-addresses {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-top: 2px;
+
+      .drop-settings-section-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--color-text-muted);
+        font-size: 11.5px;
+      }
+
+      .drop-settings-address-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+
+        .drop-settings-address {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 9px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          background: var(--color-panel-soft);
+          color: var(--color-text);
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 11px;
+          cursor: pointer;
+
+          span:last-child { color: var(--color-text-muted); font-family: inherit; }
+          &:hover:not(:disabled), &.is-active {
+            border-color: var(--color-primary);
+            background: var(--color-primary-soft);
+            color: var(--color-primary);
+          }
+          &:disabled { cursor: default; opacity: 0.72; }
+        }
+
+        .drop-settings-empty { color: var(--color-text-soft); font-size: 11.5px; }
+      }
+    }
+
+    .drop-settings-offline {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 34px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: var(--color-panel-soft);
+      color: var(--color-text-muted);
+      cursor: pointer;
+
+      &:hover {
+        border-color: var(--color-danger-line, var(--color-line-strong));
+        color: var(--color-danger);
+      }
+    }
+  }
+}
+
 .drop-transfer-modal.base-modal {
   .drop-transfer-form {
     display: flex;
@@ -2113,6 +2434,14 @@ function isTextPreviewFile(name, mimeType) {
   }
 }
 
+.drop-delete-device-modal {
+  .drop-delete-warning {
+    color: var(--color-danger);
+    font-size: var(--font-size-xs);
+    line-height: 1.6;
+  }
+}
+
 .drop-connect-modal.base-modal,
 .drop-group-modal.base-modal {
   .drop-connect-content,
@@ -2133,6 +2462,74 @@ function isTextPreviewFile(name, mimeType) {
     .drop-connect-hint {
       color: var(--color-text-soft);
       font-size: 11.5px;
+    }
+
+    .drop-connect-list {
+      display: flex;
+      max-height: 320px;
+      flex-direction: column;
+      gap: 6px;
+      overflow-y: auto;
+
+      .drop-connect-device {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        background: var(--color-panel);
+        color: var(--color-text);
+        text-align: left;
+        cursor: pointer;
+
+        &:hover:not(:disabled) {
+          border-color: var(--color-primary);
+          background: var(--color-primary-soft);
+        }
+
+        &:disabled {
+          cursor: default;
+          color: var(--color-text-muted);
+        }
+
+        .drop-connect-device-info {
+          display: flex;
+          min-width: 0;
+          flex: 1;
+          flex-direction: column;
+          gap: 4px;
+
+          .drop-connect-device-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+
+          .drop-connect-device-ip {
+            color: var(--color-text-muted);
+            font-size: var(--font-size-sm);
+          }
+        }
+
+        .drop-connect-device-status {
+          flex: none;
+          color: var(--color-primary);
+          font-size: var(--font-size-sm);
+        }
+      }
+
+      .drop-connect-empty {
+        padding: 24px 12px;
+        color: var(--color-text-muted);
+        text-align: center;
+      }
+    }
+
+    .drop-connect-error {
+      margin: 0;
+      color: var(--color-danger);
+      font-size: var(--font-size-sm);
     }
 
     .drop-connect-actions,

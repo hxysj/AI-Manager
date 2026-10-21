@@ -763,16 +763,17 @@ impl ManagerState {
                 )
                 .await
             }
-            "lan-share:set-auto-discovery" => {
-                lan_share::set_auto_discovery(
+            "lan-share:scan-devices" => {
+                lan_share::scan_devices(&self.lan_share_registry).await
+            }
+            "lan-share:set-hidden" => {
+                lan_share::set_hidden(
+                    app.clone(),
                     &self.lan_share_registry,
                     &self.paths,
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await
-            }
-            "lan-share:scan-devices" => {
-                lan_share::scan_devices(&self.lan_share_registry).await
             }
             "lan-share:set-transfer-settings" => {
                 lan_share::set_transfer_settings(

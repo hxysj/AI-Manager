@@ -270,6 +270,7 @@
           >
             <span class="workspace-member-copy">
               {{ member.deviceName || member.deviceId }}
+              <span v-if="member.owner" class="workspace-member-owner">群主</span>
               <span
                 class="workspace-member-status"
                 :class="{ 'status-online': member.online }"
@@ -278,6 +279,7 @@
               </span>
             </span>
             <el-button
+              v-if="!member.owner && member.deviceId !== currentGroup.ownerDeviceId"
               size="small"
               text
               type="danger"
@@ -759,6 +761,14 @@ function deleteGroup() {
         align-items: center;
         gap: 8px;
         color: var(--color-text);
+
+        .workspace-member-owner {
+          padding: 2px 5px;
+          border: 1px solid var(--color-info-line);
+          border-radius: 4px;
+          color: var(--color-primary);
+          font-size: 10px;
+        }
 
         .workspace-member-status {
           font-size: 10.5px;

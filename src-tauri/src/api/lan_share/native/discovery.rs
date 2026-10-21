@@ -1,24 +1,114 @@
 use super::*;
 
-pub(super) fn broadcast_address(ip: Ipv4Addr, prefix: u8) -> Option<Ipv4Addr> {
-    if !(ip.is_private() || ip.is_link_local()) || prefix == 0 || prefix >= 31 {
-        return None;
-    }
-    let mask = u32::MAX << (32 - prefix);
-    Some(Ipv4Addr::from(u32::from(ip) | !mask))
-}
-
-pub(super) fn targets() -> Result<Vec<SocketAddr>, ManagerError> {
-    let mut result = vec![SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT))];
-    for (ip, prefix) in interfaces()? {
-        if let Some(broadcast) = broadcast_address(ip, prefix) {
-            let target = SocketAddr::from((broadcast, DISCOVERY_PORT));
-            if !result.contains(&target) {
-                result.push(target);
+// 仅扫描当前接口所在的最多 /24 范围，避免把大网段和虚拟网卡变成无界探测。
+fn scan_addresses(interfaces: &[(Ipv4Addr, u8)]) -> Vec<Ipv4Addr> {
+    let mut result = std::collections::BTreeSet::new();
+    for &(ip, prefix) in interfaces {
+        if !(ip.is_private() || ip.is_link_local()) || prefix == 0 || prefix >= 31 {
+            continue;
+        }
+        let mask = u32::MAX << (32 - prefix.max(24));
+        let network = u32::from(ip) & mask;
+        let broadcast = network | !mask;
+        for address in network + 1..broadcast {
+            let address = Ipv4Addr::from(address);
+            if !interfaces.iter().any(|(own, _)| *own == address) {
+                result.insert(address);
             }
         }
     }
-    Ok(result)
+    result.into_iter().collect()
+}
+
+pub(super) async fn scan(
+    registry: LanShareServerRegistry,
+    paths: AppPaths,
+    app: tauri::AppHandle,
+    own_id: String,
+) {
+    let Ok(interfaces) = interfaces() else { return };
+    let Ok(client) = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .http1_only()
+        .build()
+    else {
+        return;
+    };
+    let auth = TransportAuth {
+        sender: own_id.clone(),
+        receiver: String::new(),
+        secret: String::new(),
+        pairing_id: String::new(),
+    };
+    let mut requests = futures_util::stream::iter(scan_addresses(&interfaces))
+        .map(|ip| {
+            let client = client.clone();
+            let auth = auth.clone();
+            async move {
+                // 主端口被其他程序占用时，覆盖服务端实际使用的二十个备用端口。
+                // 连接被拒绝表示主机可达；无响应的主机不再逐个探测后续端口。
+                for port in DEFAULT_PORT..=DEFAULT_PORT + 20 {
+                    match tokio::time::timeout(
+                        Duration::from_millis(600),
+                        tokio::net::TcpStream::connect((ip, port)),
+                    )
+                    .await
+                    {
+                        Ok(Ok(stream)) => drop(stream),
+                        Ok(Err(error)) if error.kind() == ErrorKind::ConnectionRefused => continue,
+                        _ => return None,
+                    }
+                    let endpoint = Peer {
+                        ip: ip.to_string(),
+                        port,
+                        ..Peer::default()
+                    };
+                    let response = tokio::time::timeout(
+                        Duration::from_millis(600),
+                        secure_call(&client, &endpoint, &auth, "info", json!({}), &[], None),
+                    )
+                    .await;
+                    let Ok(Ok(response)) = response else { continue };
+                    let Ok(mut peer) = serde_json::from_value::<Peer>(response) else {
+                        continue;
+                    };
+                    if peer.id == auth.sender || !is_native_id(&peer.id) || peer.name.len() > 128 {
+                        continue;
+                    }
+                    peer.ip = endpoint.ip;
+                    peer.port = endpoint.port;
+                    peer.last_seen_at = now_millis();
+                    return Some(peer);
+                }
+                None
+            }
+        })
+        .buffer_unordered(16);
+    let mut emitted_at = tokio::time::Instant::now() - Duration::from_secs(1);
+    while let Some(candidate) = requests.next().await {
+        let Some(peer) = candidate else { continue };
+        let trusted = {
+            let mut runtime = registry.inner.lock().await;
+            // 主动扫描可重新找到已删除的设备，只有完成重新配对才恢复信任。
+            let trusted = runtime.native.authenticate(&peer.id);
+            if trusted.is_none()
+                && (runtime.native.nearby.len() < 100
+                    || runtime.native.nearby.contains_key(&peer.id))
+            {
+                runtime.native.nearby.insert(peer.id.clone(), peer.clone());
+            }
+            trusted
+        };
+        if let Some(trusted) = trusted {
+            schedule_peer_check(&registry, &paths, Some(app.clone()), peer, trusted).await;
+        }
+        if emitted_at.elapsed() >= Duration::from_millis(200) {
+            emit_native_changed(&app, &registry).await;
+            emitted_at = tokio::time::Instant::now();
+        }
+    }
+    emit_native_changed(&app, &registry).await;
 }
 
 #[cfg(windows)]
@@ -99,69 +189,27 @@ fn interfaces() -> Result<Vec<(Ipv4Addr, u8)>, ManagerError> {
     Ok(result)
 }
 
-pub(super) fn packet(kind: &str, peer: &Peer) -> Result<Vec<u8>, ManagerError> {
-    transport::encrypt(
-        "",
-        "device-drop-discovery-v2",
-        &serde_json::to_vec(&json!({
-            "protocol": DISCOVERY_PROTOCOL, "kind": kind, "peer": peer, "sentAt": now_millis()
-        }))?,
-    )
-}
-
-pub(super) fn parse(
-    bytes: &[u8],
-    source: SocketAddr,
-    own_id: &str,
-) -> Option<(DiscoveryPacketKind, Peer, u64)> {
-    let plaintext = transport::decrypt("", "device-drop-discovery-v2", bytes).ok()?;
-    let payload: Value = serde_json::from_slice(&plaintext).ok()?;
-    if payload["protocol"] != DISCOVERY_PROTOCOL {
-        return None;
-    }
-    let kind = match payload["kind"].as_str()? {
-        "announce" => DiscoveryPacketKind::Announce,
-        "probe" => DiscoveryPacketKind::Probe,
-        _ => return None,
-    };
-    let mut peer: Peer = serde_json::from_value(payload["peer"].clone()).ok()?;
-    if peer.id == own_id || !is_native_id(&peer.id) || peer.id.len() > 80 || peer.name.len() > 128 {
-        return None;
-    }
-    peer.ip = source.ip().to_string();
-    peer_origin(&peer).ok()?;
-    let sent_at = payload["sentAt"].as_u64()?;
-    if now_millis().abs_diff(sent_at) > 5 * 60 * 1000 {
-        return None;
-    }
-    peer.last_seen_at = now_millis();
-    Some((kind, peer, sent_at))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn broadcast_uses_real_prefix_including_non_24_subnets() {
+    fn subnet_scan_is_bounded_deduplicated_and_excludes_own_addresses() {
+        let addresses = scan_addresses(&[
+            ("192.168.1.10".parse().unwrap(), 16),
+            ("192.168.1.11".parse().unwrap(), 24),
+            ("127.0.0.1".parse().unwrap(), 8),
+            ("8.8.8.8".parse().unwrap(), 24),
+        ]);
+        assert_eq!(addresses.len(), 252);
+        assert!(addresses.iter().all(|ip| ip.octets()[..3] == [192, 168, 1]));
+        assert!(!addresses.contains(&"192.168.1.10".parse().unwrap()));
+        assert!(!addresses.contains(&"192.168.1.11".parse().unwrap()));
         assert_eq!(
-            broadcast_address("192.168.12.5".parse().unwrap(), 20)
-                .unwrap()
-                .to_string(),
-            "192.168.15.255"
+            scan_addresses(&[("192.168.1.10".parse().unwrap(), 28)]).len(),
+            13
         );
-        assert_eq!(
-            broadcast_address("10.2.3.4".parse().unwrap(), 16)
-                .unwrap()
-                .to_string(),
-            "10.2.255.255"
-        );
-        assert!(broadcast_address("127.0.0.1".parse().unwrap(), 8).is_none());
-        assert!(broadcast_address("192.168.1.5".parse().unwrap(), 31).is_none());
-        assert!(targets()
-            .unwrap()
-            .iter()
-            .all(|address| address.port() == DISCOVERY_PORT));
+        assert!(scan_addresses(&[("192.168.1.10".parse().unwrap(), 32)]).is_empty());
     }
 
     #[cfg(windows)]
@@ -175,10 +223,8 @@ mod tests {
                     .iter()
                     .find(|(address, _)| *address == ip)
                     .expect("网卡枚举应包含当前局域网地址");
-                if let Some(broadcast) = broadcast_address(ip, *prefix) {
-                    assert!(targets()
-                        .unwrap()
-                        .contains(&SocketAddr::from((broadcast, DISCOVERY_PORT))));
+                if *prefix < 31 {
+                    assert!(!scan_addresses(&addresses).contains(&ip));
                 }
             }
         }

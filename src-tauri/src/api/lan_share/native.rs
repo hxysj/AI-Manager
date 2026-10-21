@@ -3,22 +3,14 @@ use futures_util::FutureExt;
 use http_body_util::Limited;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
-use tokio::net::UdpSocket;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-const DISCOVERY_PORT: u16 = 17632;
 const DISCOVERY_PROTOCOL: &str = "monkey-thief-device-drop-v2";
 const PAIRING_LIFETIME: u64 = 90_000;
 
 mod discovery;
 mod transport;
 use transport::{secure_call, TransportAuth};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DiscoveryPacketKind {
-    Announce,
-    Probe,
-}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,10 +36,7 @@ pub(super) struct TrustedPeer {
 pub(super) struct Config {
     pub(super) id: String,
     pub(super) name: String,
-    #[serde(default = "default_auto_discovery")]
-    pub(super) auto_discovery: bool,
-    #[serde(default)]
-    pub(super) discovery_configured: bool,
+    pub(super) hidden: bool,
     pub(super) peers: Vec<TrustedPeer>,
     pub(super) ignored_peers: Vec<String>,
     pub(super) transfer: transfer::Settings,
@@ -55,21 +44,15 @@ pub(super) struct Config {
     pub(super) transfer_configured: bool,
 }
 
-fn default_auto_discovery() -> bool {
-    true
-}
-
-fn migrate_discovery_config(config: &mut Config) {
-    if !config.discovery_configured {
-        config.auto_discovery = true;
-        config.discovery_configured = true;
-    }
-}
-
 fn migrate_transfer_config(config: &mut Config) {
     if !config.transfer_configured {
         // 旧版会持久化默认 10 MiB/s；仅迁移该默认值，保留其他自定义配置。
-        if config.transfer == (transfer::Settings { send_mib_per_second: 10, max_concurrent_files: 1 }) {
+        if config.transfer
+            == (transfer::Settings {
+                send_mib_per_second: 10,
+                max_concurrent_files: 1,
+            })
+        {
             config.transfer = transfer::Settings::default();
         }
         config.transfer_configured = true;
@@ -81,8 +64,7 @@ impl Default for Config {
         Self {
             id: String::new(),
             name: String::new(),
-            auto_discovery: default_auto_discovery(),
-            discovery_configured: true,
+            hidden: false,
             peers: Vec::new(),
             ignored_peers: Vec::new(),
             transfer: transfer::Settings::default(),
@@ -105,7 +87,9 @@ pub(super) struct NativeRuntime {
     pub(super) pairing: HashMap<String, Pairing>,
     pub(super) connecting: HashMap<String, String>,
     pub(super) scan_trigger: Option<tokio::sync::mpsc::Sender<()>>,
+    scan_generation: u64,
     handle: Option<tauri::async_runtime::JoinHandle<()>>,
+    scan_task: Option<tauri::async_runtime::JoinHandle<()>>,
     tasks: HashMap<String, tauri::async_runtime::JoinHandle<()>>,
     discovery_tasks: HashMap<String, (Peer, tauri::async_runtime::JoinHandle<()>)>,
     delivery_tasks: HashMap<String, tauri::async_runtime::JoinHandle<()>>,
@@ -118,6 +102,9 @@ impl NativeRuntime {
         if let Some(handle) = self.handle.take() {
             handle.abort();
         }
+        if let Some(task) = self.scan_task.take() {
+            task.abort();
+        }
         for (_, task) in self.tasks.drain() {
             task.abort();
         }
@@ -129,15 +116,26 @@ impl NativeRuntime {
         }
         self.replay = transport::ReplayGuard::default();
         self.scan_trigger = None;
+        self.scan_generation = self.scan_generation.wrapping_add(1);
         self.nearby.clear();
         self.pairing.clear();
         self.connecting.clear();
     }
 
     pub(super) fn online(&self, id: &str) -> bool {
+        let lifetime = if self
+            .config
+            .peers
+            .iter()
+            .any(|trusted| trusted.peer.id == id)
+        {
+            15_000
+        } else {
+            60_000
+        };
         self.nearby
             .get(id)
-            .map(|peer| now_millis().saturating_sub(peer.last_seen_at) < 15_000)
+            .map(|peer| now_millis().saturating_sub(peer.last_seen_at) < lifetime)
             .unwrap_or(false)
     }
 
@@ -206,7 +204,7 @@ impl NativeRuntime {
         for discovered in self
             .nearby
             .values()
-            .filter(|peer| self.online(&peer.id) && !self.config.ignored_peers.contains(&peer.id))
+            .filter(|peer| self.online(&peer.id) || self.connecting.contains_key(&peer.id))
         {
             if let Some(peer) = peers.iter_mut().find(|peer| peer.id == discovered.id) {
                 *peer = discovered.clone();
@@ -218,13 +216,14 @@ impl NativeRuntime {
         json!({
             "deviceName": self.config.name,
             "deviceId": self.config.id,
-            "autoDiscovery": self.config.auto_discovery,
+            "hidden": self.config.hidden,
+            "scanning": self.scan_task.as_ref().map(|task| !task.inner().is_finished()).unwrap_or(false),
             "transfer": self.config.transfer,
             "error": self.error,
             "peers": peers.iter().map(|peer| json!({
                 "id": peer.id, "name": peer.name, "ip": peer.ip, "port": peer.port,
                 "online": self.online(&peer.id),
-                "paired": self.config.peers.iter().any(|trusted| trusted.peer.id == peer.id && trusted.secure),
+                "paired": self.authenticate(&peer.id).is_some(),
                 "pairingCode": self.connecting.get(&peer.id)
             })).collect::<Vec<_>>(),
             "pairingRequests": self.pairing.iter().filter(|(_, request)| request.status == "pending" && now_millis().saturating_sub(request.created_at) < PAIRING_LIFETIME).map(|(id, request)| json!({
@@ -279,7 +278,6 @@ pub(super) async fn start(
         Err(error) if error.kind() == ErrorKind::NotFound => Config::default(),
         Err(error) => return Err(error.into()),
     };
-    migrate_discovery_config(&mut config);
     migrate_transfer_config(&mut config);
     config.transfer.validate()?;
     registry.transfer.configure(config.transfer);
@@ -290,141 +288,83 @@ pub(super) async fn start(
             .unwrap_or_else(|_| "我的电脑".into());
     }
     write_json(&paths.lan_share_files.config, &json!(config)).await?;
-    let (own_id, peer) = {
+    let own_id = config.id.clone();
+    {
         let mut runtime = registry.inner.lock().await;
-        runtime.native.config = config.clone();
+        runtime.native.config = config;
         runtime.native.error.clear();
-        (
-            config.id.clone(),
-            Peer {
-                id: config.id,
-                name: config.name,
-                ip: runtime.lan_ip.clone(),
-                port: runtime.port,
-                last_seen_at: 0,
-            },
-        )
-    };
-    let socket = match UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], DISCOVERY_PORT))).await {
-        Ok(socket) => socket,
-        Err(_) => {
-            registry.inner.lock().await.native.error =
-                "自动发现暂不可用，可通过局域网地址连接设备。".into();
-            return Ok(());
-        }
-    };
-    socket.set_broadcast(true)?;
-    let (scan_tx, mut scan_rx) = tokio::sync::mpsc::channel::<()>(8);
+    }
+    let (scan_tx, mut scan_rx) = tokio::sync::mpsc::channel::<()>(1);
     registry.inner.lock().await.native.scan_trigger = Some(scan_tx);
     let task_registry = registry.clone();
     let task_paths = paths.clone();
     let handle = tauri::async_runtime::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(3));
-        let mut buffer = [0u8; 2048];
-        let mut broadcast_targets = discovery::targets()
-            .unwrap_or_else(|_| vec![SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT))]);
-        let mut targets_refreshed_at = 0u64;
+        let mut known_checked_at = 0u64;
         loop {
-            let packet = futures_util::select! {
+            futures_util::select! {
                 _ = interval.tick().fuse() => {
-                    if now_millis().saturating_sub(targets_refreshed_at) >= 15_000 {
-                        if let Ok(targets) = discovery::targets() {
-                            broadcast_targets = targets;
+                    // 仅对已配对设备做加密心跳，不广播本机，也不在后台扫描网段。
+                    if now_millis().saturating_sub(known_checked_at) >= 9_000 {
+                        let known = task_registry.inner.lock().await.native.config.peers.clone();
+                        for trusted in known.into_iter().filter(|trusted| trusted.secure && !trusted.secret.is_empty()) {
+                            schedule_peer_check(&task_registry, &task_paths, Some(app.clone()), trusted.peer.clone(), trusted).await;
                         }
-                        targets_refreshed_at = now_millis();
-                    }
-                    let should_broadcast = {
-                        let runtime = task_registry.inner.lock().await;
-                        runtime.native.config.auto_discovery
-                    };
-                    if should_broadcast {
-                        if let Ok(packet) = discovery::packet("announce", &peer) {
-                            for target in &broadcast_targets {
-                                let _ = socket.send_to(&packet, target).await;
-                            }
-                        }
+                        known_checked_at = now_millis();
                     }
                     {
                         let mut runtime = task_registry.inner.lock().await;
-                        runtime.native.nearby.retain(|_, peer| {
-                            now_millis().saturating_sub(peer.last_seen_at) < 15_000
+                        let native = &mut runtime.native;
+                        if native
+                            .scan_task
+                            .as_ref()
+                            .map(|task| task.inner().is_finished())
+                            .unwrap_or(false)
+                        {
+                            native.scan_task = None;
+                        }
+                        native.nearby.retain(|id, peer| {
+                            now_millis().saturating_sub(peer.last_seen_at) < 60_000 || native.connecting.contains_key(id)
                         });
-                        runtime.native.pairing.retain(|_, request| {
+                        native.pairing.retain(|_, request| {
                             now_millis().saturating_sub(request.created_at) < PAIRING_LIFETIME
                         });
                     }
-                    let _ = emit_state_changed(&app, &task_registry, &task_paths).await;
-                    None
+                    emit_native_changed(&app, &task_registry).await;
                 },
                 scan_req = scan_rx.recv().fuse() => {
-                    if scan_req.is_some() {
-                        if let Ok(targets) = discovery::targets() {
-                            broadcast_targets = targets;
-                        }
-                        if let Ok(packet) = discovery::packet("probe", &peer) {
-                            for target in &broadcast_targets {
-                                let _ = socket.send_to(&packet, target).await;
+                    if scan_req.is_none() { break; }
+                    let mut runtime = task_registry.inner.lock().await;
+                    if runtime.native.scan_task.as_ref().map(|task| task.inner().is_finished()).unwrap_or(true) {
+                        let registry = task_registry.clone();
+                        let paths = task_paths.clone();
+                        let app = app.clone();
+                        let own_id = own_id.clone();
+                        runtime.native.scan_generation = runtime.native.scan_generation.wrapping_add(1);
+                        let scan_generation = runtime.native.scan_generation;
+                        runtime.native.scan_task = Some(tauri::async_runtime::spawn(async move {
+                            emit_native_changed(&app, &registry).await;
+                            discovery::scan(registry.clone(), paths, app.clone(), own_id).await;
+                            let mut runtime = registry.inner.lock().await;
+                            if runtime.native.scan_generation == scan_generation {
+                                runtime.native.scan_task = None;
                             }
-                        }
+                            drop(runtime);
+                            emit_native_changed(&app, &registry).await;
+                        }));
                     }
-                    None
                 },
-                recv = socket.recv_from(&mut buffer).fuse() => {
-                    Some(recv)
-                }
-            };
-            if let Some(Ok((size, source))) = packet {
-                if let Some((packet_kind, candidate, sent_at)) =
-                    discovery::parse(&buffer[..size], source, &own_id)
-                {
-                    let (trusted, inserted) = {
-                        let mut runtime = task_registry.inner.lock().await;
-                        if runtime.native.config.ignored_peers.contains(&candidate.id)
-                            || !runtime.native.replay.accept(
-                                "discovery",
-                                &buffer[..12],
-                                sent_at,
-                                now_millis(),
-                            )
-                        {
-                            continue;
-                        }
-                        let trusted = runtime.native.authenticate(&candidate.id);
-                        let inserted = trusted.is_none()
-                            && (runtime.native.nearby.len() < 100
-                                || runtime.native.nearby.contains_key(&candidate.id));
-                        if inserted {
-                            runtime
-                                .native
-                                .nearby
-                                .insert(candidate.id.clone(), candidate.clone());
-                        }
-                        (trusted, inserted)
-                    };
-                    if packet_kind == DiscoveryPacketKind::Probe {
-                        if let Ok(packet) = discovery::packet("announce", &peer) {
-                            let _ = socket.send_to(&packet, source).await;
-                        }
-                    }
-                    if inserted {
-                        let _ = emit_state_changed(&app, &task_registry, &task_paths).await;
-                    }
-                    if let Some(trusted) = trusted {
-                        schedule_peer_check(
-                            &task_registry,
-                            &task_paths,
-                            Some(app.clone()),
-                            candidate,
-                            trusted,
-                        )
-                        .await;
-                    }
-                }
             }
         }
     });
     registry.inner.lock().await.native.handle = Some(handle);
     Ok(())
+}
+
+// 发现心跳只推送小型运行态，不重复读取消息、文件历史和生成二维码。
+async fn emit_native_changed(app: &tauri::AppHandle, registry: &LanShareServerRegistry) {
+    let native = registry.inner.lock().await.native.snapshot();
+    let _ = app.emit(EVENT_NATIVE_CHANGED, native);
 }
 
 async fn schedule_peer_check(
@@ -464,8 +404,11 @@ async fn schedule_peer_check(
         else {
             return;
         };
-        let Ok(response) =
-            secure_call(&client, &candidate, &auth, "ping", json!({}), &[], None).await
+        let Ok(Ok(response)) = tokio::time::timeout(
+            Duration::from_secs(2),
+            secure_call(&client, &candidate, &auth, "ping", json!({}), &[], None),
+        )
+        .await
         else {
             return;
         };
@@ -487,7 +430,7 @@ async fn schedule_peer_check(
         let Some(app) = app else {
             return;
         };
-        let _ = emit_state_changed(&app, &registry, &paths).await;
+        emit_native_changed(&app, &registry).await;
         let mut runtime = registry.inner.lock().await;
         if !runtime
             .native
@@ -516,21 +459,6 @@ async fn schedule_peer_check(
         .insert(checking.id.clone(), (checking, task));
 }
 
-pub(super) async fn set_auto_discovery(
-    registry: &LanShareServerRegistry,
-    paths: &AppPaths,
-    enabled: bool,
-) -> Result<Value, ManagerError> {
-    let snapshot = {
-        let mut runtime = registry.inner.lock().await;
-        runtime.native.config.auto_discovery = enabled;
-        runtime.native.config.discovery_configured = true;
-        write_json(&paths.lan_share_files.config, &json!(runtime.native.config)).await?;
-        runtime.native.snapshot()
-    };
-    Ok(snapshot)
-}
-
 pub(super) async fn set_transfer_settings(
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
@@ -554,15 +482,61 @@ pub(super) async fn set_transfer_settings(
     Ok(())
 }
 
-pub(super) async fn scan_nearby(
+pub(super) async fn set_hidden(
     registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    hidden: bool,
 ) -> Result<Value, ManagerError> {
+    let mut runtime = registry.inner.lock().await;
+    let mut config = runtime.native.config.clone();
+    if config.id.is_empty() {
+        config = match tokio::fs::read(&paths.lan_share_files.config).await {
+            Ok(bytes) => serde_json::from_slice(&bytes)?,
+            Err(error) if error.kind() == ErrorKind::NotFound => Config::default(),
+            Err(error) => return Err(error.into()),
+        };
+    }
+    config.hidden = hidden;
+    write_json(&paths.lan_share_files.config, &json!(config)).await?;
+    runtime.native.config = config;
+    if hidden {
+        for request in runtime
+            .native
+            .pairing
+            .values_mut()
+            .filter(|request| request.status == "pending")
+        {
+            request.status = "rejected".into();
+        }
+    }
+    Ok(runtime.native.snapshot())
+}
+
+pub(super) async fn scan_nearby(registry: &LanShareServerRegistry) -> Result<Value, ManagerError> {
     let scan_tx = {
-        let runtime = registry.inner.lock().await;
+        let mut runtime = registry.inner.lock().await;
+        let native = &mut runtime.native;
+        if native
+            .scan_task
+            .as_ref()
+            .map(|task| task.inner().is_finished())
+            .unwrap_or(true)
+        {
+            // 新一轮扫描不沿用公开候选，已隐藏或离线的设备不能由缓存继续出现。
+            native.nearby.retain(|id, _| {
+                native.connecting.contains_key(id)
+                    || native
+                        .config
+                        .peers
+                        .iter()
+                        .any(|trusted| trusted.peer.id == *id)
+            });
+            native.error.clear();
+        }
         runtime.native.scan_trigger.clone()
     };
     if let Some(tx) = scan_tx {
-        let _ = tx.send(()).await;
+        let _ = tx.try_send(());
     }
     Ok(json!(true))
 }
@@ -966,7 +940,10 @@ async fn process_secure_operation(
             let _storage = registry.storage.lock().await;
             let exists = read_array::<LanShareMessage>(&paths.lan_share_files.messages)?
                 .iter()
-                .any(|message| (message.id == message_id || message.id == uuid_id) && message.device_id == peer.id);
+                .any(|message| {
+                    (message.id == message_id || message.id == uuid_id)
+                        && message.device_id == peer.id
+                });
             Ok(json!({ "exists": exists }))
         }
         "file-chunk" => {
@@ -1032,7 +1009,10 @@ async fn process_secure_operation(
             let legacy_id = format!("{}-{source_id}", peer.id);
             let message_id = {
                 let _storage = registry.storage.lock().await;
-                if read_array::<LanShareMessage>(&paths.lan_share_files.messages)?.iter().any(|message| message.id == legacy_id && message.device_id == peer.id) {
+                if read_array::<LanShareMessage>(&paths.lan_share_files.messages)?
+                    .iter()
+                    .any(|message| message.id == legacy_id && message.device_id == peer.id)
+                {
                     legacy_id
                 } else {
                     create_stable_id(&format!("lan-message:{legacy_id}"))
@@ -1127,6 +1107,10 @@ where
         {
             return Ok(api_error(StatusCode::UNAUTHORIZED, "接收设备不匹配。"));
         }
+        // 隐藏节点不向未配对设备返回身份，也不接受新的发现和配对请求。
+        if runtime.native.config.hidden && scope == "software" {
+            return Ok(api_error(StatusCode::NOT_FOUND, "设备不可用。"));
+        }
         match scope.as_str() {
             "software" if pairing_id.is_empty() => (
                 Peer {
@@ -1166,13 +1150,31 @@ where
     };
     let aad = auth.aad();
     // 文件大包单独排队并按帧限速，短消息和心跳无需等待文件许可。
-    let bulk = request.body().size_hint().upper().map(|size| size > 64 * 1024).unwrap_or(true);
-    let mut _permit = if bulk { Some(registry.transfer.acquire_upload().await) } else { None };
+    let bulk = request
+        .body()
+        .size_hint()
+        .upper()
+        .map(|size| size > 64 * 1024)
+        .unwrap_or(true);
+    let mut _permit = if bulk {
+        Some(registry.transfer.acquire_upload().await)
+    } else {
+        None
+    };
+    let capacity = request
+        .body()
+        .size_hint()
+        .upper()
+        .unwrap_or(64 * 1024)
+        .min(transport::MAX_BODY as u64) as usize;
     let mut body = Limited::new(request.into_body(), transport::MAX_BODY);
-    let mut ciphertext = Vec::new();
+    let mut ciphertext = Vec::with_capacity(capacity);
     while let Some(frame) = body.frame().await {
         let Ok(frame) = frame else {
-            return Ok(api_error(StatusCode::PAYLOAD_TOO_LARGE, "加密载荷过大或接收中断。"));
+            return Ok(api_error(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "加密载荷过大或接收中断。",
+            ));
         };
         if let Ok(bytes) = frame.into_data() {
             if bulk {
@@ -1181,7 +1183,11 @@ where
             ciphertext.extend_from_slice(&bytes);
         }
     }
-    let plaintext = match transport::decrypt(&auth.secret, &aad, &ciphertext) {
+    let received_length = ciphertext.len();
+    let request_nonce = ciphertext
+        .get(..12)
+        .map(|nonce| <[u8; 12]>::try_from(nonce).unwrap());
+    let plaintext = match transport::decrypt_owned(&auth.secret, &aad, ciphertext) {
         Ok(plaintext) => plaintext,
         Err(_) => {
             return Ok(api_error(
@@ -1197,7 +1203,7 @@ where
         if !bulk && operation == "file-chunk" {
             // 尾块和小文件在解密后计费，控制消息仍可直接通过。
             _permit = Some(registry.transfer.acquire_upload().await);
-            registry.transfer.receive_bytes(ciphertext.len()).await;
+            registry.transfer.receive_bytes(received_length).await;
         }
         let permitted = match scope.as_str() {
             "software" => matches!(operation.as_str(), "info" | "pair"),
@@ -1215,7 +1221,7 @@ where
         }
         if !registry.inner.lock().await.native.replay.accept(
             &format!("{sender}|{scope}|{pairing_id}"),
-            &ciphertext[..12],
+            &request_nonce.unwrap(),
             metadata["sentAt"].as_u64().unwrap_or(0),
             now_millis(),
         ) {
@@ -1248,7 +1254,8 @@ where
             json!({ "status": "error", "data": null, "message": error.to_string() }),
         ),
     };
-    let request_nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&ciphertext[..12]);
+    let request_nonce =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(request_nonce.unwrap());
     let response = transport::encrypt(
         &auth.secret,
         &format!("{aad}|response|{request_nonce}"),
@@ -1268,6 +1275,7 @@ pub(super) async fn deliver(
     content: &str,
     files: &[LanShareFile],
     message_id: &str,
+    app: Option<&tauri::AppHandle>,
 ) -> Result<bool, ManagerError> {
     let (trusted, own_id) = {
         let runtime = registry.inner.lock().await;
@@ -1288,6 +1296,8 @@ pub(super) async fn deliver(
     let client = reqwest::Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
+        .http1_only()
+        .tcp_nodelay(true)
         .build()
         .map_err(network_error)?;
     let existing = secure_call(
@@ -1303,75 +1313,156 @@ pub(super) async fn deliver(
     if existing["exists"] == true {
         return Ok(true);
     }
-    let mut remote_session = String::new();
-    let mut identifiers = Vec::new();
-    for file in files {
-        let _permit = registry.transfer.acquire_file().await;
-        let mut source = File::open(&file.path).await?;
-        let metadata = source.metadata().await?;
-        if !metadata.is_file() || metadata.len() != file.size {
-            return Err(ManagerError::System(format!(
-                "附件已改变或不是文件：{}",
-                file.name
-            )));
+    // 进度以对端已确认的字节为准，只推送小事件，不写盘或刷新聊天历史。
+    let total_bytes = files.iter().map(|file| file.size).sum::<u64>();
+    let started = tokio::time::Instant::now();
+    let progress = std::sync::Mutex::new((0u64, started - Duration::from_secs(1)));
+    let report_progress = |index: usize, size: u64, complete: bool| {
+        let mut progress = progress.lock().unwrap();
+        progress.0 += size;
+        if complete || progress.1.elapsed() >= Duration::from_millis(200) {
+            progress.1 = tokio::time::Instant::now();
+            if let Some(app) = app {
+                let elapsed = started.elapsed().as_millis().max(1) as u64;
+                let _ = app.emit(
+                    EVENT_TRANSFER_PROGRESS,
+                    json!({
+                        "messageId": message_id, "fileIndex": index, "fileComplete": complete,
+                        "loadedBytes": progress.0, "totalBytes": total_bytes,
+                        "bytesPerSecond": progress.0.saturating_mul(1000) / elapsed
+                    }),
+                );
+            }
         }
-        let chunk_total = file.size.div_ceil(attachments::FILE_CHUNK_BYTES).max(1);
-        let upload_id = create_id();
-        for chunk_index in 0..chunk_total {
-            let offset = chunk_index * attachments::FILE_CHUNK_BYTES;
-            let chunk_length = file
-                .size
-                .saturating_sub(offset)
-                .min(attachments::FILE_CHUNK_BYTES);
-            let mut chunk = vec![0u8; chunk_length as usize];
-            source.read_exact(&mut chunk).await?;
-            let chunk_sha256 = format!("{:x}", Sha256::digest(&chunk));
-            let content_range = if file.size == 0 {
-                "bytes 0-0/0".to_string()
-            } else {
-                format!(
-                    "bytes {}-{}/{}",
-                    offset,
-                    offset + chunk_length - 1,
-                    file.size
-                )
-            };
-            let uploaded = secure_call(
-                &client,
-                &trusted.peer,
-                &auth,
-                "file-chunk",
-                json!({
-                    "name": file.name, "sessionId": remote_session, "uploadId": upload_id,
-                    "chunkIndex": chunk_index, "chunkTotal": chunk_total, "offset": offset,
-                    "totalSize": file.size, "sha256": chunk_sha256,
-                    "contentLength": chunk_length, "contentRange": content_range,
-                }),
-                &chunk,
-                Some(&registry.transfer),
-            )
-            .await?;
-            let complete = chunk_index + 1 == chunk_total;
-            if uploaded["uploadId"] != upload_id
-                || uploaded["chunkIndex"].as_u64() != Some(chunk_index)
-                || uploaded["complete"].as_bool() != Some(complete)
-            {
-                return Err(ManagerError::System("对方返回的分块确认不一致。".into()));
-            }
-            let session = string_value(uploaded.get("sessionId"));
-            if session.is_empty() || (!remote_session.is_empty() && session != remote_session) {
-                return Err(ManagerError::System("对方返回的会话不一致。".into()));
-            }
-            remote_session = session;
-            if complete {
-                let identifier = string_value(uploaded["file"].get("id"));
-                if identifier.is_empty() {
-                    return Err(ManagerError::System("对方未返回完整附件。".into()));
+    };
+    // 最多挂起八个文件任务；真正读取文件前领取全局许可，设置的并发立即生效。
+    let mut uploaded_files = futures_util::stream::iter(files.to_vec().into_iter().enumerate())
+        .map(|(index, file)| {
+            let client = &client;
+            let trusted = &trusted;
+            let auth = &auth;
+            let report_progress = &report_progress;
+            async move {
+                let mut remote_session = String::new();
+                let mut identifier = String::new();
+                let _permit = registry.transfer.acquire_file().await;
+                let mut source = File::open(&file.path).await?;
+                let metadata = source.metadata().await?;
+                if !metadata.is_file() || metadata.len() != file.size {
+                    return Err(ManagerError::System(format!(
+                        "附件已改变或不是文件：{}",
+                        file.name
+                    )));
                 }
-                identifiers.push(identifier);
+                let chunk_total = file.size.div_ceil(attachments::FILE_CHUNK_BYTES).max(1);
+                let upload_id = create_stable_id(&format!(
+                    "lan-upload:{}:{message_id}:{}",
+                    auth.sender, file.id
+                ));
+                for chunk_index in 0..chunk_total {
+                    if registry
+                        .inner
+                        .lock()
+                        .await
+                        .native
+                        .authenticate(device_id)
+                        .map(|current| is_valid_token(&current.secret, &auth.secret))
+                        != Some(true)
+                    {
+                        return Err(ManagerError::System("设备配对已撤销，传输已停止。".into()));
+                    }
+                    let offset = chunk_index * attachments::FILE_CHUNK_BYTES;
+                    let chunk_length = file
+                        .size
+                        .saturating_sub(offset)
+                        .min(attachments::FILE_CHUNK_BYTES);
+                    let content_range = if file.size == 0 {
+                        "bytes 0-0/0".to_string()
+                    } else {
+                        format!(
+                            "bytes {}-{}/{}",
+                            offset,
+                            offset + chunk_length - 1,
+                            file.size
+                        )
+                    };
+                    let mut attempt = 0;
+                    let uploaded = loop {
+                        // 每次重试重新读取该块并使用新 nonce，避免保留整块备份或触发重放保护。
+                        source.seek(std::io::SeekFrom::Start(offset)).await?;
+                        let mut chunk = Vec::with_capacity(chunk_length as usize + 4096);
+                        chunk.resize(chunk_length as usize, 0);
+                        source.read_exact(&mut chunk).await?;
+                        let chunk_sha256 = format!("{:x}", Sha256::digest(&chunk));
+                        let result = secure_call(
+                            client,
+                            &trusted.peer,
+                            auth,
+                            "file-chunk",
+                            json!({
+                                "name": file.name, "sessionId": remote_session, "uploadId": upload_id,
+                                "chunkIndex": chunk_index, "chunkTotal": chunk_total, "offset": offset,
+                                "totalSize": file.size, "sha256": chunk_sha256,
+                                "contentLength": chunk_length, "contentRange": content_range,
+                            }),
+                            chunk,
+                            Some(&registry.transfer),
+                        )
+                        .await;
+                        match result {
+                            Ok(uploaded) => break uploaded,
+                            Err(ManagerError::System(message))
+                                if attempt < 2 && message.starts_with("设备连接失败：") =>
+                            {
+                                attempt += 1;
+                                tokio::time::sleep(Duration::from_millis(200 * attempt)).await;
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    };
+                    let complete = chunk_index + 1 == chunk_total;
+                    if uploaded["uploadId"] != upload_id
+                        || uploaded["chunkIndex"].as_u64() != Some(chunk_index)
+                        || uploaded["complete"].as_bool() != Some(complete)
+                    {
+                        return Err(ManagerError::System("对方返回的分块确认不一致。".into()));
+                    }
+                    let session = string_value(uploaded.get("sessionId"));
+                    if session.is_empty()
+                        || (!remote_session.is_empty() && session != remote_session)
+                    {
+                        return Err(ManagerError::System("对方返回的会话不一致。".into()));
+                    }
+                    remote_session = session;
+                    if complete {
+                        identifier = string_value(uploaded["file"].get("id"));
+                        if identifier.is_empty() {
+                            return Err(ManagerError::System("对方未返回完整附件。".into()));
+                        }
+                    }
+                    report_progress(index, chunk_length, complete);
+                }
+                Ok::<_, ManagerError>((index, remote_session, identifier))
             }
-        }
+        })
+        .buffer_unordered(8)
+        .try_collect::<Vec<_>>()
+        .await?;
+    uploaded_files.sort_by_key(|(index, _, _)| *index);
+    let remote_session = uploaded_files
+        .first()
+        .map(|(_, session, _)| session.as_str())
+        .unwrap_or("");
+    if uploaded_files
+        .iter()
+        .any(|(_, session, _)| session != remote_session)
+    {
+        return Err(ManagerError::System("对方返回的会话不一致。".into()));
     }
+    let identifiers = uploaded_files
+        .iter()
+        .map(|(_, _, identifier)| identifier)
+        .collect::<Vec<_>>();
     secure_call(&client, &trusted.peer, &auth, "message", json!({
         "messageId": message_id, "sessionId": remote_session, "content": content, "attachmentIds": identifiers
     }), &[], None).await?;
@@ -1383,6 +1474,103 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hidden_nodes_reject_discovery_but_keep_authenticated_peers_and_persist_settings() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id());
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            registry.inner.lock().await.native.config.id = "native-local".into();
+            remember(
+                &registry,
+                &paths,
+                TrustedPeer {
+                    peer: Peer {
+                        id: "native-known".into(),
+                        ip: "127.0.0.1".into(),
+                        port: DEFAULT_PORT,
+                        ..Peer::default()
+                    },
+                    secret: "trusted-secret".into(),
+                    secure: true,
+                },
+            )
+            .await
+            .unwrap();
+            let snapshot = set_hidden(&registry, &paths, true).await.unwrap();
+            assert_eq!(snapshot["hidden"], true);
+            let saved: Config = serde_json::from_slice(
+                &tokio::fs::read(&paths.lan_share_files.config)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(saved.hidden);
+            assert_eq!(saved.peers.len(), 1);
+            assert_eq!(saved.id, "native-local");
+            let public = TransportAuth {
+                sender: "native-stranger".into(),
+                receiver: String::new(),
+                secret: String::new(),
+                pairing_id: String::new(),
+            };
+            for operation in ["info", "pair"] {
+                let packet = encrypted_test_packet(&public, operation, json!({}));
+                let response = handle_secure_request(
+                    encrypted_test_request(&public, &packet),
+                    &registry,
+                    &paths,
+                    None,
+                    "127.0.0.1:9000".parse().unwrap(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            }
+            assert!(registry.inner.lock().await.native.pairing.is_empty());
+            let known = TransportAuth {
+                sender: "native-known".into(),
+                receiver: "native-local".into(),
+                secret: "trusted-secret".into(),
+                pairing_id: String::new(),
+            };
+            let packet = encrypted_test_packet(&known, "ping", json!({}));
+            let response = handle_secure_request(
+                encrypted_test_request(&known, &packet),
+                &registry,
+                &paths,
+                None,
+                "127.0.0.1:9000".parse().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decoded_test_response(response, &known, &packet).await.0,
+                StatusCode::OK
+            );
+            assert!(registry.inner.lock().await.native.online("native-known"));
+            assert_eq!(
+                set_hidden(&registry, &paths, false).await.unwrap()["hidden"],
+                false
+            );
+            let packet = encrypted_test_packet(&public, "info", json!({}));
+            let response = handle_secure_request(
+                encrypted_test_request(&public, &packet),
+                &registry,
+                &paths,
+                None,
+                "127.0.0.1:9000".parse().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                decoded_test_response(response, &public, &packet).await.0,
+                StatusCode::OK
+            );
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
+
+    #[test]
     fn legacy_default_rate_is_lowered_without_replacing_custom_settings() {
         for (rate, concurrent, configured, expected) in [
             (10, 1, false, 2),
@@ -1391,7 +1579,9 @@ mod tests {
             (10, 1, true, 10),
         ] {
             let mut value = json!({ "transfer": { "sendMibPerSecond": rate, "maxConcurrentFiles": concurrent } });
-            if configured { value["transfer_configured"] = json!(true); }
+            if configured {
+                value["transfer_configured"] = json!(true);
+            }
             let mut config: Config = serde_json::from_value(value).unwrap();
             migrate_transfer_config(&mut config);
             assert_eq!(config.transfer.send_mib_per_second, expected);
@@ -1410,16 +1600,32 @@ mod tests {
             let paths = crate::core::paths::resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
             registry.inner.lock().await.native.config.id = "native-receiver".into();
-            remember(&registry, &paths, TrustedPeer {
-                peer: Peer { id: "native-sender".into(), ip: "127.0.0.1".into(), port: DEFAULT_PORT, ..Peer::default() },
-                secret: "upload-test-secret".into(),
-                secure: true,
-            }).await.unwrap();
+            remember(
+                &registry,
+                &paths,
+                TrustedPeer {
+                    peer: Peer {
+                        id: "native-sender".into(),
+                        ip: "127.0.0.1".into(),
+                        port: DEFAULT_PORT,
+                        ..Peer::default()
+                    },
+                    secret: "upload-test-secret".into(),
+                    secure: true,
+                },
+            )
+            .await
+            .unwrap();
             let auth = TransportAuth {
-                sender: "native-sender".into(), receiver: "native-receiver".into(),
-                secret: "upload-test-secret".into(), pairing_id: String::new(),
+                sender: "native-sender".into(),
+                receiver: "native-receiver".into(),
+                secret: "upload-test-secret".into(),
+                pairing_id: String::new(),
             };
-            registry.transfer.configure(transfer::Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+            registry.transfer.configure(transfer::Settings {
+                send_mib_per_second: 1,
+                max_concurrent_files: 1,
+            });
             // 大块与短尾块都必须计入接收预算，心跳不能等待它们的文件许可。
             for size in [512 * 1024, 32 * 1024] {
                 let content = vec![7; size];
@@ -1431,21 +1637,49 @@ mod tests {
                         "sha256": format!("{:x}", Sha256::digest(&content)),
                         "contentLength": size, "contentRange": format!("bytes 0-{}/{}", size - 1, size)
                     }
-                }), &content).unwrap();
+                }), content).unwrap();
                 let packet = transport::encrypt(&auth.secret, &auth.aad(), &packet).unwrap();
-                registry.transfer.configure(transfer::Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+                registry.transfer.configure(transfer::Settings {
+                    send_mib_per_second: 1,
+                    max_concurrent_files: 1,
+                });
                 let started = tokio::time::Instant::now();
                 let request = encrypted_test_request(&auth, &packet);
-                let mut upload = Box::pin(handle_secure_request(request, &registry, &paths, None, "127.0.0.1:12345".parse().unwrap()));
+                let mut upload = Box::pin(handle_secure_request(
+                    request,
+                    &registry,
+                    &paths,
+                    None,
+                    "127.0.0.1:12345".parse().unwrap(),
+                ));
                 assert!(upload.as_mut().now_or_never().is_none());
                 let ping_packet = encrypted_test_packet(&auth, "ping", json!({}));
-                let ping = tokio::time::timeout(Duration::from_millis(250), handle_secure_request(
-                    encrypted_test_request(&auth, &ping_packet), &registry, &paths, None, "127.0.0.1:12345".parse().unwrap(),
-                )).await.unwrap().unwrap();
-                assert_eq!(decoded_test_response(ping, &auth, &ping_packet).await.0, StatusCode::OK);
+                let ping = tokio::time::timeout(
+                    Duration::from_millis(250),
+                    handle_secure_request(
+                        encrypted_test_request(&auth, &ping_packet),
+                        &registry,
+                        &paths,
+                        None,
+                        "127.0.0.1:12345".parse().unwrap(),
+                    ),
+                )
+                .await
+                .unwrap()
+                .unwrap();
+                assert_eq!(
+                    decoded_test_response(ping, &auth, &ping_packet).await.0,
+                    StatusCode::OK
+                );
                 let result = upload.await.unwrap();
-                assert_eq!(decoded_test_response(result, &auth, &packet).await.0, StatusCode::OK);
-                assert!(started.elapsed() >= Duration::from_secs_f64(size as f64 / (1024.0 * 1024.0) * 0.95));
+                assert_eq!(
+                    decoded_test_response(result, &auth, &packet).await.0,
+                    StatusCode::OK
+                );
+                assert!(
+                    started.elapsed()
+                        >= Duration::from_secs_f64(size as f64 / (1024.0 * 1024.0) * 0.95)
+                );
             }
             assert_eq!(root.parent(), Some(temp_root.as_path()));
             tokio::fs::remove_dir_all(root).await.unwrap();
@@ -1828,7 +2062,6 @@ mod tests {
             remember(&registry, &paths, trusted.clone()).await.unwrap();
             {
                 let mut runtime = registry.inner.lock().await;
-                runtime.native.config.auto_discovery = false;
                 runtime.native.delivery_tasks.insert(
                     peer.id.clone(),
                     tauri::async_runtime::spawn(std::future::pending::<()>()),
@@ -1927,14 +2160,19 @@ mod tests {
         assert!(is_native_id("native-1789038628947-12096-997"));
         assert!(is_native_id("native_1789038628947_12096_997"));
         assert!(!is_native_id("desktop_1789038628947"));
-        assert_eq!(uuid::Uuid::parse_str(&create_native_id()).unwrap().get_version_num(), 4);
+        assert_eq!(
+            uuid::Uuid::parse_str(&create_native_id())
+                .unwrap()
+                .get_version_num(),
+            4
+        );
         let mut legacy_id = "native_1789038628947_12096_997".to_string();
         normalize_native_id(&mut legacy_id);
         assert_eq!(legacy_id, "native_1789038628947_12096_997");
     }
 
     #[test]
-    fn deleting_native_device_revokes_pairing_and_hides_future_discovery() {
+    fn deleting_native_device_revokes_pairing_and_manual_scan_requires_new_approval() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root);
@@ -2010,7 +2248,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .all(|peer| peer["id"] != removed.id));
+                .any(|peer| peer["id"] == removed.id && peer["paired"] == false));
             assert!(native.forget(&paths, "native-local").await.is_err());
             let registry = LanShareServerRegistry::new();
             registry.inner.lock().await.native = native;
@@ -2059,6 +2297,10 @@ mod tests {
         assert!(runtime.authenticate("native-approved").is_some());
         assert!(runtime.authenticate("native-other").is_none());
         runtime.config.peers[0].secure = false;
+        assert!(runtime.authenticate("native-approved").is_none());
+        assert_eq!(runtime.snapshot()["peers"][0]["paired"], false);
+        runtime.config.peers[0].secure = true;
+        runtime.config.peers[0].secret.clear();
         assert!(runtime.authenticate("native-approved").is_none());
         assert_eq!(runtime.snapshot()["peers"][0]["paired"], false);
         let legacy: TrustedPeer = serde_json::from_value(json!({
@@ -2142,45 +2384,93 @@ mod tests {
                     secure: true,
                 });
             }
+            // 配对完成时设备记录与会话已经建立，测试也走同一初始化路径。
+            let trusted = receiver
+                .inner
+                .lock()
+                .await
+                .native
+                .authenticate("native-sender")
+                .unwrap();
+            remember(&receiver, &paths, trusted).await.unwrap();
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let records = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+            use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+            let dropped_ack = Arc::new(AtomicBool::new(false));
+            let active = Arc::new(AtomicUsize::new(0));
+            let maximum = Arc::new(AtomicUsize::new(0));
+            let server_dropped_ack = dropped_ack.clone();
+            let server_active = active.clone();
+            let server_maximum = maximum.clone();
             let server_records = records.clone();
             let server_registry = receiver.clone();
             let server_paths = paths.clone();
             let server = tauri::async_runtime::spawn(async move {
-                for _connection in 0..2 {
+                let mut connections = tokio::task::JoinSet::new();
+                loop {
                     let (socket, address) = listener.accept().await.unwrap();
                     let records = server_records.clone();
                     let registry = server_registry.clone();
                     let paths = server_paths.clone();
-                    let service = service_fn(move |request: Request<Incoming>| {
-                        let records = records.clone();
-                        let registry = registry.clone();
-                        let paths = paths.clone();
-                        async move {
-                            assert_eq!(request.uri().path(), "/api/native/secure");
-                            assert!(request.uri().query().is_none());
-                            assert!(request.headers().get("authorization").is_none());
-                            let (parts, body) = request.into_parts();
-                            let body = body.collect().await.unwrap().to_bytes();
-                            records.lock().await.push(body.to_vec());
-                            let response = handle_secure_request(
-                                Request::from_parts(parts, Full::new(body)),
-                                &registry,
-                                &paths,
-                                None,
-                                address,
-                            )
+                    let dropped_ack = server_dropped_ack.clone();
+                    let active = server_active.clone();
+                    let maximum = server_maximum.clone();
+                    connections.spawn(async move {
+                        let service = service_fn(move |request: Request<Incoming>| {
+                            let records = records.clone();
+                            let registry = registry.clone();
+                            let paths = paths.clone();
+                            let dropped_ack = dropped_ack.clone();
+                            let active = active.clone();
+                            let maximum = maximum.clone();
+                            async move {
+                                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                                maximum.fetch_max(current, Ordering::SeqCst);
+                                assert_eq!(request.uri().path(), "/api/native/secure");
+                                assert!(request.uri().query().is_none());
+                                assert!(request.headers().get("authorization").is_none());
+                                let (parts, body) = request.into_parts();
+                                let body = body.collect().await.unwrap().to_bytes();
+                                let auth = TransportAuth {
+                                    sender: "native-sender".into(),
+                                    receiver: "native-receiver".into(),
+                                    secret: "fixture-secret".into(),
+                                    pairing_id: String::new(),
+                                };
+                                let (metadata, _) = transport::unpack(
+                                    transport::decrypt(&auth.secret, &auth.aad(), &body).unwrap(),
+                                )
+                                .unwrap();
+                                let file_chunk = metadata["operation"] == "file-chunk";
+                                tokio::time::sleep(Duration::from_millis(40)).await;
+                                records.lock().await.push(body.to_vec());
+                                let response = handle_secure_request(
+                                    Request::from_parts(parts, Full::new(body)),
+                                    &registry,
+                                    &paths,
+                                    None,
+                                    address,
+                                )
+                                .await
+                                .unwrap();
+                                active.fetch_sub(1, Ordering::SeqCst);
+                                // 模拟文件已经接收成功，但确认响应在途中丢失。
+                                if file_chunk && !dropped_ack.swap(true, Ordering::SeqCst) {
+                                    return Err(std::io::Error::new(
+                                        ErrorKind::ConnectionReset,
+                                        "测试丢失确认响应",
+                                    ));
+                                }
+                                Ok::<_, std::io::Error>(response)
+                            }
+                        });
+                        http1::Builder::new()
+                            .serve_connection(TokioIo::new(socket), service)
                             .await
-                            .unwrap();
-                            Ok::<_, Infallible>(response)
-                        }
+                            .ok();
                     });
-                    http1::Builder::new()
-                        .serve_connection(TokioIo::new(socket), service)
-                        .await
-                        .unwrap();
+                    while connections.try_join_next().is_some() {}
                 }
             });
             let registry = LanShareServerRegistry::new();
@@ -2200,7 +2490,7 @@ mod tests {
             }
             registry.transfer.configure(transfer::Settings {
                 send_mib_per_second: 4,
-                max_concurrent_files: 1,
+                max_concurrent_files: 2,
             });
             let started = tokio::time::Instant::now();
             for _attempt in 0..2 {
@@ -2209,15 +2499,19 @@ mod tests {
                     "native-receiver",
                     "三个附件",
                     &files,
-                    "batch_message"
+                    "batch_message",
+                    None
                 )
                 .await
                 .unwrap());
             }
             assert!(started.elapsed() >= Duration::from_millis(950));
-            server.await.unwrap();
+            server.abort();
+            let _ = server.await;
+            assert!(dropped_ack.load(Ordering::SeqCst));
+            assert_eq!(maximum.load(Ordering::SeqCst), 2);
             let records = records.lock().await;
-            assert_eq!(records.len(), 7);
+            assert_eq!(records.len(), 8);
             for body in records.iter() {
                 for plaintext in [
                     b"fixture-secret".as_slice(),
@@ -2232,14 +2526,39 @@ mod tests {
             let uploaded: Vec<LanShareFile> = read_array(&paths.lan_share_files.files).unwrap();
             assert_eq!(uploaded.len(), 3);
             assert_eq!(
-                tokio::fs::read(&uploaded[0].path).await.unwrap(),
+                tokio::fs::read(
+                    &uploaded
+                        .iter()
+                        .find(|file| file.name == "first.txt")
+                        .unwrap()
+                        .path
+                )
+                .await
+                .unwrap(),
                 first_content
             );
             assert_eq!(
-                tokio::fs::read(&uploaded[1].path).await.unwrap(),
+                tokio::fs::read(
+                    &uploaded
+                        .iter()
+                        .find(|file| file.name == "second.png")
+                        .unwrap()
+                        .path
+                )
+                .await
+                .unwrap(),
                 b"second-file"
             );
-            assert!(tokio::fs::read(&uploaded[2].path).await.unwrap().is_empty());
+            assert!(tokio::fs::read(
+                &uploaded
+                    .iter()
+                    .find(|file| file.name == "empty.txt")
+                    .unwrap()
+                    .path
+            )
+            .await
+            .unwrap()
+            .is_empty());
             let messages: Vec<LanShareMessage> =
                 read_array(&paths.lan_share_files.messages).unwrap();
             assert_eq!(messages.len(), 1);
@@ -2311,69 +2630,20 @@ mod tests {
     }
 
     #[test]
-    fn discovery_accepts_only_encrypted_packets_and_uses_source_address() {
-        let peer = Peer {
-            id: "native-other".into(),
-            name: "另一台电脑".into(),
-            ip: "8.8.8.8".into(),
-            port: DEFAULT_PORT,
-            ..Peer::default()
-        };
-        let announcement = discovery::packet("announce", &peer).unwrap();
-        let probe = discovery::packet("probe", &peer).unwrap();
-        let source = "192.168.1.9:17632".parse().unwrap();
-        let (kind, discovered, _) = discovery::parse(&announcement, source, "native-self").unwrap();
-        assert_eq!(kind, DiscoveryPacketKind::Announce);
-        assert_eq!(discovered.ip, "192.168.1.9");
-        assert_eq!(
-            discovery::parse(&probe, source, "native-self").unwrap().0,
-            DiscoveryPacketKind::Probe
-        );
-        let plaintext = serde_json::to_vec(
-            &json!({ "protocol": DISCOVERY_PROTOCOL, "kind": "announce", "peer": peer }),
-        )
-        .unwrap();
-        assert!(discovery::parse(&plaintext, source, "native-self").is_none());
-        let mut modified = announcement.clone();
-        modified[20] ^= 1;
-        assert!(discovery::parse(&modified, source, "native-self").is_none());
-        assert!(discovery::parse(
-            &announcement,
-            "8.8.8.8:17632".parse().unwrap(),
-            "native-self"
-        )
-        .is_none());
-        assert!(discovery::parse(&announcement, source, "native-other").is_none());
+    fn legacy_broadcast_settings_are_discarded_without_losing_pairing() {
+        let legacy: Config = serde_json::from_value(json!({
+            "id": "native-self", "name": "本机", "auto_discovery": true,
+            "discovery_configured": true, "hidden": true,
+            "peers": [{ "peer": { "id": "native-known", "name": "对方", "ip": "192.168.1.9", "port": DEFAULT_PORT }, "secret": "do-not-expose", "secure": true }]
+        })).unwrap();
         let mut runtime = NativeRuntime::default();
-        runtime.config.peers.push(TrustedPeer {
-            peer: discovered,
-            secret: "do-not-expose".into(),
-            secure: true,
-        });
+        runtime.config = legacy;
+        assert!(runtime.authenticate("native-known").is_some());
+        assert!(runtime.config.hidden);
         assert!(!runtime.snapshot().to_string().contains("do-not-expose"));
-    }
-
-    #[test]
-    fn discovery_is_enabled_for_new_and_legacy_configs() {
-        assert!(Config::default().auto_discovery);
-        assert!(Config::default().discovery_configured);
-        let legacy = serde_json::from_value::<Config>(json!({
-            "id": "native-self",
-            "name": "本机"
-        }))
-        .unwrap();
-        let mut legacy = legacy;
-        migrate_discovery_config(&mut legacy);
-        assert!(legacy.auto_discovery);
-        assert!(legacy.discovery_configured);
-        assert!(!serde_json::from_value::<Config>(json!({
-            "id": "native-self",
-            "name": "本机",
-            "auto_discovery": false,
-            "discovery_configured": true
-        }))
-        .unwrap()
-        .auto_discovery);
+        let saved = serde_json::to_value(&runtime.config).unwrap();
+        assert!(saved.get("auto_discovery").is_none());
+        assert!(saved.get("discovery_configured").is_none());
     }
 
     #[test]

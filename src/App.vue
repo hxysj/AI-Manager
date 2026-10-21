@@ -2121,25 +2121,26 @@ async function uninstallWithoutTrace() {
 const pendingPairingRequest = ref(null)
 const pairingLoading = ref(false)
 let unsubscribeLanShare = null
+let unsubscribeLanShareNative = null
 
 async function handleGlobalPairingResponse(accept) {
   if (!pendingPairingRequest.value || pairingLoading.value) return
+  // 后台事件可能在提交期间移除请求，保留本次确认对象，避免误清除后续请求。
+  const request = pendingPairingRequest.value
   pairingLoading.value = true
   try {
     await lanShareApi.respondPairing({
-      requestId: pendingPairingRequest.value.id,
+      requestId: request.id,
       accept
     })
     if (accept) {
-      createMessage.success(
-        `已允许与设备「${pendingPairingRequest.value.name}」建立连接`
-      )
+      createMessage.success(`已允许与设备「${request.name}」建立连接`)
     } else {
-      createMessage.info(
-        `已拒绝与设备「${pendingPairingRequest.value.name}」的连接请求`
-      )
+      createMessage.info(`已拒绝与设备「${request.name}」的连接请求`)
     }
-    pendingPairingRequest.value = null
+    if (pendingPairingRequest.value?.id === request.id) {
+      pendingPairingRequest.value = null
+    }
   } catch (err) {
     createMessage.error(err?.message || "处理连接请求失败")
   } finally {
@@ -2172,6 +2173,10 @@ onMounted(() => {
   unsubscribeLanShare = lanShareApi.onStateChanged((payload) => {
     const data = payload?.service ? payload : payload?.data || {}
     pendingPairingRequest.value = data?.native?.pairingRequests?.[0] || null
+  })
+  // 过期和隐藏状态通过轻量事件同步，关闭已经失效的全局确认弹框。
+  unsubscribeLanShareNative = lanShareApi.onNativeChanged((native) => {
+    pendingPairingRequest.value = native?.pairingRequests?.[0] || null
   })
 
   // 视图切换按需加载
@@ -2225,6 +2230,7 @@ onBeforeUnmount(() => {
   if (typeof unsubscribeLanShare === "function") {
     unsubscribeLanShare()
   }
+  unsubscribeLanShareNative?.()
 
   if (isQuickSwitchPanel) {
     document.documentElement.classList.remove("quick-switch-html")
