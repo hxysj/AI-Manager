@@ -332,6 +332,18 @@
       @install="installAppUpdate"
     />
 
+    <AppAnnouncementModal
+      v-if="
+        releaseAnnouncement &&
+        !updateDialog.open &&
+        !showCloseConfirm &&
+        !pendingPairingRequest
+      "
+      :announcement="releaseAnnouncement"
+      :saving="announcementSaving"
+      @close="dismissReleaseAnnouncement"
+    />
+
     <div v-if="showCloseConfirm" class="close-confirm">
       <div class="close-confirm__overlay"></div>
       <section class="close-confirm__panel" role="dialog" aria-modal="true">
@@ -459,6 +471,9 @@ import {
 import { useGlobalLoading } from "@/utils/global-loading"
 import { createMessage } from "@/utils/message"
 
+const AppAnnouncementModal = defineAsyncComponent(
+  () => import("@/components/AppAnnouncementModal.vue")
+)
 const LanShareGlobalPairModal = defineAsyncComponent(
   () => import("@/features/lanShare/components/LanShareGlobalPairModal.vue")
 )
@@ -668,6 +683,8 @@ const showImportSkills = ref(false)
 const showAddRepo = ref(false)
 const showCloseConfirm = ref(false)
 const closeRemember = ref(false)
+const releaseAnnouncement = ref(null)
+const announcementSaving = ref(false)
 const updateDialog = reactive({
   open: false,
   phase: "idle",
@@ -800,6 +817,28 @@ async function bootstrap() {
     }
   })
   refreshLocalBackups(false)
+  if (quickSwitchReady.value) loadReleaseAnnouncement()
+}
+
+async function loadReleaseAnnouncement() {
+  try {
+    releaseAnnouncement.value = await appApi.getReleaseAnnouncement()
+  } catch (error) {
+    showErrorMessage(error)
+  }
+}
+
+async function dismissReleaseAnnouncement() {
+  if (announcementSaving.value || !releaseAnnouncement.value) return
+  announcementSaving.value = true
+  try {
+    await appApi.dismissReleaseAnnouncement()
+    releaseAnnouncement.value = null
+  } catch (error) {
+    showErrorMessage(error)
+  } finally {
+    announcementSaving.value = false
+  }
 }
 
 // 只在独立工具页面挂载完成后显示窗口，主面板已打开时由后端保持隐藏。

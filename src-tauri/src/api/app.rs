@@ -1,4 +1,5 @@
 use crate::core::error::ManagerError;
+use crate::core::paths::AppPaths;
 use crate::core::settings::{serialize_app_settings, write_json_file, AppSettings};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -52,6 +53,36 @@ struct CloseActionPayload {
     action: String,
     #[serde(default)]
     remember: bool,
+}
+
+const RELEASE_ANNOUNCEMENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const RELEASE_ANNOUNCEMENT_NOTES: &str = include_str!("../../../build/release-notes.md");
+const RELEASE_ANNOUNCEMENT_RECEIPT: &str = "release-announcement.txt";
+
+pub async fn release_announcement(paths: &AppPaths) -> Result<Value, ManagerError> {
+    let receipt = Path::new(&paths.storage_dir).join(RELEASE_ANNOUNCEMENT_RECEIPT);
+    match tokio::fs::read_to_string(receipt).await {
+        Ok(version) if version.trim() == RELEASE_ANNOUNCEMENT_VERSION => return Ok(Value::Null),
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+
+    Ok(json!({
+        "version": RELEASE_ANNOUNCEMENT_VERSION,
+        "releaseNotes": RELEASE_ANNOUNCEMENT_NOTES,
+    }))
+}
+
+pub async fn dismiss_release_announcement(paths: &AppPaths) -> Result<Value, ManagerError> {
+    // 仅在用户确认或关闭公告后记录已读，展示和退出应用均不改变此状态。
+    tokio::fs::create_dir_all(&paths.storage_dir).await?;
+    tokio::fs::write(
+        Path::new(&paths.storage_dir).join(RELEASE_ANNOUNCEMENT_RECEIPT),
+        RELEASE_ANNOUNCEMENT_VERSION,
+    )
+    .await?;
+    Ok(Value::Null)
 }
 
 pub async fn update_status() -> Result<Value, ManagerError> {
@@ -1493,6 +1524,67 @@ mod quick_switch_tests {
             );
             assert_eq!(clamped, PhysicalPosition::new(left, bottom));
         }
+    }
+}
+
+#[cfg(test)]
+mod release_announcement_tests {
+    use super::*;
+    use crate::core::paths::resolve_app_paths;
+
+    struct TestStorage {
+        root: PathBuf,
+        paths: AppPaths,
+    }
+
+    impl TestStorage {
+        fn new() -> Self {
+            let root = std::env::temp_dir()
+                .join(format!("monkey-thief-announcement-{}", uuid::Uuid::new_v4()));
+            let paths = resolve_app_paths(&root);
+            Self { root, paths }
+        }
+    }
+
+    impl Drop for TestStorage {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn release_announcement_remains_unread_until_dismissed_and_returns_after_upgrade() {
+        tauri::async_runtime::block_on(async {
+            let storage = TestStorage::new();
+            let receipt = Path::new(&storage.paths.storage_dir).join(RELEASE_ANNOUNCEMENT_RECEIPT);
+            let first = release_announcement(&storage.paths).await.unwrap();
+            assert_eq!(first["version"], RELEASE_ANNOUNCEMENT_VERSION);
+            assert!(first["releaseNotes"].as_str().unwrap().contains("### 应用更新"));
+            assert!(!receipt.exists());
+            assert_eq!(release_announcement(&storage.paths).await.unwrap(), first);
+
+            dismiss_release_announcement(&storage.paths).await.unwrap();
+            assert_eq!(std::fs::read_to_string(&receipt).unwrap(), RELEASE_ANNOUNCEMENT_VERSION);
+            assert!(release_announcement(&storage.paths).await.unwrap().is_null());
+
+            // 模拟从旧版本升级，原已读版本不能屏蔽新版本的公告。
+            tokio::fs::write(&receipt, "0.0.1").await.unwrap();
+            assert_eq!(release_announcement(&storage.paths).await.unwrap(), first);
+            dismiss_release_announcement(&storage.paths).await.unwrap();
+            assert!(release_announcement(&storage.paths).await.unwrap().is_null());
+        });
+    }
+
+    #[test]
+    fn release_announcement_reports_storage_errors_instead_of_claiming_success() {
+        tauri::async_runtime::block_on(async {
+            let storage = TestStorage::new();
+            let receipt = Path::new(&storage.paths.storage_dir).join(RELEASE_ANNOUNCEMENT_RECEIPT);
+            tokio::fs::create_dir_all(&receipt).await.unwrap();
+            assert!(release_announcement(&storage.paths).await.is_err());
+            assert!(dismiss_release_announcement(&storage.paths).await.is_err());
+            assert!(receipt.is_dir());
+        });
     }
 }
 

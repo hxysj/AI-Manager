@@ -505,6 +505,8 @@ impl ManagerState {
                 Ok(self.state.clone())
             }
             "app:update-status" => app::update_status().await,
+            "app:release-announcement" => app::release_announcement(&self.paths).await,
+            "app:release-announcement-dismiss" => app::dismiss_release_announcement(&self.paths).await,
             "app:check-updates" => app::check_updates(&app).await,
             "app:update-download" => app::download_update(&app).await,
             "app:update-install" => {
