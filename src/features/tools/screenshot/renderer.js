@@ -60,6 +60,205 @@ export async function thumbnailSource(image) {
   }
 }
 
+function grayLuma(red, green, blue) {
+  return red * 0.299 + green * 0.587 + blue * 0.114
+}
+
+function suppressOverlaps(candidates) {
+  const result = []
+  const sorted = candidates.sort(
+    (left, right) =>
+      right.score - left.score ||
+      right.width * right.height - left.width * left.height
+  )
+  for (const candidate of sorted) {
+    if (result.some((other) => overlapRatio(candidate, other) > 0.72)) continue
+    result.push({ ...candidate, id: `visual-${result.length}` })
+    if (result.length >= 24) break
+  }
+  return result
+}
+
+function overlapRatio(left, right) {
+  const x = Math.max(
+    0,
+    Math.min(left.x + left.width, right.x + right.width) -
+      Math.max(left.x, right.x)
+  )
+  const y = Math.max(
+    0,
+    Math.min(left.y + left.height, right.y + right.height) -
+      Math.max(left.y, right.y)
+  )
+  const intersection = x * y
+  return (
+    intersection /
+    Math.max(1, Math.min(left.width * left.height, right.width * right.height))
+  )
+}
+
+// 直接扫描当前截图页面，按四条闭合边线寻找可框选矩形，不依赖窗口边界。
+export function detectPageRegions(canvas, frameWidth, frameHeight) {
+  if (!canvas || !frameWidth || !frameHeight) return []
+  const sample = document.createElement("canvas")
+  const candidates = []
+  const scale = Math.min(1, 320 / frameWidth, 200 / frameHeight)
+  const width = Math.max(32, Math.round(frameWidth * scale))
+  const height = Math.max(24, Math.round(frameHeight * scale))
+  sample.width = width
+  sample.height = height
+  const context = sample.getContext("2d", { willReadFrequently: true })
+  context.drawImage(canvas, 0, 0, frameWidth, frameHeight, 0, 0, width, height)
+  const pixels = context.getImageData(0, 0, width, height).data
+  const gray = new Uint8Array(width * height)
+  for (let index = 0, pixel = 0; index < gray.length; index++, pixel += 4) {
+    gray[index] = Math.round(
+      grayLuma(pixels[pixel], pixels[pixel + 1], pixels[pixel + 2])
+    )
+  }
+
+  const vertical = new Uint8Array(width * height)
+  const horizontal = new Uint8Array(width * height)
+  for (let y = 1; y < height; y++) {
+    const row = y * width
+    const previous = row - width
+    for (let x = 1; x < width; x++) {
+      vertical[row + x] = Math.abs(gray[row + x] - gray[row + x - 1])
+      horizontal[row + x] = Math.abs(gray[row + x] - gray[previous + x])
+    }
+  }
+
+  const verticalLines = collectLines(vertical, width, height, true)
+  const horizontalLines = collectLines(horizontal, width, height, false)
+  for (let leftIndex = 0; leftIndex < verticalLines.length; leftIndex++) {
+    const leftLine = verticalLines[leftIndex]
+    for (
+      let rightIndex = leftIndex + 1;
+      rightIndex < verticalLines.length;
+      rightIndex++
+    ) {
+      const rightLine = verticalLines[rightIndex]
+      const sampleWidth = rightLine.position - leftLine.position
+      if (sampleWidth < 48) continue
+      const horizontalCandidates = horizontalLines.filter(
+        (line) =>
+          line.start <= leftLine.position + 5 &&
+          line.end >= rightLine.position - 5
+      )
+      for (
+        let topIndex = 0;
+        topIndex < horizontalCandidates.length;
+        topIndex++
+      ) {
+        const topLine = horizontalCandidates[topIndex]
+        for (
+          let bottomIndex = topIndex + 1;
+          bottomIndex < horizontalCandidates.length;
+          bottomIndex++
+        ) {
+          const bottomLine = horizontalCandidates[bottomIndex]
+          const sampleHeight = bottomLine.position - topLine.position
+          if (sampleHeight < 32) continue
+          if (
+            leftLine.start > topLine.position + 5 ||
+            leftLine.end < bottomLine.position - 5 ||
+            rightLine.start > topLine.position + 5 ||
+            rightLine.end < bottomLine.position - 5
+          )
+            continue
+          if (sampleWidth >= width - 8 && sampleHeight >= height - 8) continue
+
+          const score =
+            (leftLine.score + rightLine.score + topLine.score + bottomLine.score) /
+            4
+          if (score < 0.38) continue
+          const x = Math.round(leftLine.position / scale)
+          const y = Math.round(topLine.position / scale)
+          const regionWidth = Math.round(sampleWidth / scale)
+          const regionHeight = Math.round(sampleHeight / scale)
+          if (regionWidth < 96 || regionHeight < 64) continue
+          candidates.push({
+            id: `page-${candidates.length}`,
+            kind: "page",
+            label: "页面区域",
+            x,
+            y,
+            width: regionWidth,
+            height: regionHeight,
+            score
+          })
+        }
+      }
+    }
+  }
+  sample.width = 0
+  sample.height = 0
+  return suppressOverlaps(candidates)
+}
+
+function collectLines(edges, width, height, vertical) {
+  const axisLength = vertical ? width : height
+  const runLength = vertical ? height : width
+  const minimumRun = Math.max(10, Math.round(runLength * 0.06))
+  const lines = []
+  for (let position = 3; position < axisLength - 3; position++) {
+    let start = -1
+    let total = 0
+    let count = 0
+    const flush = (end) => {
+      if (start < 0) return
+      const length = end - start
+      if (length >= minimumRun && count > 0) {
+        lines.push({
+          position,
+          start,
+          end,
+          score: (total / count / 255) * (count / length)
+        })
+      }
+      start = -1
+      total = 0
+      count = 0
+    }
+    for (let offset = 2; offset < runLength - 2; offset++) {
+      let strongest = 0
+      for (let delta = -1; delta <= 1; delta++) {
+        const index = vertical
+          ? offset * width + position + delta
+          : (position + delta) * width + offset
+        strongest = Math.max(strongest, edges[index] || 0)
+      }
+      if (strongest >= 24) {
+        if (start < 0) start = offset
+        total += strongest
+        count += 1
+      } else {
+        flush(offset)
+      }
+    }
+    flush(runLength - 2)
+  }
+
+  const merged = []
+  for (const line of lines.sort((left, right) => right.score - left.score)) {
+    const target = merged.find(
+      (current) =>
+        Math.abs(current.position - line.position) <= 3 &&
+        Math.min(current.end, line.end) - Math.max(current.start, line.start) >=
+          minimumRun * 0.45
+    )
+    if (target) {
+      target.start = Math.min(target.start, line.start)
+      target.end = Math.max(target.end, line.end)
+      target.score = Math.max(target.score, line.score)
+    } else {
+      merged.push({ ...line })
+    }
+    if (merged.length >= 48) break
+  }
+  return merged.sort((left, right) => left.position - right.position)
+}
+
 export function renderDocument(canvas, image, annotations) {
   if (canvas.width !== image.naturalWidth) canvas.width = image.naturalWidth
   if (canvas.height !== image.naturalHeight) canvas.height = image.naturalHeight

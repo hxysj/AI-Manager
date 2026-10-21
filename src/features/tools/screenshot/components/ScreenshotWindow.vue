@@ -18,8 +18,15 @@
       height="1"
       class="capture-background"
     />
+    <div
+      v-if="frame && !selection && activeRegion"
+      class="capture-auto-region"
+      :style="regionStyle(activeRegion)"
+    >
+      <span>页面区域 · {{ activeRegion.label }}</span>
+    </div>
     <div v-if="frame && !selection" class="capture-instructions">
-      拖动选择截图区域 · Esc 取消 · C 复制当前像素颜色
+      悬停页面区域，点击自动选中 · 拖动自定义区域 · Esc 取消
     </div>
     <div
       v-if="frame && selection"
@@ -381,7 +388,12 @@ import { screenshotApi } from "@/api/modules/screenshot"
 import { systemApi } from "@/api/modules/system"
 import { subscribeReady } from "@/api/request"
 import ImageEditor from "./ImageEditor.vue"
-import { canvasSource, selectionRect, thumbnailSource } from "../renderer"
+import {
+  canvasSource,
+  detectPageRegions,
+  selectionRect,
+  thumbnailSource
+} from "../renderer"
 
 const query = new URLSearchParams(location.search)
 const mode = query.get("mode")
@@ -393,6 +405,8 @@ const desktop = ref(null)
 const captureBackground = ref(null)
 const pinImage = ref(null)
 const selection = ref(null)
+const pageRegions = ref([])
+const activeRegion = ref(null)
 const editorSource = ref("")
 const pointer = ref(null)
 const magnifier = ref(null)
@@ -549,19 +563,58 @@ function desktopPoint(event) {
   }
 }
 
+function regionStyle(region) {
+  if (!frame.value || !region) return {}
+  return {
+    left: `${(region.x / frame.value.width) * 100}%`,
+    top: `${(region.y / frame.value.height) * 100}%`,
+    width: `${(region.width / frame.value.width) * 100}%`,
+    height: `${(region.height / frame.value.height) * 100}%`
+  }
+}
+
+function containsRegion(region, point) {
+  return (
+    point.x >= region.x &&
+    point.y >= region.y &&
+    point.x <= region.x + region.width &&
+    point.y <= region.y + region.height
+  )
+}
+
+function regionAt(point) {
+  const candidates = pageRegions.value.filter((region) =>
+    containsRegion(region, point)
+  )
+  return (
+    candidates.sort(
+      (left, right) => left.width * left.height - right.width * right.height
+    )[0] || null
+  )
+}
+
 function startSelection(event) {
   if (!frame.value || busy.value || event.button !== 0) return
   if (selection.value && editorSource.value) return
   selectionGeneration += 1
   desktop.value.setPointerCapture(event.pointerId)
   const start = desktopPoint(event)
-  drag.value = { kind: "select", start }
-  selection.value = selectionRect(
-    start,
-    start,
-    frame.value.width,
-    frame.value.height
-  )
+  const candidate =
+    activeRegion.value && containsRegion(activeRegion.value, start)
+      ? activeRegion.value
+      : null
+  if (candidate) {
+    drag.value = { kind: "auto", start, candidate }
+    selection.value = { ...candidate }
+  } else {
+    drag.value = { kind: "select", start }
+    selection.value = selectionRect(
+      start,
+      start,
+      frame.value.width,
+      frame.value.height
+    )
+  }
 }
 
 function startMove(event, hasAnnotations) {
@@ -597,8 +650,22 @@ async function movePointer(event) {
   if (!frame.value) return
   const point = desktopPoint(event)
   pointer.value = point
+  if (!drag.value && !selection.value) activeRegion.value = regionAt(point)
   if (drag.value) {
-    if (drag.value.kind === "select")
+    if (drag.value.kind === "auto") {
+      if (
+        Math.hypot(point.x - drag.value.start.x, point.y - drag.value.start.y) >
+        6
+      ) {
+        drag.value = { kind: "select", start: drag.value.start }
+        selection.value = selectionRect(
+          drag.value.start,
+          point,
+          frame.value.width,
+          frame.value.height
+        )
+      }
+    } else if (drag.value.kind === "select")
       selection.value = selectionRect(
         drag.value.start,
         point,
@@ -731,6 +798,7 @@ function cancelDrag() {
   resizeHovered.value = false
   selection.value = null
   editorSource.value = ""
+  activeRegion.value = null
 }
 
 function reselect(hasAnnotations = true) {
@@ -1205,6 +1273,8 @@ function resetCapture() {
   originalImage = null
   pixelCanvas = null
   pointer.value = null
+  pageRegions.value = []
+  activeRegion.value = null
   toolbarHovered.value = false
   resizeHovered.value = false
   savedOutput = null
@@ -1248,6 +1318,12 @@ async function loadFrame() {
   frame.value = current
   autoCopy.value = header.getUint32(16, true) === 1
   if (generation !== frameGeneration) return
+  // 直接分析当前截图页面，采样上限控制内存峰值。
+  pageRegions.value = detectPageRegions(
+    background,
+    current.width,
+    current.height
+  )
   checkViewport()
   await screenshotApi.call("ready")
 }
@@ -1348,6 +1424,26 @@ onBeforeUnmount(() => {
     background: #17212bec;
     font-size: var(--font-size-sm);
     white-space: nowrap;
+  }
+  .capture-auto-region {
+    position: absolute;
+    z-index: 2;
+    box-sizing: border-box;
+    border: 2px solid #fbbf24;
+    background: #fbbf2414;
+    pointer-events: none;
+    span {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      padding: 2px 6px;
+      border-radius: 3px;
+      background: #292524e8;
+      color: #fef3c7;
+      font-size: 11px;
+      line-height: 16px;
+      white-space: nowrap;
+    }
   }
   .capture-selection {
     position: absolute;
