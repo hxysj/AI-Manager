@@ -133,9 +133,13 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
             }
         }
     }
+    // 先建立供应商映射，再转换密钥与统计，旧桌面端统计才能关联到 UUID 主键。
+    super::keys::migrate(&transaction)?;
     let keys = legacy_map(&transaction, "provider_keys_legacy", "provider_id")?;
     for id in keys.keys() {
-        let owner = id.strip_prefix("google-oauth:").unwrap_or(id);
+        // 桌面端旧密钥使用带前缀的关联 ID，迁移后的 UUID 主键需按同一规则解析。
+        let owner =
+            usage_provider_id(&transaction, id.strip_prefix("google-oauth:").unwrap_or(id))?;
         if !transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1)",
             [owner],
@@ -191,7 +195,11 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
         if !active.is_empty()
             && transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1)",
-                [format!("account:{active}")],
+                [canonical_id(
+                    &transaction,
+                    &json!({"id":active}),
+                    "account",
+                )?],
                 |row| row.get::<_, bool>(0),
             )?
         {

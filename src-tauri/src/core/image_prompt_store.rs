@@ -84,7 +84,9 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
 }
 
 fn ensure_prompt_schema(connection: &Connection) -> Result<(), ManagerError> {
-    connection.execute_batch(
+    // 先迁移字段再建立新索引，词库复制失败时保留旧模板、分类和目录。
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS image_prompt_templates (
            id TEXT PRIMARY KEY, position INTEGER NOT NULL, search_text TEXT NOT NULL,
            title TEXT NOT NULL, title_zh TEXT NOT NULL DEFAULT '', prompt TEXT NOT NULL,
@@ -98,11 +100,15 @@ fn ensure_prompt_schema(connection: &Connection) -> Result<(), ManagerError> {
          CREATE TABLE IF NOT EXISTS image_prompt_categories (
            id TEXT PRIMARY KEY, group_name TEXT NOT NULL DEFAULT '',
            title TEXT NOT NULL, original_title TEXT NOT NULL DEFAULT ''
-         );
-         CREATE INDEX IF NOT EXISTS idx_image_prompt_category ON image_prompt_categories(id);
+         );",
+    )?;
+    ensure_prompt_category_schema(&transaction)?;
+    transaction.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_image_prompt_category ON image_prompt_categories(id);
          DROP TABLE IF EXISTS image_prompt_catalog;",
     )?;
-    ensure_prompt_category_schema(connection)
+    transaction.commit()?;
+    Ok(())
 }
 
 fn ensure_prompt_category_schema(connection: &Connection) -> Result<(), ManagerError> {
@@ -111,12 +117,14 @@ fn ensure_prompt_category_schema(connection: &Connection) -> Result<(), ManagerE
         let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
         rows.collect::<Result<HashSet<_>, _>>()?
     };
-    if template_columns.contains("payload_json") {
+    let has_payload = template_columns.contains("payload_json");
+    let has_legacy_templates = !table_columns(connection, "image_prompt_templates_legacy")?.is_empty();
+    if has_payload || has_legacy_templates {
+        let source = if has_payload { "image_prompt_templates" } else { "image_prompt_templates_legacy" };
         let legacy_rows = {
-            let mut statement = connection.prepare(
-                "SELECT id, position, search_text, summary_json, payload_json
-                 FROM image_prompt_templates ORDER BY position",
-            )?;
+            let mut statement = connection.prepare(&format!(
+                "SELECT id, position, search_text, summary_json, payload_json FROM {source} ORDER BY position"
+            ))?;
             let rows = statement.query_map([], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -128,7 +136,8 @@ fn ensure_prompt_category_schema(connection: &Connection) -> Result<(), ManagerE
             })?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
-        connection.execute_batch(
+        if has_payload {
+            connection.execute_batch(
             "ALTER TABLE image_prompt_templates RENAME TO image_prompt_templates_legacy;
              CREATE TABLE image_prompt_templates (
                id TEXT PRIMARY KEY, position INTEGER NOT NULL, search_text TEXT NOT NULL,
@@ -140,7 +149,8 @@ fn ensure_prompt_category_schema(connection: &Connection) -> Result<(), ManagerE
                tags TEXT NOT NULL DEFAULT '[]', source TEXT NOT NULL DEFAULT '',
                category_ids TEXT NOT NULL DEFAULT ''
              );",
-        )?;
+            )?;
+        }
         for (id, position, search, summary_raw, detail_raw) in legacy_rows {
             let summary: Value = serde_json::from_str(&summary_raw)?;
             let detail: Value = serde_json::from_str(&detail_raw)?;
@@ -152,7 +162,8 @@ fn ensure_prompt_category_schema(connection: &Connection) -> Result<(), ManagerE
                    id, position, search_text, title, title_zh, prompt, prompt_localized,
                    model, input_mode, preview_image_url, high_quality_image_url, variables,
                    reference_image_count, aspect_ratio, tags, source, category_ids
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                 ON CONFLICT(id) DO NOTHING",
                 params![
                     id, position, search,
                     text(&detail["title"]), text(&summary["title"]), text(&detail["prompt"]),
@@ -178,9 +189,11 @@ fn ensure_prompt_category_schema(connection: &Connection) -> Result<(), ManagerE
         rows.collect::<Result<HashSet<_>, _>>()?
     };
     if category_columns.contains("template_id") {
+        connection.execute_batch("ALTER TABLE image_prompt_categories RENAME TO image_prompt_categories_legacy;")?;
+    }
+    if !table_columns(connection, "image_prompt_categories_legacy")?.is_empty() {
         connection.execute_batch(
-            "ALTER TABLE image_prompt_categories RENAME TO image_prompt_categories_legacy;
-             CREATE TABLE image_prompt_categories(
+            "CREATE TABLE IF NOT EXISTS image_prompt_categories(
                id TEXT PRIMARY KEY, group_name TEXT NOT NULL DEFAULT '',
                title TEXT NOT NULL, original_title TEXT NOT NULL DEFAULT ''
              );
@@ -189,10 +202,29 @@ fn ensure_prompt_category_schema(connection: &Connection) -> Result<(), ManagerE
              FROM image_prompt_categories_legacy;
              UPDATE image_prompt_templates SET category_ids = COALESCE(
                (SELECT group_concat(category_id, ',') FROM image_prompt_categories_legacy
-                WHERE template_id = image_prompt_templates.id), '');
+                WHERE template_id = image_prompt_templates.id), '') WHERE category_ids='';
              DROP TABLE image_prompt_categories_legacy;
              CREATE INDEX IF NOT EXISTS idx_image_prompt_category ON image_prompt_categories(id);",
         )?;
+    }
+    let has_catalog: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='image_prompt_catalog')",
+        [], |row| row.get(0),
+    )?;
+    if has_catalog {
+        let catalog: Option<String> = connection.query_row(
+            "SELECT payload_json FROM image_prompt_catalog WHERE id=1", [], |row| row.get(0),
+        ).optional()?;
+        if let Some(catalog) = catalog {
+            let catalog: Value = serde_json::from_str(&catalog)?;
+            for category in catalog["categories"].as_array().into_iter().flatten() {
+                connection.execute(
+                    "INSERT INTO image_prompt_categories(id,group_name,title,original_title) VALUES(?1,?2,?3,?4)
+                     ON CONFLICT(id) DO UPDATE SET group_name=excluded.group_name,title=excluded.title,original_title=excluded.original_title",
+                    params![text(&category["id"]),text(&category["group"]),text(&category["title"]),text(&category["originalTitle"])],
+                )?;
+            }
+        }
     }
     Ok(())
 }

@@ -828,7 +828,11 @@ async function loadReleaseAnnouncement() {
   }
 }
 
-async function dismissReleaseAnnouncement() {
+async function dismissReleaseAnnouncement(options) {
+  if (options?.remember === false) {
+    releaseAnnouncement.value = null
+    return
+  }
   if (announcementSaving.value || !releaseAnnouncement.value) return
   announcementSaving.value = true
   try {

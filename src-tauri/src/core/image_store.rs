@@ -771,31 +771,26 @@ fn migrate_task_columns(connection: &Connection) -> Result<(), ManagerError> {
         [], |row| row.get(0)
     )?;
     if legacy_table_exists {
-        let current_count: i64 = connection.query_row("SELECT COUNT(*) FROM image_tasks", [], |row| row.get(0))?;
-        if current_count == 0 {
-            // 上次启动若在旧视图解析阶段中断，重建表可能已完成但清理旧表尚未执行；这里接着完成复制。
-            connection.execute_batch(
-                "INSERT OR IGNORE INTO image_tasks(
-                   id, created_at, status, conversation_id, round_id, input_id, account_id,
-                   generation_mode, mode, prompt, model, size, quality, requested_count, output_format,
-                   background, response_format, batch_name, ratio, tier, batch_count, batch_index,
-                   batch_key, batch_concurrency, input_count, has_mask, image_count, revision, can_resume,
-                   error_json, recovery_json, finished_at, endpoint, request_id, usage_json, images_json,
-                   updated_at, storage_version, edit_mode, reference_image_ids, web_session_id, web_session_deleted
-                 ) SELECT
-                   id, created_at, status, conversation_id, round_id, input_id, account_id,
-                   generation_mode, mode, prompt, model, size, quality, requested_count, output_format,
-                   background, response_format, batch_name, ratio, tier, batch_count, batch_index,
-                   batch_key, batch_concurrency, input_count, has_mask, image_count, revision, can_resume,
-                   error_json, recovery_json, finished_at, endpoint, request_id, usage_json, images_json,
-                   CASE WHEN updated_at = 0 THEN created_at ELSE updated_at END, 1, edit_mode,
-                   reference_image_ids, web_session_id, web_session_deleted
-                 FROM image_tasks_legacy;
-                 DROP TABLE image_tasks_legacy;"
-            )?;
-        } else {
-            connection.execute_batch("DROP TABLE image_tasks_legacy;")?;
-        }
+        // 上次迁移中断时，新表可能已复制部分任务；补齐缺失记录后才能删除旧表。
+        connection.execute_batch(
+            "INSERT OR IGNORE INTO image_tasks(
+               id, created_at, status, conversation_id, round_id, input_id, account_id,
+               generation_mode, mode, prompt, model, size, quality, requested_count, output_format,
+               background, response_format, batch_name, ratio, tier, batch_count, batch_index,
+               batch_key, batch_concurrency, input_count, has_mask, image_count, revision, can_resume,
+               error_json, recovery_json, finished_at, endpoint, request_id, usage_json, images_json,
+               updated_at, storage_version, edit_mode, reference_image_ids, web_session_id, web_session_deleted
+             ) SELECT
+               id, created_at, status, conversation_id, round_id, input_id, account_id,
+               generation_mode, mode, prompt, model, size, quality, requested_count, output_format,
+               background, response_format, batch_name, ratio, tier, batch_count, batch_index,
+               batch_key, batch_concurrency, input_count, has_mask, image_count, revision, can_resume,
+               error_json, recovery_json, finished_at, endpoint, request_id, usage_json, images_json,
+               CASE WHEN updated_at = 0 THEN created_at ELSE updated_at END, 1, edit_mode,
+               reference_image_ids, web_session_id, web_session_deleted
+             FROM image_tasks_legacy;
+             DROP TABLE image_tasks_legacy;"
+        )?;
     }
     let has_legacy_payload = {
         let mut statement = connection.prepare("PRAGMA table_info(image_tasks)")?;
@@ -838,9 +833,12 @@ fn migrate_task_columns(connection: &Connection) -> Result<(), ManagerError> {
            request_id = COALESCE(NULLIF(request_id, ''), NULLIF(json_extract(payload_json, '$.requestId'), ''), ''),
            usage_json = COALESCE(json_extract(payload_json, '$.usage'), usage_json),
            images_json = COALESCE(json_extract(payload_json, '$.images'), images_json),
-           edit_mode = COALESCE(json_extract(payload_json, '$.editMode'), edit_mode),
+           edit_mode = COALESCE(json_extract(payload_json, '$.editMode'), CASE
+             WHEN lower(COALESCE(NULLIF(mode, ''), json_extract(payload_json, '$.request.mode')))
+               IN ('edit','image-to-image','image_to_image','img2img','img-to-img') THEN 1 ELSE edit_mode END),
            reference_image_ids = COALESCE(NULLIF(reference_image_ids, ''), ''),
-           web_session_id = COALESCE(NULLIF(web_session_id, ''), NULLIF(json_extract(payload_json, '$.webSessionId'), ''), ''),
+           web_session_id = COALESCE(NULLIF(web_session_id, ''), NULLIF(json_extract(payload_json, '$.webSessionId'), ''),
+             NULLIF(json_extract(payload_json, '$.recovery.conversationId'), ''), ''),
            web_session_deleted = COALESCE(json_extract(payload_json, '$.webSessionDeleted'), web_session_deleted),
            updated_at = CASE WHEN updated_at = 0 THEN created_at ELSE updated_at END
          WHERE storage_version = 0;",
@@ -879,7 +877,9 @@ fn migrate_task_columns(connection: &Connection) -> Result<(), ManagerError> {
       )?;
     }
     connection.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_image_tasks_conversation ON image_tasks(conversation_id, created_at DESC);
+        "CREATE INDEX IF NOT EXISTS idx_image_tasks_created ON image_tasks(created_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_image_tasks_status ON image_tasks(status);
+         CREATE INDEX IF NOT EXISTS idx_image_tasks_conversation ON image_tasks(conversation_id, created_at DESC);
          CREATE INDEX IF NOT EXISTS idx_image_tasks_round ON image_tasks(conversation_id, round_id, created_at DESC);
          UPDATE image_tasks SET storage_version = 1 WHERE storage_version = 0;",
     )?;
@@ -901,20 +901,18 @@ fn ensure_task_columns(connection: &Connection) -> Result<(), ManagerError> {
     }
     migrate_task_columns(connection)?;
     if existing.contains("thumbnail") {
-        let transaction = connection.unchecked_transaction()?;
-        let still_exists: bool = transaction.query_row(
+        let still_exists: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info('image_tasks') WHERE name = 'thumbnail')",
             [], |row| row.get(0),
         )?;
         if still_exists {
-            transaction.execute_batch("ALTER TABLE image_tasks DROP COLUMN thumbnail;")?;
+            connection.execute_batch("ALTER TABLE image_tasks DROP COLUMN thumbnail;")?;
         }
         // 迁移完成后在启动流程统一压缩一次数据库，释放旧缩略图占用的页。
-        transaction.execute_batch(
+        connection.execute_batch(
             "CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
              INSERT OR REPLACE INTO app_metadata(key, value) VALUES ('image_thumbnail_compaction_pending', '1');",
         )?;
-        transaction.commit()?;
     }
     Ok(())
 }
@@ -953,7 +951,15 @@ fn ensure_web_session_schema(connection: &Connection) -> Result<(), ManagerError
             "updated_at",
             "task_ids",
         ];
-        if required.iter().any(|column| !columns.contains(*column)) {
+        if !columns.contains("payload_json")
+            && required[..required.len() - 1].iter().all(|column| columns.contains(*column))
+            && !columns.contains("task_ids")
+        {
+            connection.execute_batch("ALTER TABLE image_web_sessions ADD COLUMN task_ids TEXT NOT NULL DEFAULT '';")?;
+        } else if required.iter().any(|column| !columns.contains(*column)) {
+            if !columns.contains("payload_json") {
+                return Err(ManagerError::System("图片会话表缺少必要字段，已保留原表".into()));
+            }
             let legacy_rows = if columns.contains("payload_json") {
                 let local_column = if columns.contains("local_id") {
                     "local_id"
@@ -961,7 +967,8 @@ fn ensure_web_session_schema(connection: &Connection) -> Result<(), ManagerError
                     "''"
                 };
                 let mut statement = connection.prepare(&format!(
-                    "SELECT account_id, {local_column}, payload_json FROM image_web_sessions"
+                    "SELECT account_id, {local_column}, payload_json FROM image_web_sessions
+                     ORDER BY CASE WHEN json_valid(payload_json) THEN COALESCE(json_extract(payload_json, '$.updatedAt'), 0) ELSE 0 END"
                 ))?;
                 let rows = statement.query_map([], |row| {
                     Ok((
@@ -981,7 +988,9 @@ fn ensure_web_session_schema(connection: &Connection) -> Result<(), ManagerError
                    local_conversation_id TEXT NOT NULL, conversation_id TEXT NOT NULL,
                    parent_message_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
                    updated_at INTEGER NOT NULL, task_ids TEXT NOT NULL DEFAULT ''
-                 );",
+                 );
+                 CREATE UNIQUE INDEX IF NOT EXISTS idx_image_web_sessions_upstream
+                   ON image_web_sessions(account_id, conversation_id);",
             )?;
             for (account_id, legacy_local_id, payload_json) in legacy_rows {
                 let payload: Value = if payload_json.trim().is_empty() {
@@ -1063,6 +1072,12 @@ fn ensure_web_session_schema(connection: &Connection) -> Result<(), ManagerError
         rows.collect::<Result<HashSet<_>, _>>()?
     };
     let deleted_filter = if old_columns.contains("is_deleted") {
+        connection.execute_batch(
+            "UPDATE image_tasks SET web_session_deleted=1
+             WHERE EXISTS(SELECT 1 FROM image_web_conversations old
+               WHERE old.account_id=image_tasks.account_id AND old.conversation_id=image_tasks.web_session_id
+                 AND old.is_deleted=1);",
+        )?;
         "WHERE is_deleted = 0"
     } else {
         ""
@@ -1076,6 +1091,12 @@ fn ensure_web_session_schema(connection: &Connection) -> Result<(), ManagerError
            FROM image_web_conversations {deleted_filter};
          DROP TABLE image_web_conversations;"
     ))?;
+    connection.execute_batch(
+        "UPDATE image_web_sessions SET task_ids=COALESCE(
+           (SELECT group_concat(id, ',') FROM image_tasks
+            WHERE account_id=image_web_sessions.account_id AND web_session_id=image_web_sessions.conversation_id), '')
+         WHERE task_ids='';",
+    )?;
     Ok(())
 }
 
@@ -1161,24 +1182,23 @@ fn migrate_legacy_inputs(paths: &AppPaths, connection: &Connection) -> Result<us
         connection.execute("UPDATE image_inputs SET image_id = ?1 WHERE rowid = ?2",
             params![uuid::Uuid::new_v4().to_string(), row_id])?;
     }
-    let rows = {
-        let mut statement = connection.prepare(
-            "SELECT task_id, position, image_id, format, data_url
-             FROM image_inputs WHERE data_url <> '' ORDER BY task_id, position",
-        )?;
-        let rows = statement.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-            ))
-        })?;
-        rows.collect::<Result<Vec<_>, _>>()?
-    };
-    let migrated = rows.len();
-    for (owner_id, position, image_id, format, data_url) in rows {
+    let mut statement = connection.prepare(
+        "SELECT task_id, position, image_id, format, data_url
+         FROM image_inputs WHERE data_url <> '' ORDER BY task_id, position",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut migrated = 0;
+    // 逐张写出并提交进度，旧库包含大量图片时也不同时加载全部图片。
+    for row in rows {
+        let (owner_id, position, image_id, format, data_url) = row?;
         let actual_format = if format == "url" || format.is_empty() {
             write_input_file(paths, &owner_id, &image_id, &data_url)?.0
         } else {
@@ -1193,10 +1213,15 @@ fn migrate_legacy_inputs(paths: &AppPaths, connection: &Connection) -> Result<us
              WHERE task_id = ?1 AND position = ?2 AND image_id = ?4",
             params![owner_id, position, actual_format, image_id],
         )?;
+        migrated += 1;
     }
-    connection.execute_batch(
-        "DROP TRIGGER IF EXISTS trg_image_inputs_assign_id;
-         CREATE TABLE image_inputs_compact (
+    drop(statement);
+    let transaction = connection.unchecked_transaction()?;
+    transaction.execute_batch(
+        "DROP TRIGGER IF EXISTS trg_image_inputs_assign_id;",
+    )?;
+    transaction.execute_batch(
+        "CREATE TABLE image_inputs_compact (
            task_id TEXT NOT NULL, position INTEGER NOT NULL,
            image_id TEXT NOT NULL, format TEXT NOT NULL,
            PRIMARY KEY(task_id, image_id), UNIQUE(task_id, position)
@@ -1204,10 +1229,9 @@ fn migrate_legacy_inputs(paths: &AppPaths, connection: &Connection) -> Result<us
          INSERT INTO image_inputs_compact(task_id, position, image_id, format)
          SELECT task_id, position, image_id, format FROM image_inputs;
          DROP TABLE image_inputs;
-         ALTER TABLE image_inputs_compact RENAME TO image_inputs;
-         PRAGMA wal_checkpoint(TRUNCATE);
-         VACUUM;",
+         ALTER TABLE image_inputs_compact RENAME TO image_inputs;",
     )?;
+    transaction.commit()?;
     Ok(migrated)
 }
 
@@ -1247,29 +1271,27 @@ fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<u
     }
 
     if has_bytes {
-        let legacy_blobs = {
-            let mut statement = connection.prepare(
-                "SELECT image_outputs.task_id, image_outputs.position, image_outputs.image_id,
-                        image_outputs.format, image_outputs.bytes,
-                        COALESCE(NULLIF(image_tasks.conversation_id, ''), 'legacy')
-                 FROM image_outputs
-                 LEFT JOIN image_tasks ON image_tasks.id = image_outputs.task_id
-                 WHERE length(image_outputs.bytes) > 0
-                 ORDER BY image_outputs.task_id, image_outputs.position",
-            )?;
-            let rows = statement.query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Vec<u8>>(4)?,
-                    row.get::<_, String>(5)?,
-                ))
-            })?;
-            rows.collect::<Result<Vec<_>, _>>()?
-        };
-        for (task_id, position, image_id, format, bytes, group_id) in legacy_blobs {
+        let mut statement = connection.prepare(
+            "SELECT image_outputs.task_id, image_outputs.position, image_outputs.image_id,
+                    image_outputs.format, image_outputs.bytes,
+                    COALESCE(NULLIF(image_tasks.conversation_id, ''), 'legacy')
+             FROM image_outputs
+             LEFT JOIN image_tasks ON image_tasks.id = image_outputs.task_id
+             WHERE length(image_outputs.bytes) > 0
+             ORDER BY image_outputs.task_id, image_outputs.position",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Vec<u8>>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })?;
+        for row in rows {
+            let (task_id, position, image_id, format, bytes, group_id) = row?;
             let relative = output_relative_path(&group_id, &task_id, &image_id, &format);
             let target = output_path(paths, &relative)?;
             if !target.is_file() {
@@ -1327,7 +1349,8 @@ fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<u
 
     if has_bytes || has_file_path {
         // 重建表删除 BLOB 和路径列；VACUUM 会把历史图片占用的 SQLite 页真正还给磁盘。
-        connection.execute_batch(
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(
             "DROP TRIGGER IF EXISTS trg_image_outputs_assign_id;
              CREATE TABLE image_outputs_compact (
                task_id TEXT NOT NULL,
@@ -1340,10 +1363,9 @@ fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<u
              INSERT INTO image_outputs_compact(task_id, position, image_id, format)
              SELECT task_id, position, image_id, format FROM image_outputs;
              DROP TABLE image_outputs;
-             ALTER TABLE image_outputs_compact RENAME TO image_outputs;
-             PRAGMA wal_checkpoint(TRUNCATE);
-             VACUUM;",
+             ALTER TABLE image_outputs_compact RENAME TO image_outputs;",
         )?;
+        transaction.commit()?;
     }
     Ok(migrated)
 }
@@ -1437,7 +1459,10 @@ fn migrate_input_metadata(connection: &Connection, table: &str) -> Result<(), Ma
         grouped.entry(input_id).or_default().push((position, image_id));
     }
     for (input_id, entries) in grouped {
-        let ids = entries.iter().filter(|(position, _)| *position >= 0).map(|(_, id)| id.clone()).collect::<Vec<_>>().join(",");
+        // 新结构约定遮罩放在引用列表末尾，不能在过滤负位置时丢掉旧遮罩。
+        let ids = entries.iter().filter(|(position, _)| *position >= 0)
+            .chain(entries.iter().filter(|(position, _)| *position < 0))
+            .map(|(_, id)| id.clone()).collect::<Vec<_>>().join(",");
         let has_mask = entries.iter().any(|(position, _)| *position == -1);
         connection.execute(
             "UPDATE image_tasks SET reference_image_ids = CASE
@@ -1454,16 +1479,17 @@ fn migrate_input_metadata(connection: &Connection, table: &str) -> Result<(), Ma
 
 fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
     let connection = database::open(paths)?;
+    let transaction = connection.unchecked_transaction()?;
     // 旧版本的兼容视图可能引用已经删除的 image_assets，先移除，避免 SQLite 在重建任务表时解析失败。
     for name in ["image_inputs", "image_outputs"] {
-        let object_type: Option<String> = connection.query_row(
+        let object_type: Option<String> = transaction.query_row(
             "SELECT type FROM sqlite_master WHERE name = ?1", [name], |row| row.get(0)
         ).optional()?;
         if object_type.as_deref() == Some("view") {
-            connection.execute_batch(&format!("DROP VIEW {name}"))?;
+            transaction.execute_batch(&format!("DROP VIEW {name}"))?;
         }
     }
-    connection.execute_batch(
+    transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS image_tasks (
            id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, status TEXT NOT NULL,
            conversation_id TEXT NOT NULL DEFAULT '', round_id TEXT NOT NULL DEFAULT '',
@@ -1496,19 +1522,20 @@ fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
             updated_at INTEGER NOT NULL, task_ids TEXT NOT NULL DEFAULT ''
           );",
     )?;
-    ensure_web_session_schema(&connection)?;
-     connection.execute_batch(
-         "CREATE UNIQUE INDEX IF NOT EXISTS idx_image_web_sessions_upstream
+    ensure_task_columns(&transaction)?;
+    ensure_web_session_schema(&transaction)?;
+    transaction.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_image_web_sessions_upstream
             ON image_web_sessions(account_id, conversation_id);
           CREATE INDEX IF NOT EXISTS idx_image_web_sessions_local
             ON image_web_sessions(account_id, local_conversation_id, updated_at DESC);
           CREATE INDEX IF NOT EXISTS idx_image_web_sessions_reuse
             ON image_web_sessions(account_id, updated_at DESC);",
      )?;
-    ensure_task_columns(&connection)?;
-    ensure_asset_storage(&connection)?;
-    ensure_output_columns(&connection)?;
-    ensure_input_columns(&connection)?;
+    ensure_asset_storage(&transaction)?;
+    ensure_output_columns(&transaction)?;
+    ensure_input_columns(&transaction)?;
+    transaction.commit()?;
     Ok(connection)
 }
 
@@ -1695,13 +1722,20 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
     )?;
     let _ = migrate_legacy_inputs(paths, &connection)?;
     let _ = migrate_legacy_outputs(paths, &connection)?;
-    migrate_legacy_assets(&connection)?;
+    // 元数据合并和旧表删除一起提交，失败后仍可从旧表继续迁移。
+    let transaction = connection.unchecked_transaction()?;
+    migrate_legacy_assets(&transaction)?;
+    transaction.commit()?;
     if compacted < 2 || thumbnail_compaction {
-        connection.execute_batch(
+        if let Err(error) = connection.execute_batch(
             "PRAGMA wal_checkpoint(TRUNCATE);
              VACUUM;
              PRAGMA user_version = 2;"
-        )?;
+        ) {
+            // 图片和元数据已经迁移成功；空间不足等原因只延后压缩，不阻止应用启动。
+            eprintln!("图片迁移已完成，数据库空间回收将在下次启动重试：{error}");
+            return Ok(());
+        }
         if thumbnail_compaction {
             connection.execute("DELETE FROM app_metadata WHERE key = 'image_thumbnail_compaction_pending'", [])?;
         }

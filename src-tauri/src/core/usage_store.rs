@@ -863,12 +863,12 @@ fn migrate_legacy_json(paths: &AppPaths, connection: &mut Connection) -> Result<
     let pricing = read_json_value(pricing_path)?;
     let transaction = connection.transaction()?;
 
-    for log in &logs {
-        insert_usage_log(&transaction, log)?;
-    }
-
     for record in &records {
         insert_request_record(&transaction, record)?;
+    }
+
+    for log in &logs {
+        requests::import_legacy_log(&transaction, log)?;
     }
 
     if let Some(pricing) = pricing.as_ref() {

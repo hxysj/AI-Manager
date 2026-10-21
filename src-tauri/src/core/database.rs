@@ -11,6 +11,8 @@ use std::path::Path;
 use std::time::Duration;
 
 mod restore;
+#[cfg(test)]
+mod legacy_tests;
 pub use restore::{preview_rows, row_choice_key, RestoreRowDifference};
 
 // 仅跨设备恢复的业务数据进入备份，其他表只保留结构。

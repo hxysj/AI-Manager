@@ -199,6 +199,36 @@ pub(super) fn upsert(
     Ok(())
 }
 
+pub(super) fn import_legacy_log(
+    connection: &Connection,
+    value: &Value,
+) -> Result<(), ManagerError> {
+    let mut value = value.clone();
+    // 旧日志可能没有归属字段，不能用缺省空值覆盖提前捕获的供应商和密钥。
+    let request_id = non_empty_text(value.get("requestId"), &text(value.get("id")));
+    let previous = connection
+        .query_row(
+            &format!(
+                "SELECT {} FROM usage_requests WHERE request_id=?1",
+                columns()
+            ),
+            [request_id],
+            from_row,
+        )
+        .optional()?;
+    if let Some(previous) = previous {
+        for (field, item) in previous.as_object().into_iter().flatten() {
+            if value
+                .get(field)
+                .is_none_or(|item| item.is_null() || item.as_str() == Some(""))
+            {
+                value[field] = item.clone();
+            }
+        }
+    }
+    upsert(connection, &value, true)
+}
+
 fn upsert_sql(is_log: bool) -> String {
     let updates = FIELDS
         .iter()
@@ -293,7 +323,11 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<(), ManagerError> {
                     }
                 }
             }
-            upsert(&transaction, &value, is_log)?;
+            if is_log {
+                import_legacy_log(&transaction, &value)?;
+            } else {
+                upsert(&transaction, &value, false)?;
+            }
         }
         drop(rows);
         drop(statement);

@@ -165,7 +165,6 @@ pub(super) fn create(connection: &Connection) -> Result<(), ManagerError> {
          CREATE UNIQUE INDEX IF NOT EXISTS idx_providers_active_cli ON providers(cli) WHERE is_active=1;
         "
     ))?;
-    super::keys::migrate(connection)?;
     Ok(())
 }
 

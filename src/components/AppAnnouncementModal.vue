@@ -10,6 +10,209 @@
       @keydown="handleKeydown"
     >
       <template #header>
+        <div class="announcement-header-decor">
+          <svg
+            class="announcement-illustration"
+            viewBox="0 0 180 140"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <defs>
+              <filter
+                id="announcementGlow"
+                x="-30%"
+                y="-30%"
+                width="160%"
+                height="160%"
+              >
+                <feGaussianBlur stdDeviation="16" />
+              </filter>
+              <linearGradient
+                id="announcementDocGrad"
+                x1="20"
+                y1="10"
+                x2="130"
+                y2="120"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0%" stop-color="#bfdbfe" stop-opacity="0.95" />
+                <stop offset="45%" stop-color="#93c5fd" stop-opacity="0.88" />
+                <stop offset="100%" stop-color="#60a5fa" stop-opacity="0.82" />
+              </linearGradient>
+              <linearGradient
+                id="announcementDocStroke"
+                x1="20"
+                y1="10"
+                x2="130"
+                y2="120"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9" />
+                <stop offset="50%" stop-color="#ffffff" stop-opacity="0.4" />
+                <stop offset="100%" stop-color="#93c5fd" stop-opacity="0.2" />
+              </linearGradient>
+              <linearGradient
+                id="announcementDocSheen"
+                x1="0"
+                y1="0"
+                x2="1"
+                y2="1"
+              >
+                <stop offset="0%" stop-color="#ffffff" stop-opacity="0.5" />
+                <stop offset="45%" stop-color="#ffffff" stop-opacity="0.1" />
+                <stop offset="50%" stop-color="#ffffff" stop-opacity="0" />
+              </linearGradient>
+              <radialGradient
+                id="announcementBadgeGrad"
+                cx="38%"
+                cy="32%"
+                r="68%"
+              >
+                <stop offset="0%" stop-color="#93c5fd" />
+                <stop offset="25%" stop-color="#60a5fa" />
+                <stop offset="70%" stop-color="#2563eb" />
+                <stop offset="100%" stop-color="#1d4ed8" />
+              </radialGradient>
+              <linearGradient
+                id="announcementBadgeRim"
+                x1="0"
+                y1="0"
+                x2="0"
+                y2="1"
+              >
+                <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95" />
+                <stop offset="100%" stop-color="#93c5fd" stop-opacity="0.4" />
+              </linearGradient>
+              <filter
+                id="announcementDocShadow"
+                x="-20%"
+                y="-20%"
+                width="150%"
+                height="150%"
+              >
+                <feDropShadow
+                  dx="0"
+                  dy="10"
+                  stdDeviation="12"
+                  flood-color="#1e40af"
+                  flood-opacity="0.18"
+                />
+              </filter>
+              <filter
+                id="announcementBadgeShadow"
+                x="-30%"
+                y="-30%"
+                width="170%"
+                height="170%"
+              >
+                <feDropShadow
+                  dx="0"
+                  dy="8"
+                  stdDeviation="10"
+                  flood-color="#1e3a8a"
+                  flood-opacity="0.32"
+                />
+              </filter>
+            </defs>
+
+            <!-- Ambient Glow -->
+            <circle
+              cx="100"
+              cy="65"
+              r="52"
+              fill="#60a5fa"
+              opacity="0.32"
+              filter="url(#announcementGlow)"
+            />
+            <circle
+              cx="135"
+              cy="40"
+              r="36"
+              fill="#38bdf8"
+              opacity="0.28"
+              filter="url(#announcementGlow)"
+            />
+
+            <!-- Tilted Document -->
+            <g
+              transform="rotate(-6 82 60)"
+              filter="url(#announcementDocShadow)"
+            >
+              <rect
+                x="38"
+                y="12"
+                width="88"
+                height="104"
+                rx="16"
+                fill="url(#announcementDocGrad)"
+                stroke="url(#announcementDocStroke)"
+                stroke-width="1.5"
+              />
+              <path
+                d="M 39 13 L 125 13 C 125 13 125 50 92 72 C 55 92 39 62 39 62 Z"
+                fill="url(#announcementDocSheen)"
+              />
+              <rect
+                x="50"
+                y="32"
+                width="46"
+                height="6.5"
+                rx="3.25"
+                fill="#ffffff"
+                opacity="0.92"
+              />
+              <rect
+                x="50"
+                y="46"
+                width="64"
+                height="6.5"
+                rx="3.25"
+                fill="#ffffff"
+                opacity="0.92"
+              />
+              <rect
+                x="50"
+                y="60"
+                width="36"
+                height="6.5"
+                rx="3.25"
+                fill="#ffffff"
+                opacity="0.92"
+              />
+            </g>
+
+            <!-- Floating Upward Arrow Circle Badge -->
+            <g
+              transform="translate(108, 70)"
+              filter="url(#announcementBadgeShadow)"
+            >
+              <circle
+                cx="25"
+                cy="25"
+                r="24"
+                fill="url(#announcementBadgeGrad)"
+                stroke="url(#announcementBadgeRim)"
+                stroke-width="2"
+              />
+              <path
+                d="M 10 18 A 20 20 0 0 1 40 18"
+                stroke="#ffffff"
+                stroke-width="2"
+                stroke-linecap="round"
+                opacity="0.55"
+                fill="none"
+              />
+              <g transform="translate(25, 25)">
+                <path
+                  d="M 0 -9 L -7 -2 C -7.5 -1.5 -7.2 -0.8 -6.5 -0.8 L -3 -0.8 L -3 8 C -3 8.6 -2.6 9 -2 9 L 2 9 C 2.6 9 3 8.6 3 8 L 3 -0.8 L 6.5 -0.8 C 7.2 -0.8 7.5 -1.5 7 -2 Z"
+                  fill="#ffffff"
+                />
+              </g>
+            </g>
+          </svg>
+        </div>
+
         <div class="announcement-heading">
           <span class="announcement-label">
             <BellRing :size="15" /> 更新公告
@@ -31,7 +234,7 @@
           :disabled="saving"
           @click="requestClose"
         >
-          <X :size="18" />
+          <X :size="16" />
         </button>
       </template>
 
@@ -58,7 +261,22 @@
       </div>
 
       <footer class="announcement-footer">
-        <span class="announcement-hint">关闭后，本版本不再提示</span>
+        <label class="announcement-remember">
+          <input
+            v-model="dontShowAgain"
+            type="checkbox"
+            class="announcement-checkbox-native"
+            :disabled="saving"
+          />
+          <span
+            class="announcement-checkbox-custom"
+            :class="{ 'is-checked': dontShowAgain }"
+            aria-hidden="true"
+          >
+            <Check v-if="dontShowAgain" :size="12" :stroke-width="3" />
+          </span>
+          <span class="announcement-hint">关闭后，本版本不再提示</span>
+        </label>
         <button
           ref="confirmButton"
           class="announcement-confirm"
@@ -75,7 +293,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue"
-import { BellRing, X } from "lucide-vue-next"
+import { BellRing, Check, X } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 
 const props = defineProps({
@@ -83,6 +301,7 @@ const props = defineProps({
   saving: { type: Boolean, default: false }
 })
 const emit = defineEmits(["close"])
+const dontShowAgain = ref(true)
 const confirmButton = ref(null)
 let previousFocus = null
 
@@ -113,7 +332,9 @@ const sections = computed(() => {
 })
 
 function requestClose() {
-  if (!props.saving) emit("close")
+  if (!props.saving) {
+    emit("close", { remember: dontShowAgain.value })
+  }
 }
 
 function handleKeydown(event) {
@@ -123,7 +344,7 @@ function handleKeydown(event) {
     requestClose()
   } else if (event.key === "Tab") {
     const targets = event.currentTarget.querySelectorAll(
-      'button:not(:disabled), [tabindex="0"]'
+      'button:not(:disabled), input:not(:disabled), [tabindex="0"]'
     )
     const first = targets[0]
     const last = targets[targets.length - 1]
@@ -152,30 +373,69 @@ onBeforeUnmount(() => {
   color: var(--color-text);
 
   :deep(.base-modal__panel) {
-    width: min(660px, calc(100vw - 48px));
-    max-height: min(760px, calc(100vh - 48px));
-    border-radius: 12px;
+    width: min(670px, calc(100vw - 48px));
+    max-height: min(780px, calc(100vh - 48px));
+    border-radius: 16px;
+    border: 1px solid var(--color-line);
+    background: var(--color-panel);
+    box-shadow:
+      0 24px 64px -12px rgba(15, 23, 42, 0.18),
+      0 0 0 1px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
   }
 
   :deep(.base-modal__header) {
+    position: relative;
     flex-shrink: 0;
-    padding: 24px 28px 20px;
+    padding: 28px 28px 22px;
     border-bottom: 1px solid var(--color-line);
+    overflow: hidden;
+    background: radial-gradient(
+      ellipse 540px 240px at 85% -10%,
+      rgba(219, 234, 254, 0.75) 0%,
+      rgba(224, 242, 254, 0.4) 45%,
+      rgba(255, 255, 255, 0) 80%
+    );
   }
 
   :deep(.base-modal__content) {
     padding: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .announcement-header-decor {
+    position: absolute;
+    right: 56px;
+    top: -8px;
+    width: 175px;
+    height: 140px;
+    pointer-events: none;
+    z-index: 1;
+
+    .announcement-illustration {
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
   }
 
   .announcement-heading {
+    position: relative;
+    z-index: 2;
     min-width: 0;
+    max-width: 420px;
 
     .announcement-label {
-      display: flex;
+      display: inline-flex;
       align-items: center;
       gap: 6px;
-      color: var(--color-primary);
-      font-size: var(--font-size-sm);
+      color: #2563eb;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.2;
     }
 
     .announcement-title-row {
@@ -187,28 +447,40 @@ onBeforeUnmount(() => {
 
       .announcement-title {
         margin: 0;
-        font-size: var(--font-size-xl);
+        font-size: 24px;
+        font-weight: 800;
+        color: var(--color-text);
+        letter-spacing: -0.02em;
+        line-height: 1.25;
       }
 
       .announcement-version {
-        padding: 3px 9px;
-        border: 1px solid var(--color-line);
-        border-radius: 6px;
-        background: var(--color-panel-soft);
-        color: var(--color-text-muted);
-        font-size: var(--font-size-sm);
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 11px;
+        border: 1px solid rgba(186, 230, 253, 0.8);
+        border-radius: 9999px;
+        background: #e0f2fe;
+        color: #0284c7;
+        font-size: 12.5px;
+        font-weight: 600;
+        line-height: 1.3;
       }
     }
 
     .announcement-description {
       margin: 10px 0 0;
       color: var(--color-text-muted);
-      font-size: var(--font-size-sm);
-      line-height: 1.6;
+      font-size: 14px;
+      line-height: 1.5;
     }
   }
 
   .announcement-close {
+    position: absolute;
+    right: 22px;
+    top: 22px;
+    z-index: 5;
     display: grid;
     flex-shrink: 0;
     width: 32px;
@@ -216,13 +488,21 @@ onBeforeUnmount(() => {
     place-items: center;
     border: 1px solid var(--color-line);
     border-radius: 8px;
-    background: var(--color-panel);
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(8px);
     color: var(--color-text-muted);
     cursor: pointer;
+    transition: all 0.15s ease;
 
     &:hover {
       background: var(--color-panel-soft);
+      border-color: var(--color-line-strong);
       color: var(--color-text);
+    }
+
+    &:focus-visible {
+      outline: 2px solid #2563eb;
+      outline-offset: 2px;
     }
 
     &:disabled {
@@ -233,38 +513,77 @@ onBeforeUnmount(() => {
 
   .announcement-notes {
     min-height: 0;
-    overflow: auto;
+    flex: 1;
+    overflow-y: auto;
     overscroll-behavior: contain;
-    padding: 24px 28px;
+    padding: 22px 28px 24px;
+
+    &::-webkit-scrollbar {
+      width: 6px;
+    }
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    &::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.45);
+      border-radius: 9999px;
+
+      &:hover {
+        background: rgba(100, 116, 139, 0.7);
+      }
+    }
 
     .announcement-section {
+      background: var(--color-panel);
+      border: 1px solid var(--color-line);
+      border-radius: 12px;
+      padding: 16px 20px;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.02);
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+
       & + .announcement-section {
-        margin-top: 24px;
+        margin-top: 14px;
+      }
+
+      &:hover {
+        border-color: var(--color-line-strong);
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
       }
 
       .announcement-section-title {
-        margin: 0 0 10px;
-        padding-left: 10px;
-        border-left: 3px solid var(--color-primary);
-        font-size: var(--font-size-base);
-        line-height: 1.3;
+        margin: 0 0 12px;
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--color-text);
+        line-height: 1.4;
+        letter-spacing: -0.01em;
       }
 
       .announcement-items {
-        display: grid;
-        gap: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
         margin: 0;
-        padding-left: 20px;
+        padding: 0;
+        list-style: none;
 
         .announcement-item {
-          padding-left: 2px;
+          position: relative;
+          padding-left: 16px;
           color: var(--color-text-muted);
-          font-size: var(--font-size-sm);
-          line-height: 1.8;
+          font-size: 13.5px;
+          line-height: 1.65;
           overflow-wrap: anywhere;
 
-          &::marker {
-            color: var(--color-text-soft);
+          &::before {
+            content: "";
+            position: absolute;
+            left: 2px;
+            top: 8.5px;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: #2563eb;
           }
         }
       }
@@ -273,6 +592,7 @@ onBeforeUnmount(() => {
     .announcement-empty {
       margin: 0;
       color: var(--color-text-muted);
+      font-size: 14px;
     }
   }
 
@@ -283,31 +603,154 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 12px;
-    padding: 16px 28px;
+    padding: 16px 28px 20px;
     border-top: 1px solid var(--color-line);
+    background: var(--color-panel);
 
-    .announcement-hint {
-      color: var(--color-text-soft);
-      font-size: var(--font-size-xs);
+    .announcement-remember {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      cursor: pointer;
+      user-select: none;
+
+      .announcement-checkbox-native {
+        position: absolute;
+        opacity: 0;
+        width: 0;
+        height: 0;
+        pointer-events: none;
+
+        &:focus-visible + .announcement-checkbox-custom {
+          outline: 2px solid #2563eb;
+          outline-offset: 2px;
+        }
+      }
+
+      .announcement-checkbox-custom {
+        display: grid;
+        place-items: center;
+        width: 17px;
+        height: 17px;
+        flex-shrink: 0;
+        border: 1.5px solid var(--color-line-strong);
+        border-radius: 4px;
+        background: var(--color-panel);
+        color: #ffffff;
+        transition: all 0.15s ease;
+
+        &.is-checked {
+          border-color: #2563eb;
+          background: #2563eb;
+        }
+      }
+
+      .announcement-hint {
+        color: var(--color-text-muted);
+        font-size: 13.5px;
+        line-height: 1;
+        transition: color 0.15s ease;
+      }
+
+      &:hover .announcement-hint {
+        color: var(--color-text);
+      }
+
+      &:hover .announcement-checkbox-custom:not(.is-checked) {
+        border-color: #2563eb;
+      }
     }
 
     .announcement-confirm {
       min-width: 96px;
-      padding: 10px 20px;
-      border: 1px solid var(--color-primary-solid);
+      height: 38px;
+      padding: 0 24px;
+      border: none;
       border-radius: 8px;
-      background: var(--color-primary-solid);
-      color: #fff;
+      background: #1677ff;
+      color: #ffffff;
       cursor: pointer;
-      font-size: var(--font-size-sm);
+      font-size: 14px;
+      font-weight: 500;
+      box-shadow: 0 2px 8px rgba(22, 119, 255, 0.28);
+      transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 
       &:hover {
-        filter: brightness(1.06);
+        filter: brightness(1.08);
+        box-shadow: 0 4px 14px rgba(22, 119, 255, 0.36);
+        transform: translateY(-1px);
+      }
+
+      &:active {
+        transform: translateY(0);
+        filter: brightness(0.96);
+      }
+
+      &:focus-visible {
+        outline: 2px solid #1677ff;
+        outline-offset: 2px;
       }
 
       &:disabled {
         opacity: 0.6;
         cursor: wait;
+        transform: none;
+        box-shadow: none;
+      }
+    }
+  }
+}
+
+:root[data-theme="dark"] .app-announcement-modal {
+  :deep(.base-modal__header) {
+    background: radial-gradient(
+      ellipse 540px 240px at 85% -10%,
+      rgba(30, 58, 138, 0.45) 0%,
+      rgba(14, 116, 144, 0.2) 45%,
+      transparent 80%
+    );
+  }
+
+  .announcement-heading {
+    .announcement-label {
+      color: #60a5fa;
+    }
+
+    .announcement-title-row .announcement-version {
+      background: rgba(14, 165, 233, 0.16);
+      color: #38bdf8;
+      border-color: rgba(56, 189, 248, 0.28);
+    }
+  }
+
+  .announcement-close {
+    background: rgba(30, 41, 59, 0.7);
+    border-color: var(--color-line);
+
+    &:hover {
+      background: var(--color-panel-soft);
+      border-color: var(--color-line-strong);
+    }
+  }
+
+  .announcement-notes .announcement-section {
+    background: var(--color-panel-soft);
+
+    .announcement-items .announcement-item::before {
+      background: #3b82f6;
+    }
+  }
+
+  .announcement-footer {
+    .announcement-remember {
+      .announcement-checkbox-custom {
+        background: var(--color-panel-soft);
+        border-color: var(--color-line-strong);
+
+        &.is-checked {
+          border-color: #2563eb;
+          background: #2563eb;
+        }
       }
     }
   }
