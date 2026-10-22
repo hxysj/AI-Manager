@@ -10,6 +10,7 @@
     @pointermove="movePointer"
     @pointerup="finishSelection"
     @pointercancel="cancelDrag"
+    @wheel="adjustSmartLevel"
     @contextmenu.prevent="reselect"
   >
     <canvas
@@ -23,7 +24,10 @@
       class="capture-auto-region"
       :style="regionStyle(activeRegion)"
     >
-      <span>页面区域 · {{ activeRegion.label }}</span>
+      <span
+        >{{ activeRegion.kind === "window" ? "窗口区域" : "屏幕区域" }} ·
+        {{ activeRegion.label }}</span
+      >
     </div>
     <div v-if="frame && !selection" class="capture-instructions">
       悬停页面区域，点击自动选中 · 拖动自定义区域 · Esc 取消
@@ -407,6 +411,8 @@ const pinImage = ref(null)
 const selection = ref(null)
 const pageRegions = ref([])
 const activeRegion = ref(null)
+const smartLevels = ref([])
+const smartLevel = ref(0)
 const editorSource = ref("")
 const pointer = ref(null)
 const magnifier = ref(null)
@@ -472,6 +478,9 @@ let unlistenFrame
 let unlistenReset
 let frameGeneration = 0
 let resizeFrame
+let smartQueryTimer = 0
+let smartQueryPoint = null
+let smartQuerySequence = 0
 let pinWidth = 0
 let pinDragStart = null
 let pinHeight = 0
@@ -593,6 +602,77 @@ function regionAt(point) {
   )
 }
 
+function applySmartLevels(regions) {
+  if (!frame.value || !Array.isArray(regions)) return
+  const local = regions
+    .map((region) => ({
+      ...region,
+      x: region.x - frame.value.left,
+      y: region.y - frame.value.top
+    }))
+    .filter(
+      (region) =>
+        region.width >= 30 &&
+        region.height >= 30 &&
+        containsRegion(region, {
+          x: pointer.value?.x ?? 0,
+          y: pointer.value?.y ?? 0
+        })
+    )
+  const anchor = local[0]
+  if (
+    !anchor ||
+    !smartLevels.value[0] ||
+    anchor.x !== smartLevels.value[0].x ||
+    anchor.y !== smartLevels.value[0].y
+  )
+    smartLevel.value = 0
+  smartLevels.value = local
+  activeRegion.value =
+    local[Math.min(smartLevel.value, Math.max(local.length - 1, 0))] || null
+}
+
+function queueSmartSelection(point) {
+  if (mode !== "capture" || !frame.value) return
+  smartQueryPoint = point
+  if (smartQueryTimer) return
+  smartQueryTimer = window.setTimeout(async () => {
+    smartQueryTimer = 0
+    const target = smartQueryPoint
+    if (!target || !frame.value) return
+    const sequence = ++smartQuerySequence
+    try {
+      const result = await screenshotApi.call("smart-selection", {
+        x: Math.round(frame.value.left + target.x),
+        y: Math.round(frame.value.top + target.y)
+      })
+      if (sequence === smartQuerySequence && !drag.value && !selection.value)
+        applySmartLevels(result?.regions || [])
+    } catch {
+      // 原生窗口识别不可用时保留当前图像区域识别结果。
+    }
+  }, 45)
+}
+
+function adjustSmartLevel(event) {
+  if (
+    mode !== "capture" ||
+    drag.value ||
+    selection.value ||
+    smartLevels.value.length < 2
+  )
+    return
+  event.preventDefault()
+  smartLevel.value = Math.max(
+    0,
+    Math.min(
+      smartLevels.value.length - 1,
+      smartLevel.value + (event.deltaY > 0 ? 1 : -1)
+    )
+  )
+  activeRegion.value = smartLevels.value[smartLevel.value] || null
+}
+
 function startSelection(event) {
   if (!frame.value || busy.value || event.button !== 0) return
   if (selection.value && editorSource.value) return
@@ -650,7 +730,10 @@ async function movePointer(event) {
   if (!frame.value) return
   const point = desktopPoint(event)
   pointer.value = point
-  if (!drag.value && !selection.value) activeRegion.value = regionAt(point)
+  if (!drag.value && !selection.value) {
+    activeRegion.value = regionAt(point)
+    queueSmartSelection(point)
+  }
   if (drag.value) {
     if (drag.value.kind === "auto") {
       if (
@@ -875,6 +958,23 @@ async function openPinMenu(event) {
   // 先扩展原生窗口，给菜单和子菜单预留可点击的透明区域。
   if (!menuExpanded.value) {
     const imageBounds = pinImage.value?.getBoundingClientRect()
+    // 原生窗口调整是异步的；先锁住图片原尺寸，避免窗口刚变大时图片跟着铺满，
+    // 造成右键菜单第一次打开时闪出一整块放大的截图。
+    const scale = devicePixelRatio || 1
+    const lockedSize = {
+      // pinWidth/pinHeight 是物理像素，网页尺寸需要换算成逻辑像素。
+      width: imageBounds?.width || pinWidth / scale,
+      height: imageBounds?.height || pinHeight / scale
+    }
+    menuSize.value = lockedSize
+    // 先同步写入 DOM，再调用原生调整窗口。这样即使原生窗口立即触发
+    // resize，浏览器也不会先按 100% 把图片铺满新的透明区域。
+    if (pinImage.value) {
+      pinImage.value.style.width = `${lockedSize.width}px`
+      pinImage.value.style.height = `${lockedSize.height}px`
+    }
+    menuExpanded.value = true
+    await nextTick()
     try {
       const originalSize = await screenshotApi.call("pin-action", {
         id,
@@ -882,17 +982,15 @@ async function openPinMenu(event) {
         extraWidth: 560,
         extraHeight: 700
       })
-      menuSize.value = {
-        // 原生尺寸是物理像素，优先使用图片当前的 CSS 尺寸避免 DPI 缩放变形。
-        width:
-          imageBounds?.width ||
-          (originalSize?.width || pinWidth) / (devicePixelRatio || 1),
-        height:
-          imageBounds?.height ||
-          (originalSize?.height || pinHeight) / (devicePixelRatio || 1)
+      // 原生尺寸是物理像素，只有首次布局尚未返回 CSS 尺寸时才回退换算。
+      if (!imageBounds) {
+        menuSize.value = {
+          width: (originalSize?.width || pinWidth) / scale,
+          height: (originalSize?.height || pinHeight) / scale
+        }
       }
-      menuExpanded.value = true
     } catch (cause) {
+      menuExpanded.value = false
       error.value = String(cause)
       return
     }
@@ -1275,6 +1373,9 @@ function resetCapture() {
   pointer.value = null
   pageRegions.value = []
   activeRegion.value = null
+  smartLevels.value = []
+  smartLevel.value = 0
+  smartQuerySequence += 1
   toolbarHovered.value = false
   resizeHovered.value = false
   savedOutput = null
@@ -1379,6 +1480,8 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  if (smartQueryTimer) window.clearTimeout(smartQueryTimer)
+  smartQueryTimer = 0
   cancelPinPaint?.()
   selectionGeneration += 1
   documentGeneration += 1

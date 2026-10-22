@@ -1,17 +1,18 @@
 use super::{decode_bytes, failure, ManagerError, ScreenshotService};
 use image::{DynamicImage, RgbaImage};
+use serde::Serialize;
 use std::{
     mem::{size_of, zeroed},
     ptr::null_mut,
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
-use windows_sys::Win32::{
-    Foundation::{GlobalFree, HGLOBAL},
-    Graphics::{Dwm::{DwmSetWindowAttribute, DWMWA_TRANSITIONS_FORCEDISABLED}, Gdi::*},
+use windows_sys::{core::BOOL, Win32::{
+    Foundation::{GlobalFree, HGLOBAL, HWND, LPARAM, POINT, RECT},
+    Graphics::{Dwm::{DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_TRANSITIONS_FORCEDISABLED}, Gdi::*},
     System::{DataExchange::*, Memory::*},
     UI::{Input::KeyboardAndMouse::*, Shell::DragQueryFileW, WindowsAndMessaging::*},
-};
+}};
 
 pub fn disable_window_transitions(window: &WebviewWindow) -> Result<(), ManagerError> {
     let hwnd = window.hwnd().map_err(failure)?;
@@ -29,6 +30,117 @@ pub fn disable_window_transitions(window: &WebviewWindow) -> Result<(), ManagerE
         return Err(failure(format!("关闭贴图窗口过渡动画失败：{result:#x}")));
     }
     Ok(())
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartRegion {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+    pub kind: String,
+    pub label: String,
+}
+
+struct SmartQuery {
+    x: i32,
+    y: i32,
+    skip: isize,
+    result: Vec<SmartRegion>,
+}
+
+unsafe extern "system" fn collect_smart_window(hwnd: HWND, param: LPARAM) -> BOOL {
+    let query = &mut *(param as *mut SmartQuery);
+    if hwnd as isize == query.skip || IsWindowVisible(hwnd) == 0 {
+        return 1;
+    }
+    let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+    if ex_style & WS_EX_TOOLWINDOW != 0 || ex_style & WS_EX_TRANSPARENT != 0 {
+        return 1;
+    }
+    let mut cloaked = 0_u32;
+    if DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_CLOAKED as u32,
+        (&mut cloaked as *mut u32).cast(),
+        size_of::<u32>() as u32,
+    ) >= 0
+        && cloaked != 0
+    {
+        return 1;
+    }
+    let mut title = [0_u16; 512];
+    let title_len = GetWindowTextW(hwnd, title.as_mut_ptr(), title.len() as i32);
+    if title_len <= 0 {
+        return 1;
+    }
+    let title = String::from_utf16_lossy(&title[..title_len as usize]);
+    let mut rect: RECT = zeroed();
+    if DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_EXTENDED_FRAME_BOUNDS as u32,
+        (&mut rect as *mut RECT).cast(),
+        size_of::<RECT>() as u32,
+    ) < 0
+    {
+        if GetWindowRect(hwnd, &mut rect) == 0 {
+            return 1;
+        }
+    }
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width < 30 || height < 30 || query.x < rect.left || query.x >= rect.right || query.y < rect.top || query.y >= rect.bottom {
+        return 1;
+    }
+    let mut class_name = [0_u16; 256];
+    let class_len = GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32);
+    let class_name = String::from_utf16_lossy(&class_name[..class_len.max(0) as usize]);
+    if matches!(class_name.as_str(), "WorkerW" | "Progman" | "Windows.UI.Core.CoreWindow") {
+        return 1;
+    }
+    query.result.push(SmartRegion {
+        x: rect.left,
+        y: rect.top,
+        width: width as u32,
+        height: height as u32,
+        kind: "window".into(),
+        label: title,
+    });
+    0
+}
+
+pub fn smart_selection(app: &AppHandle, x: i32, y: i32) -> Result<Vec<SmartRegion>, ManagerError> {
+    unsafe {
+        let skip = app
+            .get_webview_window("screenshot-capture")
+            .and_then(|window| window.hwnd().ok())
+            .map(|hwnd| hwnd.0 as isize)
+            .unwrap_or(0);
+        let mut query = SmartQuery { x, y, skip, result: Vec::new() };
+        EnumWindows(Some(collect_smart_window), (&mut query as *mut SmartQuery) as isize);
+        let point = POINT { x, y };
+        let mut monitor_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
+        if !monitor.is_null() {
+            let mut info: MONITORINFO = zeroed();
+            info.cbSize = size_of::<MONITORINFO>() as u32;
+            if GetMonitorInfoW(monitor, &mut info) != 0 {
+                monitor_rect = info.rcMonitor;
+            }
+        }
+        if monitor_rect.right > monitor_rect.left && monitor_rect.bottom > monitor_rect.top {
+            query.result.push(SmartRegion {
+                x: monitor_rect.left,
+                y: monitor_rect.top,
+                width: (monitor_rect.right - monitor_rect.left) as u32,
+                height: (monitor_rect.bottom - monitor_rect.top) as u32,
+                kind: "screen".into(),
+                label: "当前显示器".into(),
+            });
+        }
+        Ok(query.result)
+    }
 }
 
 // 所有 GDI 所有权都在此处释放，剪贴板借用的位图不进入此包装。

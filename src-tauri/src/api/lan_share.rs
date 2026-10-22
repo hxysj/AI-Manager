@@ -17,7 +17,7 @@ use qrcode::render::svg;
 use qrcode::QrCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::io::{ErrorKind, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -504,7 +504,9 @@ pub async fn get_state(
         (files, devices, sessions, groups, messages)
     };
     sort_sessions(&mut sessions);
-    let unread_counts = session_unread_counts(&sessions, &messages);
+    // 删除设备时默认保留历史会话，但这些历史不应继续占用悬浮窗未读数。
+    // 设备重新连接并重新出现在设备清单后，历史消息仍可正常查看。
+    let unread_counts = session_unread_counts(&sessions, &messages, &devices);
     let lan_ips = available_lan_ips()?;
     let mut runtime = registry.inner.lock().await;
     refresh_access_address(&mut runtime, &lan_ips);
@@ -4701,9 +4703,20 @@ fn sort_sessions(sessions: &mut Vec<LanShareSession>) {
 fn session_unread_counts(
     sessions: &[LanShareSession],
     messages: &[LanShareMessage],
+    devices: &[LanShareDevice],
 ) -> HashMap<String, usize> {
+    let device_ids = devices
+        .iter()
+        .map(|device| device.id.as_str())
+        .collect::<HashSet<_>>();
     let session_by_id = sessions
         .iter()
+        .filter(|session| {
+            // 群聊会话的 device_id 为空；单聊只统计仍存在于设备清单的设备。
+            session.mode == "group"
+                || session.device_id.is_empty()
+                || device_ids.contains(session.device_id.as_str())
+        })
         .map(|session| (session.id.as_str(), session))
         .collect::<HashMap<_, _>>();
     let mut counts = HashMap::new();
@@ -6615,6 +6628,9 @@ mod tests {
                 )
                 .await
                 .unwrap();
+                // 删除设备但保留历史时，历史消息仍在，但不能继续显示为悬浮窗未读。
+                let state = super::get_state(&registry, &paths).await.unwrap();
+                assert_eq!(state["data"]["totalUnread"], 0);
                 assert!(read_array::<LanShareDevice>(&paths.lan_share_files.devices)
                     .unwrap()
                     .is_empty());
