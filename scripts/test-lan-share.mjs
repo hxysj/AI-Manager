@@ -80,7 +80,7 @@ const api = {
     fixture.native.hidden = hidden
     return structuredClone(fixture.native)
   },
-  deleteDevice: async payload => {
+  deleteDevice: async (payload) => {
     calls.push({ delete: payload })
     return structuredClone(fixture)
   },
@@ -283,13 +283,15 @@ assert.equal(state.state.native.hidden, false)
 // 高频发现只更新节点运行态，不能清空聊天记录或触发工作台历史重新加载。
 state.state.messages = [{ id: "history" }]
 const version = state.stateVersion
-state.state.groups = [{
-  id: "group",
-  members: [
-    { deviceId: "known", online: false },
-    { deviceId: "browser", online: true }
-  ]
-}]
+state.state.groups = [
+  {
+    id: "group",
+    members: [
+      { deviceId: "known", online: false },
+      { deviceId: "browser", online: true }
+    ]
+  }
+]
 listeners.native({ ...structuredClone(fixture.native), hidden: true })
 assert.equal(state.state.messages[0].id, "history")
 assert.equal(state.stateVersion, version)
@@ -312,14 +314,24 @@ state.openCreateGroup()
 assert.equal(state.createGroupOpen, true)
 assert.equal(state.newGroup.name, "新的群聊")
 assert.deepEqual(state.newGroup.deviceIds, [])
-const nativeGroupDevice = state.connectedDevices.find(device => device.id === "known")
-const legacyGroupDevice = state.connectedDevices.find(device => device.id === "legacy")
+const nativeGroupDevice = state.connectedDevices.find(
+  (device) => device.id === "known"
+)
+const legacyGroupDevice = state.connectedDevices.find(
+  (device) => device.id === "legacy"
+)
 state.toggleGroupDevice(legacyGroupDevice)
 assert.deepEqual(state.newGroup.deviceIds, [], "旧版原生客户端仍然不能加入群聊")
 state.toggleGroupDevice(nativeGroupDevice)
-assert.deepEqual(state.newGroup.deviceIds, ["known"], "新版原生客户端可以加入群聊")
+assert.deepEqual(
+  state.newGroup.deviceIds,
+  ["known"],
+  "新版原生客户端可以加入群聊"
+)
 assert.deepEqual(state.selectedGroupDeviceIds, ["known"])
-const browserGroupDevice = state.connectedDevices.find(device => device.id === "browser")
+const browserGroupDevice = state.connectedDevices.find(
+  (device) => device.id === "browser"
+)
 state.toggleGroupDevice(browserGroupDevice)
 assert.deepEqual(state.newGroup.deviceIds, ["known", "browser"])
 assert.deepEqual(state.selectedGroupDeviceIds, ["browser", "known"])
@@ -327,6 +339,27 @@ state.toggleGroupDevice(browserGroupDevice)
 state.toggleGroupDevice(nativeGroupDevice)
 assert.deepEqual(state.newGroup.deviceIds, [])
 state.createGroupOpen = false
+
+// 验证文件保存成功弹框与路径剪贴板交互
+let copiedPath = ""
+Object.defineProperty(globalThis.navigator, "clipboard", {
+  value: {
+    writeText: async (text) => {
+      copiedPath = text
+    }
+  },
+  configurable: true
+})
+state.savedFile = {
+  name: "opencode-dev.zip",
+  path: "D:\\GithubObject\\opencode-dev.zip",
+  directory: "D:\\GithubObject"
+}
+assert.equal(state.savedPathCopied, false)
+await state.copySavedFilePath()
+assert.equal(state.savedPathCopied, true)
+assert.equal(copiedPath, "D:\\GithubObject\\opencode-dev.zip")
+state.savedFile = null
 
 renderer.render(null, root)
 assert.deepEqual(Object.keys(listeners), [])
@@ -336,11 +369,17 @@ assert.deepEqual(errorsDuringRuntime, [])
 for (const fileName of [
   "src/App.vue",
   "src/features/providers/components/ProviderDeleteConfirmModal.vue",
-  "src/features/lanShare/components/LanShareMessagesPanel.vue"
+  "src/features/lanShare/components/LanShareMessagesPanel.vue",
+  "src/features/lanShare/components/LanSharePreviewDialog.vue"
 ]) {
-  const { descriptor, errors } = parse(readFileSync(fileName, "utf8"), { filename: fileName })
+  const { descriptor, errors } = parse(readFileSync(fileName, "utf8"), {
+    filename: fileName
+  })
   assert.deepEqual(errors, [])
-  const script = compileScript(descriptor, { id: fileName, genDefaultAs: "__component" })
+  const script = compileScript(descriptor, {
+    id: fileName,
+    genDefaultAs: "__component"
+  })
   const template = compileTemplate({
     source: descriptor.template.content,
     filename: fileName,
@@ -350,42 +389,80 @@ for (const fileName of [
   assert.deepEqual(template.errors, [])
   if (!fileName.endsWith("LanShareMessagesPanel.vue")) continue
   for (const style of descriptor.styles) {
-    const result = await compileStyleAsync({ source: style.content, filename: fileName, id: fileName, scoped: style.scoped, preprocessLang: style.lang })
+    const result = await compileStyleAsync({
+      source: style.content,
+      filename: fileName,
+      id: fileName,
+      scoped: style.scoped,
+      preprocessLang: style.lang
+    })
     assert.deepEqual(result.errors, [])
   }
   let finishSend
   api.listMessages = async () => []
-  api.sendMessage = () => new Promise(resolve => { finishSend = resolve })
-  api.onTransferProgress = callback => {
+  api.sendMessage = () =>
+    new Promise((resolve) => {
+      finishSend = resolve
+    })
+  api.onTransferProgress = (callback) => {
     listeners.transfer = callback
-    return () => { delete listeners.transfer }
+    return () => {
+      delete listeners.transfer
+    }
   }
-  api.onMessageCreated = callback => {
+  api.onMessageCreated = (callback) => {
     listeners.message = callback
-    return () => { delete listeners.message }
+    return () => {
+      delete listeners.message
+    }
   }
   const module = { exports: {} }
-  const code = transformSync(`${script.content}\n__component.render = () => null\nexport default __component`, { format: "cjs" }).code
-  new Function("require", "module", "exports", code)(name => {
-    if (name === "@/api") return { lanShareApi: api, systemApi: {} }
-    if (name === "@tauri-apps/api/core") return { isTauri: () => false }
-    if (name === "@/utils/message") return { createMessage: { success() {}, error: error => assert.fail(error), info() {} } }
-    if (name === "@/utils/formatters") return { formatDateTime: () => "" }
-    if (name === "@/features/lanShare/utils") return { formatFileSize: value => String(value) }
-    if (name.endsWith(".vue") || name.includes("/style/css") || name === "element-plus") return {}
-    return require(name)
-  }, module, module.exports)
+  const code = transformSync(
+    `${script.content}\n__component.render = () => null\nexport default __component`,
+    { format: "cjs" }
+  ).code
+  new Function("require", "module", "exports", code)(
+    (name) => {
+      if (name === "@/api") return { lanShareApi: api, systemApi: {} }
+      if (name === "@tauri-apps/api/core") return { isTauri: () => false }
+      if (name === "@/utils/message")
+        return {
+          createMessage: {
+            success() {},
+            error: (error) => assert.fail(error),
+            info() {}
+          }
+        }
+      if (name === "@/utils/formatters") return { formatDateTime: () => "" }
+      if (name === "@/features/lanShare/utils")
+        return { formatFileSize: (value) => String(value) }
+      if (
+        name.endsWith(".vue") ||
+        name.includes("/style/css") ||
+        name === "element-plus"
+      )
+        return {}
+      return require(name)
+    },
+    module,
+    module.exports
+  )
   const vnode = vue.h(module.exports.default, {
     currentDevice: { id: known.id, native: true },
     currentSessionId: "session",
     service: { running: true }
   })
   vnode.appContext = { ...vue.createApp({})._context }
-  vnode.appContext.config.errorHandler = error => errorsDuringRuntime.push(error)
+  vnode.appContext.config.errorHandler = (error) =>
+    errorsDuringRuntime.push(error)
   renderer.render(vnode, root)
   await tick()
   const panel = vnode.component.setupState
-  assert.equal(panel.sendBlocked, false, "普通离线或已配对状态不能误判为对方删除")
+  assert.equal(
+    panel.sendBlocked,
+    false,
+    "普通离线或已配对状态不能误判为对方删除"
+  )
   panel.addPaths(["D:/example.bin"])
   panel.sendMessage()
   await tick()
@@ -393,12 +470,26 @@ for (const fileName of [
   assert.equal(task.status, "sending")
   assert.equal(task.progress, 0)
   assert.equal(task.files[0].transferred, false)
-  listeners.transfer({ messageId: task.id, fileIndex: 0, fileComplete: false, loadedBytes: 50, totalBytes: 100, bytesPerSecond: 25 })
+  listeners.transfer({
+    messageId: task.id,
+    fileIndex: 0,
+    fileComplete: false,
+    loadedBytes: 50,
+    totalBytes: 100,
+    bytesPerSecond: 25
+  })
   assert.equal(task.progress, 50)
   assert.equal(task.bytesPerSecond, 25)
   listeners.transfer({ messageId: "other", loadedBytes: 100, totalBytes: 100 })
   assert.equal(task.progress, 50)
-  listeners.transfer({ messageId: task.id, fileIndex: 0, fileComplete: true, loadedBytes: 100, totalBytes: 100, bytesPerSecond: 25 })
+  listeners.transfer({
+    messageId: task.id,
+    fileIndex: 0,
+    fileComplete: true,
+    loadedBytes: 100,
+    totalBytes: 100,
+    bytesPerSecond: 25
+  })
   assert.equal(task.files[0].transferred, true)
   assert.equal(task.progress, 99)
   assert.equal(task.status, "sending")

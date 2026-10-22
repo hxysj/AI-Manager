@@ -51,18 +51,9 @@ pub(super) struct Config {
 }
 
 fn migrate_transfer_config(config: &mut Config) {
-    if !config.transfer_configured {
-        // 旧版会持久化默认 10 MiB/s；仅迁移该默认值，保留其他自定义配置。
-        if config.transfer
-            == (transfer::Settings {
-                send_mib_per_second: 10,
-                max_concurrent_files: 1,
-            })
-        {
-            config.transfer = transfer::Settings::default();
-        }
-        config.transfer_configured = true;
-    }
+    // 传输策略不再开放配置，启动时统一恢复固定默认值。
+    config.transfer = transfer::Settings::default();
+    config.transfer_configured = true;
 }
 
 impl Default for Config {
@@ -251,7 +242,6 @@ impl NativeRuntime {
             "deviceId": self.config.id,
             "hidden": self.config.hidden,
             "scanning": self.scan_task.as_ref().map(|task| !task.inner().is_finished()).unwrap_or(false),
-            "transfer": self.config.transfer,
             "error": self.error,
             "peers": peers.iter().map(|peer| json!({
                 "id": peer.id, "name": peer.name, "ip": peer.ip, "port": peer.port,
@@ -314,7 +304,6 @@ pub(super) async fn start(
         Err(error) => return Err(error.into()),
     };
     migrate_transfer_config(&mut config);
-    config.transfer.validate()?;
     registry.transfer.configure(config.transfer);
     normalize_native_id(&mut config.id);
     if config.name.is_empty() {
@@ -502,29 +491,6 @@ async fn schedule_peer_check(
         .native
         .discovery_tasks
         .insert(checking.id.clone(), (checking, task));
-}
-
-pub(super) async fn set_transfer_settings(
-    registry: &LanShareServerRegistry,
-    paths: &AppPaths,
-    settings: transfer::Settings,
-) -> Result<(), ManagerError> {
-    settings.validate()?;
-    let mut runtime = registry.inner.lock().await;
-    let mut config = runtime.native.config.clone();
-    if config.id.is_empty() {
-        config = match tokio::fs::read(&paths.lan_share_files.config).await {
-            Ok(bytes) => serde_json::from_slice(&bytes)?,
-            Err(error) if error.kind() == ErrorKind::NotFound => Config::default(),
-            Err(error) => return Err(error.into()),
-        };
-    }
-    config.transfer = settings;
-    config.transfer_configured = true;
-    write_json(&paths.lan_share_files.config, &json!(config)).await?;
-    runtime.native.config = config;
-    registry.transfer.configure(settings);
-    Ok(())
 }
 
 pub(super) async fn set_hidden(
@@ -2038,24 +2004,20 @@ mod tests {
     }
 
     #[test]
-    fn legacy_default_rate_is_lowered_without_replacing_custom_settings() {
-        for (rate, concurrent, configured, expected) in [
-            (10, 1, false, 2),
-            (5, 1, false, 5),
-            (10, 2, false, 10),
-            (10, 1, true, 10),
-        ] {
+    fn transfer_config_is_always_reset_to_default() {
+        for (rate, concurrent, configured) in
+            [(10, 1, false), (5, 1, false), (10, 2, false), (10, 1, true)]
+        {
             let mut value = json!({ "transfer": { "sendMibPerSecond": rate, "maxConcurrentFiles": concurrent } });
             if configured {
                 value["transfer_configured"] = json!(true);
             }
             let mut config: Config = serde_json::from_value(value).unwrap();
             migrate_transfer_config(&mut config);
-            assert_eq!(config.transfer.send_mib_per_second, expected);
-            assert_eq!(config.transfer.max_concurrent_files, concurrent);
+            assert_eq!(config.transfer, transfer::Settings::default());
             assert!(config.transfer_configured);
             migrate_transfer_config(&mut config);
-            assert_eq!(config.transfer.send_mib_per_second, expected);
+            assert_eq!(config.transfer, transfer::Settings::default());
         }
     }
 
@@ -3039,66 +3001,6 @@ mod tests {
             assert_eq!(messages[0].content, "三个附件");
             assert_eq!(messages[0].attachments.len(), 3);
             assert_eq!(messages[0].attachments[0].name, "first.txt");
-            tokio::fs::remove_dir_all(root).await.unwrap();
-        });
-    }
-
-    #[test]
-    fn transfer_settings_persist_without_replacing_existing_pairing() {
-        tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(create_id());
-            let paths = crate::core::paths::resolve_app_paths(&root);
-            let old_config = json!({
-                "id": "native-local", "name": "我的电脑", "peers": [{
-                    "peer": { "id": "native-remote", "name": "对方", "ip": "192.168.1.8", "port": DEFAULT_PORT },
-                    "secret": "fixture-secret", "secure": true
-                }]
-            });
-            write_json(&paths.lan_share_files.config, &old_config)
-                .await
-                .unwrap();
-            let registry = LanShareServerRegistry::new();
-            let settings = transfer::Settings {
-                send_mib_per_second: 5,
-                max_concurrent_files: 2,
-            };
-            set_transfer_settings(&registry, &paths, settings)
-                .await
-                .unwrap();
-            let config: Config = serde_json::from_slice(
-                &tokio::fs::read(&paths.lan_share_files.config)
-                    .await
-                    .unwrap(),
-            )
-            .unwrap();
-            assert_eq!(config.transfer, settings);
-            assert_eq!(config.id, "native-local");
-            assert_eq!(config.peers[0].secret, "fixture-secret");
-            assert!(config.peers[0].secure);
-            assert_eq!(
-                registry.inner.lock().await.native.snapshot()["transfer"],
-                json!(settings)
-            );
-            let first = registry.transfer.acquire_file().await;
-            let second = registry.transfer.acquire_file().await;
-            drop((first, second));
-            assert!(set_transfer_settings(
-                &registry,
-                &paths,
-                transfer::Settings {
-                    send_mib_per_second: 0,
-                    ..settings
-                }
-            )
-            .await
-            .is_err());
-            let saved: Config = serde_json::from_slice(
-                &tokio::fs::read(&paths.lan_share_files.config)
-                    .await
-                    .unwrap(),
-            )
-            .unwrap();
-            assert_eq!(saved.transfer, settings);
             tokio::fs::remove_dir_all(root).await.unwrap();
         });
     }

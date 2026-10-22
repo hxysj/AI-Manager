@@ -73,7 +73,7 @@ impl AppState {
             }
             return self.manager.lock().await.dispatch(app, channel, payload).await;
         }
-        // 文件传输仅持有快照，限速等待期间允许调整设置和使用其他页面。
+        // 文件传输仅持有快照，限速等待期间不阻塞其他页面。
         if matches!(
             channel,
             "lan-share:send-message" | "lan-share:retry-message" | "lan-share:add-files"
@@ -777,15 +777,6 @@ impl ManagerState {
                 )
                 .await
             }
-            "lan-share:set-transfer-settings" => {
-                lan_share::set_transfer_settings(
-                    app.clone(),
-                    &self.lan_share_registry,
-                    &self.paths,
-                    payload.unwrap_or_else(|| json!({})),
-                )
-                .await
-            }
             "lan-share:create-session" => {
                 lan_share::create_session(
                     &self.lan_share_registry,
@@ -795,20 +786,25 @@ impl ManagerState {
                 .await
             }
             "lan-share:activate-session" => {
-                lan_share::activate_session(
+                let result = lan_share::activate_session(
                     &self.lan_share_registry,
                     &self.paths,
                     payload.unwrap_or_else(|| json!({})),
                 )
-                .await
+                .await?;
+                // 会话清零后同步所有窗口的未读徽标。
+                self.emit_state_changed(&app)?;
+                Ok(result)
             }
             "lan-share:delete-message" => {
-                lan_share::delete_message(
+                let result = lan_share::delete_message(
                     &self.lan_share_registry,
                     &self.paths,
                     payload.unwrap_or_else(|| json!({})),
                 )
-                .await
+                .await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
             }
             "lan-share:delete-messages" => {
                 let result = lan_share::delete_messages(
@@ -821,12 +817,14 @@ impl ManagerState {
                 Ok(result)
             }
             "lan-share:clear-session" => {
-                lan_share::clear_session(
+                let result = lan_share::clear_session(
                     &self.lan_share_registry,
                     &self.paths,
                     payload.unwrap_or_else(|| json!({})),
                 )
-                .await
+                .await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
             }
             "lan-share:delete-session" => {
                 let result = lan_share::delete_session(
@@ -840,12 +838,14 @@ impl ManagerState {
                 Ok(result)
             }
             "lan-share:delete-device-history" => {
-                lan_share::delete_device_history(
+                let result = lan_share::delete_device_history(
                     &self.lan_share_registry,
                     &self.paths,
                     payload.unwrap_or_else(|| json!({})),
                 )
-                .await
+                .await?;
+                self.emit_state_changed(&app)?;
+                Ok(result)
             }
             "lan-share:delete-device" => {
                 let result = lan_share::delete_device(

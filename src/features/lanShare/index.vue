@@ -75,7 +75,7 @@
       v-if="settingsOpen"
       class="drop-settings-modal"
       title="设备快传设置"
-      description="管理传输、节点可见性和访问地址"
+      description="管理节点可见性和访问地址"
       @close="settingsOpen = false"
     >
       <div class="drop-settings-content">
@@ -91,21 +91,6 @@
         </div>
 
         <div class="drop-settings-list">
-          <button
-            class="drop-settings-item"
-            type="button"
-            @click="openTransferSettings"
-          >
-            <span class="drop-settings-item-icon"
-              ><Settings2 :size="17"
-            /></span>
-            <span class="drop-settings-item-copy">
-              <span>传输限速与并发</span>
-              <small>控制文件传输速度和同时处理的文件数</small>
-            </span>
-            <ChevronRight :size="16" class="drop-settings-item-arrow" />
-          </button>
-
           <button
             class="drop-settings-item"
             type="button"
@@ -273,6 +258,12 @@
                     >
                       {{ device.native ? "P2P" : "WEB" }}
                     </span>
+                    <span
+                      v-if="deviceUnreadCount(device.id)"
+                      class="cyber-unread-badge"
+                    >
+                      {{ formatUnreadCount(deviceUnreadCount(device.id)) }}
+                    </span>
                   </div>
 
                   <div
@@ -340,6 +331,12 @@
                       group.name
                     }}</span>
                     <span class="cyber-node-tag tag-group">GROUP</span>
+                    <span
+                      v-if="groupUnreadCount(group.id)"
+                      class="cyber-unread-badge"
+                    >
+                      {{ formatUnreadCount(groupUnreadCount(group.id)) }}
+                    </span>
                   </div>
 
                   <div
@@ -483,16 +480,129 @@
       title="文件保存成功"
       @close="savedFile = null"
     >
+      <template #header>
+        <button
+          class="drop-save-success-close"
+          type="button"
+          aria-label="关闭"
+          @click="savedFile = null"
+        >
+          <X :size="16" />
+        </button>
+      </template>
+
       <div class="drop-save-success-content">
-        <p>“{{ savedFile.name }}”已保存到本地。</p>
-        <span class="drop-save-success-path" :title="savedFile.path">
-          {{ savedFile.path }}
-        </span>
+        <!-- 顶部绿色发光成功徽标与散落微粒 -->
+        <div class="drop-save-success-illustration" aria-hidden="true">
+          <svg
+            class="drop-save-success-badge-svg"
+            viewBox="0 0 100 100"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <defs>
+              <filter
+                id="saveSuccessHalo"
+                x="-30%"
+                y="-30%"
+                width="160%"
+                height="160%"
+              >
+                <feGaussianBlur stdDeviation="8" />
+              </filter>
+              <linearGradient
+                id="saveSuccessGrad"
+                x1="20"
+                y1="20"
+                x2="80"
+                y2="80"
+                gradientUnits="userSpaceOnUse"
+              >
+                <stop offset="0%" stop-color="#10b981" />
+                <stop offset="100%" stop-color="#059669" />
+              </linearGradient>
+            </defs>
+
+            <!-- 柔和外发光圈 -->
+            <circle
+              cx="50"
+              cy="50"
+              r="34"
+              fill="#10b981"
+              opacity="0.22"
+              filter="url(#saveSuccessHalo)"
+            />
+
+            <!-- 散落彩色微粒 -->
+            <circle cx="28" cy="22" r="3" fill="#60a5fa" opacity="0.8" />
+            <circle cx="75" cy="24" r="2.5" fill="#34d399" opacity="0.85" />
+            <circle cx="88" cy="48" r="3.5" fill="#60a5fa" opacity="0.75" />
+            <circle cx="16" cy="50" r="2.5" fill="#2dd4bf" opacity="0.8" />
+            <circle cx="24" cy="74" r="3" fill="#38bdf8" opacity="0.8" />
+            <circle cx="78" cy="74" r="2.5" fill="#34d399" opacity="0.85" />
+
+            <!-- 中心绿色主徽标 -->
+            <circle cx="50" cy="50" r="27" fill="url(#saveSuccessGrad)" />
+
+            <!-- 居中白色对勾 -->
+            <path
+              d="M39 50.5 L46.5 58 L61 43.5"
+              stroke="#ffffff"
+              stroke-width="3.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+        </div>
+
+        <h2 class="drop-save-success-title">文件保存成功</h2>
+        <p class="drop-save-success-desc">
+          “<span class="drop-save-success-filename">{{ savedFile.name }}</span
+          >”已保存到本地。
+        </p>
+
+        <!-- 路径卡片 -->
+        <div class="drop-save-success-path-card">
+          <div class="drop-save-success-path-icon" aria-hidden="true">
+            <Folder :size="18" />
+          </div>
+          <span
+            class="drop-save-success-path-text"
+            :title="savedFile.path"
+            @click="copySavedFilePath"
+          >
+            {{ savedFile.path }}
+          </span>
+          <button
+            class="drop-save-success-copy-btn"
+            :class="{ 'is-copied': savedPathCopied }"
+            type="button"
+            :title="savedPathCopied ? '已复制' : '复制文件路径'"
+            aria-label="复制文件路径"
+            @click="copySavedFilePath"
+          >
+            <Check v-if="savedPathCopied" :size="15" :stroke-width="2.5" />
+            <Copy v-else :size="15" />
+          </button>
+        </div>
+
+        <!-- 底部操作按钮 -->
         <div class="drop-save-success-actions">
-          <el-button @click="savedFile = null">关闭</el-button>
-          <el-button type="primary" @click="openSavedFileDirectory">
-            打开所在目录
-          </el-button>
+          <button
+            class="drop-save-btn drop-save-btn--cancel"
+            type="button"
+            @click="savedFile = null"
+          >
+            关闭
+          </button>
+          <button
+            class="drop-save-btn drop-save-btn--primary"
+            type="button"
+            @click="openSavedFileDirectory"
+          >
+            <FolderOpen :size="16" />
+            <span>打开所在目录</span>
+          </button>
         </div>
       </div>
     </BaseModal>
@@ -633,61 +743,6 @@
           </button>
         </div>
       </div>
-    </BaseModal>
-
-    <BaseModal
-      v-if="transferSettingsOpen"
-      class="drop-transfer-modal"
-      title="传输限速与并发"
-      @close="transferSettingsOpen = false"
-    >
-      <form class="drop-transfer-form" @submit.prevent="saveTransferSettings">
-        <p class="drop-transfer-hint">
-          限制本设备发送和接收文件的总速度，客户端和网页传输均生效。 默认 2
-          MiB/s，Wi-Fi 卡顿时可继续降低限速。
-        </p>
-        <label class="drop-transfer-field">
-          <span>文件传输总限速（MiB/s）</span>
-          <el-input-number
-            v-model="transferSettings.sendMibPerSecond"
-            :min="1"
-            :max="1024"
-            :precision="0"
-            :disabled="loading"
-            aria-label="文件传输总限速，单位 MiB 每秒"
-          />
-        </label>
-        <label class="drop-transfer-field">
-          <span>每个方向同时传输的文件数</span>
-          <el-input-number
-            v-model="transferSettings.maxConcurrentFiles"
-            :min="1"
-            :max="8"
-            :precision="0"
-            :disabled="loading"
-            aria-label="每个方向同时传输的文件数"
-          />
-        </label>
-        <p class="drop-transfer-hint">
-          保存后立即生效并保留设置。降低并发时，正在传输的文件继续完成。
-        </p>
-        <div class="drop-transfer-actions">
-          <el-button :disabled="loading" @click="transferSettingsOpen = false">
-            取消
-          </el-button>
-          <el-button
-            type="primary"
-            native-type="submit"
-            :loading="loading"
-            :disabled="
-              !transferSettings.sendMibPerSecond ||
-              !transferSettings.maxConcurrentFiles
-            "
-          >
-            保存设置
-          </el-button>
-        </div>
-      </form>
     </BaseModal>
 
     <!-- 创建群聊弹窗 -->
@@ -891,15 +946,16 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
-import { ElButton, ElCheckbox, ElInput, ElInputNumber } from "element-plus"
-import "element-plus/es/components/button/style/css"
+import { ElCheckbox, ElInput } from "element-plus"
 import "element-plus/es/components/checkbox/style/css"
 import "element-plus/es/components/input/style/css"
-import "element-plus/es/components/input-number/style/css"
 import {
   AlertCircle,
   Check,
   ChevronRight,
+  Copy,
+  Folder,
+  FolderOpen,
   Globe,
   Info,
   Laptop,
@@ -951,8 +1007,7 @@ const state = reactive({
     pairingRequests: [],
     error: "",
     hidden: false,
-    scanning: false,
-    transfer: { sendMibPerSecond: 2, maxConcurrentFiles: 1 }
+    scanning: false
   },
   messages: []
 })
@@ -967,14 +1022,8 @@ const deleteDevicePending = ref(false)
 const deleteDeviceError = ref("")
 const deleteDeviceWithHistory = ref(false)
 const createGroupOpen = ref(false)
-const transferSettingsOpen = ref(false)
 // 控制设备快传设置弹框。
 const settingsOpen = ref(false)
-// 默认使用较低的总速率，避免文件收发挤占同一无线网络。
-const transferSettings = reactive({
-  sendMibPerSecond: 2,
-  maxConcurrentFiles: 1
-})
 const newGroup = reactive({ name: "新的群聊", deviceIds: [] })
 
 const deviceKeyword = ref("")
@@ -1221,6 +1270,26 @@ function devicePreviewText(device) {
   return deviceLastMessage(device.id)
 }
 
+// 设备卡片和群聊卡片按会话记录聚合显示未读数量。
+function deviceUnreadCount(deviceId) {
+  return state.sessions
+    .filter(
+      (session) =>
+        session.deviceId === deviceId && session.mode !== "group"
+    )
+    .reduce((total, session) => total + Number(session.unreadCount || 0), 0)
+}
+
+function groupUnreadCount(groupId) {
+  return state.sessions
+    .filter((session) => session.mode === "group" && session.groupId === groupId)
+    .reduce((total, session) => total + Number(session.unreadCount || 0), 0)
+}
+
+function formatUnreadCount(count) {
+  return count > 99 ? "99+" : count
+}
+
 async function chooseDevice(device) {
   await openDeviceSessions(device.id)
 }
@@ -1257,22 +1326,6 @@ async function toggleHidden() {
   } finally {
     togglingHidden.value = false
   }
-}
-
-// 打开时读取已保存设置，后台状态事件不会覆盖正在编辑的数值。
-function openTransferSettings() {
-  settingsOpen.value = false
-  Object.assign(transferSettings, state.native.transfer)
-  transferSettingsOpen.value = true
-}
-
-async function saveTransferSettings() {
-  if (loading.value) return
-  const result = await runAction(
-    () => lanShareApi.setTransferSettings({ ...transferSettings }),
-    "传输设置已生效"
-  )
-  if (result) transferSettingsOpen.value = false
 }
 
 async function scanNearby() {
@@ -1669,6 +1722,7 @@ async function deleteSession(sessionId) {
 async function openDeviceSessions(deviceId) {
   selectedDeviceId.value = deviceId
   if (isDirectDeviceSession(currentSession.value, deviceId)) {
+    await selectSession(selectedSessionId.value)
     return
   }
   selectedSessionId.value = findDirectSessionId(deviceId)
@@ -1807,6 +1861,35 @@ async function downloadFile(file) {
     createMessage.error(`保存失败：${error?.message || error}`)
   } finally {
     savingFile.value = false
+  }
+}
+
+const savedPathCopied = ref(false)
+let copyPathTimer = null
+
+async function copySavedFilePath() {
+  if (!savedFile.value?.path) return
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(savedFile.value.path)
+    } else {
+      const textarea = document.createElement("textarea")
+      textarea.value = savedFile.value.path
+      textarea.style.position = "fixed"
+      textarea.style.opacity = "0"
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand("copy")
+      document.body.removeChild(textarea)
+    }
+    savedPathCopied.value = true
+    createMessage.success("已复制文件路径")
+    clearTimeout(copyPathTimer)
+    copyPathTimer = setTimeout(() => {
+      savedPathCopied.value = false
+    }, 2000)
+  } catch (error) {
+    createMessage.error(`复制路径失败：${error?.message || error}`)
   }
 }
 
@@ -2362,6 +2445,19 @@ function isTextPreviewFile(name, mimeType) {
                     color: var(--color-primary);
                   }
                 }
+
+                .cyber-unread-badge {
+                  min-width: 18px;
+                  height: 18px;
+                  box-sizing: border-box;
+                  padding: 0 4px;
+                  border-radius: 9px;
+                  background: #ef4444;
+                  color: #ffffff;
+                  font-size: 10px;
+                  line-height: 18px;
+                  text-align: center;
+                }
               }
 
               .cyber-device-preview {
@@ -2731,41 +2827,234 @@ function isTextPreviewFile(name, mimeType) {
   }
 }
 
-.drop-transfer-modal.base-modal {
-  .drop-transfer-form {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-    padding-top: 6px;
-    color: var(--color-text);
-
-    .drop-transfer-hint {
-      margin: 0;
-      color: var(--color-text-muted);
-      font-size: 12.5px;
-      line-height: 1.6;
-    }
-
-    .drop-transfer-field {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-    }
-
-    .drop-transfer-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 10px;
-    }
-  }
-}
-
 .drop-delete-device-modal {
   .drop-delete-warning {
     color: var(--color-danger);
     font-size: var(--font-size-xs);
     line-height: 1.6;
+  }
+}
+
+.drop-save-success-modal {
+  :deep(.base-modal__panel) {
+    width: min(520px, calc(100vw - 48px));
+    border-radius: 18px;
+    border: 1px solid var(--color-line);
+    background: var(--color-panel);
+    box-shadow:
+      0 24px 64px -12px rgba(15, 23, 42, 0.2),
+      0 0 0 1px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
+  }
+
+  :deep(.base-modal__header) {
+    position: relative;
+    padding: 16px 20px 0;
+    border-bottom: none;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  :deep(.base-modal__content) {
+    padding: 0 32px 32px;
+  }
+
+  .drop-save-success-close {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover {
+      background: var(--color-panel-soft);
+      border-color: var(--color-line-strong);
+      color: var(--color-text);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 2px;
+    }
+  }
+
+  .drop-save-success-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+
+    .drop-save-success-illustration {
+      width: 96px;
+      height: 96px;
+      display: grid;
+      place-items: center;
+      margin-top: -6px;
+
+      .drop-save-success-badge-svg {
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+    }
+
+    .drop-save-success-title {
+      margin: 14px 0 0;
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--color-text);
+      line-height: 1.3;
+      letter-spacing: -0.01em;
+    }
+
+    .drop-save-success-desc {
+      margin: 8px 0 0;
+      font-size: 14px;
+      color: var(--color-text-muted);
+      line-height: 1.5;
+      max-width: 440px;
+      word-break: break-all;
+
+      .drop-save-success-filename {
+        color: var(--color-text);
+        font-weight: 500;
+      }
+    }
+
+    .drop-save-success-path-card {
+      width: 100%;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 22px;
+      padding: 9px 12px 9px 14px;
+      border-radius: 10px;
+      border: 1px solid var(--color-line);
+      background: #f8faff;
+      transition: all 0.15s ease;
+
+      &:hover {
+        border-color: #93c5fd;
+      }
+
+      .drop-save-success-path-icon {
+        display: grid;
+        place-items: center;
+        color: #2563eb;
+        flex-shrink: 0;
+      }
+
+      .drop-save-success-path-text {
+        flex: 1;
+        min-width: 0;
+        text-align: left;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 13px;
+        color: var(--color-text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        user-select: all;
+        cursor: pointer;
+      }
+
+      .drop-save-success-copy-btn {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border-radius: 7px;
+        border: 1px solid var(--color-line);
+        background: var(--color-panel);
+        color: var(--color-text-muted);
+        cursor: pointer;
+        flex-shrink: 0;
+        transition: all 0.15s ease;
+
+        &:hover {
+          background: var(--color-panel-soft);
+          border-color: var(--color-line-strong);
+          color: var(--color-text);
+        }
+
+        &.is-copied {
+          border-color: #10b981;
+          background: #ecfdf5;
+          color: #059669;
+        }
+
+        &:focus-visible {
+          outline: 2px solid var(--color-primary);
+          outline-offset: 2px;
+        }
+      }
+    }
+
+    .drop-save-success-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin-top: 24px;
+      width: 100%;
+
+      .drop-save-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        height: 40px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+
+        &--cancel {
+          min-width: 104px;
+          padding: 0 20px;
+          border: 1px solid var(--color-line);
+          background: var(--color-panel);
+          color: var(--color-text);
+
+          &:hover {
+            background: var(--color-panel-soft);
+            border-color: var(--color-line-strong);
+          }
+        }
+
+        &--primary {
+          min-width: 144px;
+          padding: 0 24px;
+          border: none;
+          background: #1677ff;
+          color: #ffffff;
+          box-shadow: 0 2px 8px rgba(22, 119, 255, 0.28);
+
+          &:hover {
+            filter: brightness(1.08);
+            box-shadow: 0 4px 14px rgba(22, 119, 255, 0.36);
+            transform: translateY(-1px);
+          }
+
+          &:active {
+            transform: translateY(0);
+            filter: brightness(0.96);
+          }
+        }
+
+        &:focus-visible {
+          outline: 2px solid var(--color-primary);
+          outline-offset: 2px;
+        }
+      }
+    }
   }
 }
 
@@ -3742,6 +4031,58 @@ function isTextPreviewFile(name, mimeType) {
 }
 
 :root[data-theme="dark"] {
+  .drop-save-success-modal {
+    .drop-save-success-close {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--color-line);
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: var(--color-line-strong);
+      }
+    }
+
+    .drop-save-success-path-card {
+      background: rgba(30, 41, 59, 0.6);
+      border-color: rgba(255, 255, 255, 0.08);
+
+      &:hover {
+        border-color: rgba(59, 130, 246, 0.4);
+      }
+
+      .drop-save-success-path-icon {
+        color: #60a5fa;
+      }
+
+      .drop-save-success-copy-btn {
+        background: rgba(255, 255, 255, 0.06);
+        border-color: rgba(255, 255, 255, 0.1);
+
+        &:hover {
+          background: rgba(255, 255, 255, 0.12);
+          border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        &.is-copied {
+          border-color: rgba(16, 185, 129, 0.5);
+          background: rgba(16, 185, 129, 0.2);
+          color: #34d399;
+        }
+      }
+    }
+
+    .drop-save-btn--cancel {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.12);
+      color: #e2e8f0;
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.2);
+      }
+    }
+  }
+
   .drop-group-modal {
     .drop-group-header-icon {
       background: rgba(37, 99, 235, 0.2);

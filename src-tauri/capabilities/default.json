@@ -3,5 +3,9 @@
   "identifier": "default",
   "description": "默认桌面窗口权限",
   "windows": ["main", "quick-switch", "tool-window-*"],
-  "permissions": ["core:event:default", "core:app:allow-set-app-theme"]
+  "permissions": [
+    "core:event:default",
+    "core:app:allow-set-app-theme",
+    "notification:default"
+  ]
 }

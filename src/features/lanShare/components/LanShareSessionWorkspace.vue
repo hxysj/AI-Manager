@@ -37,10 +37,10 @@
                 currentDevice.remoteDeleted
                   ? "对方已删除 // 无法发送"
                   : currentDevice.online
-                  ? "ONLINE // 节点在线"
-                  : currentDevice.native
-                    ? "PAIRED // 已配对"
-                    : "OFFLINE // 离线"
+                    ? "ONLINE // 节点在线"
+                    : currentDevice.native
+                      ? "PAIRED // 已配对"
+                      : "OFFLINE // 离线"
               }}
             </span>
           </div>
@@ -172,6 +172,9 @@
                 <span class="history-session-id"
                   >会话 {{ session.id.slice(-8) }}</span
                 >
+                <span v-if="session.unreadCount" class="history-unread-badge">
+                  {{ session.unreadCount > 99 ? "99+" : session.unreadCount }}
+                </span>
                 <span class="workspace-history-time">
                   {{ formatDateTime(session.updatedAt) }}
                 </span>
@@ -275,7 +278,9 @@
           >
             <span class="workspace-member-copy">
               {{ member.deviceName || member.deviceId }}
-              <span v-if="member.owner" class="workspace-member-owner">群主</span>
+              <span v-if="member.owner" class="workspace-member-owner"
+                >群主</span
+              >
               <span
                 class="workspace-member-status"
                 :class="{ 'status-online': member.online }"
@@ -284,7 +289,9 @@
               </span>
             </span>
             <el-button
-              v-if="!member.owner && member.deviceId !== currentGroup.ownerDeviceId"
+              v-if="
+                !member.owner && member.deviceId !== currentGroup.ownerDeviceId
+              "
               size="small"
               text
               type="danger"
@@ -672,6 +679,21 @@ function deleteGroup() {
           .history-session-id {
             font-size: 13px;
             font-weight: 500;
+          }
+
+          .history-unread-badge {
+            display: inline-flex;
+            min-width: 18px;
+            height: 18px;
+            align-items: center;
+            justify-content: center;
+            box-sizing: border-box;
+            padding: 0 4px;
+            border-radius: 9px;
+            background: #ef4444;
+            color: #ffffff;
+            font-size: 10px;
+            line-height: 18px;
           }
 
           .workspace-history-time {

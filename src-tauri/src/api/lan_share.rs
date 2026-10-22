@@ -24,7 +24,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
+use tauri_plugin_notification::NotificationExt;
 use tokio::fs::File;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
@@ -503,6 +504,7 @@ pub async fn get_state(
         (files, devices, sessions, groups, messages)
     };
     sort_sessions(&mut sessions);
+    let unread_counts = session_unread_counts(&sessions, &messages);
     let lan_ips = available_lan_ips()?;
     let mut runtime = registry.inner.lock().await;
     refresh_access_address(&mut runtime, &lan_ips);
@@ -611,7 +613,17 @@ pub async fn get_state(
         "native": runtime.native.snapshot(),
         "files": files,
         "devices": devices,
-        "sessions": sessions,
+        "sessions": sessions
+            .iter()
+            .map(|session| {
+                session_state_payload(
+                    session,
+                    unread_counts.get(&session.id).copied().unwrap_or(0),
+                )
+            })
+            .collect::<Vec<_>>(),
+        "unreadCounts": unread_counts,
+        "totalUnread": unread_counts.values().sum::<usize>(),
         "groups": groups,
         "messages": messages
     })))
@@ -3134,10 +3146,6 @@ fn mobile_page_html() -> String {
               <span class="switch-slider"></span>
             </label>
           </div>
-          <div class="settings-row">
-            <span class="settings-label">传输并发优化</span>
-            <span class="settings-value badge-soft">极速直连流</span>
-          </div>
         </div>
       </section>
 
@@ -4470,6 +4478,34 @@ async fn emit_devices_changed(
 
 fn emit_message_created(app: &tauri::AppHandle, message: &LanShareMessage) {
     let _ = app.emit(EVENT_MESSAGE_CREATED, message.clone());
+    if message.direction != "mobile-to-desktop" {
+        return;
+    }
+    let floating_visible = app
+        .get_webview_window("quick-switch")
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    if floating_visible {
+        return;
+    }
+    let content = if message.content.is_empty() {
+        if message.attachments.len() == 1 {
+            format!("收到文件：{}", message.attachments[0].name)
+        } else {
+            format!("收到 {} 个附件", message.attachments.len())
+        }
+    } else {
+        message.content.clone()
+    };
+    if let Err(error) = app
+        .notification()
+        .builder()
+        .title(format!("设备快传 · {}", message.device_name))
+        .body(content)
+        .show()
+    {
+        eprintln!("设备快传系统通知发送失败：{error}");
+    }
 }
 
 pub async fn upsert_device(
@@ -4660,6 +4696,32 @@ fn ensure_session(
 
 fn sort_sessions(sessions: &mut Vec<LanShareSession>) {
     sessions.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+}
+
+fn session_unread_counts(
+    sessions: &[LanShareSession],
+    messages: &[LanShareMessage],
+) -> HashMap<String, usize> {
+    let session_by_id = sessions
+        .iter()
+        .map(|session| (session.id.as_str(), session))
+        .collect::<HashMap<_, _>>();
+    let mut counts = HashMap::new();
+    for message in messages
+        .iter()
+        .filter(|message| message.direction == "mobile-to-desktop" && !message.read)
+    {
+        if session_by_id.contains_key(message.session_id.as_str()) {
+            *counts.entry(message.session_id.clone()).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+fn session_state_payload(session: &LanShareSession, unread_count: usize) -> Value {
+    let mut payload = serde_json::to_value(session).unwrap_or_else(|_| json!({}));
+    payload["unreadCount"] = json!(unread_count);
+    payload
 }
 
 async fn fill_session_ips(
@@ -4926,7 +4988,7 @@ pub async fn create_session(
         return Err(ManagerError::System("设备不能为空。".to_string()));
     }
 
-    let (session, sessions) = {
+    let session = {
         let _storage = registry.storage.lock().await;
         let device = find_device_for_session(paths, &device_id)?;
         let device_name = device_display_name(&device);
@@ -4949,7 +5011,7 @@ pub async fn create_session(
         sessions.insert(0, session.clone());
         sort_sessions(&mut sessions);
         write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
-        (session, sessions)
+        session
     };
     registry
         .inner
@@ -4960,7 +5022,6 @@ pub async fn create_session(
 
     let mut state = get_state(registry, paths).await?;
     state["data"]["currentSession"] = json!(session);
-    state["data"]["sessions"] = json!(sessions);
     Ok(state)
 }
 
@@ -4975,7 +5036,7 @@ pub async fn activate_session(
         return Err(ManagerError::System("会话不能为空。".to_string()));
     }
 
-    let (current_session, sessions) = {
+    let current_session = {
         let _storage = registry.storage.lock().await;
         let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
         let Some(index) = sessions.iter().position(|session| session.id == session_id) else {
@@ -4986,7 +5047,30 @@ pub async fn activate_session(
         let current_session = sessions[index].clone();
         sort_sessions(&mut sessions);
         write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
-        (current_session, sessions)
+        let visible_ids = if current_session.mode == "group" {
+            sessions
+                .iter()
+                .filter(|session| session.group_id == current_session.group_id)
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>()
+        } else {
+            vec![current_session.id.as_str()]
+        };
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        let mut changed = false;
+        for message in messages.iter_mut() {
+            if message.direction == "mobile-to-desktop"
+                && !message.read
+                && visible_ids.contains(&message.session_id.as_str())
+            {
+                message.read = true;
+                changed = true;
+            }
+        }
+        if changed {
+            write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
+        }
+        current_session
     };
     registry.inner.lock().await.active_sessions.insert(
         current_session.device_id.clone(),
@@ -4995,7 +5079,6 @@ pub async fn activate_session(
 
     let mut state = get_state(registry, paths).await?;
     state["data"]["currentSession"] = json!(current_session);
-    state["data"]["sessions"] = json!(sessions);
     Ok(state)
 }
 
@@ -5433,18 +5516,6 @@ pub async fn set_hidden(
     let result = native::set_hidden(registry, paths, hidden).await?;
     emit_state_changed(&app, registry, paths).await?;
     Ok(lan_share_response(result))
-}
-
-pub async fn set_transfer_settings(
-    app: tauri::AppHandle,
-    registry: &LanShareServerRegistry,
-    paths: &AppPaths,
-    payload: Value,
-) -> Result<Value, ManagerError> {
-    let settings: transfer::Settings = serde_json::from_value(payload)?;
-    native::set_transfer_settings(registry, paths, settings).await?;
-    emit_state_changed(&app, registry, paths).await?;
-    get_state(registry, paths).await
 }
 
 pub async fn scan_devices(registry: &LanShareServerRegistry) -> Result<Value, ManagerError> {
@@ -6469,9 +6540,9 @@ mod tests {
     use super::{
         activate_session, add_files, append_message, create_file_id, create_group, create_id,
         create_session, delete_messages, delete_session, device_id_from_ip, export_files_zip,
-        list_messages, mobile_files_payload, read_array, refresh_files, remove_files, string_value,
-        upsert_device, LanShareDevice, LanShareFile, LanShareMessage, LanShareServerRegistry,
-        LanShareSession,
+        get_state, list_messages, mobile_files_payload, read_array, refresh_files, remove_files,
+        string_value, upsert_device, LanShareDevice, LanShareFile, LanShareMessage,
+        LanShareServerRegistry, LanShareSession,
     };
     use crate::core::paths::resolve_app_paths;
     use serde_json::json;
@@ -6894,6 +6965,120 @@ mod tests {
             .unwrap();
 
             assert_eq!(message.content, content);
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
+    fn incoming_messages_are_unread_until_session_activation() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id());
+            let paths = resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            let device = upsert_device(
+                &registry,
+                &paths,
+                "unread-device",
+                "未读设备",
+                "MonkeyThief/Desktop",
+                "192.168.1.12",
+            )
+            .await
+            .unwrap();
+            let created = create_session(&registry, &paths, json!({ "deviceId": device.id }))
+                .await
+                .unwrap();
+            let session_id = created["data"]["currentSession"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+
+            append_message(
+                &registry,
+                &paths,
+                &device.id,
+                &session_id,
+                "mobile-to-desktop",
+                "第一条",
+                true,
+            )
+            .await
+            .unwrap();
+            append_message(
+                &registry,
+                &paths,
+                &device.id,
+                &session_id,
+                "mobile-to-desktop",
+                "第二条",
+                true,
+            )
+            .await
+            .unwrap();
+            let second = create_session(&registry, &paths, json!({ "deviceId": device.id }))
+                .await
+                .unwrap();
+            let second_session_id = second["data"]["currentSession"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            append_message(
+                &registry,
+                &paths,
+                &device.id,
+                &second_session_id,
+                "mobile-to-desktop",
+                "第三条",
+                true,
+            )
+            .await
+            .unwrap();
+
+            let state = get_state(&registry, &paths).await.unwrap();
+            assert_eq!(state["data"]["totalUnread"], 3);
+            let sessions = state["data"]["sessions"].as_array().unwrap();
+            assert_eq!(
+                sessions
+                    .iter()
+                    .find(|session| session["id"] == session_id)
+                    .unwrap()["unreadCount"],
+                2
+            );
+            assert_eq!(
+                sessions
+                    .iter()
+                    .find(|session| session["id"] == second_session_id)
+                    .unwrap()["unreadCount"],
+                1
+            );
+
+            let cleared = activate_session(
+                &registry,
+                &paths,
+                json!({ "sessionId": session_id }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(cleared["data"]["totalUnread"], 1);
+            assert_eq!(
+                cleared["data"]["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|session| session["id"] == session_id)
+                    .unwrap()["unreadCount"],
+                0
+            );
+            assert_eq!(
+                cleared["data"]["sessions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|session| session["id"] == second_session_id)
+                    .unwrap()["unreadCount"],
+                1
+            );
 
             let _ = tokio::fs::remove_dir_all(root).await;
         });

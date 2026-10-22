@@ -24,19 +24,6 @@ impl Default for Settings {
     }
 }
 
-impl Settings {
-    pub(super) fn validate(&self) -> Result<(), ManagerError> {
-        if !(1..=1024).contains(&self.send_mib_per_second)
-            || !(1..=8).contains(&self.max_concurrent_files)
-        {
-            return Err(ManagerError::System(
-                "传输限速需为 1–1024 MiB/s，并发文件数需为 1–8。".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
 struct Budget {
     settings: Settings,
     tokens: f64,
@@ -308,22 +295,6 @@ mod tests {
                 .await
                 .unwrap();
         });
-    }
-
-    #[test]
-    fn invalid_settings_are_rejected_and_old_config_gets_safe_defaults() {
-        assert_eq!(
-            serde_json::from_str::<Settings>("{}").unwrap(),
-            Settings::default()
-        );
-        for (rate, concurrent) in [(0, 1), (1025, 1), (10, 0), (10, 9)] {
-            assert!(Settings {
-                send_mib_per_second: rate,
-                max_concurrent_files: concurrent,
-            }
-            .validate()
-            .is_err());
-        }
     }
 
     #[test]

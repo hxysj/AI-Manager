@@ -165,13 +165,31 @@
           ></button>
         </nav>
       </template>
+      <button
+        v-if="lanShareUnreadCount"
+        class="quick-switch-unread-badge"
+        type="button"
+        :title="`设备快传有 ${lanShareUnreadCount} 条未读消息`"
+        @pointerdown.stop
+        @click.stop="openLanShare"
+      >
+        {{ displayUnreadCount }}
+      </button>
     </article>
   </section>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue"
-import { appApi, usageApi } from "@/api"
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch
+} from "vue"
+import { appApi, lanShareApi, usageApi } from "@/api"
 import AiIcon from "@/components/AiIcon.vue"
 import DesktopPet from "@/components/DesktopPet.vue"
 import { getDesktopPet } from "@/constants/desktop-pets"
@@ -193,6 +211,25 @@ const hovered = ref(false)
 const selectedPage = ref("home")
 const usageSummary = ref(null)
 const usageError = ref("")
+const lanShareUnreadCount = ref(0)
+let unsubscribeLanShare = null
+
+// 统一使用后端快照，避免主窗口和悬浮窗各自累加产生偏差。
+function applyLanShareState(payload) {
+  const data = payload?.service ? payload : payload?.data || {}
+  lanShareUnreadCount.value = Number(data.totalUnread || 0)
+}
+
+// 气泡点击直接打开设备快传工具窗口。
+function openLanShare() {
+  appApi.showMainPanel({ toolId: "lan-share" }).catch((error) => {
+    createMessage.error(error.message || String(error))
+  })
+}
+
+const displayUnreadCount = computed(() =>
+  lanShareUnreadCount.value > 99 ? "99+" : lanShareUnreadCount.value
+)
 const desktopPet = computed(() =>
   props.state.appSettings?.desktop?.enabled
     ? getDesktopPet(props.state.appSettings.desktop.petId)
@@ -582,6 +619,10 @@ function handleVisibilityChange(layout) {
   if (layout.visible) {
     centerPosition.value = { x: layout.centerX, y: layout.centerY }
     screenEdge.value = layout.edge || ""
+    lanShareApi
+      .getState()
+      .then(applyLanShareState)
+      .catch(() => {})
   }
   windowVisible.value = layout.visible
 }
@@ -719,7 +760,17 @@ onBeforeUnmount(() => {
   clearInterval(usageTimer)
   clearInterval(pageTimer)
   unsubscribeVisibility?.()
+  unsubscribeLanShare?.()
   stopDrag()
+})
+
+onMounted(() => {
+  // 悬浮窗单独加载设备快传状态，主窗口隐藏时也能及时更新气泡。
+  unsubscribeLanShare = lanShareApi.onStateChanged(applyLanShareState)
+  lanShareApi
+    .getState()
+    .then(applyLanShareState)
+    .catch(() => {})
 })
 </script>
 
@@ -1017,6 +1068,29 @@ onBeforeUnmount(() => {
       }
       .quick-switch-provider {
         color: var(--color-text-secondary);
+      }
+    }
+    .quick-switch-unread-badge {
+      position: absolute;
+      top: -7px;
+      right: -7px;
+      min-width: 20px;
+      height: 20px;
+      box-sizing: border-box;
+      padding: 0 5px;
+      border: 2px solid var(--color-panel);
+      border-radius: 10px;
+      background: #ef4444;
+      color: #ffffff;
+      cursor: pointer;
+      font-size: 10px;
+      line-height: 16px;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(185, 28, 28, 0.28);
+      &:hover,
+      &:focus-visible {
+        background: #dc2626;
+        outline: none;
       }
     }
     .quick-switch-usage {

@@ -26,9 +26,6 @@ export const lanShareApi = {
   // 文件进度独立推送，避免每个分块重新加载整个会话。
   onTransferProgress: (callback) =>
     subscribe("lan-share:transfer-progress", callback),
-  // 所有设备共用本机发送限额，设置由后端持久化并即时应用。
-  setTransferSettings: (payload) =>
-    request("lan-share:set-transfer-settings", payload),
   scanDevices: () => request("lan-share:scan-devices"),
   createSession: (payload) => request("lan-share:create-session", payload),
   activateSession: (payload) => request("lan-share:activate-session", payload),
