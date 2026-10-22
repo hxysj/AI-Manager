@@ -1085,6 +1085,17 @@ pub async fn create_group(
         members: Vec::new(),
     };
 
+    let native_group_capabilities = {
+        let runtime = registry.inner.lock().await;
+        runtime
+            .native
+            .config
+            .peers
+            .iter()
+            .map(|trusted| (trusted.peer.id.clone(), trusted.peer.supports_groups))
+            .collect::<HashMap<_, _>>()
+    };
+
     {
         let _storage = registry.storage.lock().await;
         let devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices)?;
@@ -1094,9 +1105,14 @@ pub async fn create_group(
                 .iter()
                 .find(|device| &device.id == device_id)
                 .ok_or_else(|| ManagerError::System("邀请的设备已不存在，请重新选择。".into()))?;
-            if device.user_agent == "MonkeyThief/Desktop" {
+            if device.user_agent == "MonkeyThief/Desktop"
+                && !native_group_capabilities
+                    .get(&device.id)
+                    .copied()
+                    .unwrap_or(false)
+            {
                 return Err(ManagerError::System(
-                    "客户端设备目前仅支持单聊，请选择已连接过的网页设备加入群聊。".into(),
+                    "该客户端版本不支持群聊，请先更新对方设备后再邀请。".into(),
                 ));
             }
             if !invited
@@ -1132,6 +1148,15 @@ pub async fn create_group(
                     payload: json!({ "type": "groupsChanged" }),
                 });
             }
+        }
+    }
+    for member in &group.members {
+        if native_group_capabilities
+            .get(&member.device_id)
+            .copied()
+            .unwrap_or(false)
+        {
+            let _ = native::sync_group_to_peer(registry, paths, &group, &member.device_id).await;
         }
     }
     let mut state = get_state(registry, paths).await?;
@@ -5174,6 +5199,16 @@ pub async fn send_message(
     };
     if let Some(group_session) = group_session_by_id(paths, &target_session_id)? {
         let targets = group_online_targets(registry, paths, &group_session.group_id).await?;
+        let native_deliveries = native::deliver_group(
+            registry,
+            paths,
+            &group_session.group_id,
+            &content,
+            &files,
+            &message_id,
+            Some(&app),
+        )
+        .await?;
         let stored = append_message_with_attachments(
             registry,
             paths,
@@ -5185,7 +5220,7 @@ pub async fn send_message(
             &group_session.id,
             "desktop-to-mobile",
             &content,
-            !targets.is_empty(),
+            native_deliveries > 0 || !targets.is_empty(),
             &files,
             Some(&message_id),
         )

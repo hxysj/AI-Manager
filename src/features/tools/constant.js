@@ -92,7 +92,7 @@ export function getToolItems({ cliTargets = [], repos = [] } = {}) {
       id: 'lan-share',
       label: '设备快传',
       summary: '客户端直接连接，聊天中发送文件与图片；网页仅作为访客入口。',
-      meta: '自动发现',
+      meta: '手动扫描',
       icon: Share2,
       theme: 'violet'
     }

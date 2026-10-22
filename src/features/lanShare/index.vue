@@ -607,7 +607,7 @@
         <div class="drop-connect-hint-row">
           <Info :size="15" class="drop-connect-hint-icon" />
           <span class="drop-connect-hint">
-            未确认、已拒绝或相同节点的设备不会加入候选节点列表。隐藏节点仍可被自动发现。
+            未确认、已拒绝或相同节点的设备不会加入候选节点列表。隐藏节点不会被其他设备发现，但仍可主动扫描局域网设备。
           </span>
         </div>
 
@@ -737,7 +737,8 @@
         <div class="drop-group-notice" role="note">
           <Info :size="16" class="drop-group-notice-icon" />
           <div class="drop-group-notice-text">
-            群聊至少需要 3 人（包含本机），请至少选择两台设备。离线的网页设备重新连接后可查看邀请。
+            群聊至少需要 3
+            人（包含本机），请至少选择两台设备。离线的网页设备重新连接后可查看邀请。
           </div>
         </div>
 
@@ -749,19 +750,23 @@
             </span>
           </div>
 
-          <div class="drop-group-devices" role="group" aria-label="可选设备列表">
+          <div
+            class="drop-group-devices"
+            role="group"
+            aria-label="可选设备列表"
+          >
             <div
-              v-for="device in state.devices"
+              v-for="device in connectedDevices"
               :key="device.id"
               class="drop-group-device-card"
               :class="{
                 'is-selected': newGroup.deviceIds.includes(device.id),
-                'is-disabled': loading || device.native
+                'is-disabled': loading || device.groupSupported === false
               }"
               role="checkbox"
               :aria-checked="newGroup.deviceIds.includes(device.id)"
-              :aria-disabled="loading || device.native"
-              :tabindex="device.native ? -1 : 0"
+              :aria-disabled="loading || device.groupSupported === false"
+              :tabindex="device.groupSupported === false ? -1 : 0"
               @click="toggleGroupDevice(device)"
               @keydown.space.prevent="toggleGroupDevice(device)"
               @keydown.enter.prevent="toggleGroupDevice(device)"
@@ -770,7 +775,7 @@
                 class="drop-group-checkbox"
                 :class="{
                   'is-checked': newGroup.deviceIds.includes(device.id),
-                  'is-disabled': device.native
+                  'is-disabled': device.groupSupported === false
                 }"
                 aria-hidden="true"
               >
@@ -796,10 +801,10 @@
 
               <div class="drop-group-device-status">
                 <span
-                  v-if="device.native"
+                  v-if="device.groupSupported === false"
                   class="drop-group-status-badge drop-group-status-badge--disabled"
                 >
-                  客户端暂仅支持单聊
+                  客户端版本不支持群聊
                 </span>
                 <span
                   v-else-if="device.online"
@@ -816,7 +821,7 @@
               </div>
             </div>
 
-            <div v-if="!state.devices.length" class="drop-group-empty">
+            <div v-if="!connectedDevices.length" class="drop-group-empty">
               <Users :size="32" class="drop-group-empty-icon" />
               <p class="drop-group-empty-text">暂无可邀请设备</p>
               <p class="drop-group-empty-subtext">
@@ -972,14 +977,6 @@ const transferSettings = reactive({
 })
 const newGroup = reactive({ name: "新的群聊", deviceIds: [] })
 
-const selectedGroupDeviceIds = computed(() =>
-  state.devices
-    .filter(
-      (device) => !device.native && newGroup.deviceIds.includes(device.id)
-    )
-    .map((device) => device.id)
-)
-
 const deviceKeyword = ref("")
 const connectDialogOpen = ref(false)
 const connectIpFilter = ref("")
@@ -1133,7 +1130,7 @@ const connectedDevices = computed(() => {
   const devices = new Map(
     state.devices
       .filter((device) => !device.native)
-      .map((device) => [device.id, device])
+      .map((device) => [device.id, { ...device, groupSupported: true }])
   )
   for (const peer of state.native.peers || []) {
     if (!peer.paired && !peer.remoteDeleted) continue
@@ -1145,6 +1142,16 @@ const connectedDevices = computed(() => {
   }
   return [...devices.values()]
 })
+
+const selectedGroupDeviceIds = computed(() =>
+  connectedDevices.value
+    .filter(
+      (device) =>
+        device.groupSupported !== false &&
+        newGroup.deviceIds.includes(device.id)
+    )
+    .map((device) => device.id)
+)
 
 const visibleDevices = computed(() => {
   const query = deviceKeyword.value.trim().toLowerCase()
@@ -1520,7 +1527,7 @@ function openCreateGroup() {
 }
 
 function toggleGroupDevice(device) {
-  if (loading.value || device?.native) return
+  if (loading.value || device?.groupSupported === false) return
   const index = newGroup.deviceIds.indexOf(device.id)
   if (index > -1) {
     newGroup.deviceIds.splice(index, 1)

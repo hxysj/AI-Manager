@@ -21,7 +21,8 @@ const candidate = {
   ip: "192.168.1.8",
   port: 17631,
   online: true,
-  paired: false
+  paired: false,
+  groupSupported: true
 }
 const known = {
   id: "known",
@@ -29,7 +30,17 @@ const known = {
   ip: "192.168.1.9",
   port: 17631,
   online: true,
-  paired: true
+  paired: true,
+  groupSupported: true
+}
+const legacy = {
+  id: "legacy",
+  name: "旧版客户端",
+  ip: "192.168.1.10",
+  port: 17631,
+  online: true,
+  paired: true,
+  groupSupported: false
 }
 const fixture = {
   service: {
@@ -41,12 +52,13 @@ const fixture = {
     qrSvg: ""
   },
   native: {
-    peers: [candidate, known],
+    peers: [candidate, known, legacy],
     hidden: false,
     scanning: false
   },
   devices: [
     { id: "known", name: "已连接设备", native: true },
+    { id: "legacy", name: "旧版客户端", native: true },
     { id: "old-unpaired", name: "旧未配对记录", native: true },
     { id: "browser", name: "已接入网页", native: false }
   ],
@@ -169,7 +181,8 @@ await tick()
 const state = vnode.component.setupState
 assert.deepEqual(state.connectedDevices.map((device) => device.id).sort(), [
   "browser",
-  "known"
+  "known",
+  "legacy"
 ])
 assert.equal(calls.length, 0)
 
@@ -294,17 +307,24 @@ state.requestDeleteDevice(known)
 assert.equal(state.deleteDeviceWithHistory, false)
 state.closeDeleteDevice()
 
-// 验证创建群聊面板交互与原生客户端单聊互斥逻辑
+// 验证创建群聊面板交互与新版原生客户端群聊能力。
 state.openCreateGroup()
 assert.equal(state.createGroupOpen, true)
 assert.equal(state.newGroup.name, "新的群聊")
 assert.deepEqual(state.newGroup.deviceIds, [])
-state.toggleGroupDevice(state.state.devices[0]) // native === true
-assert.deepEqual(state.newGroup.deviceIds, [], "原生桌面客户端暂不支持直接加入群聊信道")
-state.toggleGroupDevice(state.state.devices[2]) // browser, native: false
-assert.deepEqual(state.newGroup.deviceIds, ["browser"])
-assert.deepEqual(state.selectedGroupDeviceIds, ["browser"])
-state.toggleGroupDevice(state.state.devices[2])
+const nativeGroupDevice = state.connectedDevices.find(device => device.id === "known")
+const legacyGroupDevice = state.connectedDevices.find(device => device.id === "legacy")
+state.toggleGroupDevice(legacyGroupDevice)
+assert.deepEqual(state.newGroup.deviceIds, [], "旧版原生客户端仍然不能加入群聊")
+state.toggleGroupDevice(nativeGroupDevice)
+assert.deepEqual(state.newGroup.deviceIds, ["known"], "新版原生客户端可以加入群聊")
+assert.deepEqual(state.selectedGroupDeviceIds, ["known"])
+const browserGroupDevice = state.connectedDevices.find(device => device.id === "browser")
+state.toggleGroupDevice(browserGroupDevice)
+assert.deepEqual(state.newGroup.deviceIds, ["known", "browser"])
+assert.deepEqual(state.selectedGroupDeviceIds, ["browser", "known"])
+state.toggleGroupDevice(browserGroupDevice)
+state.toggleGroupDevice(nativeGroupDevice)
 assert.deepEqual(state.newGroup.deviceIds, [])
 state.createGroupOpen = false
 

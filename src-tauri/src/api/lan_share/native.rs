@@ -21,6 +21,8 @@ pub(super) struct Peer {
     pub(super) port: u16,
     #[serde(default)]
     pub(super) last_seen_at: u64,
+    #[serde(default)]
+    pub(super) supports_groups: bool,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -253,6 +255,7 @@ impl NativeRuntime {
             "error": self.error,
             "peers": peers.iter().map(|peer| json!({
                 "id": peer.id, "name": peer.name, "ip": peer.ip, "port": peer.port,
+                "groupSupported": peer.supports_groups,
                 "online": self.online(&peer.id),
                 "paired": self.authenticate(&peer.id).is_some(),
                 "remoteDeleted": self.config.remote_deleted_peers.iter().any(|id| id == &peer.id),
@@ -745,7 +748,9 @@ async fn refresh_peer(
         return Err(ManagerError::System("设备配对已撤销。".into()));
     };
     let address_changed = trusted.peer.ip != peer.ip || trusted.peer.port != peer.port;
-    let changed = address_changed || trusted.peer.name != peer.name;
+    let changed = address_changed
+        || trusted.peer.name != peer.name
+        || trusted.peer.supports_groups != peer.supports_groups;
     trusted.peer = peer.clone();
     if address_changed {
         if let Some(task) = runtime.native.delivery_tasks.remove(&peer.id) {
@@ -845,7 +850,10 @@ pub async fn connect_peer(
     let request_id = create_id();
     auth.receiver = peer.id.clone();
     let response = secure_call(&client, &peer, &auth, "pair", json!({
-        "requestId": request_id, "publicKey": public_key, "peer": { "id": identity.id, "name": identity.name, "ip": "", "port": own_port }
+        "requestId": request_id, "publicKey": public_key, "peer": {
+            "id": identity.id, "name": identity.name, "ip": "", "port": own_port,
+            "supportsGroups": true
+        }
     }), &[], None).await?;
     let receiver_key = string_value(response.get("publicKey"));
     let secret = transport::pair_secret(
@@ -982,7 +990,20 @@ async fn peer_session(
     paths: &AppPaths,
     peer: &Peer,
     requested: &str,
+    group_payload: Option<&Value>,
 ) -> Result<LanShareSession, ManagerError> {
+    if let Some(group_payload) = group_payload.filter(|value| !value.is_null()) {
+        let group: LanShareGroup = serde_json::from_value(group_payload.clone())
+            .map_err(|_| ManagerError::System("群聊信息格式无效。".into()))?;
+        if group.id.is_empty()
+            || group.owner_device_id.is_empty()
+            || (group.owner_device_id != peer.id
+                && !group.members.iter().any(|member| member.device_id == peer.id))
+        {
+            return Err(ManagerError::System("群聊成员身份无效。".into()));
+        }
+        return ensure_native_group_session(registry, paths, &group).await;
+    }
     let _storage = registry.storage.lock().await;
     if !requested.is_empty() {
         return read_array::<LanShareSession>(&paths.lan_share_files.sessions)?
@@ -993,6 +1014,67 @@ async fn peer_session(
             .ok_or_else(|| ManagerError::System("会话不属于当前设备。".into()));
     }
     ensure_session(paths, &peer.id, "", &peer.name, &peer.ip)
+}
+
+async fn ensure_native_group_session(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    incoming: &LanShareGroup,
+) -> Result<LanShareSession, ManagerError> {
+    let _storage = registry.storage.lock().await;
+    let mut group = incoming.clone();
+    let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
+    let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+    let now = now_millis();
+
+    let owner_session = if let Some(session) = sessions
+        .iter_mut()
+        .find(|session| session.mode == "group" && session.group_id == group.id && session.device_id.is_empty())
+    {
+        session.group_name = group.name.clone();
+        session.message_visibility = group.message_visibility.clone();
+        session.updated_at = now;
+        session.clone()
+    } else {
+        let session = LanShareSession {
+            id: create_id(),
+            device_id: String::new(),
+            device_name: "群聊".to_string(),
+            ip: String::new(),
+            mode: "group".to_string(),
+            group_id: group.id.clone(),
+            group_name: group.name.clone(),
+            message_visibility: group.message_visibility.clone(),
+            joined_at: now,
+            created_at: now,
+            updated_at: now,
+        };
+        sessions.push(session.clone());
+        session
+    };
+
+    for member in group.members.clone() {
+        let device = LanShareDevice {
+            id: member.device_id.clone(),
+            name: member.device_name.clone(),
+            auto_name: member.device_name.clone(),
+            user_agent: "MonkeyThief/Desktop".to_string(),
+            ip: member.ip.clone(),
+            first_seen_at: member.joined_at,
+            last_seen_at: member.last_seen_at,
+        };
+        upsert_group_session(&mut sessions, &mut group, &device, &member.ip);
+    }
+
+    if let Some(existing) = groups.iter_mut().find(|item| item.id == group.id) {
+        *existing = group.clone();
+    } else {
+        groups.insert(0, group);
+    }
+    sort_sessions(&mut sessions);
+    write_json(&paths.lan_share_files.groups, &json!(groups)).await?;
+    write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
+    Ok(owner_session)
 }
 
 async fn process_secure_operation(
@@ -1012,8 +1094,23 @@ async fn process_secure_operation(
                 name: runtime.native.config.name.clone(),
                 ip: runtime.lan_ip.clone(),
                 port: runtime.port,
-                last_seen_at: now_millis()
+                last_seen_at: now_millis(),
+                supports_groups: true,
             }))
+        }
+        "group-sync" => {
+            let group = payload
+                .get("group")
+                .ok_or_else(|| ManagerError::System("群聊信息缺失。".into()))?;
+            let group: LanShareGroup = serde_json::from_value(group.clone())?;
+            if group.id.is_empty() || group.owner_device_id != peer.id {
+                return Err(ManagerError::System("群聊邀请来源无效。".into()));
+            }
+            let session = ensure_native_group_session(registry, paths, &group).await?;
+            if let Some(app) = app {
+                emit_state_changed(app, registry, paths).await?;
+            }
+            Ok(json!({ "groupId": group.id, "sessionId": session.id }))
         }
         "pair" => {
             let identifier = string_value(payload.get("requestId"));
@@ -1107,6 +1204,7 @@ async fn process_secure_operation(
                 paths,
                 peer,
                 &string_value(payload.get("sessionId")),
+                payload.get("group"),
             )
             .await?;
             let number = |key: &str| {
@@ -1152,6 +1250,7 @@ async fn process_secure_operation(
                 paths,
                 peer,
                 &string_value(payload.get("sessionId")),
+                payload.get("group"),
             )
             .await?;
             let files = attachments::prepare(
@@ -1420,7 +1519,7 @@ where
             }
             "paired" => matches!(
                 operation.as_str(),
-                "ping" | "message-exists" | "file-chunk" | "message" | "device-removed"
+                "ping" | "message-exists" | "file-chunk" | "message" | "group-sync" | "device-removed"
             ),
             _ => false,
         } && !(auth.receiver.is_empty() && operation != "info");
@@ -1486,6 +1585,116 @@ pub(super) async fn deliver(
     message_id: &str,
     app: Option<&tauri::AppHandle>,
 ) -> Result<bool, ManagerError> {
+    deliver_to_peer(registry, paths, device_id, content, files, message_id, app, None).await
+}
+
+pub(super) async fn deliver_group(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    group_id: &str,
+    content: &str,
+    files: &[LanShareFile],
+    message_id: &str,
+    app: Option<&tauri::AppHandle>,
+) -> Result<usize, ManagerError> {
+    let group = {
+        let _storage = registry.storage.lock().await;
+        read_array::<LanShareGroup>(&paths.lan_share_files.groups)?
+            .into_iter()
+            .find(|group| group.id == group_id)
+            .ok_or_else(|| ManagerError::System("群聊不存在。".into()))?
+    };
+    let own_id = registry.inner.lock().await.native.config.id.clone();
+    let mut target_ids = Vec::with_capacity(group.members.len() + 1);
+    if !group.owner_device_id.is_empty() && group.owner_device_id != own_id {
+        target_ids.push(group.owner_device_id.clone());
+    }
+    for member in &group.members {
+        if member.device_id != own_id && !target_ids.contains(&member.device_id) {
+            target_ids.push(member.device_id.clone());
+        }
+    }
+
+    let mut delivered = 0;
+    for device_id in target_ids {
+        match deliver_to_peer(
+            registry,
+            paths,
+            &device_id,
+            content,
+            files,
+            message_id,
+            app,
+            Some(&group),
+        )
+        .await
+        {
+            Ok(true) => delivered += 1,
+            Ok(false) => {}
+            Err(error) if is_remote_deleted_error(&error) => {
+                let _ = mark_remote_deleted(registry, paths, &device_id).await;
+            }
+            Err(_) => {}
+        }
+    }
+    Ok(delivered)
+}
+
+pub(super) async fn sync_group_to_peer(
+    registry: &LanShareServerRegistry,
+    _paths: &AppPaths,
+    group: &LanShareGroup,
+    device_id: &str,
+) -> Result<bool, ManagerError> {
+    let (trusted, own_id) = {
+        let runtime = registry.inner.lock().await;
+        (
+            runtime.native.authenticate(device_id),
+            runtime.native.config.id.clone(),
+        )
+    };
+    let Some(trusted) = trusted else {
+        return Ok(false);
+    };
+    if !trusted.peer.supports_groups {
+        return Ok(false);
+    }
+    let auth = TransportAuth {
+        sender: own_id,
+        receiver: trusted.peer.id.clone(),
+        secret: trusted.secret.clone(),
+        pairing_id: String::new(),
+    };
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .http1_only()
+        .tcp_nodelay(true)
+        .build()
+        .map_err(network_error)?;
+    secure_call(
+        &client,
+        &trusted.peer,
+        &auth,
+        "group-sync",
+        json!({ "group": group }),
+        &[],
+        None,
+    )
+    .await?;
+    Ok(true)
+}
+
+async fn deliver_to_peer(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    device_id: &str,
+    content: &str,
+    files: &[LanShareFile],
+    message_id: &str,
+    app: Option<&tauri::AppHandle>,
+    group: Option<&LanShareGroup>,
+) -> Result<bool, ManagerError> {
     let (trusted, own_id) = {
         let runtime = registry.inner.lock().await;
         if runtime
@@ -1523,7 +1732,10 @@ pub(super) async fn deliver(
         &trusted.peer,
         &auth,
         "message-exists",
-        json!({ "messageId": message_id }),
+        json!({
+            "messageId": message_id,
+            "groupId": group.map(|item| item.id.clone()).unwrap_or_default()
+        }),
         &[],
         None,
     )
@@ -1586,8 +1798,10 @@ pub(super) async fn deliver(
                 }
                 let chunk_total = file.size.div_ceil(attachments::FILE_CHUNK_BYTES).max(1);
                 let upload_id = create_stable_id(&format!(
-                    "lan-upload:{}:{message_id}:{}",
-                    auth.sender, file.id
+                    "lan-upload:{}:{}:{message_id}:{}",
+                    auth.sender,
+                    group.map(|item| item.id.as_str()).unwrap_or("direct"),
+                    file.id
                 ));
                 for chunk_index in 0..chunk_total {
                     if registry
@@ -1631,6 +1845,7 @@ pub(super) async fn deliver(
                             "file-chunk",
                             json!({
                                 "name": file.name, "sessionId": remote_session, "uploadId": upload_id,
+                                "group": group,
                                 "chunkIndex": chunk_index, "chunkTotal": chunk_total, "offset": offset,
                                 "totalSize": file.size, "sha256": chunk_sha256,
                                 "contentLength": chunk_length, "contentRange": content_range,
@@ -1706,7 +1921,8 @@ pub(super) async fn deliver(
         .map(|(_, _, identifier)| identifier)
         .collect::<Vec<_>>();
     let result = secure_call(&client, &trusted.peer, &auth, "message", json!({
-        "messageId": message_id, "sessionId": remote_session, "content": content, "attachmentIds": identifiers
+        "messageId": message_id, "sessionId": remote_session, "content": content,
+        "attachmentIds": identifiers, "group": group
     }), &[], None).await;
     if let Err(error) = &result {
         if is_remote_deleted_error(error) {
@@ -2190,6 +2406,7 @@ mod tests {
                 ip: "192.168.1.2".into(),
                 port: DEFAULT_PORT,
                 last_seen_at: now_millis(),
+                supports_groups: false,
             };
             remember(
                 &registry,
@@ -2206,6 +2423,7 @@ mod tests {
                 ip: "192.168.2.3".into(),
                 port: DEFAULT_PORT + 1,
                 name: "新名称".into(),
+                supports_groups: true,
                 ..original.clone()
             };
             assert!(refresh_peer(&registry, &paths, &changed, "wrong-secret")
@@ -2230,6 +2448,7 @@ mod tests {
             .unwrap();
             assert_eq!(saved.peers[0].peer.ip, changed.ip);
             assert_eq!(saved.peers[0].peer.port, changed.port);
+            assert!(saved.peers[0].peer.supports_groups);
             let devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices).unwrap();
             assert_eq!(devices[0].ip, changed.ip);
             let auth = TransportAuth {
@@ -2304,6 +2523,7 @@ mod tests {
                 ip: "127.0.0.1".into(),
                 port,
                 last_seen_at: now_millis(),
+                supports_groups: false,
             };
             let trusted = TrustedPeer {
                 peer: peer.clone(),
@@ -2433,6 +2653,7 @@ mod tests {
                 ip: "192.168.1.5".into(),
                 port: DEFAULT_PORT,
                 last_seen_at: now_millis(),
+                supports_groups: false,
             };
             let kept = Peer {
                 id: "native-kept".into(),
@@ -2440,6 +2661,7 @@ mod tests {
                 ip: "192.168.1.6".into(),
                 port: DEFAULT_PORT,
                 last_seen_at: now_millis(),
+                supports_groups: false,
             };
             let config = Config {
                 id: "native-local".into(),
@@ -3056,6 +3278,81 @@ mod tests {
             .await
             .unwrap();
             assert_eq!(wrong_response.status(), StatusCode::UNAUTHORIZED);
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
+
+    #[test]
+    fn native_info_advertises_group_support() {
+        tauri::async_runtime::block_on(async {
+            let registry = LanShareServerRegistry::new();
+            registry.inner.lock().await.native.config.id = "native-local".into();
+            let paths = crate::core::paths::resolve_app_paths(
+                &std::env::temp_dir().join(create_id()),
+            );
+            let info = process_secure_operation(
+                &registry,
+                &paths,
+                None,
+                &Peer::default(),
+                "info",
+                json!({}),
+                Bytes::new(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(info["supportsGroups"], true);
+        });
+    }
+
+    #[test]
+    fn native_group_payload_creates_a_local_group_session() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id());
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            let owner = Peer {
+                id: "native-owner".into(),
+                name: "群主设备".into(),
+                ip: "127.0.0.1".into(),
+                port: DEFAULT_PORT,
+                supports_groups: true,
+                ..Peer::default()
+            };
+            let group = LanShareGroup {
+                id: "group-1".into(),
+                name: "测试群聊".into(),
+                invite_code: "invite-1".into(),
+                owner_device_id: owner.id.clone(),
+                owner_device_name: owner.name.clone(),
+                message_visibility: "afterJoin".into(),
+                created_at: now_millis(),
+                updated_at: now_millis(),
+                members: vec![LanShareGroupMember {
+                    device_id: "native-member".into(),
+                    device_name: "成员设备".into(),
+                    ip: "127.0.0.2".into(),
+                    joined_at: now_millis(),
+                    last_seen_at: now_millis(),
+                    active: true,
+                }],
+            };
+            let session = peer_session(
+                &registry,
+                &paths,
+                &owner,
+                "",
+                Some(&json!(group)),
+            )
+            .await
+            .unwrap();
+            assert_eq!(session.mode, "group");
+            assert_eq!(session.group_id, "group-1");
+            let groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups).unwrap();
+            assert_eq!(groups.len(), 1);
+            assert_eq!(groups[0].members.len(), 1);
+            let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
+            assert_eq!(sessions.iter().filter(|item| item.group_id == "group-1").count(), 2);
             tokio::fs::remove_dir_all(root).await.unwrap();
         });
     }
