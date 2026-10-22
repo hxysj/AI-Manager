@@ -4456,7 +4456,7 @@ async fn rotate_access_token(
     Ok(())
 }
 
-async fn emit_state_changed(
+pub async fn emit_state_changed(
     app: &tauri::AppHandle,
     registry: &LanShareServerRegistry,
     paths: &AppPaths,

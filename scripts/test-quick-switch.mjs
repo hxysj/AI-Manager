@@ -17,6 +17,8 @@ const calls = []
 const messages = []
 let handlers = {}
 const visibilityListeners = new Set()
+const lanShareListeners = new Set()
+let lanShareState = { service: {}, totalUnread: 0 }
 let nativeLayout = { centerX: 64, centerY: 64, edge: "" }
 const api = new Proxy(
   {},
@@ -65,7 +67,19 @@ function loadComponent(path) {
   ).code
   const module = { exports: {} }
   const localRequire = (name) => {
-    if (name === "@/api") return { appApi: api, usageApi: api, systemApi: api }
+    if (name === "@/api")
+      return {
+        appApi: api,
+        lanShareApi: {
+          onStateChanged: (callback) => {
+            lanShareListeners.add(callback)
+            return () => lanShareListeners.delete(callback)
+          },
+          getState: async () => lanShareState
+        },
+        usageApi: api,
+        systemApi: api
+      }
     if (name === "@/utils/message")
       return {
         createMessage: {
@@ -255,6 +269,12 @@ function findNodes(root, className) {
 }
 
 function assertNoHoverTitles(node) {
+  if (
+    String(node.props.class || "")
+      .split(" ")
+      .includes("quick-switch-unread-badge")
+  )
+    return
   assert.equal(node.props.title, undefined)
   node.children.forEach(assertNoHoverTitles)
 }
@@ -316,6 +336,7 @@ handlers.getUsageStats = (payload) => ({
     }
   }
 })
+handlers.getReleaseAnnouncement = () => null
 
 const Quick = loadComponent("src/components/QuickSwitchPanel.vue")
 const state = fixture()
@@ -326,6 +347,17 @@ assert.equal(findNodes(panel.root, "quick-switch-tool").length, 0)
 assert.equal(panel.state.centerPages.length, 3)
 assert.equal(panel.state.usageSummary.actualTokens, 25000)
 assertNoHoverTitles(findNodes(panel.root, "quick-switch-center")[0])
+lanShareState = { service: {}, totalUnread: 5 }
+lanShareListeners.forEach((callback) => callback(lanShareState))
+await tick()
+assert.equal(findNodes(panel.root, "quick-switch-unread-badge").length, 1)
+assert.equal(findNodes(panel.root, "quick-switch-unread-badge-right").length, 0)
+panel.state.screenEdge = "left"
+await tick()
+assert.equal(findNodes(panel.root, "quick-switch-unread-badge-left").length, 1)
+panel.state.screenEdge = "right"
+await tick()
+assert.equal(findNodes(panel.root, "quick-switch-unread-badge-right").length, 1)
 const usageCall = calls.find((call) => call.name === "getUsageStats").payload
 assert.equal(usageCall.appType, "all")
 assert.equal(new Date(usageCall.startAt).getHours(), 0)
@@ -352,7 +384,7 @@ panel.state.rotateCenterPage()
 assert.equal(panel.state.selectedPage, "home")
 await tickDelay(130)
 assert.equal(panel.state.expanded, true)
-assert.equal(findNodes(panel.root, "quick-switch-tool").length, 10)
+assert.equal(findNodes(panel.root, "quick-switch-tool").length, 11)
 assert.deepEqual(
   calls.find(
     (call) => call.name === "setQuickSwitchCollapsed" && !call.payload.collapsed
@@ -443,7 +475,7 @@ state.appSettings.system.quickSwitchTools = { git: false }
 await tick()
 await panel.state.setExpanded(true)
 await tick()
-assert.equal(findNodes(panel.root, "quick-switch-tool").length, 9)
+assert.equal(findNodes(panel.root, "quick-switch-tool").length, 10)
 assert.ok(!panel.state.orbitTools.some((tool) => tool.id === "git"))
 state.appSettings.system.quickSwitchTools = Object.fromEntries(
   panel.state.visibleTools
@@ -829,7 +861,7 @@ assert.ok(
 )
 await petPanel.state.setExpanded(true)
 await tick()
-assert.equal(findNodes(petPanel.root, "quick-switch-tool").length, 10)
+assert.equal(findNodes(petPanel.root, "quick-switch-tool").length, 11)
 petPanel.state.handleMainClick({ detail: 0 })
 await tick()
 assert.equal(calls.at(-1).name, "showMainPanel")
@@ -911,7 +943,7 @@ for (const edge of ["left", "right", "top", "bottom"]) {
   await tickDelay(130)
   assert.equal(edgePanel.state.expanded, true)
   assert.equal(edgePanel.state.screenEdge, edge)
-  assert.equal(findNodes(edgePanel.root, "quick-switch-tool").length, 10)
+  assert.equal(findNodes(edgePanel.root, "quick-switch-tool").length, 11)
   edgePanel.state.leavePanel()
   await tickDelay(300)
   assert.equal(edgePanel.state.expanded, false)
@@ -1167,7 +1199,7 @@ const settings = mount(Settings, {
 })
 settings.state.activeTab = "system"
 await tick()
-assert.equal(findNodes(settings.root, "settings-floating-tool").length, 10)
+assert.equal(findNodes(settings.root, "settings-floating-tool").length, 11)
 assert.ok(
   Object.values(settings.state.draft.system.quickSwitchTools).every(Boolean)
 )
@@ -1179,7 +1211,7 @@ assert.equal(findNodes(settings.root, "settings-floating-tools-card").length, 0)
 assert.equal(findNodes(settings.root, "settings-floating-tool").length, 0)
 settings.state.draft.system.quickSwitchVisible = true
 await tick()
-assert.equal(findNodes(settings.root, "settings-floating-tool").length, 10)
+assert.equal(findNodes(settings.root, "settings-floating-tool").length, 11)
 assert.equal(settings.state.draft.system.quickSwitchTools.git, false)
 settings.state.submitSettings()
 assert.equal(savedSettings.at(-1).system.quickSwitchTools.git, false)
@@ -1327,6 +1359,8 @@ const bootstrapSource = appDescriptor.scriptSetup.content.slice(
 )
 const createBootstrap = new Function(
   "isQuickSwitchPanel",
+  "isToolWindow",
+  "releaseAnnouncement",
   "appApi",
   "updateState",
   "quickSwitchReady",
@@ -1342,6 +1376,8 @@ let finishStateSubscription
 const quickReady = { value: false }
 const initialized = createBootstrap(
   true,
+  false,
+  { value: null },
   {
     onStateChangedReady: (callback) => {
       stateListener = callback
@@ -1384,8 +1420,11 @@ let finishBackupListing
 let mainBootstrapped = false
 const mainInitialized = createBootstrap(
   false,
+  false,
+  { value: null },
   {
     bootstrap: async () => ({ appSettings: {} }),
+    getReleaseAnnouncement: async () => null,
     onStateChanged: () => () => {}
   },
   () => {},

@@ -168,6 +168,10 @@
       <button
         v-if="lanShareUnreadCount"
         class="quick-switch-unread-badge"
+        :class="{
+          'quick-switch-unread-badge-left': screenEdge === 'left',
+          'quick-switch-unread-badge-right': screenEdge === 'right'
+        }"
         type="button"
         :title="`设备快传有 ${lanShareUnreadCount} 条未读消息`"
         @pointerdown.stop
@@ -1091,6 +1095,14 @@ onMounted(() => {
       &:focus-visible {
         background: #dc2626;
         outline: none;
+      }
+      &.quick-switch-unread-badge-right {
+        right: 1px;
+        left: auto;
+      }
+      &.quick-switch-unread-badge-left {
+        right: auto;
+        left: 1px;
       }
     }
     .quick-switch-usage {

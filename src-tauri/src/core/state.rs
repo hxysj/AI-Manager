@@ -793,7 +793,12 @@ impl ManagerState {
                 )
                 .await?;
                 // 会话清零后同步所有窗口的未读徽标。
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:delete-message" => {
@@ -803,7 +808,12 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:delete-messages" => {
@@ -813,7 +823,12 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:clear-session" => {
@@ -823,7 +838,12 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:delete-session" => {
@@ -834,7 +854,12 @@ impl ManagerState {
                 )
                 .await?;
                 lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:delete-device-history" => {
@@ -844,7 +869,12 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:delete-device" => {
@@ -867,7 +897,12 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:update-group" => {
@@ -877,7 +912,12 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:remove-group-member" => {
@@ -887,7 +927,12 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:clear-group-messages" => {
@@ -897,7 +942,12 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:delete-group" => {
@@ -908,7 +958,12 @@ impl ManagerState {
                 )
                 .await?;
                 lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
-                self.emit_state_changed(&app)?;
+                lan_share::emit_state_changed(
+                    &app,
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await?;
                 Ok(result)
             }
             "lan-share:export-files-zip" => {

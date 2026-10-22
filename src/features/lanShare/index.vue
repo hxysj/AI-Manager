@@ -21,18 +21,28 @@
         <!-- 运行状态指示 -->
         <div
           class="cyber-status-chip"
-          :class="{ 'cyber-status-online': state.service.running }"
+          :class="{
+            'cyber-status-online':
+              state.service.running && !state.native.hidden,
+            'cyber-status-hidden': state.service.running && state.native.hidden
+          }"
         >
           <span
             class="cyber-pulse-dot"
             :class="
               state.service.running
-                ? 'cyber-pulse-dot--emerald'
+                ? state.native.hidden
+                  ? 'cyber-pulse-dot--amber'
+                  : 'cyber-pulse-dot--emerald'
                 : 'cyber-pulse-dot--gray'
             "
           ></span>
           <span>{{
-            state.service.running ? "ONLINE // 节点在线" : "OFFLINE // 节点离线"
+            state.service.running
+              ? state.native.hidden
+                ? "隐身状态"
+                : "在线状态"
+              : "离线状态"
           }}</span>
         </div>
 
@@ -1274,15 +1284,16 @@ function devicePreviewText(device) {
 function deviceUnreadCount(deviceId) {
   return state.sessions
     .filter(
-      (session) =>
-        session.deviceId === deviceId && session.mode !== "group"
+      (session) => session.deviceId === deviceId && session.mode !== "group"
     )
     .reduce((total, session) => total + Number(session.unreadCount || 0), 0)
 }
 
 function groupUnreadCount(groupId) {
   return state.sessions
-    .filter((session) => session.mode === "group" && session.groupId === groupId)
+    .filter(
+      (session) => session.mode === "group" && session.groupId === groupId
+    )
     .reduce((total, session) => total + Number(session.unreadCount || 0), 0)
 }
 
@@ -2084,6 +2095,12 @@ function isTextPreviewFile(name, mimeType) {
           background: var(--color-success-soft);
           border-color: var(--color-success-line);
           color: var(--color-success);
+        }
+
+        &.cyber-status-hidden {
+          background: var(--color-warning-soft);
+          border-color: var(--color-warning-line);
+          color: var(--color-warning);
         }
       }
 
@@ -4296,6 +4313,12 @@ function isTextPreviewFile(name, mimeType) {
   &--emerald {
     background: var(--color-success);
     box-shadow: 0 0 6px var(--color-success);
+    animation: cyberPulse 1.8s ease-in-out infinite;
+  }
+
+  &--amber {
+    background: var(--color-warning);
+    box-shadow: 0 0 6px var(--color-warning);
     animation: cyberPulse 1.8s ease-in-out infinite;
   }
 
