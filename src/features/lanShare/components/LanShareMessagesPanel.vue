@@ -53,7 +53,8 @@
               <button
                 class="chat-task-action-btn"
                 type="button"
-                title="重新发送"
+                :disabled="sendBlocked"
+                :title="sendBlocked ? '对方已删除此设备' : '重新发送'"
                 @click="retryTask(message)"
               >
                 <RotateCw :size="10" />
@@ -91,12 +92,14 @@
               class="chat-offline-badge"
             >
               <span class="cyber-pulse-dot cyber-pulse-dot--amber"></span>
-              <span class="chat-delivery-text">待对方接收 (离线)</span>
+              <span class="chat-delivery-text">{{
+                sendBlocked ? "对方已删除此设备" : "待对方接收 (离线)"
+              }}</span>
               <button
                 class="chat-retry-btn"
                 type="button"
-                :disabled="retryingMessageId === message.id"
-                title="立即向对方重试发送"
+                :disabled="retryingMessageId === message.id || sendBlocked"
+                :title="sendBlocked ? '对方已删除此设备' : '立即向对方重试发送'"
                 @click="retryMessage(message.id)"
               >
                 <RotateCw
@@ -289,6 +292,9 @@
 
     <!-- 科技感底部输入区 -->
     <footer class="chat-composer" :aria-busy="sending">
+      <div v-if="sendBlocked" class="chat-remote-deleted-notice">
+        对方已删除此设备，当前信道只能查看历史记录。重新连接并经对方确认后才能发送。
+      </div>
       <div
         v-if="currentDraft.files.length"
         class="chat-draft-files"
@@ -338,7 +344,7 @@
           ref="composerRef"
           v-model="currentDraft.content"
           class="chat-input"
-          :disabled="!currentSessionId"
+          :disabled="!currentSessionId || sendBlocked"
           rows="2"
           placeholder="输入消息内容，或直接拖拽/粘贴文件、图片至此..."
           aria-label="聊天输入框"
@@ -352,7 +358,7 @@
           <button
             class="chat-attach-button"
             type="button"
-            :disabled="!currentSessionId"
+            :disabled="!currentSessionId || sendBlocked"
             title="添加文件或图片，可多选"
             @click="pickFiles"
           >
@@ -373,6 +379,7 @@
           :disabled="
             !service.running ||
             !currentSessionId ||
+            sendBlocked ||
             (!currentDraft.content.trim() && !currentDraft.files.length)
           "
           @click="sendMessage"
@@ -387,6 +394,7 @@
         type="file"
         multiple
         aria-label="选择附件"
+        :disabled="sendBlocked"
         @change="chooseBrowserFiles"
       />
     </footer>
@@ -548,6 +556,10 @@ const activeSendingCount = computed(
     ).length
 )
 const sending = computed(() => activeSendingCount.value > 0)
+// 对方撤销本机配对后，保留历史查看能力但停止所有发送入口。
+const sendBlocked = computed(
+  () => props.chatMode === "direct" && Boolean(props.currentDevice?.remoteDeleted)
+)
 
 const displayMessages = computed(() => {
   const serverList = messages.value
@@ -744,7 +756,7 @@ async function loadMessages() {
 }
 
 async function retryMessage(messageId) {
-  if (retryingMessageId.value) return
+  if (retryingMessageId.value || sendBlocked.value) return
   retryingMessageId.value = messageId
   try {
     const result = await lanShareApi.retryMessage({ messageId })
@@ -764,7 +776,7 @@ async function retryMessage(messageId) {
 }
 
 function appendFiles(files) {
-  if (!props.currentSessionId) return
+  if (!props.currentSessionId || sendBlocked.value) return
   const remaining = 100 - currentDraft.value.files.length
   if (files.length > remaining)
     createMessage.warning("一条消息最多添加 100 个附件。")
@@ -808,7 +820,7 @@ function chooseBrowserFiles(event) {
 }
 
 async function pickFiles() {
-  if (!props.currentSessionId) return
+  if (!props.currentSessionId || sendBlocked.value) return
   if (isTauri()) {
     try {
       const selected = await systemApi.selectFiles({
@@ -826,6 +838,7 @@ async function pickFiles() {
 }
 
 function pasteFiles(event) {
+  if (sendBlocked.value) return
   const items = Array.from(event.clipboardData?.items || [])
   const files = items
     .filter((item) => item.kind === "file")
@@ -1071,7 +1084,8 @@ async function executeSendingTask(task) {
 }
 
 function sendMessage() {
-  if (!props.service.running || !props.currentSessionId) return
+  if (!props.service.running || !props.currentSessionId || sendBlocked.value)
+    return
   const draft = currentDraft.value
   const content = draft.content.trim()
   const files = [...draft.files]
@@ -1119,6 +1133,7 @@ function sendMessage() {
 }
 
 function retryTask(task) {
+  if (sendBlocked.value) return
   task.status = "uploading"
   task.errorMessage = ""
   task.progress = 0
@@ -1718,6 +1733,17 @@ defineExpose({
     padding: 12px 18px 14px;
     border-top: 1px solid var(--color-line);
     background: var(--color-panel);
+
+    .chat-remote-deleted-notice {
+      margin-bottom: 10px;
+      padding: 8px 10px;
+      border: 1px solid var(--color-warning-line);
+      border-radius: 6px;
+      background: var(--color-warning-soft);
+      color: var(--color-warning);
+      font-size: 12px;
+      line-height: 1.5;
+    }
 
     .chat-draft-files {
       display: flex;

@@ -504,38 +504,95 @@
       title="连接设备"
       @close="connectDialogOpen = false"
     >
+      <template #header>
+        <div class="drop-connect-header">
+          <h2 class="drop-connect-title">连接设备</h2>
+          <p class="drop-connect-description">
+            选择局域网内发现的设备，核对安全校验码并等待对方同意后建立连接。
+          </p>
+        </div>
+        <button
+          class="drop-connect-close"
+          type="button"
+          aria-label="关闭"
+          @click="connectDialogOpen = false"
+        >
+          <X :size="16" />
+        </button>
+      </template>
+
       <div class="drop-connect-content">
-        <p class="drop-connect-description">
-          选择局域网内发现的设备，核对安全校验码并等待对方同意后建立连接。
-        </p>
-        <el-input
-          v-model="connectIpFilter"
-          placeholder="按 IP 地址过滤，例如：192.168.1"
-          aria-label="按 IP 地址过滤发现的设备"
-          clearable
-        />
+        <div class="drop-connect-filter-box">
+          <el-input
+            v-model="connectIpFilter"
+            class="drop-connect-filter-input"
+            placeholder="按 IP 地址过滤，例如：192.168.1"
+            aria-label="按 IP 地址过滤发现的设备"
+            clearable
+          >
+            <template #prefix>
+              <Search :size="15" class="drop-connect-filter-icon" />
+            </template>
+          </el-input>
+        </div>
+
         <div class="drop-connect-list" aria-label="发现的设备">
-          <button
+          <div
             v-for="peer in discoveredPeers"
             :key="peer.id"
-            class="drop-connect-device"
-            type="button"
-            :disabled="loading || !!peer.pairingCode"
+            class="drop-connect-card drop-connect-device"
+            :class="{
+              'is-waiting': !!peer.pairingCode,
+              'is-ready': !peer.pairingCode
+            }"
             @click="connectDiscoveredPeer(peer)"
           >
-            <MonitorSmartphone :size="18" />
-            <span class="drop-connect-device-info">
-              <span class="drop-connect-device-name">{{
-                peer.name || "未命名设备"
-              }}</span>
-              <span class="drop-connect-device-ip"
-                >{{ peer.ip }}:{{ peer.port }}</span
-              >
-            </span>
-            <span class="drop-connect-device-status">
-              {{ peer.pairingCode ? `等待同意 · ${peer.pairingCode}` : "连接" }}
-            </span>
-          </button>
+            <div class="drop-connect-avatar">
+              <component :is="getPeerDeviceIcon(peer)" :size="20" />
+            </div>
+            <div class="drop-connect-info drop-connect-device-info">
+              <div class="drop-connect-name-row">
+                <span class="drop-connect-name drop-connect-device-name">
+                  {{ peer.name || "未命名设备" }}
+                </span>
+                <span
+                  class="drop-connect-badge"
+                  :class="
+                    peer.pairingCode
+                      ? 'drop-connect-badge--waiting'
+                      : 'drop-connect-badge--ready'
+                  "
+                >
+                  <span class="badge-dot">●</span>
+                  {{
+                    peer.pairingCode
+                      ? typeof peer.pairingCode === "string" &&
+                        peer.pairingCode !== "true"
+                        ? `待确认 · ${peer.pairingCode}`
+                        : "待确认"
+                      : "可连接"
+                  }}
+                </span>
+              </div>
+              <span class="drop-connect-ip drop-connect-device-ip">
+                {{ peer.ip }}:{{ peer.port }}
+              </span>
+            </div>
+            <button
+              class="drop-connect-btn"
+              :class="
+                peer.pairingCode
+                  ? 'drop-connect-btn--waiting'
+                  : 'drop-connect-btn--primary'
+              "
+              type="button"
+              :disabled="loading || !!peer.pairingCode"
+              @click.stop="connectDiscoveredPeer(peer)"
+            >
+              <Link2 :size="15" />
+              <span class="drop-connect-device-status">连接</span>
+            </button>
+          </div>
           <span v-if="!discoveredPeers.length" class="drop-connect-empty">
             {{
               scanning || state.native.scanning
@@ -546,22 +603,34 @@
             }}
           </span>
         </div>
-        <p v-if="state.native.error" class="drop-connect-error" role="alert">
-          {{ state.native.error }}
-        </p>
-        <span class="drop-connect-hint"
-          >未确认、已拒绝和超时的设备不会加入设备节点列表。隐藏节点仍可被已配对设备识别。</span
-        >
+
+        <div class="drop-connect-hint-row">
+          <Info :size="15" class="drop-connect-hint-icon" />
+          <span class="drop-connect-hint">
+            未确认、已拒绝或相同节点的设备不会加入候选节点列表。隐藏节点仍可被自动发现。
+          </span>
+        </div>
+
         <div class="drop-connect-actions">
-          <el-button @click="connectDialogOpen = false">关闭</el-button>
-          <el-button
-            type="primary"
-            :loading="scanning || state.native.scanning"
+          <button
+            class="drop-connect-action-close"
+            type="button"
+            @click="connectDialogOpen = false"
+          >
+            关闭
+          </button>
+          <button
+            class="drop-connect-action-scan"
+            type="button"
             :disabled="loading || scanning || state.native.scanning"
             @click="scanNearby"
           >
-            重新扫描
-          </el-button>
+            <RefreshCw
+              :size="15"
+              :class="{ 'is-spinning': scanning || state.native.scanning }"
+            />
+            <span>重新扫描</span>
+          </button>
         </div>
       </div>
     </BaseModal>
@@ -628,94 +697,226 @@
       title="创建加密群聊信道"
       @close="createGroupOpen = false"
     >
+      <template #header>
+        <div class="drop-group-header">
+          <div class="drop-group-header-icon" aria-hidden="true">
+            <UserPlus :size="20" />
+          </div>
+          <div class="drop-group-header-text">
+            <h2 class="drop-group-title">创建加密群聊信道</h2>
+            <p class="drop-group-description">
+              选择局域网内的设备组建多方加密群聊信道
+            </p>
+          </div>
+        </div>
+        <button
+          class="drop-group-close"
+          type="button"
+          aria-label="关闭"
+          @click="createGroupOpen = false"
+        >
+          <X :size="16" />
+        </button>
+      </template>
+
       <form class="drop-group-form" @submit.prevent="createGroup">
-        <label class="drop-group-field">
-          <span>群名称</span>
+        <div class="drop-group-field">
+          <label class="drop-group-field-label" for="group-name-input">
+            群聊名称
+          </label>
           <el-input
+            id="group-name-input"
             v-model="newGroup.name"
-            placeholder="输入群名称"
+            class="drop-group-name-input"
+            placeholder="输入群聊名称，例如：团队项目组"
             :disabled="loading"
+            clearable
           />
-        </label>
-        <div class="drop-group-selection">
-          <span>邀请设备 · 已选 {{ selectedGroupDeviceIds.length }} 台</span>
-          <span class="drop-group-hint"
-            >群聊至少需要 3 人（包含本机），请至少选择两台设备。离线的网页设备重新连接后可查看邀请。</span
-          >
         </div>
-        <div class="drop-group-devices">
-          <el-checkbox
-            v-for="device in state.devices"
-            :key="device.id"
-            v-model="newGroup.deviceIds"
-            :value="device.id"
-            :disabled="loading || device.native"
-            class="drop-group-device"
-          >
-            <span class="drop-group-device-copy">
-              <span>{{ device.name || device.autoName }}</span>
-              <span class="drop-group-device-meta">
-                {{ device.ip }} ·
-                {{
-                  device.native
-                    ? "客户端暂仅支持单聊"
-                    : device.online
-                      ? "在线"
-                      : "离线"
-                }}
-              </span>
+
+        <div class="drop-group-notice" role="note">
+          <Info :size="16" class="drop-group-notice-icon" />
+          <div class="drop-group-notice-text">
+            群聊至少需要 3 人（包含本机），请至少选择两台设备。离线的网页设备重新连接后可查看邀请。
+          </div>
+        </div>
+
+        <div class="drop-group-section">
+          <div class="drop-group-section-header">
+            <span class="drop-group-section-title">可选设备</span>
+            <span class="drop-group-count-badge">
+              已选 {{ selectedGroupDeviceIds.length }} 台
             </span>
-          </el-checkbox>
-          <span v-if="!state.devices.length" class="drop-group-empty">
-            暂无可邀请设备，请先让至少一台网页设备通过访客访问连接。
-          </span>
+          </div>
+
+          <div class="drop-group-devices" role="group" aria-label="可选设备列表">
+            <div
+              v-for="device in state.devices"
+              :key="device.id"
+              class="drop-group-device-card"
+              :class="{
+                'is-selected': newGroup.deviceIds.includes(device.id),
+                'is-disabled': loading || device.native
+              }"
+              role="checkbox"
+              :aria-checked="newGroup.deviceIds.includes(device.id)"
+              :aria-disabled="loading || device.native"
+              :tabindex="device.native ? -1 : 0"
+              @click="toggleGroupDevice(device)"
+              @keydown.space.prevent="toggleGroupDevice(device)"
+              @keydown.enter.prevent="toggleGroupDevice(device)"
+            >
+              <span
+                class="drop-group-checkbox"
+                :class="{
+                  'is-checked': newGroup.deviceIds.includes(device.id),
+                  'is-disabled': device.native
+                }"
+                aria-hidden="true"
+              >
+                <Check
+                  v-if="newGroup.deviceIds.includes(device.id)"
+                  :size="12"
+                  :stroke-width="3"
+                />
+              </span>
+
+              <div class="drop-group-device-avatar" aria-hidden="true">
+                <component :is="getPeerDeviceIcon(device)" :size="18" />
+              </div>
+
+              <div class="drop-group-device-info">
+                <span class="drop-group-device-name">
+                  {{ device.name || device.autoName || "未命名设备" }}
+                </span>
+                <span class="drop-group-device-ip">
+                  {{ device.ip || "局域网终端" }}
+                </span>
+              </div>
+
+              <div class="drop-group-device-status">
+                <span
+                  v-if="device.native"
+                  class="drop-group-status-badge drop-group-status-badge--disabled"
+                >
+                  客户端暂仅支持单聊
+                </span>
+                <span
+                  v-else-if="device.online"
+                  class="drop-group-status-badge drop-group-status-badge--online"
+                >
+                  <span class="status-dot">●</span> 在线
+                </span>
+                <span
+                  v-else
+                  class="drop-group-status-badge drop-group-status-badge--offline"
+                >
+                  <span class="status-dot">●</span> 离线
+                </span>
+              </div>
+            </div>
+
+            <div v-if="!state.devices.length" class="drop-group-empty">
+              <Users :size="32" class="drop-group-empty-icon" />
+              <p class="drop-group-empty-text">暂无可邀请设备</p>
+              <p class="drop-group-empty-subtext">
+                请先让至少一台移动设备或浏览器通过扫码/访客地址接入。
+              </p>
+            </div>
+          </div>
         </div>
+
         <div class="drop-group-actions">
-          <el-button :disabled="loading" @click="createGroupOpen = false">
-            取消
-          </el-button>
-          <el-button
-            native-type="submit"
-            type="primary"
-            :loading="loading"
-            :disabled="selectedGroupDeviceIds.length < 2 || !newGroup.name.trim()"
+          <button
+            type="button"
+            class="drop-group-btn drop-group-btn--cancel"
+            :disabled="loading"
+            @click="createGroupOpen = false"
           >
-            创建并邀请
-          </el-button>
+            取消
+          </button>
+          <button
+            type="submit"
+            class="drop-group-btn drop-group-btn--primary"
+            :disabled="
+              loading ||
+              selectedGroupDeviceIds.length < 2 ||
+              !newGroup.name.trim()
+            "
+          >
+            <UserPlus :size="15" />
+            <span>{{ loading ? "正在创建..." : "创建并邀请" }}</span>
+          </button>
         </div>
       </form>
     </BaseModal>
+
+    <!-- 右侧消息提示弹框：自动消失并支持手动关闭 -->
+    <Teleport to="body">
+      <Transition name="drop-toast-slide">
+        <aside
+          v-if="toastMessage"
+          class="drop-right-toast"
+          role="alert"
+          aria-live="assertive"
+          @mouseenter="pauseToast"
+          @mouseleave="resumeToast"
+        >
+          <div class="drop-right-toast__icon">
+            <AlertCircle :size="18" />
+          </div>
+          <div class="drop-right-toast__body">
+            <span class="drop-right-toast__title">系统提示</span>
+            <p class="drop-right-toast__text">{{ toastMessage }}</p>
+          </div>
+          <button
+            class="drop-right-toast__close"
+            type="button"
+            aria-label="关闭提示"
+            @click="dismissToast"
+          >
+            <X :size="14" />
+          </button>
+          <div class="drop-right-toast__bar"></div>
+        </aside>
+      </Transition>
+    </Teleport>
   </section>
 </template>
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
-import {
-  ElButton,
-  ElCheckbox,
-  ElInput,
-  ElInputNumber
-} from "element-plus"
+import { ElButton, ElCheckbox, ElInput, ElInputNumber } from "element-plus"
 import "element-plus/es/components/button/style/css"
 import "element-plus/es/components/checkbox/style/css"
 import "element-plus/es/components/input/style/css"
 import "element-plus/es/components/input-number/style/css"
 import {
+  AlertCircle,
+  Check,
   ChevronRight,
   Globe,
+  Info,
+  Laptop,
   Link,
+  Link2,
   Lock,
+  Monitor,
   MonitorSmartphone,
   Plus,
   QrCode,
   Radio,
+  RefreshCw,
   Search,
   Settings2,
   Share2,
   ShieldCheck,
+  Smartphone,
   Trash2,
+  UserPlus,
   Users,
-  Power
+  Power,
+  X
 } from "lucide-vue-next"
 import { lanShareApi, systemApi } from "@/api"
 import { createMessage } from "@/utils/message"
@@ -797,6 +998,70 @@ const previewDialog = reactive({
   textContent: ""
 })
 
+const toastMessage = ref("")
+let toastTimer = null
+let toastRemaining = 3500
+let toastStartTime = 0
+
+function showRightToast(msg, duration = 3500) {
+  if (!msg) return
+  toastMessage.value = msg
+  toastRemaining = duration
+  clearTimeout(toastTimer)
+  toastStartTime = Date.now()
+  toastTimer = setTimeout(() => {
+    toastMessage.value = ""
+  }, duration)
+}
+
+function pauseToast() {
+  clearTimeout(toastTimer)
+  const elapsed = Date.now() - toastStartTime
+  toastRemaining = Math.max(1000, toastRemaining - elapsed)
+}
+
+function resumeToast() {
+  clearTimeout(toastTimer)
+  toastStartTime = Date.now()
+  toastTimer = setTimeout(() => {
+    toastMessage.value = ""
+  }, toastRemaining)
+}
+
+function dismissToast() {
+  clearTimeout(toastTimer)
+  toastMessage.value = ""
+}
+
+function getPeerDeviceIcon(peer) {
+  const name = String(peer?.name || "").toLowerCase()
+  if (
+    name.includes("laptop") ||
+    name.includes("notebook") ||
+    name.includes("macbook") ||
+    name.includes("thinkpad")
+  ) {
+    return Laptop
+  }
+  if (
+    name.includes("phone") ||
+    name.includes("mobile") ||
+    name.includes("android") ||
+    name.includes("iphone")
+  ) {
+    return Smartphone
+  }
+  if (
+    name.includes("desktop") ||
+    name.includes("pc") ||
+    name.includes("workstation") ||
+    name.includes("server")
+  ) {
+    return Monitor
+  }
+  return MonitorSmartphone
+}
+
 let stopStateListener = null
 let stopDevicesListener = null
 let stopNativeListener = null
@@ -807,6 +1072,7 @@ const serviceSummary = computed(() => {
   if (!state.service.running) {
     return "服务未启动"
   }
+  if (!state.service.lanIp) return "网络已断开，等待可用局域网地址"
   return `${state.service.lanIp}:${state.service.port} · ${
     state.service.onlineDevices || 0
   } 台在线`
@@ -870,7 +1136,7 @@ const connectedDevices = computed(() => {
       .map((device) => [device.id, device])
   )
   for (const peer of state.native.peers || []) {
-    if (!peer.paired) continue
+    if (!peer.paired && !peer.remoteDeleted) continue
     devices.set(peer.id, {
       ...state.devices.find((device) => device.id === peer.id),
       ...peer,
@@ -939,6 +1205,9 @@ function groupLastMessage(groupId) {
 }
 
 function devicePreviewText(device) {
+  if (device.remoteDeleted) {
+    return "对方已删除此设备 · 无法发送"
+  }
   if (device.pairingCode) {
     return `等待对方确认 · ${device.pairingCode}`
   }
@@ -953,6 +1222,8 @@ async function openConnectDialog() {
   if (!state.service.running) await startService()
   if (!state.service.running) return
   connectIpFilter.value = ""
+  if (state.native) state.native.error = ""
+  toastMessage.value = ""
   connectDialogOpen.value = true
   await scanNearby()
 }
@@ -1019,6 +1290,9 @@ onMounted(async () => {
   })
   stopNativeListener = lanShareApi.onNativeChanged((native) => {
     state.native = native
+    if (native?.error) {
+      showRightToast(native.error)
+    }
     // 原生设备的心跳独立推送，收到后同步群聊成员在线状态，避免重新加载聊天记录。
     const onlineById = new Map(
       (native.peers || []).map((peer) => [peer.id, Boolean(peer.online)])
@@ -1035,6 +1309,15 @@ onMounted(async () => {
   await loadState()
   if (!state.service.running) await startService()
 })
+
+watch(
+  () => state.native?.error,
+  (newErr) => {
+    if (newErr) {
+      showRightToast(newErr)
+    }
+  }
+)
 
 watch(selectedDeviceId, (deviceId) => {
   if (chatMode.value !== "direct") {
@@ -1073,17 +1356,21 @@ onBeforeUnmount(() => {
   if (stopDevicesListener) stopDevicesListener()
   if (stopNativeListener) stopNativeListener()
   clearTimeout(scanTimer)
+  clearTimeout(toastTimer)
 })
 
 function applyState(payload) {
   const nextState = payload?.service ? payload : unwrapData(payload) || {}
   state.service = nextState.service || state.service
-  accessQrSvg.value = state.service.qrSvg || accessQrSvg.value
+  accessQrSvg.value = state.service.qrSvg || ""
   state.devices = nextState.devices || []
   state.sessions = nextState.sessions || []
   state.groups = nextState.groups || []
   state.messages = nextState.messages || []
   state.native = nextState.native || state.native
+  if (nextState.native?.error) {
+    showRightToast(nextState.native.error)
+  }
   stateVersion.value += 1
 
   if (nextState.currentSession?.id) {
@@ -1178,7 +1465,7 @@ async function showAccessDialog() {
   if (!accessQrSvg.value) {
     await loadState()
   }
-  accessQrSvg.value = state.service.qrSvg || accessQrSvg.value
+  accessQrSvg.value = state.service.qrSvg || ""
   accessDialogOpen.value = true
 }
 
@@ -1230,6 +1517,16 @@ function openCreateGroup() {
   newGroup.name = "新的群聊"
   newGroup.deviceIds = []
   createGroupOpen.value = true
+}
+
+function toggleGroupDevice(device) {
+  if (loading.value || device?.native) return
+  const index = newGroup.deviceIds.indexOf(device.id)
+  if (index > -1) {
+    newGroup.deviceIds.splice(index, 1)
+  } else {
+    newGroup.deviceIds.push(device.id)
+  }
 }
 
 async function createGroup() {
@@ -1756,7 +2053,9 @@ function isTextPreviewFile(name, mimeType) {
           }
 
           &:hover:not(:disabled) svg,
-          &:hover:not(:disabled) span { color: #ffffff !important; }
+          &:hover:not(:disabled) span {
+            color: #ffffff !important;
+          }
         }
 
         &:disabled {
@@ -2274,8 +2573,13 @@ function isTextPreviewFile(name, mimeType) {
         flex-direction: column;
         gap: 3px;
 
-        span { font-size: 13px; }
-        small { color: var(--color-text-muted); font-size: 11.5px; }
+        span {
+          font-size: 13px;
+        }
+        small {
+          color: var(--color-text-muted);
+          font-size: 11.5px;
+        }
       }
     }
 
@@ -2303,7 +2607,10 @@ function isTextPreviewFile(name, mimeType) {
         background: var(--color-primary-soft);
       }
 
-      &:disabled { cursor: wait; opacity: 0.6; }
+      &:disabled {
+        cursor: wait;
+        opacity: 0.6;
+      }
 
       .drop-settings-item-icon {
         display: grid;
@@ -2323,7 +2630,9 @@ function isTextPreviewFile(name, mimeType) {
         flex-direction: column;
         gap: 3px;
 
-        span { font-size: 12.5px; }
+        span {
+          font-size: 12.5px;
+        }
         small {
           overflow: hidden;
           color: var(--color-text-muted);
@@ -2367,20 +2676,31 @@ function isTextPreviewFile(name, mimeType) {
           border-radius: 6px;
           background: var(--color-panel-soft);
           color: var(--color-text);
-          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-family:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
           font-size: 11px;
           cursor: pointer;
 
-          span:last-child { color: var(--color-text-muted); font-family: inherit; }
-          &:hover:not(:disabled), &.is-active {
+          span:last-child {
+            color: var(--color-text-muted);
+            font-family: inherit;
+          }
+          &:hover:not(:disabled),
+          &.is-active {
             border-color: var(--color-primary);
             background: var(--color-primary-soft);
             color: var(--color-primary);
           }
-          &:disabled { cursor: default; opacity: 0.72; }
+          &:disabled {
+            cursor: default;
+            opacity: 0.72;
+          }
         }
 
-        .drop-settings-empty { color: var(--color-text-soft); font-size: 11.5px; }
+        .drop-settings-empty {
+          color: var(--color-text-soft);
+          font-size: 11.5px;
+        }
       }
     }
 
@@ -2442,120 +2762,1178 @@ function isTextPreviewFile(name, mimeType) {
   }
 }
 
-.drop-connect-modal.base-modal,
-.drop-group-modal.base-modal {
-  .drop-connect-content,
+.drop-group-modal {
+  :deep(.base-modal__panel) {
+    width: min(580px, calc(100vw - 48px));
+    max-height: min(720px, calc(100vh - 48px));
+    border-radius: 16px;
+    border: 1px solid var(--color-line);
+    background: var(--color-panel);
+    box-shadow:
+      0 24px 60px -12px rgba(15, 23, 42, 0.18),
+      0 0 0 1px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
+  }
+
+  :deep(.base-modal__header) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 22px 26px 16px;
+    border-bottom: 1px solid var(--color-line);
+  }
+
+  :deep(.base-modal__content) {
+    padding: 20px 26px 24px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .drop-group-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+
+    &-icon {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      background: #eff6ff;
+      color: #2563eb;
+      flex-shrink: 0;
+    }
+
+    &-text {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .drop-group-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      color: var(--color-text);
+      letter-spacing: -0.01em;
+      line-height: 1.3;
+    }
+
+    .drop-group-description {
+      margin: 0;
+      color: var(--color-text-muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+  }
+
+  .drop-group-close {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover {
+      background: var(--color-panel-soft);
+      border-color: var(--color-line-strong);
+      color: var(--color-text);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 2px;
+    }
+  }
+
   .drop-group-form {
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    padding-top: 6px;
+    gap: 16px;
     color: var(--color-text);
+  }
 
-    .drop-connect-description {
-      margin: 0;
-      color: var(--color-text-muted);
-      font-size: 12.5px;
-      line-height: 1.6;
+  .drop-group-field {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+
+    &-label {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--color-text);
+      line-height: 1.3;
     }
 
-    .drop-connect-hint {
-      color: var(--color-text-soft);
-      font-size: 11.5px;
-    }
-
-    .drop-connect-list {
-      display: flex;
-      max-height: 320px;
-      flex-direction: column;
-      gap: 6px;
-      overflow-y: auto;
-
-      .drop-connect-device {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 10px 12px;
-        border: 1px solid var(--color-line);
-        border-radius: 6px;
+    .drop-group-name-input {
+      :deep(.el-input__wrapper) {
+        border-radius: 9px;
+        padding: 4px 12px;
         background: var(--color-panel);
+        box-shadow: 0 0 0 1px var(--color-line) inset;
+        transition: all 0.15s ease;
+
+        &:hover {
+          box-shadow: 0 0 0 1px var(--color-line-strong) inset;
+        }
+
+        &.is-focus {
+          box-shadow:
+            0 0 0 1.5px var(--color-primary) inset,
+            0 0 0 4px rgba(22, 119, 255, 0.1);
+        }
+      }
+
+      :deep(.el-input__inner) {
+        height: 38px;
+        font-size: 14px;
         color: var(--color-text);
-        text-align: left;
-        cursor: pointer;
 
-        &:hover:not(:disabled) {
-          border-color: var(--color-primary);
-          background: var(--color-primary-soft);
-        }
-
-        &:disabled {
-          cursor: default;
-          color: var(--color-text-muted);
-        }
-
-        .drop-connect-device-info {
-          display: flex;
-          min-width: 0;
-          flex: 1;
-          flex-direction: column;
-          gap: 4px;
-
-          .drop-connect-device-name {
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-          }
-
-          .drop-connect-device-ip {
-            color: var(--color-text-muted);
-            font-size: var(--font-size-sm);
-          }
-        }
-
-        .drop-connect-device-status {
-          flex: none;
-          color: var(--color-primary);
-          font-size: var(--font-size-sm);
+        &::placeholder {
+          color: var(--color-text-soft);
         }
       }
+    }
+  }
 
-      .drop-connect-empty {
-        padding: 24px 12px;
-        color: var(--color-text-muted);
-        text-align: center;
-      }
+  .drop-group-notice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 11px 14px;
+    border-radius: 10px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+
+    &-icon {
+      color: #2563eb;
+      flex-shrink: 0;
+      margin-top: 1px;
     }
 
-    .drop-connect-error {
-      margin: 0;
-      color: var(--color-danger);
-      font-size: var(--font-size-sm);
+    &-text {
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: #1e40af;
     }
+  }
 
-    .drop-connect-actions,
-    .drop-group-actions {
+  .drop-group-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+
+    &-header {
       display: flex;
-      justify-content: flex-end;
-      gap: 10px;
-      margin-top: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    &-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--color-text);
+    }
+
+    .drop-group-count-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2.5px 9px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      background: #eff6ff;
+      color: #2563eb;
+      border: 1px solid #bfdbfe;
     }
   }
 
   .drop-group-devices {
     display: flex;
-    max-height: 200px;
     flex-direction: column;
-    gap: 8px;
+    gap: 9px;
+    max-height: 240px;
     overflow-y: auto;
+    padding-right: 4px;
 
-    .drop-group-device {
-      height: auto;
-      margin-right: 0;
-      padding: 8px 10px;
-      background: var(--color-panel-soft);
+    &::-webkit-scrollbar {
+      width: 6px;
+    }
+    &::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    &::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.4);
+      border-radius: 9999px;
+
+      &:hover {
+        background: rgba(100, 116, 139, 0.6);
+      }
+    }
+
+    .drop-group-device-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 14px;
+      border-radius: 10px;
       border: 1px solid var(--color-line);
-      border-radius: 6px;
+      background: var(--color-panel);
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+
+      &:hover:not(.is-disabled) {
+        border-color: #93c5fd;
+        background: var(--color-panel-soft);
+      }
+
+      &.is-selected {
+        border-color: #2563eb;
+        background: #f8faff;
+        box-shadow: 0 0 0 1px #2563eb inset;
+
+        .drop-group-device-avatar {
+          background: #eff6ff;
+          color: #2563eb;
+        }
+      }
+
+      &.is-disabled {
+        opacity: 0.62;
+        cursor: not-allowed;
+        background: var(--color-panel-soft);
+      }
+
+      &:focus-visible {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 2px;
+      }
+    }
+
+    .drop-group-checkbox {
+      display: grid;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      border: 1.5px solid var(--color-line-strong);
+      border-radius: 5px;
+      background: var(--color-panel);
+      color: #ffffff;
+      transition: all 0.15s ease;
+
+      &.is-checked {
+        border-color: #2563eb;
+        background: #2563eb;
+      }
+
+      &.is-disabled {
+        border-color: var(--color-line);
+        background: rgba(148, 163, 184, 0.15);
+      }
+    }
+
+    .drop-group-device-avatar {
+      display: grid;
+      place-items: center;
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--color-panel-soft);
+      color: var(--color-text-muted);
+      flex-shrink: 0;
+      transition: all 0.18s ease;
+    }
+
+    .drop-group-device-info {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+      flex: 1;
+
+      .drop-group-device-name {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--color-text);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .drop-group-device-ip {
+        font-size: 12px;
+        color: var(--color-text-muted);
+        font-variant-numeric: tabular-nums;
+      }
+    }
+
+    .drop-group-device-status {
+      flex-shrink: 0;
+
+      .drop-group-status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 3px 9px;
+        border-radius: 6px;
+        font-size: 11.5px;
+        font-weight: 500;
+        white-space: nowrap;
+
+        .status-dot {
+          font-size: 8px;
+          line-height: 1;
+        }
+
+        &--online {
+          background: #ecfdf5;
+          color: #059669;
+          border: 1px solid #a7f3d0;
+
+          .status-dot {
+            color: #10b981;
+          }
+        }
+
+        &--offline {
+          background: var(--color-panel-soft);
+          color: var(--color-text-muted);
+          border: 1px solid var(--color-line);
+
+          .status-dot {
+            color: var(--color-text-soft);
+          }
+        }
+
+        &--disabled {
+          background: #fef3c7;
+          color: #d97706;
+          border: 1px solid #fde68a;
+        }
+      }
+    }
+
+    .drop-group-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+      border: 1px dashed var(--color-line);
+      border-radius: 10px;
+      background: var(--color-panel-soft);
+      text-align: center;
+
+      &-icon {
+        color: var(--color-text-soft);
+        margin-bottom: 8px;
+      }
+
+      &-text {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--color-text);
+        margin: 0 0 4px;
+      }
+
+      &-subtext {
+        font-size: 12px;
+        color: var(--color-text-muted);
+        margin: 0;
+        max-width: 320px;
+        line-height: 1.5;
+      }
+    }
+  }
+
+  .drop-group-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 4px;
+    padding-top: 16px;
+    border-top: 1px solid var(--color-line);
+
+    .drop-group-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 36px;
+      padding: 0 18px;
+      border-radius: 8px;
+      font-size: 13.5px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+
+      &--cancel {
+        border: 1px solid var(--color-line);
+        background: var(--color-panel);
+        color: var(--color-text);
+
+        &:hover:not(:disabled) {
+          background: var(--color-panel-soft);
+          border-color: var(--color-line-strong);
+        }
+      }
+
+      &--primary {
+        border: none;
+        background: #1677ff;
+        color: #ffffff;
+        box-shadow: 0 2px 6px rgba(22, 119, 255, 0.25);
+
+        &:hover:not(:disabled) {
+          background: #4096ff;
+          box-shadow: 0 4px 12px rgba(22, 119, 255, 0.35);
+        }
+
+        &:disabled {
+          opacity: 0.55;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
+      }
+
+      &:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+    }
+  }
+}
+
+.drop-connect-modal {
+  :deep(.base-modal__panel) {
+    width: min(650px, calc(100vw - 48px));
+    max-height: min(720px, calc(100vh - 48px));
+    border-radius: 16px;
+    border: 1px solid var(--color-line);
+    background: var(--color-panel);
+    box-shadow:
+      0 24px 60px -12px rgba(15, 23, 42, 0.18),
+      0 0 0 1px rgba(0, 0, 0, 0.04);
+    overflow: hidden;
+  }
+
+  :deep(.base-modal__header) {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 26px 28px 12px;
+    border-bottom: none;
+  }
+
+  :deep(.base-modal__content) {
+    padding: 0 28px 26px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .drop-connect-header {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+
+    .drop-connect-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
       color: var(--color-text);
+      letter-spacing: -0.01em;
+      line-height: 1.3;
+    }
+
+    .drop-connect-description {
+      margin: 0;
+      color: var(--color-text-muted);
+      font-size: 13.5px;
+      line-height: 1.5;
+    }
+  }
+
+  .drop-connect-close {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border: 1px solid var(--color-line);
+    border-radius: 8px;
+    background: var(--color-panel);
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: all 0.15s ease;
+
+    &:hover {
+      background: var(--color-panel-soft);
+      border-color: var(--color-line-strong);
+      color: var(--color-text);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--color-primary);
+      outline-offset: 2px;
+    }
+  }
+
+  .drop-connect-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+
+    .drop-connect-filter-box {
+      margin-top: 4px;
+
+      :deep(.el-input) {
+        .el-input__wrapper {
+          border-radius: 9px;
+          padding: 3px 12px;
+          background: var(--color-panel);
+          box-shadow: 0 0 0 1px var(--color-line) inset;
+          transition: all 0.15s ease;
+
+          &:hover {
+            box-shadow: 0 0 0 1px var(--color-line-strong) inset;
+          }
+
+          &.is-focus {
+            box-shadow:
+              0 0 0 1.5px var(--color-primary) inset,
+              0 0 0 4px rgba(22, 119, 255, 0.1);
+          }
+        }
+
+        .el-input__inner {
+          height: 36px;
+          font-size: 13.5px;
+          color: var(--color-text);
+
+          &::placeholder {
+            color: var(--color-text-soft);
+          }
+        }
+      }
+
+      .drop-connect-filter-icon {
+        color: var(--color-text-soft);
+        margin-right: 6px;
+        flex-shrink: 0;
+      }
+    }
+
+    .drop-connect-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin: 14px 0 10px;
+      max-height: 320px;
+      overflow-y: auto;
+      padding-right: 2px;
+
+      &::-webkit-scrollbar {
+        width: 6px;
+      }
+      &::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      &::-webkit-scrollbar-thumb {
+        background: rgba(148, 163, 184, 0.4);
+        border-radius: 9999px;
+
+        &:hover {
+          background: rgba(100, 116, 139, 0.6);
+        }
+      }
+
+      .drop-connect-card {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 14px 18px;
+        border: 1px solid var(--color-line);
+        border-radius: 12px;
+        background: var(--color-panel);
+        transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        cursor: pointer;
+
+        &.is-ready {
+          border-color: #93c5fd;
+          background: #f8faff;
+        }
+
+        &:hover {
+          border-color: var(--color-primary);
+          background: var(--color-primary-soft);
+          box-shadow: 0 4px 14px rgba(22, 119, 255, 0.08);
+
+          .drop-connect-avatar {
+            background: #eff6ff;
+            color: #2563eb;
+          }
+
+          .drop-connect-btn--waiting {
+            background: #1677ff;
+            color: #ffffff;
+            border-color: #1677ff;
+          }
+        }
+
+        .drop-connect-avatar {
+          display: grid;
+          place-items: center;
+          width: 44px;
+          height: 44px;
+          border-radius: 50%;
+          background: var(--color-panel-soft);
+          color: var(--color-text-muted);
+          flex-shrink: 0;
+          transition: all 0.2s ease;
+        }
+
+        &.is-ready .drop-connect-avatar {
+          background: #eff6ff;
+          color: #2563eb;
+        }
+
+        .drop-connect-info {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          min-width: 0;
+          flex: 1;
+
+          .drop-connect-name-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+
+            .drop-connect-name {
+              font-size: 14.5px;
+              font-weight: 600;
+              color: var(--color-text);
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+
+            .drop-connect-badge {
+              display: inline-flex;
+              align-items: center;
+              gap: 5px;
+              padding: 2px 9px;
+              border-radius: 9999px;
+              font-size: 11.5px;
+              font-weight: 500;
+              line-height: 1.35;
+
+              .badge-dot {
+                font-size: 8px;
+                line-height: 1;
+              }
+
+              &--ready {
+                background: #ecfdf5;
+                color: #059669;
+
+                .badge-dot {
+                  color: #10b981;
+                }
+              }
+
+              &--waiting {
+                background: #fff7ed;
+                color: #d97706;
+
+                .badge-dot {
+                  color: #f59e0b;
+                }
+              }
+            }
+          }
+
+          .drop-connect-ip {
+            font-size: 13px;
+            color: var(--color-text-muted);
+            font-variant-numeric: tabular-nums;
+          }
+        }
+
+        .drop-connect-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 6px;
+          min-width: 82px;
+          height: 35px;
+          padding: 0 16px;
+          border-radius: 8px;
+          font-size: 13.5px;
+          font-weight: 500;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          flex-shrink: 0;
+
+          &--primary {
+            border: 1px solid #1677ff;
+            background: #1677ff;
+            color: #ffffff;
+            box-shadow: 0 2px 6px rgba(22, 119, 255, 0.25);
+
+            &:hover:not(:disabled) {
+              background: #4096ff;
+              border-color: #4096ff;
+              box-shadow: 0 4px 10px rgba(22, 119, 255, 0.35);
+            }
+          }
+
+          &--waiting {
+            border: 1px solid rgba(22, 119, 255, 0.5);
+            background: var(--color-panel);
+            color: #1677ff;
+
+            &:hover:not(:disabled) {
+              background: rgba(22, 119, 255, 0.08);
+              border-color: #1677ff;
+            }
+          }
+
+          &:disabled {
+            opacity: 0.65;
+            cursor: not-allowed;
+            box-shadow: none;
+          }
+        }
+      }
+
+      .drop-connect-empty {
+        padding: 32px 16px;
+        color: var(--color-text-muted);
+        text-align: center;
+        font-size: 13.5px;
+      }
+    }
+
+    .drop-connect-hint-row {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin-top: 10px;
+
+      .drop-connect-hint-icon {
+        color: var(--color-text-soft);
+        flex-shrink: 0;
+      }
+
+      .drop-connect-hint {
+        color: var(--color-text-soft);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+    }
+
+    .drop-connect-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+      margin-top: 18px;
+
+      .drop-connect-action-close {
+        min-width: 78px;
+        height: 36px;
+        padding: 0 18px;
+        border-radius: 8px;
+        border: 1px solid var(--color-line);
+        background: var(--color-panel);
+        color: var(--color-text);
+        font-size: 13.5px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.15s ease;
+
+        &:hover {
+          background: var(--color-panel-soft);
+          border-color: var(--color-line-strong);
+        }
+      }
+
+      .drop-connect-action-scan {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-width: 96px;
+        height: 36px;
+        padding: 0 18px;
+        border-radius: 8px;
+        border: none;
+        background: #1677ff;
+        color: #ffffff;
+        font-size: 13.5px;
+        font-weight: 500;
+        cursor: pointer;
+        box-shadow: 0 2px 6px rgba(22, 119, 255, 0.25);
+        transition: all 0.15s ease;
+
+        &:hover:not(:disabled) {
+          background: #4096ff;
+          box-shadow: 0 4px 12px rgba(22, 119, 255, 0.35);
+        }
+
+        &:disabled {
+          opacity: 0.6;
+          cursor: not-allowed;
+          box-shadow: none;
+        }
+
+        .is-spinning {
+          animation: dropSpin 1s linear infinite;
+        }
+      }
+    }
+  }
+}
+
+@keyframes dropSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 右侧浮动通知弹框 */
+.drop-right-toast {
+  position: fixed;
+  top: 28px;
+  right: 28px;
+  z-index: 9999;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 320px;
+  max-width: 440px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  background: var(--color-panel);
+  box-shadow:
+    0 14px 36px -4px rgba(15, 23, 42, 0.16),
+    0 4px 12px -2px rgba(239, 68, 68, 0.1),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+
+  &__icon {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    background: #fef2f2;
+    color: #ef4444;
+    flex-shrink: 0;
+  }
+
+  &__body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  &__title {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--color-text);
+    line-height: 1.4;
+  }
+
+  &__text {
+    margin: 0;
+    font-size: 13px;
+    color: var(--color-text-muted);
+    line-height: 1.5;
+    word-break: break-word;
+  }
+
+  &__close {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    margin: -2px -4px 0 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--color-text-soft);
+    cursor: pointer;
+    transition: all 0.15s ease;
+    flex-shrink: 0;
+
+    &:hover {
+      background: var(--color-panel-soft);
+      color: var(--color-text);
+    }
+  }
+
+  &__bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 2.5px;
+    background: #ef4444;
+    border-radius: 0 0 0 12px;
+    animation: toastProgress 3.5s linear forwards;
+  }
+}
+
+@keyframes toastProgress {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}
+
+.drop-toast-slide-enter-active,
+.drop-toast-slide-leave-active {
+  transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.drop-toast-slide-enter-from {
+  opacity: 0;
+  transform: translateX(40px) scale(0.96);
+}
+
+.drop-toast-slide-leave-to {
+  opacity: 0;
+  transform: translateX(30px) scale(0.98);
+}
+
+:root[data-theme="dark"] {
+  .drop-group-modal {
+    .drop-group-header-icon {
+      background: rgba(37, 99, 235, 0.2);
+      color: #60a5fa;
+    }
+
+    .drop-group-close {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--color-line);
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: var(--color-line-strong);
+      }
+    }
+
+    .drop-group-notice {
+      background: rgba(37, 99, 235, 0.12);
+      border-color: rgba(59, 130, 246, 0.3);
+
+      &-icon {
+        color: #60a5fa;
+      }
+
+      &-text {
+        color: #93c5fd;
+      }
+    }
+
+    .drop-group-section .drop-group-count-badge {
+      background: rgba(37, 99, 235, 0.18);
+      color: #60a5fa;
+      border-color: rgba(59, 130, 246, 0.35);
+    }
+
+    .drop-group-devices {
+      .drop-group-device-card {
+        background: rgba(30, 41, 59, 0.5);
+        border-color: rgba(255, 255, 255, 0.08);
+
+        &:hover:not(.is-disabled) {
+          border-color: rgba(59, 130, 246, 0.4);
+          background: rgba(37, 99, 235, 0.08);
+        }
+
+        &.is-selected {
+          border-color: #3b82f6;
+          background: rgba(37, 99, 235, 0.14);
+          box-shadow: 0 0 0 1px #3b82f6 inset;
+
+          .drop-group-device-avatar {
+            background: rgba(37, 99, 235, 0.25);
+            color: #60a5fa;
+          }
+        }
+
+        &.is-disabled {
+          background: rgba(15, 23, 42, 0.4);
+          border-color: rgba(255, 255, 255, 0.04);
+        }
+      }
+
+      .drop-group-checkbox {
+        background: rgba(30, 41, 59, 0.7);
+        border-color: rgba(255, 255, 255, 0.2);
+
+        &.is-checked {
+          background: #2563eb;
+          border-color: #2563eb;
+        }
+
+        &.is-disabled {
+          background: rgba(255, 255, 255, 0.05);
+          border-color: rgba(255, 255, 255, 0.1);
+        }
+      }
+
+      .drop-group-device-avatar {
+        background: rgba(255, 255, 255, 0.06);
+        color: #94a3b8;
+      }
+
+      .drop-group-device-status .drop-group-status-badge {
+        &--online {
+          background: rgba(16, 185, 129, 0.18);
+          color: #34d399;
+          border-color: rgba(16, 185, 129, 0.3);
+        }
+
+        &--disabled {
+          background: rgba(245, 158, 11, 0.18);
+          color: #fbbf24;
+          border-color: rgba(245, 158, 11, 0.3);
+        }
+      }
+
+      .drop-group-empty {
+        background: rgba(15, 23, 42, 0.4);
+        border-color: rgba(255, 255, 255, 0.1);
+      }
+    }
+
+    .drop-group-actions .drop-group-btn--cancel {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.12);
+      color: #e2e8f0;
+
+      &:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.2);
+      }
+    }
+  }
+
+  .drop-connect-modal {
+    .drop-connect-close {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: var(--color-line);
+
+      &:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: var(--color-line-strong);
+      }
+    }
+
+    .drop-connect-content {
+      .drop-connect-list {
+        .drop-connect-card {
+          background: rgba(30, 41, 59, 0.5);
+          border-color: rgba(255, 255, 255, 0.08);
+
+          &.is-ready {
+            border-color: rgba(59, 130, 246, 0.4);
+            background: rgba(37, 99, 235, 0.1);
+          }
+
+          &:hover {
+            border-color: #3b82f6;
+            background: rgba(37, 99, 235, 0.15);
+          }
+
+          .drop-connect-avatar {
+            background: rgba(255, 255, 255, 0.06);
+            color: #94a3b8;
+          }
+
+          &.is-ready .drop-connect-avatar {
+            background: rgba(37, 99, 235, 0.25);
+            color: #60a5fa;
+          }
+
+          .drop-connect-badge--ready {
+            background: rgba(16, 185, 129, 0.18);
+            color: #34d399;
+          }
+
+          .drop-connect-badge--waiting {
+            background: rgba(245, 158, 11, 0.18);
+            color: #fbbf24;
+          }
+
+          .drop-connect-btn--waiting {
+            background: transparent;
+            border-color: rgba(96, 165, 250, 0.5);
+            color: #60a5fa;
+
+            &:hover:not(:disabled) {
+              background: rgba(37, 99, 235, 0.2);
+              border-color: #60a5fa;
+            }
+          }
+        }
+      }
+
+      .drop-connect-actions {
+        .drop-connect-action-close {
+          background: rgba(255, 255, 255, 0.06);
+          border-color: rgba(255, 255, 255, 0.12);
+          color: #e2e8f0;
+
+          &:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+          }
+        }
+      }
+    }
+  }
+
+  .drop-right-toast {
+    background: #1e293b;
+    border-color: rgba(239, 68, 68, 0.35);
+    box-shadow:
+      0 16px 40px -4px rgba(0, 0, 0, 0.5),
+      0 0 0 1px rgba(255, 255, 255, 0.08);
+
+    &__icon {
+      background: rgba(239, 68, 68, 0.2);
+      color: #f87171;
     }
   }
 }

@@ -36,6 +36,7 @@
           no-match-text="没有匹配的分支"
           no-data-text="暂无分支"
           :disabled="busy"
+          @change="search"
         >
           <ElOption value="HEAD" label="当前工作树" />
           <ElOption value=":all" label="所有分支" />
@@ -44,6 +45,35 @@
             :key="branch.name"
             :value="branch.name"
             :label="branch.name"
+            :title="branch.name"
+          />
+        </ElSelect>
+        <ElSelect
+          :model-value="checkBranchName"
+          class="git-file-history-branch git-file-history-check-branch"
+          aria-label="合入对比分支"
+          placeholder="不检查合入"
+          title="检查提交是否已合入所选分支&#10;命令：git merge-base --is-ancestor <提交> <对比分支>"
+          filterable
+          :fit-input-width="true"
+          :persistent="false"
+          :show-arrow="false"
+          :suffix-icon="ChevronDown"
+          :offset="6"
+          :fallback-placements="['bottom-start', 'top-start']"
+          popper-class="git-file-history-branch-popup"
+          no-match-text="没有匹配的分支"
+          no-data-text="暂无分支"
+          :loading="checkBranchLoading"
+          :disabled="busy || checkBranchLoading"
+          @change="emit('change-check-branch', $event)"
+        >
+          <ElOption value="" label="不检查合入" />
+          <ElOption
+            v-for="branch in branches"
+            :key="branch.name"
+            :value="branch.name"
+            :label="`对比：${branch.name}`"
             :title="branch.name"
           />
         </ElSelect>
@@ -70,6 +100,7 @@
             class="git-file-history-checkbox"
             type="checkbox"
             :disabled="busy || scope === ':all'"
+            @change="search"
           />
           <span>追踪重命名前的历史</span>
         </label>
@@ -184,7 +215,7 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref } from "vue"
+import { onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   ChevronDown,
   ChevronLeft,
@@ -209,10 +240,12 @@ const props = defineProps({
   projectPath: { type: String, required: true },
   worktreePath: { type: String, default: "" },
   branchName: { type: String, default: "" },
+  checkBranchName: { type: String, default: "" },
+  checkBranchLoading: { type: Boolean, default: false },
   branches: { type: Array, default: () => [] },
   busy: { type: Boolean, default: false }
 })
-const emit = defineEmits(["select-commit"])
+const emit = defineEmits(["select-commit", "change-check-branch"])
 const filePath = ref("")
 const scope = ref(props.branchName || "HEAD")
 const followRenames = ref(true)
@@ -227,6 +260,9 @@ const pageSize = 60
 let query = null
 let sequence = 0
 let treeSequence = 0
+
+// 对比分支保存成功后重新查询，旧请求由序号隔离，避免回写上一分支的检查结果。
+watch(() => props.checkBranchName, search)
 
 // 翻页沿用已提交的查询和分支快照，编辑输入框不会改变已有结果的上下文。
 async function search() {
@@ -325,6 +361,7 @@ onMounted(loadFiles)
 
     .git-file-history-form {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       gap: 8px;
 

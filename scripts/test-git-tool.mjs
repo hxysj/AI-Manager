@@ -17,7 +17,7 @@ const vue = require("vue")
 const selectComponents = {
   ElSelect: vue.defineComponent({
     props: ["modelValue", "disabled"],
-    emits: ["change"],
+    emits: ["update:modelValue", "change"],
     setup:
       (props, { emit, slots }) =>
       () =>
@@ -26,7 +26,10 @@ const selectComponents = {
           {
             value: props.modelValue,
             disabled: props.disabled,
-            onChange: (event) => emit("change", event.target.value)
+            onChange: (event) => {
+              emit("update:modelValue", event.target.value)
+              emit("change", event.target.value)
+            }
           },
           slots.default?.()
         )
@@ -734,12 +737,18 @@ const history = mount(FileHistory, {
   projectPath: linkedPath,
   worktreePath: linkedPath,
   branchName: "feature",
+  checkBranchName: "release",
   branches,
   onSelectCommit: (commit) => {
     openedHistoryCommit = commit
   }
 })
 await tick()
+assert.equal(
+  findNodes(history.root, "git-file-history-check-branch").length,
+  1,
+  "文件历史应提供独立的合入对比分支选择器"
+)
 assert.deepEqual(Array.from(history.state.files), [
   "README.md",
   "src/current.js"
@@ -784,8 +793,23 @@ assert.equal(
 assert.equal(history.state.result.commits.length, 1)
 history.state.openCommit(history.state.result.commits[0])
 assert.equal(openedHistoryCommit.historyBranchName, "feature")
-history.state.scope = ":all"
-await history.state.search()
+// 切换查询分支自动重查，分页快照不能沿用上一分支的提交。
+history.state.filePath = "src/current.js"
+findNodes(history.root, "git-file-history-branch")[0].props.onChange({
+  target: { value: "main" }
+})
+await tick()
+const historyRequest = calls.findLast(
+  (call) => call.name === "listGitToolFileHistory"
+).payload
+assert.equal(historyRequest.branchName, "main")
+assert.equal(historyRequest.offset, 0)
+assert.equal(historyRequest.revision, undefined)
+assert.equal(history.state.result.branchName, "main")
+findNodes(history.root, "git-file-history-branch")[0].props.onChange({
+  target: { value: ":all" }
+})
+await tick()
 assert.equal(
   calls.findLast((call) => call.name === "listGitToolFileHistory").payload
     .followRenames,
@@ -1219,6 +1243,87 @@ assert.equal(pageHistory.props.worktreePath, linkedPath)
 pageHistory.setupState.scope = "feature"
 await pageHistory.setupState.selectFile("src/current.js")
 await tick()
+// 文件历史沿用项目对比分支，切换只更新当前面板，不额外加载分支提交列表。
+handlers.updateGitToolCheckBranch = (payload) => ({
+  ...worktreePage.state.project,
+  checkBranchName: payload.branchName
+})
+handlers.listGitToolFileHistory = (payload) => ({
+  ...historyResponse(payload),
+  commits: [
+    {
+      ...historyCommit,
+      filePath: "src/旧名称 [1].js",
+      checkStatus: worktreePage.state.project.checkBranchName
+        ? "exists-hash"
+        : "",
+      checkTargetBranch: worktreePage.state.project.checkBranchName
+    }
+  ]
+})
+const compareSelector = () =>
+  findNodes(worktreePage.root, "git-file-history-check-branch")[0]
+const commitCallsBeforeCheck = calls.filter(
+  (call) => call.name === "listGitToolCommits"
+).length
+compareSelector().props.onChange({ target: { value: "main" } })
+await tick()
+assert.equal(
+  calls.findLast((call) => call.name === "updateGitToolCheckBranch").payload
+    .branchName,
+  "main"
+)
+assert.equal(pageHistory.props.checkBranchName, "main")
+assert.equal(pageHistory.setupState.result.commits[0].checkTargetBranch, "main")
+assert.equal(pageHistory.setupState.result.branchName, "feature")
+assert.equal(
+  calls.filter((call) => call.name === "listGitToolCommits").length,
+  commitCallsBeforeCheck
+)
+assert.equal(
+  calls.findLast((call) => call.name === "listGitToolFileHistory").payload
+    .revision,
+  undefined
+)
+assert.match(
+  findNodes(worktreePage.root, "git-file-history-check")[0].props.title,
+  /「main」/
+)
+// 保存失败时保持原配置和查询结果，显示错误并恢复选择器。
+handlers.updateGitToolCheckBranch = () => {
+  throw new Error("保存对比分支失败")
+}
+compareSelector().props.onChange({ target: { value: "feature" } })
+await tick()
+assert.equal(pageHistory.props.checkBranchName, "main")
+assert.equal(pageHistory.setupState.result.commits[0].checkTargetBranch, "main")
+assert.equal(compareSelector().props.disabled, false)
+assert.match(messages.at(-1).text, /保存对比分支失败/)
+handlers.updateGitToolCheckBranch = (payload) => ({
+  ...worktreePage.state.project,
+  checkBranchName: payload.branchName
+})
+// 上一次合入检查返回较晚时，不能覆盖已关闭检查的新结果。
+let finishPreviousCheck
+const checkedHistoryResponse = handlers.listGitToolFileHistory
+handlers.listGitToolFileHistory = (payload) => {
+  const response = checkedHistoryResponse(payload)
+  if (worktreePage.state.project.checkBranchName === "feature") {
+    return new Promise((resolve) => {
+      finishPreviousCheck = () => resolve(response)
+    })
+  }
+  return response
+}
+compareSelector().props.onChange({ target: { value: "feature" } })
+await tick()
+assert.equal(typeof finishPreviousCheck, "function")
+compareSelector().props.onChange({ target: { value: "" } })
+await tick()
+finishPreviousCheck()
+await tick()
+assert.equal(pageHistory.setupState.result.commits[0].checkStatus, "")
+assert.equal(findNodes(worktreePage.root, "git-file-history-check").length, 0)
 findNodes(worktreePage.root, "git-file-history-record")[0].props.onClick()
 await tick()
 assert.deepEqual(

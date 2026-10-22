@@ -173,6 +173,33 @@ assert.deepEqual(state.connectedDevices.map((device) => device.id).sort(), [
 ])
 assert.equal(calls.length, 0)
 
+// 网络地址切换后同步二维码；断网时清空旧二维码，恢复后使用新地址。
+fixture.service.accessUrl = "http://192.168.1.1:17631/?token=stable"
+fixture.service.qrSvg = "<svg>old-network</svg>"
+listeners.state(structuredClone(fixture))
+await state.showAccessDialog()
+assert.equal(state.accessQrSvg, "<svg>old-network</svg>")
+fixture.service.lanIp = "192.168.2.10"
+fixture.service.lanIps = ["192.168.2.10"]
+fixture.service.accessUrl = "http://192.168.2.10:17631/?token=stable"
+fixture.service.qrSvg = "<svg>new-network</svg>"
+listeners.state(structuredClone(fixture))
+assert.equal(state.state.service.lanIp, "192.168.2.10")
+assert.equal(state.accessQrSvg, "<svg>new-network</svg>")
+fixture.service.lanIp = ""
+fixture.service.lanIps = []
+fixture.service.accessUrl = ""
+fixture.service.qrSvg = ""
+listeners.state(structuredClone(fixture))
+assert.equal(state.accessQrSvg, "", "断网后不能继续显示旧网络的二维码")
+fixture.service.lanIp = "192.168.3.10"
+fixture.service.lanIps = ["192.168.3.10"]
+fixture.service.accessUrl = "http://192.168.3.10:17631/?token=stable"
+fixture.service.qrSvg = "<svg>reconnected-network</svg>"
+listeners.state(structuredClone(fixture))
+assert.equal(state.accessQrSvg, "<svg>reconnected-network</svg>")
+state.accessDialogOpen = false
+
 await state.openConnectDialog()
 assert.equal(state.connectDialogOpen, true)
 assert.deepEqual(calls, ["scan"])
@@ -206,6 +233,21 @@ listeners.state(structuredClone(fixture))
 assert.equal(
   state.connectedDevices.some((device) => device.id === "candidate"),
   false
+)
+fixture.native.peers.push({
+  id: "removed",
+  name: "已被对方删除",
+  ip: "192.168.1.10",
+  port: 17631,
+  online: false,
+  paired: false,
+  remoteDeleted: true
+})
+listeners.state(structuredClone(fixture))
+assert.equal(
+  state.connectedDevices.some((device) => device.id === "removed"),
+  true,
+  "已被对方删除的设备仍保留本地历史入口"
 )
 fixture.native.peers[0].paired = true
 fixture.devices.push({ id: "candidate", name: "新连接设备", native: true })
@@ -251,6 +293,21 @@ assert.equal(calls.at(-1).delete.deleteHistory, true)
 state.requestDeleteDevice(known)
 assert.equal(state.deleteDeviceWithHistory, false)
 state.closeDeleteDevice()
+
+// 验证创建群聊面板交互与原生客户端单聊互斥逻辑
+state.openCreateGroup()
+assert.equal(state.createGroupOpen, true)
+assert.equal(state.newGroup.name, "新的群聊")
+assert.deepEqual(state.newGroup.deviceIds, [])
+state.toggleGroupDevice(state.state.devices[0]) // native === true
+assert.deepEqual(state.newGroup.deviceIds, [], "原生桌面客户端暂不支持直接加入群聊信道")
+state.toggleGroupDevice(state.state.devices[2]) // browser, native: false
+assert.deepEqual(state.newGroup.deviceIds, ["browser"])
+assert.deepEqual(state.selectedGroupDeviceIds, ["browser"])
+state.toggleGroupDevice(state.state.devices[2])
+assert.deepEqual(state.newGroup.deviceIds, [])
+state.createGroupOpen = false
+
 renderer.render(null, root)
 assert.deepEqual(Object.keys(listeners), [])
 assert.deepEqual(errorsDuringRuntime, [])
@@ -308,6 +365,7 @@ for (const fileName of [
   renderer.render(vnode, root)
   await tick()
   const panel = vnode.component.setupState
+  assert.equal(panel.sendBlocked, false, "普通离线或已配对状态不能误判为对方删除")
   panel.addPaths(["D:/example.bin"])
   panel.sendMessage()
   await tick()
@@ -329,6 +387,22 @@ for (const fileName of [
   assert.equal(task.statusText, "已保存，待对方接收")
   renderer.render(null, root)
   assert.deepEqual(Object.keys(listeners), [])
+
+  // 对方删除本机后，输入和附件入口都不能创建发送任务。
+  const blockedVnode = vue.h(module.exports.default, {
+    currentDevice: { id: known.id, native: true, remoteDeleted: true },
+    currentSessionId: "session",
+    service: { running: true }
+  })
+  blockedVnode.appContext = { ...vue.createApp({})._context }
+  renderer.render(blockedVnode, root)
+  await tick()
+  const blockedPanel = blockedVnode.component.setupState
+  assert.equal(blockedPanel.sendBlocked, true)
+  blockedPanel.addPaths(["D:/blocked.bin"])
+  blockedPanel.sendMessage()
+  assert.equal(blockedPanel.sendingTasks.length, 0)
+  renderer.render(null, root)
 }
 assert.deepEqual(errorsDuringRuntime, [])
 console.log(

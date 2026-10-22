@@ -5,6 +5,18 @@ description = "Desktop manager for AI CLI skills, repos and runtime metadata"
 authors = ["Monkey Thief"]
 edition = "2021"
 
+# 开发构建默认会为每次代码变更保留大量增量编译和调试产物。
+# 限制代码生成单元并降低调试信息后，target/debug/deps 不会按默认的
+# 256 个代码生成单元持续堆积；保留行号信息，仍可定位本项目的错误。
+[profile.dev]
+codegen-units = 16
+debug = 1
+
+# 依赖库不需要完整调试符号。依赖仍然可以正常调试和链接，但会显著减少
+# .o/.pdb 体积；本项目自身继续使用上面的行号调试信息。
+[profile.dev.package."*"]
+debug = 0
+
 [lib]
 name = "monkey_thief_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

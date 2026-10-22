@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/start-tauri-dev.mjs",
+    "dev:bounded": "node scripts/start-tauri-dev.mjs --auto-prune",
+    "clean:rust-target": "node scripts/clean-rust-target.mjs",
+    "clean:rust-target:apply": "node scripts/clean-rust-target.mjs --apply --max-size-gb 30 --older-than-days 1",
     "predev:renderer": "node scripts/build-translation-agent.mjs",
     "dev:renderer": "vite",
     "build": "tauri build",

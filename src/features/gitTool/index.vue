@@ -388,6 +388,8 @@
       :project-path="activeProjectPath"
       :worktree-path="selectedWorktreePath"
       :branch-name="selectedBranch || currentBranch"
+      :check-branch-name="project?.checkBranchName || ''"
+      :check-branch-loading="checkBranchLoading"
       :branches="branches"
       :busy="
         operationBusy ||
@@ -396,6 +398,7 @@
         confirmDialog.visible
       "
       @select-commit="selectCommit"
+      @change-check-branch="handleCheckBranchChange"
     />
     <section v-else-if="gitWorkspace === 'branch'" class="git-tool-workbench">
       <aside v-if="!branchCompareVisible" class="git-tool-branch-panel">
@@ -548,9 +551,9 @@
               v-if="!branchCompareVisible"
               class="git-tool-mini-select"
               :value="project?.checkBranchName || ''"
-              :disabled="!selectedBranch"
+              :disabled="!selectedBranch || checkBranchLoading"
               title="检查分支"
-              @change="handleCheckBranchChange"
+              @change="handleCheckBranchChange($event.target.value)"
             >
               <option value="">不检查</option>
               <option
@@ -1692,6 +1695,7 @@ const archiveCommitDetailLoading = ref(false)
 const stashDetailLoading = ref(false)
 const stashLoading = ref(false)
 const project = ref(null)
+const checkBranchLoading = ref(false)
 const branches = ref([])
 const commits = ref([])
 const archives = ref([])
@@ -3150,19 +3154,26 @@ async function archiveSelectedBranches() {
   }
 }
 
-async function handleCheckBranchChange(event) {
-  if (!selectedRepoId.value) {
+async function handleCheckBranchChange(branchName) {
+  if (!selectedRepoId.value || checkBranchLoading.value) {
     return
   }
 
+  const repoId = selectedRepoId.value
+  checkBranchLoading.value = true
   try {
-    project.value = await gitToolApi.updateGitToolCheckBranch({
-      repoId: selectedRepoId.value,
-      branchName: event.target.value
+    const updatedProject = await gitToolApi.updateGitToolCheckBranch({
+      repoId,
+      branchName
     })
-    await loadCommits()
+    // 切换仓库后不再回写旧项目；文件历史由面板监听配置后刷新。
+    if (repoId !== selectedRepoId.value) return
+    project.value = updatedProject
+    if (gitWorkspace.value === "branch") await loadCommits()
   } catch (error) {
     showErrorMessage(error)
+  } finally {
+    checkBranchLoading.value = false
   }
 }
 

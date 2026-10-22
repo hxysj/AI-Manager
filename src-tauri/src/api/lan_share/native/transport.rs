@@ -234,6 +234,16 @@ pub(super) async fn secure_call(
     let status = response.status();
     if response
         .headers()
+        .get("x-lan-device-removed")
+        .and_then(|value| value.to_str().ok())
+        == Some("true")
+    {
+        return Err(ManagerError::System(
+            super::REMOTE_DELETED_MESSAGE.into(),
+        ));
+    }
+    if response
+        .headers()
         .get("x-lan-version")
         .and_then(|value| value.to_str().ok())
         != Some(VERSION)

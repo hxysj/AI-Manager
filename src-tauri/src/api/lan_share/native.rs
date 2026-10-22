@@ -39,6 +39,10 @@ pub(super) struct Config {
     pub(super) hidden: bool,
     pub(super) peers: Vec<TrustedPeer>,
     pub(super) ignored_peers: Vec<String>,
+    #[serde(default)]
+    pub(super) remote_deleted_peers: Vec<String>,
+    #[serde(default)]
+    pub(super) revoked_peers: Vec<TrustedPeer>,
     pub(super) transfer: transfer::Settings,
     #[serde(default)]
     pub(super) transfer_configured: bool,
@@ -67,6 +71,8 @@ impl Default for Config {
             hidden: false,
             peers: Vec::new(),
             ignored_peers: Vec::new(),
+            remote_deleted_peers: Vec::new(),
+            revoked_peers: Vec::new(),
             transfer: transfer::Settings::default(),
             transfer_configured: true,
         }
@@ -151,7 +157,16 @@ impl NativeRuntime {
         self.config
             .peers
             .iter()
-            .find(|trusted| trusted.peer.id == id && trusted.secure && !trusted.secret.is_empty())
+            .find(|trusted| {
+                trusted.peer.id == id
+                    && trusted.secure
+                    && !trusted.secret.is_empty()
+                    && !self
+                        .config
+                        .remote_deleted_peers
+                        .iter()
+                        .any(|remote_id| remote_id == id)
+            })
             .cloned()
     }
 
@@ -172,7 +187,23 @@ impl NativeRuntime {
         if config.id == device_id {
             return Err(ManagerError::System("不能删除当前设备自身。".into()));
         }
+        if let Some(removed) = config
+            .peers
+            .iter()
+            .find(|trusted| trusted.peer.id == device_id)
+            .cloned()
+        {
+            config.revoked_peers.retain(|trusted| trusted.peer.id != device_id);
+            config.revoked_peers.push(removed);
+            if config.revoked_peers.len() > 100 {
+                let excess = config.revoked_peers.len() - 100;
+                config.revoked_peers.drain(..excess);
+            }
+        }
         config.peers.retain(|trusted| trusted.peer.id != device_id);
+        config
+            .remote_deleted_peers
+            .retain(|remote_id| remote_id != device_id);
         if !config.ignored_peers.iter().any(|id| id == device_id) {
             config.ignored_peers.push(device_id.to_string());
         }
@@ -224,6 +255,7 @@ impl NativeRuntime {
                 "id": peer.id, "name": peer.name, "ip": peer.ip, "port": peer.port,
                 "online": self.online(&peer.id),
                 "paired": self.authenticate(&peer.id).is_some(),
+                "remoteDeleted": self.config.remote_deleted_peers.iter().any(|id| id == &peer.id),
                 "pairingCode": self.connecting.get(&peer.id)
             })).collect::<Vec<_>>(),
             "pairingRequests": self.pairing.iter().filter(|(_, request)| request.status == "pending" && now_millis().saturating_sub(request.created_at) < PAIRING_LIFETIME).map(|(id, request)| json!({
@@ -404,13 +436,23 @@ async fn schedule_peer_check(
         else {
             return;
         };
-        let Ok(Ok(response)) = tokio::time::timeout(
+        let response = match tokio::time::timeout(
             Duration::from_secs(2),
             secure_call(&client, &candidate, &auth, "ping", json!({}), &[], None),
         )
         .await
-        else {
-            return;
+        {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                if is_remote_deleted_error(&error) {
+                    let _ = mark_remote_deleted(&registry, &paths, &candidate.id).await;
+                    if let Some(app) = app.as_ref() {
+                        emit_native_changed(app, &registry).await;
+                    }
+                }
+                return;
+            }
+            Err(_) => return,
         };
         let Ok(mut verified) = serde_json::from_value::<Peer>(response) else {
             return;
@@ -545,6 +587,106 @@ fn network_error(error: reqwest::Error) -> ManagerError {
     ManagerError::System(format!("设备连接失败：{}", error.without_url()))
 }
 
+const REMOTE_DELETED_MESSAGE: &str = "对方已删除此设备，无法发送消息，请重新连接。";
+
+fn remote_deleted_error() -> ManagerError {
+    ManagerError::System(REMOTE_DELETED_MESSAGE.into())
+}
+
+pub(super) fn is_remote_deleted_error(error: &ManagerError) -> bool {
+    error.to_string() == REMOTE_DELETED_MESSAGE
+}
+
+pub(super) async fn ensure_send_allowed(
+    registry: &LanShareServerRegistry,
+    device_id: &str,
+) -> Result<(), ManagerError> {
+    let runtime = registry.inner.lock().await;
+    if runtime
+        .native
+        .config
+        .remote_deleted_peers
+        .iter()
+        .any(|id| id == device_id)
+    {
+        return Err(remote_deleted_error());
+    }
+    Ok(())
+}
+
+async fn mark_remote_deleted(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    device_id: &str,
+) -> Result<(), ManagerError> {
+    let mut runtime = registry.inner.lock().await;
+    if !runtime
+        .native
+        .config
+        .peers
+        .iter()
+        .any(|trusted| trusted.peer.id == device_id)
+    {
+        return Ok(());
+    }
+    if !runtime
+        .native
+        .config
+        .remote_deleted_peers
+        .iter()
+        .any(|id| id == device_id)
+    {
+        runtime
+            .native
+            .config
+            .remote_deleted_peers
+            .push(device_id.to_string());
+        write_json(
+            &paths.lan_share_files.config,
+            &json!(runtime.native.config),
+        )
+        .await?;
+    }
+    if let Some(task) = runtime.native.delivery_tasks.remove(device_id) {
+        task.abort();
+    }
+    Ok(())
+}
+
+pub(super) async fn notify_peer_removed(
+    registry: &LanShareServerRegistry,
+    trusted: &TrustedPeer,
+) -> Result<(), ManagerError> {
+    if !trusted.secure || trusted.secret.is_empty() {
+        return Ok(());
+    }
+    let own_id = registry.inner.lock().await.native.config.id.clone();
+    let auth = TransportAuth {
+        sender: own_id,
+        receiver: trusted.peer.id.clone(),
+        secret: trusted.secret.clone(),
+        pairing_id: String::new(),
+    };
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .http1_only()
+        .tcp_nodelay(true)
+        .build()
+        .map_err(network_error)?;
+    secure_call(
+        &client,
+        &trusted.peer,
+        &auth,
+        "device-removed",
+        json!({}),
+        &[],
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
 async fn remember(
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
@@ -573,6 +715,12 @@ async fn remember(
         .peers
         .retain(|current| current.peer.id != trusted.peer.id);
     config.ignored_peers.retain(|id| id != &trusted.peer.id);
+    config
+        .remote_deleted_peers
+        .retain(|remote_id| remote_id != &trusted.peer.id);
+    config
+        .revoked_peers
+        .retain(|revoked| revoked.peer.id != trusted.peer.id);
     config.peers.push(trusted.clone());
     write_json(&paths.lan_share_files.config, &json!(config)).await?;
     runtime
@@ -934,6 +1082,13 @@ async fn process_secure_operation(
                 .ok_or_else(|| ManagerError::System("连接确认已过期。".into()))?;
             Ok(json!({ "status": pairing.status }))
         }
+        "device-removed" => {
+            mark_remote_deleted(registry, paths, &peer.id).await?;
+            if let Some(app) = app {
+                emit_state_changed(app, registry, paths).await?;
+            }
+            Ok(json!({ "removed": true }))
+        }
         "message-exists" => {
             let message_id = format!("{}-{}", peer.id, string_value(payload.get("messageId")));
             let uuid_id = create_stable_id(&format!("lan-message:{message_id}"));
@@ -1056,6 +1211,21 @@ pub(super) async fn handle_request(
     .await
 }
 
+fn device_removed_response() -> Response<BoxBody> {
+    let payload = json!({
+        "status": "error",
+        "data": Value::Null,
+        "message": REMOTE_DELETED_MESSAGE
+    });
+    Response::builder()
+        .status(StatusCode::GONE)
+        .header(CONTENT_TYPE, "application/json; charset=utf-8")
+        .header("x-lan-device-removed", "true")
+        .header("x-lan-version", transport::VERSION)
+        .body(boxed_full(Bytes::from(serde_json::to_vec(&payload).unwrap())))
+        .unwrap()
+}
+
 async fn handle_secure_request<B>(
     request: Request<B>,
     registry: &LanShareServerRegistry,
@@ -1100,7 +1270,7 @@ where
     {
         return Ok(api_error(StatusCode::UNAUTHORIZED, "设备身份无效。"));
     }
-    let (mut peer, secret) = {
+    let (mut peer, secret, revoked) = {
         let runtime = registry.inner.lock().await;
         if (!receiver.is_empty() && receiver != runtime.native.config.id)
             || sender == runtime.native.config.id
@@ -1119,12 +1289,47 @@ where
                     ..Peer::default()
                 },
                 String::new(),
+                false,
             ),
             "paired" if pairing_id.is_empty() => {
-                let Some(trusted) = runtime.native.authenticate(&sender) else {
+                if let Some(trusted) = runtime.native.authenticate(&sender) {
+                    (trusted.peer, trusted.secret, false)
+                } else if runtime
+                    .native
+                    .config
+                    .remote_deleted_peers
+                    .iter()
+                    .any(|id| id == &sender)
+                {
+                    let Some(deleted) = runtime
+                        .native
+                        .config
+                        .peers
+                        .iter()
+                        .find(|trusted| {
+                            trusted.peer.id == sender
+                                && trusted.secure
+                                && !trusted.secret.is_empty()
+                        })
+                    else {
+                        return Ok(api_error(StatusCode::UNAUTHORIZED, "设备尚未安全配对。"));
+                    };
+                    (deleted.peer.clone(), deleted.secret.clone(), true)
+                } else if let Some(revoked) = runtime
+                    .native
+                    .config
+                    .revoked_peers
+                    .iter()
+                    .find(|trusted| {
+                        trusted.peer.id == sender
+                            && trusted.secure
+                            && !trusted.secret.is_empty()
+                    })
+                {
+                    (revoked.peer.clone(), revoked.secret.clone(), true)
+                } else {
                     return Ok(api_error(StatusCode::UNAUTHORIZED, "设备尚未安全配对。"));
-                };
-                (trusted.peer, trusted.secret)
+                }
             }
             "pairing" => {
                 let Some(pairing) = runtime.native.pairing.get(&pairing_id).filter(|pairing| {
@@ -1137,7 +1342,7 @@ where
                         "连接确认无效或已过期。",
                     ));
                 };
-                (pairing.peer.clone(), pairing.secret.clone())
+                (pairing.peer.clone(), pairing.secret.clone(), false)
             }
             _ => return Ok(api_error(StatusCode::UNAUTHORIZED, "设备密钥类型无效。")),
         }
@@ -1196,6 +1401,9 @@ where
             ))
         }
     };
+    if revoked {
+        return Ok(device_removed_response());
+    }
     // 通过认证后的操作结果和错误都加密返回。
     let result = async {
         let (metadata, bytes) = transport::unpack(plaintext)?;
@@ -1212,7 +1420,7 @@ where
             }
             "paired" => matches!(
                 operation.as_str(),
-                "ping" | "message-exists" | "file-chunk" | "message"
+                "ping" | "message-exists" | "file-chunk" | "message" | "device-removed"
             ),
             _ => false,
         } && !(auth.receiver.is_empty() && operation != "info");
@@ -1271,6 +1479,7 @@ where
 
 pub(super) async fn deliver(
     registry: &LanShareServerRegistry,
+    paths: &AppPaths,
     device_id: &str,
     content: &str,
     files: &[LanShareFile],
@@ -1279,6 +1488,15 @@ pub(super) async fn deliver(
 ) -> Result<bool, ManagerError> {
     let (trusted, own_id) = {
         let runtime = registry.inner.lock().await;
+        if runtime
+            .native
+            .config
+            .remote_deleted_peers
+            .iter()
+            .any(|id| id == device_id)
+        {
+            return Err(remote_deleted_error());
+        }
         (
             runtime.native.authenticate(device_id),
             runtime.native.config.id.clone(),
@@ -1300,7 +1518,7 @@ pub(super) async fn deliver(
         .tcp_nodelay(true)
         .build()
         .map_err(network_error)?;
-    let existing = secure_call(
+    let existing = match secure_call(
         &client,
         &trusted.peer,
         &auth,
@@ -1309,7 +1527,19 @@ pub(super) async fn deliver(
         &[],
         None,
     )
-    .await?;
+    .await
+    {
+        Ok(existing) => existing,
+        Err(error) => {
+            if is_remote_deleted_error(&error) {
+                let _ = mark_remote_deleted(registry, paths, device_id).await;
+                if let Some(app) = app {
+                    emit_state_changed(app, registry, paths).await.ok();
+                }
+            }
+            return Err(error);
+        }
+    };
     if existing["exists"] == true {
         return Ok(true);
     }
@@ -1394,7 +1624,7 @@ pub(super) async fn deliver(
                         chunk.resize(chunk_length as usize, 0);
                         source.read_exact(&mut chunk).await?;
                         let chunk_sha256 = format!("{:x}", Sha256::digest(&chunk));
-                        let result = secure_call(
+                        let result = match secure_call(
                             client,
                             &trusted.peer,
                             auth,
@@ -1408,7 +1638,19 @@ pub(super) async fn deliver(
                             chunk,
                             Some(&registry.transfer),
                         )
-                        .await;
+                        .await
+                        {
+                            Ok(result) => Ok(result),
+                            Err(error) => {
+                                if is_remote_deleted_error(&error) {
+                                    let _ = mark_remote_deleted(registry, paths, device_id).await;
+                                    if let Some(app) = app {
+                                        emit_state_changed(app, registry, paths).await.ok();
+                                    }
+                                }
+                                Err(error)
+                            }
+                        };
                         match result {
                             Ok(uploaded) => break uploaded,
                             Err(ManagerError::System(message))
@@ -1463,9 +1705,18 @@ pub(super) async fn deliver(
         .iter()
         .map(|(_, _, identifier)| identifier)
         .collect::<Vec<_>>();
-    secure_call(&client, &trusted.peer, &auth, "message", json!({
+    let result = secure_call(&client, &trusted.peer, &auth, "message", json!({
         "messageId": message_id, "sessionId": remote_session, "content": content, "attachmentIds": identifiers
-    }), &[], None).await?;
+    }), &[], None).await;
+    if let Err(error) = &result {
+        if is_remote_deleted_error(error) {
+            let _ = mark_remote_deleted(registry, paths, device_id).await;
+            if let Some(app) = app {
+                emit_state_changed(app, registry, paths).await.ok();
+            }
+        }
+    }
+    result?;
     Ok(true)
 }
 
@@ -2496,6 +2747,7 @@ mod tests {
             for _attempt in 0..2 {
                 assert!(deliver(
                     &registry,
+                    &paths,
                     "native-receiver",
                     "三个附件",
                     &files,
@@ -2640,6 +2892,8 @@ mod tests {
         runtime.config = legacy;
         assert!(runtime.authenticate("native-known").is_some());
         assert!(runtime.config.hidden);
+        assert!(runtime.config.remote_deleted_peers.is_empty());
+        assert!(runtime.config.revoked_peers.is_empty());
         assert!(!runtime.snapshot().to_string().contains("do-not-expose"));
         let saved = serde_json::to_value(&runtime.config).unwrap();
         assert!(saved.get("auto_discovery").is_none());
@@ -2662,5 +2916,147 @@ mod tests {
             ..Peer::default()
         })
         .is_ok());
+    }
+
+    #[test]
+    fn remote_deleted_state_is_persisted_and_repair_clears_it() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id());
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            registry.inner.lock().await.native.config.id = "native-local".into();
+            let peer = Peer {
+                id: "native-remote".into(),
+                ip: "127.0.0.1".into(),
+                port: DEFAULT_PORT,
+                ..Peer::default()
+            };
+            remember(
+                &registry,
+                &paths,
+                TrustedPeer {
+                    peer: peer.clone(),
+                    secret: "old-secret".into(),
+                    secure: true,
+                },
+            )
+            .await
+            .unwrap();
+            process_secure_operation(
+                &registry,
+                &paths,
+                None,
+                &peer,
+                "device-removed",
+                json!({}),
+                Bytes::new(),
+            )
+            .await
+            .unwrap();
+            assert!(registry.inner.lock().await.native.authenticate(&peer.id).is_none());
+            assert_eq!(
+                registry.inner.lock().await.native.snapshot()["peers"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item["id"] == peer.id)
+                    .unwrap()["remoteDeleted"],
+                true
+            );
+            assert!(ensure_send_allowed(&registry, &peer.id).await.is_err());
+            let saved: Config = serde_json::from_slice(
+                &tokio::fs::read(&paths.lan_share_files.config)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(saved.remote_deleted_peers, vec![peer.id.clone()]);
+
+            remember(
+                &registry,
+                &paths,
+                TrustedPeer {
+                    peer: peer.clone(),
+                    secret: "new-secret".into(),
+                    secure: true,
+                },
+            )
+            .await
+            .unwrap();
+            assert!(ensure_send_allowed(&registry, &peer.id).await.is_ok());
+            assert!(registry.inner.lock().await.native.authenticate(&peer.id).is_some());
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
+
+    #[test]
+    fn revoked_pairing_returns_device_removed_marker_after_offline_delete() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id());
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            registry.inner.lock().await.native.config.id = "native-local".into();
+            let peer = Peer {
+                id: "native-remote".into(),
+                ip: "127.0.0.1".into(),
+                port: DEFAULT_PORT,
+                ..Peer::default()
+            };
+            remember(
+                &registry,
+                &paths,
+                TrustedPeer {
+                    peer: peer.clone(),
+                    secret: "revoked-secret".into(),
+                    secure: true,
+                },
+            )
+            .await
+            .unwrap();
+            {
+                let mut runtime = registry.inner.lock().await;
+                runtime.native.forget(&paths, &peer.id).await.unwrap();
+            }
+            let auth = TransportAuth {
+                sender: peer.id,
+                receiver: "native-local".into(),
+                secret: "revoked-secret".into(),
+                pairing_id: String::new(),
+            };
+            let packet = encrypted_test_packet(&auth, "ping", json!({}));
+            let response = handle_secure_request(
+                encrypted_test_request(&auth, &packet),
+                &registry,
+                &paths,
+                None,
+                "127.0.0.1:12345".parse().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::GONE);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-lan-device-removed")
+                    .and_then(|value| value.to_str().ok()),
+                Some("true")
+            );
+            let wrong_auth = TransportAuth {
+                secret: "wrong-secret".into(),
+                ..auth
+            };
+            let wrong_packet = encrypted_test_packet(&wrong_auth, "ping", json!({}));
+            let wrong_response = handle_secure_request(
+                encrypted_test_request(&wrong_auth, &wrong_packet),
+                &registry,
+                &paths,
+                None,
+                "127.0.0.1:12345".parse().unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(wrong_response.status(), StatusCode::UNAUTHORIZED);
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
     }
 }

@@ -28,10 +28,15 @@
             <span
               v-else-if="currentDevice"
               class="cyber-node-badge"
-              :class="{ 'cyber-node-online': currentDevice.online }"
+              :class="{
+                'cyber-node-online': currentDevice.online,
+                'cyber-node-removed': currentDevice.remoteDeleted
+              }"
             >
               {{
-                currentDevice.online
+                currentDevice.remoteDeleted
+                  ? "对方已删除 // 无法发送"
+                  : currentDevice.online
                   ? "ONLINE // 节点在线"
                   : currentDevice.native
                     ? "PAIRED // 已配对"
@@ -530,6 +535,12 @@ function deleteGroup() {
               border-color: #a7f3d0;
               color: #10b981;
               font-weight: 600;
+            }
+
+            &.cyber-node-removed {
+              background: var(--color-warning-soft);
+              border-color: var(--color-warning-line);
+              color: var(--color-warning);
             }
 
             &.cyber-node-group {
