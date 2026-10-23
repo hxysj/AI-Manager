@@ -24,8 +24,8 @@
     <aside
       v-if="visible"
       ref="panel"
-      class="selection-translator"
-      :style="{ left: `${position.x}px`, top: `${position.y}px` }"
+      :class="['selection-translator', { 'selection-translator-desktop': desktop }]"
+      :style="desktop ? {} : { left: `${position.x}px`, top: `${position.y}px` }"
       aria-label="翻译结果"
       @pointerdown.stop
     >
@@ -70,14 +70,17 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { Copy, Languages, X } from "lucide-vue-next"
 import { translationApi } from "@/api"
 
 const props = defineProps({
   activeView: { type: String, default: "" },
+  desktop: { type: Boolean, default: false },
   settings: { type: Object, default: () => ({ enabled: false }) }
 })
+const desktopSettings = reactive({ enabled: true, targetLanguage: "简体中文" })
+const settings = computed(() => props.desktop ? desktopSettings : props.settings)
 const menu = reactive({ visible: false, x: 0, y: 0, text: "" })
 const visible = ref(false)
 const loading = ref(false)
@@ -90,13 +93,15 @@ const position = reactive({ x: 0, y: 0 })
 let requestId = 0
 let menuRequestId = 0
 let monacoEditor = null
+let unsubscribeDesktop = null
+let disposed = false
 const dragging = reactive({ active: false, offsetX: 0, offsetY: 0 })
 
 // 仅启用翻译后加载编辑器入口，与差异弹框共用同一个 Monaco 实例。
 watch(
   () => props.settings.enabled,
   async (enabled) => {
-    if (enabled)
+    if (enabled && !props.desktop)
       monacoEditor = (await import("monaco-editor/esm/vs/editor/editor.api"))
         .editor
   },
@@ -106,7 +111,7 @@ watch(
 // 捕获阶段统一处理普通文本、输入框和 Monaco，防止页面自己的菜单覆盖翻译。
 function openContextMenu(event) {
   closeMenu()
-  if (!props.settings.enabled) return
+  if (props.desktop || !settings.value.enabled) return
   const target = event.target
   if (!(target instanceof Element)) return
   if (target.closest('input[type="password"], [data-translation-disabled]'))
@@ -138,7 +143,7 @@ function openContextMenu(event) {
 }
 
 async function translateSelection() {
-  if (!props.settings.enabled || !menu.text.trim()) return
+  if (!settings.value.enabled || !menu.text.trim()) return
   const current = ++requestId
   sourceText.value = menu.text
   result.value = {}
@@ -193,10 +198,22 @@ function closeTranslator() {
   visible.value = false
   loading.value = false
   closeMenu()
+  if (props.desktop) {
+    translationApi.desktopClose().catch(error => {
+      errorMessage.value = error.message || String(error)
+      visible.value = true
+    })
+  }
 }
 
 function startDrag(event) {
   if (event.button !== 0 || !panel.value) return
+  if (props.desktop) {
+    translationApi.desktopDrag().catch(error => {
+      errorMessage.value = error.message || String(error)
+    })
+    return
+  }
   const rect = panel.value.getBoundingClientRect()
   dragging.active = true
   dragging.offsetX = event.clientX - rect.left
@@ -233,6 +250,7 @@ function stopDrag() {
 
 function fitPanel() {
   closeMenu()
+  if (props.desktop) return
   const rect = panel.value?.getBoundingClientRect()
   if (!rect) return
   position.x = Math.max(
@@ -249,8 +267,42 @@ function handleKey(event) {
   if (event.key === "Escape") closeTranslator()
 }
 
-watch(() => [props.activeView, props.settings.enabled], closeTranslator)
-onMounted(() => {
+// 原生窗口只传选区和错误；实际翻译继续走现有 API、历史和用量链路。
+function showDesktopSelection(selection) {
+  if (selection.targetLanguage) desktopSettings.targetLanguage = selection.targetLanguage
+  if (selection.error) {
+    requestId += 1
+    sourceText.value = ""
+    result.value = {}
+    loading.value = false
+    errorMessage.value = selection.error
+    visible.value = true
+    return
+  }
+  menu.text = selection.text || ""
+  translateSelection()
+}
+
+watch(() => [props.activeView, props.settings.enabled], () => {
+  if (!props.desktop) closeTranslator()
+})
+onMounted(async () => {
+  if (props.desktop) {
+    document.addEventListener("keydown", handleKey)
+    try {
+      unsubscribeDesktop = await translationApi.onDesktopSelection(showDesktopSelection)
+      if (disposed) {
+        unsubscribeDesktop()
+        return
+      }
+      const selection = await translationApi.desktopReady()
+      if (!disposed) showDesktopSelection(selection)
+    } catch (error) {
+      errorMessage.value = error.message || String(error)
+      visible.value = true
+    }
+    return
+  }
   document.addEventListener("contextmenu", openContextMenu, true)
   document.addEventListener("pointerdown", closeMenu)
   document.addEventListener("scroll", closeMenu, true)
@@ -258,7 +310,9 @@ onMounted(() => {
   window.addEventListener("resize", fitPanel)
 })
 onBeforeUnmount(() => {
-  closeTranslator()
+  disposed = true
+  requestId += 1
+  unsubscribeDesktop?.()
   stopDrag()
   document.removeEventListener("contextmenu", openContextMenu, true)
   document.removeEventListener("pointerdown", closeMenu)
@@ -307,6 +361,15 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   background: var(--color-panel);
   box-shadow: var(--shadow-panel);
+  &.selection-translator-desktop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+  }
   .translator-header {
     display: flex;
     align-items: center;

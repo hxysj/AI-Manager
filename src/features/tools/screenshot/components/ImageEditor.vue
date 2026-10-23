@@ -269,6 +269,7 @@ import {
   Pin,
   Redo2,
   Save,
+  ScanText,
   Square,
   Type,
   Undo2,
@@ -338,6 +339,7 @@ const tools = [
 ].filter((item) => props.reselect || item.id !== "select")
 const outputs = [
   { id: "pin", label: "贴到桌面", icon: Pin },
+  { id: "ocr", label: "识别文字", icon: ScanText },
   { id: "export", label: "保存 PNG", icon: Save },
   { id: "copy", label: "复制图片 Enter", icon: Copy }
 ]

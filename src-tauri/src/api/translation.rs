@@ -4,6 +4,8 @@ use serde_json::{json, Value};
 use std::{path::{Path, PathBuf}, process::Stdio};
 use tokio::{io::AsyncWriteExt, process::Command};
 
+pub mod desktop;
+
 pub async fn translate_text(
     paths: &AppPaths,
     workspace_root: &Path,
@@ -89,7 +91,7 @@ async fn run_agent(
             let executable = cli["executablePath"].as_str().filter(|path| !path.is_empty()).unwrap_or("codex");
             command = codex_command(executable);
             let config = format!(
-                "model = {}\nmodel_provider = \"translation\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nweb_search = \"disabled\"\nproject_doc_max_bytes = 0\n[features]\nshell_tool = false\nmulti_agent = false\n[model_providers.translation]\nname = \"翻译代理\"\nbase_url = {}\nwire_api = \"responses\"\nenv_key = \"AI_MANAGER_TRANSLATION_TOKEN\"\nrequires_openai_auth = false\nsupports_websockets = false\nrequest_max_retries = 0\nstream_max_retries = 0\n",
+                "model = {}\nmodel_provider = \"translation\"\nmodel_reasoning_effort = \"low\"\napproval_policy = \"never\"\nsandbox_mode = \"read-only\"\nweb_search = \"disabled\"\nproject_doc_max_bytes = 0\n[features]\nshell_tool = false\nmulti_agent = false\n[model_providers.translation]\nname = \"翻译代理\"\nbase_url = {}\nwire_api = \"responses\"\nenv_key = \"AI_MANAGER_TRANSLATION_TOKEN\"\nrequires_openai_auth = false\nsupports_websockets = false\nrequest_max_retries = 0\nstream_max_retries = 0\n",
                 serde_json::to_string(&settings.model)?, serde_json::to_string(&llm_proxy.base_url)?
             );
             let codex_dir = run_dir.join("codex");
@@ -234,6 +236,7 @@ mod tests {
                         let payload: Value = serde_json::from_slice(&body).unwrap();
                         assert_eq!(payload["model"], "custom-translation-model");
                         assert_eq!(payload["tools"], json!([]));
+                        assert_eq!(payload["reasoning"], json!({"effort": "low"}));
                         let response = json!({
                             "id": "resp_translation_test", "object": "response", "status": "completed",
                             "model": "custom-translation-model",

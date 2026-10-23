@@ -94,6 +94,7 @@ impl Settings {
             (4, "toggle", "Shift+F3"),
             (5, "switchGroup", "Ctrl+F3"),
             (6, "resetInput", "Ctrl+Alt+R"),
+            (7, "captureLong", "Ctrl+Alt+F1"),
         ]
         .into_iter()
         .map(|(id, name, default)| {
@@ -166,6 +167,9 @@ pub struct ScreenshotService {
     session: Mutex<Session>,
     frame: Mutex<Option<Vec<u8>>>,
     capturing: AtomicBool,
+    long_capture_requested: AtomicBool,
+    // 长截图期间暂时隐藏已有贴图，避免贴图窗口被 GDI 一并截进长图。
+    long_hidden_pins: Mutex<Vec<String>>,
     hotkeys_paused: AtomicBool,
     view_save_pending: AtomicBool,
     menu_windows: Mutex<HashMap<String, (PhysicalPosition<i32>, PhysicalSize<u32>)>>,
@@ -224,6 +228,8 @@ impl ScreenshotService {
             session: Mutex::new(session),
             frame: Mutex::new(None),
             capturing: AtomicBool::new(false),
+            long_capture_requested: AtomicBool::new(false),
+            long_hidden_pins: Mutex::new(Vec::new()),
             hotkeys_paused: AtomicBool::new(false),
             view_save_pending: AtomicBool::new(false),
             hotkey_errors: Mutex::new(Vec::new()),
@@ -490,12 +496,53 @@ pub async fn dispatch(
         }
         "capture" => {
             drop(service);
-            begin_capture(&app, false).await?;
+            begin_capture(&app, false, false).await?;
             Ok(json!(true))
         }
         "capture-auto-copy" => {
             drop(service);
-            begin_capture(&app, true).await?;
+            begin_capture(&app, true, false).await?;
+            Ok(json!(true))
+        }
+        "capture-long" => {
+            drop(service);
+            begin_capture(&app, false, true).await?;
+            Ok(json!(true))
+        }
+        "capture-mode" => {
+            Ok(json!({
+                "long": service.long_capture_requested.swap(false, Ordering::SeqCst)
+            }))
+        }
+        "long-start" => {
+            let window = app
+                .get_webview_window("screenshot-capture")
+                .ok_or_else(|| failure("截图窗口已关闭"))?;
+            // 覆盖层本身设置了 content_protected，长截图时保留透明边框和
+            // 进度提示；仅让鼠标事件穿透到下方页面。已有贴图窗口必须
+            // 暂时隐藏，否则 GDI 会把它们当成页面内容一起截入长图。
+            window.set_ignore_cursor_events(true).map_err(failure)?;
+            let mut hidden = service.long_hidden_pins.lock().unwrap();
+            hidden.clear();
+            for (label, pin) in app.webview_windows() {
+                if !label.starts_with("screenshot-pin-")
+                    || !pin.is_visible().unwrap_or(false)
+                {
+                    continue;
+                }
+                pin.hide().map_err(failure)?;
+                hidden.push(label);
+            }
+            Ok(json!(true))
+        }
+        "long-scroll" => {
+            let x = payload["x"].as_i64().ok_or_else(|| failure("缺少滚轮横坐标"))? as i32;
+            let y = payload["y"].as_i64().ok_or_else(|| failure("缺少滚轮纵坐标"))? as i32;
+            let delta = payload["delta"].as_i64().unwrap_or(-640).clamp(-12000, 12000) as i32;
+            #[cfg(windows)]
+            windows::scroll_at(x, y, delta)?;
+            #[cfg(not(windows))]
+            return Err(failure("长截图目前仅支持 Windows"));
             Ok(json!(true))
         }
         "ready" => {
@@ -1134,6 +1181,35 @@ pub async fn screenshot_frame(app: AppHandle) -> tauri::ipc::Response {
     tauri::ipc::Response::new(bytes)
 }
 
+#[tauri::command]
+pub async fn screenshot_region_frame(
+    app: AppHandle,
+    left: i32,
+    top: i32,
+    width: u32,
+    height: u32,
+) -> Result<tauri::ipc::Response, String> {
+    if width == 0 || height == 0 || width > 8192 || height > 8192 || u64::from(width) * u64::from(height) > 20_000_000 {
+        return Err("长截图区域尺寸无效或过大".into());
+    }
+    let monitors = app.available_monitors().map_err(|error| error.to_string())?;
+    let image = tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(windows)]
+        {
+            windows::capture(&monitors, left, top, width, height)
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (monitors, left, top, width, height);
+            Err(failure("桌面截图目前仅支持 Windows"))
+        }
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| error.to_string())?;
+    Ok(tauri::ipc::Response::new(capture_frame_data(image, left, top, false)))
+}
+
 fn document_image_path(service: &ScreenshotService, id: &str, kind: &str) -> Result<PathBuf, ManagerError> {
     let file = match kind {
         "source" => "source.png",
@@ -1153,11 +1229,12 @@ pub async fn screenshot_image(app: AppHandle, id: String, kind: String) -> Resul
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-pub async fn begin_capture(app: &AppHandle, auto_copy: bool) -> Result<(), ManagerError> {
+pub async fn begin_capture(app: &AppHandle, auto_copy: bool, long_capture: bool) -> Result<(), ManagerError> {
     let service = app.state::<ScreenshotService>();
     if service.capturing.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
+    service.long_capture_requested.store(long_capture, Ordering::SeqCst);
     let result = async {
         let monitors = app.available_monitors().map_err(failure)?;
         let (left, top, width, height) = capture_bounds(&monitors)?;
@@ -1191,8 +1268,25 @@ fn cancel_capture(app: &AppHandle) -> Result<(), ManagerError> {
         window.emit("screenshot:reset", ()).map_err(failure)?;
     }
     let service = app.state::<ScreenshotService>();
+    let hidden = std::mem::take(&mut *service.long_hidden_pins.lock().unwrap());
+    if !hidden.is_empty() {
+        let session = service.session.lock().unwrap().clone();
+        for label in hidden {
+            let should_show = label
+                .strip_prefix("screenshot-pin-")
+                .and_then(|id| session.entries.iter().find(|entry| entry.id == id))
+                .and_then(|entry| entry.pin.as_ref())
+                .is_some_and(|pin| pin.lifecycle == "open" && pin.visible);
+            if should_show {
+                if let Some(window) = app.get_webview_window(&label) {
+                    window.show().map_err(failure)?;
+                }
+            }
+        }
+    }
     *service.frame.lock().unwrap() = None;
     service.capturing.store(false, Ordering::SeqCst);
+    service.long_capture_requested.store(false, Ordering::SeqCst);
     Ok(())
 }
 

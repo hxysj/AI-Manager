@@ -3,6 +3,7 @@
     v-if="mode === 'capture'"
     ref="desktop"
     class="capture-window"
+    :class="{ 'is-long-capturing': longBusy }"
     :style="{
       cursor: drag?.kind === 'resize' ? resizeCursors[drag.handle] : undefined
     }"
@@ -14,6 +15,7 @@
     @contextmenu.prevent="reselect"
   >
     <canvas
+      v-if="!longBusy"
       ref="captureBackground"
       width="1"
       height="1"
@@ -25,12 +27,22 @@
       :style="regionStyle(activeRegion)"
     >
       <span
-        >{{ activeRegion.kind === "window" ? "窗口区域" : "屏幕区域" }} ·
-        {{ activeRegion.label }}</span
+        >{{
+          activeRegion.kind === "element"
+            ? "块区域"
+            : activeRegion.kind === "window"
+              ? "窗口区域"
+              : "屏幕区域"
+        }}
+        · {{ activeRegion.label }}</span
       >
     </div>
-    <div v-if="frame && !selection" class="capture-instructions">
-      悬停页面区域，点击自动选中 · 拖动自定义区域 · Esc 取消
+    <div v-if="frame && !selection && !longBusy" class="capture-instructions">
+      {{
+        longCaptureRequested
+          ? "拖动选择区域，确认后点击右上角“长截图”"
+          : "悬停界面块，点击自动选中 · 拖动自定义区域 · Esc 取消"
+      }}
     </div>
     <div
       v-if="frame && selection"
@@ -39,7 +51,7 @@
       :style="selectionStyle"
     >
       <ImageEditor
-        v-if="editorSource && !drag"
+        v-if="editorSource && !drag && !longBusy"
         :source="editorSource"
         :toolbar-style="toolbarStyle"
         :busy="busy"
@@ -51,10 +63,24 @@
         @selection-start="startMove"
         @toolbar-hover="toolbarHovered = $event"
       />
-      <div class="selection-size">
+      <div v-if="!longBusy" class="selection-size">
         {{ selection.width }} × {{ selection.height }}
       </div>
       <button
+        v-if="editorSource && !longBusy"
+        type="button"
+        class="long-screenshot-button"
+        :disabled="busy"
+        @pointerdown.stop
+        @click.stop="startLongCapture"
+      >
+        长截图
+      </button>
+      <span v-if="longBusy" class="long-screenshot-progress">
+        正在滚动拼接 {{ longProgress }} / 40
+      </span>
+      <button
+        v-if="!longBusy"
         v-for="edge in ['n', 'e', 's', 'w']"
         :key="`edge-${edge}`"
         type="button"
@@ -67,6 +93,7 @@
         @pointerdown.stop="startResize($event, edge)"
       />
       <button
+        v-if="!longBusy"
         v-for="handle in handles"
         :key="handle"
         type="button"
@@ -384,6 +411,59 @@
       {{ error }}
     </div>
   </div>
+  <Teleport to="body">
+    <div
+      v-if="ocrResult"
+      class="ocr-result-mask"
+      @pointerdown.self="ocrResult = null"
+    >
+      <section
+        class="ocr-result-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="OCR 识别结果"
+      >
+        <header class="ocr-result-head">
+          <strong>识别结果</strong>
+          <span>{{ ocrResult.engine }}</span>
+          <button
+            type="button"
+            aria-label="关闭识别结果"
+            @click="ocrResult = null"
+          >
+            ×
+          </button>
+        </header>
+        <textarea
+          v-model="ocrResult.text"
+          class="ocr-result-text"
+          spellcheck="false"
+          aria-label="识别文字"
+        />
+        <footer class="ocr-result-actions">
+          <span v-if="!ocrResult.text" class="ocr-result-empty"
+            >没有识别到文字</span
+          >
+          <span v-else>{{ ocrResult.lines.length }} 行文字</span>
+          <button
+            type="button"
+            class="ocr-result-button"
+            :disabled="!ocrResult.text"
+            @click="copyOcrResult"
+          >
+            复制文字
+          </button>
+          <button
+            type="button"
+            class="ocr-result-button primary"
+            @click="ocrResult = null"
+          >
+            关闭
+          </button>
+        </footer>
+      </section>
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
@@ -398,11 +478,16 @@ import {
   selectionRect,
   thumbnailSource
 } from "../renderer"
+import { recognizePpocr } from "../ocr"
+import { captureLongScreenshot } from "../long-screenshot"
 
 const query = new URLSearchParams(location.search)
 const mode = query.get("mode")
 const id = query.get("id")
 const dismissCapture = query.get("capture") === "1"
+const longCaptureRequested = ref(
+  sessionStorage.getItem("screenshot-long-request") === "1"
+)
 const frame = ref(null)
 const autoCopy = ref(false)
 const desktop = ref(null)
@@ -432,6 +517,9 @@ const colorValue = computed(() =>
 )
 const busy = ref(false)
 const error = ref("")
+const ocrResult = ref(null)
+const longBusy = ref(false)
+const longProgress = ref(0)
 const document = ref(null)
 const editing = ref(false)
 const menu = ref(false)
@@ -904,11 +992,59 @@ async function cancel() {
   }
 }
 
+async function startLongCapture() {
+  if (
+    mode !== "capture" ||
+    !selection.value ||
+    !editorSource.value ||
+    busy.value ||
+    longBusy.value
+  )
+    return
+  longBusy.value = true
+  longProgress.value = 0
+  error.value = ""
+  try {
+    // 先完成透明边框的重绘，再让原生端开始采集，避免首帧仍带着旧截图画布。
+    await nextTick()
+    const result = await captureLongScreenshot({
+      rect: {
+        x: frame.value.left + selection.value.x,
+        y: frame.value.top + selection.value.y,
+        width: selection.value.width,
+        height: selection.value.height
+      },
+      onProgress: (current) => {
+        longProgress.value = current
+      }
+    })
+    await output({
+      action: "pin",
+      source: result.source,
+      output: result.source,
+      thumbnail: result.thumbnail,
+      annotations: []
+    })
+    // 贴图窗口创建请求已提交，立即结束透明选区窗口，避免长截图边框
+    // 在结果贴图出现前短暂残留在桌面上。
+    await screenshotApi.call("cancel")
+  } catch (cause) {
+    await screenshotApi.call("cancel").catch(() => {})
+    error.value = `长截图失败：${String(cause)}`
+  } finally {
+    longBusy.value = false
+  }
+}
+
 async function output(data) {
   if (busy.value) return
   busy.value = true
   error.value = ""
   try {
+    if (data.action === "ocr") {
+      ocrResult.value = await recognizePpocr(data.source)
+      return
+    }
     if (savedOutput?.output !== data.output) {
       const newId = await screenshotApi.call("save-document", {
         source: data.source,
@@ -947,6 +1083,16 @@ async function output(data) {
     error.value = `操作失败：${String(cause)}`
   } finally {
     busy.value = false
+  }
+}
+
+async function copyOcrResult() {
+  if (!ocrResult.value?.text) return
+  try {
+    await navigator.clipboard.writeText(ocrResult.value.text)
+    error.value = ""
+  } catch (cause) {
+    error.value = `复制识别文字失败：${String(cause)}`
   }
 }
 
@@ -1430,6 +1576,7 @@ async function loadFrame() {
 }
 
 onMounted(async () => {
+  if (longCaptureRequested.value) sessionStorage.removeItem("screenshot-long-request")
   window.addEventListener("keydown", keydown)
   window.addEventListener("resize", checkViewport)
   try {
@@ -1440,6 +1587,10 @@ onMounted(async () => {
         })
       })
       unlistenReset = await subscribeReady("screenshot:reset", resetCapture)
+      const captureMode = await screenshotApi.call("capture-mode")
+      longCaptureRequested.value =
+        longCaptureRequested.value || Boolean(captureMode?.long)
+      sessionStorage.removeItem("screenshot-long-request")
       await loadFrame()
       if (!frame.value) await screenshotApi.call("capture-window-ready")
     } else {
@@ -1516,6 +1667,22 @@ onBeforeUnmount(() => {
     object-fit: fill;
     pointer-events: none;
   }
+  // 长截图时保留透明选区边框和进度提示，让用户能看到当前采集区域；
+  // 原始整屏画布与编辑器隐藏，底下的页面保持可见。
+  &.is-long-capturing {
+    .capture-selection {
+      box-shadow: none;
+      outline: 3px solid #22c55e;
+      pointer-events: none;
+    }
+    .long-screenshot-progress {
+      top: -34px;
+      right: 0;
+      border-color: #22c55e;
+      background: #14532de8;
+      color: #dcfce7;
+    }
+  }
   .capture-instructions {
     position: absolute;
     top: 24px;
@@ -1566,6 +1733,31 @@ onBeforeUnmount(() => {
       pointer-events: none;
       transform: translateY(-100%);
       white-space: nowrap;
+    }
+    .long-screenshot-button,
+    .long-screenshot-progress {
+      position: absolute;
+      z-index: 7;
+      top: 4px;
+      right: 4px;
+      padding: 4px 9px;
+      border: 1px solid #0ea5e9;
+      border-radius: 5px;
+      background: #17212be8;
+      color: #e0f2fe;
+      font-size: 12px;
+      line-height: 18px;
+      white-space: nowrap;
+    }
+    .long-screenshot-button {
+      cursor: pointer;
+      &:hover {
+        background: #075985;
+      }
+      &:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
     }
     .selection-edge {
       position: absolute;
@@ -1913,6 +2105,99 @@ onBeforeUnmount(() => {
     background: #7f1d1d;
     color: #fff;
     font-size: var(--font-size-xs);
+  }
+}
+
+.ocr-result-mask {
+  position: fixed;
+  z-index: 3000;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #0007;
+}
+
+.ocr-result-dialog {
+  display: flex;
+  width: min(720px, calc(100vw - 48px));
+  max-height: min(680px, calc(100vh - 48px));
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #b7c4d4;
+  border-radius: 10px;
+  background: #fff;
+  color: #1f2937;
+  box-shadow: 0 18px 60px #0005;
+}
+
+.ocr-result-head,
+.ocr-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+}
+
+.ocr-result-head {
+  border-bottom: 1px solid #e5e7eb;
+  strong {
+    font-size: 15px;
+  }
+  span {
+    color: #64748b;
+    font-size: 12px;
+  }
+  button {
+    margin-left: auto;
+    border: 0;
+    background: transparent;
+    color: #64748b;
+    cursor: pointer;
+    font-size: 24px;
+    line-height: 20px;
+  }
+}
+
+.ocr-result-text {
+  min-height: 320px;
+  flex: 1;
+  padding: 14px 16px;
+  border: 0;
+  outline: 0;
+  resize: vertical;
+  color: #111827;
+  font:
+    14px/1.7 Consolas,
+    "Microsoft YaHei",
+    sans-serif;
+}
+
+.ocr-result-actions {
+  border-top: 1px solid #e5e7eb;
+  color: #64748b;
+  font-size: 12px;
+  .ocr-result-empty {
+    color: #b45309;
+  }
+  .ocr-result-button {
+    padding: 6px 12px;
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    background: #fff;
+    color: #334155;
+    cursor: pointer;
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.45;
+    }
+    &.primary {
+      margin-left: auto;
+      border-color: #2563eb;
+      background: #2563eb;
+      color: #fff;
+    }
   }
 }
 </style>

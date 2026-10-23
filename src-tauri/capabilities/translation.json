@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "translation",
+  "description": "桌面翻译窗口仅使用事件权限，取词和窗口操作由专用后端控制",
+  "windows": ["translation-desktop"],
+  "permissions": ["core:event:default"]
+}

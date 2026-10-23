@@ -10,6 +10,8 @@ async function main() {
     apiKey: payload.token,
     model: payload.model,
     useResponsesApi: true,
+    // 翻译固定使用低推理强度，不沿用供应商或模型的默认档位。
+    reasoning: { effort: 'low' },
     maxRetries: 0,
     configuration: { baseURL: payload.baseURL }
   })

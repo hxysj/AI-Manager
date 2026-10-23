@@ -1,7 +1,7 @@
 mod api;
 mod core;
 
-use crate::api::{app, app_logs, screenshot};
+use crate::api::{app, app_logs, screenshot, translation};
 use crate::core::state::{AppState, ManagerState};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -20,6 +20,13 @@ async fn dispatch_api(
     channel: String,
     payload: Option<Value>,
 ) -> Result<Value, String> {
+    // 取词窗口的高频操作不扫描业务数据，也不把原文重复写入操作日志。
+    if let Some(action) = channel.strip_prefix("translation:desktop-") {
+        return translation::desktop::dispatch(&app, action).map_err(|error| error.to_string());
+    }
+    if channel.starts_with("translation:") {
+        return state.dispatch(app, &channel, payload).await.map_err(|error| error.to_string());
+    }
     // 截图数据走独立服务，不写操作日志，也不重建 Provider 托盘。
     if let Some(action) = channel.strip_prefix("screenshot:") {
         let result = screenshot::dispatch(app.clone(), action.to_string(), payload.unwrap_or_else(|| serde_json::json!({})))
@@ -93,6 +100,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
+            translation::desktop::window_event(window.app_handle(), window.label(), event);
             screenshot::window_event(window.app_handle(), window.label(), event);
             if window.label() != "main" {
                 return;
@@ -167,6 +175,8 @@ pub fn run() {
             let quick_switch_collapsed = manager_state.quick_switch_collapsed();
             // 预热窗口会立即调用 IPC，先注册共享状态。
             app.manage(AppState::new(manager_state));
+            app.manage(translation::desktop::DesktopTranslator::default());
+            translation::desktop::sync(app.handle(), &app_settings.agents.translation);
             let data_root = tauri::async_runtime::block_on(app.state::<AppState>().user_data_path());
             match screenshot::ScreenshotService::new(&data_root) {
                 Ok(service) => {
@@ -221,7 +231,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![dispatch_api, screenshot::screenshot_frame, screenshot::screenshot_image])
+        .invoke_handler(tauri::generate_handler![dispatch_api, screenshot::screenshot_frame, screenshot::screenshot_region_frame, screenshot::screenshot_image])
         .build(tauri::generate_context!())
         .expect("启动 Monkey Thief 失败")
         .run(|app, event| {

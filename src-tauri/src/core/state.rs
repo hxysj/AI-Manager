@@ -482,6 +482,7 @@ impl ManagerState {
                 )
                 .await?;
                 app::apply_auto_launch_setting(&app, &self.app_settings)?;
+                translation::desktop::sync(&app, &self.app_settings.agents.translation);
                 let user_data_path = self.user_data_path.clone();
                 let paths = self.paths.clone();
                 if self.data_backup_cache.begin_local_backup() {

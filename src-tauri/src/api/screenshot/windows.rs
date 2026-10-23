@@ -50,6 +50,194 @@ struct SmartQuery {
     result: Vec<SmartRegion>,
 }
 
+// 控件识别放到独立线程，避免无障碍提供程序卡住截图界面。
+mod block_detection {
+    use super::SmartRegion;
+    use std::{collections::VecDeque, sync::{mpsc::{self, SyncSender}, OnceLock}, thread, time::Duration};
+    use ::windows::{
+        core::Interface,
+        Win32::{
+            Foundation::{POINT, RECT},
+            System::{
+                Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED, CLSCTX_INPROC_SERVER},
+                Variant::{VariantClear, VARIANT, VT_DISPATCH, VT_I4},
+            },
+            UI::{
+                Accessibility::{AccessibleObjectFromPoint, CUIAutomation, IAccessible, IUIAutomation},
+                WindowsAndMessaging::{GetAncestor, WindowFromPoint, GA_ROOT},
+            },
+        },
+    };
+
+    struct Request {
+        x: i32,
+        y: i32,
+        skip: isize,
+        reply: SyncSender<Vec<SmartRegion>>,
+    }
+
+    struct VariantGuard(VARIANT);
+    impl Drop for VariantGuard {
+        fn drop(&mut self) {
+            unsafe { let _ = VariantClear(&mut self.0); }
+        }
+    }
+
+    struct AccessibleHit {
+        node: IAccessible,
+        child: i32,
+    }
+
+    fn child_variant(child: i32) -> VariantGuard {
+        let mut value = VARIANT::default();
+        unsafe {
+            let variant = &mut *value.Anonymous.Anonymous;
+            variant.vt = VT_I4;
+            variant.Anonymous.lVal = child;
+        }
+        VariantGuard(value)
+    }
+
+    fn variant_child(value: &VARIANT) -> i32 {
+        unsafe {
+            if value.Anonymous.Anonymous.vt == VT_I4 {
+                value.Anonymous.Anonymous.Anonymous.lVal
+            } else {
+                0
+            }
+        }
+    }
+
+    fn variant_accessible(value: &VARIANT) -> Option<IAccessible> {
+        unsafe {
+            if value.Anonymous.Anonymous.vt != VT_DISPATCH { return None; }
+            let dispatch = value.Anonymous.Anonymous.Anonymous.pdispVal.as_ref()?.clone();
+            dispatch.cast::<IAccessible>().ok()
+        }
+    }
+
+    fn contains(rect: &RECT, x: i32, y: i32) -> bool {
+        rect.left <= x && x < rect.right && rect.top <= y && y < rect.bottom
+    }
+
+    fn same_rect(left: &RECT, right: &RECT) -> bool {
+        left.left == right.left && left.top == right.top && left.right == right.right && left.bottom == right.bottom
+    }
+
+    fn location(node: &IAccessible, child: i32) -> Option<RECT> {
+        let child = child_variant(child);
+        let (mut left, mut top, mut width, mut height) = (0, 0, 0, 0);
+        unsafe { node.accLocation(&mut left, &mut top, &mut width, &mut height, &child.0).ok()?; }
+        if width <= 0 || height <= 0 { return None; }
+        Some(RECT { left, top, right: left.saturating_add(width), bottom: top.saturating_add(height) })
+    }
+
+    fn label(node: &IAccessible, child: i32) -> String {
+        let child = child_variant(child);
+        unsafe { node.get_accName(&child.0).ok().map(|value| value.to_string()).filter(|value| !value.trim().is_empty()).unwrap_or_else(|| "识别到的界面块".into()) }
+    }
+
+    fn accessible_chain(x: i32, y: i32) -> Vec<SmartRegion> {
+        let point = POINT { x, y };
+        let mut node = None;
+        let mut child = VARIANT::default();
+        if unsafe { AccessibleObjectFromPoint(point, &mut node, &mut child).is_err() } { return Vec::new(); }
+        let Some(node) = node else { return Vec::new(); };
+        let node = variant_accessible(&child).unwrap_or(node);
+        let mut current = AccessibleHit { node, child: variant_child(&child) };
+        unsafe { let _ = VariantClear(&mut child); }
+        let mut regions = Vec::new();
+        let mut rectangles = Vec::new();
+        for _ in 0..31 {
+            if let Some(rect) = location(&current.node, current.child) {
+                if contains(&rect, x, y) && rect.right - rect.left >= 30 && rect.bottom - rect.top >= 30 && !rectangles.iter().any(|item| same_rect(item, &rect)) {
+                    rectangles.push(rect);
+                    regions.push(SmartRegion {
+                        x: rect.left,
+                        y: rect.top,
+                        width: (rect.right - rect.left) as u32,
+                        height: (rect.bottom - rect.top) as u32,
+                        kind: "element".into(),
+                        label: label(&current.node, current.child),
+                    });
+                }
+            }
+            if current.child != 0 {
+                current.child = 0;
+                continue;
+            }
+            let Some(parent_dispatch) = (unsafe { current.node.accParent().ok() }) else { break; };
+            let Ok(parent) = parent_dispatch.cast::<IAccessible>() else { break; };
+            current = AccessibleHit { node: parent, child: 0 };
+        }
+        regions
+    }
+
+    fn automation_region(automation: &IUIAutomation, x: i32, y: i32) -> Option<SmartRegion> {
+        let element = unsafe { automation.ElementFromPoint(POINT { x, y }).ok()? };
+        let rect = unsafe { element.CurrentBoundingRectangle().ok()? };
+        if !contains(&rect, x, y) || rect.right - rect.left < 30 || rect.bottom - rect.top < 30 { return None; }
+        let label = unsafe { element.CurrentName().ok().map(|value| value.to_string()).filter(|value| !value.trim().is_empty()).unwrap_or_else(|| "识别到的界面块".into()) };
+        Some(SmartRegion { x: rect.left, y: rect.top, width: (rect.right - rect.left) as u32, height: (rect.bottom - rect.top) as u32, kind: "element".into(), label })
+    }
+
+    fn skipped(point: POINT, skip: isize) -> bool {
+        if skip == 0 { return false; }
+        unsafe {
+            let target = WindowFromPoint(point);
+            !target.0.is_null() && (target.0 as isize == skip || GetAncestor(target, GA_ROOT).0 as isize == skip)
+        }
+    }
+
+    fn query(x: i32, y: i32, skip: isize, automation: &mut Option<IUIAutomation>) -> Vec<SmartRegion> {
+        let point = POINT { x, y };
+        if skipped(point, skip) { return Vec::new(); }
+        let mut regions = accessible_chain(x, y);
+        if automation.is_none() {
+            *automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok() };
+        }
+        if let Some(automation) = automation.as_ref() {
+            if let Some(region) = automation_region(automation, x, y) {
+                if !regions.iter().any(|item| item.x == region.x && item.y == region.y && item.width == region.width && item.height == region.height) {
+                    regions.insert(0, region);
+                }
+            }
+        }
+        regions
+    }
+
+    fn sender() -> SyncSender<Request> {
+        static CHANNEL: OnceLock<SyncSender<Request>> = OnceLock::new();
+        CHANNEL.get_or_init(|| {
+            let (input, output) = mpsc::sync_channel::<Request>(1);
+            thread::Builder::new().name("截图块识别".into()).spawn(move || {
+                let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
+                let mut automation = None;
+                let mut cache = VecDeque::<(i32, i32, isize, Vec<SmartRegion>)>::new();
+                while let Ok(request) = output.recv() {
+                    if let Some((_, _, _, regions)) = cache.iter().find(|(x, y, skip, _)| *x == request.x && *y == request.y && *skip == request.skip) {
+                        let _ = request.reply.send(regions.clone());
+                        continue;
+                    }
+                    let regions = query(request.x, request.y, request.skip, &mut automation);
+                    cache.retain(|(x, y, skip, _)| *x != request.x || *y != request.y || *skip != request.skip);
+                    cache.push_front((request.x, request.y, request.skip, regions.clone()));
+                    cache.truncate(24);
+                    let _ = request.reply.send(regions);
+                }
+                if initialized { unsafe { CoUninitialize(); } }
+            }).expect("无法启动截图块识别线程");
+            input
+        }).clone()
+    }
+
+    pub fn query_async(x: i32, y: i32, skip: isize) -> Vec<SmartRegion> {
+        let (reply, result) = mpsc::sync_channel(1);
+        if sender().try_send(Request { x, y, skip, reply }).is_err() { return Vec::new(); }
+        result.recv_timeout(Duration::from_millis(220)).unwrap_or_default()
+    }
+}
+
 unsafe extern "system" fn collect_smart_window(hwnd: HWND, param: LPARAM) -> BOOL {
     let query = &mut *(param as *mut SmartQuery);
     if hwnd as isize == query.skip || IsWindowVisible(hwnd) == 0 {
@@ -119,6 +307,16 @@ pub fn smart_selection(app: &AppHandle, x: i32, y: i32) -> Result<Vec<SmartRegio
             .unwrap_or(0);
         let mut query = SmartQuery { x, y, skip, result: Vec::new() };
         EnumWindows(Some(collect_smart_window), (&mut query as *mut SmartQuery) as isize);
+        let windows = query.result;
+        let mut result = block_detection::query_async(x, y, skip);
+        // 无障碍树的根节点通常就是窗口本身，去掉重复矩形后再补回窗口层级。
+        result.retain(|region| !windows.iter().any(|window| {
+            region.x == window.x &&
+                region.y == window.y &&
+                region.width == window.width &&
+                region.height == window.height
+        }));
+        result.extend(windows);
         let point = POINT { x, y };
         let mut monitor_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
         let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
@@ -130,7 +328,7 @@ pub fn smart_selection(app: &AppHandle, x: i32, y: i32) -> Result<Vec<SmartRegio
             }
         }
         if monitor_rect.right > monitor_rect.left && monitor_rect.bottom > monitor_rect.top {
-            query.result.push(SmartRegion {
+            result.push(SmartRegion {
                 x: monitor_rect.left,
                 y: monitor_rect.top,
                 width: (monitor_rect.right - monitor_rect.left) as u32,
@@ -139,7 +337,7 @@ pub fn smart_selection(app: &AppHandle, x: i32, y: i32) -> Result<Vec<SmartRegio
                 label: "当前显示器".into(),
             });
         }
-        Ok(query.result)
+        Ok(result)
     }
 }
 
@@ -225,6 +423,32 @@ pub fn capture(
         }
     }
     Ok(DynamicImage::ImageRgba8(output))
+}
+
+/// 将滚轮事件发送到长截图选区中心。截图覆盖层在调用前会被隐藏，
+/// 因此事件会落到用户正在浏览的窗口，而不是截图窗口。
+pub fn scroll_at(x: i32, y: i32, delta: i32) -> Result<(), ManagerError> {
+    if delta == 0 {
+        return Ok(());
+    }
+    unsafe {
+        let mut previous = POINT { x: 0, y: 0 };
+        let has_previous = GetCursorPos(&mut previous) != 0;
+        if SetCursorPos(x, y) == 0 {
+            return Err(failure("无法定位长截图滚轮位置"));
+        }
+        // 覆盖层隐藏后仍可能保留焦点，先激活鼠标所在窗口，保证滚轮落到原页面。
+        let target = WindowFromPoint(POINT { x, y });
+        if !target.is_null() {
+            let root = GetAncestor(target, GA_ROOT);
+            let _ = SetForegroundWindow(if root.is_null() { target } else { root });
+        }
+        mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0);
+        if has_previous {
+            let _ = SetCursorPos(previous.x, previous.y);
+        }
+    }
+    Ok(())
 }
 
 unsafe fn bitmap_image(
@@ -481,12 +705,13 @@ pub fn start_hotkeys(app: AppHandle) {
                     let action = message.wParam;
                     tauri::async_runtime::spawn(async move {
                         let result = match action {
-                            1 => super::begin_capture(&app, true).await,
-                            2 => super::begin_capture(&app, false).await,
+                            1 => super::begin_capture(&app, true, false).await,
+                            2 => super::begin_capture(&app, false, false).await,
                             3 => super::paste_clipboard(&app),
                             4 => super::toggle_pins(&app),
                             5 => super::switch_pin_group(&app),
                             6 => super::reset_input(&app),
+                            7 => super::begin_capture(&app, false, true).await,
                             _ => Ok(()),
                         };
                         if let Err(error) = result {

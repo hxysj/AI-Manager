@@ -458,106 +458,50 @@
         <div class="settings-view__panel-header">
           <div>
             <h2>桌面管理</h2>
-            <span>用动画桌宠陪伴桌面，拖动移动，悬浮展开工具。</span>
+            <span>管理已有桌宠，选择启动，点击卡片查看详情。</span>
           </div>
         </div>
-        <div class="settings-view__system-list">
-          <article class="settings-view__system-card">
-            <div class="settings-view__data-copy">
-              <span data-emphasis>启用桌宠</span>
-              <span>开启后替换悬浮窗中心内容；关闭后恢复原来的信息卡片。</span>
-            </div>
-            <div class="settings-view__choice-group">
-              <label
-                v-for="item in desktopModeItems"
-                :key="String(item.value)"
-                class="settings-view__choice"
-                :class="{
-                  'settings-view__choice--active':
-                    draft.desktop.enabled === item.value
-                }"
-              >
-                <input
-                  v-model="draft.desktop.enabled"
-                  type="radio"
-                  name="desktop-pet-enabled"
-                  :value="item.value"
-                  :disabled="item.value && !desktopPets.length"
-                />
-                <span>{{ item.label }}</span>
-              </label>
-            </div>
-          </article>
-        </div>
-        <div v-if="draft.desktop.enabled" class="settings-desktop-selection">
+        <div class="settings-desktop-status" role="status">
           <div class="settings-desktop-copy">
-            <span data-emphasis>选择桌宠</span>
-            <span>自动轮换动作，保存后生效，下次启用会记住你的选择。</span>
-          </div>
-          <div class="settings-desktop-pets">
-            <label
-              v-for="pet in desktopPets"
-              :key="pet.id"
-              class="settings-desktop-pet"
-              :class="{
-                'settings-desktop-pet-active': draft.desktop.petId === pet.id
-              }"
-            >
-              <span class="settings-desktop-preview"
-                ><DesktopPet :pet="pet"
-              /></span>
-              <span class="settings-desktop-pet-choice">
-                <input
-                  v-model="draft.desktop.petId"
-                  type="radio"
-                  name="desktop-pet"
-                  :value="pet.id"
-                />
-                <span>{{ pet.name }}</span>
-              </span>
-            </label>
-          </div>
-          <section
-            v-if="selectedDesktopPet"
-            class="settings-desktop-animations"
-          >
-            <div class="settings-desktop-copy">
-              <span data-emphasis>{{ selectedDesktopPet.name }}的全部动画</span>
+            <span class="settings-desktop-status-title">
               <span
-                >{{
-                  selectedDesktopPet.animations.length
-                }}
-                个动作，每个动作独立循环播放。</span
-              >
-            </div>
-            <div class="settings-desktop-animation-list">
-              <article
-                v-for="animation in selectedDesktopPet.animations"
-                :key="`${selectedDesktopPet.id}:${animation.id}`"
-                class="settings-desktop-animation"
-              >
-                <div class="settings-desktop-animation-preview">
-                  <DesktopPet
-                    :pet="selectedDesktopPet"
-                    :action="animation.id"
-                  />
-                </div>
-                <span class="settings-desktop-animation-name">{{
-                  animation.name
-                }}</span>
-              </article>
-            </div>
-          </section>
-          <p
-            v-if="!draft.system.quickSwitchVisible"
-            class="settings-desktop-hint"
+                class="settings-desktop-status-dot"
+                :class="{
+                  'settings-desktop-status-dot-active': runningDesktopPet
+                }"
+              ></span>
+              {{
+                runningDesktopPet
+                  ? `${runningDesktopPet.name} 正在运行`
+                  : appSettings.desktop?.enabled
+                    ? "桌宠已隐藏"
+                    : "桌宠未启动"
+              }}
+            </span>
+            <span class="settings-desktop-description"
+              >启动后自动记住选择，拖动桌宠可移动，悬浮展开工具。</span
+            >
+          </div>
+          <button
+            v-if="appSettings.desktop?.enabled"
+            class="settings-desktop-button settings-desktop-stop"
+            type="button"
+            :disabled="pending"
+            @click="stopDesktopPet"
           >
-            悬浮窗当前已隐藏，可在“系统设置”中开启显示。
-          </p>
+            <Power :size="14" />
+            停止桌宠
+          </button>
         </div>
-        <p v-if="!desktopPets.length" class="settings-desktop-hint">
-          暂无可用桌宠。
-        </p>
+
+        <DesktopPetList
+          v-model="draft.desktop.petId"
+          :pets="desktopPets"
+          :running-pet-id="runningDesktopPet?.id || ''"
+          :pending="pending"
+          @detail="activeDesktopPetId = $event"
+          @start="startDesktopPet"
+        />
       </section>
 
       <section v-else class="settings-view__panel">
@@ -742,6 +686,14 @@
         </div>
       </section>
     </div>
+    <DesktopPetDetail
+      v-if="activeTab === 'desktop' && activeDesktopPetId && selectedDesktopPet"
+      :pet="selectedDesktopPet"
+      :running="runningDesktopPet?.id === selectedDesktopPet.id"
+      :pending="pending"
+      @close="activeDesktopPetId = ''"
+      @start="startDesktopPet"
+    />
   </section>
 </template>
 
@@ -768,7 +720,8 @@ import {
 import { systemApi } from "@/api"
 import { getToolItems } from "@/features/tools/constant"
 import { desktopPets, getDesktopPet } from "@/constants/desktop-pets"
-import DesktopPet from "@/components/DesktopPet.vue"
+import DesktopPetList from "@/features/settings/components/DesktopPetList.vue"
+import DesktopPetDetail from "@/features/settings/components/DesktopPetDetail.vue"
 import TranslationAgentSettings from "./components/TranslationAgentSettings.vue"
 
 const props = defineProps({
@@ -815,6 +768,8 @@ const emit = defineEmits([
 
 const activeTab = ref("directories")
 const activeAgent = ref("")
+// 浏览详情不改变待启动的桌宠，启动后再由已保存配置同步选择。
+const activeDesktopPetId = ref("")
 const floatingToolItems = computed(() =>
   getToolItems({ cliTargets: props.cliTargets })
 )
@@ -928,13 +883,36 @@ const closeActionItems = [
   }
 ]
 
-const desktopModeItems = [
-  { value: true, label: "启用" },
-  { value: false, label: "关闭" }
-]
-
 // 当前选择直接驱动全部动作预览，不影响已保存的桌宠配置。
-const selectedDesktopPet = computed(() => getDesktopPet(draft.desktop.petId))
+const selectedDesktopPet = computed(() =>
+  getDesktopPet(activeDesktopPetId.value || draft.desktop.petId)
+)
+// 运行状态只读取已保存且可见的桌宠，避免把草稿选择显示为正在运行。
+const runningDesktopPet = computed(() =>
+  props.appSettings.desktop?.enabled &&
+  props.appSettings.system?.quickSwitchVisible !== false
+    ? getDesktopPet(props.appSettings.desktop.petId)
+    : null
+)
+
+function startDesktopPet(pet) {
+  if (props.pending || !pet) return
+  // 立即启动只更新桌宠和悬浮窗，沿用其他已保存配置。
+  emit("save", {
+    ...props.appSettings,
+    desktop: { enabled: true, petId: pet.id },
+    system: { ...props.appSettings.system, quickSwitchVisible: true }
+  })
+}
+
+function stopDesktopPet() {
+  if (props.pending) return
+  // 停止时保留上次启动的桌宠和悬浮窗显示设置。
+  emit("save", {
+    ...props.appSettings,
+    desktop: { ...props.appSettings.desktop, enabled: false }
+  })
+}
 
 const cliItems = computed(() => {
   return Object.entries(cliNames).map(([id, name]) => {
@@ -1167,92 +1145,65 @@ watch(floatingToolItems, (tools) => {
 <style scoped lang="less">
 .settings-view {
   .settings-desktop-panel {
-    .settings-desktop-selection {
+    .settings-desktop-copy {
       display: flex;
       flex-direction: column;
-      gap: 16px;
-      margin-top: 20px;
-      .settings-desktop-copy {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        color: var(--color-text-secondary);
+      gap: 6px;
+      .settings-desktop-description {
+        color: var(--color-text-muted);
         font-size: var(--font-size-sm);
-      }
-      .settings-desktop-pets {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 14px;
-        .settings-desktop-pet {
-          display: flex;
-          width: 168px;
-          flex-direction: column;
-          align-items: center;
-          gap: 12px;
-          padding: 14px;
-          border: 1px solid var(--color-line);
-          border-radius: 14px;
-          background: var(--color-panel-soft);
-          cursor: pointer;
-          transition:
-            border-color 160ms,
-            background-color 160ms;
-          &.settings-desktop-pet-active {
-            border-color: var(--color-primary);
-            background: var(--color-primary-soft);
-          }
-          &:focus-within {
-            outline: 1px solid var(--color-primary);
-            outline-offset: 3px;
-          }
-          .settings-desktop-preview {
-            display: flex;
-            width: 112px;
-            height: 112px;
-          }
-          .settings-desktop-pet-choice {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            color: var(--color-text);
-          }
-        }
-      }
-      .settings-desktop-animations {
-        display: flex;
-        flex-direction: column;
-        gap: 14px;
-        .settings-desktop-animation-list {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 12px;
-          .settings-desktop-animation {
-            display: flex;
-            width: 136px;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-            padding: 10px;
-            border: 1px solid var(--color-line);
-            border-radius: 10px;
-            background: var(--color-panel-soft);
-            .settings-desktop-animation-preview {
-              width: 112px;
-              height: 112px;
-            }
-            .settings-desktop-animation-name {
-              color: var(--color-text);
-              font-size: var(--font-size-sm);
-              line-height: 20px;
-            }
-          }
-        }
+        line-height: 1.5;
       }
     }
-    .settings-desktop-hint {
-      margin: 14px 0 0;
+    .settings-desktop-button {
+      display: inline-flex;
+      flex: none;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 32px;
+      padding: 0 12px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: var(--color-panel);
       color: var(--color-text-muted);
+      cursor: pointer;
       font-size: var(--font-size-sm);
+      &:hover:not(:disabled) {
+        border-color: var(--color-primary);
+        color: var(--color-primary);
+      }
+      &:disabled {
+        opacity: 0.56;
+        cursor: not-allowed;
+      }
+    }
+    .settings-desktop-status {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 14px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel-soft);
+      .settings-desktop-copy {
+        .settings-desktop-status-title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          .settings-desktop-status-dot {
+            width: 7px;
+            height: 7px;
+            flex: none;
+            border-radius: 50%;
+            background: var(--color-text-soft);
+            &.settings-desktop-status-dot-active {
+              background: var(--color-success);
+            }
+          }
+        }
+      }
     }
   }
   .settings-view__panel {

@@ -128,9 +128,16 @@ function loadComponent(path) {
       modules.set(name, imported.exports)
       return imported.exports
     }
-    if (name === "@/components/DesktopPet.vue")
+    if (
+      [
+        "@/components/DesktopPet.vue",
+        "@/components/BaseModal.vue",
+        "@/features/settings/components/DesktopPetList.vue",
+        "@/features/settings/components/DesktopPetDetail.vue"
+      ].includes(name)
+    )
       return {
-        default: loadComponent("src/components/DesktopPet.vue"),
+        default: loadComponent(name.replace("@/", "src/")),
         __esModule: true
       }
     if (name.endsWith("?url")) return { default: "logo.png", __esModule: true }
@@ -1225,16 +1232,29 @@ assert.equal(
   true
 )
 
+// 加入另一只选择夹具，验证保存后重载确实恢复上次选择。
+desktopPets.push({
+  ...desktopPets[0],
+  id: "test-second-pet",
+  name: "第二只桌宠"
+})
 settings.state.activeTab = "desktop"
 await tick()
 assert.equal(findNodes(settings.root, "settings-desktop-panel").length, 1)
 assert.equal(settings.state.draft.desktop.enabled, false)
 assert.equal(settings.state.draft.desktop.petId, desktopPets[0].id)
-assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 0)
-settings.state.draft.desktop.enabled = true
+assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 2)
+assert.equal(findNodes(settings.root, "settings-desktop-animation").length, 0)
+assert.equal(findNodes(settings.root, "settings-desktop-stop").length, 0)
+
+// 关闭状态也能弹出详情，关闭后列表保留，浏览不会保存或改变启动选择。
+const savedBeforeDetail = savedSettings.length
+const petDetail = () => findNodes(settings.root, "settings-desktop-detail")[0]
+findNodes(settings.root, "settings-desktop-pet-detail")[0].props.onClick()
 await tick()
-assert.equal(findNodes(settings.root, "settings-desktop-pet-active").length, 1)
-assert.equal(findNodes(settings.root, "desktop-pet-animation").length, 17)
+assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 2)
+assert.equal(findNodes(settings.root, "base-modal").length, 1)
+assert.equal(findNodes(petDetail(), "desktop-pet-animation").length, 17)
 const animationCards = findNodes(settings.root, "settings-desktop-animation")
 assert.equal(animationCards.length, desktopPets[0].animations.length)
 animationCards.forEach((card, index) => {
@@ -1247,43 +1267,125 @@ animationCards.forEach((card, index) => {
     desktopPets[0].animations[index].name
   )
 })
-settings.state.submitSettings()
-assert.deepEqual(savedSettings.at(-1).desktop, {
-  enabled: true,
-  petId: desktopPets[0].id
-})
-// 加入另一只选择夹具，验证保存后重载确实恢复上次选择。
-desktopPets.push({
-  ...desktopPets[0],
-  id: "test-second-pet",
-  name: "第二只桌宠"
-})
-settings.state.draft.desktop.petId = "test-second-pet"
-settings.state.submitSettings()
-assert.equal(savedSettings.at(-1).desktop.petId, "test-second-pet")
-settings.component.props.appSettings = savedSettings.at(-1)
+findNodes(petDetail(), "base-modal__close")[0].props.onClick()
+await tick()
+assert.equal(savedSettings.length, savedBeforeDetail)
+assert.equal(findNodes(settings.root, "settings-desktop-detail").length, 0)
+assert.equal(settings.state.draft.desktop.petId, desktopPets[0].id)
+assert.equal(findNodes(settings.root, "settings-desktop-animation").length, 0)
+
+// 选择、保存与启动是独立操作；未启动时也能保存下次使用的桌宠。
+findNodes(settings.root, "settings-desktop-pet-radio")[1].props.onChange()
 await tick()
 assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
-assert.equal(
-  findNodes(settings.root, "settings-desktop-pet-active")[0]
-    .children.at(-1)
-    .children.at(-1).text,
-  "第二只桌宠"
-)
-settings.state.draft.desktop.enabled = false
-settings.state.submitSettings()
+assert.equal(savedSettings.length, savedBeforeDetail)
+findNodes(settings.root, "settings-view__save")[0].props.onClick()
 assert.deepEqual(savedSettings.at(-1).desktop, {
   enabled: false,
   petId: "test-second-pet"
 })
 settings.component.props.appSettings = savedSettings.at(-1)
 await tick()
-assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 0)
-assert.equal(findNodes(settings.root, "settings-desktop-animation").length, 0)
-settings.state.draft.desktop.enabled = true
+assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
+assert.equal(
+  findNodes(
+    findNodes(settings.root, "settings-desktop-pet-active")[0],
+    "settings-desktop-pet-name"
+  )[0].text,
+  "第二只桌宠"
+)
+
+// 详情启动当前查看的桌宠，保存失败前不提前显示运行状态；忙碌时禁止重复提交。
+findNodes(settings.root, "settings-desktop-pet-detail")[0].props.onClick()
 await tick()
 assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
-assert.equal(settings.state.selectedDesktopPet.id, "test-second-pet")
+settings.component.props.pending = true
+await tick()
+assert.equal(
+  findNodes(petDetail(), "settings-desktop-start")[0].props.disabled,
+  true
+)
+const savedBeforeStart = savedSettings.length
+findNodes(petDetail(), "settings-desktop-start")[0].props.onClick()
+assert.equal(savedSettings.length, savedBeforeStart)
+settings.component.props.pending = false
+await tick()
+settings.state.draft.dataPath = "D:/unsaved-test-path"
+findNodes(petDetail(), "settings-desktop-start")[0].props.onClick()
+assert.deepEqual(savedSettings.at(-1).desktop, {
+  enabled: true,
+  petId: desktopPets[0].id
+})
+assert.equal(savedSettings.at(-1).system.quickSwitchVisible, true)
+assert.equal(savedSettings.at(-1).system.quickSwitchTools.git, false)
+assert.equal(
+  savedSettings.at(-1).dataPath,
+  settings.component.props.appSettings.dataPath
+)
+assert.equal(settings.state.runningDesktopPet, null)
+assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
+settings.component.props.appSettings = savedSettings.at(-1)
+await tick()
+assert.equal(settings.state.runningDesktopPet.id, desktopPets[0].id)
+assert.equal(
+  findNodes(petDetail(), "settings-desktop-start")[0].props.disabled,
+  true
+)
+findNodes(petDetail(), "base-modal__close")[0].props.onClick()
+await tick()
+assert.equal(findNodes(settings.root, "settings-desktop-pet-running").length, 1)
+
+// 列表启动切换到选中项；停止保留选择，列表继续可见。
+findNodes(settings.root, "settings-desktop-pet-radio")[1].props.onChange()
+await tick()
+assert.equal(settings.state.runningDesktopPet.id, desktopPets[0].id)
+assert.equal(
+  findNodes(settings.root, "settings-desktop-start")[0].props.disabled,
+  false
+)
+findNodes(settings.root, "settings-desktop-start")[0].props.onClick()
+assert.equal(savedSettings.at(-1).desktop.petId, "test-second-pet")
+settings.component.props.appSettings = savedSettings.at(-1)
+await tick()
+assert.equal(settings.state.runningDesktopPet.id, "test-second-pet")
+findNodes(settings.root, "settings-desktop-stop")[0].props.onClick()
+assert.deepEqual(savedSettings.at(-1).desktop, {
+  enabled: false,
+  petId: "test-second-pet"
+})
+assert.equal(savedSettings.at(-1).system.quickSwitchVisible, true)
+settings.component.props.appSettings = savedSettings.at(-1)
+await tick()
+assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 2)
+assert.equal(findNodes(settings.root, "settings-desktop-pet-running").length, 0)
+assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
+
+findNodes(settings.root, "settings-desktop-pet-detail")[1].props.onClick()
+await tick()
+assert.equal(
+  findNodes(petDetail(), "settings-desktop-detail-name")[0].text,
+  "第二只桌宠"
+)
+assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
+findNodes(petDetail(), "base-modal__backdrop")[0].props.onClick()
+await tick()
+assert.equal(findNodes(settings.root, "settings-desktop-detail").length, 0)
+assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 2)
+
+// 悬浮窗隐藏后，重新启动会恢复显示；失效的历史选择仍使用已有桌宠。
+settings.component.props.appSettings = {
+  ...savedSettings.at(-1),
+  desktop: { enabled: true, petId: "test-second-pet" },
+  system: { ...savedSettings.at(-1).system, quickSwitchVisible: false }
+}
+await tick()
+assert.equal(settings.state.runningDesktopPet, null)
+assert.equal(
+  findNodes(settings.root, "settings-desktop-start")[0].props.disabled,
+  false
+)
+findNodes(settings.root, "settings-desktop-start")[0].props.onClick()
+assert.equal(savedSettings.at(-1).system.quickSwitchVisible, true)
 settings.component.props.appSettings = {
   desktop: { enabled: true, petId: "removed-pet" }
 }
@@ -1293,6 +1395,20 @@ settings.unmount()
 desktopPets.pop()
 assert.deepEqual(settings.errors, [])
 assert.deepEqual(settings.warnings, [])
+
+const PetList = loadComponent(
+  "src/features/settings/components/DesktopPetList.vue"
+)
+const emptyPets = mount(PetList, { pets: [] })
+assert.equal(findNodes(emptyPets.root, "settings-desktop-hint").length, 1)
+assert.equal(findNodes(emptyPets.root, "settings-desktop-pet").length, 0)
+assert.equal(
+  findNodes(emptyPets.root, "settings-desktop-start")[0].props.disabled,
+  true
+)
+emptyPets.unmount()
+assert.deepEqual(emptyPets.errors, [])
+assert.deepEqual(emptyPets.warnings, [])
 
 const Tools = loadComponent("src/features/tools/index.vue")
 const detailChanges = []

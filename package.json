@@ -26,6 +26,7 @@
     "langchain": "^1.5.10",
     "lucide-vue-next": "^1.0.0",
     "monaco-editor": "^0.52.2",
+    "onnxruntime-web": "1.30.0",
     "vue": "^3.5.13",
     "xlsx": "^0.18.5",
     "zod": "^3.25.76"

@@ -133,6 +133,8 @@ impl LlmTarget {
         body["tools"] = json!([]);
         body["tool_choice"] = json!("none");
         body["store"] = json!(false);
+        // 在真正发送上游前统一限制，官方 CLI 和 LangChain 都不能提升翻译推理强度。
+        body["reasoning"] = json!({ "effort": "low" });
         self.client.post(&self.upstream_url).headers(self.headers.clone()).json(&body).send().await
             .map_err(|error| ManagerError::System(error.to_string()))
     }
@@ -2352,6 +2354,48 @@ mod tests {
         .unwrap();
         provider_store::write_provider_bundle(paths, &providers, &models, &profiles, &keys)
             .unwrap();
+    }
+
+    #[test]
+    fn translation_enforces_low_reasoning_without_changing_provider_configuration() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let (paths, root) = create_json_agent_paths();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            write_json_agent_provider(&paths, &format!("http://{}/v1", listener.local_addr().unwrap()));
+            let before = provider_store::read_providers(&paths).unwrap();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                http1::Builder::new().serve_connection(TokioIo::new(stream), service_fn(
+                    |request: hyper::Request<hyper::body::Incoming>| async move {
+                        assert_eq!(request.uri().path(), "/v1/responses");
+                        let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                        let body: Value = serde_json::from_slice(&bytes).unwrap();
+                        assert_eq!(body["reasoning"], json!({ "effort": "low" }));
+                        assert_eq!(body["model"], "translation-model");
+                        assert_eq!(body["input"], "Hello");
+                        assert_eq!(body["tools"], json!([]));
+                        assert_eq!(body["tool_choice"], "none");
+                        assert_eq!(body["store"], false);
+                        Ok::<_, Infallible>(Response::builder()
+                            .header("connection", "close")
+                            .body(Full::new(Bytes::from_static(b"{}"))).unwrap())
+                    }
+                )).await.unwrap();
+            });
+            let settings = crate::core::settings::TranslationAgentSettings {
+                enabled: true, target_id: "provider-active".into(), model: "translation-model".into(), target_language: "简体中文".into(),
+            };
+            let target = super::prepare_translation_target(&paths, &json!([]), &settings).await.unwrap();
+            let response = target.send(json!({
+                "model": "other-model", "input": "Hello", "reasoning": { "effort": "high", "mode": "pro", "summary": "auto" },
+                "tools": [{"type": "web_search"}], "tool_choice": "auto", "store": true
+            })).await.unwrap();
+            assert!(response.status().is_success());
+            response.bytes().await.unwrap();
+            server.await.unwrap();
+            assert_eq!(provider_store::read_providers(&paths).unwrap(), before);
+            std::fs::remove_dir_all(&root).unwrap();
+        });
     }
 
     #[test]

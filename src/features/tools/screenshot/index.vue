@@ -16,6 +16,15 @@
         class="screenshot-button"
         type="button"
         :disabled="busy || !ready"
+        title="先框选区域，再自动滚动拼接成长图"
+        @click="startLongCapture"
+      >
+        <ScanLine :size="17" />长截图
+      </button>
+      <button
+        class="screenshot-button"
+        type="button"
+        :disabled="busy || !ready"
         @click="run('clipboard')"
       >
         <ClipboardPaste :size="17" />剪贴板贴图
@@ -294,7 +303,8 @@ function defaultSettings() {
       clipboard: "F3",
       toggle: "Shift+F3",
       switchGroup: "Ctrl+F3",
-      resetInput: "Ctrl+Alt+R"
+      resetInput: "Ctrl+Alt+R",
+      captureLong: "Ctrl+Alt+F1"
     }
   }
 }
@@ -306,7 +316,8 @@ const shortcutFields = [
   { id: "clipboard", label: "贴图" },
   { id: "toggle", label: "隐藏 / 显示所有贴图" },
   { id: "switchGroup", label: "切换到另一贴图组" },
-  { id: "resetInput", label: "取消鼠标穿透" }
+  { id: "resetInput", label: "取消鼠标穿透" },
+  { id: "captureLong", label: "长截图" }
 ]
 const warnings = ref([])
 const dataPath = ref("")
@@ -384,6 +395,11 @@ async function run(action, payload) {
   } finally {
     busy.value = false
   }
+}
+
+async function startLongCapture() {
+  // 通过后端传递模式，截图窗口和主窗口各自独立，不能依赖 sessionStorage。
+  await run("capture-long")
 }
 
 async function importImage() {

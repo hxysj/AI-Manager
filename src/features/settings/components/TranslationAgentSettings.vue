@@ -5,7 +5,7 @@
         <div class="translation-heading">
           <span data-emphasis>划词翻译</span>
           <span class="translation-hint"
-            >启用后，在软件内选中文字，右键点击「翻译」。修改后点击上方「保存设置」。</span
+            >软件内选中文字后右键点击「翻译」；Windows 其他应用选中文字后按 Ctrl+Alt+T。修改后点击上方「保存设置」。</span
           >
         </div>
         <button class="translation-back" type="button" @click="$emit('back')">
@@ -80,6 +80,12 @@
       <p v-if="invalidTarget" class="translation-error">
         所选 Provider / 账号已删除或禁用，请重新选择。
       </p>
+      <p class="translation-hint">
+        翻译固定使用低推理强度（low）。Windows 桌面取词仅在按快捷键时读取选区；
+        不支持取词的应用可先复制，再按 Ctrl+Alt+Shift+T 翻译剪贴板。
+        关闭翻译会注销全局快捷键，关闭结果窗口会释放窗口资源。
+      </p>
+      <p v-if="desktopStatus.error" class="translation-error">{{ desktopStatus.error }}</p>
     </div>
 
     <div class="translation-records">
@@ -240,8 +246,19 @@ const page = ref(1)
 const total = ref(0)
 const loading = ref(false)
 const errorMessage = ref("")
+const desktopStatus = ref({ error: "" })
 let requestId = 0
 let unsubscribe = null
+let unsubscribeDesktopStatus = null
+
+// 直接展示原生快捷键冲突，避免保存成功后用户无法判断桌面入口是否可用。
+async function loadDesktopStatus() {
+  try {
+    desktopStatus.value = await translationApi.desktopStatus()
+  } catch (error) {
+    desktopStatus.value = { error: error.message || String(error) }
+  }
+}
 
 // 账号与 Provider 使用后端已有的 account: 标识，明确限制为 Codex 模式。
 const targetGroups = computed(() => [
@@ -346,11 +363,14 @@ function changePage(offset) {
 
 onMounted(() => {
   loadRecords()
+  loadDesktopStatus()
   unsubscribe = translationApi.onChanged(loadRecords)
+  unsubscribeDesktopStatus = translationApi.onDesktopStatus(loadDesktopStatus)
 })
 onBeforeUnmount(() => {
   requestId += 1
   unsubscribe?.()
+  unsubscribeDesktopStatus?.()
 })
 </script>
 
