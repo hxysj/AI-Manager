@@ -22,7 +22,7 @@ async fn dispatch_api(
 ) -> Result<Value, String> {
     // 取词窗口的高频操作不扫描业务数据，也不把原文重复写入操作日志。
     if let Some(action) = channel.strip_prefix("translation:desktop-") {
-        return translation::desktop::dispatch(&app, action).map_err(|error| error.to_string());
+        return translation::desktop::dispatch(&app, action, payload).map_err(|error| error.to_string());
     }
     if channel.starts_with("translation:") {
         return state.dispatch(app, &channel, payload).await.map_err(|error| error.to_string());

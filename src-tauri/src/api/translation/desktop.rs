@@ -1,7 +1,7 @@
 use crate::core::{error::ManagerError, settings::TranslationAgentSettings};
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(windows)]
 mod windows;
@@ -60,7 +60,7 @@ pub fn sync(app: &AppHandle, settings: &TranslationAgentSettings) {
     }
 }
 
-pub fn dispatch(app: &AppHandle, action: &str) -> Result<Value, ManagerError> {
+pub fn dispatch(app: &AppHandle, action: &str, payload: Option<Value>) -> Result<Value, ManagerError> {
     let service = app.state::<DesktopTranslator>();
     match action {
         "status" => {
@@ -91,6 +91,29 @@ pub fn dispatch(app: &AppHandle, action: &str) -> Result<Value, ManagerError> {
         "drag" => {
             if let Some(window) = app.get_webview_window("translation-desktop") {
                 window.start_dragging().map_err(|error| ManagerError::System(error.to_string()))?;
+            }
+            Ok(Value::Null)
+        }
+        "resize" => {
+            if let (Some(window), Some(payload)) = (app.get_webview_window("translation-desktop"), payload) {
+                let width = payload.get("width").and_then(Value::as_f64);
+                let height = payload.get("height").and_then(Value::as_f64);
+                if let (Some(w), Some(h)) = (width, height) {
+                    let _ = window.set_size(LogicalSize::new(w, h));
+                    if let Ok(Some(monitor)) = window.current_monitor() {
+                        if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+                            let origin = monitor.position();
+                            let m_size = monitor.size();
+                            let max_x = (origin.x as i64 + m_size.width as i64 - size.width as i64).max(origin.x as i64);
+                            let max_y = (origin.y as i64 + m_size.height as i64 - size.height as i64).max(origin.y as i64);
+                            let new_x = (pos.x as i64).clamp(origin.x as i64, max_x) as i32;
+                            let new_y = (pos.y as i64).clamp(origin.y as i64, max_y) as i32;
+                            if new_x != pos.x || new_y != pos.y {
+                                let _ = window.set_position(PhysicalPosition::new(new_x, new_y));
+                            }
+                        }
+                    }
+                }
             }
             Ok(Value::Null)
         }
@@ -139,8 +162,8 @@ fn show_selection(app: &AppHandle, result: Result<String, String>, x: i32, y: i3
                     WebviewUrl::App("index.html?panel=translation".into()),
                 )
                 .title("划词翻译")
-                .inner_size(468.0, 492.0)
-                .min_inner_size(300.0, 240.0)
+                .inner_size(440.0, 240.0)
+                .min_inner_size(280.0, 160.0)
                 .decorations(false)
                 .skip_taskbar(true)
                 .always_on_top(true)

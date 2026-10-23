@@ -427,10 +427,7 @@
                 type="button"
                 role="switch"
                 :aria-checked="draft.agents.translation.enabled"
-                @click.stop="
-                  draft.agents.translation.enabled =
-                    !draft.agents.translation.enabled
-                "
+                @click.stop="toggleTranslationAgent"
               >
                 <span class="settings-agent-switch-thumb"></span>
               </button>
@@ -714,6 +711,7 @@
       :providers="providers"
       :codex-accounts="codexAccounts"
       :runtime-models="runtimeModels"
+      @save="submitSettings"
       @close="showTranslationConfigModal = false"
     />
     <TranslationHistoryModal
@@ -831,7 +829,9 @@ const draft = reactive({
       enabled: false,
       targetId: "",
       model: "",
-      targetLanguage: "简体中文"
+      targetLanguage: "简体中文",
+      shortcut: "Ctrl+Alt+T",
+      clipboardShortcut: "Ctrl+Alt+Shift+T"
     }
   },
   dataPath: "",
@@ -974,6 +974,8 @@ function syncDraft() {
     targetId: "",
     model: "",
     targetLanguage: "简体中文",
+    shortcut: "Ctrl+Alt+T",
+    clipboardShortcut: "Ctrl+Alt+Shift+T",
     ...props.appSettings.agents?.translation
   }
   draft.dataPath = props.appSettings.dataPath || ""
@@ -1041,6 +1043,11 @@ async function selectDirectory(key, currentPath) {
 function resetCliPath(key) {
   draft.cliConfigPaths[key] =
     props.appSettings.defaultCliConfigPaths?.[key] || ""
+}
+
+function toggleTranslationAgent() {
+  draft.agents.translation.enabled = !draft.agents.translation.enabled
+  submitSettings()
 }
 
 function submitSettings() {
@@ -1820,7 +1827,9 @@ watch(floatingToolItems, (tools) => {
         border: 1px solid var(--color-line);
         border-radius: 12px;
         background: var(--color-panel);
-        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        transition:
+          border-color 0.15s ease,
+          box-shadow 0.15s ease;
 
         .settings-agent-icon {
           display: flex;

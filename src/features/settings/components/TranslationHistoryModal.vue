@@ -104,13 +104,26 @@
           class="translation-record-card"
         >
           <summary class="translation-record-head">
-            <span class="translation-record-title">
-              {{ kind === "history" ? item.sourceText : item.model }}
-            </span>
-            <span class="translation-record-meta">
-              {{ formatDateTime(item.createdAt) }} ·
-              {{ statusLabels[item.status] || item.status }}
-            </span>
+            <div class="translation-record-left">
+              <ChevronRight :size="15" class="record-chevron" />
+              <span class="translation-record-title">
+                {{
+                  (kind === "history" ? item.sourceText : item.model) ||
+                  "（无内容）"
+                }}
+              </span>
+            </div>
+            <div class="translation-record-header-meta">
+              <span
+                class="status-badge"
+                :class="`status-${item.status || 'unknown'}`"
+              >
+                {{ statusLabels[item.status] || item.status || "未知" }}
+              </span>
+              <span class="time-text">{{
+                formatDateTime(item.createdAt)
+              }}</span>
+            </div>
           </summary>
           <div class="translation-record-body">
             <div class="translation-record-info">
@@ -177,7 +190,14 @@
 
 <script setup>
 import { onBeforeUnmount, onMounted, ref } from "vue"
-import { BarChart2, Clock, FileText, RotateCw, X } from "lucide-vue-next"
+import {
+  BarChart2,
+  ChevronRight,
+  Clock,
+  FileText,
+  RotateCw,
+  X
+} from "lucide-vue-next"
 import { translationApi } from "@/api"
 import { formatDateTime } from "@/utils/formatters"
 import BaseModal from "@/components/BaseModal.vue"
@@ -269,9 +289,29 @@ onBeforeUnmount(() => {
 <style scoped lang="less">
 .translation-history-modal {
   :deep(.base-modal__panel) {
-    width: 800px;
+    width: 820px;
     max-width: calc(100vw - 32px);
+    height: 680px;
+    max-height: calc(90vh - 32px);
     border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  :deep(.base-modal__header) {
+    padding: 0;
+    border-bottom: none;
+    flex-shrink: 0;
+  }
+
+  :deep(.base-modal__content) {
+    padding: 0;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
   .translation-modal-header {
@@ -279,8 +319,9 @@ onBeforeUnmount(() => {
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    padding: 18px 24px 14px;
+    padding: 16px 24px 14px;
     border-bottom: 1px solid var(--color-line);
+    flex-shrink: 0;
 
     .translation-modal-title {
       display: flex;
@@ -326,16 +367,18 @@ onBeforeUnmount(() => {
 
   .translation-history-body {
     display: flex;
+    flex: 1;
+    min-height: 0;
     flex-direction: column;
-    padding: 20px 24px 24px;
-    max-height: calc(85vh - 90px);
-    overflow-y: auto;
+    padding: 16px 24px 20px;
+    overflow: hidden;
 
     .translation-toolbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 16px;
+      flex-shrink: 0;
 
       .translation-tabs {
         display: flex;
@@ -400,10 +443,11 @@ onBeforeUnmount(() => {
 
     .translation-summary-card {
       margin-top: 14px;
-      padding: 14px 18px;
+      padding: 12px 18px;
       border: 1px solid var(--color-line);
       border-radius: 8px;
       background: var(--color-panel-soft);
+      flex-shrink: 0;
 
       .translation-summary-stats {
         display: flex;
@@ -433,9 +477,14 @@ onBeforeUnmount(() => {
       background: var(--color-danger-soft);
       color: var(--color-danger);
       font-size: 13px;
+      flex-shrink: 0;
     }
 
     .translation-empty-state {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       padding: 40px;
       text-align: center;
       color: var(--color-text-muted);
@@ -447,18 +496,30 @@ onBeforeUnmount(() => {
       flex-direction: column;
       gap: 8px;
       margin-top: 14px;
-      min-height: 120px;
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      padding-right: 4px;
+      scrollbar-width: thin;
 
       .translation-record-card {
+        flex-shrink: 0;
         border: 1px solid var(--color-line);
         border-radius: 8px;
         background: var(--color-panel-soft);
         overflow: hidden;
-        transition: border-color 0.15s ease;
+        transition:
+          border-color 0.15s ease,
+          background-color 0.15s ease;
 
         &[open] {
           border-color: var(--color-line-strong);
           background: var(--color-panel);
+
+          .record-chevron {
+            transform: rotate(90deg);
+            color: #2563eb;
+          }
         }
 
         .translation-record-head {
@@ -466,7 +527,8 @@ onBeforeUnmount(() => {
           align-items: center;
           justify-content: space-between;
           gap: 16px;
-          padding: 12px 16px;
+          min-height: 44px;
+          padding: 10px 16px;
           cursor: pointer;
           user-select: none;
           list-style: none;
@@ -475,21 +537,78 @@ onBeforeUnmount(() => {
             display: none;
           }
 
-          .translation-record-title {
-            flex: 1;
-            min-width: 0;
-            overflow: hidden;
-            white-space: nowrap;
-            text-overflow: ellipsis;
-            font-size: 14px;
-            font-weight: 500;
-            color: var(--color-text);
+          &::marker {
+            display: none;
+            content: "";
           }
 
-          .translation-record-meta {
+          .translation-record-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            min-width: 0;
+
+            .record-chevron {
+              flex-shrink: 0;
+              color: var(--color-text-muted);
+              transition:
+                transform 0.2s ease,
+                color 0.2s ease;
+            }
+
+            .translation-record-title {
+              flex: 1;
+              min-width: 0;
+              overflow: hidden;
+              white-space: nowrap;
+              text-overflow: ellipsis;
+              font-size: 13.5px;
+              font-weight: 500;
+              color: var(--color-text);
+            }
+          }
+
+          .translation-record-header-meta {
+            display: flex;
+            align-items: center;
+            gap: 10px;
             flex-shrink: 0;
-            font-size: 12.5px;
-            color: var(--color-text-muted);
+
+            .status-badge {
+              display: inline-flex;
+              align-items: center;
+              padding: 2px 8px;
+              border-radius: 4px;
+              font-size: 12px;
+              font-weight: 500;
+              line-height: 1.2;
+
+              &.status-success {
+                background: #ecfdf5;
+                color: #059669;
+              }
+
+              &.status-failed {
+                background: #fef2f2;
+                color: #dc2626;
+              }
+
+              &.status-running {
+                background: #eff6ff;
+                color: #2563eb;
+              }
+
+              &.status-interrupted {
+                background: #fffbeb;
+                color: #d97706;
+              }
+            }
+
+            .time-text {
+              font-size: 12px;
+              color: var(--color-text-muted);
+            }
           }
         }
 
@@ -556,8 +675,10 @@ onBeforeUnmount(() => {
       align-items: center;
       justify-content: flex-end;
       gap: 16px;
-      margin-top: 16px;
-      padding-top: 8px;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--color-line);
+      flex-shrink: 0;
 
       .pagination-info {
         font-size: 13px;

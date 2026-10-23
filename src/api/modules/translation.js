@@ -6,6 +6,7 @@ export const translationApi = {
   desktopReady: () => request('translation:desktop-ready'),
   desktopClose: () => request('translation:desktop-close'),
   desktopDrag: () => request('translation:desktop-drag'),
+  desktopResize: payload => request('translation:desktop-resize', payload),
   desktopStatus: () => request('translation:desktop-status'),
   onDesktopSelection: callback => subscribeReady('translation:desktop-selection', callback),
   onDesktopStatus: callback => subscribe('translation:desktop-status', callback),
