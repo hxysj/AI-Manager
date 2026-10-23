@@ -22,6 +22,11 @@ const imageSources = readFileSync("index.html", "utf8")
   .match(/\bimg-src\s+([^;"\n]+)/)?.[1]
   .split(/\s+/)
 assert.ok(imageSources?.includes("blob:"), "页面安全策略必须允许贴图 Blob 图片")
+assert.match(
+  readFileSync("index.html", "utf8"),
+  /script-src[^;]+\bwasm-unsafe-eval\b/,
+  "OCR 的 WASM 编译必须被页面安全策略允许"
+)
 const filename = "src/features/tools/screenshot/components/ScreenshotWindow.vue"
 const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
   filename
@@ -52,6 +57,9 @@ const requests = []
 const listeners = new Map()
 let captureFrame = null
 let saveFailure = false
+let captureLong = false
+let pendingSmartSelection = null
+let pendingLongCapture = null
 const imageRequests = []
 const imageUrls = new Set()
 const imageBlobs = new Map()
@@ -146,6 +154,11 @@ const localRequire = (name) => {
         },
         call: async (action, payload) => {
           requests.push({ action, payload })
+          if (action === "capture-mode") return { long: captureLong }
+          if (action === "smart-selection")
+            return pendingSmartSelection
+              ? pendingSmartSelection(payload)
+              : { regions: [] }
           if (action === "document") {
             assert.equal(payload.metadataOnly, true)
             return {
@@ -187,8 +200,19 @@ const localRequire = (name) => {
       loadImage: async () => ({ naturalWidth: 1600, naturalHeight: 1200 }),
       canvasSource,
       thumbnailSource,
-      selectionRect
+      selectionRect,
+      detectPageRegions: () => []
     }
+  if (name === "../ocr")
+    return {
+      recognizePpocr: async () => ({
+        text: "识别成功",
+        lines: [],
+        engine: "测试"
+      })
+    }
+  if (name === "../long-screenshot")
+    return { captureLongScreenshot: (options) => pendingLongCapture(options) }
   return require(name)
 }
 new Function(
@@ -242,6 +266,8 @@ const context = () => ({
   getImageData: () => ({ data: [10, 20, 30, 255] })
 })
 globalThis.window = {
+  setTimeout,
+  clearTimeout,
   addEventListener() {},
   removeEventListener() {},
   confirm: () => true,
@@ -781,6 +807,105 @@ assert.equal(
 )
 assert.equal(state.frame, null)
 assert.deepEqual(failures, [])
+// 智能识别直接使用正式选框；新位置先清旧框，旧异步响应不能覆盖新位置。
+captureFrame = { ...captureFrame, autoCopy: false }
+await listeners.get("screenshot:frame")()
+await tick()
+const smartReplies = []
+pendingSmartSelection = payload => new Promise(resolve => smartReplies.push({ payload, resolve }))
+await state.movePointer({ clientX: 50, clientY: 50 })
+await new Promise(resolve => setTimeout(resolve, 55))
+smartReplies[0].resolve({ regions: [{ x: 20, y: 20, width: 200, height: 200 }] })
+await tick()
+assert.deepEqual(state.activeRegion, { x: 20, y: 20, width: 200, height: 200 })
+assert.ok(findElement(root, element => element.props.class === "capture-selection"))
+assert.equal(findElement(root, element => element.props.class === "capture-auto-region"), undefined)
+await state.movePointer({ clientX: 200, clientY: 50 })
+assert.equal(state.activeRegion, null)
+await new Promise(resolve => setTimeout(resolve, 55))
+await state.movePointer({ clientX: 350, clientY: 50 })
+smartReplies[1].resolve({ regions: [{ x: 300, y: 0, width: 600, height: 200 }] })
+await tick()
+assert.equal(state.activeRegion, null)
+await new Promise(resolve => setTimeout(resolve, 55))
+smartReplies[2].resolve({ regions: [{ x: 650, y: 20, width: 200, height: 200 }] })
+await tick()
+assert.equal(state.activeRegion.x, 650)
+pendingSmartSelection = null
+state.cancelDrag()
+
+// 长截图入口框选后直接开始，隐藏取色及其快捷键；Esc 和原生事件都保存当前结果。
+for (const finishMethod of ["escape", "native", "button"]) {
+  captureLong = true
+  await listeners.get("screenshot:frame")()
+  await tick()
+  assert.equal(state.longCaptureRequested, true)
+  let longOptions
+  pendingLongCapture = async options => {
+    longOptions = options
+    await options.onProgress({ width: 200, height: 600 }, 3)
+    await new Promise(resolve => options.signal.addEventListener("abort", resolve, { once: true }))
+    if (options.signal.reason !== "finish") throw new DOMException("已取消", "AbortError")
+    return { source: "long.png", thumbnail: "long-thumb.png", width: 200, height: 600 }
+  }
+  state.startSelection({ button: 0, pointerId: 6, clientX: 20, clientY: 30 })
+  await state.movePointer({ clientX: 120, clientY: 130 })
+  const captured = state.finishSelection()
+  await tick()
+  assert.equal(state.longBusy, true)
+  assert.equal(state.magnifierVisible, false)
+  assert.ok(findElement(root, element => element.props.class === "long-screenshot-preview"))
+  assert.equal(teleportTarget.children.some(element => element.props.class === "capture-magnifier"), false)
+  assert.deepEqual(longOptions.rect, { x: 40, y: 60, width: 200, height: 200 })
+  assert.deepEqual(state.longSize, { width: 200, height: 600 })
+  assert.equal(state.longProgress, 3)
+  const scrollButton = findElement(root, element => element.props.class === "long-scroll-button")
+  const finishButton = findElement(root, element => element.props.class === "long-finish-button")
+  assert.ok(finishButton)
+  assert.equal(longOptions.shouldAutoScroll(), false)
+  scrollButton.props.onClick({ stopPropagation() {} })
+  await tick()
+  assert.equal(longOptions.shouldAutoScroll(), true)
+  assert.equal(scrollButton.props["aria-pressed"], true)
+  scrollButton.props.onClick({ stopPropagation() {} })
+  assert.equal(longOptions.shouldAutoScroll(), false)
+  assert.ok(requests.some(request => request.action === "long-preview" && request.payload.width > 0))
+  const copiedBefore = copiedColors.length
+  await state.keydown(colorKey("c"))
+  await state.keydown(colorKey("Shift"))
+  assert.equal(copiedColors.length, copiedBefore)
+  assert.equal(state.colorFormat, "rgb")
+  const cancelledBefore = requests.filter(request => request.action === "cancel").length
+  scrollButton.props.onClick({ stopPropagation() {} })
+  if (finishMethod === "native") listeners.get("screenshot:long-finish")()
+  else if (finishMethod === "button") finishButton.props.onClick({ stopPropagation() {} })
+  else await state.keydown(colorKey("Escape"))
+  assert.equal(longOptions.signal.reason, "finish")
+  assert.equal(longOptions.shouldAutoScroll(), false)
+  await captured
+  await tick()
+  assert.equal(requests.findLast(request => request.action === "save-document").payload.source, "long.png")
+  assert.ok(requests.filter(request => request.action === "cancel").length > cancelledBefore)
+  assert.equal(state.longBusy, false)
+  assert.equal(state.frame, null)
+}
+// 取消会话后不能把尚在采集的旧长图保存回来，后续普通截图也不会沿用长截图模式。
+await listeners.get("screenshot:frame")()
+await tick()
+state.startSelection({ button: 0, pointerId: 7, clientX: 20, clientY: 30 })
+await state.movePointer({ clientX: 120, clientY: 130 })
+const cancelledLong = state.finishSelection()
+await tick()
+const savedBeforeCancel = requests.filter(request => request.action === "save-document").length
+await state.cancel()
+await cancelledLong
+assert.equal(requests.filter(request => request.action === "save-document").length, savedBeforeCancel)
+captureLong = false
+await listeners.get("screenshot:frame")()
+await tick()
+assert.equal(state.longCaptureRequested, false)
+assert.equal(state.magnifierVisible, true)
+assert.deepEqual(failures, [])
 captureApp.unmount()
 assert.equal(listeners.size, 0)
 async function loadTestComponent(filename, mocks) {
@@ -877,7 +1002,8 @@ assert.deepEqual(Object.values(page.settings.shortcuts), [
   "F3",
   "Shift+F3",
   "Ctrl+F3",
-  "Ctrl+Alt+R"
+  "Ctrl+Alt+R",
+  "Ctrl+Alt+F1"
 ])
 page.openSettings()
 await tick()
@@ -982,7 +1108,7 @@ assert.deepEqual(
 )
 assert.deepEqual(
   editor.outputs.map((action) => action.id),
-  ["pin", "export", "copy"]
+  ["pin", "ocr", "export", "copy"]
 )
 const drawingEvent = (clientX, clientY) => ({
   button: 0,

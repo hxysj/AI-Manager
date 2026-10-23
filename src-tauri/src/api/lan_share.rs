@@ -869,10 +869,8 @@ pub async fn delete_device(
     if device_id.trim().is_empty() {
         return Err(ManagerError::System("设备标识不能为空。".into()));
     }
-    let delete_history = payload
-        .get("deleteHistory")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    // 删除设备时彻底清理该设备关联的全部单聊会话与聊天记录，不再保留孤儿会话与历史消息。
+    let delete_history = true;
     let trusted_peer = registry
         .inner
         .lock()
@@ -944,11 +942,11 @@ pub async fn delete_device(
             }
         }
         devices.retain(|device| device.id != device_id);
-        sessions.retain(|session| {
-            session.device_id != device_id || (!delete_history && session.mode != "group")
-        });
+        sessions.retain(|session| session.device_id != device_id);
         if delete_history {
-            messages.retain(|message| !direct_session_ids.contains(&message.session_id));
+            messages.retain(|message| {
+                !direct_session_ids.contains(&message.session_id) && message.device_id != device_id
+            });
             let removed_files = files
                 .iter()
                 .filter(|file| direct_session_ids.contains(&file.session_id))
@@ -1034,6 +1032,120 @@ pub async fn delete_device(
             });
         }
     }
+    broadcast_files_changed(registry).await?;
+    get_state(registry, paths).await
+}
+
+pub async fn delete_all_devices_and_messages(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+) -> Result<Value, ManagerError> {
+    let trusted_peers = {
+        let runtime = registry.inner.lock().await;
+        runtime.native.config.peers.clone()
+    };
+    for trusted in trusted_peers {
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            native::notify_peer_removed(registry, &trusted),
+        )
+        .await;
+    }
+
+    {
+        let _storage = registry.storage.lock().await;
+        let mut devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices)?;
+        let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        let mut files: Vec<LanShareFile> = read_array(&paths.lan_share_files.files)?;
+        let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
+        let mut downloads: Vec<LanShareDownload> = read_array(&paths.lan_share_files.downloads)?;
+
+        {
+            let mut runtime = registry.inner.lock().await;
+            let peer_ids = runtime
+                .native
+                .config
+                .peers
+                .iter()
+                .map(|p| p.peer.id.clone())
+                .collect::<Vec<_>>();
+            for peer_id in peer_ids {
+                let _ = runtime.native.forget(paths, &peer_id).await;
+            }
+        }
+
+        devices.clear();
+        messages.clear();
+        downloads.clear();
+
+        // 移除所有单聊会话及与设备关联的群聊会话
+        sessions.retain(|session| session.mode == "group" && session.device_id.is_empty());
+
+        for group in &mut groups {
+            let count = group.members.len();
+            group.members.clear();
+            if count > 0 {
+                group.updated_at = now_millis();
+            }
+        }
+
+        let uploads = Path::new(&paths.lan_share_dir).join("uploads");
+        let uploads = match tokio::fs::canonicalize(&uploads).await {
+            Ok(directory) => Some(directory),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => return Err(error.into()),
+        };
+
+        let removed_files = files
+            .iter()
+            .filter(|file| !file.session_id.is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        files.retain(|file| file.session_id.is_empty());
+
+        if let Some(directory) = &uploads {
+            for file in &removed_files {
+                if files.iter().any(|other| other.path == file.path) {
+                    continue;
+                }
+                let path = match tokio::fs::canonicalize(&file.path).await {
+                    Ok(path) => path,
+                    Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
+                };
+                if path.parent() == Some(directory.as_path()) {
+                    let _ = tokio::fs::remove_file(path).await;
+                }
+            }
+            if let Ok(mut entries) = tokio::fs::read_dir(directory).await {
+                while let Ok(Some(entry)) = entries.next_entry().await {
+                    let path = entry.path();
+                    let name = entry.file_name();
+                    let name = name.to_string_lossy();
+                    if name.starts_with(".lan-upload-") || name.starts_with("attachment_") {
+                        let _ = tokio::fs::remove_file(path).await;
+                    }
+                }
+            }
+        }
+
+        let mut runtime = registry.inner.lock().await;
+        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
+        write_json(&paths.lan_share_files.files, &json!(files)).await?;
+        write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
+        write_json(&paths.lan_share_files.groups, &json!(groups)).await?;
+        write_json(&paths.lan_share_files.devices, &json!(devices)).await?;
+        write_json(&paths.lan_share_files.downloads, &json!(downloads)).await?;
+
+        for (_, sender) in runtime.clients.drain() {
+            let _ = sender.send(WsOutbound {
+                payload: json!({ "type": "deviceRemoved" }),
+            });
+        }
+        runtime.active_sessions.clear();
+    }
+
     broadcast_files_changed(registry).await?;
     get_state(registry, paths).await
 }

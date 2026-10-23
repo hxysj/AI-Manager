@@ -68,6 +68,18 @@
           <span>访客扫码</span>
         </button>
 
+        <!-- 删除所有连接设备和所有聊天消息 -->
+        <button
+          class="cyber-header-btn cyber-header-btn--danger"
+          type="button"
+          :disabled="loading || clearAllPending"
+          title="删除所有连接设备和所有聊天消息"
+          @click="openClearAllModal"
+        >
+          <Trash2 :size="13" />
+          <span>删除所有设备与消息</span>
+        </button>
+
         <!-- 设置改为居中弹框，避免下拉菜单被顶部区域裁剪。 -->
         <button
           class="cyber-menu-btn"
@@ -155,6 +167,25 @@
           </div>
         </div>
 
+        <div class="drop-settings-danger-card">
+          <div class="drop-settings-danger-header">
+            <Trash2 :size="14" />
+            <span>彻底清理</span>
+          </div>
+          <p class="drop-settings-danger-desc">
+            断开所有连接设备、解除设备配对，并彻底删除全部聊天记录、接收文件及传输缓存。
+          </p>
+          <button
+            class="drop-settings-danger-btn"
+            type="button"
+            :disabled="clearAllPending"
+            @click="openClearAllModal"
+          >
+            <Trash2 :size="13" />
+            <span>删除所有连接设备和所有聊天消息</span>
+          </button>
+        </div>
+
         <button
           v-if="state.service.running"
           class="drop-settings-offline"
@@ -202,6 +233,17 @@
               <span class="tab-badge">{{ state.groups.length }}</span>
             </button>
           </div>
+          <button
+            v-if="chatMode === 'direct'"
+            class="cyber-icon-action-btn cyber-icon-action-btn--danger"
+            type="button"
+            title="删除所有连接设备和所有聊天消息"
+            aria-label="删除所有连接设备和所有聊天消息"
+            :disabled="loading || clearAllPending"
+            @click="openClearAllModal"
+          >
+            <Trash2 :size="14" />
+          </button>
           <button
             v-if="chatMode === 'group'"
             class="cyber-icon-action-btn"
@@ -441,26 +483,25 @@
       class="drop-delete-device-modal"
       title="删除设备"
       :name="deleteDeviceTarget.name"
-      :description="
-        deleteDeviceTarget.native
-          ? '解除此设备的配对并从节点列表移除。聊天记录默认保留，重新连接后可以继续查看。'
-          : '移除此设备及其群聊成员关联。聊天记录默认保留，重新接入后可以继续查看。'
-      "
+      description="确认删除该设备吗？将彻底删除该设备以及所有相关的聊天记录和接收文件。"
       :pending="deleteDevicePending"
       :error="deleteDeviceError"
       @close="closeDeleteDevice"
       @confirm="confirmDeleteDevice"
-    >
-      <el-checkbox
-        v-model="deleteDeviceWithHistory"
-        :disabled="deleteDevicePending"
-      >
-        同时彻底删除聊天记录和接收文件
-      </el-checkbox>
-      <span v-if="deleteDeviceWithHistory" class="drop-delete-warning">
-        将永久删除本机与该设备的单聊记录、接收文件及未完成的接收缓存。发送的原始文件保留。
-      </span>
-    </DeleteConfirmModal>
+    />
+
+    <!-- 清空所有设备与聊天消息二次确认弹窗 -->
+    <DeleteConfirmModal
+      v-if="clearAllModalOpen"
+      class="drop-delete-device-modal"
+      title="删除所有连接设备和所有聊天消息"
+      name="所有连接设备及所有聊天消息"
+      description="确认彻底删除所有连接设备和所有聊天消息吗？此操作将断开所有设备连接、解除所有设备配对，并彻底删除全部直接会话、群聊消息、接收文件及传输记录。"
+      :pending="clearAllPending"
+      :error="clearAllError"
+      @close="closeClearAllModal"
+      @confirm="confirmClearAll"
+    />
 
     <!-- 访客访问二维码弹窗 -->
     <LanShareAccessDialog
@@ -1030,7 +1071,9 @@ const savedFile = ref(null)
 const deleteDeviceTarget = ref(null)
 const deleteDevicePending = ref(false)
 const deleteDeviceError = ref("")
-const deleteDeviceWithHistory = ref(false)
+const clearAllModalOpen = ref(false)
+const clearAllPending = ref(false)
+const clearAllError = ref("")
 const createGroupOpen = ref(false)
 // 控制设备快传设置弹框。
 const settingsOpen = ref(false)
@@ -1795,7 +1838,6 @@ function requestDeleteDevice(device) {
     native: Boolean(device.native)
   }
   deleteDeviceError.value = ""
-  deleteDeviceWithHistory.value = false
 }
 
 function closeDeleteDevice() {
@@ -1813,7 +1855,7 @@ async function confirmDeleteDevice() {
     const result = unwrapData(
       await lanShareApi.deleteDevice({
         deviceId,
-        deleteHistory: deleteDeviceWithHistory.value
+        deleteHistory: true
       })
     )
     if (selectedDeviceId.value === deviceId) {
@@ -1822,11 +1864,42 @@ async function confirmDeleteDevice() {
     }
     applyState(result)
     deleteDeviceTarget.value = null
-    createMessage.success("设备已删除。")
+    createMessage.success("设备及聊天记录已彻底删除。")
   } catch (error) {
     deleteDeviceError.value = error?.message || String(error)
   } finally {
     deleteDevicePending.value = false
+  }
+}
+
+function openClearAllModal() {
+  if (clearAllPending.value || loading.value) return
+  clearAllError.value = ""
+  clearAllModalOpen.value = true
+}
+
+function closeClearAllModal() {
+  if (clearAllPending.value) return
+  clearAllModalOpen.value = false
+  clearAllError.value = ""
+}
+
+async function confirmClearAll() {
+  if (clearAllPending.value) return
+  clearAllPending.value = true
+  clearAllError.value = ""
+  try {
+    const result = unwrapData(await lanShareApi.deleteAllDevicesAndMessages())
+    selectedDeviceId.value = ""
+    selectedSessionId.value = ""
+    selectedGroupId.value = ""
+    applyState(result)
+    clearAllModalOpen.value = false
+    createMessage.success("已彻底删除所有连接设备和聊天消息。")
+  } catch (error) {
+    clearAllError.value = error?.message || String(error)
+  } finally {
+    clearAllPending.value = false
   }
 }
 
@@ -2165,6 +2238,17 @@ function isTextPreviewFile(name, mimeType) {
           }
         }
 
+        &--danger {
+          border-color: rgba(239, 68, 68, 0.28);
+          color: var(--color-danger, #ef4444);
+
+          &:hover:not(:disabled) {
+            border-color: var(--color-danger, #ef4444);
+            background: var(--color-danger-soft, rgba(239, 68, 68, 0.1));
+            color: var(--color-danger, #ef4444);
+          }
+        }
+
         &:disabled {
           opacity: 0.4;
           cursor: not-allowed;
@@ -2299,6 +2383,15 @@ function isTextPreviewFile(name, mimeType) {
           &:hover {
             border-color: var(--color-primary);
             background: var(--color-primary-soft);
+          }
+
+          &--danger {
+            color: var(--color-danger, #ef4444);
+
+            &:hover {
+              border-color: var(--color-danger, #ef4444);
+              background: var(--color-danger-soft, rgba(239, 68, 68, 0.1));
+            }
           }
         }
       }
@@ -2820,6 +2913,59 @@ function isTextPreviewFile(name, mimeType) {
         .drop-settings-empty {
           color: var(--color-text-soft);
           font-size: 11.5px;
+        }
+      }
+    }
+
+    .drop-settings-danger-card {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 12px 14px;
+      border: 1px dashed rgba(239, 68, 68, 0.35);
+      border-radius: 8px;
+      background: var(--color-danger-soft, rgba(239, 68, 68, 0.05));
+
+      .drop-settings-danger-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        color: var(--color-danger, #ef4444);
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .drop-settings-danger-desc {
+        margin: 0;
+        color: var(--color-text-muted);
+        font-size: 11.5px;
+        line-height: 1.5;
+      }
+
+      .drop-settings-danger-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-height: 32px;
+        padding: 0 12px;
+        border: 1px solid var(--color-danger-line, rgba(239, 68, 68, 0.4));
+        border-radius: 6px;
+        background: var(--color-panel);
+        color: var(--color-danger, #ef4444);
+        font-size: 12px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.2s;
+
+        &:hover:not(:disabled) {
+          background: var(--color-danger, #ef4444);
+          color: #ffffff;
+        }
+
+        &:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
         }
       }
     }

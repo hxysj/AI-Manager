@@ -15,43 +15,30 @@
     @contextmenu.prevent="reselect"
   >
     <canvas
-      v-if="!longBusy"
+      v-show="!longBusy"
       ref="captureBackground"
       width="1"
       height="1"
       class="capture-background"
     />
     <div
-      v-if="frame && !selection && activeRegion"
-      class="capture-auto-region"
-      :style="regionStyle(activeRegion)"
+      v-if="frame && !selection && !activeRegion && !longBusy"
+      class="capture-instructions"
     >
-      <span
-        >{{
-          activeRegion.kind === "element"
-            ? "块区域"
-            : activeRegion.kind === "window"
-              ? "窗口区域"
-              : "屏幕区域"
-        }}
-        · {{ activeRegion.label }}</span
-      >
-    </div>
-    <div v-if="frame && !selection && !longBusy" class="capture-instructions">
       {{
         longCaptureRequested
-          ? "拖动选择区域，确认后点击右上角“长截图”"
+          ? "选择区域后手动向下滚动 · Esc 完成截图"
           : "悬停界面块，点击自动选中 · 拖动自定义区域 · Esc 取消"
       }}
     </div>
     <div
-      v-if="frame && selection"
+      v-if="frame && (selection || activeRegion)"
       class="capture-selection"
       :class="{ 'is-resizing': drag?.kind === 'resize' }"
       :style="selectionStyle"
     >
       <ImageEditor
-        v-if="editorSource && !drag && !longBusy"
+        v-if="selection && editorSource && !drag && !longBusy"
         :source="editorSource"
         :toolbar-style="toolbarStyle"
         :busy="busy"
@@ -64,7 +51,8 @@
         @toolbar-hover="toolbarHovered = $event"
       />
       <div v-if="!longBusy" class="selection-size">
-        {{ selection.width }} × {{ selection.height }}
+        {{ (selection || activeRegion).width }} ×
+        {{ (selection || activeRegion).height }}
       </div>
       <button
         v-if="editorSource && !longBusy"
@@ -77,10 +65,10 @@
         长截图
       </button>
       <span v-if="longBusy" class="long-screenshot-progress">
-        正在滚动拼接 {{ longProgress }} / 40
+        {{ longAutoScroll ? "自动向下滚动" : "手动向下滚动" }} · Esc 完成截图
       </span>
       <button
-        v-if="!longBusy"
+        v-if="selection && !longBusy"
         v-for="edge in ['n', 'e', 's', 'w']"
         :key="`edge-${edge}`"
         type="button"
@@ -93,7 +81,7 @@
         @pointerdown.stop="startResize($event, edge)"
       />
       <button
-        v-if="!longBusy"
+        v-if="selection && !longBusy"
         v-for="handle in handles"
         :key="handle"
         type="button"
@@ -106,9 +94,41 @@
         @pointerdown.stop="startResize($event, handle)"
       />
     </div>
+    <aside
+      v-if="longBusy"
+      ref="longPreviewPanel"
+      class="long-screenshot-preview"
+      :style="longPreviewStyle"
+      aria-label="长截图实时预览"
+      @pointerdown.stop
+    >
+      <div class="long-preview-head">
+        <span class="long-preview-title">拼接预览</span>
+        <span class="long-preview-count">{{ longProgress }} 屏</span>
+      </div>
+      <div class="long-preview-image">
+        <canvas ref="longPreview" class="long-preview-canvas" />
+      </div>
+      <span class="long-preview-size"
+        >{{ longSize.width }} × {{ longSize.height }}</span
+      >
+      <div class="long-preview-actions">
+        <button
+          class="long-scroll-button"
+          :aria-pressed="longAutoScroll"
+          @click.stop="longAutoScroll = !longAutoScroll"
+        >
+          {{ longAutoScroll ? "暂停滚动" : "自动滚动" }}
+        </button>
+        <button class="long-finish-button" @click.stop="finishLongCapture">
+          完成截图
+        </button>
+      </div>
+      <span class="long-preview-hint">按 Esc 也可完成</span>
+    </aside>
     <Teleport to="body">
       <div
-        v-if="frame && pointer"
+        v-if="frame && pointer && !longBusy && !longCaptureRequested"
         v-show="magnifierVisible"
         class="capture-magnifier"
         :style="magnifierStyle"
@@ -485,9 +505,7 @@ const query = new URLSearchParams(location.search)
 const mode = query.get("mode")
 const id = query.get("id")
 const dismissCapture = query.get("capture") === "1"
-const longCaptureRequested = ref(
-  sessionStorage.getItem("screenshot-long-request") === "1"
-)
+const longCaptureRequested = ref(false)
 const frame = ref(null)
 const autoCopy = ref(false)
 const desktop = ref(null)
@@ -520,6 +538,11 @@ const error = ref("")
 const ocrResult = ref(null)
 const longBusy = ref(false)
 const longProgress = ref(0)
+const longPreview = ref(null)
+const longPreviewPanel = ref(null)
+const longAutoScroll = ref(false)
+const longSize = ref({ width: 0, height: 0 })
+let longController = null
 const document = ref(null)
 const editing = ref(false)
 const menu = ref(false)
@@ -555,6 +578,8 @@ const resizeCursors = {
 const handles = Object.keys(resizeCursors)
 const magnifierVisible = computed(
   () =>
+    !longBusy.value &&
+    !longCaptureRequested.value &&
     !toolbarHovered.value &&
     !resizeHovered.value &&
     drag.value?.kind !== "resize"
@@ -564,6 +589,7 @@ let pixelCanvas
 let unlisten
 let unlistenFrame
 let unlistenReset
+let unlistenLongFinish
 let frameGeneration = 0
 let resizeFrame
 let smartQueryTimer = 0
@@ -584,12 +610,21 @@ const zoomOptions = [
   { label: "200%", value: 2 }
 ]
 const selectionStyle = computed(() => {
-  const rect = selection.value
+  const rect = selection.value || activeRegion.value
   return {
     left: `${(rect.x / frame.value.width) * 100}%`,
     top: `${(rect.y / frame.value.height) * 100}%`,
     width: `${(rect.width / frame.value.width) * 100}%`,
     height: `${(rect.height / frame.value.height) * 100}%`
+  }
+})
+const longPreviewStyle = computed(() => {
+  const bounds = desktop.value.getBoundingClientRect()
+  const rect = selection.value
+  // 优先紧邻选区右侧，靠屏幕边缘时让预览保持完整可见。
+  return {
+    left: `${Math.max(8, Math.min(bounds.left + ((rect.x + rect.width) * bounds.width) / frame.value.width + 16, innerWidth - 204))}px`,
+    top: `${Math.max(8, Math.min(bounds.top + (rect.y * bounds.height) / frame.value.height, innerHeight - 220))}px`
   }
 })
 const toolbarStyle = computed(() => {
@@ -660,16 +695,6 @@ function desktopPoint(event) {
   }
 }
 
-function regionStyle(region) {
-  if (!frame.value || !region) return {}
-  return {
-    left: `${(region.x / frame.value.width) * 100}%`,
-    top: `${(region.y / frame.value.height) * 100}%`,
-    width: `${(region.width / frame.value.width) * 100}%`,
-    height: `${(region.height / frame.value.height) * 100}%`
-  }
-}
-
 function containsRegion(region, point) {
   return (
     point.x >= region.x &&
@@ -712,7 +737,9 @@ function applySmartLevels(regions) {
     !anchor ||
     !smartLevels.value[0] ||
     anchor.x !== smartLevels.value[0].x ||
-    anchor.y !== smartLevels.value[0].y
+    anchor.y !== smartLevels.value[0].y ||
+    anchor.width !== smartLevels.value[0].width ||
+    anchor.height !== smartLevels.value[0].height
   )
     smartLevel.value = 0
   smartLevels.value = local
@@ -723,12 +750,13 @@ function applySmartLevels(regions) {
 function queueSmartSelection(point) {
   if (mode !== "capture" || !frame.value) return
   smartQueryPoint = point
+  smartQuerySequence += 1
   if (smartQueryTimer) return
   smartQueryTimer = window.setTimeout(async () => {
     smartQueryTimer = 0
     const target = smartQueryPoint
     if (!target || !frame.value) return
-    const sequence = ++smartQuerySequence
+    const sequence = smartQuerySequence
     try {
       const result = await screenshotApi.call("smart-selection", {
         x: Math.round(frame.value.left + target.x),
@@ -747,6 +775,7 @@ function adjustSmartLevel(event) {
     mode !== "capture" ||
     drag.value ||
     selection.value ||
+    longBusy.value ||
     smartLevels.value.length < 2
   )
     return
@@ -762,11 +791,12 @@ function adjustSmartLevel(event) {
 }
 
 function startSelection(event) {
-  if (!frame.value || busy.value || event.button !== 0) return
+  if (!frame.value || busy.value || longBusy.value || event.button !== 0) return
   if (selection.value && editorSource.value) return
   selectionGeneration += 1
   desktop.value.setPointerCapture(event.pointerId)
   const start = desktopPoint(event)
+  smartQuerySequence += 1
   const candidate =
     activeRegion.value && containsRegion(activeRegion.value, start)
       ? activeRegion.value
@@ -819,6 +849,7 @@ async function movePointer(event) {
   const point = desktopPoint(event)
   pointer.value = point
   if (!drag.value && !selection.value) {
+    // 新位置立即替换旧框，异步识别只允许回填最后一次指针位置。
     activeRegion.value = regionAt(point)
     queueSmartSelection(point)
   }
@@ -955,6 +986,7 @@ async function finishSelection() {
       return
     }
     editorSource.value = source
+    if (longCaptureRequested.value) await startLongCapture()
   } catch (cause) {
     if (generation === selectionGeneration) error.value = String(cause)
   } finally {
@@ -975,6 +1007,7 @@ function cancelDrag() {
 function reselect(hasAnnotations = true) {
   if (
     busy.value ||
+    longBusy.value ||
     (editorSource.value &&
       hasAnnotations &&
       !window.confirm("重新选择会清除当前标注，继续选择？"))
@@ -985,6 +1018,7 @@ function reselect(hasAnnotations = true) {
 
 async function cancel() {
   if (busy.value) return
+  longController?.abort("cancel")
   try {
     await screenshotApi.call("cancel")
   } catch (cause) {
@@ -1002,38 +1036,94 @@ async function startLongCapture() {
   )
     return
   longBusy.value = true
+  longAutoScroll.value = false
   longProgress.value = 0
+  longSize.value = { width: 0, height: 0 }
+  const controller = new AbortController()
+  longController = controller
+  const generation = frameGeneration
   error.value = ""
   try {
     // 先完成透明边框的重绘，再让原生端开始采集，避免首帧仍带着旧截图画布。
     await nextTick()
     const result = await captureLongScreenshot({
+      signal: controller.signal,
+      shouldAutoScroll: () => longAutoScroll.value,
       rect: {
         x: frame.value.left + selection.value.x,
         y: frame.value.top + selection.value.y,
         width: selection.value.width,
         height: selection.value.height
       },
-      onProgress: (current) => {
-        longProgress.value = current
+      onProgress: async (canvas, count) => {
+        if (controller !== longController || disposed) return
+        longProgress.value = count
+        longSize.value = { width: canvas.width, height: canvas.height }
+        await nextTick()
+        if (!longPreview.value || controller !== longController) return
+        // 仅缩绘预览，不对每一帧生成整张 PNG，长图增长时保持较低内存占用。
+        const top = Number.parseFloat(longPreviewStyle.value.top)
+        const scale = Math.min(
+          174 / canvas.width,
+          Math.min(260, Math.max(40, innerHeight - top - 164)) / canvas.height
+        )
+        longPreview.value.width = Math.max(1, Math.round(canvas.width * scale))
+        longPreview.value.height = Math.max(
+          1,
+          Math.round(canvas.height * scale)
+        )
+        longPreview.value
+          .getContext("2d")
+          .drawImage(
+            canvas,
+            0,
+            0,
+            longPreview.value.width,
+            longPreview.value.height
+          )
+        const panel = longPreviewPanel.value.getBoundingClientRect()
+        const bounds = desktop.value.getBoundingClientRect()
+        await screenshotApi.call("long-preview", {
+          x: Math.round(
+            frame.value.left + (panel.left - bounds.left) * frame.value.width / bounds.width
+          ),
+          y: Math.round(
+            frame.value.top + (panel.top - bounds.top) * frame.value.height / bounds.height
+          ),
+          width: Math.ceil((panel.width * frame.value.width) / bounds.width),
+          height: Math.ceil((panel.height * frame.value.height) / bounds.height)
+        })
       }
     })
-    await output({
+    if (disposed || generation !== frameGeneration) return
+    const saved = await output({
       action: "pin",
       source: result.source,
       output: result.source,
       thumbnail: result.thumbnail,
       annotations: []
     })
+    if (!saved) return
     // 贴图窗口创建请求已提交，立即结束透明选区窗口，避免长截图边框
     // 在结果贴图出现前短暂残留在桌面上。
     await screenshotApi.call("cancel")
   } catch (cause) {
-    await screenshotApi.call("cancel").catch(() => {})
-    error.value = `长截图失败：${String(cause)}`
+    if (generation === frameGeneration && cause.name !== "AbortError")
+      error.value = `长截图失败：${String(cause)}`
   } finally {
-    longBusy.value = false
+    if (controller === longController) {
+      longController = null
+      longBusy.value = false
+      longAutoScroll.value = false
+    }
   }
+}
+
+function finishLongCapture() {
+  longAutoScroll.value = false
+  // Esc 只请求收尾，当前采集完成后保存已有拼接结果。
+  if (longBusy.value && !longController?.signal.aborted)
+    longController?.abort("finish")
 }
 
 async function output(data) {
@@ -1079,6 +1169,7 @@ async function output(data) {
       if (data.action !== "pin") await screenshotApi.call("pin", { id: newId })
       await screenshotApi.call("pin-action", { id, action: "close" })
     }
+    return true
   } catch (cause) {
     error.value = `操作失败：${String(cause)}`
   } finally {
@@ -1416,6 +1507,13 @@ async function setOpacity(event) {
 }
 
 async function keydown(event) {
+  if (mode === "capture" && longBusy.value) {
+    if (event.key === "Escape") {
+      event.preventDefault()
+      finishLongCapture()
+    }
+    return
+  }
   if (
     event.isComposing ||
     event.target.isContentEditable ||
@@ -1462,7 +1560,13 @@ async function keydown(event) {
       return
     }
   }
-  if (mode !== "capture" || !frame.value || !pointer.value) return
+  if (
+    mode !== "capture" ||
+    !frame.value ||
+    !pointer.value ||
+    longCaptureRequested.value
+  )
+    return
   // 松开框选后仍可切换和复制颜色；输入文字和带修饰键的编辑操作不受影响。
   if (
     event.key === "Shift" &&
@@ -1503,6 +1607,11 @@ function checkViewport() {
 }
 
 function resetCapture() {
+  longController?.abort("cancel")
+  longController = null
+  longBusy.value = false
+  longAutoScroll.value = false
+  longCaptureRequested.value = false
   frameGeneration += 1
   // 仅清空像素，保留画布缓冲区，下一次唤出不再反复缩小和扩容。
   if (captureBackground.value) {
@@ -1533,8 +1642,12 @@ function resetCapture() {
 async function loadFrame() {
   resetCapture()
   const generation = frameGeneration
-  const bytes = await screenshotApi.frame()
+  const [bytes, captureMode] = await Promise.all([
+    screenshotApi.frame(),
+    screenshotApi.call("capture-mode")
+  ])
   if (!bytes.byteLength || generation !== frameGeneration) return
+  longCaptureRequested.value = Boolean(captureMode?.long)
   // 帧头和像素来自同一响应，避免连续截图时坐标与图像错配。
   const header = new DataView(bytes, 0, 20)
   const current = {
@@ -1576,7 +1689,6 @@ async function loadFrame() {
 }
 
 onMounted(async () => {
-  if (longCaptureRequested.value) sessionStorage.removeItem("screenshot-long-request")
   window.addEventListener("keydown", keydown)
   window.addEventListener("resize", checkViewport)
   try {
@@ -1587,10 +1699,10 @@ onMounted(async () => {
         })
       })
       unlistenReset = await subscribeReady("screenshot:reset", resetCapture)
-      const captureMode = await screenshotApi.call("capture-mode")
-      longCaptureRequested.value =
-        longCaptureRequested.value || Boolean(captureMode?.long)
-      sessionStorage.removeItem("screenshot-long-request")
+      unlistenLongFinish = await subscribeReady(
+        "screenshot:long-finish",
+        finishLongCapture
+      )
       await loadFrame()
       if (!frame.value) await screenshotApi.call("capture-window-ready")
     } else {
@@ -1631,6 +1743,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  longController?.abort("cancel")
   if (smartQueryTimer) window.clearTimeout(smartQueryTimer)
   smartQueryTimer = 0
   cancelPinPaint?.()
@@ -1643,6 +1756,7 @@ onBeforeUnmount(() => {
   unlisten?.()
   unlistenFrame?.()
   unlistenReset?.()
+  unlistenLongFinish?.()
   if (resizeFrame) cancelAnimationFrame(resizeFrame)
   if (menuExpanded.value)
     screenshotApi
@@ -1674,13 +1788,13 @@ onBeforeUnmount(() => {
       box-shadow: none;
       outline: 3px solid #22c55e;
       pointer-events: none;
-    }
-    .long-screenshot-progress {
-      top: -34px;
-      right: 0;
-      border-color: #22c55e;
-      background: #14532de8;
-      color: #dcfce7;
+      .long-screenshot-progress {
+        top: 4px;
+        right: 4px;
+        border-color: #22c55e;
+        background: #14532de8;
+        color: #dcfce7;
+      }
     }
   }
   .capture-instructions {
@@ -1695,24 +1809,84 @@ onBeforeUnmount(() => {
     font-size: var(--font-size-sm);
     white-space: nowrap;
   }
-  .capture-auto-region {
+  .long-screenshot-preview {
     position: absolute;
-    z-index: 2;
+    z-index: 8;
+    display: flex;
+    flex-direction: column;
     box-sizing: border-box;
-    border: 2px solid #fbbf24;
-    background: #fbbf2414;
-    pointer-events: none;
-    span {
-      position: absolute;
-      top: 2px;
-      left: 2px;
-      padding: 2px 6px;
+    width: 196px;
+    padding: 10px;
+    gap: 8px;
+    border: 1px solid #334155;
+    border-radius: 9px;
+    background: #111827f5;
+    color: #e2e8f0;
+    box-shadow: 0 6px 24px #0005;
+    font-size: 12px;
+    pointer-events: auto;
+    .long-preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      .long-preview-title {
+        color: #f8fafc;
+      }
+      .long-preview-count {
+        color: #86efac;
+      }
+    }
+    .long-preview-image {
+      display: flex;
+      justify-content: center;
+      overflow: hidden;
       border-radius: 3px;
-      background: #292524e8;
-      color: #fef3c7;
-      font-size: 11px;
-      line-height: 16px;
-      white-space: nowrap;
+      background: #020617;
+      .long-preview-canvas {
+        display: block;
+        max-width: 100%;
+      }
+    }
+    .long-preview-size {
+      align-self: center;
+      color: #94a3b8;
+    }
+    .long-preview-actions {
+      display: flex;
+      gap: 6px;
+      .long-scroll-button,
+      .long-finish-button {
+        flex: 1;
+        padding: 7px 0;
+        border: 1px solid #475569;
+        border-radius: 5px;
+        background: #1e293b;
+        color: #e2e8f0;
+        font-size: 12px;
+        cursor: pointer;
+        &:hover {
+          background: #334155;
+        }
+      }
+      .long-scroll-button[aria-pressed="true"] {
+        border-color: #7dd3fc;
+        color: #7dd3fc;
+      }
+      .long-finish-button {
+        border-color: #4ade80;
+        background: #166534;
+        color: #f0fdf4;
+        &:hover {
+          background: #15803d;
+        }
+      }
+    }
+    .long-preview-hint {
+      padding-top: 8px;
+      border-top: 1px solid #334155;
+      color: #bbf7d0;
+      text-align: center;
     }
   }
   .capture-selection {

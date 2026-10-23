@@ -1,4 +1,4 @@
-use super::{decode_bytes, failure, ManagerError, ScreenshotService};
+use super::{decode_bytes, failure, CaptureRect, ManagerError, ScreenshotService};
 use image::{DynamicImage, RgbaImage};
 use serde::Serialize;
 use std::{
@@ -425,32 +425,6 @@ pub fn capture(
     Ok(DynamicImage::ImageRgba8(output))
 }
 
-/// 将滚轮事件发送到长截图选区中心。截图覆盖层在调用前会被隐藏，
-/// 因此事件会落到用户正在浏览的窗口，而不是截图窗口。
-pub fn scroll_at(x: i32, y: i32, delta: i32) -> Result<(), ManagerError> {
-    if delta == 0 {
-        return Ok(());
-    }
-    unsafe {
-        let mut previous = POINT { x: 0, y: 0 };
-        let has_previous = GetCursorPos(&mut previous) != 0;
-        if SetCursorPos(x, y) == 0 {
-            return Err(failure("无法定位长截图滚轮位置"));
-        }
-        // 覆盖层隐藏后仍可能保留焦点，先激活鼠标所在窗口，保证滚轮落到原页面。
-        let target = WindowFromPoint(POINT { x, y });
-        if !target.is_null() {
-            let root = GetAncestor(target, GA_ROOT);
-            let _ = SetForegroundWindow(if root.is_null() { target } else { root });
-        }
-        mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0);
-        if has_previous {
-            let _ = SetCursorPos(previous.x, previous.y);
-        }
-    }
-    Ok(())
-}
-
 unsafe fn bitmap_image(
     dc: HDC,
     bitmap: HBITMAP,
@@ -657,12 +631,93 @@ pub fn read_clipboard() -> Result<Vec<DynamicImage>, ManagerError> {
     }
 }
 
+pub(super) fn cursor_in_rect(rect: Option<&CaptureRect>) -> bool {
+    let Some(rect) = rect else { return false; };
+    let mut cursor = POINT { x: 0, y: 0 };
+    (unsafe { GetCursorPos(&mut cursor) != 0 })
+        && i64::from(cursor.x) >= i64::from(rect.x)
+        && i64::from(cursor.y) >= i64::from(rect.y)
+        && i64::from(cursor.x) < i64::from(rect.x) + i64::from(rect.width)
+        && i64::from(cursor.y) < i64::from(rect.y) + i64::from(rect.height)
+}
+
+pub fn scroll_at(x: i32, y: i32, delta: i32) -> Result<(), ManagerError> {
+    if delta == 0 { return Ok(()); }
+    unsafe {
+        let mut previous = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut previous) == 0 {
+            return Err(failure("无法读取长截图滚轮位置"));
+        }
+        // 覆盖层已穿透，激活选区下的应用，保证滚轮落到正在截图的页面。
+        let target = WindowFromPoint(POINT { x, y });
+        if !target.is_null() {
+            let root = GetAncestor(target, GA_ROOT);
+            let _ = SetForegroundWindow(if root.is_null() { target } else { root });
+        }
+        let left = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        let top = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        let width = GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1);
+        let height = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1);
+        let move_to = |px: i32, py: i32| INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 { mi: MOUSEINPUT {
+                // 对准像素中心，避免每次恢复鼠标时向左上方偏移一个像素。
+                dx: (((i64::from(px) - i64::from(left)) * 65536 + 32768) / i64::from(width)) as i32,
+                dy: (((i64::from(py) - i64::from(top)) * 65536 + 32768) / i64::from(height)) as i32,
+                dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                ..zeroed()
+            } },
+        };
+        // 移入选区、滚动并恢复鼠标放在同一批输入中，用户仍可在预览区点击暂停或完成。
+        let inputs = [move_to(x, y), INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 { mi: MOUSEINPUT {
+                mouseData: delta as u32,
+                dwFlags: MOUSEEVENTF_WHEEL,
+                ..zeroed()
+            } },
+        }, move_to(previous.x, previous.y)];
+        if SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) != inputs.len() as u32 {
+            let _ = SetCursorPos(previous.x, previous.y);
+            return Err(failure("无法发送长截图自动滚动输入"));
+        }
+    }
+    Ok(())
+}
+
 pub fn start_hotkeys(app: AppHandle) {
     std::thread::spawn(move || {
         let mut previous = String::new();
         let mut registered = Vec::new();
+        let mut escape_pressed = false;
         loop {
             let service = app.state::<ScreenshotService>();
+            // 鼠标穿透后焦点可能在被截应用，仍要让 Esc 完成长截图；不依赖全局快捷键开关。
+            let escape_down = unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } < 0;
+            if escape_down && !escape_pressed
+                && service.long_capturing.swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                if let Some(window) = app.get_webview_window("screenshot-capture") {
+                    let _ = window.emit("screenshot:long-finish", ());
+                }
+            }
+            escape_pressed = escape_down;
+            if service.long_capturing.load(std::sync::atomic::Ordering::SeqCst) {
+                let preview = service.long_preview_rect.lock().unwrap();
+                // 等锁期间可能已经结束截图，不能再把普通截图窗口改回穿透。
+                if let Some(window) = app.get_webview_window("screenshot-capture")
+                    .filter(|_| service.long_capturing.load(std::sync::atomic::Ordering::SeqCst))
+                {
+                    if let Ok(hwnd) = window.hwnd() {
+                        let transparent = unsafe { GetWindowLongPtrW(hwnd.0 as _, GWL_EXSTYLE) } as u32 & WS_EX_TRANSPARENT != 0;
+                        let interactive = cursor_in_rect(preview.as_ref());
+                        // 只有预览区接收点击，其他位置始终交给底层页面手动滚动。
+                        if transparent == interactive {
+                            let _ = window.set_ignore_cursor_events(!interactive);
+                        }
+                    }
+                }
+            }
             let settings = service.settings();
             let enabled = settings.hotkeys && !service.hotkeys_paused.load(std::sync::atomic::Ordering::SeqCst);
             let bindings = settings.shortcut_bindings();

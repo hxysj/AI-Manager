@@ -161,6 +161,14 @@ struct Session {
     entries: Vec<Entry>,
 }
 
+#[derive(Clone, Copy, Deserialize)]
+struct CaptureRect {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
 pub struct ScreenshotService {
     root: PathBuf,
     _instance_lock: std::fs::File,
@@ -168,6 +176,8 @@ pub struct ScreenshotService {
     frame: Mutex<Option<Vec<u8>>>,
     capturing: AtomicBool,
     long_capture_requested: AtomicBool,
+    long_capturing: AtomicBool,
+    long_preview_rect: Mutex<Option<CaptureRect>>,
     // 长截图期间暂时隐藏已有贴图，避免贴图窗口被 GDI 一并截进长图。
     long_hidden_pins: Mutex<Vec<String>>,
     hotkeys_paused: AtomicBool,
@@ -229,6 +239,8 @@ impl ScreenshotService {
             frame: Mutex::new(None),
             capturing: AtomicBool::new(false),
             long_capture_requested: AtomicBool::new(false),
+            long_capturing: AtomicBool::new(false),
+            long_preview_rect: Mutex::new(None),
             long_hidden_pins: Mutex::new(Vec::new()),
             hotkeys_paused: AtomicBool::new(false),
             view_save_pending: AtomicBool::new(false),
@@ -511,7 +523,7 @@ pub async fn dispatch(
         }
         "capture-mode" => {
             Ok(json!({
-                "long": service.long_capture_requested.swap(false, Ordering::SeqCst)
+                "long": service.long_capture_requested.load(Ordering::SeqCst)
             }))
         }
         "long-start" => {
@@ -522,6 +534,9 @@ pub async fn dispatch(
             // 进度提示；仅让鼠标事件穿透到下方页面。已有贴图窗口必须
             // 暂时隐藏，否则 GDI 会把它们当成页面内容一起截入长图。
             window.set_ignore_cursor_events(true).map_err(failure)?;
+            window.set_focusable(false).map_err(failure)?;
+            *service.long_preview_rect.lock().unwrap() = None;
+            service.long_capturing.store(true, Ordering::SeqCst);
             let mut hidden = service.long_hidden_pins.lock().unwrap();
             hidden.clear();
             for (label, pin) in app.webview_windows() {
@@ -535,14 +550,41 @@ pub async fn dispatch(
             }
             Ok(json!(true))
         }
+        "long-preview" => {
+            let rect: CaptureRect = serde_json::from_value(payload).map_err(failure)?;
+            if service.long_capturing.load(Ordering::SeqCst) {
+                *service.long_preview_rect.lock().unwrap() = Some(rect);
+            }
+            Ok(json!(true))
+        }
         "long-scroll" => {
-            let x = payload["x"].as_i64().ok_or_else(|| failure("缺少滚轮横坐标"))? as i32;
-            let y = payload["y"].as_i64().ok_or_else(|| failure("缺少滚轮纵坐标"))? as i32;
-            let delta = payload["delta"].as_i64().unwrap_or(-640).clamp(-12000, 12000) as i32;
-            #[cfg(windows)]
-            windows::scroll_at(x, y, delta)?;
-            #[cfg(not(windows))]
-            return Err(failure("长截图目前仅支持 Windows"));
+            #[cfg(windows)] {
+                // 与鼠标穿透检测共用锁，注入滚轮期间不能重新拦截底层应用的鼠标事件。
+                let preview = service.long_preview_rect.lock().unwrap();
+                if service.long_capturing.load(Ordering::SeqCst) {
+                    let x = payload["x"].as_i64().ok_or_else(|| failure("缺少滚动横坐标"))? as i32;
+                    let y = payload["y"].as_i64().ok_or_else(|| failure("缺少滚动纵坐标"))? as i32;
+                    let delta = payload["delta"].as_i64().unwrap_or(-120).clamp(-120, 120) as i32;
+                    if let Some(window) = app.get_webview_window("screenshot-capture") {
+                        let interactive = windows::cursor_in_rect(preview.as_ref());
+                        window.set_ignore_cursor_events(true).map_err(failure)?;
+                        let result = windows::scroll_at(x, y, delta);
+                        window.set_ignore_cursor_events(!interactive).map_err(failure)?;
+                        result?;
+                    }
+                }
+            }
+            Ok(json!(true))
+        }
+        "long-end" => {
+            end_long_capture(&app)?;
+            if service.capturing.load(Ordering::SeqCst) {
+                if let Some(window) = app.get_webview_window("screenshot-capture") {
+                    window.set_ignore_cursor_events(false).map_err(failure)?;
+                    window.set_focusable(true).map_err(failure)?;
+                    window.set_focus().map_err(failure)?;
+                }
+            }
             Ok(json!(true))
         }
         "ready" => {
@@ -1262,12 +1304,23 @@ pub async fn begin_capture(app: &AppHandle, auto_copy: bool, long_capture: bool)
 }
 
 fn cancel_capture(app: &AppHandle) -> Result<(), ManagerError> {
+    end_long_capture(app)?;
     if let Some(window) = app.get_webview_window("screenshot-capture") {
         window.set_focusable(false).map_err(failure)?;
         window.set_ignore_cursor_events(true).map_err(failure)?;
         window.emit("screenshot:reset", ()).map_err(failure)?;
     }
     let service = app.state::<ScreenshotService>();
+    *service.frame.lock().unwrap() = None;
+    service.capturing.store(false, Ordering::SeqCst);
+    service.long_capture_requested.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+fn end_long_capture(app: &AppHandle) -> Result<(), ManagerError> {
+    let service = app.state::<ScreenshotService>();
+    service.long_capturing.store(false, Ordering::SeqCst);
+    *service.long_preview_rect.lock().unwrap() = None;
     let hidden = std::mem::take(&mut *service.long_hidden_pins.lock().unwrap());
     if !hidden.is_empty() {
         let session = service.session.lock().unwrap().clone();
@@ -1284,9 +1337,6 @@ fn cancel_capture(app: &AppHandle) -> Result<(), ManagerError> {
             }
         }
     }
-    *service.frame.lock().unwrap() = None;
-    service.capturing.store(false, Ordering::SeqCst);
-    service.long_capture_requested.store(false, Ordering::SeqCst);
     Ok(())
 }
 
@@ -1425,6 +1475,7 @@ pub fn window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent) {
         if matches!(event, tauri::WindowEvent::Destroyed) {
             service.capturing.store(false, Ordering::SeqCst);
             *service.frame.lock().unwrap() = None;
+            let _ = end_long_capture(app);
         }
         return;
     }

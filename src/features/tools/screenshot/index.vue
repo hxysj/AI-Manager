@@ -16,7 +16,7 @@
         class="screenshot-button"
         type="button"
         :disabled="busy || !ready"
-        title="先框选区域，再自动滚动拼接成长图"
+        title="先框选区域，再手动向下滚动拼接，按 Esc 完成"
         @click="startLongCapture"
       >
         <ScanLine :size="17" />长截图
