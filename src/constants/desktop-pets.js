@@ -55,29 +55,6 @@ const actionOrder = [
   "steal"
 ]
 
-// 这批猴子精灵图的历史文件名与实际动作内容有几处错位。这里按画面内容
-// 绑定语义动作，保留原始文件名作为素材来源，避免详情页把电脑动作标成开心。
-const animationSourceByPet = {
-  monkey_animations: {
-    idle: "idle",
-    greeting: "greeting",
-    sleep: "work_laptop",
-    wake_up: "work",
-    salute: "salute",
-    walk: "sleep",
-    run: "run",
-    work: "exercise",
-    peek: "peek",
-    jump: "walk",
-    read_book: "read_book",
-    use_phone: "use_phone",
-    think: "think",
-    work_laptop: "jump",
-    exercise: "wake_up",
-    steal: "steal"
-  }
-}
-
 const petMeta = {
   monkey_animations: {
     name: "小猴子",
@@ -93,24 +70,15 @@ export const desktopPets = Object.entries(manifests)
     const directory = path.slice(0, path.lastIndexOf("/"))
     const id = directory.split("/").at(-1)
     const config = spriteConfigs[`${directory}/sprite_config.json`]
-    const semanticSources = animationSourceByPet[id] || {}
-    const semanticActions = Object.fromEntries(
-      Object.entries(semanticSources).map(([action, source]) => [
-        source,
-        action
-      ])
-    )
     const animations = Object.entries(manifest)
-      .map(([sourceAction, item]) => {
-        const action = semanticActions[sourceAction] || sourceAction
+      .map(([action, item]) => {
         // 裁切坐标使用素材配置，播放时保持同一动作的画布尺寸稳定。
-        const sprite = config?.actions?.[sourceAction]
+        const sprite = config?.actions?.[action]
         if (!sprite) return null
         // 每个动作独立配置帧间隔，轮换周期也随该动作的速度计算。
         const frameDuration = sprite.frameDurationMs
         return {
           id: action,
-          sourceAction,
           name: animationNames[action] || action.replace(/[_-]/g, " "),
           url: images[`${directory}/${item.file}`],
           sheetWidth: sprite.sheetWidth,

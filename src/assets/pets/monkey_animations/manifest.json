@@ -1,98 +1,146 @@
 {
   "idle": {
     "file": "idle.webp",
-    "size": [1122, 787],
+    "size": [
+      1122,
+      787
+    ],
     "frames_layout": "9x5 sprite sheet (45 frames)",
     "transparent_background": true
   },
   "greeting": {
     "file": "greeting.webp",
-    "size": [1122, 634],
+    "size": [
+      1122,
+      634
+    ],
     "frames_layout": "9x4 sprite sheet (36 frames)",
     "transparent_background": true
   },
   "sleep": {
     "file": "sleep.webp",
-    "size": [1119, 725],
+    "size": [
+      1122,
+      610
+    ],
     "frames_layout": "9x5 sprite sheet (45 frames)",
     "transparent_background": true
   },
   "wake_up": {
     "file": "wake_up.webp",
-    "size": [1120, 664],
+    "size": [
+      1119,
+      738
+    ],
     "frames_layout": "9x4 sprite sheet (36 frames)",
     "transparent_background": true
   },
   "salute": {
     "file": "salute.webp",
-    "size": [1122, 751],
+    "size": [
+      1122,
+      751
+    ],
     "frames_layout": "9x5 sprite sheet (45 frames)",
-    "transparent_background": true
-  },
-  "think": {
-    "file": "think.webp",
-    "size": [1122, 648],
-    "frames_layout": "9x4 sprite sheet (36 frames)",
     "transparent_background": true
   },
   "walk": {
     "file": "walk.webp",
-    "size": [1122, 644],
-    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "size": [
+      1119,
+      725
+    ],
+    "frames_layout": "9x5 sprite sheet (45 frames)",
     "transparent_background": true
   },
   "run": {
     "file": "run.webp",
-    "size": [1122, 749],
+    "size": [
+      1122,
+      749
+    ],
     "frames_layout": "9x4 sprite sheet (36 frames)",
     "transparent_background": true
   },
-  "steal": {
-    "file": "steal.webp",
-    "size": [1122, 736],
-    "frames_layout": "9x5 sprite sheet (45 frames)",
+  "work": {
+    "file": "work.webp",
+    "size": [
+      1117,
+      674
+    ],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
     "transparent_background": true
   },
   "peek": {
     "file": "peek.webp",
-    "size": [1774, 887],
+    "size": [
+      1774,
+      887
+    ],
     "frames_layout": "10x4 sprite sheet (40 frames)",
+    "transparent_background": true
+  },
+  "jump": {
+    "file": "jump.webp",
+    "size": [
+      1122,
+      644
+    ],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
     "transparent_background": true
   },
   "read_book": {
     "file": "read_book.webp",
-    "size": [1122, 748],
+    "size": [
+      1122,
+      748
+    ],
     "frames_layout": "9x5 sprite sheet (45 frames)",
     "transparent_background": true
   },
   "use_phone": {
     "file": "use_phone.webp",
-    "size": [1122, 643],
+    "size": [
+      1122,
+      643
+    ],
+    "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
+  },
+  "think": {
+    "file": "think.webp",
+    "size": [
+      1122,
+      648
+    ],
     "frames_layout": "9x4 sprite sheet (36 frames)",
     "transparent_background": true
   },
   "work_laptop": {
     "file": "work_laptop.webp",
-    "size": [1122, 610],
-    "frames_layout": "9x5 sprite sheet (45 frames)",
-    "transparent_background": true
-  },
-  "work": {
-    "file": "work.webp",
-    "size": [1119, 738],
-    "frames_layout": "9x4 sprite sheet (36 frames)",
-    "transparent_background": true
-  },
-  "jump": {
-    "file": "jump.webp",
-    "size": [1117, 733],
+    "size": [
+      1117,
+      733
+    ],
     "frames_layout": "9x5 sprite sheet (45 frames)",
     "transparent_background": true
   },
   "exercise": {
     "file": "exercise.webp",
-    "size": [1117, 674],
+    "size": [
+      1120,
+      664
+    ],
     "frames_layout": "9x4 sprite sheet (36 frames)",
+    "transparent_background": true
+  },
+  "steal": {
+    "file": "steal.webp",
+    "size": [
+      1122,
+      736
+    ],
+    "frames_layout": "9x5 sprite sheet (45 frames)",
     "transparent_background": true
   }
 }

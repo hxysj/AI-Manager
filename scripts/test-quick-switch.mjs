@@ -917,7 +917,7 @@ for (const edge of ["left", "right", "top", "bottom"]) {
   assert.equal(edgePanel.state.petAction, "walk")
   assert.ok(
     findNodes(edgePanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
-      "/walk.webp"
+      "/sleep.webp"
     )
   )
   edgePanel.state.stopDrag()
@@ -1022,6 +1022,33 @@ handlers.moveQuickSwitchBy = () => true
 const { desktopPets, getDesktopPet } = modules.get("@/constants/desktop-pets")
 const spriteConfig = JSON.parse(
   readFileSync("src/assets/pets/monkey_animations/sprite_config.json", "utf8")
+)
+const expectedSources = {
+  idle: "idle",
+  greeting: "greeting",
+  sleep: "work_laptop",
+  wake_up: "work",
+  salute: "salute",
+  walk: "sleep",
+  run: "run",
+  work: "exercise",
+  peek: "peek",
+  jump: "walk",
+  read_book: "read_book",
+  use_phone: "use_phone",
+  think: "think",
+  work_laptop: "jump",
+  exercise: "wake_up",
+  steal: "steal"
+}
+assert.deepEqual(
+  Object.fromEntries(
+    desktopPets[0].animations.map((animation) => [
+      animation.id,
+      animation.sourceAction
+    ])
+  ),
+  expectedSources
 )
 assert.equal(getDesktopPet("").id, desktopPets[0].id)
 assert.ok(
