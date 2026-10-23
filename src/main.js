@@ -10,12 +10,19 @@ if (new URLSearchParams(location.search).get("panel") === "screenshot") {
       createApp(ScreenshotWindow).mount("#app")
     }
   )
-} else if (new URLSearchParams(location.search).get("panel") === "translation") {
+} else if (
+  new URLSearchParams(location.search).get("panel") === "translation"
+) {
+  document.documentElement.style.background = "transparent"
+  document.body.style.background = "transparent"
   // 桌面翻译复用现有结果组件，不加载主面板、编辑器或设置页。
-  document.documentElement.dataset.theme = window.localStorage.getItem("ai-manager-theme") || "light"
-  import("./components/SelectionTranslator.vue").then(({ default: SelectionTranslator }) => {
-    createApp(SelectionTranslator, { desktop: true }).mount("#app")
-  })
+  document.documentElement.dataset.theme =
+    window.localStorage.getItem("ai-manager-theme") || "light"
+  import("./components/SelectionTranslator.vue").then(
+    ({ default: SelectionTranslator }) => {
+      createApp(SelectionTranslator, { desktop: true }).mount("#app")
+    }
+  )
 } else {
   Promise.all([
     import("./App.vue"),

@@ -404,51 +404,65 @@
       </section>
 
       <section v-else-if="activeTab === 'agents'" class="settings-agent-panel">
-        <template v-if="!activeAgent">
-          <div class="settings-view__panel-header">
-            <div>
-              <h2>功能扩展</h2>
-              <span>管理应用的扩展功能，点击查看配置和使用记录。</span>
-            </div>
+        <div class="settings-view__panel-header">
+          <div>
+            <h2>功能扩展</h2>
+            <span>管理应用的扩展功能，点击查看配置和使用记录。</span>
           </div>
-          <div class="settings-agent-list">
-            <article
-              class="settings-agent-card"
-              tabindex="0"
-              @click="activeAgent = 'translation'"
-              @keydown.enter="activeAgent = 'translation'"
-            >
-              <div class="settings-agent-icon"><Languages :size="20" /></div>
-              <div class="settings-agent-copy">
-                <span data-emphasis>划词翻译</span>
-                <span>选中文本后右键翻译，支持查看翻译历史和消耗记录。</span>
-              </div>
+        </div>
+        <div class="settings-agent-list">
+          <article class="settings-agent-card">
+            <div class="settings-agent-icon"><Languages :size="24" /></div>
+            <div class="settings-agent-copy">
+              <span data-emphasis>划词翻译</span>
+              <span>选中文本后右键翻译，支持查看翻译历史和消耗记录。</span>
+            </div>
+            <div class="settings-agent-actions">
               <button
-                class="settings-agent-toggle"
+                class="settings-agent-switch"
                 :class="{
-                  'settings-agent-toggle-active':
+                  'settings-agent-switch--active':
                     draft.agents.translation.enabled
                 }"
                 type="button"
+                role="switch"
+                :aria-checked="draft.agents.translation.enabled"
                 @click.stop="
                   draft.agents.translation.enabled =
                     !draft.agents.translation.enabled
                 "
               >
-                {{ draft.agents.translation.enabled ? "已启用" : "已禁用" }}
+                <span class="settings-agent-switch-thumb"></span>
               </button>
-              <ChevronRight :size="18" />
-            </article>
-          </div>
-        </template>
-        <TranslationAgentSettings
-          v-else
-          v-model="draft.agents.translation"
-          :providers="providers"
-          :codex-accounts="codexAccounts"
-          :runtime-models="runtimeModels"
-          @back="activeAgent = ''"
-        />
+              <span
+                class="settings-agent-badge"
+                :class="{
+                  'settings-agent-badge--active':
+                    draft.agents.translation.enabled
+                }"
+              >
+                {{ draft.agents.translation.enabled ? "已启用" : "已禁用" }}
+              </span>
+              <div class="settings-agent-divider"></div>
+              <button
+                class="settings-agent-btn"
+                type="button"
+                @click="showTranslationHistoryModal = true"
+              >
+                <Clock :size="15" />
+                <span>使用记录</span>
+              </button>
+              <button
+                class="settings-agent-btn"
+                type="button"
+                @click="showTranslationConfigModal = true"
+              >
+                <Settings :size="15" />
+                <span>配置</span>
+              </button>
+            </div>
+          </article>
+        </div>
       </section>
 
       <section
@@ -694,6 +708,18 @@
       @close="activeDesktopPetId = ''"
       @start="startDesktopPet"
     />
+    <TranslationConfigModal
+      v-if="showTranslationConfigModal"
+      v-model="draft.agents.translation"
+      :providers="providers"
+      :codex-accounts="codexAccounts"
+      :runtime-models="runtimeModels"
+      @close="showTranslationConfigModal = false"
+    />
+    <TranslationHistoryModal
+      v-if="showTranslationHistoryModal"
+      @close="showTranslationHistoryModal = false"
+    />
   </section>
 </template>
 
@@ -701,6 +727,7 @@
 import { computed, reactive, ref, watch } from "vue"
 import {
   ChevronRight,
+  Clock,
   Download,
   DownloadCloud,
   Eye,
@@ -722,7 +749,8 @@ import { getToolItems } from "@/features/tools/constant"
 import { desktopPets, getDesktopPet } from "@/constants/desktop-pets"
 import DesktopPetList from "@/features/settings/components/DesktopPetList.vue"
 import DesktopPetDetail from "@/features/settings/components/DesktopPetDetail.vue"
-import TranslationAgentSettings from "./components/TranslationAgentSettings.vue"
+import TranslationConfigModal from "./components/TranslationConfigModal.vue"
+import TranslationHistoryModal from "./components/TranslationHistoryModal.vue"
 
 const props = defineProps({
   appSettings: {
@@ -768,6 +796,8 @@ const emit = defineEmits([
 
 const activeTab = ref("directories")
 const activeAgent = ref("")
+const showTranslationConfigModal = ref(false)
+const showTranslationHistoryModal = ref(false)
 // 浏览详情不改变待启动的桌宠，启动后再由已保存配置同步选择。
 const activeDesktopPetId = ref("")
 const floatingToolItems = computed(() =>
@@ -1780,54 +1810,128 @@ watch(floatingToolItems, (tools) => {
     .settings-agent-list {
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 12px;
+
       .settings-agent-card {
         display: flex;
         align-items: center;
-        gap: 12px;
-        padding: 16px;
+        gap: 16px;
+        padding: 16px 20px;
         border: 1px solid var(--color-line);
-        border-radius: 8px;
+        border-radius: 12px;
         background: var(--color-panel);
-        cursor: pointer;
-        &:hover,
-        &:focus-visible {
-          border-color: var(--color-line-strong);
-          outline: none;
-        }
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+
         .settings-agent-icon {
-          display: grid;
-          width: 38px;
-          height: 38px;
+          display: flex;
+          width: 48px;
+          height: 48px;
           flex: none;
-          place-items: center;
-          border-radius: 8px;
-          background: var(--color-panel-soft);
-          color: var(--color-primary);
+          align-items: center;
+          justify-content: center;
+          border-radius: 12px;
+          background: #eff6ff;
+          color: #2563eb;
         }
+
         .settings-agent-copy {
           display: flex;
           min-width: 0;
           flex: 1;
           flex-direction: column;
           gap: 4px;
+
+          [data-emphasis] {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--color-text);
+          }
+
           span:not([data-emphasis]) {
             color: var(--color-text-muted);
-            font-size: var(--font-size-sm);
+            font-size: 13px;
+            line-height: 1.45;
           }
         }
-        .settings-agent-toggle {
+
+        .settings-agent-actions {
+          display: flex;
+          align-items: center;
+          gap: 10px;
           flex: none;
-          padding: 6px 10px;
-          border: 1px solid var(--color-line);
-          border-radius: 6px;
-          background: var(--color-panel);
-          color: var(--color-text-muted);
-          cursor: pointer;
-          &.settings-agent-toggle-active {
-            border-color: var(--color-primary);
-            background: var(--color-panel-soft);
-            color: var(--color-primary);
+
+          .settings-agent-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            border: none;
+            border-radius: 12px;
+            background: #cbd5e1;
+            cursor: pointer;
+            padding: 2px;
+            transition: background 0.2s ease;
+
+            &--active {
+              background: #2563eb;
+
+              .settings-agent-switch-thumb {
+                transform: translateX(20px);
+              }
+            }
+
+            .settings-agent-switch-thumb {
+              display: block;
+              width: 20px;
+              height: 20px;
+              border-radius: 50%;
+              background: #ffffff;
+              box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+              transition: transform 0.2s ease;
+            }
+          }
+
+          .settings-agent-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 3px 10px;
+            border-radius: 12px;
+            background: #f1f5f9;
+            color: #64748b;
+            font-size: 13px;
+            font-weight: 500;
+            line-height: 1.4;
+
+            &--active {
+              background: #eff6ff;
+              color: #2563eb;
+            }
+          }
+
+          .settings-agent-divider {
+            width: 1px;
+            height: 24px;
+            background: var(--color-line);
+            margin: 0 4px;
+          }
+
+          .settings-agent-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border: 1px solid var(--color-line);
+            border-radius: 8px;
+            background: var(--color-panel);
+            color: var(--color-text);
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.15s ease;
+
+            &:hover {
+              background: var(--color-panel-soft);
+              border-color: var(--color-line-strong);
+            }
           }
         }
       }

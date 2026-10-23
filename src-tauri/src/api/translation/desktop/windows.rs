@@ -12,10 +12,43 @@ use windows_sys::Win32::{
     Foundation::POINT,
     System::{DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard}, Memory::{GlobalLock, GlobalSize, GlobalUnlock}},
     UI::{
-        Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT},
+        Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, MOD_WIN},
         WindowsAndMessaging::{GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId, PeekMessageW, MSG, PM_REMOVE, WM_HOTKEY},
     },
 };
+
+fn parse_shortcut(value: &str) -> Result<(u32, u32), String> {
+    let mut modifiers = 0;
+    let mut key = None;
+    for part in value.split('+') {
+        let part = part.trim().to_ascii_uppercase();
+        let modifier = match part.as_str() {
+            "ALT" => MOD_ALT,
+            "CTRL" | "CONTROL" => MOD_CONTROL,
+            "SHIFT" => MOD_SHIFT,
+            "WIN" | "META" => MOD_WIN,
+            _ => 0,
+        };
+        if modifier != 0 {
+            if modifiers & modifier != 0 { return Err("快捷键包含重复修饰键".into()); }
+            modifiers |= modifier;
+            continue;
+        }
+        let code = match part.as_str() {
+            "PRINTSCREEN" => 0x2c,
+            "SPACE" => 0x20,
+            val if val.len() == 1 && val.as_bytes()[0].is_ascii_alphanumeric() => u32::from(val.as_bytes()[0]),
+            val if val.starts_with('F') => val[1..].parse::<u32>().ok().filter(|number| (1..=24).contains(number)).map(|number| 0x70 + number - 1).ok_or_else(|| "不支持的功能键".to_string())?,
+            _ => return Err("快捷键请使用字母、数字、F1–F24、PrintScreen 或 Space".into()),
+        };
+        if key.replace(code).is_some() { return Err("每组快捷键只能包含一个主键".into()); }
+    }
+    let key = key.ok_or_else(|| "快捷键缺少主键".to_string())?;
+    if modifiers == 0 && !(0x70..=0x87).contains(&key) && key != 0x2c {
+        return Err("字母、数字和空格快捷键至少需要一个修饰键".into());
+    }
+    Ok((modifiers, key))
+}
 
 pub(super) fn start(app: AppHandle, service: DesktopTranslator) -> mpsc::SyncSender<()> {
     let (wake, changes) = mpsc::sync_channel(1);
@@ -25,21 +58,39 @@ pub(super) fn start(app: AppHandle, service: DesktopTranslator) -> mpsc::SyncSen
         let mut automation: Option<IUIAutomation> = None;
         let mut enabled = false;
         let mut registered = Vec::new();
+        let mut current_signature = String::new();
         loop {
-            let next = service.inner.lock().unwrap().enabled;
-            if next != enabled {
+            let (next_enabled, shortcut, clipboard_shortcut) = {
+                let state = service.inner.lock().unwrap();
+                (state.enabled, state.shortcut.clone(), state.clipboard_shortcut.clone())
+            };
+            let next_signature = if next_enabled {
+                format!("1:{shortcut}:{clipboard_shortcut}")
+            } else {
+                "0".to_string()
+            };
+            if next_signature != current_signature {
                 for id in registered.drain(..) { unsafe { UnregisterHotKey(null_mut(), id); } }
-                enabled = next;
+                current_signature = next_signature;
+                enabled = next_enabled;
                 let mut errors = Vec::new();
                 if enabled {
-                    for (id, modifiers, label) in [
-                        (0x4d54, MOD_CONTROL | MOD_ALT, "Ctrl+Alt+T"),
-                        (0x4d55, MOD_CONTROL | MOD_ALT | MOD_SHIFT, "Ctrl+Alt+Shift+T"),
-                    ] {
-                        if unsafe { RegisterHotKey(null_mut(), id, modifiers | MOD_NOREPEAT, b'T' as u32) } != 0 {
-                            registered.push(id);
-                        } else {
-                            errors.push(format!("{label} 注册失败，快捷键可能已被其他应用占用"));
+                    let shortcuts = [
+                        (0x4d54, shortcut.as_str(), "划词翻译"),
+                        (0x4d55, clipboard_shortcut.as_str(), "剪贴板翻译"),
+                    ];
+                    for (id, sc, label) in shortcuts {
+                        match parse_shortcut(sc) {
+                            Ok((modifiers, code)) => {
+                                if unsafe { RegisterHotKey(null_mut(), id, modifiers | MOD_NOREPEAT, code) } != 0 {
+                                    registered.push(id);
+                                } else {
+                                    errors.push(format!("{label}快捷键 {sc} 注册失败，可能已被其他应用占用"));
+                                }
+                            }
+                            Err(err) => {
+                                errors.push(format!("{label}快捷键格式错误：{err}"));
+                            }
                         }
                     }
                 } else {
@@ -85,7 +136,9 @@ pub(super) fn start(app: AppHandle, service: DesktopTranslator) -> mpsc::SyncSen
                     automation.as_ref().ok_or_else(|| "无法初始化 Windows 取词接口".to_string())
                         .and_then(selection_text)
                 } else {
-                    Err("Windows 取词接口初始化失败，请复制文字后按 Ctrl+Alt+Shift+T".into())
+                    let csc = service.inner.lock().unwrap().clipboard_shortcut.clone();
+                    let csc = if csc.is_empty() { "Ctrl+Alt+Shift+T".to_string() } else { csc };
+                    Err(format!("Windows 取词接口初始化失败，请复制文字后按 {csc}"))
                 };
                 show_selection(&app, text, cursor.x, cursor.y);
             }

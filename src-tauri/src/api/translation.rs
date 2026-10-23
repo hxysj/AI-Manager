@@ -263,6 +263,7 @@ mod tests {
             let settings = TranslationAgentSettings {
                 enabled: true, target_id: "translation-test".to_string(),
                 model: "custom-translation-model".to_string(), target_language: "简体中文".to_string(),
+                shortcut: "Ctrl+Alt+T".to_string(), clipboard_shortcut: "Ctrl+Alt+Shift+T".to_string(),
             };
             // 使用实际入口、独立工作目录和 Windows 扩展路径，覆盖本次启动失败。
             let result = translate_text(&paths, &root, &resources.canonicalize().unwrap(), &json!([]), &settings, json!({"text": "Hello, world!"})).await;

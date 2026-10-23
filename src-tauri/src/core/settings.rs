@@ -49,6 +49,18 @@ pub struct TranslationAgentSettings {
     pub target_id: String,
     pub model: String,
     pub target_language: String,
+    #[serde(default = "default_translation_shortcut")]
+    pub shortcut: String,
+    #[serde(default = "default_translation_clipboard_shortcut")]
+    pub clipboard_shortcut: String,
+}
+
+fn default_translation_shortcut() -> String {
+    "Ctrl+Alt+T".to_string()
+}
+
+fn default_translation_clipboard_shortcut() -> String {
+    "Ctrl+Alt+Shift+T".to_string()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -165,6 +177,8 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
                 target_id: string_value(translation.get("targetId")),
                 model: string_value(translation.get("model")),
                 target_language: non_empty_string(translation.get("targetLanguage"), "简体中文"),
+                shortcut: non_empty_string(translation.get("shortcut"), "Ctrl+Alt+T"),
+                clipboard_shortcut: non_empty_string(translation.get("clipboardShortcut"), "Ctrl+Alt+Shift+T"),
             },
         },
         restart_required: false,

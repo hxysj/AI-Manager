@@ -17,6 +17,8 @@ pub struct DesktopTranslator {
 struct DesktopState {
     enabled: bool,
     target_language: String,
+    shortcut: String,
+    clipboard_shortcut: String,
     selection: Value,
     hotkey_error: String,
 }
@@ -27,6 +29,16 @@ pub fn sync(app: &AppHandle, settings: &TranslationAgentSettings) {
         let mut state = service.inner.lock().unwrap();
         state.enabled = settings.enabled;
         state.target_language = settings.target_language.clone();
+        state.shortcut = if settings.shortcut.trim().is_empty() {
+            "Ctrl+Alt+T".to_string()
+        } else {
+            settings.shortcut.clone()
+        };
+        state.clipboard_shortcut = if settings.clipboard_shortcut.trim().is_empty() {
+            "Ctrl+Alt+Shift+T".to_string()
+        } else {
+            settings.clipboard_shortcut.clone()
+        };
         if !settings.enabled {
             state.selection = Value::Null;
             state.hotkey_error.clear();
@@ -86,9 +98,9 @@ pub fn dispatch(app: &AppHandle, action: &str) -> Result<Value, ManagerError> {
     }
 }
 
-fn checked_text(text: String) -> Result<String, String> {
+fn checked_text(text: String, shortcut: &str, clipboard_shortcut: &str) -> Result<String, String> {
     if text.trim().is_empty() {
-        return Err("没有选中文字。请先选中文字，再按 Ctrl+Alt+T；也可复制后按 Ctrl+Alt+Shift+T。".into());
+        return Err(format!("没有选中文字。请先选中文字，再按 {shortcut}；也可复制后按 {clipboard_shortcut}。"));
     }
     if text.chars().count() > 30_000 {
         return Err("单次最多翻译 30000 个字符，请缩小选择范围".into());
@@ -98,7 +110,14 @@ fn checked_text(text: String) -> Result<String, String> {
 
 #[cfg(windows)]
 fn show_selection(app: &AppHandle, result: Result<String, String>, x: i32, y: i32) {
-    let mut selection = match result.and_then(checked_text) {
+    let service = app.state::<DesktopTranslator>();
+    let (shortcut, clipboard_shortcut) = {
+        let state = service.inner.lock().unwrap();
+        (state.shortcut.clone(), state.clipboard_shortcut.clone())
+    };
+    let sc = if shortcut.is_empty() { "Ctrl+Alt+T" } else { &shortcut };
+    let csc = if clipboard_shortcut.is_empty() { "Ctrl+Alt+Shift+T" } else { &clipboard_shortcut };
+    let mut selection = match result.and_then(|text| checked_text(text, sc, csc)) {
         Ok(text) => json!({ "text": text, "error": "" }),
         Err(error) => json!({ "text": "", "error": error }),
     };
@@ -125,6 +144,8 @@ fn show_selection(app: &AppHandle, result: Result<String, String>, x: i32, y: i3
                 .decorations(false)
                 .skip_taskbar(true)
                 .always_on_top(true)
+                .transparent(true)
+                .shadow(false)
                 .focused(false)
                 .visible(false)
                 .build()?,
@@ -168,10 +189,10 @@ mod tests {
 
     #[test]
     fn selection_keeps_unicode_and_format_but_rejects_empty_or_oversized_text() {
-        assert_eq!(checked_text("  第一行\nhello 😀".into()).unwrap(), "  第一行\nhello 😀");
-        assert!(checked_text(" \n\t".into()).is_err());
-        assert!(checked_text("字".repeat(30_000)).is_ok());
-        assert!(checked_text("😀".repeat(30_001)).is_err());
+        assert_eq!(checked_text("  第一行\nhello 😀".into(), "Ctrl+Alt+T", "Ctrl+Alt+Shift+T").unwrap(), "  第一行\nhello 😀");
+        assert!(checked_text(" \n\t".into(), "Ctrl+Alt+T", "Ctrl+Alt+Shift+T").is_err());
+        assert!(checked_text("字".repeat(30_000), "Ctrl+Alt+T", "Ctrl+Alt+Shift+T").is_ok());
+        assert!(checked_text("😀".repeat(30_001), "Ctrl+Alt+T", "Ctrl+Alt+Shift+T").is_err());
     }
 
     #[test]

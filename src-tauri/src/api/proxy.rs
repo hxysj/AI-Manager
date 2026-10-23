@@ -2384,6 +2384,7 @@ mod tests {
             });
             let settings = crate::core::settings::TranslationAgentSettings {
                 enabled: true, target_id: "provider-active".into(), model: "translation-model".into(), target_language: "简体中文".into(),
+                shortcut: "Ctrl+Alt+T".into(), clipboard_shortcut: "Ctrl+Alt+Shift+T".into(),
             };
             let target = super::prepare_translation_target(&paths, &json!([]), &settings).await.unwrap();
             let response = target.send(json!({
