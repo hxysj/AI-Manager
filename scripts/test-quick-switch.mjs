@@ -856,7 +856,7 @@ petPanel.state.startDrag({
 await tick()
 assert.ok(
   findNodes(petPanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
-    "/walk.webp"
+    "/sleep.webp"
   )
 )
 petPanel.state.stopDrag()
@@ -1135,7 +1135,7 @@ for (const animation of desktopPets[0].animations) {
   assert.equal(frameTimer.ms, animation.frameDuration)
   assert.equal(
     frameTimer.ms,
-    spriteConfig.actions[animation.id].frameDurationMs
+    spriteConfig.actions[animation.sourceAction].frameDurationMs
   )
   const wall = findNodes(preview.root, "desktop-pet-static-frame")
   assert.equal(wall.length, animation.id === "peek" ? 1 : 0)

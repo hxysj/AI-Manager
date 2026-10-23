@@ -1,7 +1,13 @@
 <template>
   <div class="desktop-pet">
+    <img
+      v-if="pet.previewUrl && (!animation || !animation.frames)"
+      :src="pet.previewUrl"
+      :alt="pet.name"
+      class="desktop-pet-preview-image"
+    />
     <svg
-      v-if="animation"
+      v-else-if="animation && animation.frames"
       :key="`${pet.id}:${animation.id}`"
       class="desktop-pet-animation"
       :viewBox="`0 0 ${animation.frameWidth} ${animation.frameHeight}`"
@@ -26,6 +32,7 @@
         />
       </svg>
       <svg
+        v-if="frame"
         class="desktop-pet-frame"
         :x="
           animation.staticFrame
@@ -62,16 +69,17 @@ const props = defineProps({
 const animationIndex = ref(0)
 const frameIndex = ref(0)
 const animation = computed(() => {
+  if (!props.pet.animations || !props.pet.animations.length) return null
   // 管理页固定播放指定动作，悬浮窗继续自动轮换。
   if (props.action)
-    return props.pet.animations.find((item) => item.id === props.action)
+    return props.pet.animations.find((item) => item.id === props.action) || null
   if (props.dragging) {
     const walk = props.pet.animations.find((item) => item.id === "walk")
     if (walk) return walk
   }
-  return props.pet.animations[animationIndex.value]
+  return props.pet.animations[animationIndex.value] || null
 })
-const frame = computed(() => animation.value.frames[frameIndex.value])
+const frame = computed(() => animation.value?.frames?.[frameIndex.value] || null)
 let animationTimer = null
 let frameTimer = null
 let disposed = false
@@ -81,10 +89,11 @@ let imageLoaded = false
 function startAnimation() {
   imageLoaded = true
   clearInterval(frameTimer)
-  if (disposed || props.paused) return
+  if (disposed || props.paused || !animation.value?.frames?.length) return
   frameTimer = setInterval(() => {
+    if (!animation.value?.frames?.length) return
     frameIndex.value = (frameIndex.value + 1) % animation.value.frames.length
-  }, animation.value.frameDuration)
+  }, animation.value.frameDuration || 100)
   scheduleAnimation()
 }
 
@@ -96,10 +105,12 @@ function scheduleAnimation() {
     props.paused ||
     props.action ||
     props.dragging ||
-    props.pet.animations.length < 2
+    !props.pet.animations ||
+    props.pet.animations.length < 2 ||
+    !animation.value
   )
     return
-  const duration = animation.value.duration
+  const duration = animation.value.duration || 1000
   animationTimer = setTimeout(
     rotateAnimation,
     duration * Math.max(2, Math.ceil(4000 / duration))
@@ -108,6 +119,7 @@ function scheduleAnimation() {
 
 function rotateAnimation() {
   if (disposed || props.paused || props.action || props.dragging) return
+  if (!props.pet.animations || !props.pet.animations.length) return
   animationIndex.value =
     (animationIndex.value + 1) % props.pet.animations.length
 }
@@ -159,6 +171,13 @@ onBeforeUnmount(() => {
   height: 100%;
   align-items: center;
   justify-content: center;
+  .desktop-pet-preview-image {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    pointer-events: none;
+    user-select: none;
+  }
   .desktop-pet-animation {
     display: block;
     width: 100%;

@@ -466,52 +466,21 @@
         v-else-if="activeTab === 'desktop'"
         class="settings-view__panel settings-desktop-panel"
       >
-        <div class="settings-view__panel-header">
-          <div>
-            <h2>桌面管理</h2>
-            <span>管理已有桌宠，选择启动，点击卡片查看详情。</span>
-          </div>
-        </div>
-        <div class="settings-desktop-status" role="status">
-          <div class="settings-desktop-copy">
-            <span class="settings-desktop-status-title">
-              <span
-                class="settings-desktop-status-dot"
-                :class="{
-                  'settings-desktop-status-dot-active': runningDesktopPet
-                }"
-              ></span>
-              {{
-                runningDesktopPet
-                  ? `${runningDesktopPet.name} 正在运行`
-                  : appSettings.desktop?.enabled
-                    ? "桌宠已隐藏"
-                    : "桌宠未启动"
-              }}
-            </span>
-            <span class="settings-desktop-description"
-              >启动后自动记住选择，拖动桌宠可移动，悬浮展开工具。</span
-            >
-          </div>
-          <button
-            v-if="appSettings.desktop?.enabled"
-            class="settings-desktop-button settings-desktop-stop"
-            type="button"
-            :disabled="pending"
-            @click="stopDesktopPet"
-          >
-            <Power :size="14" />
-            停止桌宠
-          </button>
-        </div>
-
         <DesktopPetList
           v-model="draft.desktop.petId"
           :pets="desktopPets"
           :running-pet-id="runningDesktopPet?.id || ''"
+          :enabled="
+            Boolean(
+              appSettings.desktop?.enabled &&
+                appSettings.system?.quickSwitchVisible !== false
+            )
+          "
           :pending="pending"
           @detail="activeDesktopPetId = $event"
           @start="startDesktopPet"
+          @stop="stopDesktopPet"
+          @toggle-master="handleToggleMaster"
         />
       </section>
 
@@ -704,6 +673,7 @@
       :pending="pending"
       @close="activeDesktopPetId = ''"
       @start="startDesktopPet"
+      @stop="stopDesktopPet"
     />
     <TranslationConfigModal
       v-if="showTranslationConfigModal"
@@ -944,6 +914,16 @@ function stopDesktopPet() {
   })
 }
 
+function handleToggleMaster(val) {
+  if (props.pending) return
+  if (val) {
+    const petToStart = selectedDesktopPet.value || desktopPets[0]
+    startDesktopPet(petToStart)
+  } else {
+    stopDesktopPet()
+  }
+}
+
 const cliItems = computed(() => {
   return Object.entries(cliNames).map(([id, name]) => {
     const detected = props.cliTargets.find((item) => item.id === id)
@@ -1182,66 +1162,8 @@ watch(floatingToolItems, (tools) => {
 <style scoped lang="less">
 .settings-view {
   .settings-desktop-panel {
-    .settings-desktop-copy {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      .settings-desktop-description {
-        color: var(--color-text-muted);
-        font-size: var(--font-size-sm);
-        line-height: 1.5;
-      }
-    }
-    .settings-desktop-button {
-      display: inline-flex;
-      flex: none;
-      align-items: center;
-      justify-content: center;
-      gap: 6px;
-      min-height: 32px;
-      padding: 0 12px;
-      border: 1px solid var(--color-line);
-      border-radius: 7px;
-      background: var(--color-panel);
-      color: var(--color-text-muted);
-      cursor: pointer;
-      font-size: var(--font-size-sm);
-      &:hover:not(:disabled) {
-        border-color: var(--color-primary);
-        color: var(--color-primary);
-      }
-      &:disabled {
-        opacity: 0.56;
-        cursor: not-allowed;
-      }
-    }
-    .settings-desktop-status {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 14px;
-      border: 1px solid var(--color-line);
-      border-radius: 8px;
-      background: var(--color-panel-soft);
-      .settings-desktop-copy {
-        .settings-desktop-status-title {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          .settings-desktop-status-dot {
-            width: 7px;
-            height: 7px;
-            flex: none;
-            border-radius: 50%;
-            background: var(--color-text-soft);
-            &.settings-desktop-status-dot-active {
-              background: var(--color-success);
-            }
-          }
-        }
-      }
-    }
+    display: flex;
+    flex-direction: column;
   }
   .settings-view__panel {
     .settings-view__system-list {

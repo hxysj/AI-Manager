@@ -2,7 +2,7 @@
   <BaseModal
     class="settings-desktop-detail"
     :title="`${pet.name} · 桌宠详情`"
-    description="预览桌宠的全部动作，也可以直接启动这只桌宠。"
+    description="预览桌宠的全部动作，打开开关即可启动桌面陪伴。"
     role="dialog"
     aria-modal="true"
     :aria-label="`${pet.name}的详情`"
@@ -10,163 +10,301 @@
     @keydown.esc.stop="$emit('close')"
   >
     <div class="settings-desktop-detail-body">
-      <div class="settings-desktop-detail-summary">
-        <div class="settings-desktop-detail-preview">
-          <DesktopPet :pet="pet" />
+      <!-- 顶部桌宠概览卡片 -->
+      <section class="desktop-detail-hero">
+        <div class="desktop-detail-hero-left">
+          <div class="desktop-detail-avatar">
+            <DesktopPet :pet="pet" />
+          </div>
+          <div class="desktop-detail-info">
+            <h3 class="desktop-detail-name">{{ pet.name }}</h3>
+            <span class="desktop-detail-sub">
+              {{ pet.animations?.length || pet.actionCount || 0 }} 个动作 · 自动轮换播放
+            </span>
+            <p class="desktop-detail-desc">
+              {{
+                pet.id === "monkey_animations"
+                  ? "启动后会在桌面上显示小猴子，自动播放动作，陪伴你的日常使用。"
+                  : pet.description ||
+                    `启动后会在桌面上显示${pet.name}，自动播放动作，陪伴你的日常使用。`
+              }}
+            </p>
+          </div>
         </div>
-        <div class="settings-desktop-copy">
-          <h3 class="settings-desktop-detail-name">{{ pet.name }}</h3>
-          <span class="settings-desktop-description">
-            {{ pet.animations.length }} 个动作 · 自动轮换播放
-          </span>
-          <span class="settings-desktop-description">
-            启动后陪伴桌面，下面可以预览每个动作。
-          </span>
+
+        <div class="desktop-detail-hero-right">
           <button
-            class="settings-desktop-button settings-desktop-start"
+            class="desktop-switch"
+            :class="{ 'desktop-switch--active': running }"
             type="button"
-            :disabled="pending || running"
-            @click="$emit('start', pet)"
+            role="switch"
+            :aria-checked="running"
+            :disabled="pending"
+            @click="toggleRunning"
           >
-            <Play :size="14" />
-            {{ running ? "运行中" : "启动这只桌宠" }}
+            <span class="desktop-switch-thumb"></span>
           </button>
+          <span class="desktop-detail-switch-label">
+            {{ running ? "已启用" : "已禁用" }}
+          </span>
         </div>
-      </div>
-      <section class="settings-desktop-animations">
-        <div class="settings-desktop-copy">
-          <span data-emphasis>全部动作</span>
-          <span class="settings-desktop-description"
-            >每个动作独立循环播放。</span
-          >
+      </section>
+
+      <!-- 动作预览部分 -->
+      <section class="desktop-detail-actions-section">
+        <div class="desktop-detail-actions-header">
+          <h4 class="desktop-detail-actions-title">动作预览</h4>
+          <span class="desktop-detail-actions-desc">
+            包含以下 {{ pet.animations?.length || pet.actionCount || 0 }} 个动作，会自动随机播放。
+          </span>
         </div>
-        <div class="settings-desktop-animation-list">
+
+        <!-- 5列网格排版，对齐 Image 10 设计 -->
+        <div v-if="pet.animations?.length" class="desktop-detail-actions-grid">
           <article
             v-for="animation in pet.animations"
             :key="`${pet.id}:${animation.id}`"
-            class="settings-desktop-animation"
+            class="desktop-action-card"
           >
-            <div class="settings-desktop-animation-preview">
+            <div class="desktop-action-preview">
               <DesktopPet :pet="pet" :action="animation.id" />
             </div>
-            <span class="settings-desktop-animation-name">{{
-              animation.name
-            }}</span>
+            <span class="desktop-action-name">{{ animation.name }}</span>
           </article>
         </div>
+        <p v-else class="desktop-detail-empty-hint">暂无可用动作数据。</p>
       </section>
     </div>
   </BaseModal>
 </template>
 
 <script setup>
-import { Play } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import DesktopPet from "@/components/DesktopPet.vue"
 
-// 详情只展示传入桌宠，关闭与启动均通过事件交给设置页。
-defineProps({
+const props = defineProps({
   pet: { type: Object, required: true },
   running: { type: Boolean, default: false },
   pending: { type: Boolean, default: false }
 })
 
-defineEmits(["close", "start"])
+const emit = defineEmits(["close", "start", "stop"])
+
+function toggleRunning() {
+  if (props.pending) return
+  if (props.running) {
+    emit("stop")
+  } else {
+    emit("start", props.pet)
+  }
+}
 </script>
 
 <style scoped lang="less">
 .settings-desktop-detail {
   :deep(.base-modal__panel) {
-    width: 820px;
+    width: 920px;
+    max-width: 95vw;
+    border-radius: 16px;
   }
+
   .settings-desktop-detail-body {
     display: flex;
-    min-height: 0;
     flex-direction: column;
     gap: 20px;
+    max-height: calc(85vh - 120px);
     overflow-y: auto;
     padding-right: 4px;
-    .settings-desktop-copy {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      .settings-desktop-description {
-        color: var(--color-text-muted);
-        font-size: var(--font-size-sm);
-        line-height: 1.5;
-      }
+
+    &::-webkit-scrollbar {
+      width: 6px;
     }
-    .settings-desktop-detail-summary {
+    &::-webkit-scrollbar-thumb {
+      background: var(--color-line-strong);
+      border-radius: 3px;
+    }
+  }
+
+  // 顶部卡片
+  .desktop-detail-hero {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 24px;
+    background: var(--color-panel-soft);
+    border: 1px solid var(--color-line);
+    border-radius: 14px;
+
+    .desktop-detail-hero-left {
       display: flex;
-      flex: none;
       align-items: center;
-      gap: 24px;
-      padding: 18px;
-      border: 1px solid var(--color-line);
-      border-radius: 10px;
-      background: var(--color-panel-soft);
-      .settings-desktop-detail-preview {
-        width: 144px;
-        height: 144px;
-        flex: none;
+      gap: 20px;
+      flex: 1;
+
+      .desktop-detail-avatar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 88px;
+        height: 88px;
+        flex-shrink: 0;
       }
-      .settings-desktop-copy {
-        align-items: flex-start;
-        .settings-desktop-detail-name {
-          margin: 0 0 6px;
-          font-size: var(--font-size-xl);
+
+      .desktop-detail-info {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+
+        .desktop-detail-name {
+          margin: 0;
+          font-size: 19px;
+          font-weight: 700;
+          color: var(--color-text);
         }
-        .settings-desktop-start {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 6px;
-          min-height: 32px;
-          margin-top: 8px;
-          padding: 0 12px;
-          border: 1px solid var(--color-primary-solid);
-          border-radius: 7px;
-          background: var(--color-primary-solid);
-          color: #ffffff;
-          cursor: pointer;
-          font-size: var(--font-size-sm);
-          &:disabled {
-            opacity: 0.56;
-            cursor: not-allowed;
-          }
+
+        .desktop-detail-sub {
+          font-size: 13px;
+          color: var(--color-text-muted);
+        }
+
+        .desktop-detail-desc {
+          margin: 4px 0 0;
+          font-size: 13px;
+          color: var(--color-text-muted);
+          line-height: 1.5;
         }
       }
     }
-    .settings-desktop-animations {
+
+    .desktop-detail-hero-right {
       display: flex;
       flex-direction: column;
-      gap: 14px;
-      .settings-desktop-animation-list {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        .settings-desktop-animation {
-          display: flex;
-          width: 136px;
-          flex-direction: column;
-          flex: none;
-          align-items: center;
-          gap: 8px;
-          padding: 10px;
-          border: 1px solid var(--color-line);
-          border-radius: 10px;
-          background: var(--color-panel-soft);
-          .settings-desktop-animation-preview {
-            width: 112px;
-            height: 112px;
-          }
-          .settings-desktop-animation-name {
-            color: var(--color-text);
-            font-size: var(--font-size-sm);
-            line-height: 20px;
-          }
-        }
+      align-items: center;
+      gap: 6px;
+      margin-left: 24px;
+      flex-shrink: 0;
+
+      .desktop-detail-switch-label {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--color-text-muted);
       }
+    }
+  }
+
+  // 开关样式
+  .desktop-switch {
+    position: relative;
+    width: 44px;
+    height: 24px;
+    border: none;
+    border-radius: 12px;
+    background: #cbd5e1;
+    cursor: pointer;
+    padding: 2px;
+    transition: background 0.2s ease;
+    flex-shrink: 0;
+
+    &:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    &--active {
+      background: #2563eb;
+
+      .desktop-switch-thumb {
+        transform: translateX(20px);
+      }
+    }
+
+    .desktop-switch-thumb {
+      display: block;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      transition: transform 0.2s ease;
+    }
+  }
+
+  // 动作预览区域
+  .desktop-detail-actions-section {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+
+    .desktop-detail-actions-header {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+
+      .desktop-detail-actions-title {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 700;
+        color: var(--color-text);
+      }
+
+      .desktop-detail-actions-desc {
+        font-size: 13px;
+        color: var(--color-text-muted);
+      }
+    }
+
+    .desktop-detail-actions-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 14px;
+
+      @media (max-width: 768px) {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    .desktop-action-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 14px 8px 10px;
+      background: var(--color-panel-soft);
+      border: 1px solid var(--color-line);
+      border-radius: 12px;
+      transition: all 0.2s ease;
+
+      &:hover {
+        background: var(--color-panel);
+        border-color: var(--color-line-strong);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+        transform: translateY(-1px);
+      }
+
+      .desktop-action-preview {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 80px;
+        height: 80px;
+      }
+
+      .desktop-action-name {
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--color-text);
+      }
+    }
+
+    .desktop-detail-empty-hint {
+      margin: 0;
+      padding: 32px;
+      text-align: center;
+      color: var(--color-text-muted);
+      border: 1px dashed var(--color-line);
+      border-radius: 12px;
+      font-size: 13px;
     }
   }
 }

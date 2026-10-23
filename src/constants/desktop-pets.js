@@ -18,9 +18,9 @@ const images = import.meta.glob("/src/assets/pets/*/*.webp", {
 
 const animationNames = {
   idle: "待机",
-  walk: "行走",
+  walk: "走路",
   greeting: "打招呼",
-  jump: "跳跃",
+  jump: "开心",
   read_book: "看书",
   use_phone: "玩手机",
   sleep: "睡觉",
@@ -31,24 +31,86 @@ const animationNames = {
   salute: "敬礼",
   steal: "偷东西",
   peek: "偷看",
-  run: "奔跑",
+  run: "跑步",
   wake_up: "醒来"
 }
 
+// 动作在预览面板中的优先展示顺序，排版对齐设计图
+const actionOrder = [
+  "idle",
+  "greeting",
+  "sleep",
+  "wake_up",
+  "salute",
+  "walk",
+  "run",
+  "work",
+  "peek",
+  "jump",
+  "read_book",
+  "use_phone",
+  "think",
+  "work_laptop",
+  "exercise",
+  "steal"
+]
+
+// 这批猴子精灵图的历史文件名与实际动作内容有几处错位。这里按画面内容
+// 绑定语义动作，保留原始文件名作为素材来源，避免详情页把电脑动作标成开心。
+const animationSourceByPet = {
+  monkey_animations: {
+    idle: "idle",
+    greeting: "greeting",
+    sleep: "work_laptop",
+    wake_up: "work",
+    salute: "salute",
+    walk: "sleep",
+    run: "run",
+    work: "exercise",
+    peek: "peek",
+    jump: "walk",
+    read_book: "read_book",
+    use_phone: "use_phone",
+    think: "think",
+    work_laptop: "jump",
+    exercise: "wake_up",
+    steal: "steal"
+  }
+}
+
+const petMeta = {
+  monkey_animations: {
+    name: "小猴子",
+    description: "机灵可爱的小猴子，会在桌面上做各种有趣的动作。",
+    actionCount: 16
+  }
+}
+
+// 仅动态加载存在真实素材数据（manifest + WebP 帧）的桌宠，无数据的绝不渲染
 export const desktopPets = Object.entries(manifests)
   .sort(([left], [right]) => left.localeCompare(right))
   .map(([path, manifest]) => {
     const directory = path.slice(0, path.lastIndexOf("/"))
     const id = directory.split("/").at(-1)
     const config = spriteConfigs[`${directory}/sprite_config.json`]
+    const semanticSources = animationSourceByPet[id] || {}
+    const semanticActions = Object.fromEntries(
+      Object.entries(semanticSources).map(([action, source]) => [
+        source,
+        action
+      ])
+    )
     const animations = Object.entries(manifest)
-      .map(([action, item]) => {
+      .map(([sourceAction, item]) => {
+        const action = semanticActions[sourceAction] || sourceAction
         // 裁切坐标使用素材配置，播放时保持同一动作的画布尺寸稳定。
-        const sprite = config.actions[action]
+        const sprite = config?.actions?.[sourceAction]
+        if (!sprite) return null
         // 每个动作独立配置帧间隔，轮换周期也随该动作的速度计算。
         const frameDuration = sprite.frameDurationMs
         return {
           id: action,
+          sourceAction,
           name: animationNames[action] || action.replace(/[_-]/g, " "),
           url: images[`${directory}/${item.file}`],
           sheetWidth: sprite.sheetWidth,
@@ -65,10 +127,25 @@ export const desktopPets = Object.entries(manifests)
           duration: sprite.frameCount * frameDuration
         }
       })
-      .filter((animation) => animation.url)
+      .filter((animation) => animation && animation.url)
+
+    animations.sort((a, b) => {
+      const idxA = actionOrder.indexOf(a.id)
+      const idxB = actionOrder.indexOf(b.id)
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB
+      if (idxA !== -1) return -1
+      if (idxB !== -1) return 1
+      return a.id.localeCompare(b.id)
+    })
+
+    const meta = petMeta[id] || {}
     return {
       id,
-      name: id === "monkey_animations" ? "小猴子" : id.replace(/[_-]/g, " "),
+      name:
+        meta.name ||
+        (id === "monkey_animations" ? "小猴子" : id.replace(/[_-]/g, " ")),
+      description: meta.description || "机灵可爱的桌宠，会在桌面上做各种动作。",
+      actionCount: meta.actionCount || animations.length,
       animations
     }
   })

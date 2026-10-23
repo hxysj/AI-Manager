@@ -450,8 +450,9 @@
         </div>
       </aside>
 
-      <!-- 消息工作台 -->
+      <!-- 消息工作台（仅在存在选中设备或群组时渲染） -->
       <LanShareSessionWorkspace
+        v-if="hasActiveTarget"
         :chat-mode="chatMode"
         :sessions="deviceSessions"
         :current-group="currentGroup"
@@ -475,6 +476,25 @@
         @download-file="downloadFile"
         @copy-text="copyText"
       />
+      <div v-else class="cyber-workspace-empty">
+        <div class="cyber-workspace-empty-hud">
+          <div class="cyber-radar-hud">
+            <div class="radar-circle radar-circle--1"></div>
+            <div class="radar-circle radar-circle--2"></div>
+            <Radio :size="28" class="radar-center-icon" />
+          </div>
+          <span class="cyber-empty-title">
+            {{ chatMode === "group" ? "NO ACTIVE GROUP" : "NO DEVICE SELECTED" }}
+          </span>
+          <p class="cyber-empty-hint">
+            {{
+              chatMode === "group"
+                ? "请在左侧选择加密群聊或点击「+」创建新群组"
+                : "请在左侧选择在线或已配对设备以开启传输会话"
+            }}
+          </p>
+        </div>
+      </div>
     </div>
 
     <!-- 删除设备确认弹窗 -->
@@ -1205,6 +1225,13 @@ const currentGroup = computed(() => {
   return (
     state.groups.find((group) => group.id === selectedGroupId.value) || null
   )
+})
+
+const hasActiveTarget = computed(() => {
+  if (chatMode.value === "group") {
+    return Boolean(currentGroup.value)
+  }
+  return Boolean(currentDevice.value)
 })
 
 const deviceSessions = computed(() => {
@@ -2733,6 +2760,76 @@ function isTextPreviewFile(name, mimeType) {
               flex-shrink: 0;
             }
           }
+        }
+      }
+    }
+
+    .cyber-workspace-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--color-line);
+      border-radius: 10px;
+      background: var(--color-panel);
+      box-shadow: var(--shadow-panel);
+      padding: 32px;
+
+      .cyber-workspace-empty-hud {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 16px;
+        max-width: 360px;
+        text-align: center;
+
+        .cyber-radar-hud {
+          position: relative;
+          width: 80px;
+          height: 80px;
+          display: grid;
+          place-items: center;
+
+          .radar-circle {
+            position: absolute;
+            border-radius: 50%;
+            border: 1px solid var(--color-line);
+
+            &--1 {
+              width: 54px;
+              height: 54px;
+              border-style: dashed;
+              border-color: var(--color-primary);
+              opacity: 0.55;
+              animation: cyberSpin 14s linear infinite;
+            }
+
+            &--2 {
+              width: 80px;
+              height: 80px;
+              border-color: var(--color-line-strong);
+            }
+          }
+
+          .radar-center-icon {
+            color: var(--color-primary);
+            z-index: 1;
+          }
+        }
+
+        .cyber-empty-title {
+          font-family: var(--font-mono, monospace);
+          font-size: 14px;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+          color: var(--color-text);
+        }
+
+        .cyber-empty-hint {
+          margin: 0;
+          font-size: 13px;
+          color: var(--color-text-muted);
+          line-height: 1.6;
         }
       }
     }
