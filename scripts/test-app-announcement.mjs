@@ -15,6 +15,8 @@ let read = false
 let saveError = false
 let bootError = false
 let finishSave = null
+let updateResponse = { phase: 'not-available', manual: true }
+let finishUpdateStatus = null
 const announcement = {
   version: '9.0.0',
   releaseNotes: [
@@ -43,7 +45,10 @@ const api = new Proxy({}, {
         read = true
         return null
       }
-      if (name === 'getUpdateStatus') return { phase: 'idle' }
+      if (name === 'getUpdateStatus') return finishUpdateStatus
+        ? new Promise(resolve => { finishUpdateStatus.resolve = resolve }) : { phase: 'idle' }
+      if (name === 'checkForUpdates') return updateResponse
+      if (name === 'downloadUpdate') return { phase: 'downloaded', version: '9.0.1', manual: true }
       return {}
     }
   }
@@ -79,7 +84,8 @@ function loadComponent(filename) {
     if (name === '@tauri-apps/api/app') return { setTheme: async () => {} }
     if (name.endsWith('.vue')) return {
       __esModule: true,
-      default: name.endsWith('/BaseModal.vue') ? loadComponent('src/components/BaseModal.vue') : placeholder
+      default: name.endsWith('/BaseModal.vue') ? loadComponent('src/components/BaseModal.vue')
+        : name.endsWith('/AppUpdateModal.vue') ? loadComponent('src/components/AppUpdateModal.vue') : placeholder
     }
     return require(name)
   }
@@ -142,6 +148,8 @@ const tick = async () => {
   for (let index = 0; index < 20; index++) { await Promise.resolve(); await vue.nextTick() }
   assert.deepEqual(renderErrors, [])
 }
+let mountedRoot = null
+let mountedState = null
 function mount(search = '') {
   window.location.search = search
   calls.length = 0
@@ -149,9 +157,12 @@ function mount(search = '') {
   const app = renderer.createApp(App)
   app.config.errorHandler = error => renderErrors.push(error.stack)
   app.mount(root)
+  mountedRoot = root
+  mountedState = app._instance.setupState
   return () => app.unmount()
 }
 const find = className => walk(body, node => String(node.props.class || '').split(' ').includes(className))
+const findUpdate = className => walk(mountedRoot, node => String(node.props.class || '').split(' ').includes(className))
 
 // 首次进入显示公告，展示本身不会标记已读；未确认退出后仍会提示。
 let unmount = mount()
@@ -228,10 +239,75 @@ for (const search of ['?panel=tool', '?panel=quick-switch', '']) {
   unmount()
 }
 
+// 原生后台推送新版本即可弹框，无更新与自动检测失败均不打扰用户。
+bootError = false
+read = false
+unmount = mount()
+await tick()
+const updateStatus = status => subscriptions.get('onUpdateStatus')(status)
+const beforeUpdateErrors = errors.length
+for (const phase of ['checking', 'not-available', 'error']) {
+  updateStatus({ phase, manual: false, message: '自动检测结果' })
+  await tick()
+  assert.equal(findUpdate('app-update-modal').length, 0)
+}
+assert.equal(errors.length, beforeUpdateErrors)
+updateStatus({ phase: 'available', version: '9.0.0', manual: false, releaseNotes: '新版本说明' })
+await tick()
+assert.equal(findUpdate('app-update-modal').length, 1)
+assert.equal(findUpdate('app-update-notes')[0].text, '新版本说明')
+assert.equal(find('app-announcement-modal').length, 0)
+assert.equal(read, false)
+assert.equal(calls.includes('checkForUpdates'), false)
+
+// “稍后”抑制本次运行中同一版本的自动提示，但更新的版本仍可再次提醒。
+findUpdate('app-update-button')[0].props.onClick()
+await tick()
+assert.equal(calls.includes('dismissUpdate'), true)
+assert.equal(findUpdate('app-update-modal').length, 0)
+updateStatus({ phase: 'available', version: '9.0.0', manual: false })
+await tick()
+assert.equal(findUpdate('app-update-modal').length, 0)
+updateStatus({ phase: 'available', version: '9.0.1', manual: false })
+await tick()
+assert.equal(findUpdate('app-update-modal').length, 1)
+findUpdate('app-update-primary-button')[0].props.onClick()
+await tick()
+assert.equal(calls.includes('downloadUpdate'), true)
+assert.equal(mountedState.updateDialog.phase, 'downloaded')
+assert.equal(findUpdate('app-update-primary-button')[0].text.trim(), '立即重启更新')
+await mountedState.closeUpdateDialog()
+
+// 手动检查仍能重新查看已暂缓的版本，并明确显示当前已是最新版本的结果。
+updateResponse = { phase: 'available', version: '9.0.0', manual: true }
+await mountedState.checkForAppUpdates()
+await tick()
+assert.equal(findUpdate('app-update-modal').length, 1)
+assert.equal(mountedState.updateDialog.version, '9.0.0')
+await mountedState.closeUpdateDialog()
+updateResponse = { phase: 'not-available', manual: true }
+await mountedState.checkForAppUpdates()
+await tick()
+assert.equal(findUpdate('app-update-modal').length, 1)
+assert.equal(mountedState.updateDialog.phase, 'not-available')
+unmount()
+
+// 启动快照迟到时，不能把自动推送的新版本弹框覆盖成 idle。
+finishUpdateStatus = {}
+unmount = mount()
+await tick()
+updateStatus({ phase: 'available', version: '9.0.2', manual: false })
+finishUpdateStatus.resolve({ phase: 'idle' })
+finishUpdateStatus = null
+await tick()
+assert.equal(findUpdate('app-update-modal').length, 1)
+assert.equal(mountedState.updateDialog.version, '9.0.2')
+unmount()
+
 for (const { filename, style } of styles) {
   const result = await compileStyleAsync({
     source: style.content, filename, id: filename, scoped: style.scoped, preprocessLang: style.lang
   })
   assert.deepEqual(result.errors, [])
 }
-console.log('公告测试通过：首次展示、关闭与确认、重复启动、保存失败、窗口隔离及样式编译')
+console.log('公告与更新测试通过：公告已读、自动更新提示、同版本暂缓、后续版本提醒、手动检测、下载入口及样式编译')

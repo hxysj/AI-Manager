@@ -125,10 +125,35 @@ pub fn apply_auto_launch_setting(
     Ok(())
 }
 
-pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError> {
-    let _guard = begin_update_task(app, "checking", "正在检查更新。")?;
+pub fn start_update_checker(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        // 启动后稍作等待，再由原生后台定期检查，避免多窗口重复请求和隐藏窗口计时器节流。
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        loop {
+            if let Err(error) = check_updates(&app, false).await {
+                eprintln!("自动检查更新失败：{error}");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
+        }
+    });
+}
+
+pub async fn check_updates(app: &tauri::AppHandle, manual: bool) -> Result<Value, ManagerError> {
+    if !manual {
+        let status = update_status_snapshot()?;
+        // 保留手动更新操作和已下载的安装包，自动检查继续留意后续发布的新版本。
+        if status["manual"] == true
+            || matches!(
+                status["phase"].as_str(),
+                Some("checking" | "downloading" | "downloaded" | "installing" | "installer-opened")
+            )
+        {
+            return Ok(status);
+        }
+    }
+    let _guard = begin_update_task(app, "checking", "正在检查更新。", manual)?;
     let status_result = async {
-        if let Some(status) = downloaded_update_status(true).await {
+        if let Some(status) = downloaded_update_status(manual).await {
             return Ok(status);
         }
 
@@ -146,14 +171,14 @@ pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError
               "message": format!("发现新版本 {}。", update.version),
               "version": update.version,
               "releaseNotes": update.body.unwrap_or_default(),
-              "manual": true,
+              "manual": manual,
               "configured": true,
               "isDev": cfg!(debug_assertions)
             }),
             None => json!({
               "phase": "not-available",
               "message": "当前已是最新版本。",
-              "manual": true,
+              "manual": manual,
               "configured": true,
               "isDev": cfg!(debug_assertions)
             }),
@@ -164,14 +189,16 @@ pub async fn check_updates(app: &tauri::AppHandle) -> Result<Value, ManagerError
     match status_result {
         Ok(status) => emit_update_status(app, status),
         Err(error) => {
-            let _ = emit_update_status(app, update_error_status(&error));
+            if manual {
+                let _ = emit_update_status(app, update_error_status(&error));
+            }
             Err(error)
         }
     }
 }
 
 pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerError> {
-    let _guard = begin_update_task(app, "downloading", "正在准备下载更新。")?;
+    let _guard = begin_update_task(app, "downloading", "正在准备下载更新。", true)?;
     let status_result = async {
         if let Some(status) = downloaded_update_status(true).await {
             return Ok(status);
@@ -258,7 +285,7 @@ pub async fn install_update(
     app: &tauri::AppHandle,
     _payload: Value,
 ) -> Result<Value, ManagerError> {
-    let _guard = begin_update_task(app, "installing", "正在准备静默安装更新。")?;
+    let _guard = begin_update_task(app, "installing", "正在准备静默安装更新。", true)?;
     let downloaded_update = DOWNLOADED_UPDATE.lock().await.take();
     let Some(downloaded_update) = downloaded_update else {
         let error = ManagerError::System("更新安装包未下载完成".to_string());
@@ -1152,6 +1179,7 @@ fn begin_update_task(
     app: &tauri::AppHandle,
     phase: &str,
     message: &str,
+    manual: bool,
 ) -> Result<UpdateTaskGuard, ManagerError> {
     let mut busy = UPDATE_BUSY
         .lock()
@@ -1165,12 +1193,16 @@ fn begin_update_task(
 
     *busy = true;
     drop(busy);
+    // 自动检测仅在发现新版本时展示结果，不发送会打断当前弹框的 checking 状态。
+    if !manual {
+        return Ok(UpdateTaskGuard);
+    }
     if let Err(error) = emit_update_status(
         app,
         json!({
           "phase": phase,
           "message": message,
-          "manual": true,
+          "manual": manual,
           "configured": true,
           "isDev": cfg!(debug_assertions)
         }),

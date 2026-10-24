@@ -536,7 +536,7 @@ impl ManagerState {
             "app:update-status" => app::update_status().await,
             "app:release-announcement" => app::release_announcement(&self.paths).await,
             "app:release-announcement-dismiss" => app::dismiss_release_announcement(&self.paths).await,
-            "app:check-updates" => app::check_updates(&app).await,
+            "app:check-updates" => app::check_updates(&app, true).await,
             "app:update-download" => app::download_update(&app).await,
             "app:update-install" => {
                 app::install_update(&app, payload.unwrap_or_else(|| json!({}))).await

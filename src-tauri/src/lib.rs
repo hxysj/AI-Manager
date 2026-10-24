@@ -192,6 +192,7 @@ pub fn run() {
                 quick_switch_collapsed,
             )?;
             create_tray(app.handle())?;
+            app::start_update_checker(app.handle().clone());
             if let Some(state) = app.handle().try_state::<AppState>() {
                 let snapshot = tauri::async_runtime::block_on(state.state_snapshot());
                 update_tray_menu(app.handle(), &snapshot)?;

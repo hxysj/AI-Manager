@@ -710,6 +710,7 @@ const { loading: pending, withGlobalLoading } = useGlobalLoading()
 let unsubscribe = null
 let unsubscribeClose = null
 let unsubscribeUpdate = null
+let dismissedUpdateVersion = ""
 let unsubscribeTool = null
 let unsubscribeScreenshotError = null
 
@@ -1101,7 +1102,11 @@ function applyUpdateStatus(status = {}) {
     status.installDirectory || updateDialog.installDirectory || ""
   updateDialog.manual = Boolean(status.manual)
 
-  if (updateDialog.phase === "error" && updateDialog.message) {
+  if (
+    updateDialog.phase === "error" &&
+    updateDialog.manual &&
+    updateDialog.message
+  ) {
     console.error("[update]", updateDialog.message)
     createMessage.error(updateDialog.message)
   }
@@ -1113,7 +1118,9 @@ function applyUpdateStatus(status = {}) {
 
   updateDialog.open =
     updateDialog.manual ||
-    ["available", "downloading", "error"].includes(updateDialog.phase)
+    updateDialog.phase === "downloading" ||
+    (updateDialog.phase === "available" &&
+      updateDialog.version !== dismissedUpdateVersion)
 }
 
 async function refreshState() {
@@ -1207,6 +1214,10 @@ async function closeUpdateDialog() {
   }
 
   updateDialog.open = false
+  // “稍后”只暂缓本次运行中的同一版本，手动检查和后续新版本仍正常提示。
+  if (updateDialog.phase === "available") {
+    dismissedUpdateVersion = updateDialog.version
+  }
 
   try {
     await appApi.dismissUpdate()
@@ -2250,7 +2261,10 @@ onMounted(() => {
   unsubscribeUpdate = appApi.onUpdateStatus(applyUpdateStatus)
   appApi
     .getUpdateStatus()
-    .then(applyUpdateStatus)
+    .then((status) => {
+      // 初始快照可能迟于更新事件返回，不能覆盖已推送的新版本或正在进行的操作。
+      if (updateDialog.phase === "idle") applyUpdateStatus(status)
+    })
     .catch(() => {})
   unsubscribeClose = appApi.onCloseRequested(() => {
     closeRemember.value = false
