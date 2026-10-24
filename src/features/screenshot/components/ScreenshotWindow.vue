@@ -1274,6 +1274,12 @@ async function closePinMenu() {
       id,
       action: "context-menu-close"
     })
+    // 原生调用返回时 WebView 可能仍是扩展尺寸，等视口恢复后再解除图片尺寸锁定。
+    const scale = devicePixelRatio || 1
+    await waitForPinPaint({
+      width: menuSize.value.width * scale,
+      height: menuSize.value.height * scale
+    })
   } catch (cause) {
     error.value = String(cause)
   } finally {

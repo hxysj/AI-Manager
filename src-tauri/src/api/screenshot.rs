@@ -919,22 +919,11 @@ pub async fn dispatch(
                     }
                     menu_windows.insert(id.to_string(), (position, size));
                     drop(menu_windows);
-                    // 调整无边框贴图窗口时，Windows 可能先把旧的网页合成表面
-                    // 拉伸到新尺寸，造成一帧巨大的截图闪烁。隐藏窗口后再调整，
-                    // 等尺寸完成后显示，透明区域不会经过可见的拉伸帧。
-                    if let Err(error) = window.hide() {
-                        service.menu_windows.lock().unwrap().remove(id);
-                        return Err(failure(error));
-                    }
+                    // 网页已锁定图片尺寸，只扩展菜单区域；隐藏再显示会让整张贴图闪动。
                     if let Err(error) = window.set_size(PhysicalSize::new(
                         size.width.saturating_add(extra_width),
                         size.height.saturating_add(extra_height),
                     )) {
-                        let _ = window.show();
-                        service.menu_windows.lock().unwrap().remove(id);
-                        return Err(failure(error));
-                    }
-                    if let Err(error) = window.show() {
                         service.menu_windows.lock().unwrap().remove(id);
                         return Err(failure(error));
                     }
@@ -943,16 +932,8 @@ pub async fn dispatch(
                 "context-menu-close" => {
                     let original = service.menu_windows.lock().unwrap().remove(id);
                     if let Some((position, size)) = original {
-                        window.hide().map_err(failure)?;
-                        if let Err(error) = window.set_size(size) {
-                            let _ = window.show();
-                            return Err(failure(error));
-                        }
-                        if let Err(error) = window.set_position(position) {
-                            let _ = window.show();
-                            return Err(failure(error));
-                        }
-                        window.show().map_err(failure)?;
+                        window.set_size(size).map_err(failure)?;
+                        window.set_position(position).map_err(failure)?;
                     }
                     return Ok(json!(true));
                 }

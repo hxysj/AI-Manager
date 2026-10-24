@@ -60,6 +60,7 @@ let saveFailure = false
 let captureLong = false
 let pendingSmartSelection = null
 let pendingLongCapture = null
+let pendingPinMenuAction = null
 const imageRequests = []
 const imageUrls = new Set()
 const imageBlobs = new Map()
@@ -154,6 +155,12 @@ const localRequire = (name) => {
         },
         call: async (action, payload) => {
           requests.push({ action, payload })
+          if (
+            action === "pin-action" &&
+            payload.action.startsWith("context-menu-") &&
+            pendingPinMenuAction
+          )
+            return pendingPinMenuAction(payload)
           if (action === "capture-mode") return { long: captureLong }
           if (action === "smart-selection")
             return pendingSmartSelection
@@ -446,6 +453,9 @@ for (const event of [
 assert.equal(requests.length, afterPinKeys)
 const menu = () =>
   pin.children.find((element) => element.props.class === "pin-menu")
+const pinImage = pin.children.find(
+  (element) => element.props.class === "pin-image"
+)
 async function openMenu(clientX, clientY) {
   let prevented = false
   await pin.props.onContextmenu({
@@ -458,8 +468,21 @@ async function openMenu(clientX, clientY) {
   await tick()
   assert.equal(prevented, true)
 }
+// 原生扩窗先于 API 返回完成，图片与可见状态也必须保持不变。
+pendingPinMenuAction = ({ action }) => {
+  if (action === "context-menu-open") {
+    assert.equal(pinImage.style.width, "800px")
+    assert.equal(pinImage.style.height, "600px")
+    assert.equal(pin.props.style.opacity, 1)
+    globalThis.innerWidth = 1080
+    globalThis.innerHeight = 950
+    return { width: 1600, height: 1200 }
+  }
+}
 await openMenu(120, 90)
 assert.deepEqual(menu().props.style, { left: "120px", top: "90px" })
+assert.equal(pinImage.props.style.width, "800px")
+assert.equal(pinImage.props.style.height, "600px")
 await openMenu(250, 150)
 assert.deepEqual(menu().props.style, { left: "250px", top: "150px" })
 await openMenu(790, 590)
@@ -501,6 +524,17 @@ assert.equal(
 await pin.props.onPointerdown({ button: 0, detail: 1 })
 await tick()
 assert.equal(Boolean(menu()), false)
+// 关闭的 API 已返回，视口尚未缩回时仍保持图片尺寸，避免再次铺满扩展区域。
+assert.equal(pinState.menuExpanded, true)
+assert.equal(pinImage.props.style.width, "800px")
+assert.equal(pinImage.props.style.height, "600px")
+globalThis.innerWidth = 800
+globalThis.innerHeight = 600
+await tick()
+assert.equal(pinState.menuExpanded, false)
+assert.equal(pinImage.props.style.width, "100%")
+assert.equal(pinImage.props.style.height, "100%")
+pendingPinMenuAction = null
 assert.equal(
   requests.some((request) => request.payload?.action === "drag"),
   false
@@ -512,8 +546,9 @@ assert.equal(
 )
 await openMenu(80, 80)
 // 工具栏样式调整后按动作进入编辑，避免依赖菜单按钮的排列顺序。
-await app._instance.setupState.pinAction("edit")
+const editPin = app._instance.setupState.pinAction("edit")
 await tick()
+await editPin
 const beforeEditorKeys = requests.length
 await pinState.keydown(pinKey("ArrowUp"))
 await pinState.keydown(pinKey("c", { ctrlKey: true }))
