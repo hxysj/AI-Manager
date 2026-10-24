@@ -197,7 +197,7 @@ async function tick() {
   }
 }
 
-for (const name of ["DesktopPetList", "DesktopPetDetail"]) {
+for (const name of ["DesktopPetList", "DesktopPetDetail", "SystemSettings"]) {
   const filename = `src/features/settings/components/${name}.vue`
   components.set(`@/${filename.slice(4)}`, await loadComponent(filename))
 }
@@ -286,16 +286,18 @@ async function finish(index, error) {
 // 连续开启、关闭同一设置时，较早的响应不能改回用户刚关闭的状态。
 settings.state.activeTab = "system"
 await tick()
-trigger(input(settings.root, "auto-launch-enabled", true), "change")
+const autoLaunchSwitch = () =>
+  find(settings.root, (item) => item.props.name === "auto-launch-enabled")[0]
+trigger(autoLaunchSwitch(), "click")
 await tick()
-trigger(input(settings.root, "auto-launch-enabled", false), "change")
+trigger(autoLaunchSwitch(), "click")
 await tick()
 assert.equal(calls.length, 1, "保存请求串行执行")
 assert.deepEqual(calls[0].patch, { system: { autoLaunchEnabled: true } })
 assert.equal(notifications.length, 0, "落盘前不提示保存成功")
 settings.state.draft.cloudSync.username = "尚未完成的输入"
 await finish(0)
-assert.equal(settings.state.draft.system.autoLaunchEnabled, false)
+assert.equal(autoLaunchSwitch().props["aria-checked"], false)
 assert.equal(settings.state.draft.cloudSync.username, "尚未完成的输入")
 assert.deepEqual(calls[1].patch, { system: { autoLaunchEnabled: false } })
 await finish(1)
@@ -315,9 +317,9 @@ assert.deepEqual(calls[2].patch, {
   system: { quickSwitchTools: { git: false } }
 })
 await finish(2, "模拟磁盘写入失败")
-assert.equal(settings.state.draft.system.quickSwitchTools.git, true)
+assert.equal(tool.checked, true)
 assert.equal(notifications.at(-1).success, false)
-trigger(input(settings.root, "close-action", "minimize"), "change")
+trigger(input(settings.root, "close-action", "minimize"), "click")
 await tick()
 assert.deepEqual(calls[3].patch, { system: { closeAction: "minimize" } })
 await finish(3)
@@ -416,6 +418,57 @@ for (const [offset, index] of [0, 1].entries()) {
   await finish(requestIndex + 1)
 }
 desktopSettings.unmount()
+
+// 系统组件可独立维护设置；页面卸载不丢保存，程序操作仍交给已有流程。
+const systemActions = []
+const systemProps = vue.reactive({
+  get settings() {
+    return props.appSettings.system
+  },
+  pending: false,
+  saveSettings,
+  onQuitApp: () => systemActions.push("quit"),
+  onUninstallWithoutTrace: () => systemActions.push("uninstall")
+})
+const systemSettings = mount(
+  components.get("@/features/settings/components/SystemSettings.vue"),
+  systemProps
+)
+await tick()
+assert.equal(calls.length, 15, "单独挂载系统设置不会提交配置")
+const floatingSwitch = () =>
+  find(
+    systemSettings.root,
+    (item) => item.props.name === "quick-switch-visible"
+  )[0]
+trigger(floatingSwitch(), "click")
+await tick()
+assert.deepEqual(calls[15].patch, { system: { quickSwitchVisible: false } })
+assert.equal(
+  find(
+    systemSettings.root,
+    (item) => item.props.class === "system-settings-tools"
+  ).length,
+  0,
+  "关闭悬浮窗后隐藏工具配置"
+)
+// 其他状态刷新时保留正在保存的选择。
+props.appSettings = structuredClone(server)
+await tick()
+assert.equal(floatingSwitch().props["aria-checked"], false)
+await finish(15, "模拟保存悬浮窗设置失败")
+assert.equal(floatingSwitch().props["aria-checked"], true)
+const actionButtons = find(
+  systemSettings.root,
+  (item) => item.props.class === "system-settings-danger-button"
+)
+for (const button of actionButtons) trigger(button, "click")
+assert.deepEqual(systemActions, ["quit", "uninstall"])
+trigger(floatingSwitch(), "click")
+await tick()
+systemSettings.unmount()
+await finish(16)
+assert.equal(server.system.quickSwitchVisible, false)
 
 // 翻译弹窗按改动字段立即保存，重复快捷键不会被提交。
 const translationChanges = []

@@ -692,8 +692,9 @@ pub fn start_hotkeys(app: AppHandle) {
         let mut escape_pressed = false;
         loop {
             let service = app.state::<ScreenshotService>();
+            let settings = service.settings();
             // 鼠标穿透后焦点可能在被截应用，仍要让 Esc 完成长截图；不依赖全局快捷键开关。
-            let escape_down = unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } < 0;
+            let escape_down = settings.enabled && unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } < 0;
             if escape_down && !escape_pressed
                 && service.long_capturing.swap(false, std::sync::atomic::Ordering::SeqCst)
             {
@@ -718,8 +719,7 @@ pub fn start_hotkeys(app: AppHandle) {
                     }
                 }
             }
-            let settings = service.settings();
-            let enabled = settings.hotkeys && !service.hotkeys_paused.load(std::sync::atomic::Ordering::SeqCst);
+            let enabled = settings.enabled && settings.hotkeys && !service.hotkeys_paused.load(std::sync::atomic::Ordering::SeqCst);
             let bindings = settings.shortcut_bindings();
             let key = format!("{enabled}:{bindings:?}");
             if key != previous {
@@ -759,6 +759,9 @@ pub fn start_hotkeys(app: AppHandle) {
                     let app = app.clone();
                     let action = message.wParam;
                     tauri::async_runtime::spawn(async move {
+                        if !app.state::<ScreenshotService>().settings().enabled {
+                            return;
+                        }
                         let result = match action {
                             1 => super::begin_capture(&app, true, false).await,
                             2 => super::begin_capture(&app, false, false).await,
@@ -775,7 +778,7 @@ pub fn start_hotkeys(app: AppHandle) {
                     });
                 }
             }
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(Duration::from_millis(if settings.enabled { 5 } else { 100 }));
         }
     });
 }

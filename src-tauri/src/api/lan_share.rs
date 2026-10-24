@@ -3313,7 +3313,9 @@ fn mobile_page_html() -> String {
         <div class="settings-card">
           <div class="settings-row">
             <span class="settings-label">版本信息</span>
-            <span class="settings-value">v2.0.26</span>
+            <span class="settings-value">v"##,
+        env!("CARGO_PKG_VERSION"),
+        r##"</span>
           </div>
           <div class="settings-row">
             <span class="settings-label">直连协议</span>

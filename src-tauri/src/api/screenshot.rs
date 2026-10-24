@@ -56,6 +56,8 @@ struct Pin {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     pub hotkeys: bool,
     pub shortcut_style: String,
     pub restore_pins: bool,
@@ -63,6 +65,10 @@ pub struct Settings {
     pub history_limit: usize,
     #[serde(default)]
     pub shortcuts: std::collections::HashMap<String, String>,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 fn default_history_limit() -> usize {
@@ -76,6 +82,7 @@ fn default_pin_group() -> String {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            enabled: default_enabled(),
             hotkeys: true,
             shortcut_style: "alt".into(),
             restore_pins: true,
@@ -340,6 +347,23 @@ impl ScreenshotService {
         self.session.lock().unwrap().settings.clone()
     }
 
+    fn ensure_enabled(&self) -> Result<(), ManagerError> {
+        if !self.settings().enabled {
+            return Err(failure("截图贴图已关闭，请在功能扩展中启动"));
+        }
+        Ok(())
+    }
+
+    fn set_enabled(&self, enabled: bool) -> Result<(), ManagerError> {
+        let mut guard = self.session.lock().unwrap();
+        let mut next = guard.clone();
+        // 启停仅修改本模块的开关，保留快捷键、历史与贴图恢复状态。
+        next.settings.enabled = enabled;
+        self.commit(&next)?;
+        *guard = next;
+        Ok(())
+    }
+
     fn update_pin(&self, id: &str, update: impl FnOnce(&mut Pin)) -> Result<(), ManagerError> {
         let mut guard = self.session.lock().unwrap();
         let mut next = guard.clone();
@@ -467,7 +491,19 @@ pub async fn dispatch(
     let service = app.try_state::<ScreenshotService>().ok_or_else(|| {
         failure("截图贴图数据未能加载，请检查数据目录中的 session.json；原数据已保留")
     })?;
+    if !matches!(action.as_str(), "status" | "set-enabled" | "list" | "settings" | "pause-hotkeys" | "document" | "delete" | "export" | "copy" | "cancel") {
+        service.ensure_enabled()?;
+    }
     match action.as_str() {
+        "status" => Ok(json!(service.settings())),
+        "set-enabled" => {
+            let enabled = payload["enabled"].as_bool().ok_or_else(|| failure("缺少截图启停状态"))?;
+            service.set_enabled(enabled)?;
+            let result = sync_runtime(&app);
+            changed(&app);
+            result?;
+            Ok(json!(service.settings()))
+        }
         "list" => {
             let session = service.session.lock().unwrap().clone();
             let entries = session
@@ -494,6 +530,8 @@ pub async fn dispatch(
             let mut guard = service.session.lock().unwrap();
             let mut next = guard.clone();
             next.settings = settings;
+            // 配置弹框可能早于启停操作打开，不能用旧草稿覆盖模块开关。
+            next.settings.enabled = guard.settings.enabled;
             let expired = service.prune_history(&mut next);
             service.commit(&next)?;
             *guard = next;
@@ -1165,6 +1203,7 @@ fn ensure_capture_window(
     app: &AppHandle,
     bounds: Option<(i32, i32, u32, u32)>,
 ) -> Result<tauri::WebviewWindow, ManagerError> {
+    app.state::<ScreenshotService>().ensure_enabled()?;
     if let Some(window) = app.get_webview_window("screenshot-capture") { return Ok(window); }
     let mut builder = WebviewWindowBuilder::new(
         app,
@@ -1231,6 +1270,7 @@ pub async fn screenshot_region_frame(
     width: u32,
     height: u32,
 ) -> Result<tauri::ipc::Response, String> {
+    app.state::<ScreenshotService>().ensure_enabled().map_err(|error| error.to_string())?;
     if width == 0 || height == 0 || width > 8192 || height > 8192 || u64::from(width) * u64::from(height) > 20_000_000 {
         return Err("长截图区域尺寸无效或过大".into());
     }
@@ -1273,6 +1313,7 @@ pub async fn screenshot_image(app: AppHandle, id: String, kind: String) -> Resul
 
 pub async fn begin_capture(app: &AppHandle, auto_copy: bool, long_capture: bool) -> Result<(), ManagerError> {
     let service = app.state::<ScreenshotService>();
+    service.ensure_enabled()?;
     if service.capturing.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
@@ -1286,6 +1327,8 @@ pub async fn begin_capture(app: &AppHandle, auto_copy: bool, long_capture: bool)
             #[cfg(not(windows))]
             { Err::<Vec<u8>, ManagerError>(failure("桌面截图目前仅支持 Windows")) }
         }).await.map_err(failure)??;
+        // 采集期间用户可能已经关闭扩展，不能再创建截图窗口。
+        service.ensure_enabled()?;
         let window = ensure_capture_window(app, Some((left, top, width, height)))?;
         if window.inner_size().map_err(failure)? != PhysicalSize::new(width, height) {
             window.set_size(PhysicalSize::new(width, height)).map_err(failure)?;
@@ -1322,7 +1365,7 @@ fn end_long_capture(app: &AppHandle) -> Result<(), ManagerError> {
     service.long_capturing.store(false, Ordering::SeqCst);
     *service.long_preview_rect.lock().unwrap() = None;
     let hidden = std::mem::take(&mut *service.long_hidden_pins.lock().unwrap());
-    if !hidden.is_empty() {
+    if !hidden.is_empty() && service.settings().enabled {
         let session = service.session.lock().unwrap().clone();
         for label in hidden {
             let should_show = label
@@ -1352,6 +1395,7 @@ fn open_pin_with_visibility(
 ) -> Result<(), ManagerError> {
     let label = format!("screenshot-pin-{id}");
     let service = app.state::<ScreenshotService>();
+    service.ensure_enabled()?;
     service.document_dir(id)?;
     if let Some(window) = app.get_webview_window(&label) {
         window.show().map_err(failure)?;
@@ -1632,6 +1676,7 @@ pub fn reset_input(app: &AppHandle) -> Result<(), ManagerError> {
 }
 
 pub fn paste_clipboard(app: &AppHandle) -> Result<(), ManagerError> {
+    app.state::<ScreenshotService>().ensure_enabled()?;
     #[cfg(windows)]
     {
         let images = windows::read_clipboard()?;
@@ -1650,18 +1695,35 @@ pub fn paste_clipboard(app: &AppHandle) -> Result<(), ManagerError> {
 }
 
 pub fn start(app: AppHandle) {
+    #[cfg(windows)]
+    windows::start_hotkeys(app.clone());
+    if let Err(error) = sync_runtime(&app) {
+        let _ = app.emit("screenshot:error", error.to_string());
+    }
+}
+
+fn sync_runtime(app: &AppHandle) -> Result<(), ManagerError> {
+    let service = app.state::<ScreenshotService>();
+    if !service.settings().enabled {
+        cancel_capture(app)?;
+        service.hotkeys_paused.store(false, Ordering::SeqCst);
+        service.hotkey_errors.lock().unwrap().clear();
+        // 直接销毁窗口，保留贴图的打开状态供下次启动恢复，不触发历史删除。
+        for (label, window) in app.webview_windows() {
+            if label.starts_with("screenshot-") {
+                window.destroy().map_err(failure)?;
+            }
+        }
+        service.menu_windows.lock().unwrap().clear();
+        return Ok(());
+    }
     let bounds = app
         .available_monitors()
         .ok()
         .and_then(|monitors| capture_bounds(&monitors).ok());
-    if let Err(error) = ensure_capture_window(&app, bounds) {
-        let _ = app.emit("screenshot:error", format!("截图窗口预加载失败：{error}"));
-    }
-    #[cfg(windows)]
-    windows::start_hotkeys(app.clone());
-    let service = app.state::<ScreenshotService>();
+    ensure_capture_window(app, bounds)?;
     if !service.settings().restore_pins {
-        return;
+        return Ok(());
     }
     let ids = service
         .session
@@ -1673,7 +1735,10 @@ pub fn start(app: AppHandle) {
         .map(|e| e.id.clone())
         .collect::<Vec<_>>();
     for id in ids {
-        if let Err(error) = open_pin_with_visibility(&app, &id, false, false) {
+        if app.get_webview_window(&format!("screenshot-pin-{id}")).is_some() {
+            continue;
+        }
+        if let Err(error) = open_pin_with_visibility(app, &id, false, false) {
             service
                 .startup_errors
                 .lock()
@@ -1681,6 +1746,7 @@ pub fn start(app: AppHandle) {
                 .push(error.to_string());
         }
     }
+    Ok(())
 }
 
 pub fn flush(app: &AppHandle) {
@@ -1813,6 +1879,7 @@ mod tests {
         assert_eq!(service.prune_history(&mut session).len(), 1);
         assert_eq!(session.entries.len(), 1);
         let old: Settings = serde_json::from_value(json!({"hotkeys":true,"shortcutStyle":"shift","restorePins":true})).unwrap();
+        assert!(old.enabled);
         assert_eq!(old.history_limit, 50);
         assert_eq!(old.shortcut_bindings()[0].2, "Ctrl+F1");
         assert_eq!(old.shortcut_bindings()[1].2, "Shift+F1");
@@ -1820,6 +1887,48 @@ mod tests {
         assert_eq!(old.shortcut_bindings()[3].2, "Shift+F3");
         assert_eq!(old.shortcut_bindings()[4].2, "Ctrl+F3");
         old.validate().unwrap();
+    }
+
+    #[test]
+    fn extension_toggle_persists_without_changing_history_or_configuration() {
+        let root = TestRoot::new();
+        let service = ScreenshotService::new(&root.0).unwrap();
+        let mut session = service.session.lock().unwrap();
+        session.settings.hotkeys = false;
+        session.settings.history_limit = 25;
+        session.settings.shortcuts.insert("capture".into(), "Ctrl+F8".into());
+        let entry = history_entry(0, Some("open"));
+        let dir = service.document_dir(&entry.id).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("output.png"), b"retained-image").unwrap();
+        session.entries.push(entry);
+        let mut expected = serde_json::to_value(&*session).unwrap();
+        drop(session);
+
+        service.set_enabled(false).unwrap();
+        assert!(service.ensure_enabled().is_err());
+        expected["settings"]["enabled"] = json!(false);
+        assert_eq!(serde_json::to_value(&*service.session.lock().unwrap()).unwrap(), expected);
+        drop(service);
+
+        let restored = ScreenshotService::new(&root.0).unwrap();
+        assert!(!restored.settings().enabled);
+        assert!(restored.ensure_enabled().is_err());
+        assert_eq!(std::fs::read(dir.join("output.png")).unwrap(), b"retained-image");
+        restored.set_enabled(true).unwrap();
+        restored.ensure_enabled().unwrap();
+        expected["settings"]["enabled"] = json!(true);
+        assert_eq!(serde_json::to_value(&*restored.session.lock().unwrap()).unwrap(), expected);
+    }
+
+    #[test]
+    fn extension_toggle_write_failure_keeps_saved_state() {
+        let root = TestRoot::new();
+        let service = ScreenshotService::new(&root.0).unwrap();
+        std::fs::create_dir(service.root.join("session.json")).unwrap();
+        assert!(service.set_enabled(false).is_err());
+        assert!(service.settings().enabled);
+        service.ensure_enabled().unwrap();
     }
 
     #[test]

@@ -503,7 +503,6 @@ pub fn show_main_panel(
 
 fn tool_window_title(tool_id: &str) -> Result<&'static str, ManagerError> {
     match tool_id {
-        "screenshot" => Ok("截图贴图"),
         "image-workbench" => Ok("图片工作台"),
         "json-agent" => Ok("JSON 智能解析"),
         "string-diff" => Ok("差异对比"),

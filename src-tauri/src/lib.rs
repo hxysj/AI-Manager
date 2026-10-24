@@ -31,8 +31,8 @@ async fn dispatch_api(
     if let Some(action) = channel.strip_prefix("screenshot:") {
         let result = screenshot::dispatch(app.clone(), action.to_string(), payload.unwrap_or_else(|| serde_json::json!({})))
             .await.map_err(|error| error.to_string());
-        // 只有保存快捷键设置才刷新菜单，截图首帧和逐帧操作不触发托盘重建。
-        if action == "settings" && result.is_ok() {
+        // 设置或启停截图时同步托盘入口，截图首帧和逐帧操作不重建菜单。
+        if matches!(action, "settings" | "set-enabled") && result.is_ok() {
             let snapshot = state.state_snapshot().await;
             if let Err(error) = update_tray_menu(&app, &snapshot) {
                 eprintln!("更新截图托盘快捷键失败：{error}");
@@ -301,7 +301,7 @@ fn build_tray_menu(app: &tauri::AppHandle, state: &Value) -> tauri::Result<Menu<
     append_quick_switch_tray_items(app, &switch_menu, state)?;
     menu.append(&show_item)?;
     let settings = app.try_state::<screenshot::ScreenshotService>().map(|service| service.settings()).unwrap_or_default();
-    for (_, name, shortcut) in settings.shortcut_bindings() {
+    for (_, name, shortcut) in settings.shortcut_bindings().into_iter().filter(|_| settings.enabled) {
         let (id, label) = match name {
             "captureAutoCopy" => ("capture-auto-copy", "截屏并自动复制"),
             "capture" => ("capture", "自定义截屏"),

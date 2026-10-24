@@ -1,94 +1,96 @@
 <template>
   <section class="screenshot-tool">
-    <div class="screenshot-actions">
-      <button
-        class="screenshot-primary"
-        type="button"
-        :disabled="busy || !ready"
-        @click="run('capture')"
+    <template v-if="!settingsOnly">
+      <div class="screenshot-actions">
+        <button
+          class="screenshot-primary"
+          type="button"
+          :disabled="busy || !ready || !settings.enabled"
+          @click="run('capture')"
+        >
+          <ScanLine :size="18" />区域截图
+          <kbd v-if="settings.hotkeys" class="action-shortcut">{{
+            captureShortcut
+          }}</kbd>
+        </button>
+        <button
+          class="screenshot-button"
+          type="button"
+          :disabled="busy || !ready || !settings.enabled"
+          title="先框选区域，再手动向下滚动拼接，按 Esc 完成"
+          @click="startLongCapture"
+        >
+          <ScanLine :size="17" />长截图
+        </button>
+        <button
+          class="screenshot-button"
+          type="button"
+          :disabled="busy || !ready || !settings.enabled"
+          @click="run('clipboard')"
+        >
+          <ClipboardPaste :size="17" />剪贴板贴图
+        </button>
+        <button
+          class="screenshot-button"
+          type="button"
+          :disabled="busy || !ready || !settings.enabled"
+          @click="importImage"
+        >
+          <ImagePlus :size="17" />打开图片
+        </button>
+        <span class="actions-spacer" />
+        <button
+          class="screenshot-button"
+          type="button"
+          :disabled="busy || !ready || !settings.enabled"
+          @click="run('toggle')"
+        >
+          <Eye :size="17" />显示 / 隐藏
+        </button>
+        <button
+          class="screenshot-icon"
+          type="button"
+          title="刷新历史"
+          aria-label="刷新历史"
+          :disabled="busy"
+          @click="load"
+        >
+          <RefreshCw :size="17" />
+        </button>
+      </div>
+      <div v-if="error" class="screenshot-error" role="alert">{{ error }}</div>
+      <div
+        v-if="ready && !settings.enabled"
+        class="screenshot-warning"
+        role="status"
       >
-        <ScanLine :size="18" />区域截图
-        <kbd v-if="settings.hotkeys" class="action-shortcut">{{
-          captureShortcut
-        }}</kbd>
-      </button>
-      <button
-        class="screenshot-button"
-        type="button"
-        :disabled="busy || !ready"
-        title="先框选区域，再手动向下滚动拼接，按 Esc 完成"
-        @click="startLongCapture"
+        截图贴图已关闭，可在功能扩展中启动。历史记录仍可查看、复制和保存。
+      </div>
+      <div
+        v-for="message in warnings"
+        :key="message"
+        class="screenshot-warning"
+        role="status"
       >
-        <ScanLine :size="17" />长截图
-      </button>
-      <button
-        class="screenshot-button"
-        type="button"
-        :disabled="busy || !ready"
-        @click="run('clipboard')"
-      >
-        <ClipboardPaste :size="17" />剪贴板贴图
-      </button>
-      <button
-        class="screenshot-button"
-        type="button"
-        :disabled="busy || !ready"
-        @click="importImage"
-      >
-        <ImagePlus :size="17" />打开图片
-      </button>
-      <span class="actions-spacer" />
-      <button
-        class="screenshot-button"
-        type="button"
-        :disabled="busy || !ready"
-        @click="run('toggle')"
-      >
-        <Eye :size="17" />显示 / 隐藏
-      </button>
-      <button
-        class="screenshot-icon"
-        type="button"
-        title="刷新历史"
-        aria-label="刷新历史"
-        :disabled="busy"
-        @click="load"
-      >
-        <RefreshCw :size="17" />
-      </button>
-      <button
-        class="screenshot-icon"
-        type="button"
-        title="截图设置"
-        aria-label="截图设置"
-        :disabled="!ready || busy"
-        @click="openSettings"
-      >
-        <Settings2 :size="17" />
-      </button>
-    </div>
-    <div v-if="error" class="screenshot-error" role="alert">{{ error }}</div>
-    <div
-      v-for="message in warnings"
-      :key="message"
-      class="screenshot-warning"
-      role="status"
-    >
-      {{ message }}
-    </div>
+        {{ message }}
+      </div>
+    </template>
     <BaseModal
       v-if="showSettings"
       class="screenshot-settings-modal"
       title="截图贴图设置"
       description="设置快捷键、历史数量和贴图恢复方式。"
-      @close="!busy && (showSettings = false)"
+      @close="closeSettings"
     >
+      <div v-if="!ready && !error" class="screenshot-warning" role="status">
+        正在读取截图设置…
+      </div>
       <form class="screenshot-settings" @submit.prevent="saveSettings">
         <label class="setting-row"
           ><input
             v-model="settingsDraft.hotkeys"
             type="checkbox"
-            :disabled="busy"
+            :disabled="busy || !ready"
           />启用全局快捷键</label
         >
         <label
@@ -102,7 +104,7 @@
             :aria-label="shortcut.label"
             placeholder="点击后按下快捷键"
             readonly
-            :disabled="busy || !settingsDraft.hotkeys"
+            :disabled="busy || !ready || !settingsDraft.hotkeys"
             @keydown="recordShortcut($event, shortcut.id)"
             @keyup="
               $event.key === 'PrintScreen' &&
@@ -121,7 +123,7 @@
             max="500"
             step="1"
             required
-            :disabled="busy"
+            :disabled="busy || !ready"
           /><span>张（1–500）</span>
         </label>
         <span class="setting-hint"
@@ -131,13 +133,13 @@
           ><input
             v-model="settingsDraft.restorePins"
             type="checkbox"
-            :disabled="busy"
+            :disabled="busy || !ready"
           />启动时恢复打开的贴图</label
         >
         <button
           class="screenshot-button"
           type="button"
-          :disabled="busy"
+          :disabled="busy || !ready || !settings.enabled"
           @click="run('reset-input')"
         >
           取消全部鼠标穿透
@@ -148,7 +150,7 @@
           <button
             class="screenshot-button"
             type="button"
-            :disabled="busy"
+            :disabled="busy || !ready"
             @click="settingsDraft = defaultSettings()"
           >
             恢复默认
@@ -158,113 +160,126 @@
             class="screenshot-button"
             type="button"
             :disabled="busy"
-            @click="showSettings = false"
+            aria-label="取消截图设置"
+            @click="closeSettings"
           >
             取消
           </button>
-          <button class="screenshot-primary" type="submit" :disabled="busy">
+          <button
+            class="screenshot-primary"
+            type="submit"
+            :disabled="busy || !ready"
+          >
             保存设置
           </button>
         </div>
       </form>
     </BaseModal>
-    <div class="screenshot-history-head">
-      <span class="history-title">截图与贴图</span>
-      <span class="history-count"
-        >{{ entries.length }} 张图片 · {{ openCount }} 张打开</span
-      >
-      <span class="actions-spacer" />
-      <span class="history-hint"
-        >最多 {{ settings.historyLimit }} 张，超出自动删除最旧图片及贴图</span
-      >
-    </div>
-    <div v-if="!entries.length" class="screenshot-empty">
-      <div class="empty-icon"><ScanLine :size="36" :stroke-width="1.3" /></div>
-      <span class="empty-title">截取灵感，贴在眼前</span>
-      <span class="empty-description"
-        >选择桌面区域，添加标注，再复制、保存或贴到桌面。</span
-      >
-      <span class="empty-shortcut"
-        >{{
-          settings.hotkeys
-            ? `${captureShortcut} 开始截图`
-            : "点击“区域截图”开始"
-        }}
-        · Esc 取消</span
-      >
-    </div>
-    <div v-else class="screenshot-history">
-      <article v-for="entry in entries" :key="entry.id" class="screenshot-card">
-        <button
-          class="card-preview"
-          type="button"
-          title="贴到桌面"
-          :disabled="busy"
-          @click="run('pin', { id: entry.id })"
+    <template v-if="!settingsOnly">
+      <div class="screenshot-history-head">
+        <span class="history-title">截图与贴图</span>
+        <span class="history-count"
+          >{{ entries.length }} 张图片 · {{ openCount }} 张打开</span
         >
-          <img
-            v-if="entry.thumbnail"
-            :src="entry.thumbnail"
-            class="card-image"
-            alt="截图缩略图"
-          /><span v-else class="missing-image">图片缺失</span
-          ><span v-if="entry.pin" class="card-state">{{
-            pinLabel(entry.pin)
-          }}</span>
-        </button>
-        <div class="card-info">
-          <span class="card-size">{{ entry.width }} × {{ entry.height }}</span
-          ><span class="card-time">{{ formatTime(entry.createdAt) }}</span>
+        <span class="actions-spacer" />
+        <span class="history-hint"
+          >最多 {{ settings.historyLimit }} 张，超出自动删除最旧图片及贴图</span
+        >
+      </div>
+      <div v-if="!entries.length" class="screenshot-empty">
+        <div class="empty-icon">
+          <ScanLine :size="36" :stroke-width="1.3" />
         </div>
-        <div class="card-actions">
+        <span class="empty-title">截取灵感，贴在眼前</span>
+        <span class="empty-description"
+          >选择桌面区域，添加标注，再复制、保存或贴到桌面。</span
+        >
+        <span class="empty-shortcut"
+          >{{
+            settings.hotkeys
+              ? `${captureShortcut} 开始截图`
+              : "点击“区域截图”开始"
+          }}
+          · Esc 取消</span
+        >
+      </div>
+      <div v-else class="screenshot-history">
+        <article
+          v-for="entry in entries"
+          :key="entry.id"
+          class="screenshot-card"
+        >
           <button
-            class="card-action"
+            class="card-preview"
             type="button"
-            title="贴到桌面 / 恢复关闭的贴图"
-            aria-label="贴到桌面"
+            title="贴到桌面"
             :disabled="busy"
             @click="run('pin', { id: entry.id })"
           >
-            <Pin :size="15" />贴图
+            <img
+              v-if="entry.thumbnail"
+              :src="entry.thumbnail"
+              class="card-image"
+              alt="截图缩略图"
+            /><span v-else class="missing-image">图片缺失</span
+            ><span v-if="entry.pin" class="card-state">{{
+              pinLabel(entry.pin)
+            }}</span>
           </button>
-          <button
-            class="card-action"
-            type="button"
-            title="复制图片"
-            aria-label="复制图片"
-            :disabled="busy"
-            @click="run('copy', { id: entry.id })"
-          >
-            <Copy :size="15" />
-          </button>
-          <button
-            class="card-action"
-            type="button"
-            title="保存 PNG"
-            aria-label="保存 PNG"
-            :disabled="busy"
-            @click="run('export', { id: entry.id })"
-          >
-            <Download :size="15" />
-          </button>
-          <button
-            class="card-action card-delete"
-            type="button"
-            title="删除截图及其贴图"
-            aria-label="删除截图及其贴图"
-            :disabled="busy"
-            @click="deleteEntry(entry)"
-          >
-            <Trash2 :size="15" />
-          </button>
-        </div>
-      </article>
-    </div>
-    <div class="screenshot-footer">
-      <MousePointer2 :size="14" /><span
-        >贴图：拖动移动 · 滚轮缩放 · 右键编辑、透明度和关闭</span
-      >
-    </div>
+          <div class="card-info">
+            <span class="card-size">{{ entry.width }} × {{ entry.height }}</span
+            ><span class="card-time">{{ formatTime(entry.createdAt) }}</span>
+          </div>
+          <div class="card-actions">
+            <button
+              class="card-action"
+              type="button"
+              title="贴到桌面 / 恢复关闭的贴图"
+              aria-label="贴到桌面"
+              :disabled="busy || !settings.enabled"
+              @click="run('pin', { id: entry.id })"
+            >
+              <Pin :size="15" />贴图
+            </button>
+            <button
+              class="card-action"
+              type="button"
+              title="复制图片"
+              aria-label="复制图片"
+              :disabled="busy"
+              @click="run('copy', { id: entry.id })"
+            >
+              <Copy :size="15" />
+            </button>
+            <button
+              class="card-action"
+              type="button"
+              title="保存 PNG"
+              aria-label="保存 PNG"
+              :disabled="busy"
+              @click="run('export', { id: entry.id })"
+            >
+              <Download :size="15" />
+            </button>
+            <button
+              class="card-action card-delete"
+              type="button"
+              title="删除截图及其贴图"
+              aria-label="删除截图及其贴图"
+              :disabled="busy"
+              @click="deleteEntry(entry)"
+            >
+              <Trash2 :size="15" />
+            </button>
+          </div>
+        </article>
+      </div>
+      <div class="screenshot-footer">
+        <MousePointer2 :size="14" /><span
+          >贴图：拖动移动 · 滚轮缩放 · 右键编辑、透明度和关闭</span
+        >
+      </div>
+    </template>
   </section>
 </template>
 
@@ -280,7 +295,6 @@ import {
   Pin,
   RefreshCw,
   ScanLine,
-  Settings2,
   Trash2
 } from "lucide-vue-next"
 import { screenshotApi } from "@/api/modules/screenshot"
@@ -289,10 +303,15 @@ import { subscribeReady } from "@/api/request"
 import { createMessage } from "@/utils/message"
 import BaseModal from "@/components/BaseModal.vue"
 
+const props = defineProps({
+  settingsOnly: { type: Boolean, default: false }
+})
+const emit = defineEmits(["close"])
 const entries = ref([])
 function defaultSettings() {
   // 默认组合与后端一致，已保存的用户组合在读取设置时覆盖默认值。
   return {
+    enabled: true,
     hotkeys: true,
     shortcutStyle: "alt",
     restorePins: true,
@@ -324,12 +343,16 @@ const dataPath = ref("")
 const ready = ref(false)
 const busy = ref(false)
 const error = ref("")
-const showSettings = ref(false)
-watch(showSettings, (paused) => {
-  screenshotApi.call("pause-hotkeys", { paused }).catch((cause) => {
-    error.value = String(cause)
-  })
-})
+const showSettings = ref(props.settingsOnly)
+watch(
+  showSettings,
+  (paused) => {
+    screenshotApi.call("pause-hotkeys", { paused }).catch((cause) => {
+      error.value = String(cause)
+    })
+  },
+  { immediate: props.settingsOnly }
+)
 const captureShortcut = computed(() => settings.value.shortcuts.capture)
 const openCount = computed(
   () => entries.value.filter((entry) => entry.pin?.lifecycle === "open").length
@@ -421,6 +444,12 @@ function openSettings() {
   showSettings.value = true
 }
 
+function closeSettings() {
+  if (busy.value) return
+  showSettings.value = false
+  emit("close")
+}
+
 function recordShortcut(event, id) {
   if (event.key === "Tab") return
   event.preventDefault()
@@ -458,7 +487,7 @@ function recordShortcut(event, id) {
 }
 
 async function saveSettings() {
-  if (busy.value) return
+  if (busy.value || !ready.value) return
   const draft = settingsDraft.value
   if (
     !Number.isInteger(draft.historyLimit) ||
@@ -486,6 +515,7 @@ async function saveSettings() {
     await load()
     showSettings.value = false
     createMessage.success("截图设置已保存")
+    emit("close")
   } catch (cause) {
     error.value = String(cause)
   } finally {
@@ -516,12 +546,13 @@ onMounted(async () => {
       return
     }
     await load()
+    if (props.settingsOnly && !disposed) openSettings()
   } catch (cause) {
     error.value = String(cause)
   }
 })
 onBeforeUnmount(() => {
-  if (showSettings.value)
+  if (props.settingsOnly || showSettings.value)
     screenshotApi.call("pause-hotkeys", { paused: false }).catch(() => {})
   disposed = true
   unlisten?.()

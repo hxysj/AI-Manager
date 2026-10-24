@@ -5,7 +5,7 @@ import "./styles/app.less"
 if (new URLSearchParams(location.search).get("panel") === "screenshot") {
   document.documentElement.style.background = "transparent"
   document.body.style.background = "transparent"
-  import("./features/tools/screenshot/components/ScreenshotWindow.vue").then(
+  import("./features/screenshot/components/ScreenshotWindow.vue").then(
     ({ default: ScreenshotWindow }) => {
       createApp(ScreenshotWindow).mount("#app")
     }

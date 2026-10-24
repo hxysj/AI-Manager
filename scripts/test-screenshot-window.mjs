@@ -14,7 +14,7 @@ import {
   thumbnailSource,
   selectionRect,
   renderDocument
-} from "../src/features/tools/screenshot/renderer.js"
+} from "../src/features/screenshot/renderer.js"
 
 const require = createRequire(import.meta.url)
 // 贴图和编辑原图使用 Blob 地址，实际入口的安全策略也必须允许加载。
@@ -27,7 +27,7 @@ assert.match(
   /script-src[^;]+\bwasm-unsafe-eval\b/,
   "OCR 的 WASM 编译必须被页面安全策略允许"
 )
-const filename = "src/features/tools/screenshot/components/ScreenshotWindow.vue"
+const filename = "src/features/screenshot/components/ScreenshotWindow.vue"
 const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
   filename
 })
@@ -955,7 +955,7 @@ let storedSettings = {
 let storedEntries = [{ id: "new" }, { id: "middle" }, { id: "old" }]
 const settingsRequests = []
 const ScreenshotPage = await loadTestComponent(
-  "src/features/tools/screenshot/index.vue",
+  "src/features/screenshot/index.vue",
   {
     "@/api/modules/screenshot": {
       screenshotApi: {
@@ -1050,9 +1050,97 @@ assert.deepEqual(settingsRequests.at(-1), {
   payload: { paused: false }
 })
 
+// 扩展独立启停；配置直接显示设置弹框，详情只显示截图操作和历史。
+let extensionEnabled = true
+let finishExtensionToggle
+let extensionChanged
+let extensionUnsubscribed = 0
+const extensionRequests = []
+const ScreenshotExtension = await loadTestComponent(
+  "src/features/settings/components/ScreenshotExtension.vue",
+  {
+    vue: { ...vue, defineAsyncComponent: () => ScreenshotPage },
+    "@/api/modules/screenshot": {
+      screenshotApi: {
+        call: async (action, payload) => {
+          extensionRequests.push({ action, payload })
+          if (action === "status") return { enabled: extensionEnabled }
+          assert.equal(action, "set-enabled")
+          return new Promise((resolve, reject) => {
+            finishExtensionToggle = (error) => {
+              if (error) reject(new Error(error))
+              else {
+                extensionEnabled = payload.enabled
+                storedSettings.enabled = extensionEnabled
+                resolve({ enabled: extensionEnabled })
+              }
+            }
+          })
+        }
+      }
+    },
+    "@/api/request": {
+      subscribeReady: async (_, callback) => {
+        extensionChanged = callback
+        return () => { extensionUnsubscribed++ }
+      }
+    },
+    "@/components/BaseModal.vue": {
+      __esModule: true,
+      default: { render() { return vue.h("div", this.$slots.default?.()) } }
+    }
+  }
+)
+const extensionRoot = node("root")
+const extensionApp = renderer.createApp(ScreenshotExtension)
+extensionApp.config.errorHandler = error => failures.push(String(error))
+extensionApp.mount(extensionRoot)
+await tick()
+const extension = extensionApp._instance.setupState
+assert.equal(extension.enabled, true)
+assert.equal(extensionRequests.filter(request => request.action === "set-enabled").length, 0)
+const stopping = extension.toggleEnabled()
+await tick()
+assert.equal(extension.pending, true)
+assert.equal(findElement(extensionRoot, element => element.props.role === "switch").props.disabled, true)
+await extension.toggleEnabled()
+assert.equal(extensionRequests.filter(request => request.action === "set-enabled").length, 1)
+finishExtensionToggle()
+await stopping
+await tick()
+assert.equal(extension.enabled, false)
+assert.equal(findElement(extensionRoot, element => element.props.role === "switch").props["aria-checked"], false)
+const failedStart = extension.toggleEnabled()
+finishExtensionToggle("模拟截图设置写入失败")
+await failedStart
+assert.equal(extension.enabled, false)
+assert.match(extension.error, /写入失败/)
+extension.openManager(true)
+await tick()
+assert.equal(extension.showSettings, true)
+assert.equal(extension.showManager, false)
+assert.ok(findElement(extensionRoot, element => element.props.class === "screenshot-settings-modal"))
+assert.equal(findElement(extensionRoot, element => element.props.class === "screenshot-actions"), undefined)
+findElement(extensionRoot, element => element.props["aria-label"] === "取消截图设置").props.onClick()
+await tick()
+assert.equal(extension.showSettings, false)
+assert.deepEqual(settingsRequests.at(-1), { action: "pause-hotkeys", payload: { paused: false } })
+extension.openManager()
+await tick()
+assert.equal(extension.showManager, true)
+assert.ok(findElement(extensionRoot, element => element.props.class === "screenshot-actions"))
+assert.equal(findElement(extensionRoot, element => element.props["aria-label"] === "截图设置"), undefined)
+assert.equal(findElement(extensionRoot, element => element.props.class === "screenshot-primary").props.disabled, true)
+extensionEnabled = true
+await extensionChanged()
+await tick()
+assert.equal(extension.enabled, true)
+extensionApp.unmount()
+assert.equal(extensionUnsubscribed, 1)
+
 let editorPaints = 0
 const Editor = await loadTestComponent(
-  "src/features/tools/screenshot/components/ImageEditor.vue",
+  "src/features/screenshot/components/ImageEditor.vue",
   {
     "../renderer": {
       loadImage: async () => ({ naturalWidth: 800, naturalHeight: 600 }),

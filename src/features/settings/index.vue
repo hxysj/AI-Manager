@@ -452,6 +452,7 @@
         class="settings-view__panel settings-agent-panel"
       >
         <div class="settings-agent-list">
+          <ScreenshotExtension />
           <article
             class="settings-agent-card"
             tabindex="0"
@@ -529,222 +530,15 @@
         />
       </section>
 
-      <section v-else class="settings-view__panel">
-        <div class="settings-view__system-list">
-          <article class="settings-view__system-card">
-            <div class="settings-view__data-copy">
-              <span data-emphasis>开机自动启动</span>
-              <span>开启后登录 Windows 时自动启动软件，可随时关闭。</span>
-            </div>
-            <div class="settings-view__choice-group">
-              <label
-                :class="[
-                  'settings-view__choice',
-                  {
-                    'settings-view__choice--active':
-                      draft.system.autoLaunchEnabled
-                  }
-                ]"
-              >
-                <input
-                  v-model="draft.system.autoLaunchEnabled"
-                  type="radio"
-                  name="auto-launch-enabled"
-                  :value="true"
-                  @change="
-                    saveChanges({
-                      system: {
-                        autoLaunchEnabled: draft.system.autoLaunchEnabled
-                      }
-                    })
-                  "
-                />
-                <span>开启</span>
-              </label>
-              <label
-                :class="[
-                  'settings-view__choice',
-                  {
-                    'settings-view__choice--active':
-                      !draft.system.autoLaunchEnabled
-                  }
-                ]"
-              >
-                <input
-                  v-model="draft.system.autoLaunchEnabled"
-                  type="radio"
-                  name="auto-launch-enabled"
-                  :value="false"
-                  @change="
-                    saveChanges({
-                      system: {
-                        autoLaunchEnabled: draft.system.autoLaunchEnabled
-                      }
-                    })
-                  "
-                />
-                <span>关闭</span>
-              </label>
-            </div>
-          </article>
-          <article class="settings-view__system-card">
-            <div class="settings-view__data-copy">
-              <span data-emphasis>关闭按钮行为</span>
-              <span
-                >点击窗口关闭按钮时，选择询问、最小化到托盘或直接关闭软件。</span
-              >
-            </div>
-            <div class="settings-view__choice-group">
-              <label
-                v-for="item in closeActionItems"
-                :key="item.value"
-                :class="[
-                  'settings-view__choice',
-                  {
-                    'settings-view__choice--active':
-                      draft.system.closeAction === item.value
-                  }
-                ]"
-              >
-                <input
-                  v-model="draft.system.closeAction"
-                  type="radio"
-                  name="close-action"
-                  :value="item.value"
-                  @change="
-                    saveChanges({
-                      system: { closeAction: draft.system.closeAction }
-                    })
-                  "
-                />
-                <span>{{ item.label }}</span>
-              </label>
-            </div>
-          </article>
-          <article class="settings-view__system-card">
-            <div class="settings-view__data-copy">
-              <span data-emphasis>悬浮快速切换窗</span>
-              <span
-                >主界面最小化时显示中心节点，鼠标悬浮后展开四周的工具入口。</span
-              >
-            </div>
-            <div class="settings-view__choice-group">
-              <label
-                :class="[
-                  'settings-view__choice',
-                  {
-                    'settings-view__choice--active':
-                      draft.system.quickSwitchVisible
-                  }
-                ]"
-              >
-                <input
-                  v-model="draft.system.quickSwitchVisible"
-                  type="radio"
-                  name="quick-switch-visible"
-                  :value="true"
-                  @change="
-                    saveChanges({
-                      system: {
-                        quickSwitchVisible: draft.system.quickSwitchVisible
-                      }
-                    })
-                  "
-                />
-                <span>显示</span>
-              </label>
-              <label
-                :class="[
-                  'settings-view__choice',
-                  {
-                    'settings-view__choice--active':
-                      !draft.system.quickSwitchVisible
-                  }
-                ]"
-              >
-                <input
-                  v-model="draft.system.quickSwitchVisible"
-                  type="radio"
-                  name="quick-switch-visible"
-                  :value="false"
-                  @change="
-                    saveChanges({
-                      system: {
-                        quickSwitchVisible: draft.system.quickSwitchVisible
-                      }
-                    })
-                  "
-                />
-                <span>隐藏</span>
-              </label>
-            </div>
-          </article>
-          <article
-            v-if="draft.system.quickSwitchVisible"
-            class="settings-view__system-card settings-floating-tools-card"
-          >
-            <div class="settings-view__data-copy">
-              <span data-emphasis>悬浮窗工具</span>
-              <span
-                >选择悬浮时显示的工具，默认全部显示。取消全部后只保留中心节点。</span
-              >
-            </div>
-            <div class="settings-floating-tools">
-              <label
-                v-for="tool in floatingToolItems"
-                :key="tool.id"
-                class="settings-floating-tool"
-              >
-                <input
-                  v-model="draft.system.quickSwitchTools[tool.id]"
-                  type="checkbox"
-                  @change="
-                    saveChanges({
-                      system: {
-                        quickSwitchTools: {
-                          [tool.id]: draft.system.quickSwitchTools[tool.id]
-                        }
-                      }
-                    })
-                  "
-                />
-                <component :is="tool.icon" :size="16" />
-                <span class="settings-floating-tool-label">{{
-                  tool.label
-                }}</span>
-              </label>
-            </div>
-          </article>
-          <article class="settings-view__system-card">
-            <div class="settings-view__data-copy">
-              <span data-emphasis>关闭程序</span>
-              <span>立即退出桌面端，不最小化到托盘。</span>
-            </div>
-            <button
-              class="settings-view__danger-button"
-              type="button"
-              @click="$emit('quit-app')"
-            >
-              <Power :size="16" />
-              关闭程序
-            </button>
-          </article>
-          <article class="settings-view__system-card">
-            <div class="settings-view__data-copy">
-              <span data-emphasis>无痕卸载</span>
-              <span>删除所有本地用户数据，并自动启动静默卸载。</span>
-            </div>
-            <button
-              class="settings-view__danger-button"
-              type="button"
-              @click="$emit('uninstall-without-trace')"
-            >
-              <Trash2 :size="16" />
-              无痕卸载
-            </button>
-          </article>
-        </div>
-      </section>
+      <SystemSettings
+        v-else-if="activeTab === 'system'"
+        :settings="appSettings.system"
+        :cli-targets="cliTargets"
+        :pending="pending"
+        :save-settings="saveSettings"
+        @quit-app="$emit('quit-app')"
+        @uninstall-without-trace="$emit('uninstall-without-trace')"
+      />
     </div>
     <DesktopPetDetail
       v-if="activeTab === 'desktop' && activeDesktopPetId && selectedDesktopPet"
@@ -789,18 +583,17 @@ import {
   FolderOpen,
   Languages,
   Monitor,
-  Power,
   Puzzle,
   RefreshCw,
   RotateCcw,
   Settings,
-  Trash2,
   Upload,
   UploadCloud
 } from "lucide-vue-next"
 import { systemApi } from "@/api"
-import { getToolItems } from "@/features/tools/constant"
 import { desktopPets, getDesktopPet } from "@/constants/desktop-pets"
+import SystemSettings from "@/features/settings/components/SystemSettings.vue"
+import ScreenshotExtension from "@/features/settings/components/ScreenshotExtension.vue"
 import DesktopPetList from "@/features/settings/components/DesktopPetList.vue"
 import DesktopPetDetail from "@/features/settings/components/DesktopPetDetail.vue"
 import TranslationConfigModal from "./components/TranslationConfigModal.vue"
@@ -857,9 +650,6 @@ const showTranslationConfigModal = ref(false)
 const showTranslationHistoryModal = ref(false)
 // 浏览详情不改变待启动的桌宠，启动后再由已保存配置同步选择。
 const activeDesktopPetId = ref("")
-const floatingToolItems = computed(() =>
-  getToolItems({ cliTargets: props.cliTargets })
-)
 
 // 两个 WebDAV 服务保留独立配置，避免切换同步目标时覆盖凭据。
 const cloudSyncItems = [
@@ -922,12 +712,7 @@ const draft = reactive({
     maxCount: 20,
     lastBackupAt: 0
   },
-  system: {
-    closeAction: "ask",
-    quickSwitchVisible: true,
-    quickSwitchTools: {},
-    autoLaunchEnabled: false
-  }
+  system: { quickSwitchVisible: true }
 })
 
 // 记录已落盘值和正在保存的字段，避免较早的响应覆盖后续操作或其他输入草稿。
@@ -998,21 +783,6 @@ const tabs = [
   },
   { id: "desktop", label: "桌面管理", icon: Monitor },
   { id: "agents", label: "功能扩展", icon: Puzzle }
-]
-
-const closeActionItems = [
-  {
-    value: "ask",
-    label: "每次询问"
-  },
-  {
-    value: "minimize",
-    label: "最小化到托盘"
-  },
-  {
-    value: "quit",
-    label: "直接关闭"
-  }
 ]
 
 // 当前选择直接驱动全部动作预览，不影响已保存的桌宠配置。
@@ -1126,22 +896,8 @@ function syncDraft() {
   nextDraft.localBackup.lastBackupAt = Number(
     props.appSettings.localBackup?.lastBackupAt || 0
   )
-  nextDraft.system.closeAction = props.appSettings.system?.closeAction || "ask"
   nextDraft.system.quickSwitchVisible =
     props.appSettings.system?.quickSwitchVisible !== false
-  // 缺少配置的工具默认显示，旧配置和以后新增的工具都无需迁移。
-  nextDraft.system.quickSwitchTools = {
-    ...props.appSettings.system?.quickSwitchTools,
-    ...Object.fromEntries(
-      floatingToolItems.value.map((tool) => [
-        tool.id,
-        props.appSettings.system?.quickSwitchTools?.[tool.id] !== false
-      ])
-    )
-  }
-  nextDraft.system.autoLaunchEnabled = Boolean(
-    props.appSettings.system?.autoLaunchEnabled
-  )
   for (const [path, value] of settingFields(nextDraft)) {
     const key = path.join(".")
     const target = path.slice(0, -1).reduce((item, part) => item[part], draft)
@@ -1275,13 +1031,6 @@ watch(
   },
   { deep: true, immediate: true }
 )
-
-watch(floatingToolItems, (tools) => {
-  for (const tool of tools) {
-    if (draft.system.quickSwitchTools[tool.id] === undefined)
-      draft.system.quickSwitchTools[tool.id] = true
-  }
-})
 </script>
 
 <style scoped lang="less">
@@ -1289,38 +1038,6 @@ watch(floatingToolItems, (tools) => {
   .settings-desktop-panel {
     display: flex;
     flex-direction: column;
-  }
-  .settings-view__panel {
-    .settings-view__system-list {
-      .settings-floating-tools-card {
-        align-items: stretch;
-        flex-direction: column;
-        .settings-floating-tools {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 10px;
-          .settings-floating-tool {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 9px 12px;
-            border: 1px solid var(--color-line);
-            border-radius: 8px;
-            background: var(--color-panel);
-            color: var(--color-text-secondary);
-            cursor: pointer;
-            &:has(:checked) {
-              border-color: var(--color-primary);
-              background: var(--color-panel-soft);
-              color: var(--color-primary);
-            }
-            .settings-floating-tool-label {
-              font-size: var(--font-size-sm);
-            }
-          }
-        }
-      }
-    }
   }
   display: flex;
   height: 100%;
@@ -1554,12 +1271,6 @@ watch(floatingToolItems, (tools) => {
     gap: 10px;
   }
 
-  &__system-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-
   &__cli-card {
     display: flex;
     flex-direction: column;
@@ -1635,17 +1346,6 @@ watch(floatingToolItems, (tools) => {
     background: var(--color-panel-soft);
   }
 
-  &__system-card {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 13px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel-soft);
-  }
-
   &__choice-group {
     display: flex;
     flex: none;
@@ -1677,22 +1377,6 @@ watch(floatingToolItems, (tools) => {
   &__choice--active {
     background: var(--color-primary-soft);
     color: var(--color-primary);
-  }
-
-  &__danger-button {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    height: 32px;
-    padding: 0 12px;
-    border: 1px solid var(--color-danger);
-    border-radius: 7px;
-    background: var(--color-danger-soft);
-    color: var(--color-danger);
-    cursor: pointer;
-    font-size: var(--font-size-sm);
   }
 
   &__cloud {

@@ -133,6 +133,7 @@ function loadComponent(path) {
         "@/components/DesktopPet.vue",
         "@/components/BaseModal.vue",
         "@/features/settings/components/DesktopPetList.vue",
+        "@/features/settings/components/SystemSettings.vue",
         "@/features/settings/components/DesktopPetDetail.vue"
       ].includes(name)
     )
@@ -391,7 +392,7 @@ panel.state.rotateCenterPage()
 assert.equal(panel.state.selectedPage, "home")
 await tickDelay(130)
 assert.equal(panel.state.expanded, true)
-assert.equal(findNodes(panel.root, "quick-switch-tool").length, 11)
+assert.equal(findNodes(panel.root, "quick-switch-tool").length, 10)
 assert.deepEqual(
   calls.find(
     (call) => call.name === "setQuickSwitchCollapsed" && !call.payload.collapsed
@@ -482,7 +483,7 @@ state.appSettings.system.quickSwitchTools = { git: false }
 await tick()
 await panel.state.setExpanded(true)
 await tick()
-assert.equal(findNodes(panel.root, "quick-switch-tool").length, 10)
+assert.equal(findNodes(panel.root, "quick-switch-tool").length, 9)
 assert.ok(!panel.state.orbitTools.some((tool) => tool.id === "git"))
 state.appSettings.system.quickSwitchTools = Object.fromEntries(
   panel.state.visibleTools
@@ -856,7 +857,7 @@ petPanel.state.startDrag({
 await tick()
 assert.ok(
   findNodes(petPanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
-    "/sleep.webp"
+    "/walk.webp"
   )
 )
 petPanel.state.stopDrag()
@@ -868,7 +869,7 @@ assert.ok(
 )
 await petPanel.state.setExpanded(true)
 await tick()
-assert.equal(findNodes(petPanel.root, "quick-switch-tool").length, 11)
+assert.equal(findNodes(petPanel.root, "quick-switch-tool").length, 10)
 petPanel.state.handleMainClick({ detail: 0 })
 await tick()
 assert.equal(calls.at(-1).name, "showMainPanel")
@@ -917,7 +918,7 @@ for (const edge of ["left", "right", "top", "bottom"]) {
   assert.equal(edgePanel.state.petAction, "walk")
   assert.ok(
     findNodes(edgePanel.root, "desktop-pet-sheet")[0].props.href.endsWith(
-      "/sleep.webp"
+      "/walk.webp"
     )
   )
   edgePanel.state.stopDrag()
@@ -950,7 +951,7 @@ for (const edge of ["left", "right", "top", "bottom"]) {
   await tickDelay(130)
   assert.equal(edgePanel.state.expanded, true)
   assert.equal(edgePanel.state.screenEdge, edge)
-  assert.equal(findNodes(edgePanel.root, "quick-switch-tool").length, 11)
+  assert.equal(findNodes(edgePanel.root, "quick-switch-tool").length, 10)
   edgePanel.state.leavePanel()
   await tickDelay(300)
   assert.equal(edgePanel.state.expanded, false)
@@ -1023,33 +1024,10 @@ const { desktopPets, getDesktopPet } = modules.get("@/constants/desktop-pets")
 const spriteConfig = JSON.parse(
   readFileSync("src/assets/pets/monkey_animations/sprite_config.json", "utf8")
 )
-const expectedSources = {
-  idle: "idle",
-  greeting: "greeting",
-  sleep: "work_laptop",
-  wake_up: "work",
-  salute: "salute",
-  walk: "sleep",
-  run: "run",
-  work: "exercise",
-  peek: "peek",
-  jump: "walk",
-  read_book: "read_book",
-  use_phone: "use_phone",
-  think: "think",
-  work_laptop: "jump",
-  exercise: "wake_up",
-  steal: "steal"
+for (const animation of desktopPets[0].animations) {
+  assert.ok(animation.url.endsWith('/' + animation.id + '.webp'))
+  assert.ok(spriteConfig.actions[animation.id])
 }
-assert.deepEqual(
-  Object.fromEntries(
-    desktopPets[0].animations.map((animation) => [
-      animation.id,
-      animation.sourceAction
-    ])
-  ),
-  expectedSources
-)
 assert.equal(getDesktopPet("").id, desktopPets[0].id)
 assert.ok(
   desktopPets[0].animations.every(
@@ -1162,7 +1140,7 @@ for (const animation of desktopPets[0].animations) {
   assert.equal(frameTimer.ms, animation.frameDuration)
   assert.equal(
     frameTimer.ms,
-    spriteConfig.actions[animation.sourceAction].frameDurationMs
+    spriteConfig.actions[animation.id].frameDurationMs
   )
   const wall = findNodes(preview.root, "desktop-pet-static-frame")
   assert.equal(wall.length, animation.id === "peek" ? 1 : 0)
@@ -1223,219 +1201,35 @@ globalThis.clearInterval = originalClearInterval
 assert.deepEqual(pet.errors, [])
 assert.deepEqual(pet.warnings, [])
 
-const Settings = loadComponent("src/features/settings/index.vue")
+// 设置与桌宠的完整保存交互由 test-settings.mjs 验证，这里只检查共用工具枚举。
+const SystemSettings = loadComponent("src/features/settings/components/SystemSettings.vue")
+const floatingSettings = { quickSwitchVisible: true, quickSwitchTools: {} }
 const savedSettings = []
-const settings = mount(Settings, {
-  appSettings: { system: {} },
+const settings = mount(SystemSettings, {
+  settings: floatingSettings,
   cliTargets: fixture().cliTargets,
   pending: false,
-  onSave: (payload) => savedSettings.push(payload)
+  saveSettings: async patch => {
+    savedSettings.push(patch)
+    Object.assign(floatingSettings.quickSwitchTools, patch.system.quickSwitchTools)
+    return true
+  }
 })
-settings.state.activeTab = "system"
 await tick()
-assert.equal(findNodes(settings.root, "settings-floating-tool").length, 11)
-assert.ok(
-  Object.values(settings.state.draft.system.quickSwitchTools).every(Boolean)
-)
-settings.state.draft.system.quickSwitchTools.git = false
-// 隐藏浮窗时收起工具配置，重新显示仍保留之前的选择。
-settings.state.draft.system.quickSwitchVisible = false
+assert.equal(findNodes(settings.root, "system-settings-tool").length, 10)
+assert.ok(!settings.state.floatingToolItems.some(tool => tool.id === "screenshot"))
+await settings.state.saveSetting("quickSwitchTools", false, "git")
+assert.deepEqual(savedSettings.at(-1), { system: { quickSwitchTools: { git: false } } })
+settings.component.props.settings = { ...floatingSettings, quickSwitchVisible: false }
 await tick()
-assert.equal(findNodes(settings.root, "settings-floating-tools-card").length, 0)
-assert.equal(findNodes(settings.root, "settings-floating-tool").length, 0)
-settings.state.draft.system.quickSwitchVisible = true
+assert.equal(findNodes(settings.root, "system-settings-tool").length, 0)
+settings.component.props.settings = { ...floatingSettings, quickSwitchVisible: true }
 await tick()
-assert.equal(findNodes(settings.root, "settings-floating-tool").length, 11)
-assert.equal(settings.state.draft.system.quickSwitchTools.git, false)
-settings.state.submitSettings()
-assert.equal(savedSettings.at(-1).system.quickSwitchTools.git, false)
-settings.component.props.appSettings = {
-  system: { quickSwitchTools: { git: false } }
-}
-await tick()
-assert.equal(settings.state.draft.system.quickSwitchTools.git, false)
-assert.equal(
-  settings.state.draft.system.quickSwitchTools["image-workbench"],
-  true
-)
-
-// 加入另一只选择夹具，验证保存后重载确实恢复上次选择。
-desktopPets.push({
-  ...desktopPets[0],
-  id: "test-second-pet",
-  name: "第二只桌宠"
-})
-settings.state.activeTab = "desktop"
-await tick()
-assert.equal(findNodes(settings.root, "settings-desktop-panel").length, 1)
-assert.equal(settings.state.draft.desktop.enabled, false)
-assert.equal(settings.state.draft.desktop.petId, desktopPets[0].id)
-assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 2)
-assert.equal(findNodes(settings.root, "settings-desktop-animation").length, 0)
-assert.equal(findNodes(settings.root, "settings-desktop-stop").length, 0)
-
-// 关闭状态也能弹出详情，关闭后列表保留，浏览不会保存或改变启动选择。
-const savedBeforeDetail = savedSettings.length
-const petDetail = () => findNodes(settings.root, "settings-desktop-detail")[0]
-findNodes(settings.root, "settings-desktop-pet-detail")[0].props.onClick()
-await tick()
-assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 2)
-assert.equal(findNodes(settings.root, "base-modal").length, 1)
-assert.equal(findNodes(petDetail(), "desktop-pet-animation").length, 17)
-const animationCards = findNodes(settings.root, "settings-desktop-animation")
-assert.equal(animationCards.length, desktopPets[0].animations.length)
-animationCards.forEach((card, index) => {
-  assert.equal(
-    findNodes(card, "desktop-pet-sheet")[0].props.href,
-    desktopPets[0].animations[index].url
-  )
-  assert.equal(
-    findNodes(card, "settings-desktop-animation-name")[0].text,
-    desktopPets[0].animations[index].name
-  )
-})
-findNodes(petDetail(), "base-modal__close")[0].props.onClick()
-await tick()
-assert.equal(savedSettings.length, savedBeforeDetail)
-assert.equal(findNodes(settings.root, "settings-desktop-detail").length, 0)
-assert.equal(settings.state.draft.desktop.petId, desktopPets[0].id)
-assert.equal(findNodes(settings.root, "settings-desktop-animation").length, 0)
-
-// 选择、保存与启动是独立操作；未启动时也能保存下次使用的桌宠。
-findNodes(settings.root, "settings-desktop-pet-radio")[1].props.onChange()
-await tick()
-assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
-assert.equal(savedSettings.length, savedBeforeDetail)
-findNodes(settings.root, "settings-view__save")[0].props.onClick()
-assert.deepEqual(savedSettings.at(-1).desktop, {
-  enabled: false,
-  petId: "test-second-pet"
-})
-settings.component.props.appSettings = savedSettings.at(-1)
-await tick()
-assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
-assert.equal(
-  findNodes(
-    findNodes(settings.root, "settings-desktop-pet-active")[0],
-    "settings-desktop-pet-name"
-  )[0].text,
-  "第二只桌宠"
-)
-
-// 详情启动当前查看的桌宠，保存失败前不提前显示运行状态；忙碌时禁止重复提交。
-findNodes(settings.root, "settings-desktop-pet-detail")[0].props.onClick()
-await tick()
-assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
-settings.component.props.pending = true
-await tick()
-assert.equal(
-  findNodes(petDetail(), "settings-desktop-start")[0].props.disabled,
-  true
-)
-const savedBeforeStart = savedSettings.length
-findNodes(petDetail(), "settings-desktop-start")[0].props.onClick()
-assert.equal(savedSettings.length, savedBeforeStart)
-settings.component.props.pending = false
-await tick()
-settings.state.draft.dataPath = "D:/unsaved-test-path"
-findNodes(petDetail(), "settings-desktop-start")[0].props.onClick()
-assert.deepEqual(savedSettings.at(-1).desktop, {
-  enabled: true,
-  petId: desktopPets[0].id
-})
-assert.equal(savedSettings.at(-1).system.quickSwitchVisible, true)
-assert.equal(savedSettings.at(-1).system.quickSwitchTools.git, false)
-assert.equal(
-  savedSettings.at(-1).dataPath,
-  settings.component.props.appSettings.dataPath
-)
-assert.equal(settings.state.runningDesktopPet, null)
-assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
-settings.component.props.appSettings = savedSettings.at(-1)
-await tick()
-assert.equal(settings.state.runningDesktopPet.id, desktopPets[0].id)
-assert.equal(
-  findNodes(petDetail(), "settings-desktop-start")[0].props.disabled,
-  true
-)
-findNodes(petDetail(), "base-modal__close")[0].props.onClick()
-await tick()
-assert.equal(findNodes(settings.root, "settings-desktop-pet-running").length, 1)
-
-// 列表启动切换到选中项；停止保留选择，列表继续可见。
-findNodes(settings.root, "settings-desktop-pet-radio")[1].props.onChange()
-await tick()
-assert.equal(settings.state.runningDesktopPet.id, desktopPets[0].id)
-assert.equal(
-  findNodes(settings.root, "settings-desktop-start")[0].props.disabled,
-  false
-)
-findNodes(settings.root, "settings-desktop-start")[0].props.onClick()
-assert.equal(savedSettings.at(-1).desktop.petId, "test-second-pet")
-settings.component.props.appSettings = savedSettings.at(-1)
-await tick()
-assert.equal(settings.state.runningDesktopPet.id, "test-second-pet")
-findNodes(settings.root, "settings-desktop-stop")[0].props.onClick()
-assert.deepEqual(savedSettings.at(-1).desktop, {
-  enabled: false,
-  petId: "test-second-pet"
-})
-assert.equal(savedSettings.at(-1).system.quickSwitchVisible, true)
-settings.component.props.appSettings = savedSettings.at(-1)
-await tick()
-assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 2)
-assert.equal(findNodes(settings.root, "settings-desktop-pet-running").length, 0)
-assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
-
-findNodes(settings.root, "settings-desktop-pet-detail")[1].props.onClick()
-await tick()
-assert.equal(
-  findNodes(petDetail(), "settings-desktop-detail-name")[0].text,
-  "第二只桌宠"
-)
-assert.equal(settings.state.draft.desktop.petId, "test-second-pet")
-findNodes(petDetail(), "base-modal__backdrop")[0].props.onClick()
-await tick()
-assert.equal(findNodes(settings.root, "settings-desktop-detail").length, 0)
-assert.equal(findNodes(settings.root, "settings-desktop-pet").length, 2)
-
-// 悬浮窗隐藏后，重新启动会恢复显示；失效的历史选择仍使用已有桌宠。
-settings.component.props.appSettings = {
-  ...savedSettings.at(-1),
-  desktop: { enabled: true, petId: "test-second-pet" },
-  system: { ...savedSettings.at(-1).system, quickSwitchVisible: false }
-}
-await tick()
-assert.equal(settings.state.runningDesktopPet, null)
-assert.equal(
-  findNodes(settings.root, "settings-desktop-start")[0].props.disabled,
-  false
-)
-findNodes(settings.root, "settings-desktop-start")[0].props.onClick()
-assert.equal(savedSettings.at(-1).system.quickSwitchVisible, true)
-settings.component.props.appSettings = {
-  desktop: { enabled: true, petId: "removed-pet" }
-}
-await tick()
-assert.equal(settings.state.draft.desktop.petId, desktopPets[0].id)
+assert.equal(findNodes(settings.root, "system-settings-tool").length, 10)
+assert.equal(settings.state.draft.quickSwitchTools.git, false)
 settings.unmount()
-desktopPets.pop()
 assert.deepEqual(settings.errors, [])
 assert.deepEqual(settings.warnings, [])
-
-const PetList = loadComponent(
-  "src/features/settings/components/DesktopPetList.vue"
-)
-const emptyPets = mount(PetList, { pets: [] })
-assert.equal(findNodes(emptyPets.root, "settings-desktop-hint").length, 1)
-assert.equal(findNodes(emptyPets.root, "settings-desktop-pet").length, 0)
-assert.equal(
-  findNodes(emptyPets.root, "settings-desktop-start")[0].props.disabled,
-  true
-)
-emptyPets.unmount()
-assert.deepEqual(emptyPets.errors, [])
-assert.deepEqual(emptyPets.warnings, [])
 
 const Tools = loadComponent("src/features/tools/index.vue")
 const detailChanges = []
