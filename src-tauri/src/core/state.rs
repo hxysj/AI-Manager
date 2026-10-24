@@ -474,18 +474,36 @@ impl ManagerState {
                 Ok(self.state.clone())
             }
             "settings:save" => {
+                let payload = payload.unwrap_or_else(|| json!({}));
+                let directories_changed = payload.get("dataPath").is_some()
+                    || payload.get("cliConfigPaths").is_some();
+                let system = &payload["system"];
+                let translation_changed = payload
+                    .get("agents")
+                    .and_then(|agents| agents.get("translation"))
+                    .is_some();
+                let quick_switch_changed = payload.get("desktop").is_some()
+                    || system.get("quickSwitchVisible").is_some()
+                    || system.get("quickSwitchTools").is_some();
                 settings::save_settings(
                     &mut self.app_settings,
                     &mut self.paths,
                     &mut self.state,
-                    payload.unwrap_or_else(|| json!({})),
+                    payload.clone(),
                 )
                 .await?;
-                app::apply_auto_launch_setting(&app, &self.app_settings)?;
-                translation::desktop::sync(&app, &self.app_settings.agents.translation);
+                // 每次只应用对应功能的设置，不重新初始化其他模块。
+                if system.get("autoLaunchEnabled").is_some() {
+                    app::apply_auto_launch_setting(&app, &self.app_settings)?;
+                }
+                if translation_changed {
+                    translation::desktop::sync(&app, &self.app_settings.agents.translation);
+                }
                 let user_data_path = self.user_data_path.clone();
                 let paths = self.paths.clone();
-                if self.data_backup_cache.begin_local_backup() {
+                if payload.get("localBackup").is_some()
+                    && self.data_backup_cache.begin_local_backup()
+                {
                     let backup_result = data::create_local_backup_if_due(
                         &user_data_path,
                         &paths,
@@ -495,15 +513,25 @@ impl ManagerState {
                     self.data_backup_cache.finish_local_backup();
                     backup_result?;
                 }
-                self.refresh_state().await?;
-                app::sync_quick_switch_window(
-                    &app,
-                    &self.app_settings,
-                    self.quick_switch_collapsed,
-                )?;
-                app.emit("state:changed", self.state.clone())
+                if directories_changed {
+                    self.refresh_state().await?;
+                }
+                if quick_switch_changed {
+                    app::sync_quick_switch_window(
+                        &app,
+                        &self.app_settings,
+                        self.quick_switch_collapsed,
+                    )?;
+                }
+                self.state["appSettings"] = serde_json::to_value(&self.app_settings)?;
+                let changed_state = if directories_changed {
+                    self.state.clone()
+                } else {
+                    json!({ "appSettings": self.app_settings })
+                };
+                app.emit("state:changed", changed_state.clone())
                     .map_err(|error| ManagerError::Path(error.to_string()))?;
-                Ok(self.state.clone())
+                Ok(changed_state)
             }
             "app:update-status" => app::update_status().await,
             "app:release-announcement" => app::release_announcement(&self.paths).await,

@@ -65,7 +65,7 @@
                 default-first-option
                 popper-class="translation-select-popper"
                 :disabled="!modelValue.targetId"
-                @update:model-value="update('model', $event)"
+                @update:model-value="update({ model: $event })"
               >
                 <el-option
                   v-for="model in modelOptions"
@@ -80,7 +80,7 @@
               <el-select
                 :model-value="modelValue.targetLanguage"
                 popper-class="translation-select-popper"
-                @update:model-value="update('targetLanguage', $event)"
+                @update:model-value="update({ targetLanguage: $event })"
               >
                 <el-option
                   v-for="language in languages"
@@ -166,8 +166,7 @@
           {{ desktopStatus.error }}
         </p>
         <p class="translation-hint">
-          目前仅支持 Codex 模式。
-          按快捷键划词取词，或先复制再按
+          目前仅支持 Codex 模式。 按快捷键划词取词，或先复制再按
           <strong>{{
             modelValue.clipboardShortcut || "Ctrl+Alt+Shift+T"
           }}</strong>
@@ -181,14 +180,7 @@
           type="button"
           @click="$emit('close')"
         >
-          取消
-        </button>
-        <button
-          class="translation-primary-btn"
-          type="button"
-          @click="handleConfirm"
-        >
-          确定
+          关闭
         </button>
       </footer>
     </div>
@@ -296,14 +288,25 @@ const modelOptions = computed(() => [
   )
 ])
 
-function update(key, value) {
-  emit("update:modelValue", { ...props.modelValue, [key]: value })
+function update(changes) {
+  const next = { ...props.modelValue, ...changes }
+  // 快捷键先校验再单独保存，普通配置修改不提交其他功能的草稿。
+  if (
+    ("shortcut" in changes || "clipboardShortcut" in changes) &&
+    next.shortcut === next.clipboardShortcut
+  ) {
+    shortcutError.value = "划词翻译与剪贴板翻译快捷键不能相同"
+    return
+  }
+  shortcutError.value = ""
+  emit("update:modelValue", next)
+  emit("save", changes)
 }
 
 function selectTarget(targetId) {
   const provider = props.providers.find((item) => item.id === targetId)
-  const model = provider?.runtimeConfig?.mainModel || ""
-  emit("update:modelValue", { ...props.modelValue, targetId, model })
+  const model = provider?.runtimeConfig?.mainModel || props.modelValue.model
+  update({ targetId, model })
 }
 
 function recordShortcut(event, field) {
@@ -345,31 +348,15 @@ function recordShortcut(event, field) {
     .join("+")
 
   shortcutError.value = ""
-  update(field, combination)
+  update({ [field]: combination })
 }
 
 function resetShortcuts() {
   shortcutError.value = ""
-  emit("update:modelValue", {
-    ...props.modelValue,
+  update({
     shortcut: "Ctrl+Alt+T",
     clipboardShortcut: "Ctrl+Alt+Shift+T"
   })
-}
-
-function handleConfirm() {
-  const shortcut = props.modelValue.shortcut || "Ctrl+Alt+T"
-  const clipboardShortcut =
-    props.modelValue.clipboardShortcut || "Ctrl+Alt+Shift+T"
-
-  if (shortcut === clipboardShortcut) {
-    shortcutError.value = "划词翻译与剪贴板翻译快捷键不能相同"
-    return
-  }
-
-  shortcutError.value = ""
-  emit("save")
-  emit("close")
 }
 
 onMounted(() => {
@@ -720,31 +707,6 @@ onBeforeUnmount(() => {
         &:hover {
           background: var(--color-panel-soft);
           border-color: var(--color-line-strong);
-        }
-
-        &:active {
-          transform: translateY(1px);
-        }
-      }
-
-      .translation-primary-btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        height: 34px;
-        padding: 0 22px;
-        border: 1px solid #2563eb;
-        border-radius: 6px;
-        background: #2563eb;
-        color: #ffffff;
-        font-size: 13px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: all 0.15s ease;
-
-        &:hover {
-          background: #1d4ed8;
-          border-color: #1d4ed8;
         }
 
         &:active {

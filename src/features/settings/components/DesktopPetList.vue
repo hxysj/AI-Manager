@@ -38,23 +38,7 @@
           >
             <span class="desktop-switch-thumb"></span>
           </button>
-          <span class="desktop-hero-switch-label">启用桌宠功能</span>
         </div>
-        <div class="desktop-hero-status-row">
-          <span
-            class="desktop-status-dot"
-            :class="{ 'desktop-status-dot--active': enabled }"
-          ></span>
-          <span
-            class="desktop-status-label"
-            :class="{ 'desktop-status-label--active': enabled }"
-          >
-            {{ enabled ? "当前已开启" : "当前已关闭" }}
-          </span>
-        </div>
-        <span class="desktop-hero-status-desc">
-          {{ enabled ? "桌面宠物功能正常运行中" : "桌面宠物功能已暂停" }}
-        </span>
       </div>
     </section>
   </div>
@@ -98,7 +82,9 @@ function openDetail() {
   border-radius: 16px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
   cursor: pointer;
-  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  transition:
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
 
   &:hover {
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
@@ -160,9 +146,9 @@ function openDetail() {
 
   .desktop-hero-right {
     display: flex;
+    align-items: flex-end;
     flex-direction: column;
     gap: 6px;
-    min-width: 200px;
     flex-shrink: 0;
 
     .desktop-hero-switch-row {
@@ -175,40 +161,6 @@ function openDetail() {
         font-weight: 600;
         color: var(--color-text);
       }
-    }
-
-    .desktop-hero-status-row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 2px;
-
-      .desktop-status-dot {
-        width: 7px;
-        height: 7px;
-        border-radius: 50%;
-        background: #94a3b8;
-
-        &--active {
-          background: #16a34a;
-        }
-      }
-
-      .desktop-status-label {
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--color-text-muted);
-
-        &--active {
-          color: #16a34a;
-        }
-      }
-    }
-
-    .desktop-hero-status-desc {
-      font-size: 12px;
-      color: var(--color-text-soft);
-      line-height: 1.4;
     }
   }
 }

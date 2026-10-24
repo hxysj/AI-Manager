@@ -2,7 +2,6 @@
   <section class="settings-view">
     <header class="settings-view__header">
       <div>
-        <p>Application Settings</p>
         <h1>设置</h1>
       </div>
       <div class="settings-view__header-actions">
@@ -13,15 +12,6 @@
         >
           <RefreshCw :size="16" />
           <div class="text">检查更新</div>
-        </button>
-        <button
-          class="settings-view__save"
-          type="button"
-          :disabled="pending"
-          @click="submitSettings"
-        >
-          <Save :size="16" />
-          <div class="text">{{ pending ? "保存中..." : "保存设置" }}</div>
         </button>
       </div>
     </header>
@@ -59,17 +49,19 @@
           <label class="settings-view__field">
             <span>Data 存放位置</span>
             <div class="settings-view__input-row">
-              <input v-model.trim="draft.dataPath" type="text" />
+              <input
+                v-model.trim="draft.dataPath"
+                type="text"
+                @change="saveChanges({ dataPath: draft.dataPath })"
+                @keydown.enter="$event.target.blur()"
+              />
               <button
                 type="button"
                 @click="selectDirectory('dataPath', draft.dataPath)"
               >
                 选择
               </button>
-              <button
-                type="button"
-                @click="draft.dataPath = appSettings.defaultDataPath"
-              >
+              <button type="button" @click="resetDataPath">
                 <RotateCcw :size="15" />
               </button>
             </div>
@@ -118,6 +110,14 @@
                   <input
                     v-model.trim="draft.cliConfigPaths[item.id]"
                     type="text"
+                    @change="
+                      saveChanges({
+                        cliConfigPaths: {
+                          [item.id]: draft.cliConfigPaths[item.id]
+                        }
+                      })
+                    "
+                    @keydown.enter="$event.target.blur()"
                   />
                   <button
                     type="button"
@@ -152,13 +152,6 @@
       </div>
 
       <section v-else-if="activeTab === 'data'" class="settings-view__panel">
-        <div class="settings-view__panel-header">
-          <div>
-            <h2>数据管理</h2>
-            <span>支持导出至本地备份文件，也可从本地备份文件兼容恢复。</span>
-          </div>
-        </div>
-
         <div class="settings-view__data-list">
           <article class="settings-view__data-card">
             <div class="settings-view__data-copy">
@@ -212,6 +205,11 @@
                   type="radio"
                   name="local-backup-enabled"
                   :value="true"
+                  @change="
+                    saveChanges({
+                      localBackup: { enabled: draft.localBackup.enabled }
+                    })
+                  "
                 />
                 <span>启用</span>
               </label>
@@ -228,6 +226,11 @@
                   type="radio"
                   name="local-backup-enabled"
                   :value="false"
+                  @change="
+                    saveChanges({
+                      localBackup: { enabled: draft.localBackup.enabled }
+                    })
+                  "
                 />
                 <span>暂停</span>
               </label>
@@ -240,8 +243,18 @@
               <input
                 v-model.number="draft.localBackup.intervalMinutes"
                 type="number"
+                required
                 min="1"
                 step="1"
+                @change="
+                  $event.target.reportValidity() &&
+                  saveChanges({
+                    localBackup: {
+                      intervalMinutes: draft.localBackup.intervalMinutes
+                    }
+                  })
+                "
+                @keydown.enter="$event.target.blur()"
               />
             </label>
             <label class="settings-view__field">
@@ -249,8 +262,16 @@
               <input
                 v-model.number="draft.localBackup.maxCount"
                 type="number"
+                required
                 min="1"
                 step="1"
+                @change="
+                  $event.target.reportValidity() &&
+                  saveChanges({
+                    localBackup: { maxCount: draft.localBackup.maxCount }
+                  })
+                "
+                @keydown.enter="$event.target.blur()"
               />
             </label>
           </div>
@@ -268,10 +289,6 @@
           </div>
 
           <div class="settings-view__cloud-actions">
-            <button type="button" :disabled="pending" @click="submitSettings">
-              <Save :size="16" />
-              保存配置
-            </button>
             <button
               type="button"
               :disabled="pending"
@@ -344,6 +361,14 @@
               <input
                 v-model.trim="draft[syncItem.settingKey].webdavUrl"
                 type="text"
+                @change="
+                  saveChanges({
+                    [syncItem.settingKey]: {
+                      webdavUrl: draft[syncItem.settingKey].webdavUrl
+                    }
+                  })
+                "
+                @keydown.enter="$event.target.blur()"
               />
             </label>
             <label class="settings-view__field">
@@ -351,6 +376,14 @@
               <input
                 v-model.trim="draft[syncItem.settingKey].fileName"
                 type="text"
+                @change="
+                  saveChanges({
+                    [syncItem.settingKey]: {
+                      fileName: draft[syncItem.settingKey].fileName
+                    }
+                  })
+                "
+                @keydown.enter="$event.target.blur()"
               />
             </label>
             <label class="settings-view__field">
@@ -358,6 +391,14 @@
               <input
                 v-model.trim="draft[syncItem.settingKey].username"
                 type="text"
+                @change="
+                  saveChanges({
+                    [syncItem.settingKey]: {
+                      username: draft[syncItem.settingKey].username
+                    }
+                  })
+                "
+                @keydown.enter="$event.target.blur()"
               />
             </label>
             <label class="settings-view__field">
@@ -366,15 +407,18 @@
                 v-model="draft[syncItem.settingKey].password"
                 type="password"
                 show-password
+                @change="
+                  saveChanges({
+                    [syncItem.settingKey]: {
+                      password: draft[syncItem.settingKey].password
+                    }
+                  })
+                "
               />
             </label>
           </div>
 
           <div class="settings-view__cloud-actions">
-            <button type="button" :disabled="pending" @click="submitSettings">
-              <Save :size="16" />
-              保存配置
-            </button>
             <button
               type="button"
               :disabled="pending"
@@ -403,60 +447,66 @@
         </section>
       </section>
 
-      <section v-else-if="activeTab === 'agents'" class="settings-agent-panel">
-        <div class="settings-view__panel-header">
-          <div>
-            <h2>功能扩展</h2>
-            <span>管理应用的扩展功能，点击查看配置和使用记录。</span>
-          </div>
-        </div>
+      <section
+        v-else-if="activeTab === 'agents'"
+        class="settings-view__panel settings-agent-panel"
+      >
         <div class="settings-agent-list">
-          <article class="settings-agent-card">
-            <div class="settings-agent-icon"><Languages :size="24" /></div>
-            <div class="settings-agent-copy">
-              <span data-emphasis>划词翻译</span>
-              <span>选中文本后右键翻译，支持查看翻译历史和消耗记录。</span>
+          <article
+            class="settings-agent-card"
+            tabindex="0"
+            role="button"
+            aria-label="进入划词翻译配置"
+            @click="showTranslationConfigModal = true"
+            @keydown.enter="showTranslationConfigModal = true"
+            @keydown.space.prevent="showTranslationConfigModal = true"
+          >
+            <div class="settings-agent-main">
+              <div class="settings-agent-icon"><Languages :size="24" /></div>
+              <div class="settings-agent-copy">
+                <h3 class="settings-agent-title">划词翻译</h3>
+                <p class="settings-agent-description">
+                  选中文本后右键翻译，支持查看翻译历史和消耗记录。
+                </p>
+              </div>
             </div>
-            <div class="settings-agent-actions">
-              <button
-                class="settings-agent-switch"
-                :class="{
-                  'settings-agent-switch--active':
-                    draft.agents.translation.enabled
-                }"
-                type="button"
-                role="switch"
-                :aria-checked="draft.agents.translation.enabled"
-                @click.stop="toggleTranslationAgent"
-              >
-                <span class="settings-agent-switch-thumb"></span>
-              </button>
-              <span
-                class="settings-agent-badge"
-                :class="{
-                  'settings-agent-badge--active':
-                    draft.agents.translation.enabled
-                }"
-              >
-                {{ draft.agents.translation.enabled ? "已启用" : "已禁用" }}
-              </span>
-              <div class="settings-agent-divider"></div>
-              <button
-                class="settings-agent-btn"
-                type="button"
-                @click="showTranslationHistoryModal = true"
-              >
-                <Clock :size="15" />
-                <span>使用记录</span>
-              </button>
-              <button
-                class="settings-agent-btn"
-                type="button"
-                @click="showTranslationConfigModal = true"
-              >
-                <Settings :size="15" />
-                <span>配置</span>
-              </button>
+            <div class="settings-agent-divider"></div>
+            <div class="settings-agent-actions" @click.stop @keydown.stop>
+              <div class="settings-agent-buttons">
+                <button
+                  class="settings-agent-btn"
+                  type="button"
+                  @click="showTranslationHistoryModal = true"
+                >
+                  <Clock :size="15" />
+                  <span>使用记录</span>
+                </button>
+                <button
+                  class="settings-agent-btn"
+                  type="button"
+                  @click="showTranslationConfigModal = true"
+                >
+                  <Settings :size="15" />
+                  <span>配置</span>
+                </button>
+              </div>
+              <div class="settings-agent-switch-row">
+                <button
+                  class="settings-agent-switch"
+                  :class="{
+                    'settings-agent-switch--active':
+                      draft.agents.translation.enabled
+                  }"
+                  type="button"
+                  role="switch"
+                  aria-label="启用划词翻译"
+                  :aria-checked="draft.agents.translation.enabled"
+                  :disabled="pending"
+                  @click="toggleTranslationAgent"
+                >
+                  <span class="settings-agent-switch-thumb"></span>
+                </button>
+              </div>
             </div>
           </article>
         </div>
@@ -471,10 +521,7 @@
           :selected-pet-id="draft.desktop.petId"
           :running-pet-id="runningDesktopPet?.id || ''"
           :enabled="
-            Boolean(
-              appSettings.desktop?.enabled &&
-              appSettings.system?.quickSwitchVisible !== false
-            )
+            Boolean(draft.desktop.enabled && draft.system.quickSwitchVisible)
           "
           :pending="pending"
           @detail="activeDesktopPetId = $event"
@@ -483,13 +530,6 @@
       </section>
 
       <section v-else class="settings-view__panel">
-        <div class="settings-view__panel-header">
-          <div>
-            <h2>系统设置</h2>
-            <span>控制桌面端启动、窗口关闭和悬浮窗显示行为。</span>
-          </div>
-        </div>
-
         <div class="settings-view__system-list">
           <article class="settings-view__system-card">
             <div class="settings-view__data-copy">
@@ -511,6 +551,13 @@
                   type="radio"
                   name="auto-launch-enabled"
                   :value="true"
+                  @change="
+                    saveChanges({
+                      system: {
+                        autoLaunchEnabled: draft.system.autoLaunchEnabled
+                      }
+                    })
+                  "
                 />
                 <span>开启</span>
               </label>
@@ -528,6 +575,13 @@
                   type="radio"
                   name="auto-launch-enabled"
                   :value="false"
+                  @change="
+                    saveChanges({
+                      system: {
+                        autoLaunchEnabled: draft.system.autoLaunchEnabled
+                      }
+                    })
+                  "
                 />
                 <span>关闭</span>
               </label>
@@ -557,6 +611,11 @@
                   type="radio"
                   name="close-action"
                   :value="item.value"
+                  @change="
+                    saveChanges({
+                      system: { closeAction: draft.system.closeAction }
+                    })
+                  "
                 />
                 <span>{{ item.label }}</span>
               </label>
@@ -584,6 +643,13 @@
                   type="radio"
                   name="quick-switch-visible"
                   :value="true"
+                  @change="
+                    saveChanges({
+                      system: {
+                        quickSwitchVisible: draft.system.quickSwitchVisible
+                      }
+                    })
+                  "
                 />
                 <span>显示</span>
               </label>
@@ -601,6 +667,13 @@
                   type="radio"
                   name="quick-switch-visible"
                   :value="false"
+                  @change="
+                    saveChanges({
+                      system: {
+                        quickSwitchVisible: draft.system.quickSwitchVisible
+                      }
+                    })
+                  "
                 />
                 <span>隐藏</span>
               </label>
@@ -625,6 +698,15 @@
                 <input
                   v-model="draft.system.quickSwitchTools[tool.id]"
                   type="checkbox"
+                  @change="
+                    saveChanges({
+                      system: {
+                        quickSwitchTools: {
+                          [tool.id]: draft.system.quickSwitchTools[tool.id]
+                        }
+                      }
+                    })
+                  "
                 />
                 <component :is="tool.icon" :size="16" />
                 <span class="settings-floating-tool-label">{{
@@ -668,7 +750,12 @@
       v-if="activeTab === 'desktop' && activeDesktopPetId && selectedDesktopPet"
       :pets="desktopPets"
       :pet="selectedDesktopPet"
-      :running="runningDesktopPet?.id === selectedDesktopPet.id"
+      :running-pet-id="runningDesktopPet?.id || ''"
+      :running="
+        draft.desktop.enabled &&
+        draft.system.quickSwitchVisible &&
+        draft.desktop.petId === selectedDesktopPet.id
+      "
       :pending="pending"
       @close="activeDesktopPetId = ''"
       @select="activeDesktopPetId = $event"
@@ -681,7 +768,7 @@
       :providers="providers"
       :codex-accounts="codexAccounts"
       :runtime-models="runtimeModels"
-      @save="submitSettings"
+      @save="saveTranslationChanges"
       @close="showTranslationConfigModal = false"
     />
     <TranslationHistoryModal
@@ -692,7 +779,7 @@
 </template>
 
 <script setup>
-import { computed, reactive, ref, watch } from "vue"
+import { computed, nextTick, reactive, ref, watch } from "vue"
 import {
   ChevronRight,
   Clock,
@@ -706,7 +793,6 @@ import {
   Puzzle,
   RefreshCw,
   RotateCcw,
-  Save,
   Settings,
   Trash2,
   Upload,
@@ -743,11 +829,14 @@ const props = defineProps({
   pending: {
     type: Boolean,
     required: true
+  },
+  saveSettings: {
+    type: Function,
+    required: true
   }
 })
 
 const emit = defineEmits([
-  "save",
   "check-update",
   "open-path",
   "export-data",
@@ -841,6 +930,49 @@ const draft = reactive({
   }
 })
 
+// 记录已落盘值和正在保存的字段，避免较早的响应覆盖后续操作或其他输入草稿。
+const savedFields = new Map()
+const pendingFields = new Map()
+
+function settingFields(value, path = []) {
+  return Object.entries(value).flatMap(([key, item]) => {
+    const fieldPath = [...path, key]
+    return item && typeof item === "object"
+      ? settingFields(item, fieldPath)
+      : [[fieldPath, item]]
+  })
+}
+
+async function saveChanges(patch) {
+  const fields = settingFields(patch)
+  if (
+    fields.every(
+      ([path, value]) =>
+        !pendingFields.has(path.join(".")) &&
+        savedFields.get(path.join(".")) === value
+    )
+  )
+    return true
+  const request = Symbol()
+  for (const [path, value] of fields) {
+    const target = path.slice(0, -1).reduce((item, key) => item[key], draft)
+    target[path.at(-1)] = value
+    pendingFields.set(path.join("."), request)
+  }
+  const success = await props.saveSettings(patch)
+  await nextTick()
+  for (const [path, value] of fields) {
+    const key = path.join(".")
+    if (pendingFields.get(key) !== request) continue
+    pendingFields.delete(key)
+    const target = path.slice(0, -1).reduce((item, part) => item[part], draft)
+    // 成功时采用后端规范化后的值，失败时恢复已保存值；保留保存期间继续输入的内容。
+    if (target[path.at(-1)] === value)
+      target[path.at(-1)] = savedFields.get(key)
+  }
+  return success
+}
+
 const cliNames = {
   claude: "Claude",
   codex: "Codex"
@@ -898,19 +1030,17 @@ const runningDesktopPet = computed(() =>
 function startDesktopPet(pet) {
   if (props.pending || !pet) return
   // 立即启动只更新桌宠和悬浮窗，沿用其他已保存配置。
-  emit("save", {
-    ...props.appSettings,
+  saveChanges({
     desktop: { enabled: true, petId: pet.id },
-    system: { ...props.appSettings.system, quickSwitchVisible: true }
+    system: { quickSwitchVisible: true }
   })
 }
 
 function stopDesktopPet() {
   if (props.pending) return
   // 停止时保留上次启动的桌宠和悬浮窗显示设置。
-  emit("save", {
-    ...props.appSettings,
-    desktop: { ...props.appSettings.desktop, enabled: false }
+  saveChanges({
+    desktop: { enabled: false }
   })
 }
 
@@ -918,7 +1048,7 @@ function handleToggleMaster(val) {
   if (props.pending) return
   if (val) {
     // 总开关启动时沿用上次保存的桌宠，没有记录时由 getDesktopPet 回退到第一只。
-    const petToStart = getDesktopPet(props.appSettings.desktop?.petId)
+    const petToStart = getDesktopPet(draft.desktop.petId)
     startDesktopPet(petToStart)
   } else {
     stopDesktopPet()
@@ -945,12 +1075,21 @@ const cliItems = computed(() => {
 })
 
 function syncDraft() {
+  const nextDraft = {
+    desktop: {},
+    agents: {},
+    cliConfigPaths: {},
+    cloudSync: {},
+    koofrSync: {},
+    localBackup: {},
+    system: {}
+  }
   // 关闭只停用桌宠，不清除上次选择；旧素材不存在时选择第一只。
-  draft.desktop.enabled = Boolean(props.appSettings.desktop?.enabled)
-  draft.desktop.petId =
+  nextDraft.desktop.enabled = Boolean(props.appSettings.desktop?.enabled)
+  nextDraft.desktop.petId =
     getDesktopPet(props.appSettings.desktop?.petId)?.id || ""
   // 保存后的全局配置驱动划词入口；未保存的编辑仅留在设置草稿中。
-  draft.agents.translation = {
+  nextDraft.agents.translation = {
     enabled: false,
     targetId: "",
     model: "",
@@ -959,14 +1098,15 @@ function syncDraft() {
     clipboardShortcut: "Ctrl+Alt+Shift+T",
     ...props.appSettings.agents?.translation
   }
-  draft.dataPath = props.appSettings.dataPath || ""
-  draft.cliConfigPaths.claude = props.appSettings.cliConfigPaths?.claude || ""
-  draft.cliConfigPaths.codex = props.appSettings.cliConfigPaths?.codex || ""
+  nextDraft.dataPath = props.appSettings.dataPath || ""
+  nextDraft.cliConfigPaths.claude =
+    props.appSettings.cliConfigPaths?.claude || ""
+  nextDraft.cliConfigPaths.codex = props.appSettings.cliConfigPaths?.codex || ""
   // 当前版本暂不启用 Gemini。
   // draft.cliConfigPaths.gemini = props.appSettings.cliConfigPaths?.gemini || ""
   for (const syncItem of cloudSyncItems) {
     const source = props.appSettings[syncItem.settingKey] || {}
-    const target = draft[syncItem.settingKey]
+    const target = nextDraft[syncItem.settingKey]
 
     target.provider = syncItem.provider
     target.webdavUrl = source.webdavUrl || syncItem.defaultUrl
@@ -975,21 +1115,22 @@ function syncDraft() {
     target.fileName = source.fileName || "ai-manager.aimbackup"
     target.lastUpdatedAt = Number(source.lastUpdatedAt || 0)
   }
-  draft.localBackup.enabled = props.appSettings.localBackup?.enabled !== false
-  draft.localBackup.intervalMinutes = Number(
+  nextDraft.localBackup.enabled =
+    props.appSettings.localBackup?.enabled !== false
+  nextDraft.localBackup.intervalMinutes = Number(
     props.appSettings.localBackup?.intervalMinutes || 60
   )
-  draft.localBackup.maxCount = Number(
+  nextDraft.localBackup.maxCount = Number(
     props.appSettings.localBackup?.maxCount || 20
   )
-  draft.localBackup.lastBackupAt = Number(
+  nextDraft.localBackup.lastBackupAt = Number(
     props.appSettings.localBackup?.lastBackupAt || 0
   )
-  draft.system.closeAction = props.appSettings.system?.closeAction || "ask"
-  draft.system.quickSwitchVisible =
+  nextDraft.system.closeAction = props.appSettings.system?.closeAction || "ask"
+  nextDraft.system.quickSwitchVisible =
     props.appSettings.system?.quickSwitchVisible !== false
   // 缺少配置的工具默认显示，旧配置和以后新增的工具都无需迁移。
-  draft.system.quickSwitchTools = {
+  nextDraft.system.quickSwitchTools = {
     ...props.appSettings.system?.quickSwitchTools,
     ...Object.fromEntries(
       floatingToolItems.value.map((tool) => [
@@ -998,9 +1139,20 @@ function syncDraft() {
       ])
     )
   }
-  draft.system.autoLaunchEnabled = Boolean(
+  nextDraft.system.autoLaunchEnabled = Boolean(
     props.appSettings.system?.autoLaunchEnabled
   )
+  for (const [path, value] of settingFields(nextDraft)) {
+    const key = path.join(".")
+    const target = path.slice(0, -1).reduce((item, part) => item[part], draft)
+    if (
+      !pendingFields.has(key) &&
+      (!savedFields.has(key) || target[path.at(-1)] === savedFields.get(key))
+    ) {
+      target[path.at(-1)] = value
+    }
+    savedFields.set(key, value)
+  }
 }
 
 async function selectDirectory(key, currentPath) {
@@ -1015,62 +1167,34 @@ async function selectDirectory(key, currentPath) {
 
   if (key === "dataPath") {
     draft.dataPath = selectedPath
+    saveChanges({ dataPath: selectedPath })
     return
   }
 
   draft.cliConfigPaths[key] = selectedPath
+  saveChanges({ cliConfigPaths: { [key]: selectedPath } })
+}
+
+function resetDataPath() {
+  draft.dataPath = props.appSettings.defaultDataPath
+  saveChanges({ dataPath: draft.dataPath })
 }
 
 function resetCliPath(key) {
   draft.cliConfigPaths[key] =
     props.appSettings.defaultCliConfigPaths?.[key] || ""
+  saveChanges({ cliConfigPaths: { [key]: draft.cliConfigPaths[key] } })
 }
 
 function toggleTranslationAgent() {
   draft.agents.translation.enabled = !draft.agents.translation.enabled
-  submitSettings()
+  saveChanges({
+    agents: { translation: { enabled: draft.agents.translation.enabled } }
+  })
 }
 
-function submitSettings() {
-  emit("save", {
-    desktop: { ...draft.desktop },
-    agents: { translation: { ...draft.agents.translation } },
-    dataPath: draft.dataPath,
-    cliConfigPaths: {
-      claude: draft.cliConfigPaths.claude,
-      codex: draft.cliConfigPaths.codex
-      // 当前版本暂不启用 Gemini。
-      // gemini: draft.cliConfigPaths.gemini
-    },
-    cloudSync: {
-      provider: draft.cloudSync.provider,
-      webdavUrl: draft.cloudSync.webdavUrl,
-      username: draft.cloudSync.username,
-      password: draft.cloudSync.password,
-      fileName: draft.cloudSync.fileName,
-      lastUpdatedAt: draft.cloudSync.lastUpdatedAt
-    },
-    koofrSync: {
-      provider: draft.koofrSync.provider,
-      webdavUrl: draft.koofrSync.webdavUrl,
-      username: draft.koofrSync.username,
-      password: draft.koofrSync.password,
-      fileName: draft.koofrSync.fileName,
-      lastUpdatedAt: draft.koofrSync.lastUpdatedAt
-    },
-    localBackup: {
-      enabled: draft.localBackup.enabled,
-      intervalMinutes: Number(draft.localBackup.intervalMinutes || 60),
-      maxCount: Number(draft.localBackup.maxCount || 20),
-      lastBackupAt: draft.localBackup.lastBackupAt
-    },
-    system: {
-      closeAction: draft.system.closeAction,
-      quickSwitchVisible: draft.system.quickSwitchVisible,
-      quickSwitchTools: { ...draft.system.quickSwitchTools },
-      autoLaunchEnabled: draft.system.autoLaunchEnabled
-    }
-  })
+function saveTranslationChanges(changes) {
+  saveChanges({ agents: { translation: changes } })
 }
 
 function emitCloudSync(eventName, syncItem) {
@@ -1278,7 +1402,6 @@ watch(floatingToolItems, (tools) => {
     color: var(--color-primary);
   }
 
-  &__save,
   &__check-update,
   &__panel-header button,
   &__input-row button,
@@ -1299,24 +1422,12 @@ watch(floatingToolItems, (tools) => {
     font-size: var(--font-size-sm);
   }
 
-  &__save {
-    padding: 0 13px;
-    border-color: var(--color-primary);
-    background: var(--color-primary-solid);
-    color: #ffffff;
-  }
-
   &__check-update {
     padding: 0 12px;
     .text {
       font-size: var(--font-size-sm);
       line-height: 14px;
     }
-  }
-
-  &__save:disabled {
-    cursor: not-allowed;
-    opacity: 0.56;
   }
 
   &__cloud-actions button:disabled,
@@ -1736,133 +1847,162 @@ watch(floatingToolItems, (tools) => {
 
   .settings-agent-panel {
     min-height: 0;
-    overflow: auto;
+
     .settings-agent-list {
       display: flex;
       flex-direction: column;
-      gap: 12px;
+      gap: 24px;
 
       .settings-agent-card {
         display: flex;
         align-items: center;
-        gap: 16px;
-        padding: 16px 20px;
+        justify-content: space-between;
+        padding: 22px 28px;
         border: 1px solid var(--color-line);
-        border-radius: 12px;
+        border-radius: 16px;
         background: var(--color-panel);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+        cursor: pointer;
         transition:
-          border-color 0.15s ease,
-          box-shadow 0.15s ease;
+          box-shadow 0.2s ease,
+          transform 0.2s ease;
 
-        .settings-agent-icon {
-          display: flex;
-          width: 48px;
-          height: 48px;
-          flex: none;
-          align-items: center;
-          justify-content: center;
-          border-radius: 12px;
-          background: #eff6ff;
-          color: #2563eb;
+        &:hover {
+          box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06);
+          transform: translateY(-1px);
         }
 
-        .settings-agent-copy {
+        &:focus-visible {
+          outline: 2px solid #2563eb;
+          outline-offset: 2px;
+        }
+
+        .settings-agent-main {
           display: flex;
+          align-items: center;
+          gap: 18px;
           min-width: 0;
           flex: 1;
-          flex-direction: column;
-          gap: 4px;
 
-          [data-emphasis] {
-            font-size: 15px;
-            font-weight: 600;
-            color: var(--color-text);
+          .settings-agent-icon {
+            display: flex;
+            width: 52px;
+            height: 52px;
+            flex: none;
+            align-items: center;
+            justify-content: center;
+            border-radius: 14px;
+            background: #eff6ff;
+            color: #2563eb;
           }
 
-          span:not([data-emphasis]) {
-            color: var(--color-text-muted);
-            font-size: 13px;
-            line-height: 1.45;
+          .settings-agent-copy {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 4px;
+
+            .settings-agent-title {
+              margin: 0;
+              font-size: 18px;
+              color: var(--color-text);
+              letter-spacing: -0.01em;
+            }
+
+            .settings-agent-description {
+              margin: 0;
+              color: var(--color-text-muted);
+              font-size: 13px;
+              line-height: 1.5;
+            }
           }
+        }
+
+        .settings-agent-divider {
+          width: 1px;
+          height: 54px;
+          flex-shrink: 0;
+          margin: 0 32px;
+          background: var(--color-line);
         }
 
         .settings-agent-actions {
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 16px;
           flex: none;
 
-          .settings-agent-switch {
-            position: relative;
-            width: 44px;
-            height: 24px;
-            border: none;
-            border-radius: 12px;
-            background: #cbd5e1;
-            cursor: pointer;
-            padding: 2px;
-            transition: background 0.2s ease;
+          .settings-agent-switch-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
 
-            &--active {
-              background: #2563eb;
+            .settings-agent-switch {
+              position: relative;
+              width: 44px;
+              height: 24px;
+              flex-shrink: 0;
+              border: none;
+              border-radius: 12px;
+              background: #cbd5e1;
+              cursor: pointer;
+              padding: 2px;
+              transition: background 0.2s ease;
+
+              &:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+              }
+
+              &.settings-agent-switch--active {
+                background: #2563eb;
+
+                .settings-agent-switch-thumb {
+                  transform: translateX(20px);
+                }
+              }
 
               .settings-agent-switch-thumb {
-                transform: translateX(20px);
+                display: block;
+                width: 20px;
+                height: 20px;
+                border-radius: 50%;
+                background: #ffffff;
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+                transition: transform 0.2s ease;
               }
             }
 
-            .settings-agent-switch-thumb {
-              display: block;
-              width: 20px;
-              height: 20px;
-              border-radius: 50%;
-              background: #ffffff;
-              box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-              transition: transform 0.2s ease;
+            .settings-agent-switch-label {
+              color: var(--color-text);
+              font-size: 15px;
             }
           }
 
-          .settings-agent-badge {
-            display: inline-flex;
+          .settings-agent-buttons {
+            display: flex;
             align-items: center;
-            padding: 3px 10px;
-            border-radius: 12px;
-            background: #f1f5f9;
-            color: #64748b;
-            font-size: 13px;
-            font-weight: 500;
-            line-height: 1.4;
+            gap: 10px;
 
-            &--active {
-              background: #eff6ff;
-              color: #2563eb;
-            }
-          }
+            .settings-agent-btn {
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+              padding: 6px 10px;
+              border: 1px solid var(--color-line);
+              border-radius: 8px;
+              background: var(--color-panel);
+              color: var(--color-text);
+              font-size: 13px;
+              cursor: pointer;
+              transition:
+                background 0.15s ease,
+                border-color 0.15s ease;
 
-          .settings-agent-divider {
-            width: 1px;
-            height: 24px;
-            background: var(--color-line);
-            margin: 0 4px;
-          }
-
-          .settings-agent-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 14px;
-            border: 1px solid var(--color-line);
-            border-radius: 8px;
-            background: var(--color-panel);
-            color: var(--color-text);
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.15s ease;
-
-            &:hover {
-              background: var(--color-panel-soft);
-              border-color: var(--color-line-strong);
+              &:hover {
+                background: var(--color-panel-soft);
+                border-color: var(--color-line-strong);
+              }
             }
           }
         }

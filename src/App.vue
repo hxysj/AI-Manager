@@ -188,6 +188,7 @@
           :local-backup-directory="localBackupDirectory"
           :local-backups="localBackups"
           :pending="pending"
+          :save-settings="saveSettings"
           @export-data="exportDataBackup"
           @local-backup-now="createLocalBackup"
           @local-backup-restore="previewLocalBackupRestore"
@@ -199,7 +200,6 @@
           @open-path="openPath"
           @quit-app="quitApp"
           @restore-data="restoreDataBackup"
-          @save="saveSettings"
           @uninstall-without-trace="uninstallWithoutTrace"
         />
 
@@ -1125,17 +1125,22 @@ async function refreshSessions() {
   await runAction(() => appApi.ensureSessionsReady())
 }
 
-async function saveSettings(payload) {
-  const success = await runAction(() => settingsApi.saveSettings(payload))
-
-  if (success) {
-    await refreshLocalBackups(false)
-    showSuccessMessage(
-      state.appSettings.restartRequired
-        ? "设置已保存，数据目录将在重启后生效。"
-        : "设置已保存并重新刷新。"
-    )
-  }
+// 连续修改按顺序落盘，队列保留在主界面，离开设置页也不会丢弃已提交的修改。
+let settingsSaveQueue = Promise.resolve()
+function saveSettings(payload) {
+  const patch = JSON.parse(JSON.stringify(payload))
+  settingsSaveQueue = settingsSaveQueue.then(async () => {
+    try {
+      updateState(await settingsApi.saveSettings(patch))
+      showSuccessMessage("修改已保存")
+      if (patch.localBackup) await refreshLocalBackups(false)
+      return true
+    } catch (error) {
+      showErrorMessage(error)
+      return false
+    }
+  })
+  return settingsSaveQueue
 }
 
 async function checkForAppUpdates() {
