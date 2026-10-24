@@ -767,7 +767,12 @@ impl ManagerState {
                 .await
             }
             "lan-share:scan-devices" => {
-                lan_share::scan_devices(&self.lan_share_registry).await
+                lan_share::scan_devices(
+                    app.clone(),
+                    &self.lan_share_registry,
+                    &self.paths,
+                )
+                .await
             }
             "lan-share:set-hidden" => {
                 lan_share::set_hidden(

@@ -433,6 +433,19 @@
   </div>
   <Teleport to="body">
     <div
+      v-if="ocrLoading"
+      class="ocr-loading-mask"
+      role="status"
+      aria-live="polite"
+      aria-label="OCR 正在识别"
+    >
+      <section class="ocr-loading-dialog">
+        <span class="ocr-loading-spinner" aria-hidden="true" />
+        <span class="ocr-loading-title">正在识别文字</span>
+        <span class="ocr-loading-description">正在分析截图内容，请稍候…</span>
+      </section>
+    </div>
+    <div
       v-if="ocrResult"
       class="ocr-result-mask"
       @pointerdown.self="ocrResult = null"
@@ -534,6 +547,8 @@ const colorValue = computed(() =>
         .join(", ")
 )
 const busy = ref(false)
+// OCR 推理耗时较长时单独展示状态，避免与保存操作共用忙碌状态。
+const ocrLoading = ref(false)
 const error = ref("")
 const ocrResult = ref(null)
 const longBusy = ref(false)
@@ -1085,10 +1100,12 @@ async function startLongCapture() {
         const bounds = desktop.value.getBoundingClientRect()
         await screenshotApi.call("long-preview", {
           x: Math.round(
-            frame.value.left + (panel.left - bounds.left) * frame.value.width / bounds.width
+            frame.value.left +
+              ((panel.left - bounds.left) * frame.value.width) / bounds.width
           ),
           y: Math.round(
-            frame.value.top + (panel.top - bounds.top) * frame.value.height / bounds.height
+            frame.value.top +
+              ((panel.top - bounds.top) * frame.value.height) / bounds.height
           ),
           width: Math.ceil((panel.width * frame.value.width) / bounds.width),
           height: Math.ceil((panel.height * frame.value.height) / bounds.height)
@@ -1132,6 +1149,10 @@ async function output(data) {
   error.value = ""
   try {
     if (data.action === "ocr") {
+      ocrResult.value = null
+      ocrLoading.value = true
+      // 先让 loading 状态完成渲染，再开始模型加载和推理。
+      await nextTick()
       ocrResult.value = await recognizePpocr(data.source)
       return
     }
@@ -1173,6 +1194,7 @@ async function output(data) {
   } catch (cause) {
     error.value = `操作失败：${String(cause)}`
   } finally {
+    ocrLoading.value = false
     busy.value = false
   }
 }
@@ -2291,6 +2313,54 @@ onBeforeUnmount(() => {
   justify-content: center;
   padding: 24px;
   background: #0007;
+}
+
+.ocr-loading-mask {
+  position: fixed;
+  z-index: 3001;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #0007;
+}
+
+.ocr-loading-dialog {
+  display: flex;
+  min-width: 230px;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 20px;
+  border: 1px solid #b7c4d4;
+  border-radius: 10px;
+  background: #fff;
+  color: #1f2937;
+  box-shadow: 0 18px 60px #0005;
+  font-size: 13px;
+  .ocr-loading-title {
+    flex: 0 0 auto;
+  }
+  .ocr-loading-description {
+    color: #64748b;
+    font-size: 12px;
+  }
+}
+
+.ocr-loading-spinner {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 2px solid #dbeafe;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: ocr-loading-spin 0.8s linear infinite;
+}
+
+@keyframes ocr-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .ocr-result-dialog {

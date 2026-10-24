@@ -1,5 +1,5 @@
 <template>
-  <section class="chat-workspace">
+  <section class="chat-workspace" @click="markSessionRead">
     <header class="workspace-header">
       <div class="workspace-identity">
         <div
@@ -388,6 +388,10 @@ const filesOpen = ref(false)
 const historyOpen = ref(false)
 const groupOpen = ref(false)
 const groupDraft = reactive({ name: "", messageVisibility: "all" })
+
+function markSessionRead() {
+  messagesRef.value?.markCurrentSessionRead?.()
+}
 
 const sortedSessions = computed(() =>
   [...props.sessions].sort((left, right) => right.updatedAt - left.updatedAt)

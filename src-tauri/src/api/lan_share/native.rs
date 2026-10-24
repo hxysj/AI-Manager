@@ -455,16 +455,17 @@ async fn schedule_peer_check(
         verified.ip = candidate.ip;
         verified.port = candidate.port;
         verified.last_seen_at = now_millis();
-        if refresh_peer(&registry, &paths, &verified, &trusted.secret)
-            .await
-            .is_err()
-        {
-            return;
-        }
+        let peer_changed = match refresh_peer(&registry, &paths, &verified, &trusted.secret).await {
+            Ok(changed) => changed,
+            Err(_) => return,
+        };
         let Some(app) = app else {
             return;
         };
         emit_native_changed(&app, &registry).await;
+        if peer_changed {
+            let _ = super::emit_state_changed(&app, &registry, &paths).await;
+        }
         let mut runtime = registry.inner.lock().await;
         if !runtime
             .native
@@ -550,6 +551,35 @@ pub(super) async fn scan_nearby(registry: &LanShareServerRegistry) -> Result<Val
         let _ = tx.try_send(());
     }
     Ok(json!(true))
+}
+
+pub(super) async fn probe_known_peers(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    app: Option<tauri::AppHandle>,
+) {
+    let known = {
+        let runtime = registry.inner.lock().await;
+        runtime
+            .native
+            .config
+            .peers
+            .iter()
+            .filter(|trusted| trusted.secure && !trusted.secret.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+
+    for trusted in known {
+        schedule_peer_check(
+            registry,
+            paths,
+            app.clone(),
+            trusted.peer.clone(),
+            trusted,
+        )
+        .await;
+    }
 }
 
 fn network_error(error: reqwest::Error) -> ManagerError {
@@ -705,7 +735,7 @@ async fn refresh_peer(
     paths: &AppPaths,
     peer: &Peer,
     secret: &str,
-) -> Result<(), ManagerError> {
+) -> Result<bool, ManagerError> {
     let _storage = registry.storage.lock().await;
     let mut runtime = registry.inner.lock().await;
     let Some(trusted) = runtime.native.config.peers.iter_mut().find(|trusted| {
@@ -731,9 +761,11 @@ async fn refresh_peer(
             device.last_seen_at = now_millis();
         }
         write_json(&paths.lan_share_files.devices, &json!(devices)).await?;
+        // 心跳发现地址变化时同步直接会话，消息时间线才能标出新旧 IP。
+        super::ensure_session(paths, &peer.id, "", &peer.name, &peer.ip)?;
     }
     runtime.native.nearby.insert(peer.id.clone(), peer.clone());
-    Ok(())
+    Ok(changed)
 }
 
 pub async fn connect_peer(
@@ -1503,10 +1535,16 @@ where
             ));
         }
         peer.ip = client_ip(address);
+        let mut peer_changed = false;
         if scope == "paired" {
             peer.last_seen_at = now_millis();
             peer_origin(&peer)?;
-            refresh_peer(registry, paths, &peer, &auth.secret).await?;
+            peer_changed = refresh_peer(registry, paths, &peer, &auth.secret).await?;
+        }
+        if peer_changed {
+            if let Some(app) = app {
+                emit_state_changed(app, registry, paths).await?;
+            }
         }
         process_secure_operation(
             registry,

@@ -1186,6 +1186,8 @@ let stopDevicesListener = null
 let stopNativeListener = null
 let scanTimer = null
 let initialSessionResolved = false
+// 状态事件可能连续到达，避免重复激活同一个未读会话。
+let autoActivatingSessionId = ""
 
 const serviceSummary = computed(() => {
   if (!state.service.running) {
@@ -1449,6 +1451,8 @@ onMounted(async () => {
   })
   await loadState()
   if (!state.service.running) await startService()
+  // 进入设备列表时立即探测已连接节点，及时发现网页设备切换网络后的新 IP。
+  await probeConnectedDevices()
 })
 
 watch(
@@ -1538,6 +1542,24 @@ function applyState(payload) {
     selectedDeviceId.value = connectedDevices.value[0].id
     selectedSessionId.value = findDirectSessionId(selectedDeviceId.value)
   }
+  if (chatMode.value === "direct" && selectedDeviceId.value) {
+    const unreadSession = state.sessions.find(
+      (session) =>
+        isDirectDeviceSession(session) && Number(session.unreadCount || 0) > 0
+    )
+    if (
+      unreadSession &&
+      unreadSession.id !== selectedSessionId.value &&
+      autoActivatingSessionId !== unreadSession.id
+    ) {
+      // 新消息进入设备的其他会话时，自动切换到未读会话并标记为已读。
+      autoActivatingSessionId = unreadSession.id
+      void selectSession(unreadSession.id).finally(() => {
+        if (autoActivatingSessionId === unreadSession.id)
+          autoActivatingSessionId = ""
+      })
+    }
+  }
 }
 
 function unwrapData(result) {
@@ -1585,6 +1607,16 @@ async function runAction(action, successMessage) {
 
 async function loadState() {
   await runAction(async () => lanShareApi.getState())
+}
+
+async function probeConnectedDevices() {
+  if (!state.service.running) return
+  try {
+    await lanShareApi.scanDevices()
+  } catch (error) {
+    // 主状态已经加载成功时，探测失败不应阻塞设备列表展示。
+    console.warn("设备在线探测失败", error)
+  }
 }
 
 async function startService() {

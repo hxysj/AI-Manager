@@ -545,6 +545,8 @@ pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, 
         &label,
         WebviewUrl::App(format!("index.html?panel=tool&tool={tool_id}").into()),
     )
+    // Windows 下原生拖放处理会拦截页面的 HTML5 拖拽事件，工具页需要自行接收文件拖放。
+    .disable_drag_drop_handler()
     .title(format!("{title} · Monkey Thief"))
     .inner_size(if large { 1120.0 } else { 960.0 }, if large { 760.0 } else { 680.0 })
     .min_inner_size(896.0, 576.0)

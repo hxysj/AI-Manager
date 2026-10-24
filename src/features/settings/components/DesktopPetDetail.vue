@@ -1,8 +1,8 @@
 <template>
   <BaseModal
     class="settings-desktop-detail"
-    :title="`${pet.name} · 桌宠详情`"
-    description="预览桌宠的全部动作，打开开关即可启动桌面陪伴。"
+    title="桌宠功能 · 详情"
+    description="选择桌宠、预览全部动作，打开开关即可启动桌面陪伴。"
     role="dialog"
     aria-modal="true"
     :aria-label="`${pet.name}的详情`"
@@ -10,6 +10,41 @@
     @keydown.esc.stop="$emit('close')"
   >
     <div class="settings-desktop-detail-body">
+      <!-- 桌宠目录放在详情内，避免占用桌面管理外层空间。 -->
+      <section class="desktop-detail-pets-section">
+        <div class="desktop-detail-pets-header">
+          <div>
+            <h3 class="desktop-detail-pets-title">可用桌宠</h3>
+            <p class="desktop-detail-pets-desc">选择桌宠查看详情和动作预览。</p>
+          </div>
+          <span class="desktop-detail-pets-count">{{ pets.length }} 只桌宠</span>
+        </div>
+
+        <div v-if="pets.length" class="desktop-detail-pets-list">
+          <button
+            v-for="item in pets"
+            :key="item.id"
+            class="desktop-detail-pet-option"
+            :class="{ 'desktop-detail-pet-option--selected': item.id === pet.id }"
+            type="button"
+            :aria-pressed="item.id === pet.id"
+            @click="$emit('select', item.id)"
+          >
+            <span class="desktop-detail-pet-preview">
+              <DesktopPet :pet="item" />
+            </span>
+            <span class="desktop-detail-pet-name">{{ item.name }}</span>
+            <span class="desktop-detail-pet-actions">
+              {{ item.animations?.length || item.actionCount || 0 }} 个动作
+            </span>
+            <span v-if="item.id === pet.id" class="desktop-detail-pet-current">
+              当前查看
+            </span>
+          </button>
+        </div>
+        <p v-else class="desktop-detail-empty-hint">暂无可用桌宠。</p>
+      </section>
+
       <!-- 顶部桌宠概览卡片 -->
       <section class="desktop-detail-hero">
         <div class="desktop-detail-hero-left">
@@ -83,12 +118,13 @@ import BaseModal from "@/components/BaseModal.vue"
 import DesktopPet from "@/components/DesktopPet.vue"
 
 const props = defineProps({
+  pets: { type: Array, default: () => [] },
   pet: { type: Object, required: true },
   running: { type: Boolean, default: false },
   pending: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(["close", "start", "stop"])
+const emit = defineEmits(["close", "select", "start", "stop"])
 
 function toggleRunning() {
   if (props.pending) return
@@ -122,6 +158,103 @@ function toggleRunning() {
     &::-webkit-scrollbar-thumb {
       background: var(--color-line-strong);
       border-radius: 3px;
+    }
+  }
+
+  .desktop-detail-pets-section {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 18px;
+    background: var(--color-panel-soft);
+    border: 1px solid var(--color-line);
+    border-radius: 14px;
+
+    .desktop-detail-pets-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+
+      .desktop-detail-pets-title {
+        margin: 0;
+        font-size: 16px;
+        color: var(--color-text);
+      }
+
+      .desktop-detail-pets-desc {
+        margin: 4px 0 0;
+        font-size: 13px;
+        color: var(--color-text-muted);
+      }
+
+      .desktop-detail-pets-count {
+        flex-shrink: 0;
+        padding-top: 2px;
+        font-size: 13px;
+        color: var(--color-text-muted);
+      }
+    }
+
+    .desktop-detail-pets-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .desktop-detail-pet-option {
+      display: flex;
+      flex: 1 1 140px;
+      flex-direction: column;
+      align-items: center;
+      min-width: 140px;
+      max-width: 180px;
+      gap: 4px;
+      padding: 10px 12px;
+      border: 1px solid var(--color-line);
+      border-radius: 12px;
+      background: var(--color-panel);
+      color: var(--color-text);
+      cursor: pointer;
+      text-align: center;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+
+      &:hover {
+        border-color: var(--color-line-strong);
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.05);
+      }
+
+      &:focus-visible {
+        outline: 2px solid #2563eb;
+        outline-offset: 2px;
+      }
+
+      &--selected {
+        border-color: #3b82f6;
+        box-shadow: 0 0 0 1px #3b82f6;
+      }
+
+      .desktop-detail-pet-preview {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 72px;
+        height: 72px;
+      }
+
+      .desktop-detail-pet-name {
+        font-size: 14px;
+      }
+
+      .desktop-detail-pet-actions,
+      .desktop-detail-pet-current {
+        font-size: 12px;
+        color: var(--color-text-muted);
+      }
+
+      .desktop-detail-pet-current {
+        color: #2563eb;
+      }
     }
   }
 

@@ -164,6 +164,8 @@ pub struct LanShareMessage {
     #[serde(default)]
     pub attachments: Vec<attachments::Attachment>,
     pub content: String,
+    #[serde(default)]
+    pub ip: String,
     pub created_at: u64,
     pub delivered: bool,
     pub read: bool,
@@ -3513,8 +3515,10 @@ fn mobile_page_html() -> String {
     const connSettingReceiveModeEl = document.getElementById("connSettingReceiveMode");
 
     let ws = null;
+    let presenceTimer = null;
     let deviceRemoved = false;
-    let deviceId = "";
+    // 持久化服务端设备 ID，网络切换后继续沿用同一设备身份。
+    let deviceId = localStorage.getItem("lanShareDeviceId") || "";
     let currentSessionId = "";
     let currentMode = "direct";
     let currentGroupId = "";
@@ -3656,7 +3660,7 @@ fn mobile_page_html() -> String {
 
     function fileUrl(file, kind) {
       const endpoint = kind === "preview" ? "/api/files/preview" : "/api/files/download";
-      return endpoint + "?token=" + encodeURIComponent(token) + "&id=" + encodeURIComponent(file.id);
+      return endpoint + "?token=" + encodeURIComponent(token) + "&id=" + encodeURIComponent(file.id) + "&deviceId=" + encodeURIComponent(deviceId);
     }
 
     function getFileTypeCategory(file) {
@@ -3781,6 +3785,8 @@ fn mobile_page_html() -> String {
         })
       });
       deviceId = data.id || deviceId;
+      // 注册结果可能由同名设备合并得到，必须保存最终稳定 ID。
+      localStorage.setItem("lanShareDeviceId", deviceId);
       deviceNameEl.value = data.name || data.autoName || "";
       localStorage.setItem("lanShareDeviceName", deviceNameEl.value);
       updateSettingsInfo();
@@ -3842,6 +3848,8 @@ fn mobile_page_html() -> String {
         })
       });
       deviceId = data.device?.id || deviceId;
+      // 加入群聊后也沿用服务端确认过的设备 ID。
+      localStorage.setItem("lanShareDeviceId", deviceId);
       currentMode = "group";
       currentGroupId = data.group?.id || "";
       currentSessionId = data.currentSession?.id || currentSessionId;
@@ -4050,15 +4058,29 @@ fn mobile_page_html() -> String {
       ws = new WebSocket(protocol + "//" + location.host + "/ws?token=" + encodeURIComponent(token) + "&deviceId=" + encodeURIComponent(deviceId));
       ws.onopen = () => {
         setStatus("已连接电脑端服务");
+        clearInterval(presenceTimer);
+        // 定时发送存活信号，让电脑端及时发现网页设备换 IP。
+        presenceTimer = window.setInterval(() => {
+          if (ws?.readyState !== WebSocket.OPEN) return;
+          try { ws.send(JSON.stringify({ type: "presence" })); } catch (_) {}
+        }, 9000);
         loadGroups().catch(error => setStatus(error.message));
       };
       ws.onclose = () => {
+        clearInterval(presenceTimer);
+        presenceTimer = null;
         if (deviceRemoved) return;
         setStatus("连接已断开，正在重连...");
         window.setTimeout(connectWs, 1600);
       };
       ws.onmessage = event => {
         const payload = JSON.parse(event.data);
+        if (payload.type === "presence-request") {
+          if (ws?.readyState === WebSocket.OPEN) {
+            try { ws.send(JSON.stringify({ type: "presence" })); } catch (_) {}
+          }
+          return;
+        }
         if (payload.type === "deviceRemoved") {
           deviceRemoved = true;
           currentSessionId = "";
@@ -4225,6 +4247,7 @@ fn mobile_page_html() -> String {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             messageId: pendingMessageId,
+            deviceId,
             content,
             sessionId,
             attachmentIds: pendingAttachments.map(item => item.uploadedId)
@@ -4286,6 +4309,7 @@ fn mobile_page_html() -> String {
     document.getElementById("resetConnBtn").onclick = () => {
       localStorage.removeItem("lanShareConnSettings");
       localStorage.removeItem("lanShareDeviceName");
+      localStorage.removeItem("lanShareDeviceId");
       showToast("已重置连接记录与本地配置");
     };
 
@@ -4370,6 +4394,54 @@ fn query_value(uri: &hyper::Uri, key: &str) -> String {
 
 fn client_ip(addr: SocketAddr) -> String {
     addr.ip().to_string()
+}
+
+fn resolve_guest_device_id(
+    paths: &AppPaths,
+    requested_device_id: &str,
+    ip: &str,
+) -> Result<String, ManagerError> {
+    if !requested_device_id.is_empty()
+        && read_array::<LanShareDevice>(&paths.lan_share_files.devices)?
+            .iter()
+            .any(|device| device.id == requested_device_id)
+    {
+        return Ok(requested_device_id.to_string());
+    }
+    if ip.is_empty() {
+        return Ok(requested_device_id.to_string());
+    }
+    Ok(device_id_from_ip(ip))
+}
+
+async fn refresh_guest_presence(
+    context: &HttpContext,
+    device_id: &str,
+    ip: &str,
+) -> Result<bool, ManagerError> {
+    if device_id.is_empty() || ip.is_empty() {
+        return Ok(false);
+    }
+    let device = read_array::<LanShareDevice>(&context.paths.lan_share_files.devices)?
+        .into_iter()
+        .find(|device| device.id == device_id);
+    let Some(device) = device else {
+        return Ok(false);
+    };
+    if device.ip == ip {
+        return Ok(false);
+    }
+    upsert_device(
+        &context.registry,
+        &context.paths,
+        &device.id,
+        &device.name,
+        &device.user_agent,
+        ip,
+    )
+    .await?;
+    emit_state_changed(&context.app, &context.registry, &context.paths).await?;
+    Ok(true)
 }
 
 async fn is_request_token_valid(registry: &LanShareServerRegistry, actual: &str) -> bool {
@@ -4641,26 +4713,69 @@ pub async fn upsert_device(
     } else {
         device_id_from_ip(ip)
     };
+    let same_name_device_ids = if ip.is_empty() || native_device || normalized_name.is_empty() {
+        Vec::new()
+    } else {
+        devices
+            .iter()
+            .filter(|device| {
+                device.user_agent != "MonkeyThief/Desktop"
+                    && normalize_device_name(&device.name) == normalized_name
+            })
+            .map(|device| device.id.clone())
+            .collect::<Vec<_>>()
+    };
 
     let device_index = devices
         .iter()
-        .position(|device| device.id == canonical_device_id)
-        .or_else(|| devices.iter().position(|device| device.id == device_id))
+        .position(|device| !device_id.is_empty() && device.id == device_id)
         .or_else(|| {
-            if ip.is_empty() || native_device {
+            if ip.is_empty() || native_device || normalized_name.is_empty() {
                 None
             } else {
-                devices.iter().position(|device| {
-                    device.ip == ip && device.user_agent != "MonkeyThief/Desktop"
-                })
+                devices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, device)| {
+                        device.user_agent != "MonkeyThief/Desktop"
+                            && normalize_device_name(&device.name) == normalized_name
+                    })
+                    .min_by_key(|(_, device)| device.first_seen_at)
+                    .map(|(index, _)| index)
             }
+        })
+        .or_else(|| devices.iter().position(|device| device.id == canonical_device_id))
+        .or_else(|| {
+            if ip.is_empty() || native_device {
+                return None;
+            }
+            devices.iter().position(|device| {
+                device.ip == ip && device.user_agent != "MonkeyThief/Desktop"
+            })
         });
 
     if let Some(index) = device_index {
         let old_device_id = devices[index].id.clone();
+        let old_ip = devices[index].ip.clone();
+        let matched_by_requested_id = !device_id.is_empty() && old_device_id == device_id;
+        let matched_by_canonical_id = old_device_id == canonical_device_id;
+        let matched_by_name = !normalized_name.is_empty()
+            && devices[index].user_agent != "MonkeyThief/Desktop"
+            && normalize_device_name(&devices[index].name) == normalized_name;
+        let next_device_id = if matched_by_requested_id || matched_by_canonical_id || matched_by_name
+        {
+            old_device_id.clone()
+        } else {
+            canonical_device_id.clone()
+        };
+        let merged_device_ids = same_name_device_ids
+            .iter()
+            .filter(|id| *id != &next_device_id)
+            .cloned()
+            .collect::<HashSet<_>>();
         let next_device = {
             let device = &mut devices[index];
-            device.id = canonical_device_id.clone();
+            device.id = next_device_id.clone();
             device.name = normalized_name;
             device.auto_name = next_auto_name;
             device.user_agent = user_agent.to_string();
@@ -4670,13 +4785,18 @@ pub async fn upsert_device(
         };
 
         devices.retain(|device| {
-            native_device
+            !merged_device_ids.contains(&device.id)
+                && (native_device
                 || device.user_agent == "MonkeyThief/Desktop"
-                || device.id == canonical_device_id
+                || device.id == next_device_id
                 || device.ip != ip
-                || device.ip.is_empty()
+                || device.ip.is_empty())
         });
-        rewrite_device_references(paths, &old_device_id, &canonical_device_id, ip).await?;
+        for merged_device_id in &merged_device_ids {
+            rewrite_device_references(paths, merged_device_id, &next_device_id, ip).await?;
+        }
+        rewrite_device_references(paths, &old_device_id, &next_device_id, ip).await?;
+        update_device_ip_references(paths, &next_device_id, &old_ip, ip)?;
         write_json(&paths.lan_share_files.devices, &json!(devices)).await?;
         return Ok(next_device);
     }
@@ -4710,6 +4830,7 @@ async fn rewrite_device_references(
     let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
     let mut downloads: Vec<LanShareDownload> = read_array(&paths.lan_share_files.downloads)?;
     let mut target_session_ids = Vec::new();
+    let mut target_session_ips = HashMap::new();
     let mut sessions_changed = false;
     let mut messages_changed = false;
     let mut downloads_changed = false;
@@ -4717,6 +4838,7 @@ async fn rewrite_device_references(
     for session in sessions.iter_mut() {
         if session.device_id == old_device_id || (!ip.is_empty() && session.ip == ip) {
             target_session_ids.push(session.id.clone());
+            target_session_ips.insert(session.id.clone(), session.ip.clone());
             session.device_id = next_device_id.to_string();
             sessions_changed = true;
         }
@@ -4725,6 +4847,11 @@ async fn rewrite_device_references(
     for message in messages.iter_mut() {
         if message.device_id == old_device_id || target_session_ids.contains(&message.session_id) {
             message.device_id = next_device_id.to_string();
+            if message.ip.is_empty() {
+                if let Some(session_ip) = target_session_ips.get(&message.session_id) {
+                    message.ip = session_ip.clone();
+                }
+            }
             messages_changed = true;
         }
     }
@@ -4749,6 +4876,48 @@ async fn rewrite_device_references(
     Ok(())
 }
 
+fn update_device_ip_references(
+    paths: &AppPaths,
+    device_id: &str,
+    old_ip: &str,
+    new_ip: &str,
+) -> Result<(), ManagerError> {
+    if device_id.is_empty() || new_ip.is_empty() || old_ip == new_ip {
+        return Ok(());
+    }
+
+    let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
+    let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+    let mut changed_sessions = false;
+    let mut changed_messages = false;
+    for session in sessions.iter_mut().filter(|session| {
+        session.device_id == device_id && session.mode != "group"
+    }) {
+        if !old_ip.is_empty() {
+            for message in messages.iter_mut().filter(|message| {
+                message.session_id == session.id && message.ip.is_empty()
+            }) {
+                message.ip = old_ip.to_string();
+                changed_messages = true;
+            }
+        }
+        if session.ip != new_ip {
+            session.ip = new_ip.to_string();
+            session.updated_at = now_millis();
+            changed_sessions = true;
+        }
+    }
+
+    if changed_sessions {
+        sort_sessions(&mut sessions);
+        write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
+    }
+    if changed_messages {
+        write_json_blocking(&paths.lan_share_files.messages, &json!(messages))?;
+    }
+    Ok(())
+}
+
 fn ensure_session(
     paths: &AppPaths,
     device_id: &str,
@@ -4765,7 +4934,6 @@ fn ensure_session(
             .filter(|(_, session)| {
                 session.device_id == device_id
                     && session.mode != "group"
-                    && (ip.is_empty() || session.ip == ip || session.ip.is_empty())
             })
             .max_by_key(|(_, session)| session.updated_at)
             .map(|(index, _)| index)
@@ -4777,14 +4945,29 @@ fn ensure_session(
 
     if let Some(index) = target_index {
         let session = &mut sessions[index];
+        let old_ip = session.ip.clone();
         session.device_name = device_name.to_string();
-        if session.ip.is_empty() {
+        if !ip.is_empty() && session.ip != ip {
             session.ip = ip.to_string();
         }
         session.updated_at = now;
         let next_session = session.clone();
         sort_sessions(&mut sessions);
         write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
+        if !old_ip.is_empty() && !ip.is_empty() && old_ip != ip {
+            let mut messages: Vec<LanShareMessage> =
+                read_array(&paths.lan_share_files.messages)?;
+            let mut changed = false;
+            for message in messages.iter_mut().filter(|message| {
+                message.session_id == next_session.id && message.ip.is_empty()
+            }) {
+                message.ip = old_ip.clone();
+                changed = true;
+            }
+            if changed {
+                write_json_blocking(&paths.lan_share_files.messages, &json!(messages))?;
+            }
+        }
         return Ok(next_session);
     }
 
@@ -5324,6 +5507,7 @@ async fn append_message_with_attachments(
         message_type: if files.is_empty() { "text" } else { "file" }.to_string(),
         attachments: files.iter().map(attachments::Attachment::from).collect(),
         content,
+        ip: device.ip.clone(),
         created_at: now_millis(),
         delivered,
         read: false,
@@ -5476,6 +5660,7 @@ pub async fn send_message(
         }
     };
     let mut sent_messages = Vec::new();
+    let mut needs_presence_probe = false;
     for (device_id, sender) in targets {
         let stored_id = if device_id == target_device_id {
             message_id.clone()
@@ -5501,11 +5686,18 @@ pub async fn send_message(
         attachments::publish(registry, paths, &files).await?;
         if let Some(sender) = sender {
             let _ = send_stored_message_to_client(&sender, &stored);
+        } else if !native_delivery {
+            // 设备当前不在线时仍主动探测一次，给网络切换后的原生设备和
+            // 正在重连的网页设备机会更新 IP；消息先保留，探测成功后再补发。
+            needs_presence_probe = true;
         }
         emit_message_created(&app, &stored);
         sent_messages.push(stored);
     }
     emit_state_changed(&app, registry, paths).await?;
+    if needs_presence_probe {
+        let _ = scan_devices(app.clone(), registry, paths).await;
+    }
     Ok(lan_share_response(json!(sent_messages)))
 }
 
@@ -5643,9 +5835,31 @@ pub async fn set_hidden(
     Ok(lan_share_response(result))
 }
 
-pub async fn scan_devices(registry: &LanShareServerRegistry) -> Result<Value, ManagerError> {
-    let result = native::scan_nearby(registry).await?;
-    Ok(lan_share_response(result))
+pub async fn scan_devices(
+    app: tauri::AppHandle,
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+) -> Result<Value, ManagerError> {
+    // 设备列表打开时也主动要求已连接的网页设备回报一次 presence，
+    // 这样网络切换后不用等待下一轮定时心跳就能同步新的 IP。
+    let web_senders = {
+        let runtime = registry.inner.lock().await;
+        runtime.clients.values().cloned().collect::<Vec<_>>()
+    };
+    let web_count = web_senders.len();
+    for sender in web_senders {
+        let _ = sender.send(WsOutbound {
+            payload: json!({ "type": "presence-request" }),
+        });
+    }
+
+    // 已配对的原生设备直接执行一次加密 ping，立即验证在线状态和当前 IP。
+    native::probe_known_peers(registry, paths, Some(app)).await;
+    let native_result = native::scan_nearby(registry).await?;
+    Ok(lan_share_response(json!({
+        "native": native_result,
+        "web": web_count
+    })))
 }
 
 async fn handle_http_request(
@@ -5761,9 +5975,10 @@ async fn process_http_request(
                 .map_err(|_| ManagerError::System("消息过大或接收中断。".into()))?
                 .to_bytes();
             let payload: Value = serde_json::from_slice(&body)?;
-            let stored =
-                store_guest_message(&context, &device_id_from_ip(&client_ip(addr)), &payload)
-                    .await?;
+            let requested_device_id = string_value(payload.get("deviceId"));
+            let device_id =
+                resolve_guest_device_id(&context.paths, &requested_device_id, &client_ip(addr))?;
+            let stored = store_guest_message(&context, &device_id, &payload).await?;
             Ok(api_success(json!(stored)))
         }
         (&Method::GET, "/api/groups") => mobile_groups(request.uri(), &context, addr).await,
@@ -5940,11 +6155,7 @@ async fn mobile_messages(
 ) -> Result<Response<BoxBody>, ManagerError> {
     let request_ip = client_ip(addr);
     let requested_device_id = query_value(uri, "deviceId");
-    let device_id = if request_ip.is_empty() {
-        requested_device_id
-    } else {
-        device_id_from_ip(&request_ip)
-    };
+    let device_id = resolve_guest_device_id(&context.paths, &requested_device_id, &request_ip)?;
     let session_id = query_value(uri, "sessionId");
 
     if device_id.is_empty() {
@@ -6002,11 +6213,7 @@ async fn mobile_groups(
 ) -> Result<Response<BoxBody>, ManagerError> {
     let request_ip = client_ip(addr);
     let requested_device_id = query_value(uri, "deviceId");
-    let device_id = if request_ip.is_empty() {
-        requested_device_id
-    } else {
-        device_id_from_ip(&request_ip)
-    };
+    let device_id = resolve_guest_device_id(&context.paths, &requested_device_id, &request_ip)?;
 
     if device_id.is_empty() {
         return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
@@ -6049,11 +6256,7 @@ async fn append_download_record(
     ip: &str,
 ) -> Result<(), ManagerError> {
     let _storage = registry.storage.lock().await;
-    let canonical_device_id = if ip.is_empty() {
-        device_id.to_string()
-    } else {
-        device_id_from_ip(ip)
-    };
+    let canonical_device_id = resolve_guest_device_id(paths, device_id, ip)?;
     let device = read_array::<LanShareDevice>(&paths.lan_share_files.devices)?
         .into_iter()
         .find(|device| device.id == canonical_device_id)
@@ -6106,11 +6309,8 @@ async fn create_mobile_session(
     }
 
     let ip = client_ip(addr);
-    let device_id = if ip.is_empty() {
-        string_value(payload.get("deviceId"))
-    } else {
-        device_id_from_ip(&ip)
-    };
+    let requested_device_id = string_value(payload.get("deviceId"));
+    let device_id = resolve_guest_device_id(&context.paths, &requested_device_id, &ip)?;
 
     if device_id.is_empty() {
         return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
@@ -6174,11 +6374,7 @@ async fn join_mobile_group(
 
     let ip = client_ip(addr);
     let requested_device_id = string_value(payload.get("deviceId"));
-    let device_id = if ip.is_empty() {
-        requested_device_id
-    } else {
-        device_id_from_ip(&ip)
-    };
+    let device_id = resolve_guest_device_id(&context.paths, &requested_device_id, &ip)?;
 
     if device_id.is_empty() {
         return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
@@ -6271,11 +6467,7 @@ async fn leave_mobile_group(
 
     let ip = client_ip(addr);
     let requested_device_id = string_value(payload.get("deviceId"));
-    let device_id = if ip.is_empty() {
-        requested_device_id
-    } else {
-        device_id_from_ip(&ip)
-    };
+    let device_id = resolve_guest_device_id(&context.paths, &requested_device_id, &ip)?;
 
     if device_id.is_empty() {
         return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
@@ -6485,11 +6677,7 @@ async fn handle_websocket_connection(
     ip: String,
     stream: hyper::upgrade::Upgraded,
 ) -> Result<(), ManagerError> {
-    let device_id = if ip.is_empty() {
-        device_id
-    } else {
-        device_id_from_ip(&ip)
-    };
+    let device_id = resolve_guest_device_id(&context.paths, &device_id, &ip)?;
     let stream = TokioIo::new(stream);
     let websocket = WebSocketStream::from_raw_socket(stream, Role::Server, None).await;
     let (mut writer, mut reader) = websocket.split();
@@ -6508,6 +6696,8 @@ async fn handle_websocket_connection(
         }
         runtime.clients.insert(device_id.clone(), sender);
     }
+    // WebSocket 重连可能来自新的局域网地址，连接建立时立即同步设备记录。
+    refresh_guest_presence(&context, &device_id, &ip).await?;
     emit_state_changed(&context.app, &context.registry, &context.paths).await?;
 
     let writer_handle = tauri::async_runtime::spawn(async move {
@@ -6526,6 +6716,15 @@ async fn handle_websocket_connection(
             }
         }
     });
+
+    deliver_pending_web_messages(
+        &context.app,
+        &context.registry,
+        &context.paths,
+        &device_id,
+        &client_sender,
+    )
+    .await?;
 
     loop {
         let message = reader
@@ -6558,12 +6757,22 @@ async fn handle_websocket_connection(
         let payload = serde_json::from_str::<Value>(&message.to_text().unwrap_or_default())
             .unwrap_or_else(|_| json!({}));
 
-        if payload.get("type").and_then(Value::as_str) == Some("message") {
-            if let Err(error) = store_guest_message(&context, &device_id, &payload).await {
-                let _ = client_sender.send(WsOutbound {
-                    payload: json!({ "type": "error", "message": error.to_string() }),
-                });
+        match payload.get("type").and_then(Value::as_str) {
+            Some("presence") => {
+                if let Err(error) = refresh_guest_presence(&context, &device_id, &ip).await {
+                    let _ = client_sender.send(WsOutbound {
+                        payload: json!({ "type": "error", "message": error.to_string() }),
+                    });
+                }
             }
+            Some("message") => {
+                if let Err(error) = store_guest_message(&context, &device_id, &payload).await {
+                    let _ = client_sender.send(WsOutbound {
+                        payload: json!({ "type": "error", "message": error.to_string() }),
+                    });
+                }
+            }
+            _ => {}
         }
     }
 
@@ -6581,6 +6790,52 @@ async fn handle_websocket_connection(
     }
     emit_state_changed(&context.app, &context.registry, &context.paths).await?;
     Ok(())
+}
+
+async fn deliver_pending_web_messages(
+    app: &tauri::AppHandle,
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    device_id: &str,
+    sender: &mpsc::UnboundedSender<WsOutbound>,
+) -> Result<(), ManagerError> {
+    let pending = {
+        let _storage = registry.storage.lock().await;
+        read_array::<LanShareMessage>(&paths.lan_share_files.messages)?
+            .into_iter()
+            .filter(|message| {
+                message.device_id == device_id
+                    && message.direction == "desktop-to-mobile"
+                    && !message.delivered
+            })
+            .collect::<Vec<_>>()
+    };
+
+    if pending.is_empty() {
+        return Ok(());
+    }
+
+    let mut delivered_ids = Vec::new();
+    for message in &pending {
+        if send_stored_message_to_client(sender, message) {
+            delivered_ids.push(message.id.clone());
+        }
+    }
+    if delivered_ids.is_empty() {
+        return Ok(());
+    }
+
+    {
+        let _storage = registry.storage.lock().await;
+        let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
+        for message in messages.iter_mut() {
+            if delivered_ids.contains(&message.id) {
+                message.delivered = true;
+            }
+        }
+        write_json(&paths.lan_share_files.messages, &json!(messages)).await?;
+    }
+    emit_state_changed(app, registry, paths).await
 }
 
 async fn store_guest_message(
@@ -7232,6 +7487,7 @@ mod tests {
                         message_type: "text".to_string(),
                         attachments: Vec::new(),
                         content: "ordinary text".to_string(),
+                        ip: String::new(),
                         created_at: 20,
                         delivered: true,
                         read: false,
@@ -7245,6 +7501,7 @@ mod tests {
                         message_type: "text".to_string(),
                         attachments: Vec::new(),
                         content: "needle content".to_string(),
+                        ip: String::new(),
                         created_at: 10,
                         delivered: true,
                         read: false,
@@ -7287,6 +7544,7 @@ mod tests {
                         message_type: "text".to_string(),
                         attachments: Vec::new(),
                         content: "删除我".to_string(),
+                        ip: String::new(),
                         created_at: 10,
                         delivered: true,
                         read: false,
@@ -7300,6 +7558,7 @@ mod tests {
                         message_type: "text".to_string(),
                         attachments: Vec::new(),
                         content: "保留我".to_string(),
+                        ip: String::new(),
                         created_at: 20,
                         delivered: true,
                         read: false,
@@ -7801,6 +8060,78 @@ mod tests {
     }
 
     #[test]
+    fn same_named_device_keeps_history_when_ip_changes() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id());
+            let paths = resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            let first = upsert_device(
+                &registry,
+                &paths,
+                "",
+                "我的手机",
+                "Android Chrome",
+                "192.168.1.8",
+            )
+            .await
+            .unwrap();
+            let state = create_session(&registry, &paths, json!({ "deviceId": first.id }))
+                .await
+                .unwrap();
+            let first_session_id = state["data"]["currentSession"]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            append_message(
+                &registry,
+                &paths,
+                &first.id,
+                &first_session_id,
+                "mobile-to-desktop",
+                "旧地址消息",
+                true,
+            )
+            .await
+            .unwrap();
+
+            let second = upsert_device(
+                &registry,
+                &paths,
+                "",
+                "我的手机",
+                "Android Chrome",
+                "192.168.1.20",
+            )
+            .await
+            .unwrap();
+            let latest = append_message(
+                &registry,
+                &paths,
+                &second.id,
+                "",
+                "mobile-to-desktop",
+                "新地址消息",
+                true,
+            )
+            .await
+            .unwrap();
+            let devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices).unwrap();
+            let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
+            let messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages).unwrap();
+
+            assert_eq!(second.id, first.id);
+            assert_eq!(devices.len(), 1);
+            assert_eq!(devices[0].ip, "192.168.1.20");
+            assert_eq!(sessions.len(), 1);
+            assert_eq!(latest.session_id, first_session_id);
+            assert_eq!(messages.iter().find(|item| item.content == "旧地址消息").unwrap().ip, "192.168.1.8");
+            assert_eq!(latest.ip, "192.168.1.20");
+
+            let _ = tokio::fs::remove_dir_all(root).await;
+        });
+    }
+
+    #[test]
     fn state_backfills_missing_session_ip_from_device_record() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id());
@@ -8054,7 +8385,7 @@ mod tests {
     }
 
     #[test]
-    fn appends_mobile_message_to_latest_session_matching_current_ip() {
+    fn appends_mobile_message_to_latest_session_when_ip_changes() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
@@ -8112,7 +8443,7 @@ mod tests {
             .await
             .unwrap();
 
-            assert_eq!(message.session_id, "session_same_ip");
+            assert_eq!(message.session_id, "session_other_ip");
 
             let _ = tokio::fs::remove_dir_all(root).await;
         });
@@ -8514,10 +8845,10 @@ mod service_tests {
     }
 
     #[test]
-    fn mobile_page_does_not_create_browser_random_device_id() {
+    fn mobile_page_persists_server_device_id_without_browser_random_id() {
         let html = mobile_page_html();
 
-        assert!(!html.contains("lanShareDeviceId"));
+        assert!(html.contains("localStorage.getItem(\"lanShareDeviceId\")"));
         assert!(!html.contains("Math.random"));
     }
 
@@ -8670,6 +9001,7 @@ mod service_tests {
             message_type: "text".to_string(),
             attachments: Vec::new(),
             content: "hello".to_string(),
+            ip: String::new(),
             created_at: 123,
             delivered: true,
             read: false,

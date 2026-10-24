@@ -7,6 +7,7 @@
     @dragover="handleDragOver"
     @dragleave="handleDragLeave"
     @drop="handleDrop"
+    @click="markCurrentSessionRead"
   >
     <div ref="messageListRef" class="chat-timeline" aria-label="聊天消息">
       <div v-if="!displayMessages.length" class="chat-empty">
@@ -21,18 +22,25 @@
         >
       </div>
 
-      <article
-        v-for="message in displayMessages"
-        :key="message.id"
-        :data-message-id="message.id"
-        class="chat-message"
-        :class="{
-          'chat-message-self': message.direction === 'desktop-to-mobile',
-          'chat-message-pending': message.isPending,
-          'chat-message-error': message.status === 'error'
-        }"
-      >
-        <div class="chat-message-meta">
+      <template v-for="message in displayMessages" :key="message.id">
+        <div
+          v-if="ipChangesByMessageId.get(message.id)"
+          class="chat-ip-change-divider"
+        >
+          IP 已变化：{{ ipChangesByMessageId.get(message.id).fromIp }} →
+          {{ ipChangesByMessageId.get(message.id).toIp }}
+        </div>
+
+        <article
+          :data-message-id="message.id"
+          class="chat-message"
+          :class="{
+            'chat-message-self': message.direction === 'desktop-to-mobile',
+            'chat-message-pending': message.isPending,
+            'chat-message-error': message.status === 'error'
+          }"
+        >
+          <div class="chat-message-meta">
           <span class="chat-sender-name">{{
             message.direction === "desktop-to-mobile"
               ? "本机节点"
@@ -286,8 +294,9 @@
               <Trash2 :size="12" />
             </button>
           </div>
-        </div>
-      </article>
+          </div>
+        </article>
+      </template>
     </div>
 
     <!-- 科技感底部输入区 -->
@@ -407,7 +416,7 @@
       append-to-body
       class="cyber-drawer"
     >
-      <div class="chat-search-drawer">
+      <div class="chat-search-drawer" @click="markCurrentSessionRead">
         <el-input
           v-model="keyword"
           placeholder="搜索文字或附件名称"
@@ -546,6 +555,8 @@ let stopTransferListener = null
 let stopDropListener = null
 let disposed = false
 let loadSeed = 0
+let readActivationSessionId = ""
+let readActivationInFlight = false
 
 const activeSendingCount = computed(
   () =>
@@ -558,7 +569,8 @@ const activeSendingCount = computed(
 const sending = computed(() => activeSendingCount.value > 0)
 // 对方撤销本机配对后，保留历史查看能力但停止所有发送入口。
 const sendBlocked = computed(
-  () => props.chatMode === "direct" && Boolean(props.currentDevice?.remoteDeleted)
+  () =>
+    props.chatMode === "direct" && Boolean(props.currentDevice?.remoteDeleted)
 )
 
 const displayMessages = computed(() => {
@@ -573,14 +585,37 @@ const displayMessages = computed(() => {
   )
 })
 
+// 相邻消息来自不同 IP 时插入时间线分割线，保留同一设备的连续历史。
+const ipChangesByMessageId = computed(() => {
+  const changes = new Map()
+  let previousIp = ""
+  for (const message of displayMessages.value) {
+    const currentIp = String(message.ip || "").trim()
+    if (previousIp && currentIp && previousIp !== currentIp) {
+      changes.set(message.id, { fromIp: previousIp, toIp: currentIp })
+    }
+    if (currentIp) previousIp = currentIp
+  }
+  return changes
+})
+
 watch(
   () => props.currentSessionId,
   (sessionId) => {
+    readActivationSessionId = ""
     if (!drafts[sessionId])
       drafts[sessionId] = { content: "", files: [], messageId: "" }
     messages.value = []
     selectedIds.value = []
     loadMessages()
+  },
+  { immediate: true }
+)
+
+watch(
+  () => Number(props.currentSession?.unreadCount || 0),
+  (unreadCount) => {
+    if (unreadCount === 0) readActivationSessionId = ""
   },
   { immediate: true }
 )
@@ -620,18 +655,23 @@ watch(() => props.stateVersion, loadMessages)
 onMounted(async () => {
   // 原生传输只更新对应任务，不重新获取历史；进度来自对端已确认的分块。
   stopTransferListener = lanShareApi.onTransferProgress((progress) => {
-    const task = sendingTasks.value.find(item => item.id === progress.messageId)
+    const task = sendingTasks.value.find(
+      (item) => item.id === progress.messageId
+    )
     if (!task || task.status !== "sending") return
     task.loadedBytes = progress.loadedBytes
     task.totalBytes = progress.totalBytes
     task.bytesPerSecond = progress.bytesPerSecond
-    task.progress = task.totalBytes ? Math.min(99, task.loadedBytes / task.totalBytes * 100) : 0
+    task.progress = task.totalBytes
+      ? Math.min(99, (task.loadedBytes / task.totalBytes) * 100)
+      : 0
     if (progress.fileComplete && task.files[progress.fileIndex]) {
       task.files[progress.fileIndex].transferred = true
     }
-    task.statusText = task.loadedBytes === task.totalBytes
-      ? "文件已接收，等待消息确认…"
-      : "正在发送文件…"
+    task.statusText =
+      task.loadedBytes === task.totalBytes
+        ? "文件已接收，等待消息确认…"
+        : "正在发送文件…"
   })
   stopMessageListener = lanShareApi.onMessageCreated((message) => {
     if (
@@ -649,26 +689,13 @@ onMounted(async () => {
           return
         }
 
-        const position = payload.position
-        const scale = window.devicePixelRatio || 1
-        const x = position.x / scale
-        const y = position.y / scale
-
-        const bounds = panelRef.value?.getBoundingClientRect()
-        const isOverPanel =
-          bounds &&
-          x >= bounds.left &&
-          x <= bounds.right &&
-          y >= bounds.top &&
-          y <= bounds.bottom
-
         if (payload.type === "enter" || payload.type === "over") {
-          isDragOver.value = Boolean(isOverPanel)
+          // 原生拖拽事件已经限定在当前工具窗口，避免 DPI 和窗口缩放造成悬浮态误判。
+          isDragOver.value = true
         } else if (payload.type === "drop") {
           isDragOver.value = false
-          if (isOverPanel) {
-            addPaths(payload.paths)
-          }
+          // 独立工具窗口可能经过缩放，原生坐标与 CSS 坐标不一致时仍要保留文件路径。
+          if (payload.paths?.length) addPaths(payload.paths)
         }
       })
       if (disposed) unlisten()
@@ -704,6 +731,24 @@ onBeforeUnmount(() => {
 
 function unwrap(result) {
   return result?.status && "data" in result ? result.data : result
+}
+
+async function markCurrentSessionRead() {
+  // 聊天区域任意元素点击都可清除当前会话未读状态，避免依赖设备列表点击。
+  const sessionId = props.currentSessionId
+  if (!sessionId || readActivationInFlight) return
+  const hasUnread = Number(props.currentSession?.unreadCount || 0) > 0
+  if (!hasUnread || readActivationSessionId === sessionId) return
+  readActivationSessionId = sessionId
+  readActivationInFlight = true
+  try {
+    await lanShareApi.activateSession({ sessionId })
+    emit("refresh-state")
+  } catch {
+    readActivationSessionId = ""
+  } finally {
+    readActivationInFlight = false
+  }
 }
 
 async function loadMessages() {
@@ -1042,21 +1087,25 @@ async function executeSendingTask(task) {
     task.progress = task.nativeDelivery ? 0 : Math.max(task.progress, 90)
     task.loadedBytes = 0
 
-    const response = unwrap(await lanShareApi.sendMessage({
-      sessionId: task.sessionId,
-      deviceId: task.deviceId,
-      messageId: task.id,
-      content: task.content,
-      paths: task.files.map((item) => item.path).filter(Boolean),
-      attachmentIds: task.files.map((item) => item.uploadedId).filter(Boolean),
-      attachmentOrder: task.files.map((item) =>
-        item.path ? { path: item.path } : { id: item.uploadedId }
-      )
-    }))
+    const response = unwrap(
+      await lanShareApi.sendMessage({
+        sessionId: task.sessionId,
+        deviceId: task.deviceId,
+        messageId: task.id,
+        content: task.content,
+        paths: task.files.map((item) => item.path).filter(Boolean),
+        attachmentIds: task.files
+          .map((item) => item.uploadedId)
+          .filter(Boolean),
+        attachmentOrder: task.files.map((item) =>
+          item.path ? { path: item.path } : { id: item.uploadedId }
+        )
+      })
+    )
 
     task.status = "success"
     task.progress = 100
-    task.statusText = response?.every?.(message => message.delivered)
+    task.statusText = response?.every?.((message) => message.delivered)
       ? "已送达"
       : "已保存，待对方接收"
 
@@ -1109,7 +1158,8 @@ function sendMessage() {
     id: taskId,
     sessionId: props.currentSessionId,
     deviceId: props.chatMode === "direct" ? props.currentDevice?.id || "" : "",
-    nativeDelivery: props.chatMode === "direct" && Boolean(props.currentDevice?.native),
+    nativeDelivery:
+      props.chatMode === "direct" && Boolean(props.currentDevice?.native),
     direction: "desktop-to-mobile",
     content,
     createdAt: Date.now(),
@@ -1219,7 +1269,9 @@ async function jumpToMessage(id) {
 }
 
 defineExpose({
+  markCurrentSessionRead,
   openSearch: () => {
+    markCurrentSessionRead()
     searchOpen.value = true
   },
   clearCurrentSession
@@ -1247,6 +1299,30 @@ defineExpose({
     background: var(--color-panel);
     scrollbar-width: thin;
     scrollbar-color: var(--color-line) transparent;
+
+    .chat-ip-change-divider {
+      display: flex;
+      width: 100%;
+      align-items: center;
+      align-self: stretch;
+      justify-content: center;
+      gap: 12px;
+      flex: none;
+      box-sizing: border-box;
+      color: var(--color-text-muted);
+      font-family:
+        ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      text-align: center;
+
+      &::before,
+      &::after {
+        height: 1px;
+        flex: 1;
+        background: var(--color-line);
+        content: "";
+      }
+    }
 
     .chat-empty {
       display: flex;

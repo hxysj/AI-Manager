@@ -467,19 +467,17 @@
         class="settings-view__panel settings-desktop-panel"
       >
         <DesktopPetList
-          v-model="draft.desktop.petId"
           :pets="desktopPets"
+          :selected-pet-id="draft.desktop.petId"
           :running-pet-id="runningDesktopPet?.id || ''"
           :enabled="
             Boolean(
               appSettings.desktop?.enabled &&
-                appSettings.system?.quickSwitchVisible !== false
+              appSettings.system?.quickSwitchVisible !== false
             )
           "
           :pending="pending"
           @detail="activeDesktopPetId = $event"
-          @start="startDesktopPet"
-          @stop="stopDesktopPet"
           @toggle-master="handleToggleMaster"
         />
       </section>
@@ -668,10 +666,12 @@
     </div>
     <DesktopPetDetail
       v-if="activeTab === 'desktop' && activeDesktopPetId && selectedDesktopPet"
+      :pets="desktopPets"
       :pet="selectedDesktopPet"
       :running="runningDesktopPet?.id === selectedDesktopPet.id"
       :pending="pending"
       @close="activeDesktopPetId = ''"
+      @select="activeDesktopPetId = $event"
       @start="startDesktopPet"
       @stop="stopDesktopPet"
     />
@@ -917,7 +917,8 @@ function stopDesktopPet() {
 function handleToggleMaster(val) {
   if (props.pending) return
   if (val) {
-    const petToStart = selectedDesktopPet.value || desktopPets[0]
+    // 总开关启动时沿用上次保存的桌宠，没有记录时由 getDesktopPet 回退到第一只。
+    const petToStart = getDesktopPet(props.appSettings.desktop?.petId)
     startDesktopPet(petToStart)
   } else {
     stopDesktopPet()
