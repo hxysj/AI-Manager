@@ -1701,7 +1701,7 @@ fn mobile_page_html() -> String {
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
   <title>设备快传</title>
   <style>
 "##,
@@ -1761,7 +1761,7 @@ fn mobile_page_html() -> String {
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
     html, body { height: 100%; margin: 0; padding: 0; }
     body {
-      min-height: 100vh;
+      min-height: 0;
       background: var(--bg-gradient);
       color: var(--text);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
@@ -1777,7 +1777,11 @@ fn mobile_page_html() -> String {
     .page-shell {
       position: relative;
       display: flex;
+      width: 100%;
+      max-width: 640px;
+      margin: 0 auto;
       height: 100vh;
+      height: var(--viewport-height, 100dvh);
       min-height: 0;
       flex-direction: column;
       overflow: hidden;
@@ -1790,8 +1794,8 @@ fn mobile_page_html() -> String {
       flex: none;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: 12px 16px;
+      gap: 8px;
+      padding: max(10px, env(safe-area-inset-top)) 12px 10px;
       background: var(--panel-glass);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
@@ -1803,11 +1807,11 @@ fn mobile_page_html() -> String {
       min-height: 0;
       flex: 1;
       flex-direction: column;
-      gap: 12px;
-      overflow-y: auto;
+      gap: 8px;
+      overflow: hidden;
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
-      padding: 12px 14px;
+      padding: 8px 10px max(8px, env(safe-area-inset-bottom));
     }
     .content-shell {
       display: flex;
@@ -1815,7 +1819,7 @@ fn mobile_page_html() -> String {
       min-height: 0;
       flex: 1;
       flex-direction: column;
-      gap: 12px;
+      gap: 8px;
     }
     .content-detail {
       display: flex;
@@ -1823,7 +1827,7 @@ fn mobile_page_html() -> String {
       min-height: 0;
       flex: 1;
       flex-direction: column;
-      gap: 12px;
+      gap: 8px;
     }
     .content-detail.hidden {
       display: none;
@@ -1832,7 +1836,7 @@ fn mobile_page_html() -> String {
     /* Floating Toast */
     .mobile-toast {
       position: fixed;
-      top: 20px;
+      top: max(20px, env(safe-area-inset-top));
       left: 50%;
       transform: translateX(-50%) translateY(-24px);
       padding: 9px 18px;
@@ -1847,7 +1851,9 @@ fn mobile_page_html() -> String {
       opacity: 0;
       pointer-events: none;
       transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-      white-space: nowrap;
+      max-width: calc(100% - 32px);
+      text-align: center;
+      overflow-wrap: anywhere;
     }
     .mobile-toast.show {
       transform: translateX(-50%) translateY(0);
@@ -1894,6 +1900,11 @@ fn mobile_page_html() -> String {
       color: var(--muted);
       margin-top: 2px;
     }
+    .brand-status-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
     .status-dot {
       width: 7px;
       height: 7px;
@@ -1920,8 +1931,8 @@ fn mobile_page_html() -> String {
       display: inline-flex;
       align-items: center;
       gap: 5px;
-      height: 32px;
-      padding: 0 12px;
+      height: 44px;
+      padding: 0 10px;
       border-radius: 999px;
       border: 1px solid var(--line);
       background: var(--panel);
@@ -1955,7 +1966,7 @@ fn mobile_page_html() -> String {
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      padding: 10px 14px;
+      padding: max(10px, env(safe-area-inset-top)) 14px 10px;
       background: var(--panel-glass);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
@@ -1966,7 +1977,7 @@ fn mobile_page_html() -> String {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      height: 34px;
+      height: 44px;
       padding: 0 10px 0 6px;
       border-radius: 8px;
       color: var(--primary);
@@ -2106,14 +2117,15 @@ fn mobile_page_html() -> String {
       padding: 10px 14px;
     }
     .field-input {
+      min-width: 0;
       width: 100%;
-      height: 36px;
+      height: 44px;
       padding: 0 12px;
       border-radius: var(--radius-sm);
       border: 1px solid var(--line-strong);
       background: var(--panel);
       color: var(--text);
-      font-size: var(--font-size-sm);
+      font-size: 16px;
       outline: none;
       transition: all 0.15s ease;
     }
@@ -2134,7 +2146,7 @@ fn mobile_page_html() -> String {
     }
     .view-tab, .mode-tab {
       flex: 1;
-      height: 34px;
+      height: 44px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -2155,6 +2167,7 @@ fn mobile_page_html() -> String {
       display: none;
       min-height: 0;
       flex: 1;
+      flex-shrink: 1;
       flex-direction: column;
     }
     .view-panel.active {
@@ -2167,7 +2180,7 @@ fn mobile_page_html() -> String {
       align-items: center;
       justify-content: center;
       gap: 5px;
-      height: 36px;
+      min-height: 44px;
       padding: 0 16px;
       border-radius: var(--radius-sm);
       font-size: var(--font-size-sm);
@@ -2202,7 +2215,7 @@ fn mobile_page_html() -> String {
     .btn-xs {
       display: inline-flex;
       align-items: center;
-      height: 26px;
+      min-height: 44px;
       padding: 0 10px;
       border-radius: 6px;
       font-size: 11.5px;
@@ -2288,11 +2301,13 @@ fn mobile_page_html() -> String {
     }
     .chat-empty-state {
       flex: 1;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 36px 20px;
+      padding: 16px 20px;
+      overflow-y: auto;
       text-align: center;
       user-select: none;
     }
@@ -2319,14 +2334,15 @@ fn mobile_page_html() -> String {
       display: flex;
       flex-direction: column;
       gap: 6px;
-      max-width: 82%;
+      max-width: 90%;
+      flex: none;
       min-width: 90px;
       padding: 10px 13px;
       border-radius: 12px;
       background: var(--panel-soft);
       border: 1px solid var(--line);
       color: var(--text);
-      font-size: var(--font-size-sm);
+      font-size: 15px;
       line-height: 1.5;
       text-align: left;
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
@@ -2351,6 +2367,24 @@ fn mobile_page_html() -> String {
       align-self: flex-end;
       font-size: 11px;
       color: var(--muted);
+    }
+    .message-text {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+    .message-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .message-copy {
+      min-height: 44px;
+      padding: 0 4px;
+      color: var(--primary);
+      font-size: 12px;
     }
 
     .message-attachment {
@@ -2380,6 +2414,7 @@ fn mobile_page_html() -> String {
     }
     .message-attachment-actions {
       display: flex;
+      flex-wrap: wrap;
       align-items: center;
       justify-content: space-between;
       gap: 6px;
@@ -2388,6 +2423,7 @@ fn mobile_page_html() -> String {
     /* Composer Bar (4.png) */
     .pending-attachments {
       display: flex;
+      flex: none;
       gap: 6px;
       padding: 6px 12px 0;
       overflow-x: auto;
@@ -2418,7 +2454,8 @@ fn mobile_page_html() -> String {
     }
     .composer {
       display: flex;
-      align-items: center;
+      flex: none;
+      align-items: flex-end;
       gap: 8px;
       padding: 8px 12px;
       border-top: 1px solid var(--line);
@@ -2430,7 +2467,7 @@ fn mobile_page_html() -> String {
       align-items: center;
       justify-content: center;
       width: 44px;
-      height: 38px;
+      height: 44px;
       border-radius: 8px;
       border: 1px solid var(--line);
       background: var(--panel);
@@ -2448,14 +2485,14 @@ fn mobile_page_html() -> String {
     .composer-input {
       flex: 1;
       min-width: 0;
-      min-height: 38px;
-      max-height: 100px;
+      min-height: 44px;
+      max-height: 120px;
       padding: 8px 12px;
       border-radius: var(--radius-sm);
       border: 1px solid var(--line-strong);
       background: var(--panel);
       color: var(--text);
-      font-size: var(--font-size-sm);
+      font-size: 16px;
       line-height: 1.4;
       resize: none;
       outline: none;
@@ -2623,6 +2660,7 @@ fn mobile_page_html() -> String {
     .settings-layer {
       position: fixed;
       inset: 0;
+      height: var(--viewport-height, 100dvh);
       z-index: 50;
       display: none;
       flex-direction: column;
@@ -2637,7 +2675,7 @@ fn mobile_page_html() -> String {
       display: flex;
       flex-direction: column;
       gap: 14px;
-      padding: 12px 14px 88px;
+      padding: 12px 14px max(20px, env(safe-area-inset-bottom));
       overflow-y: auto;
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
@@ -2828,13 +2866,13 @@ fn mobile_page_html() -> String {
     }
 
     .settings-select, .settings-number-input {
-      height: 32px;
+      height: 44px;
       padding: 0 10px;
       border-radius: 6px;
       border: 1px solid var(--line-strong);
       background: var(--panel);
       color: var(--text);
-      font-size: 13px;
+      font-size: 16px;
       outline: none;
     }
     .settings-number-input {
@@ -2855,10 +2893,7 @@ fn mobile_page_html() -> String {
       background: var(--danger-soft);
     }
     .conn-save-footer {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      right: 0;
+      flex: none;
       padding: 10px 14px max(12px, env(safe-area-inset-bottom));
       background: var(--panel-glass);
       backdrop-filter: blur(16px);
@@ -2898,6 +2933,7 @@ fn mobile_page_html() -> String {
       display: flex;
       width: min(720px, 100%);
       max-height: calc(100vh - 32px);
+      max-height: calc(var(--viewport-height, 100dvh) - 32px);
       flex-direction: column;
       overflow: hidden;
       border: 1px solid var(--line);
@@ -2931,8 +2967,8 @@ fn mobile_page_html() -> String {
       margin-top: 2px;
     }
     .preview-close-btn {
-      width: 28px;
-      height: 28px;
+      width: 44px;
+      height: 44px;
       border-radius: 6px;
       border: 1px solid var(--line);
       display: grid;
@@ -2990,7 +3026,7 @@ fn mobile_page_html() -> String {
           <h1 class="brand-title" data-emphasis>设备快传</h1>
           <div class="brand-status">
             <span id="statusDot" class="status-dot"></span>
-            <span id="status">正在连接电脑端服务...</span>
+            <span id="status" class="brand-status-text" role="status">正在连接电脑端服务...</span>
           </div>
         </div>
       </div>
@@ -3005,25 +3041,13 @@ fn mobile_page_html() -> String {
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
           </svg>
-          <span>获取内容</span>
+          <span>文件</span>
         </button>
       </div>
     </header>
 
     <!-- Main Content Area -->
     <main class="page-main">
-      <!-- Device Name Card (4.png) -->
-      <section class="card device-card">
-        <div class="card-head">
-          <span data-emphasis>设备名称</span>
-          <span>用于电脑端识别</span>
-        </div>
-        <div class="device-row">
-          <input id="deviceName" class="field-input" maxlength="40" placeholder="输入设备名称" />
-          <button id="saveDeviceName" class="text-button primary-button" type="button">保存</button>
-        </div>
-      </section>
-
       <!-- Content Shell -->
       <section class="content-shell">
         <!-- Direct / Group Mode Switcher (4.png) -->
@@ -3118,8 +3142,8 @@ fn mobile_page_html() -> String {
                 <span>附件</span>
               </button>
               <input id="attachmentInput" type="file" multiple hidden />
-              <textarea id="messageInput" class="composer-input" rows="1" placeholder="输入消息或粘贴图片、文件"></textarea>
-              <button id="sendMessage" class="text-button primary-button" type="button">发送</button>
+              <textarea id="messageInput" class="composer-input" rows="1" enterkeyhint="enter" aria-label="消息内容" placeholder="输入消息或粘贴图片、文件"></textarea>
+              <button id="sendMessage" class="text-button primary-button" type="button" disabled>发送</button>
             </div>
           </section>
 
@@ -3200,6 +3224,18 @@ fn mobile_page_html() -> String {
     </header>
 
     <div class="settings-scroll">
+      <!-- Device Name Card (4.png) -->
+      <section class="card device-card">
+        <div class="card-head">
+          <span data-emphasis>设备名称</span>
+          <span>用于电脑端识别</span>
+        </div>
+        <div class="device-row">
+          <input id="deviceName" class="field-input" maxlength="40" aria-label="设备名称" placeholder="输入设备名称" />
+          <button id="saveDeviceName" class="text-button primary-button" type="button">保存</button>
+        </div>
+      </section>
+
       <!-- Section: 设备信息 -->
       <section class="settings-group">
         <h3 class="settings-group-title">设备信息</h3>
@@ -3518,6 +3554,7 @@ fn mobile_page_html() -> String {
 
     let ws = null;
     let presenceTimer = null;
+    let reconnectTimer = null;
     let deviceRemoved = false;
     // 持久化服务端设备 ID，网络切换后继续沿用同一设备身份。
     let deviceId = localStorage.getItem("lanShareDeviceId") || "";
@@ -3529,6 +3566,14 @@ fn mobile_page_html() -> String {
     let activePreviewFileItem = null;
     let toastTimer = null;
     const messageIds = new Set();
+
+    // 跟随手机可视区域变化，软键盘弹出时让输入区留在屏幕内。
+    function updateViewport() {
+      document.documentElement.style.setProperty("--viewport-height", (window.visualViewport?.height || window.innerHeight) + "px");
+    }
+    updateViewport();
+    window.visualViewport?.addEventListener("resize", updateViewport);
+    window.addEventListener("resize", updateViewport);
 
     // Init Theme
     const savedTheme = localStorage.getItem("lanShareTheme") || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
@@ -3572,7 +3617,7 @@ fn mobile_page_html() -> String {
 
     function setStatus(text) {
       statusEl.textContent = text;
-      if (text.includes("已连接")) {
+      if (ws?.readyState === WebSocket.OPEN && !deviceRemoved) {
         statusDotEl.className = "status-dot is-connected";
       } else if (text.includes("断开") || text.includes("失败")) {
         statusDotEl.className = "status-dot is-disconnected";
@@ -3593,21 +3638,37 @@ fn mobile_page_html() -> String {
       }
     }
 
-    function copyMessageText(text) {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text).then(() => showToast("已复制到剪贴板"));
-        return;
+    async function copyMessageText(text) {
+      if (!text) return false;
+      // 局域网 HTTP 页面通常没有 Clipboard API，权限被拒绝时也尝试选区复制。
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          showToast("已复制到剪贴板");
+          return true;
+        } catch (_) {}
       }
+      const activeElement = document.activeElement;
       const element = document.createElement("textarea");
       element.value = text;
+      element.readOnly = true;
+      element.style.position = "fixed";
+      element.style.opacity = "0";
       document.body.appendChild(element);
       element.select();
-      document.execCommand("copy");
-      document.body.removeChild(element);
-      showToast("已复制到剪贴板");
+      element.setSelectionRange(0, text.length);
+      let copied = false;
+      try {
+        copied = document.execCommand("copy");
+      } catch (_) {}
+      element.remove();
+      activeElement?.focus({ preventScroll: true });
+      showToast(copied ? "已复制到剪贴板" : "复制失败，请长按消息文字选择复制");
+      return copied;
     }
 
     function renderMode() {
+      document.getElementById("sendMessage").disabled = !currentSessionId || sendingAttachments || deviceRemoved;
       modeTabs.forEach(tab => {
         tab.classList.toggle("active", tab.dataset.mode === currentMode);
       });
@@ -3657,7 +3718,11 @@ fn mobile_page_html() -> String {
         throw new Error(message);
       }
       const text = await response.text();
-      return text ? JSON.parse(text) : null;
+      if (!text) return null;
+      // 网页请求与桌面端共用统一响应结构，业务数据位于 data 字段。
+      const payload = JSON.parse(text);
+      if (payload.status === "error") throw new Error(payload.message || "请求失败");
+      return payload.data;
     }
 
     function fileUrl(file, kind) {
@@ -3976,6 +4041,7 @@ fn mobile_page_html() -> String {
       renderMode();
       chatEmptyStateEl.style.display = "flex";
       messagesEl.style.display = "none";
+      messagesEl.replaceChildren();
       messageIds.clear();
       await loadFiles();
       showToast("新会话已创建");
@@ -3992,6 +4058,7 @@ fn mobile_page_html() -> String {
       item.title = "点击消息可复制";
 
       const text = document.createElement("div");
+      text.className = "message-text";
       text.textContent = message.content || "";
       text.onclick = () => copyMessageText(message.content || "");
       item.appendChild(text);
@@ -4049,13 +4116,26 @@ fn mobile_page_html() -> String {
 
       const time = document.createElement("small");
       time.textContent = new Date(message.createdAt || Date.now()).toLocaleTimeString();
-      item.appendChild(time);
+      const actions = document.createElement("div");
+      actions.className = "message-actions";
+      if (message.content) {
+        const copy = document.createElement("button");
+        copy.type = "button";
+        copy.className = "message-copy";
+        copy.textContent = "复制";
+        copy.setAttribute("aria-label", "复制消息");
+        copy.onclick = () => copyMessageText(message.content);
+        actions.appendChild(copy);
+      }
+      actions.appendChild(time);
+      item.appendChild(actions);
       messagesEl.appendChild(item);
       messagesEl.scrollTop = messagesEl.scrollHeight;
     }
 
     function connectWs() {
-      if (deviceRemoved) return;
+      if (deviceRemoved || !deviceId || (ws && ws.readyState < 2)) return;
+      clearTimeout(reconnectTimer);
       const protocol = location.protocol === "https:" ? "wss:" : "ws:";
       ws = new WebSocket(protocol + "//" + location.host + "/ws?token=" + encodeURIComponent(token) + "&deviceId=" + encodeURIComponent(deviceId));
       ws.onopen = () => {
@@ -4073,7 +4153,7 @@ fn mobile_page_html() -> String {
         presenceTimer = null;
         if (deviceRemoved) return;
         setStatus("连接已断开，正在重连...");
-        window.setTimeout(connectWs, 1600);
+        reconnectTimer = window.setTimeout(connectWs, 1600);
       };
       ws.onmessage = event => {
         const payload = JSON.parse(event.data);
@@ -4088,6 +4168,7 @@ fn mobile_page_html() -> String {
           currentSessionId = "";
           setStatus("此设备已被电脑端移除，请重新访问后加入。");
           showToast("此设备已被电脑端移除");
+          renderMode();
           ws.close();
           return;
         }
@@ -4147,6 +4228,11 @@ fn mobile_page_html() -> String {
       updateSettingsInfo();
       settingsPageEl.classList.add("active");
     };
+    // 手机从后台恢复时立即检查连接，避免定时器暂停后一直显示旧状态。
+    window.addEventListener("pageshow", connectWs);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") connectWs();
+    });
     document.getElementById("settingsBackBtn").onclick = () => {
       settingsPageEl.classList.remove("active");
     };
@@ -4211,12 +4297,16 @@ fn mobile_page_html() -> String {
       }
     });
 
-    inputEl.addEventListener("input", () => { pendingMessageId = ""; });
+    inputEl.addEventListener("input", () => {
+      pendingMessageId = "";
+      inputEl.style.height = "auto";
+      inputEl.style.height = Math.min(inputEl.scrollHeight, 120) + "px";
+    });
 
     // Send Message
     document.getElementById("sendMessage").onclick = async () => {
       const content = inputEl.value.trim();
-      if ((!content && !pendingAttachments.length) || !currentSessionId || sendingAttachments) return;
+      if ((!content && !pendingAttachments.length) || !currentSessionId || sendingAttachments || deviceRemoved) return;
       sendingAttachments = true;
       document.getElementById("sendMessage").disabled = true;
       document.getElementById("chooseAttachments").disabled = true;
@@ -4257,6 +4347,7 @@ fn mobile_page_html() -> String {
         });
         if (currentSessionId === sessionId) appendMessage(message);
         inputEl.value = "";
+        inputEl.style.height = "";
         pendingAttachments.splice(0);
         pendingMessageId = "";
         setStatus("已发送");
@@ -4265,7 +4356,7 @@ fn mobile_page_html() -> String {
         showToast("发送失败，草稿已保留");
       } finally {
         sendingAttachments = false;
-        document.getElementById("sendMessage").disabled = false;
+        renderMode();
         document.getElementById("chooseAttachments").disabled = false;
         inputEl.disabled = false;
         renderPendingAttachments();
@@ -4273,7 +4364,8 @@ fn mobile_page_html() -> String {
     };
 
     inputEl.addEventListener("keydown", event => {
-      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      // 手机回车保留换行，外接键盘可用 Ctrl/Cmd + Enter 发送。
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.isComposing) {
         event.preventDefault();
         document.getElementById("sendMessage").click();
       }
@@ -4317,9 +4409,12 @@ fn mobile_page_html() -> String {
 
     renderMode();
     registerDevice()
-      .then(() => initialInviteCode ? joinGroup(initialInviteCode) : Promise.resolve())
-      .then(() => Promise.all([loadGroups(), loadMessages()]))
-      .then(connectWs)
+      .then(() => {
+        // 注册后立即上线，群聊列表或历史内容加载失败不阻断在线发现。
+        connectWs();
+        return loadMessages();
+      })
+      .then(() => initialInviteCode ? joinGroup(initialInviteCode) : undefined)
       .catch(error => setStatus(error.message));
   </script>
 </body>
@@ -6201,6 +6296,8 @@ async fn mobile_messages(
         .await
         .active_sessions
         .insert(device_id, session.id.clone());
+    // 网页上线与历史加载并行完成，创建会话后也通知桌面刷新可发送的会话。
+    emit_state_changed(&context.app, &context.registry, &context.paths).await?;
 
     Ok(api_success(json!({
         "currentSession": session,

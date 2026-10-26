@@ -1159,6 +1159,32 @@ const ScreenshotPage = await loadTestComponent(
     "@/api/modules/system": { systemApi: {} },
     "@/api/request": { subscribeReady: async () => () => {} },
     "@/utils/message": { createMessage: { success() {} } },
+    // 只替换第三方控件的 DOM，保留真实模板的候选项、禁用状态和更新事件。
+    "element-plus": {
+      ElSelect: {
+        props: {
+          modelValue: String,
+          filterable: Boolean,
+          allowCreate: Boolean,
+          defaultFirstOption: Boolean,
+          disabled: Boolean
+        },
+        render() {
+          return vue.h(
+            "model-select",
+            { ...this.$props, ...this.$attrs },
+            this.$slots.default?.()
+          )
+        }
+      },
+      ElOption: {
+        props: ["label", "value"],
+        render() {
+          return vue.h("model-option", this.$props)
+        }
+      }
+    },
+    "element-plus/es/components/select/style/css": {},
     "@/components/BaseModal.vue": {
       __esModule: true,
       default: {
@@ -1169,25 +1195,56 @@ const ScreenshotPage = await loadTestComponent(
     }
   }
 )
-const pageApp = renderer.createApp(ScreenshotPage, {
+const screenshotModelProps = {
   providers: [
     {
       id: "vision-provider",
       cli: "codex",
       name: "图片服务商",
-      runtimeConfig: { mainModel: "vision-default" }
+      runtimeConfig: {
+        mainModel: "vision-default",
+        modelList: [
+          "vision-default",
+          " vision-config-only ",
+          "vision-custom",
+          ""
+        ]
+      }
+    },
+    {
+      id: "text-provider",
+      cli: "codex",
+      name: "旧版模型配置",
+      runtimeConfig: {
+        modelList: "text-first\ntext-second, text-third; text-first"
+      }
     },
     {
       id: "disabled-provider",
       cli: "codex",
       name: "已禁用服务商",
-      enabled: false
+      enabled: false,
+      runtimeConfig: { mainModel: "disabled-model" }
+    },
+    {
+      id: "claude-provider",
+      cli: "claude",
+      runtimeConfig: { mainModel: "claude-model" }
     }
   ],
+  codexAccounts: [{ id: "official", email: "official@example.com" }],
   runtimeModels: [
-    { id: "vision-model", providerId: "vision-provider", name: "vision-custom" }
+    {
+      id: "vision-model",
+      providerId: "vision-provider",
+      name: "vision-custom"
+    },
+    { id: "text-extra", providerId: "text-provider" },
+    { id: "disabled-model", providerId: "disabled-provider" },
+    { id: "claude-model", providerId: "claude-provider" }
   ]
-})
+}
+const pageApp = renderer.createApp(ScreenshotPage, screenshotModelProps)
 pageApp.config.errorHandler = (error) => failures.push(String(error))
 pageApp.mount(node("root"))
 await tick()
@@ -1215,6 +1272,14 @@ assert.deepEqual(settingsRequests.at(-1), {
   payload: { paused: true }
 })
 page.settingsDraft.ocr.useLargeModel = true
+await tick()
+assert.equal(
+  findElement(
+    pageApp._instance.subTree.el,
+    (element) => element.props["aria-label"] === "OCR 模型"
+  ).props.disabled,
+  true
+)
 await page.saveSettings()
 assert.match(page.error, /请选择有效服务商并填写模型/)
 page.settingsDraft.ocr.targetId = "disabled-provider"
@@ -1225,8 +1290,62 @@ assert.match(page.error, /请选择有效服务商并填写模型/)
 page.settingsDraft.ocr.targetId = "vision-provider"
 page.selectOcrTarget()
 assert.equal(page.settingsDraft.ocr.model, "vision-default")
-assert.deepEqual([...page.ocrModelOptions], ["vision-default", "vision-custom"])
-page.settingsDraft.ocr.model = "vision-custom"
+await tick()
+const modelSelect = findElement(
+  pageApp._instance.subTree.el,
+  (element) => element.props["aria-label"] === "OCR 模型"
+)
+assert.equal(modelSelect.type, "model-select")
+assert.equal(modelSelect.props.disabled, false)
+assert.equal(modelSelect.props.filterable, true)
+assert.equal(modelSelect.props.allowCreate, true)
+assert.equal(modelSelect.props.defaultFirstOption, true)
+assert.equal(modelSelect.props.modelValue, "vision-default")
+assert.deepEqual(
+  modelSelect.children
+    .filter((element) => element.type === "model-option")
+    .map((element) => element.props.value),
+  ["vision-default", "vision-config-only", "vision-custom"]
+)
+modelSelect.props["onUpdate:modelValue"]("vision-custom")
+await tick()
+assert.equal(page.settingsDraft.ocr.model, "vision-custom")
+assert.deepEqual(
+  [...page.ocrModelOptions],
+  ["vision-default", "vision-config-only", "vision-custom"]
+)
+modelSelect.props["onUpdate:modelValue"]("  vision-manual  ")
+await tick()
+assert.equal(page.settingsDraft.ocr.model, "vision-manual")
+assert.ok(page.ocrModelOptions.includes("vision-manual"))
+// 服务商切换使用各自的完整配置，官方账号复用有效 Codex 服务商的模型。
+page.settingsDraft.ocr.targetId = "text-provider"
+page.selectOcrTarget()
+assert.equal(page.settingsDraft.ocr.model, "text-first")
+assert.deepEqual(
+  [...page.ocrModelOptions],
+  ["text-first", "text-second", "text-third", "text-extra"]
+)
+page.settingsDraft.ocr.targetId = "account:official"
+page.selectOcrTarget()
+assert.equal(page.invalidOcrTarget, false)
+assert.equal(page.settingsDraft.ocr.model, "vision-default")
+assert.deepEqual(
+  [...page.ocrModelOptions],
+  [
+    "vision-default",
+    "vision-config-only",
+    "vision-custom",
+    "text-first",
+    "text-second",
+    "text-third",
+    "text-extra"
+  ]
+)
+page.settingsDraft.ocr.targetId = "vision-provider"
+page.selectOcrTarget()
+await tick()
+modelSelect.props["onUpdate:modelValue"]("vision-config-only")
 page.recordShortcut(
   { key: "F8", ctrlKey: true, shiftKey: true, preventDefault() {} },
   "capture"
@@ -1254,7 +1373,7 @@ assert.equal(storedSettings.historyLimit, 2)
 assert.deepEqual(storedSettings.ocr, {
   useLargeModel: true,
   targetId: "vision-provider",
-  model: "vision-custom"
+  model: "vision-config-only"
 })
 assert.equal(page.captureShortcut, "Ctrl+Shift+F8")
 assert.equal(page.entries.length, 2)
@@ -1265,11 +1384,19 @@ assert.deepEqual(settingsRequests.at(-1), {
 })
 page.openSettings()
 await tick()
+assert.equal(page.settingsDraft.ocr.model, "vision-config-only")
+assert.equal(
+  findElement(
+    pageApp._instance.subTree.el,
+    (element) => element.props["aria-label"] === "OCR 模型"
+  ).props.modelValue,
+  "vision-config-only"
+)
 page.settingsDraft.ocr.useLargeModel = false
 await page.saveSettings()
 assert.equal(storedSettings.ocr.useLargeModel, false)
 assert.equal(storedSettings.ocr.targetId, "vision-provider")
-assert.equal(storedSettings.ocr.model, "vision-custom")
+assert.equal(storedSettings.ocr.model, "vision-config-only")
 assert.equal(page.defaultSettings().ocr.useLargeModel, false)
 page.openSettings()
 await tick()
@@ -1327,7 +1454,10 @@ const ScreenshotExtension = await loadTestComponent(
   }
 )
 const extensionRoot = node("root")
-const extensionApp = renderer.createApp(ScreenshotExtension)
+const extensionApp = renderer.createApp(
+  ScreenshotExtension,
+  screenshotModelProps
+)
 extensionApp.config.errorHandler = (error) => failures.push(String(error))
 extensionApp.mount(extensionRoot)
 await tick()
@@ -1366,6 +1496,7 @@ finishExtensionToggle("模拟截图设置写入失败")
 await failedStart
 assert.equal(extension.enabled, false)
 assert.match(extension.error, /写入失败/)
+storedSettings.ocr.useLargeModel = true
 extension.openManager(true)
 await tick()
 assert.equal(extension.showSettings, true)
@@ -1375,6 +1506,15 @@ assert.ok(
     extensionRoot,
     (element) => element.props.class === "screenshot-settings-modal"
   )
+)
+assert.deepEqual(
+  findElement(
+    extensionRoot,
+    (element) => element.props["aria-label"] === "OCR 模型"
+  )
+    .children.filter((element) => element.type === "model-option")
+    .map((element) => element.props.value),
+  ["vision-default", "vision-config-only", "vision-custom"]
 )
 assert.equal(
   findElement(

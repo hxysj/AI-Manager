@@ -148,22 +148,24 @@
           </label>
           <label class="setting-row">
             OCR 模型
-            <input
-              v-model.trim="settingsDraft.ocr.model"
-              class="setting-input"
+            <el-select
+              :model-value="settingsDraft.ocr.model"
+              class="setting-model-select"
               aria-label="OCR 模型"
-              list="screenshot-ocr-models"
               placeholder="选择或输入支持图片识别的模型"
+              filterable
+              allow-create
+              default-first-option
               :disabled="busy || !ready || !settingsDraft.ocr.targetId"
-              required
-            />
-            <datalist id="screenshot-ocr-models">
-              <option
+              @update:model-value="settingsDraft.ocr.model = $event.trim()"
+            >
+              <el-option
                 v-for="model in ocrModelOptions"
                 :key="model"
+                :label="model"
                 :value="model"
               />
-            </datalist>
+            </el-select>
           </label>
           <span v-if="invalidOcrTarget" class="settings-error" role="alert">
             已配置的 OCR 服务商不存在或已禁用，请重新选择。
@@ -364,6 +366,8 @@ import { screenshotApi } from "@/api/modules/screenshot"
 import { systemApi } from "@/api/modules/system"
 import { subscribeReady } from "@/api/request"
 import { createMessage } from "@/utils/message"
+import { ElOption, ElSelect } from "element-plus"
+import "element-plus/es/components/select/style/css"
 import BaseModal from "@/components/BaseModal.vue"
 
 const props = defineProps({
@@ -428,40 +432,40 @@ const invalidOcrTarget = computed(
 )
 const ocrModelOptions = computed(() => {
   const targetId = settingsDraft.value.ocr.targetId
+  const providers = props.providers.filter((provider) =>
+    targetId.startsWith("account:")
+      ? provider.cli === "codex" && provider.enabled !== false
+      : provider.id === targetId
+  )
+  // 直接读取模型配置中的完整列表，兼容旧版文本格式和独立模型记录。
+  const configuredModels = providers.flatMap((provider) => {
+    const modelList = provider.runtimeConfig?.modelList || []
+    return [
+      provider.runtimeConfig?.mainModel,
+      ...(Array.isArray(modelList) ? modelList : modelList.split(/[\r\n,;]+/))
+    ]
+  })
   return [
     ...new Set(
       [
-        props.providers.find((provider) => provider.id === targetId)
-          ?.runtimeConfig?.mainModel,
+        ...configuredModels,
         ...props.runtimeModels
-          .filter(
-            (model) =>
-              model.providerId === targetId ||
-              (targetId.startsWith("account:") &&
-                props.providers.some(
-                  (provider) =>
-                    provider.id === model.providerId && provider.cli === "codex"
-                ))
+          .filter((model) =>
+            providers.some((provider) => provider.id === model.providerId)
           )
           .map((model) => model.name || model.id),
         settingsDraft.value.ocr.model
-      ].filter(Boolean)
+      ]
+        .map((model) => String(model || "").trim())
+        .filter(Boolean)
     )
   ]
 })
 
 function selectOcrTarget() {
   // 切换服务商后重置模型，避免沿用另一个服务商的模型名称。
-  const targetId = settingsDraft.value.ocr.targetId
-  const model = props.runtimeModels.find(
-    (model) => model.providerId === targetId
-  )
-  settingsDraft.value.ocr.model =
-    props.providers.find((provider) => provider.id === targetId)?.runtimeConfig
-      ?.mainModel ||
-    model?.name ||
-    model?.id ||
-    ""
+  settingsDraft.value.ocr.model = ""
+  settingsDraft.value.ocr.model = ocrModelOptions.value[0] || ""
 }
 
 const shortcutFields = [
@@ -796,6 +800,10 @@ onBeforeUnmount(() => {
         background: var(--color-panel);
         color: inherit;
         font-size: inherit;
+      }
+      .setting-model-select {
+        margin-left: auto;
+        width: 230px;
       }
     }
     .setting-hint,
