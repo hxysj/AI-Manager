@@ -234,6 +234,9 @@ impl AppState {
         }
         let close_action = matches!(channel, "settings:save" | "app:close-action")
             .then(|| manager.app_settings.system.close_action.clone());
+        if result.is_ok() && matches!(channel, "data:restore" | "data:local-backup-restore" | "data:cloud-pull") {
+            app_logs::configure(manager.app_settings.system.log_enabled).await;
+        }
         drop(manager);
 
         if result.is_ok() {
@@ -359,6 +362,7 @@ impl ManagerState {
             .map_err(|error| ManagerError::Path(error.to_string()))?;
         let settings_file_path = PathBuf::from(DEFAULT_USER_DATA_PATH).join("app-settings.json");
         let app_settings = load_app_settings(settings_file_path)?;
+        app_logs::set_enabled(app_settings.system.log_enabled);
         let user_data_path = PathBuf::from(&app_settings.data_path);
         migrate_tauri_app_data(&tauri_app_data_path, &user_data_path)?;
         let paths = resolve_app_paths(&user_data_path);
@@ -694,8 +698,12 @@ impl ManagerState {
                 )
                 .await
             }
-            "app-log:list" => app_logs::list_logs(&self.user_data_path).await,
+            "app-log:list" => app_logs::list_logs(
+                &self.user_data_path,
+                payload.as_ref().and_then(|value| value["date"].as_str()),
+            ).await,
             "app-log:clear" => app_logs::clear_logs(&self.user_data_path).await,
+            "app-log:stats" => app_logs::stats(&self.user_data_path).await,
             "repo:add" => {
                 repos::add_repo(&self.paths, payload.unwrap_or_else(|| json!({}))).await?;
                 self.refresh_state().await?;

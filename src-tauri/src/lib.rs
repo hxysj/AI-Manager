@@ -2,6 +2,7 @@ mod api;
 mod core;
 
 use crate::api::{app, app_logs, screenshot, translation};
+use crate::core::error::ManagerError;
 use crate::core::state::{AppState, ManagerState};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,21 +17,62 @@ static CLOSE_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 #[tauri::command]
 async fn dispatch_api(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
     state: tauri::State<'_, AppState>,
     channel: String,
     payload: Option<Value>,
+    context: Option<Value>,
 ) -> Result<Value, String> {
-    // 取词窗口的高频操作不扫描业务数据，也不把原文重复写入操作日志。
-    if let Some(action) = channel.strip_prefix("translation:desktop-") {
-        return translation::desktop::dispatch(&app, action, payload).map_err(|error| error.to_string());
+    // 日志读写自身不再生成调用日志，前端错误也由同一开关和保留策略管理。
+    if channel == "app-log:record" {
+        let path = state.user_data_path().await;
+        return app_logs::record_renderer(&path, window.label(), payload.unwrap_or(Value::Null))
+            .await.map_err(|error| error.to_string());
     }
-    if channel.starts_with("translation:") || channel == "screenshot:ocr" {
+    if channel.starts_with("app-log:") {
         return state.dispatch(app, &channel, payload).await.map_err(|error| error.to_string());
     }
-    // 截图数据走独立服务，不写操作日志，也不重建 Provider 托盘。
+    let record_call = app_logs::should_record_call(&channel, payload.as_ref());
+    let started = app_logs::begin_call(payload.as_ref(), window.label(), context);
+    let path = if record_call {
+        let path = state.user_data_path().await;
+        if let Err(error) = app_logs::record_start(&path, &channel, &started).await {
+            eprintln!("[日志错误] 无法记录操作开始：{error}");
+        }
+        Some(path)
+    } else {
+        None
+    };
+    let result = dispatch_command(app, &state, &channel, payload).await;
+    if record_call || result.is_err() {
+        let path = match path {
+            Some(path) => path,
+            None => state.user_data_path().await,
+        };
+        if let Err(error) = app_logs::record_finish(&path, &channel, &started, &result).await {
+            eprintln!("[日志错误] 无法记录操作结束：{error}");
+        }
+    }
+    result.map_err(|error| error.to_string())
+}
+
+async fn dispatch_command(
+    app: tauri::AppHandle,
+    state: &AppState,
+    channel: &str,
+    payload: Option<Value>,
+) -> Result<Value, ManagerError> {
+    // 取词窗口的高频操作不扫描业务数据，失败时由入口记录错误。
+    if let Some(action) = channel.strip_prefix("translation:desktop-") {
+        return translation::desktop::dispatch(&app, action, payload);
+    }
+    if channel.starts_with("translation:") || channel == "screenshot:ocr" {
+        return state.dispatch(app, channel, payload).await;
+    }
+    // 截图数据走独立服务，业务调用由入口记录脱敏摘要，不重建 Provider 托盘。
     if let Some(action) = channel.strip_prefix("screenshot:") {
         let result = screenshot::dispatch(app.clone(), action.to_string(), payload.unwrap_or_else(|| serde_json::json!({})))
-            .await.map_err(|error| error.to_string());
+            .await;
         // 设置或启停截图时同步托盘入口，截图首帧和逐帧操作不重建菜单。
         if matches!(action, "settings" | "set-enabled") && result.is_ok() {
             let snapshot = state.state_snapshot().await;
@@ -40,46 +82,29 @@ async fn dispatch_api(
         }
         return result;
     }
-    // 悬浮窗复用内存状态，初始化不扫描磁盘，也不更新托盘和操作日志。
-    if matches!(channel.as_str(), "quick-switch:bootstrap" | "tool-window:bootstrap") {
+    // 悬浮窗复用内存状态，初始化不扫描业务数据，也不更新托盘。
+    if matches!(channel, "quick-switch:bootstrap" | "tool-window:bootstrap") {
         return Ok(state.state_snapshot().await);
     }
     // 拖动和悬浮尺寸调整不改变业务状态，不逐帧写日志和重建托盘菜单。
     if matches!(
-        channel.as_str(),
+        channel,
         "quick-switch:move-by" | "quick-switch:set-collapsed" | "quick-switch:ready"
             | "tool-window:open" | "tool-window:ready" | "quick-switch:show-main"
     ) {
         return state
-            .dispatch(app, &channel, payload)
-            .await
-            .map_err(|error| error.to_string());
+            .dispatch(app, channel, payload)
+            .await;
     }
     if channel.starts_with("app-log:") || channel.starts_with("network-quality:") {
         return state
-            .dispatch(app.clone(), &channel, payload)
-            .await
-            .map_err(|error| error.to_string());
+            .dispatch(app.clone(), channel, payload)
+            .await;
     }
 
-    let user_data_path = state.user_data_path().await;
-    let started = match app_logs::record_start(&user_data_path, &channel, payload.as_ref()).await {
-        Ok(s) => Some(s),
-        Err(e) => {
-            eprintln!("[日志错误] 无法记录操作开始: {}", e);
-            None
-        }
-    };
     let result = state
-        .dispatch(app.clone(), &channel, payload)
-        .await
-        .map_err(|error| error.to_string());
-
-    if let Some(started) = started {
-        if let Err(e) = app_logs::record_finish(&user_data_path, &channel, started, &result).await {
-            eprintln!("[日志错误] 无法记录操作结束: {}", e);
-        }
-    }
+        .dispatch(app.clone(), channel, payload)
+        .await;
 
     if result.is_ok() {
         let snapshot = state.state_snapshot().await;
@@ -175,6 +200,19 @@ pub fn run() {
             let quick_switch_collapsed = manager_state.quick_switch_collapsed();
             // 预热窗口会立即调用 IPC，先注册共享状态。
             app.manage(AppState::new(manager_state));
+            // 启动即清理，运行中每分钟复查；即使关闭记录或没有新操作也会删除过期文件。
+            let log_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    if let Some(state) = log_handle.try_state::<AppState>() {
+                        let path = state.user_data_path().await;
+                        if let Err(error) = app_logs::cleanup(&path).await {
+                            eprintln!("[日志错误] 清理过期日志失败：{error}");
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                }
+            });
             app.manage(translation::desktop::DesktopTranslator::default());
             translation::desktop::sync(app.handle(), &app_settings.agents.translation);
             let data_root = tauri::async_runtime::block_on(app.state::<AppState>().user_data_path());
@@ -184,7 +222,15 @@ pub fn run() {
                     let handle = app.handle().clone();
                     tauri::async_runtime::spawn(async move { screenshot::start(handle); });
                 }
-                Err(error) => eprintln!("截图贴图数据加载失败，原数据保留：{error}"),
+                Err(error) => {
+                    eprintln!("截图贴图数据加载失败，原数据保留：{error}");
+                    let root = data_root.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = app_logs::record_background_error(&root, "screenshot:startup", error).await {
+                            eprintln!("[日志错误] {error}");
+                        }
+                    });
+                }
             }
             app::sync_quick_switch_window(
                 app.handle(),
@@ -202,6 +248,10 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     if let Err(error) = state.start_lan_share_service(app_handle.clone()).await {
                         eprintln!("设备快传后台服务启动失败：{error}");
+                        let root = state.user_data_path().await;
+                        if let Err(error) = app_logs::record_background_error(&root, "lan-share:startup", error).await {
+                            eprintln!("[日志错误] {error}");
+                        }
                     }
                 }
             });
@@ -210,6 +260,10 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     if let Err(error) = state.start_enabled_proxy_servers().await {
                         eprintln!("{error}");
+                        let root = state.user_data_path().await;
+                        if let Err(error) = app_logs::record_background_error(&root, "proxy:startup", error).await {
+                            eprintln!("[日志错误] {error}");
+                        }
                     }
                 }
             });

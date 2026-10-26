@@ -2,18 +2,35 @@
   <section class="logs-view">
     <header class="logs-view-header">
       <div class="logs-view-title">
-        <span class="logs-view-mark">调用日志</span>
-        <h1 class="logs-view-heading">调用日志</h1>
+        <span class="logs-view-mark">调试日志</span>
+        <h1 class="logs-view-heading">调试日志</h1>
         <p class="logs-view-path">
-          {{ filePath || "记录所有后端服务调用过程。" }}
+          {{ filePath || "记录调用详情和前后端异常，按日期保存最近 7 天。" }}
         </p>
       </div>
       <div class="logs-view-actions">
-        <button class="logs-view-action-button" type="button" @click="emit('refresh')">
+        <button
+          class="logs-view-action-button"
+          type="button"
+          @click="emit('refresh', selectedDate)"
+        >
           <RefreshCw :size="15" />
           刷新
         </button>
-        <button class="logs-view-action-button" type="button" @click="emit('clear')">
+        <button
+          class="logs-view-action-button"
+          type="button"
+          :disabled="!filteredLogs.length"
+          @click="exportLogs"
+        >
+          <Download :size="15" />
+          导出筛选结果
+        </button>
+        <button
+          class="logs-view-action-button"
+          type="button"
+          @click="emit('clear')"
+        >
           清空
         </button>
       </div>
@@ -21,8 +38,26 @@
 
     <div class="logs-view-filters">
       <label class="logs-view-filter">
+        <span class="logs-view-filter-label">日期</span>
+        <select
+          :value="selectedDate"
+          class="logs-view-select"
+          aria-label="日期"
+          @change="emit('refresh', $event.target.value)"
+        >
+          <option value="">最近 7 天</option>
+          <option v-for="date in dates" :key="date" :value="date">
+            {{ date }}
+          </option>
+        </select>
+      </label>
+      <label class="logs-view-filter">
         <span class="logs-view-filter-label">分类</span>
-        <select v-model="scopeFilter" class="logs-view-select">
+        <select
+          v-model="scopeFilter"
+          class="logs-view-select"
+          aria-label="分类"
+        >
           <option value="all">全部</option>
           <option v-for="scope in scopeOptions" :key="scope" :value="scope">
             {{ formatLogScope(scope) }}
@@ -31,7 +66,11 @@
       </label>
       <label class="logs-view-filter">
         <span class="logs-view-filter-label">服务</span>
-        <select v-model="serviceFilter" class="logs-view-select">
+        <select
+          v-model="serviceFilter"
+          class="logs-view-select"
+          aria-label="服务"
+        >
           <option value="all">全部</option>
           <option
             v-for="service in serviceOptions"
@@ -44,14 +83,37 @@
       </label>
       <label class="logs-view-filter">
         <span class="logs-view-filter-label">状态</span>
-        <select v-model="statusFilter" class="logs-view-select">
+        <select
+          v-model="statusFilter"
+          class="logs-view-select"
+          aria-label="状态"
+        >
           <option value="all">全部</option>
           <option value="success">成功</option>
           <option value="error">失败</option>
           <option value="pending">进行中</option>
         </select>
       </label>
-      <span data-emphasis class="logs-view-count">{{ filteredLogs.length }} 条</span>
+      <span data-emphasis class="logs-view-count"
+        >{{ filteredLogs.length }} 条</span
+      >
+    </div>
+
+    <div class="logs-view-query">
+      <input
+        v-model="keyword"
+        class="logs-view-search"
+        type="search"
+        aria-label="搜索调试日志"
+        placeholder="搜索接口、错误、调用编号或参数内容"
+      />
+      <span class="logs-view-hint">
+        {{
+          hasMore
+            ? "当前仅展示最近 1000 条，可按日期缩小范围；磁盘日志保留 7 天。"
+            : "按日期存储，过期日志自动彻底删除。"
+        }}
+      </span>
     </div>
 
     <div v-if="filteredLogs.length" class="logs-view-list">
@@ -64,29 +126,65 @@
         ]"
       >
         <div class="logs-view-item-head">
-          <span data-emphasis class="logs-view-item-title">{{ formatLogTitle(item) }}</span>
-          <span class="logs-view-item-status">{{
-            formatLogStatus(item.status)
+          <span data-emphasis class="logs-view-item-title">{{
+            formatLogTitle(item)
           }}</span>
+          <div class="logs-view-item-actions">
+            <span class="logs-view-item-status">{{
+              formatLogStatus(item.status)
+            }}</span>
+            <button
+              class="logs-view-copy"
+              type="button"
+              aria-label="复制日志详情"
+              @click="copyLog(item)"
+            >
+              <Copy :size="14" />
+              复制
+            </button>
+          </div>
         </div>
         <p v-if="item.message" class="logs-view-item-message">
           {{ item.message }}
         </p>
         <div class="logs-view-meta">
-          <span class="logs-view-meta-item">{{ formatLogTime(item.createdAt) }}</span>
-          <span class="logs-view-meta-item">{{ formatLogScope(item.scope) }}</span>
-          <span class="logs-view-meta-item">{{ item.service || "未知服务" }}</span>
-          <span class="logs-view-meta-item">{{ item.method || item.channel }}</span>
+          <span class="logs-view-meta-item">{{
+            formatLogTime(item.createdAt)
+          }}</span>
+          <span class="logs-view-meta-item">{{
+            formatLogScope(item.scope)
+          }}</span>
+          <span class="logs-view-meta-item">{{
+            item.service || "未知服务"
+          }}</span>
+          <span class="logs-view-meta-item">{{
+            item.method || item.channel
+          }}</span>
           <span class="logs-view-meta-item">{{ item.action }}</span>
           <span class="logs-view-meta-item">{{ item.durationMs || 0 }}ms</span>
           <span class="logs-view-meta-item">{{ item.traceId }}</span>
+          <span v-if="item.context?.window" class="logs-view-meta-item"
+            >窗口：{{ item.context.window }}</span
+          >
+          <span v-if="item.context?.view" class="logs-view-meta-item"
+            >页面：{{ item.context.view }}</span
+          >
         </div>
-        <pre v-if="item.payload" class="logs-view-payload">{{
-          formatLogPayload(item.payload)
-        }}</pre>
-        <pre v-if="item.result" class="logs-view-payload">{{
-          formatLogPayload(item.result)
-        }}</pre>
+        <details class="logs-view-details" :open="item.status === 'error'">
+          <summary class="logs-view-detail-summary">
+            参数、结果、错误与运行环境
+          </summary>
+          <template v-for="field in detailFields" :key="field.key">
+            <template
+              v-if="item[field.key] !== undefined && item[field.key] !== null"
+            >
+              <p class="logs-view-detail-label">{{ field.label }}</p>
+              <pre class="logs-view-payload">{{
+                formatLogPayload(item[field.key])
+              }}</pre>
+            </template>
+          </template>
+        </details>
       </article>
     </div>
 
@@ -126,7 +224,8 @@
 
 <script setup>
 import { computed, ref, watch } from "vue"
-import { RefreshCw } from "lucide-vue-next"
+import { Copy, Download, RefreshCw } from "lucide-vue-next"
+import { createMessage } from "@/utils/message"
 
 const props = defineProps({
   logs: {
@@ -136,7 +235,10 @@ const props = defineProps({
   filePath: {
     type: String,
     default: ""
-  }
+  },
+  dates: { type: Array, default: () => [] },
+  selectedDate: { type: String, default: "" },
+  hasMore: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(["refresh", "clear"])
@@ -146,28 +248,54 @@ const serviceFilter = ref("all")
 const statusFilter = ref("all")
 const page = ref(1)
 const pageSize = ref(20)
+const keyword = ref("")
+const detailFields = [
+  { key: "payload", label: "请求参数" },
+  { key: "result", label: "返回结果（过大内容会注明截断）" },
+  { key: "error", label: "错误详情" },
+  { key: "context", label: "调用来源与运行环境" }
+]
+
+// 开始和结束共用调用编号，已结束的调用合成一条；中断的调用仍显示为进行中。
+const callLogs = computed(() => {
+  const completed = new Set(
+    props.logs
+      .filter((item) => item.action === "finish" && item.traceId)
+      .map((item) => `${item.scope}:${item.traceId}`)
+  )
+  return props.logs.filter(
+    (item) =>
+      item.action !== "start" ||
+      !item.traceId ||
+      !completed.has(`${item.scope}:${item.traceId}`)
+  )
+})
 
 const scopeOptions = computed(() =>
-  [...new Set(props.logs.map(item => item.scope || "backend"))].sort()
+  [...new Set(props.logs.map((item) => item.scope || "backend"))].sort()
 )
 
 const serviceOptions = computed(() =>
   [
     ...new Set(
-      props.logs.map(item => item.service || "未知服务").filter(Boolean)
+      props.logs.map((item) => item.service || "未知服务").filter(Boolean)
     )
   ].sort()
 )
 
 const filteredLogs = computed(() =>
-  props.logs.filter(item => {
+  callLogs.value.filter((item) => {
     const scope = item.scope || "backend"
     const service = item.service || "未知服务"
 
     return (
       (scopeFilter.value === "all" || scopeFilter.value === scope) &&
       (serviceFilter.value === "all" || serviceFilter.value === service) &&
-      (statusFilter.value === "all" || statusFilter.value === item.status)
+      (statusFilter.value === "all" || statusFilter.value === item.status) &&
+      (!keyword.value.trim() ||
+        JSON.stringify(item)
+          .toLowerCase()
+          .includes(keyword.value.trim().toLowerCase()))
     )
   })
 )
@@ -195,20 +323,64 @@ const pagedLogs = computed(() =>
 )
 
 watch(
-  [scopeFilter, serviceFilter, statusFilter, pageSize, () => props.logs],
+  [
+    scopeFilter,
+    serviceFilter,
+    statusFilter,
+    keyword,
+    pageSize,
+    () => props.logs
+  ],
   () => {
     page.value = 1
   }
 )
 
 function formatLogTime(value) {
+  const date = new Date(Number(value || 0))
+  if (Number.isNaN(date.getTime())) return "时间未知"
   return new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit"
-  }).format(new Date(Number(value || 0)))
+    second: "2-digit",
+    fractionalSecondDigits: 3
+  }).format(date)
+}
+
+// 复制和导出都使用已落盘的脱敏内容，便于直接提供同一调用链的排查材料。
+async function copyLog(item) {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(item, null, 2))
+    createMessage.success("日志详情已复制")
+  } catch {
+    createMessage.error("日志复制失败，请使用导出功能")
+  }
+}
+
+function exportLogs() {
+  const blob = new Blob(
+    [
+      JSON.stringify(
+        {
+          exportedAt: new Date().toISOString(),
+          date: props.selectedDate || "最近 7 天",
+          logs: filteredLogs.value
+        },
+        null,
+        2
+      )
+    ],
+    { type: "application/json" }
+  )
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = url
+  link.download = `app-debug-${Date.now()}.json`
+  link.click()
+  URL.revokeObjectURL(url)
 }
 
 function formatLogPayload(value) {
@@ -244,7 +416,10 @@ function formatLogStatus(value) {
 }
 
 function formatLogTitle(item) {
-  return [item.service, item.method || item.channel].filter(Boolean).join(".")
+  const method = item.method || item.channel || ""
+  return method.startsWith(`${item.service}:`)
+    ? method
+    : [item.service, method].filter(Boolean).join(".")
 }
 
 function goPage(nextPage) {
@@ -312,6 +487,11 @@ function goPage(nextPage) {
         background: var(--color-panel-soft);
         color: var(--color-primary);
         cursor: pointer;
+
+        &:disabled {
+          cursor: not-allowed;
+          opacity: 0.5;
+        }
       }
     }
   }
@@ -337,7 +517,7 @@ function goPage(nextPage) {
       }
 
       .logs-view-select {
-        width: 180px;
+        width: 140px;
         height: 34px;
         padding: 0 10px;
         border: 1px solid var(--color-line);
@@ -351,6 +531,30 @@ function goPage(nextPage) {
       margin-left: auto;
       color: var(--color-text-muted);
       font-size: var(--font-size-base);
+    }
+  }
+
+  .logs-view-query {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 12px;
+
+    .logs-view-search {
+      min-width: 0;
+      height: 34px;
+      flex: 1;
+      padding: 0 10px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      color: var(--color-primary);
+    }
+
+    .logs-view-hint {
+      max-width: 360px;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-xs);
     }
   }
 
@@ -387,6 +591,24 @@ function goPage(nextPage) {
         font-size: var(--font-size-sm);
       }
 
+      .logs-view-item-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+
+        .logs-view-copy {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          padding: 4px 8px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          background: var(--color-panel-soft);
+          color: var(--color-primary);
+          cursor: pointer;
+        }
+      }
+
       .logs-view-item-message {
         margin: 8px 0 0;
         color: var(--color-danger);
@@ -404,16 +626,32 @@ function goPage(nextPage) {
         }
       }
 
-      .logs-view-payload {
-        overflow: auto;
-        max-height: 220px;
-        margin: 10px 0 0;
-        padding: 10px;
-        border-radius: 8px;
-        background: var(--color-panel-soft);
-        color: var(--color-text-muted);
-        font-size: var(--font-size-sm);
-        line-height: 1.55;
+      .logs-view-details {
+        margin-top: 10px;
+
+        .logs-view-detail-summary {
+          color: var(--color-primary);
+          cursor: pointer;
+          font-size: var(--font-size-sm);
+        }
+
+        .logs-view-detail-label {
+          margin: 12px 0 4px;
+          color: var(--color-text-muted);
+          font-size: var(--font-size-sm);
+        }
+
+        .logs-view-payload {
+          overflow: auto;
+          max-height: 260px;
+          margin: 0;
+          padding: 10px;
+          border-radius: 8px;
+          background: var(--color-panel-soft);
+          color: var(--color-text-muted);
+          font-size: var(--font-size-sm);
+          line-height: 1.55;
+        }
       }
     }
 

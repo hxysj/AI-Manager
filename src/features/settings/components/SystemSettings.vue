@@ -13,6 +13,25 @@
             <div class="system-settings-text">
               <h3 class="system-settings-title">{{ item.title }}</h3>
               <p class="system-settings-description">{{ item.description }}</p>
+              <div
+                v-if="item.key === 'logEnabled'"
+                class="system-settings-log-storage"
+              >
+                <span aria-live="polite">
+                  当前占用：{{ logStorageText }}
+                  <template v-if="logStats"
+                    >（{{ logStats.fileCount }} 个日期文件）</template
+                  >
+                </span>
+                <button
+                  class="system-settings-log-refresh"
+                  type="button"
+                  aria-label="刷新日志存储占用"
+                  @click="loadLogStats"
+                >
+                  <RefreshCw :size="13" />
+                </button>
+              </div>
             </div>
           </div>
           <div v-if="item.kind !== 'tools'" class="system-settings-controls">
@@ -92,9 +111,25 @@
 </template>
 
 <script setup>
-import { computed, nextTick, reactive } from "vue"
-import { Monitor, PanelTopClose, Power, Trash2, Wrench } from "lucide-vue-next"
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref
+} from "vue"
+import {
+  FileText,
+  Monitor,
+  PanelTopClose,
+  Power,
+  RefreshCw,
+  Trash2,
+  Wrench
+} from "lucide-vue-next"
 import { getToolItems } from "@/features/tools/constant"
+import { appApi } from "@/api"
 
 const props = defineProps({
   settings: { type: Object, default: () => ({}) },
@@ -106,6 +141,15 @@ const props = defineProps({
 defineEmits(["quit-app", "uninstall-without-trace"])
 
 const settingItems = [
+  {
+    key: "logEnabled",
+    name: "log-enabled",
+    kind: "switch",
+    icon: FileText,
+    title: "日志记录",
+    description:
+      "按日期记录调试信息，仅保留最近 7 天，过期自动彻底删除。关闭后停止新增日志。"
+  },
   {
     key: "autoLaunchEnabled",
     name: "auto-launch-enabled",
@@ -166,6 +210,7 @@ const floatingToolItems = computed(() =>
 const overrides = reactive({ quickSwitchTools: {} })
 const requests = new Map()
 const draft = computed(() => ({
+  logEnabled: true,
   autoLaunchEnabled: false,
   closeAction: "ask",
   quickSwitchVisible: true,
@@ -177,6 +222,38 @@ const draft = computed(() => ({
     ...overrides.quickSwitchTools
   }
 }))
+
+const logStats = ref(null)
+const logStatsError = ref(false)
+let logStatsTimer = null
+const logStorageText = computed(() => {
+  if (logStatsError.value) return "读取失败，请刷新"
+  if (!logStats.value) return "读取中…"
+  const bytes = Number(logStats.value.bytes || 0)
+  if (bytes < 1024) return `${bytes} B`
+  const units = ["KB", "MB", "GB"]
+  const index = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)) - 1,
+    units.length - 1
+  )
+  return `${(bytes / 1024 ** (index + 1)).toFixed(2)} ${units[index]}`
+})
+
+// 统计读取不写日志；设置页打开时更新，关闭页面后停止轮询。
+async function loadLogStats() {
+  try {
+    logStats.value = await appApi.getAppLogStats()
+    logStatsError.value = false
+  } catch {
+    logStatsError.value = true
+  }
+}
+
+onMounted(() => {
+  void loadLogStats()
+  logStatsTimer = window.setInterval(loadLogStats, 10_000)
+})
+onBeforeUnmount(() => window.clearInterval(logStatsTimer))
 
 async function saveSetting(key, value, toolId = "") {
   const current = toolId
@@ -198,6 +275,7 @@ async function saveSetting(key, value, toolId = "") {
     delete values[field]
     requests.delete(requestKey)
   }
+  if (key === "logEnabled") await loadLogStats()
   return success
 }
 </script>
@@ -264,6 +342,26 @@ async function saveSetting(key, value, toolId = "") {
             color: var(--color-text-muted);
             font-size: 13px;
             line-height: 1.5;
+          }
+
+          .system-settings-log-storage {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--color-text-muted);
+            font-size: 12px;
+
+            .system-settings-log-refresh {
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              padding: 4px;
+              border: 0;
+              border-radius: 4px;
+              background: transparent;
+              color: var(--color-primary);
+              cursor: pointer;
+            }
           }
         }
       }

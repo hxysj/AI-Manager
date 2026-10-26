@@ -105,11 +105,12 @@ const schema = {
   authFields: ["OPENAI_API_KEY"],
   defaultProviderType: "openai"
 }
-for (const cli of [null, "claude", "codex"]) {
+for (const cli of [null, "claude", "codex", "claude-desktop"]) {
   const app = createSSRApp(Providers, {
     ...props,
-    cliTargets: cli ? [{ id: cli, name: cli }] : [],
-    runtimeConfigSchemas: cli ? { [cli]: schema } : {}
+    cliTargets: cli ? [{ id: cli, name: cli, installed: true }] : [],
+    runtimeConfigSchemas:
+      cli && cli !== "claude-desktop" ? { [cli]: schema } : {}
   })
   const failures = []
   app.component("ElInput", { render: () => null })
@@ -122,9 +123,48 @@ for (const cli of [null, "claude", "codex"]) {
   )
   assert.ok(html.includes("providers-view"))
   if (cli) assert.ok(html.includes(cli))
+  assert.equal(html.includes("providers-view__toolbar"), Boolean(cli))
+  assert.equal(html.includes("尚未检测到已安装的应用"), !cli)
   assert.ok(!html.includes("同步模型列表"))
   assert.ok(!html.includes("恢复默认模型"))
 }
+
+// 即使保留了历史配置，未安装或缺少安装状态的应用也不能显示设置入口。
+for (const installed of [false, undefined]) {
+  const app = createSSRApp(Providers, {
+    ...props,
+    cliTargets: [
+      { id: "claude", name: "Claude", installed },
+      { id: "codex", name: "Codex", installed },
+      { id: "claude-desktop", name: "Claude Desktop", installed }
+    ],
+    providers: [{ id: "saved-provider", cli: "claude", name: "历史供应商" }],
+    runtimeConfigSchemas: { claude: schema, codex: schema }
+  })
+  app.component("ElInput", { render: () => null })
+  const html = await renderToString(app)
+  assert.ok(html.includes("尚未检测到已安装的应用"))
+  assert.ok(!html.includes("providers-view__toolbar"))
+  assert.ok(!html.includes("历史供应商"))
+}
+
+const mixedApp = createSSRApp(Providers, {
+  ...props,
+  cliTargets: [
+    { id: "claude", name: "未安装的 Claude", installed: false },
+    { id: "codex", name: "已安装的 Codex", installed: true },
+    { id: "claude-desktop", name: "未安装的 Desktop", installed: false },
+    { id: "unsupported", name: "不支持配置的应用", installed: true }
+  ],
+  runtimeConfigSchemas: { claude: schema, codex: schema }
+})
+mixedApp.component("ElInput", { render: () => null })
+const mixedHtml = await renderToString(mixedApp)
+assert.ok(mixedHtml.includes("已安装的 Codex"))
+assert.ok(!mixedHtml.includes("未安装的 Claude"))
+assert.ok(!mixedHtml.includes("未安装的 Desktop"))
+assert.ok(!mixedHtml.includes("不支持配置的应用"))
+assert.ok(mixedHtml.includes("providers-view__cli-tab--active"))
 
 const activeProvider = {
   id: "active-provider",
@@ -152,7 +192,7 @@ const Editor = {
 }
 const editor = createSSRApp(Editor, {
   ...props,
-  cliTargets: [{ id: "codex", name: "Codex" }],
+  cliTargets: [{ id: "codex", name: "Codex", installed: true }],
   runtimeConfigSchemas: { codex: schema },
   onSaveProvider: payload => providerSaves.push(payload),
   providers: [activeProvider, editedProvider],
@@ -201,7 +241,7 @@ const Auth = {
 }
 const authApp = createSSRApp(Auth, {
   ...props,
-  cliTargets: [{ id: "codex", name: "Codex" }],
+  cliTargets: [{ id: "codex", name: "Codex", installed: true }],
   runtimeConfigSchemas: { codex: schema }
 })
 authApp.component("ElInput", { render: () => null })
@@ -216,5 +256,5 @@ assert.deepEqual(openedUrls, ["https://chatgpt.com/api/auth/session"])
 assert.deepEqual(copiedUrls, ["https://chatgpt.com/api/auth/session"])
 assert.deepEqual(failures, [])
 console.log(
-  "Providers 首屏、同步选项默认关闭与保存隔离、认证链接打开及复制回归通过"
+  "Providers 安装状态筛选、空状态、首屏、同步选项默认关闭与保存隔离、认证链接打开及复制回归通过"
 )

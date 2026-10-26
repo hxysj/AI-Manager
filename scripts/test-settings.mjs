@@ -17,6 +17,20 @@ const pets = [
   { id: "previous", name: "上次桌宠" }
 ]
 let selectedDirectory = null
+let logStatsResponse = { bytes: 1536, fileCount: 2 }
+let logStatsFailure = false
+const logStatsPolls = new Map()
+// 仅驱动组件轮询回调，不启动真实计时器。
+globalThis.window = {
+  setInterval(callback) {
+    const id = Symbol()
+    logStatsPolls.set(id, callback)
+    return id
+  },
+  clearInterval(id) {
+    logStatsPolls.delete(id)
+  }
+}
 const stub = { render: () => vue.h("span") }
 const components = new Map()
 
@@ -59,6 +73,12 @@ async function loadComponent(filename) {
     (name) => {
       if (name === "@/api")
         return {
+          appApi: {
+            getAppLogStats: async () => {
+              if (logStatsFailure) throw new Error("统计读取失败")
+              return logStatsResponse
+            }
+          },
           systemApi: { selectDirectory: async () => selectedDirectory },
           translationApi: {
             desktopStatus: async () => ({}),
@@ -470,6 +490,36 @@ systemSettings.unmount()
 await finish(16)
 assert.equal(server.system.quickSwitchVisible, false)
 
+// 日志开关沿用局部保存与失败恢复，存储统计独立更新，卸载后停止轮询。
+const loggingSettings = mount(
+  components.get("@/features/settings/components/SystemSettings.vue"),
+  systemProps
+)
+await tick()
+assert.equal(loggingSettings.state.logStorageText, "1.50 KB")
+const logSwitch = () =>
+  find(loggingSettings.root, (item) => item.props.name === "log-enabled")[0]
+assert.equal(logSwitch().props["aria-checked"], true)
+trigger(logSwitch(), "click")
+await tick()
+assert.deepEqual(calls[17].patch, { system: { logEnabled: false } })
+await finish(17)
+assert.equal(logSwitch().props["aria-checked"], false)
+assert.equal(server.system.logEnabled, false)
+trigger(logSwitch(), "click")
+await tick()
+await finish(18, "模拟保存日志开关失败")
+assert.equal(logSwitch().props["aria-checked"], false)
+logStatsResponse = { bytes: 2 * 1024 * 1024, fileCount: 7 }
+await loggingSettings.state.loadLogStats()
+assert.equal(loggingSettings.state.logStorageText, "2.00 MB")
+logStatsFailure = true
+await loggingSettings.state.loadLogStats()
+assert.equal(loggingSettings.state.logStorageText, "读取失败，请刷新")
+logStatsFailure = false
+loggingSettings.unmount()
+assert.equal(logStatsPolls.size, 0)
+
 // 翻译弹窗按改动字段立即保存，重复快捷键不会被提交。
 const translationChanges = []
 const translationProps = vue.reactive({
@@ -499,5 +549,5 @@ assert.deepEqual(translationChanges.at(-1), {
 translation.unmount()
 assert.deepEqual(runtimeErrors, [])
 console.log(
-  "设置自动保存：字段隔离、连续修改、失败恢复、草稿保留、目录、桌宠及翻译配置验证通过"
+  "设置自动保存：字段隔离、连续修改、失败恢复、日志开关与存储统计、轮询清理、目录、桌宠及翻译配置验证通过"
 )

@@ -1,5 +1,9 @@
 import { createApp } from "vue"
 import "./styles/app.less"
+import { installAppLogging, installRuntimeLogging } from "@/utils/app-logger"
+
+// 在异步加载页面前注册，启动失败和独立窗口的异常同样能够留存。
+installRuntimeLogging()
 
 // 截图和贴图窗口不启动主面板，避免重复加载账号、翻译与全局业务监听。
 if (new URLSearchParams(location.search).get("panel") === "screenshot") {
@@ -7,7 +11,7 @@ if (new URLSearchParams(location.search).get("panel") === "screenshot") {
   document.body.style.background = "transparent"
   import("./features/screenshot/components/ScreenshotWindow.vue").then(
     ({ default: ScreenshotWindow }) => {
-      createApp(ScreenshotWindow).mount("#app")
+      installAppLogging(createApp(ScreenshotWindow)).mount("#app")
     }
   )
 } else if (
@@ -20,7 +24,9 @@ if (new URLSearchParams(location.search).get("panel") === "screenshot") {
     window.localStorage.getItem("ai-manager-theme") || "light"
   import("./components/SelectionTranslator.vue").then(
     ({ default: SelectionTranslator }) => {
-      createApp(SelectionTranslator, { desktop: true }).mount("#app")
+      installAppLogging(
+        createApp(SelectionTranslator, { desktop: true })
+      ).mount("#app")
     }
   )
 } else {
@@ -30,6 +36,9 @@ if (new URLSearchParams(location.search).get("panel") === "screenshot") {
     import("element-plus/es/components/date-picker/style/css"),
     import("element-plus/es/components/input/style/css")
   ]).then(([{ default: App }, { ElDatePicker, ElInput }]) => {
-    createApp(App).use(ElDatePicker).use(ElInput).mount("#app")
+    installAppLogging(createApp(App))
+      .use(ElDatePicker)
+      .use(ElInput)
+      .mount("#app")
   })
 }

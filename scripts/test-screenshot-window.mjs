@@ -111,14 +111,14 @@ new Function(
   }).code
 )(
   (name) => {
-    if (name === "@tauri-apps/api/core")
+    if (name === "@/api/request")
       return {
-        invoke: async (command) =>
+        request() {},
+        invokeWithDiagnostics: async (command) =>
           command === "screenshot_image"
             ? nativeImageResponse
             : (nativeFrameResponse ?? frameResponse())
       }
-    if (name === "@/api/request") return { request() {} }
     return require(name)
   },
   apiModule,

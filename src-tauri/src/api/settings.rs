@@ -42,7 +42,8 @@ pub async fn save_settings(
     .await?;
     *app_settings = next_settings;
     *paths = next_paths;
-    state["appSettings"] = serde_json::to_value(app_settings)?;
+    state["appSettings"] = serde_json::to_value(&*app_settings)?;
+    crate::api::app_logs::configure(app_settings.system.log_enabled).await;
     Ok(())
 }
 

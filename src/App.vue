@@ -32,6 +32,7 @@
 
   <div
     v-else
+    :data-active-view="activeView"
     :class="['app-shell', { 'app-shell--tool-workspace': toolWorkspaceActive }]"
   >
     <AppSidebar
@@ -207,6 +208,9 @@
           v-else-if="activeView === 'logs'"
           :file-path="appLogPath"
           :logs="appLogs"
+          :dates="appLogDates"
+          :selected-date="appLogDate"
+          :has-more="appLogHasMore"
           @clear="clearAppLogs"
           @refresh="loadAppLogs"
         />
@@ -674,6 +678,10 @@ const toolRequest = ref(queryTool ? { toolId: queryTool } : null)
 const sidebarTitleClickCount = ref(0)
 const appLogs = ref([])
 const appLogPath = ref("")
+const appLogDates = ref([])
+const appLogDate = ref("")
+const appLogHasMore = ref(false)
+let appLogLoadRequest = 0
 const sidebarCollapsed = ref(false)
 const toolWorkspaceActive = ref(false)
 const selectedSkillName = ref("")
@@ -982,18 +990,27 @@ async function handleSidebarTitleClick() {
   }
 }
 
-async function loadAppLogs() {
-  const result = await appApi.getAppLogs()
+async function loadAppLogs(date = appLogDate.value) {
+  const request = ++appLogLoadRequest
+  const result = await appApi.getAppLogs({ date })
+  if (request !== appLogLoadRequest) return
 
   appLogs.value = result.logs || []
   appLogPath.value = result.filePath || ""
+  appLogDates.value = result.dates || []
+  appLogDate.value = date
+  appLogHasMore.value = Boolean(result.hasMore)
 }
 
 async function clearAppLogs() {
+  appLogLoadRequest += 1
   const result = await appApi.clearAppLogs()
 
   appLogs.value = result.logs || []
   appLogPath.value = result.filePath || ""
+  appLogDates.value = result.dates || []
+  appLogDate.value = ""
+  appLogHasMore.value = false
 }
 
 function formatCloudBackupTime(value) {

@@ -29,10 +29,16 @@ pub struct LocalBackupSettings {
 #[serde(rename_all = "camelCase")]
 pub struct SystemSettings {
     pub close_action: String,
+    #[serde(default = "default_log_enabled")]
+    pub log_enabled: bool,
     pub quick_switch_visible: bool,
     #[serde(default)]
     pub quick_switch_tools: BTreeMap<String, bool>,
     pub auto_launch_enabled: bool,
+}
+
+fn default_log_enabled() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -152,6 +158,7 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
         },
         system: SystemSettings {
             close_action: normalize_close_action(system.get("closeAction")),
+            log_enabled: bool_value(system.get("logEnabled"), true),
             quick_switch_visible: bool_value(system.get("quickSwitchVisible"), true),
             quick_switch_tools: system
                 .get("quickSwitchTools")
@@ -244,6 +251,19 @@ pub fn serialize_app_settings(app_settings: &AppSettings) -> Value {
 #[cfg(test)]
 mod floating_tools_tests {
     use super::*;
+
+    #[test]
+    fn log_setting_defaults_on_and_persists_disabled_value() {
+        let path = PathBuf::from("settings.json");
+        let defaults = normalize_app_settings(path.clone(), None);
+        assert!(defaults.system.log_enabled);
+        let settings = normalize_app_settings(path.clone(), Some(json!({"system": {"logEnabled": false}})));
+        let restored = normalize_app_settings(path, Some(serialize_app_settings(&settings)));
+        assert!(!restored.system.log_enabled);
+        let mut legacy = serialize_app_settings(&defaults);
+        legacy["system"].as_object_mut().unwrap().remove("logEnabled");
+        assert!(serde_json::from_value::<AppSettings>(legacy).unwrap().system.log_enabled);
+    }
 
     #[test]
     fn defaults_and_tool_visibility_survive_round_trip() {

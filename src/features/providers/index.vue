@@ -1,5 +1,5 @@
 <template>
-  <section class="providers-view">
+  <section v-if="visibleCliTargets.length" class="providers-view">
     <div v-if="viewMode === 'list'" class="providers-view__list-shell">
       <header class="providers-view__toolbar">
         <div class="providers-view__cli-tabs">
@@ -2847,6 +2847,11 @@
       @confirm="confirmDelete"
     />
   </section>
+  <section v-else class="providers-view">
+    <div class="providers-view__empty" role="status">
+      尚未检测到已安装的应用，请先安装对应应用，再刷新应用状态。
+    </div>
+  </section>
 </template>
 
 <script setup>
@@ -3222,12 +3227,13 @@ const iconOptions = Object.keys(iconModules)
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
-  return [
-    ...props.cliTargets.filter(item => {
-      return props.runtimeConfigSchemas[item.id]?.enabled
-    }),
-    { id: "claude-desktop", name: "Claude Desktop", icon: "claude" }
-  ]
+  // 统一使用应用安装检测结果，只有已安装且支持配置的应用才显示入口。
+  return props.cliTargets.filter(
+    item =>
+      item.installed === true &&
+      (item.id === "claude-desktop" ||
+        props.runtimeConfigSchemas[item.id]?.enabled)
+  )
 })
 
 const activeRuntimeSchema = computed(() => {

@@ -1,5 +1,4 @@
-import { request } from "@/api/request"
-import { invoke } from "@tauri-apps/api/core"
+import { invokeWithDiagnostics, request } from "@/api/request"
 
 function binaryBuffer(data) {
   if (data instanceof ArrayBuffer) return data
@@ -14,14 +13,20 @@ function binaryBuffer(data) {
 // 图像仅通过专用通道传输，避免进入通用操作日志。
 export const screenshotApi = {
   // 框选首帧直接接收二进制像素，避免图片压缩与解码等待。
-  frame: async () => binaryBuffer(await invoke("screenshot_frame")),
+  frame: async () =>
+    binaryBuffer(await invokeWithDiagnostics("screenshot_frame")),
   // 长截图在覆盖层隐藏期间按选区抓取连续帧。
   regionFrame: async (left, top, width, height) =>
     binaryBuffer(
-      await invoke("screenshot_region_frame", { left, top, width, height })
+      await invokeWithDiagnostics("screenshot_region_frame", {
+        left,
+        top,
+        width,
+        height
+      })
     ),
   // 贴图只加载需要的 PNG，避免两张大图经 Base64 和 JSON 重复传输。
   image: async (id, kind) =>
-    binaryBuffer(await invoke("screenshot_image", { id, kind })),
+    binaryBuffer(await invokeWithDiagnostics("screenshot_image", { id, kind })),
   call: (action, payload) => request(`screenshot:${action}`, payload)
 }
