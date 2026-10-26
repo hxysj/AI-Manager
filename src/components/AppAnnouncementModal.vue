@@ -387,7 +387,7 @@ onBeforeUnmount(() => {
   :deep(.base-modal__header) {
     position: relative;
     flex-shrink: 0;
-    padding: 28px 28px 22px;
+    padding: 16px 28px 14px;
     border-bottom: 1px solid var(--color-line);
     overflow: hidden;
     background: radial-gradient(
@@ -409,9 +409,9 @@ onBeforeUnmount(() => {
   .announcement-header-decor {
     position: absolute;
     right: 56px;
-    top: -8px;
-    width: 175px;
-    height: 140px;
+    top: -2px;
+    width: 120px;
+    height: 96px;
     pointer-events: none;
     z-index: 1;
 
@@ -433,9 +433,9 @@ onBeforeUnmount(() => {
       align-items: center;
       gap: 6px;
       color: #2563eb;
-      font-size: 14px;
+      font-size: 12px;
       font-weight: 600;
-      line-height: 1.2;
+      line-height: 1.25;
     }
 
     .announcement-title-row {
@@ -443,11 +443,11 @@ onBeforeUnmount(() => {
       align-items: center;
       flex-wrap: wrap;
       gap: 12px;
-      margin-top: 10px;
+      margin-top: 6px;
 
       .announcement-title {
         margin: 0;
-        font-size: 24px;
+        font-size: 20px;
         font-weight: 800;
         color: var(--color-text);
         letter-spacing: -0.02em;
@@ -469,17 +469,17 @@ onBeforeUnmount(() => {
     }
 
     .announcement-description {
-      margin: 10px 0 0;
+      margin: 6px 0 0;
       color: var(--color-text-muted);
-      font-size: 14px;
-      line-height: 1.5;
+      font-size: 13px;
+      line-height: 1.4;
     }
   }
 
   .announcement-close {
     position: absolute;
     right: 22px;
-    top: 22px;
+    top: 16px;
     z-index: 5;
     display: grid;
     flex-shrink: 0;
@@ -603,14 +603,17 @@ onBeforeUnmount(() => {
     justify-content: space-between;
     flex-wrap: wrap;
     gap: 12px;
-    padding: 16px 28px 20px;
+    padding: 16px 28px;
     border-top: 1px solid var(--color-line);
     background: var(--color-panel);
 
     .announcement-remember {
+      position: relative;
       display: inline-flex;
       align-items: center;
-      gap: 9px;
+      justify-content: center;
+      min-height: 38px;
+      gap: 8px;
       cursor: pointer;
       user-select: none;
 
@@ -628,10 +631,11 @@ onBeforeUnmount(() => {
       }
 
       .announcement-checkbox-custom {
-        display: grid;
-        place-items: center;
-        width: 17px;
-        height: 17px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 16px;
+        height: 16px;
         flex-shrink: 0;
         border: 1.5px solid var(--color-line-strong);
         border-radius: 4px;
@@ -646,9 +650,11 @@ onBeforeUnmount(() => {
       }
 
       .announcement-hint {
+        display: inline-flex;
+        align-items: center;
         color: var(--color-text-muted);
         font-size: 13.5px;
-        line-height: 1;
+        line-height: 20px;
         transition: color 0.15s ease;
       }
 

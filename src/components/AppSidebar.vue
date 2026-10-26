@@ -31,7 +31,14 @@
       </button>
     </div>
 
-    <nav class="app-sidebar__nav">
+    <el-scrollbar
+      class="app-sidebar-nav-scroll"
+      view-class="app-sidebar__nav"
+      tag="nav"
+      aria-label="主导航"
+      tabindex="0"
+      :style="{ '--sidebar-nav-count': navItems.length }"
+    >
       <button
         v-for="item in navItems"
         :key="item.id"
@@ -49,7 +56,7 @@
           item.label
         }}</span>
       </button>
-    </nav>
+    </el-scrollbar>
 
     <section class="app-sidebar__section">
       <div v-if="!collapsed" class="app-sidebar__section-header">
@@ -103,6 +110,8 @@
 
 <script setup>
 import { Moon, Sun } from 'lucide-vue-next'
+import { ElScrollbar } from 'element-plus'
+import 'element-plus/es/components/scrollbar/style/css'
 import AiIcon from '@/components/AiIcon.vue'
 import logoUrl from '@/assets/ai-manager-logo.png?url'
 
@@ -143,13 +152,16 @@ const colorMap = {
 
 <style scoped lang="less">
 .app-sidebar {
+  --sidebar-nav-item-min-height: 36px;
+  --sidebar-nav-item-max-height: 48px;
+  --sidebar-nav-gap: 5px;
+  --sidebar-nav-padding: 16px;
   display: flex;
   width: 260px;
   height: 100%;
   min-height: 0;
   flex-direction: column;
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
   border-right: 1px solid var(--color-line);
   background: var(--color-panel);
   transition: width 0.24s ease;
@@ -164,10 +176,14 @@ const colorMap = {
     padding-left: 0;
   }
 
-  &--collapsed &__nav {
-    align-items: center;
-    padding-right: 8px;
-    padding-left: 8px;
+  &.app-sidebar--collapsed {
+    .app-sidebar-nav-scroll {
+      :deep(.app-sidebar__nav) {
+        align-items: center;
+        padding-right: 8px;
+        padding-left: 8px;
+      }
+    }
   }
 
   &--collapsed &__nav-item {
@@ -209,6 +225,7 @@ const colorMap = {
 
   &__header {
     display: flex;
+    flex: none;
     align-items: center;
     gap: 12px;
     padding: 18px 18px 14px;
@@ -262,20 +279,40 @@ const colorMap = {
     display: block;
   }
 
-  &__nav {
-    display: flex;
+  .app-sidebar-nav-scroll {
     flex: 1;
-    flex-direction: column;
-    gap: 5px;
-    padding: 16px 12px;
+    min-height: 0;
+    height: auto;
+    --el-scrollbar-bg-color: var(--color-text-muted);
+    --el-scrollbar-hover-bg-color: var(--color-text-muted);
+
+    :deep(.el-scrollbar__wrap) {
+      overflow-x: hidden;
+    }
+
+    :deep(.app-sidebar__nav) {
+      display: flex;
+      height: 100%;
+      min-height: calc(
+        var(--sidebar-nav-count) * var(--sidebar-nav-item-min-height) +
+        (var(--sidebar-nav-count) - 1) * var(--sidebar-nav-gap) +
+        var(--sidebar-nav-padding) * 2
+      );
+      flex-direction: column;
+      gap: var(--sidebar-nav-gap);
+      padding: var(--sidebar-nav-padding) 12px;
+    }
   }
 
   &__nav-item {
     position: relative;
     display: flex;
+    flex: 0 1 var(--sidebar-nav-item-max-height);
+    min-height: var(--sidebar-nav-item-min-height);
+    max-height: var(--sidebar-nav-item-max-height);
     align-items: center;
     gap: 12px;
-    padding: 12px 14px;
+    padding: 0 14px;
     border: 0;
     border-radius: 8px;
     background: transparent;
@@ -323,6 +360,7 @@ const colorMap = {
   }
 
   &__section {
+    flex: none;
     padding: 0 12px 14px;
     border-top: 1px solid var(--color-line);
   }

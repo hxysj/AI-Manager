@@ -971,10 +971,15 @@ async function handleSidebarTitleClick() {
     return
   }
 
-  showLogsTab.value = true
-  activeView.value = "logs"
+  // 每累计点击十次切换日志入口，隐藏时仅退出当前日志页。
   sidebarTitleClickCount.value = 0
-  await loadAppLogs()
+  showLogsTab.value = !showLogsTab.value
+  if (showLogsTab.value) {
+    activeView.value = "logs"
+    await loadAppLogs()
+  } else if (activeView.value === "logs") {
+    activeView.value = "providers"
+  }
 }
 
 async function loadAppLogs() {
