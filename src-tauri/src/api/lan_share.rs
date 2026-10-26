@@ -385,20 +385,6 @@ fn create_invite_code() -> String {
     value[..8].to_uppercase()
 }
 
-fn group_invite_url(access_url: &str, invite_code: &str) -> String {
-    if access_url.is_empty() || invite_code.is_empty() {
-        return String::new();
-    }
-
-    match Url::parse(access_url) {
-        Ok(mut url) => {
-            url.query_pairs_mut().append_pair("invite", invite_code);
-            url.to_string()
-        }
-        Err(_) => String::new(),
-    }
-}
-
 pub async fn file_payload(path: &str, session_id: &str) -> Result<LanShareFile, ManagerError> {
     let target = PathBuf::from(path);
     let metadata = tokio::fs::metadata(&target).await?;
@@ -459,13 +445,17 @@ pub async fn add_files(
         None,
     )
     .await?;
-    let sender = registry
-        .inner
-        .lock()
-        .await
-        .clients
-        .get(&session.device_id)
-        .cloned();
+    let sender = if session.mode != "group" {
+        registry
+            .inner
+            .lock()
+            .await
+            .clients
+            .get(&session.device_id)
+            .cloned()
+    } else {
+        None
+    };
     let stored = append_message_with_attachments(
         registry,
         paths,
@@ -481,11 +471,6 @@ pub async fn add_files(
     attachments::publish(registry, paths, &files).await?;
     if let Some(sender) = sender {
         let _ = send_stored_message_to_client(&sender, &stored);
-    }
-    if session.mode == "group" {
-        for (_, sender) in group_online_targets(registry, paths, &session.group_id).await? {
-            let _ = send_stored_message_to_client(&sender, &stored);
-        }
     }
     get_state(registry, paths).await
 }
@@ -513,7 +498,6 @@ pub async fn get_state(
     let mut runtime = registry.inner.lock().await;
     refresh_access_address(&mut runtime, &lan_ips);
     let online_device_ids = runtime.clients.keys().cloned().collect::<Vec<_>>();
-    let access_url = runtime.access_url.clone();
     let devices = devices
         .into_iter()
         .map(|device| {
@@ -533,12 +517,6 @@ pub async fn get_state(
     let groups = groups
         .into_iter()
         .map(|group| {
-            let invite_url = group_invite_url(&access_url, &group.invite_code);
-            let qr_svg = if invite_url.is_empty() {
-                String::new()
-            } else {
-                qr_svg(&invite_url).unwrap_or_default()
-            };
             let owner_id = if group.owner_device_id.is_empty() {
                 runtime.native.config.id.clone()
             } else {
@@ -589,8 +567,6 @@ pub async fn get_state(
                 "inviteCode": group.invite_code,
                 "ownerDeviceId": owner_id,
                 "ownerDeviceName": owner_name,
-                "inviteUrl": invite_url,
-                "qrSvg": qr_svg,
                 "messageVisibility": group.message_visibility,
                 "createdAt": group.created_at,
                 "updatedAt": group.updated_at,
@@ -1028,11 +1004,6 @@ pub async fn delete_device(
                 payload: json!({ "type": "deviceRemoved" }),
             });
         }
-        for sender in runtime.clients.values() {
-            let _ = sender.send(WsOutbound {
-                payload: json!({ "type": "groupsChanged" }),
-            });
-        }
     }
     broadcast_files_changed(registry).await?;
     get_state(registry, paths).await
@@ -1233,11 +1204,15 @@ pub async fn create_group(
                 .iter()
                 .find(|device| &device.id == device_id)
                 .ok_or_else(|| ManagerError::System("邀请的设备已不存在，请重新选择。".into()))?;
-            if device.user_agent == "MonkeyThief/Desktop"
-                && !native_group_capabilities
-                    .get(&device.id)
-                    .copied()
-                    .unwrap_or(false)
+            if device.user_agent != "MonkeyThief/Desktop" {
+                return Err(ManagerError::System(
+                    "群聊仅支持已配对的客户端设备，网页设备不能加入群聊。".into(),
+                ));
+            }
+            if !native_group_capabilities
+                .get(&device.id)
+                .copied()
+                .unwrap_or(false)
             {
                 return Err(ManagerError::System(
                     "该客户端版本不支持群聊，请先更新对方设备后再邀请。".into(),
@@ -1268,16 +1243,6 @@ pub async fn create_group(
         write_json(&paths.lan_share_files.sessions, &json!(sessions)).await?;
     }
 
-    {
-        let runtime = registry.inner.lock().await;
-        for member in &group.members {
-            if let Some(sender) = runtime.clients.get(&member.device_id) {
-                let _ = sender.send(WsOutbound {
-                    payload: json!({ "type": "groupsChanged" }),
-                });
-            }
-        }
-    }
     for member in &group.members {
         if native_group_capabilities
             .get(&member.device_id)
@@ -1708,30 +1673,34 @@ fn mobile_page_html() -> String {
         include_str!("../../../src/styles/typography.css"),
         r##"
     :root {
-      --bg: #edf3f8;
-      --bg-gradient: radial-gradient(circle at 20% 0%, #f8fbff 0%, #edf3f8 42%, #e5edf5 100%);
+      --bg: #f4f7fb;
+      --bg-gradient: radial-gradient(circle at 50% 0%, #f9fbfe 0%, #f1f5fa 55%, #e9eff6 100%);
       --panel: #ffffff;
-      --panel-soft: #f7fafc;
+      --panel-soft: #f8fafc;
       --panel-glass: rgba(255, 255, 255, 0.94);
-      --line: #d8e3ee;
-      --line-strong: #bed0e2;
-      --text: #142033;
+      --line: #e2e8f0;
+      --line-strong: #cbd5e1;
+      --text: #0f172a;
       --muted: #64748b;
       --primary: #2563eb;
       --primary-hover: #1d4ed8;
       --primary-soft: #eff6ff;
       --primary-border: #bfdbfe;
+      --bubble-me: #e1f0ff;
+      --bubble-me-border: #bfdbfe;
+      --bubble-peer: #ffffff;
+      --bubble-peer-border: rgba(226, 232, 240, 0.85);
       --success: #10b981;
       --success-soft: #ecfdf5;
       --warning: #f59e0b;
       --danger: #ef4444;
       --danger-soft: #fef2f2;
-      --shadow-sm: 0 2px 6px rgba(15, 23, 42, 0.04);
-      --shadow-md: 0 8px 24px rgba(15, 23, 42, 0.06);
-      --shadow-lg: 0 16px 36px rgba(15, 23, 42, 0.1);
+      --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.04);
+      --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.06);
+      --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.1);
       --radius-sm: 8px;
-      --radius-md: 12px;
-      --radius-lg: 16px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
     }
 
     [data-theme="dark"] {
@@ -1748,14 +1717,18 @@ fn mobile_page_html() -> String {
       --primary-hover: #60a5fa;
       --primary-soft: rgba(59, 130, 246, 0.15);
       --primary-border: rgba(59, 130, 246, 0.3);
+      --bubble-me: #1e3a8a;
+      --bubble-me-border: #2563eb;
+      --bubble-peer: #17233d;
+      --bubble-peer-border: #2a3e63;
       --success: #34d399;
       --success-soft: rgba(52, 211, 153, 0.14);
       --warning: #fbbf24;
       --danger: #f87171;
       --danger-soft: rgba(248, 113, 113, 0.14);
-      --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.25);
-      --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
-      --shadow-lg: 0 16px 36px rgba(0, 0, 0, 0.45);
+      --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.25);
+      --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.35);
+      --shadow-lg: 0 14px 36px rgba(0, 0, 0, 0.45);
     }
 
     * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -1794,24 +1767,23 @@ fn mobile_page_html() -> String {
       flex: none;
       align-items: center;
       justify-content: space-between;
-      gap: 8px;
-      padding: max(10px, env(safe-area-inset-top)) 12px 10px;
+      gap: 10px;
+      padding: max(10px, env(safe-area-inset-top)) 16px 10px;
       background: var(--panel-glass);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       border-bottom: 1px solid var(--line);
-      box-shadow: var(--shadow-sm);
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03);
     }
     .page-main {
       display: flex;
       min-height: 0;
       flex: 1;
       flex-direction: column;
-      gap: 8px;
       overflow: hidden;
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
-      padding: 8px 10px max(8px, env(safe-area-inset-bottom));
+      padding: 0;
     }
     .content-shell {
       display: flex;
@@ -1819,7 +1791,7 @@ fn mobile_page_html() -> String {
       min-height: 0;
       flex: 1;
       flex-direction: column;
-      gap: 8px;
+      overflow: hidden;
     }
     .content-detail {
       display: flex;
@@ -1827,10 +1799,7 @@ fn mobile_page_html() -> String {
       min-height: 0;
       flex: 1;
       flex-direction: column;
-      gap: 8px;
-    }
-    .content-detail.hidden {
-      display: none;
+      overflow: hidden;
     }
 
     /* Floating Toast */
@@ -1860,17 +1829,17 @@ fn mobile_page_html() -> String {
       opacity: 1;
     }
 
-    /* Brand Header Components (4.png) */
+    /* Brand Header Components (matches screenshot) */
     .brand-row {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
       min-width: 0;
     }
     .app-logo {
-      width: 38px;
-      height: 38px;
-      border-radius: 10px;
+      width: 42px;
+      height: 42px;
+      border-radius: 12px;
       background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
       display: flex;
       align-items: center;
@@ -1886,7 +1855,7 @@ fn mobile_page_html() -> String {
     }
     .brand-title {
       margin: 0;
-      font-size: 17px;
+      font-size: 18px;
       font-weight: 700;
       color: var(--text);
       letter-spacing: -0.01em;
@@ -1896,7 +1865,7 @@ fn mobile_page_html() -> String {
       display: flex;
       align-items: center;
       gap: 6px;
-      font-size: 11.5px;
+      font-size: 12px;
       color: var(--muted);
       margin-top: 2px;
     }
@@ -1906,19 +1875,20 @@ fn mobile_page_html() -> String {
       white-space: nowrap;
     }
     .status-dot {
-      width: 7px;
-      height: 7px;
+      width: 8px;
+      height: 8px;
       border-radius: 50%;
       background: var(--warning);
       flex-shrink: 0;
-      transition: background 0.2s ease;
+      transition: all 0.2s ease;
     }
     .status-dot.is-connected {
       background: var(--success);
-      box-shadow: 0 0 6px rgba(16, 185, 129, 0.4);
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.55);
     }
     .status-dot.is-disconnected {
       background: var(--danger);
+      box-shadow: 0 0 6px rgba(239, 68, 68, 0.4);
     }
 
     .header-actions {
@@ -1930,21 +1900,25 @@ fn mobile_page_html() -> String {
     .header-pill-btn {
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      height: 44px;
-      padding: 0 10px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
+      gap: 6px;
+      height: 36px;
+      padding: 0 14px;
+      border-radius: 9999px;
+      border: 1px solid var(--line-strong);
       background: var(--panel);
       color: var(--text);
       font-size: 13px;
       font-weight: 500;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
       transition: all 0.15s ease;
     }
     .header-pill-btn:hover {
-      border-color: var(--line-strong);
+      border-color: var(--primary-border);
       background: var(--panel-soft);
+      color: var(--primary);
+    }
+    .header-pill-btn:active {
+      transform: scale(0.97);
     }
     .header-pill-btn.primary {
       border-color: var(--primary);
@@ -1966,7 +1940,7 @@ fn mobile_page_html() -> String {
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      padding: max(10px, env(safe-area-inset-top)) 14px 10px;
+      padding: max(10px, env(safe-area-inset-top)) 16px 10px;
       background: var(--panel-glass);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
@@ -1977,7 +1951,7 @@ fn mobile_page_html() -> String {
       display: inline-flex;
       align-items: center;
       gap: 4px;
-      height: 44px;
+      height: 36px;
       padding: 0 10px 0 6px;
       border-radius: 8px;
       color: var(--primary);
@@ -2106,7 +2080,7 @@ fn mobile_page_html() -> String {
       font-weight: 500;
     }
 
-    /* Device Card Row (4.png) */
+    /* Device Card Row */
     .device-card {
       flex: none;
     }
@@ -2134,7 +2108,7 @@ fn mobile_page_html() -> String {
       box-shadow: 0 0 0 3px var(--primary-soft);
     }
 
-    /* View Tabs & Mode Tabs */
+    /* View Tabs & Panels */
     .view-tabs {
       display: flex;
       flex: none;
@@ -2144,9 +2118,9 @@ fn mobile_page_html() -> String {
       border-radius: 10px;
       gap: 4px;
     }
-    .view-tab, .mode-tab {
+    .view-tab {
       flex: 1;
-      height: 44px;
+      height: 38px;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -2157,7 +2131,7 @@ fn mobile_page_html() -> String {
       background: transparent;
       transition: all 0.18s ease;
     }
-    .view-tab.active, .mode-tab.active {
+    .view-tab.active {
       background: var(--panel);
       color: var(--primary);
       font-weight: 600;
@@ -2169,9 +2143,16 @@ fn mobile_page_html() -> String {
       flex: 1;
       flex-shrink: 1;
       flex-direction: column;
+      overflow: hidden;
     }
     .view-panel.active {
       display: flex;
+    }
+    #messagesView {
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      border-radius: 0;
     }
 
     /* Buttons */
@@ -2180,7 +2161,7 @@ fn mobile_page_html() -> String {
       align-items: center;
       justify-content: center;
       gap: 5px;
-      min-height: 44px;
+      min-height: 40px;
       padding: 0 16px;
       border-radius: var(--radius-sm);
       font-size: var(--font-size-sm);
@@ -2203,19 +2184,10 @@ fn mobile_page_html() -> String {
     .primary-button:hover {
       background: var(--primary-hover);
     }
-    .text-button.group-back {
-      display: none;
-      flex: none;
-      min-width: 52px;
-      padding: 0 10px;
-    }
-    .text-button.group-back.active {
-      display: inline-flex;
-    }
     .btn-xs {
       display: inline-flex;
       align-items: center;
-      min-height: 44px;
+      min-height: 32px;
       padding: 0 10px;
       border-radius: 6px;
       font-size: 11.5px;
@@ -2236,68 +2208,57 @@ fn mobile_page_html() -> String {
       color: #ffffff;
     }
 
-    /* Group List View */
-    .group-list-view {
-      display: none;
-      min-height: 0;
-      flex: 1;
-      flex-direction: column;
-    }
-    .group-list-view.active {
-      display: flex;
-    }
-    .group-join-row {
-      display: flex;
-      gap: 8px;
-      padding: 10px 14px;
-      background: var(--panel-soft);
-      border-bottom: 1px solid var(--line);
-    }
-    .group-session-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      padding: 10px 14px;
-      overflow-y: auto;
-      flex: 1;
-    }
-    .group-session-item {
+    /* Date row & session switch */
+    .chat-date-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      text-align: left;
+      justify-content: center;
+      gap: 8px;
+      margin: 12px auto 6px;
+      padding: 0 16px;
+      flex-shrink: 0;
     }
-    .group-session-main {
-      display: flex;
-      flex-direction: column;
-      min-width: 0;
-    }
-    .group-session-name {
-      font-size: var(--font-size-sm);
-      font-weight: 600;
-      color: var(--text);
-    }
-    .group-session-meta {
-      font-size: 11px;
+    .chat-date-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 12px;
+      border-radius: 9999px;
+      background: rgba(148, 163, 184, 0.14);
       color: var(--muted);
-      margin-top: 2px;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+    .chat-session-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 3px 10px;
+      border-radius: 9999px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11.5px;
+      font-weight: 500;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.15s ease;
+    }
+    .chat-session-btn:hover {
+      color: var(--primary);
+      border-color: var(--primary-border);
     }
 
-    /* Chat Messages Viewport (4.png) */
+    /* Chat Messages Viewport (matches 1.png) */
     .message-list {
       flex: 1;
       display: flex;
       flex-direction: column;
-      gap: 12px;
-      padding: 14px;
+      gap: 16px;
+      padding: 12px 16px;
       min-height: 0;
       overflow-y: auto;
       overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
     }
     .chat-empty-state {
       flex: 1;
@@ -2331,44 +2292,61 @@ fn mobile_page_html() -> String {
     }
 
     .message {
+      position: relative;
       display: flex;
       flex-direction: column;
-      gap: 6px;
-      max-width: 90%;
+      gap: 4px;
+      max-width: 82%;
       flex: none;
-      min-width: 90px;
-      padding: 10px 13px;
-      border-radius: 12px;
-      background: var(--panel-soft);
-      border: 1px solid var(--line);
-      color: var(--text);
-      font-size: 15px;
-      line-height: 1.5;
-      text-align: left;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
-      cursor: pointer;
+      min-width: 80px;
+      padding: 10px 14px;
+      border-radius: 18px;
       word-break: break-word;
       transition: transform 0.1s ease;
     }
     .message:active {
-      transform: scale(0.99);
+      transform: scale(0.995);
+    }
+    .message:not(.me) {
+      align-self: flex-start;
+      margin-left: 48px;
+      background: var(--bubble-peer);
+      color: var(--text);
+      border: 1px solid var(--bubble-peer-border);
+      border-top-left-radius: 4px;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    }
+    .message:not(.me)::before {
+      content: "";
+      position: absolute;
+      left: -48px;
+      top: 0;
+      width: 38px;
+      height: 38px;
+      border-radius: 50%;
+      background-color: #dbeafe;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%233b82f6'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: center;
+      background-size: 22px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    }
+    [data-theme="dark"] .message:not(.me)::before {
+      background-color: #1e293b;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2360a5fa'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E");
+      border: 1px solid #334155;
     }
     .message.me {
       align-self: flex-end;
-      background: linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%);
-      border-color: #bfdbfe;
-      box-shadow: 0 2px 10px rgba(37, 99, 235, 0.08);
-    }
-    [data-theme="dark"] .message.me {
-      background: linear-gradient(135deg, #1e3a8a 0%, #1e293b 100%);
-      border-color: #2563eb;
-    }
-    .message small {
-      align-self: flex-end;
-      font-size: 11px;
-      color: var(--muted);
+      background: var(--bubble-me);
+      color: var(--text);
+      border: 1px solid var(--bubble-me-border);
+      border-top-right-radius: 4px;
+      box-shadow: 0 1px 4px rgba(37, 99, 235, 0.06);
     }
     .message-text {
+      font-size: 15px;
+      line-height: 1.5;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       user-select: text;
@@ -2377,32 +2355,53 @@ fn mobile_page_html() -> String {
     .message-actions {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 12px;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-top: 4px;
+    }
+    .message-actions small {
+      font-size: 11.5px;
+      color: var(--muted);
     }
     .message-copy {
-      min-height: 44px;
-      padding: 0 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: 9999px;
+      background: rgba(0, 0, 0, 0.03);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .message-copy:hover, .message-copy:active {
+      background: var(--panel);
       color: var(--primary);
-      font-size: 12px;
+      border-color: var(--primary-border);
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.06);
+    }
+    .message-read-check {
+      display: inline-flex;
+      align-items: center;
+      color: var(--primary);
     }
 
+    /* Message attachment & File card (1.png) */
     .message-attachment {
       display: flex;
       flex-direction: column;
       gap: 6px;
-      margin-top: 6px;
-      padding: 8px;
-      border-radius: 8px;
-      background: var(--panel);
-      border: 1px solid var(--line);
+      margin-top: 4px;
     }
     .message-attachment img, .message-attachment video {
       display: block;
       width: 100%;
-      max-height: 220px;
+      max-height: 240px;
       object-fit: contain;
-      border-radius: 6px;
+      border-radius: 10px;
     }
     .message-attachment audio {
       width: 100%;
@@ -2419,13 +2418,82 @@ fn mobile_page_html() -> String {
       justify-content: space-between;
       gap: 6px;
     }
+    .file-msg-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 14px;
+      background: #ffffff;
+      border: 1px solid var(--line);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.03);
+      cursor: pointer;
+      min-width: 220px;
+      max-width: 100%;
+    }
+    [data-theme="dark"] .file-msg-card {
+      background: #17233d;
+      border-color: #2a3e63;
+    }
+    .file-msg-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      box-shadow: 0 2px 6px rgba(37, 99, 235, 0.25);
+    }
+    .file-msg-details {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    .file-msg-name {
+      font-size: 14.5px;
+      font-weight: 600;
+      color: var(--text);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-msg-info {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .file-msg-download {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #e0f2fe;
+      color: #0284c7;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      text-decoration: none;
+      transition: all 0.15s ease;
+    }
+    .file-msg-download:hover {
+      background: #bae6fd;
+      transform: scale(1.05);
+    }
+    [data-theme="dark"] .file-msg-download {
+      background: rgba(59, 130, 246, 0.2);
+      color: #60a5fa;
+    }
 
-    /* Composer Bar (4.png) */
+    /* Composer Bar (matches 1.png) */
     .pending-attachments {
       display: flex;
       flex: none;
       gap: 6px;
-      padding: 6px 12px 0;
+      padding: 6px 16px 0;
       overflow-x: auto;
     }
     .pending-attachment {
@@ -2433,12 +2501,13 @@ fn mobile_page_html() -> String {
       align-items: center;
       gap: 6px;
       max-width: 200px;
-      padding: 4px 8px;
-      border-radius: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
       background: var(--primary-soft);
       border: 1px solid var(--primary-border);
       color: var(--primary);
       font-size: 11.5px;
+      font-weight: 500;
       flex-shrink: 0;
     }
     .pending-attachment span {
@@ -2455,52 +2524,108 @@ fn mobile_page_html() -> String {
     .composer {
       display: flex;
       flex: none;
-      align-items: flex-end;
-      gap: 8px;
-      padding: 8px 12px;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px max(12px, env(safe-area-inset-bottom));
+      background: var(--panel-glass);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       border-top: 1px solid var(--line);
-      background: var(--panel);
+      box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.02);
     }
-    .btn-icon-label {
+    .composer-icon-btn {
       display: inline-flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      width: 44px;
-      height: 44px;
-      border-radius: 8px;
-      border: 1px solid var(--line);
-      background: var(--panel);
-      color: var(--text);
-      font-size: 10.5px;
-      font-weight: 500;
-      gap: 2px;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      color: var(--muted);
+      background: transparent;
+      border: none;
+      cursor: pointer;
       flex-shrink: 0;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+      transition: all 0.15s ease;
     }
-    .btn-icon-label:hover {
-      border-color: var(--line-strong);
+    .composer-icon-btn:hover {
       background: var(--panel-soft);
+      color: var(--text);
+    }
+    .composer-input-wrap {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      background: var(--panel);
+      border: 1px solid var(--line-strong);
+      border-radius: 24px;
+      padding: 2px 10px 2px 16px;
+      min-height: 44px;
+      gap: 8px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+      transition: all 0.2s ease;
+    }
+    .composer-input-wrap:focus-within {
+      border-color: #93c5fd;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
     }
     .composer-input {
       flex: 1;
       min-width: 0;
-      min-height: 44px;
-      max-height: 120px;
-      padding: 8px 12px;
-      border-radius: var(--radius-sm);
-      border: 1px solid var(--line-strong);
-      background: var(--panel);
-      color: var(--text);
-      font-size: 16px;
-      line-height: 1.4;
-      resize: none;
+      border: none;
       outline: none;
-      transition: all 0.15s ease;
+      background: transparent;
+      padding: 10px 0;
+      font-size: 15px;
+      color: var(--text);
+      resize: none;
+      max-height: 120px;
+      line-height: 1.4;
     }
-    .composer-input:focus {
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px var(--primary-soft);
+    .composer-emoji-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      color: var(--muted);
+      background: transparent;
+      border: none;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: color 0.15s ease;
+    }
+    .composer-emoji-btn:hover {
+      color: var(--text);
+    }
+    .composer-send-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: #ffffff;
+      flex-shrink: 0;
+      box-shadow: 0 3px 10px rgba(37, 99, 235, 0.35);
+      border: none;
+      cursor: pointer;
+      transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .composer-send-btn:hover:not(:disabled) {
+      background: var(--primary-hover);
+      transform: scale(1.04);
+      box-shadow: 0 5px 14px rgba(37, 99, 235, 0.42);
+    }
+    .composer-send-btn:active:not(:disabled) {
+      transform: scale(0.96);
+    }
+    .composer-send-btn:disabled {
+      opacity: 0.42;
+      box-shadow: none;
+      cursor: not-allowed;
     }
 
     /* Screen 2: Received Content Page (3.png) */
@@ -3031,17 +3156,17 @@ fn mobile_page_html() -> String {
         </div>
       </div>
       <div class="header-actions">
+        <button id="openFilesBtn" class="header-pill-btn" type="button" aria-label="文件中心">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>
+          </svg>
+          <span>文件中心</span>
+        </button>
         <button id="openSettingsBtn" class="header-pill-btn" type="button" aria-label="设置">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
           <span>设置</span>
-        </button>
-        <button id="openFilesBtn" class="header-pill-btn primary" type="button" aria-label="获取内容">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-          <span>文件</span>
         </button>
       </div>
     </header>
@@ -3050,43 +3175,28 @@ fn mobile_page_html() -> String {
     <main class="page-main">
       <!-- Content Shell -->
       <section class="content-shell">
-        <!-- Direct / Group Mode Switcher (4.png) -->
-        <nav class="view-tabs" aria-label="设备快传模式">
-          <button class="mode-tab active" data-mode="direct" type="button">单聊</button>
-          <button class="mode-tab" data-mode="group" type="button">群聊</button>
-        </nav>
-
-        <!-- Group List Section (hidden unless mode is group and no current group) -->
-        <section id="groupListView" class="card group-list-view">
-          <div class="card-head">
-            <span data-emphasis>已加入群聊</span>
-            <span>输入群邀请码加入</span>
-          </div>
-          <div class="group-join-row">
-            <input id="inviteCode" class="field-input" maxlength="16" placeholder="输入群邀请码" />
-            <button id="joinGroup" class="text-button" type="button">加入</button>
-          </div>
-          <div id="groups" class="group-session-list"></div>
-        </section>
-
         <!-- Content Detail Section -->
         <section id="detailView" class="content-detail">
           <!-- Detail View Tabs (Messages / Files) -->
-          <nav class="view-tabs" aria-label="设备快传详情">
-            <button id="backGroups" class="text-button group-back" type="button" title="返回群列表">返回群列表</button>
+          <nav class="view-tabs" style="display:none;" aria-label="设备快传详情">
             <button class="view-tab active" data-view="messages" type="button">消息</button>
             <button class="view-tab" data-view="files" type="button">共享文件</button>
-            <button id="leaveGroup" class="text-button group-back" type="button" title="退出群聊">退出</button>
           </nav>
 
-          <!-- Messages View Panel (4.png) -->
+          <!-- Messages View Panel (1.png) -->
           <section id="messagesView" class="card view-panel active">
-            <div class="card-head">
-              <span data-emphasis id="messagesTitle">消息</span>
-              <button id="createSession" class="text-button" type="button">新会话</button>
+            <div class="chat-date-row">
+              <span id="messagesTitle" style="display:none;">消息</span>
+              <span id="chatDatePill" class="chat-date-pill">今天 18:42</span>
+              <button id="createSession" class="chat-session-btn" type="button" title="新会话">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 5v14M5 12h14"/>
+                </svg>
+                <span>新会话</span>
+              </button>
             </div>
 
-            <!-- Empty State Illustration (4.png) -->
+            <!-- Empty State Illustration (1.png) -->
             <div id="chatEmptyState" class="chat-empty-state">
               <div class="empty-illustration">
                 <svg viewBox="0 0 160 120" fill="none" xmlns="http://www.w3.org/2000/svg" style="width: 100%; height: 100%;">
@@ -3133,17 +3243,27 @@ fn mobile_page_html() -> String {
             <div id="messages" class="message-list" style="display:none;" aria-label="点击消息可复制"></div>
             <div id="pendingAttachments" class="pending-attachments"></div>
 
-            <!-- Composer (4.png) -->
+            <!-- Composer (1.png) -->
             <div class="composer">
-              <button id="chooseAttachments" class="btn-icon-label" type="button" aria-label="添加附件">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <button id="chooseAttachments" class="composer-icon-btn" type="button" aria-label="添加附件">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
                 </svg>
-                <span>附件</span>
               </button>
               <input id="attachmentInput" type="file" multiple hidden />
-              <textarea id="messageInput" class="composer-input" rows="1" enterkeyhint="enter" aria-label="消息内容" placeholder="输入消息或粘贴图片、文件"></textarea>
-              <button id="sendMessage" class="text-button primary-button" type="button" disabled>发送</button>
+              <div class="composer-input-wrap">
+                <textarea id="messageInput" class="composer-input" rows="1" enterkeyhint="enter" aria-label="消息内容" placeholder="输入消息..."></textarea>
+                <button type="button" class="composer-emoji-btn" aria-label="表情" onclick="const i = document.getElementById('messageInput'); i.value += '👍'; i.dispatchEvent(new Event('input')); i.focus();">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>
+                  </svg>
+                </button>
+              </div>
+              <button id="sendMessage" class="composer-send-btn" type="button" disabled aria-label="发送">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+                </svg>
+              </button>
             </div>
           </section>
 
@@ -3500,7 +3620,6 @@ fn mobile_page_html() -> String {
     window.__LAN_SHARE_APP__ = true;
     const query = new URLSearchParams(location.search);
     const token = query.get("token") || "";
-    const initialInviteCode = query.get("invite") || "";
 
     // DOM Elements
     const toastEl = document.getElementById("mobileToast");
@@ -3513,16 +3632,6 @@ fn mobile_page_html() -> String {
     const chatEmptyStateEl = document.getElementById("chatEmptyState");
     const inputEl = document.getElementById("messageInput");
     const deviceNameEl = document.getElementById("deviceName");
-    const inviteCodeEl = document.getElementById("inviteCode");
-    const groupsEl = document.getElementById("groups");
-    const groupListViewEl = document.getElementById("groupListView");
-    const detailViewEl = document.getElementById("detailView");
-    const backGroupsEl = document.getElementById("backGroups");
-    const leaveGroupEl = document.getElementById("leaveGroup");
-    const createSessionEl = document.getElementById("createSession");
-    const messagesTitleEl = document.getElementById("messagesTitle");
-    const filesTitleEl = document.getElementById("filesTitle");
-    const modeTabs = Array.from(document.querySelectorAll(".mode-tab"));
     const viewTabs = Array.from(document.querySelectorAll(".view-tab"));
     const viewPanels = {
       files: document.getElementById("filesView"),
@@ -3559,9 +3668,6 @@ fn mobile_page_html() -> String {
     // 持久化服务端设备 ID，网络切换后继续沿用同一设备身份。
     let deviceId = localStorage.getItem("lanShareDeviceId") || "";
     let currentSessionId = "";
-    let currentMode = "direct";
-    let currentGroupId = "";
-    let joinedGroups = [];
     let currentFilesList = [];
     let activePreviewFileItem = null;
     let toastTimer = null;
@@ -3582,7 +3688,6 @@ fn mobile_page_html() -> String {
 
     // Set initial device name
     deviceNameEl.value = localStorage.getItem("lanShareDeviceName") || "";
-    inviteCodeEl.value = initialInviteCode;
     if (connHostIpDisplayEl) connHostIpDisplayEl.textContent = location.host || "192.168.1.1:17631";
     if (connSettingPortEl && location.port) connSettingPortEl.value = location.port;
     if (filesPeerInfoEl) filesPeerInfoEl.textContent = "来自 电脑端 · " + (location.hostname || "局域网服务");
@@ -3669,42 +3774,6 @@ fn mobile_page_html() -> String {
 
     function renderMode() {
       document.getElementById("sendMessage").disabled = !currentSessionId || sendingAttachments || deviceRemoved;
-      modeTabs.forEach(tab => {
-        tab.classList.toggle("active", tab.dataset.mode === currentMode);
-      });
-      if (currentMode === "group") {
-        groupListViewEl.classList.toggle("active", !currentGroupId);
-        detailViewEl.classList.toggle("hidden", !currentGroupId);
-        backGroupsEl.classList.toggle("active", Boolean(currentGroupId));
-        leaveGroupEl.classList.toggle("active", Boolean(currentGroupId));
-        createSessionEl.style.display = "none";
-        const group = joinedGroups.find(item => item.id === currentGroupId);
-        messagesTitleEl.textContent = group ? group.name || "群聊" : "群聊";
-        filesTitleEl.textContent = group ? (group.name || "群聊") + " 共享文件" : "获取内容";
-      } else {
-        groupListViewEl.classList.remove("active");
-        detailViewEl.classList.remove("hidden");
-        backGroupsEl.classList.remove("active");
-        leaveGroupEl.classList.remove("active");
-        createSessionEl.style.display = "";
-        messagesTitleEl.textContent = "单聊消息";
-        filesTitleEl.textContent = "获取内容";
-      }
-    }
-
-    function switchMode(mode) {
-      currentMode = mode;
-      if (mode === "group") {
-        currentGroupId = "";
-        currentSessionId = "";
-        renderMode();
-        loadGroups().catch(error => setStatus(error.message));
-        return;
-      }
-      currentGroupId = "";
-      currentSessionId = "";
-      renderMode();
-      loadMessages().catch(error => setStatus(error.message));
     }
 
     async function api(path, options = {}) {
@@ -3864,96 +3933,7 @@ fn mobile_page_html() -> String {
       if (settingsDeviceIdDisplayEl) settingsDeviceIdDisplayEl.textContent = deviceId ? (deviceId.slice(0, 16) + "...") : "自动生成中";
     }
 
-    function renderGroups() {
-      groupsEl.innerHTML = "";
-      if (!joinedGroups.length) {
-        groupsEl.innerHTML = '<div class="empty-placeholder">还没有加入任何群聊，可输入上方邀请码加入</div>';
-        renderMode();
-        return;
-      }
-      for (const group of joinedGroups) {
-        const button = document.createElement("div");
-        button.className = "group-session-item";
-        button.innerHTML = '<div class="group-session-main"><span class="group-session-name"></span><span class="group-session-meta"></span></div><button class="btn-xs primary" type="button">进入</button>';
-        button.querySelector(".group-session-name").textContent = group.name || "群聊";
-        button.querySelector(".group-session-meta").textContent = "邀请码 " + (group.inviteCode || "") + " · " + (group.messageVisibility === "afterJoin" ? "仅加入后消息" : "全部历史消息");
-        button.onclick = () => openGroupSession(group);
-        groupsEl.appendChild(button);
-      }
-      renderMode();
-    }
-
-    function openGroupSession(group) {
-      currentMode = "group";
-      currentGroupId = group.id || "";
-      currentSessionId = group.sessionId || "";
-      setActiveView("messages");
-      renderMode();
-      loadMessages().catch(error => setStatus(error.message));
-    }
-
-    async function loadGroups() {
-      joinedGroups = await api("/api/groups?token=" + encodeURIComponent(token) + "&deviceId=" + encodeURIComponent(deviceId));
-      renderGroups();
-    }
-
-    async function joinGroup(inviteCode) {
-      const code = String(inviteCode || inviteCodeEl.value || "").trim();
-      if (!code) {
-        showToast("请输入群邀请码");
-        return;
-      }
-      const data = await api("/api/groups/join", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          token,
-          inviteCode: code,
-          deviceId,
-          deviceName: deviceNameEl.value,
-          userAgent: navigator.userAgent
-        })
-      });
-      deviceId = data.device?.id || deviceId;
-      // 加入群聊后也沿用服务端确认过的设备 ID。
-      localStorage.setItem("lanShareDeviceId", deviceId);
-      currentMode = "group";
-      currentGroupId = data.group?.id || "";
-      currentSessionId = data.currentSession?.id || currentSessionId;
-      await loadGroups();
-      await loadMessages();
-      showToast("已加入群聊 " + (data.group?.name || ""));
-    }
-
-    async function leaveCurrentGroup() {
-      const group = joinedGroups.find(item => item.sessionId === currentSessionId);
-      if (!group) {
-        showToast("请先选择要退出的群聊");
-        return;
-      }
-      await api("/api/groups/leave", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          token,
-          groupId: group.id,
-          deviceId
-        })
-      });
-      currentMode = "group";
-      currentGroupId = "";
-      currentSessionId = "";
-      await loadGroups();
-      renderMode();
-      showToast("已退出群聊 " + (group.name || ""));
-    }
-
     async function loadFiles() {
-      if (currentMode === "group" && !currentGroupId) {
-        filesEl.innerHTML = '<div class="empty-placeholder">请选择群聊后查看共享文件</div>';
-        filesCountBadgeEl.textContent = "0 项";
-        return;
-      }
       const files = await api("/api/files?token=" + encodeURIComponent(token) + "&sessionId=" + encodeURIComponent(currentSessionId));
       currentFilesList = files || [];
       filesEl.innerHTML = "";
@@ -3998,13 +3978,6 @@ fn mobile_page_html() -> String {
     }
 
     async function loadMessages() {
-      if (currentMode === "group" && !currentGroupId) {
-        chatEmptyStateEl.style.display = "flex";
-        messagesEl.style.display = "none";
-        messagesEl.innerHTML = "";
-        await loadFiles();
-        return;
-      }
       const data = await api("/api/messages?token=" + encodeURIComponent(token) + "&deviceId=" + encodeURIComponent(deviceId) + "&sessionId=" + encodeURIComponent(currentSessionId));
       currentSessionId = data.currentSession?.id || currentSessionId;
       messagesEl.innerHTML = "";
@@ -4035,8 +4008,6 @@ fn mobile_page_html() -> String {
         })
       });
       deviceId = data.device?.id || deviceId;
-      currentMode = "direct";
-      currentGroupId = "";
       currentSessionId = data.currentSession?.id || "";
       renderMode();
       chatEmptyStateEl.style.display = "flex";
@@ -4079,6 +4050,34 @@ fn mobile_page_html() -> String {
             media.preload = "metadata";
             if (mime.startsWith("image/")) media.onclick = (e) => { e.stopPropagation(); previewFile(file); };
             gallery.appendChild(media);
+          } else {
+            const card = document.createElement("div");
+            card.className = "file-msg-card";
+            card.onclick = () => previewFile(file);
+            const isPdf = /\.pdf$/i.test(file.name);
+            const iconBg = isPdf ? "linear-gradient(135deg, #ef4444 0%, #dc2626 100%)" : "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)";
+            card.innerHTML =
+              '<div class="file-msg-icon" style="background:' + iconBg + '">' +
+                '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+                  '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>' +
+                '</svg>' +
+              '</div>' +
+              '<div class="file-msg-details">' +
+                '<span class="file-msg-name"></span>' +
+                '<span class="file-msg-info"></span>' +
+              '</div>' +
+              '<a class="file-msg-download" download title="下载">' +
+                '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
+                  '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>' +
+                '</svg>' +
+              '</a>';
+            card.querySelector(".file-msg-name").textContent = file.name;
+            card.querySelector(".file-msg-info").textContent = formatSize(file.size) + " · " + (isPdf ? "PDF文档" : (file.mimeType || "文件"));
+            const dl = card.querySelector(".file-msg-download");
+            dl.href = fileUrl(file, "download");
+            dl.download = file.name;
+            dl.onclick = (e) => e.stopPropagation();
+            gallery.appendChild(card);
           }
           const name = document.createElement("span");
           name.className = "message-attachment-name";
@@ -4115,7 +4114,7 @@ fn mobile_page_html() -> String {
       }
 
       const time = document.createElement("small");
-      time.textContent = new Date(message.createdAt || Date.now()).toLocaleTimeString();
+      time.textContent = new Date(message.createdAt || Date.now()).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       const actions = document.createElement("div");
       actions.className = "message-actions";
       if (message.content) {
@@ -4128,6 +4127,12 @@ fn mobile_page_html() -> String {
         actions.appendChild(copy);
       }
       actions.appendChild(time);
+      if (message.direction === "mobile-to-desktop") {
+        const check = document.createElement("span");
+        check.className = "message-read-check";
+        check.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/></svg>';
+        actions.appendChild(check);
+      }
       item.appendChild(actions);
       messagesEl.appendChild(item);
       messagesEl.scrollTop = messagesEl.scrollHeight;
@@ -4146,7 +4151,6 @@ fn mobile_page_html() -> String {
           if (ws?.readyState !== WebSocket.OPEN) return;
           try { ws.send(JSON.stringify({ type: "presence" })); } catch (_) {}
         }, 9000);
-        loadGroups().catch(error => setStatus(error.message));
       };
       ws.onclose = () => {
         clearInterval(presenceTimer);
@@ -4180,7 +4184,6 @@ fn mobile_page_html() -> String {
           }
         }
         if (payload.type === "filesChanged") loadFiles().catch(error => setStatus(error.message));
-        if (payload.type === "groupsChanged") loadGroups().then(() => showToast("收到新的群聊邀请")).catch(error => setStatus(error.message));
       };
     }
 
@@ -4263,23 +4266,12 @@ fn mobile_page_html() -> String {
     viewTabs.forEach(tab => {
       tab.onclick = () => setActiveView(tab.dataset.view);
     });
-    modeTabs.forEach(tab => {
-      tab.onclick = () => switchMode(tab.dataset.mode);
-    });
 
     document.getElementById("refreshFiles").onclick = () => {
       loadFiles().then(() => showToast("已刷新文件列表")).catch(error => setStatus(error.message));
     };
 
     document.getElementById("createSession").onclick = () => createSession().catch(error => setStatus(error.message));
-    document.getElementById("joinGroup").onclick = () => joinGroup().catch(error => setStatus(error.message));
-    backGroupsEl.onclick = () => {
-      currentMode = "group";
-      currentGroupId = "";
-      currentSessionId = "";
-      renderMode();
-    };
-    leaveGroupEl.onclick = () => leaveCurrentGroup().catch(error => setStatus(error.message));
 
     document.getElementById("closePreview").onclick = closePreview;
     document.getElementById("previewOverlay").onclick = closePreview;
@@ -4410,11 +4402,10 @@ fn mobile_page_html() -> String {
     renderMode();
     registerDevice()
       .then(() => {
-        // 注册后立即上线，群聊列表或历史内容加载失败不阻断在线发现。
+        // 注册后立即上线，历史内容加载失败不阻断在线发现。
         connectWs();
         return loadMessages();
       })
-      .then(() => initialInviteCode ? joinGroup(initialInviteCode) : undefined)
       .catch(error => setStatus(error.message));
   </script>
 </body>
@@ -5042,6 +5033,11 @@ fn ensure_session(
 
     if let Some(index) = target_index {
         let session = &mut sessions[index];
+        if session.mode == "group" {
+            return Err(ManagerError::System(
+                "网页设备不能访问群聊会话。".into(),
+            ));
+        }
         let old_ip = session.ip.clone();
         session.device_name = device_name.to_string();
         if !ip.is_empty() && session.ip != ip {
@@ -5247,70 +5243,6 @@ fn find_group_session_by_member_session(
     sort_sessions(&mut sessions);
     write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
     Ok(Some(session))
-}
-
-async fn group_online_targets(
-    registry: &LanShareServerRegistry,
-    paths: &AppPaths,
-    group_id: &str,
-) -> Result<Vec<(String, mpsc::UnboundedSender<WsOutbound>)>, ManagerError> {
-    let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
-    let device_ids = sessions
-        .into_iter()
-        .filter(|session| session.group_id == group_id && !session.device_id.is_empty())
-        .map(|session| session.device_id)
-        .collect::<Vec<_>>();
-    let runtime = registry.inner.lock().await;
-
-    Ok(device_ids
-        .into_iter()
-        .filter_map(|device_id| {
-            runtime
-                .clients
-                .get(&device_id)
-                .cloned()
-                .map(|sender| (device_id, sender))
-        })
-        .collect::<Vec<_>>())
-}
-
-fn group_messages_for_member(
-    messages: &[LanShareMessage],
-    group_session_ids: &[String],
-    session: &LanShareSession,
-) -> Vec<LanShareMessage> {
-    let mut messages = messages
-        .iter()
-        .filter(|message| group_session_ids.contains(&message.session_id))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    messages.sort_by(|left, right| left.created_at.cmp(&right.created_at));
-
-    match session.message_visibility.as_str() {
-        "afterJoin" => messages
-            .into_iter()
-            .filter(|message| message.created_at >= session.joined_at)
-            .collect::<Vec<_>>(),
-        "recent10" => {
-            let keep_from = messages.len().saturating_sub(10);
-
-            messages.into_iter().skip(keep_from).collect::<Vec<_>>()
-        }
-        _ => messages,
-    }
-}
-
-fn upsert_group_session_blocking(
-    paths: &AppPaths,
-    group: &mut LanShareGroup,
-    device: &LanShareDevice,
-    ip: &str,
-) -> Result<LanShareSession, ManagerError> {
-    let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
-    let session = upsert_group_session(&mut sessions, group, device, ip);
-    write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
-    Ok(session)
 }
 
 fn upsert_group_session(
@@ -5687,7 +5619,6 @@ pub async fn send_message(
         requested_id
     };
     if let Some(group_session) = group_session_by_id(paths, &target_session_id)? {
-        let targets = group_online_targets(registry, paths, &group_session.group_id).await?;
         let native_deliveries = native::deliver_group(
             registry,
             paths,
@@ -5709,15 +5640,12 @@ pub async fn send_message(
             &group_session.id,
             "desktop-to-mobile",
             &content,
-            native_deliveries > 0 || !targets.is_empty(),
+            native_deliveries > 0,
             &files,
             Some(&message_id),
         )
         .await?;
         attachments::publish(registry, paths, &files).await?;
-        for (_, sender) in targets {
-            let _ = send_stored_message_to_client(&sender, &stored);
-        }
         emit_message_created(&app, &stored);
         emit_state_changed(&app, registry, paths).await?;
         return Ok(lan_share_response(json!([stored])));
@@ -6014,11 +5942,22 @@ async fn process_http_request(
     if path.starts_with("/api/native/") {
         return native::handle_request(request, &context, addr).await;
     }
+    // 网页仅提供单聊，旧邀请码和群会话地址也不能继续访问群聊。
+    if path == "/api/groups" || path.starts_with("/api/groups/") {
+        return Ok(api_error(
+            StatusCode::FORBIDDEN,
+            "群聊仅支持客户端设备，网页设备不能加入群聊。",
+        ));
+    }
+    let session_id = query_value(request.uri(), "sessionId");
+    if group_session_by_id(&context.paths, &session_id)?.is_some() {
+        return Ok(api_error(
+            StatusCode::FORBIDDEN,
+            "网页设备不能访问群聊会话。",
+        ));
+    }
     let request_token = if request.method() == Method::POST
-        && (path == "/api/devices"
-            || path == "/api/sessions"
-            || path == "/api/groups/join"
-            || path == "/api/groups/leave")
+        && (path == "/api/devices" || path == "/api/sessions")
     {
         String::new()
     } else {
@@ -6026,10 +5965,7 @@ async fn process_http_request(
     };
 
     if request.method() != Method::POST
-        || (path != "/api/devices"
-            && path != "/api/sessions"
-            && path != "/api/groups/join"
-            && path != "/api/groups/leave")
+        || (path != "/api/devices" && path != "/api/sessions")
     {
         if !is_request_token_valid(&context.registry, &request_token).await {
             return Ok(api_error(
@@ -6078,11 +6014,8 @@ async fn process_http_request(
             let stored = store_guest_message(&context, &device_id, &payload).await?;
             Ok(api_success(json!(stored)))
         }
-        (&Method::GET, "/api/groups") => mobile_groups(request.uri(), &context, addr).await,
         (&Method::POST, "/api/devices") => register_device_request(request, &context, addr).await,
         (&Method::POST, "/api/sessions") => create_mobile_session(request, &context, addr).await,
-        (&Method::POST, "/api/groups/join") => join_mobile_group(request, &context, addr).await,
-        (&Method::POST, "/api/groups/leave") => leave_mobile_group(request, &context, addr).await,
         (&Method::GET, "/ws") => websocket_response(request, context, addr).await,
         _ => Ok(api_error(StatusCode::NOT_FOUND, "请求路径不存在。")),
     }
@@ -6273,20 +6206,8 @@ async fn mobile_messages(
         let mut messages: Vec<LanShareMessage> =
             read_array(&context.paths.lan_share_files.messages)?;
 
-        if session.mode == "group" {
-            let sessions: Vec<LanShareSession> =
-                read_array(&context.paths.lan_share_files.sessions)?;
-            let group_session_ids = sessions
-                .iter()
-                .filter(|item| item.group_id == session.group_id)
-                .map(|item| item.id.clone())
-                .collect::<Vec<_>>();
-
-            messages = group_messages_for_member(&messages, &group_session_ids, &session);
-        } else {
-            messages.retain(|message| message.session_id == session.id);
-            messages.sort_by(|left, right| left.created_at.cmp(&right.created_at));
-        }
+        messages.retain(|message| message.session_id == session.id);
+        messages.sort_by(|left, right| left.created_at.cmp(&right.created_at));
         (session, messages)
     };
     context
@@ -6303,48 +6224,6 @@ async fn mobile_messages(
         "currentSession": session,
         "messages": messages
     })))
-}
-
-async fn mobile_groups(
-    uri: &hyper::Uri,
-    context: &HttpContext,
-    addr: SocketAddr,
-) -> Result<Response<BoxBody>, ManagerError> {
-    let request_ip = client_ip(addr);
-    let requested_device_id = query_value(uri, "deviceId");
-    let device_id = resolve_guest_device_id(&context.paths, &requested_device_id, &request_ip)?;
-
-    if device_id.is_empty() {
-        return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
-    }
-
-    let groups = {
-        let _storage = context.registry.storage.lock().await;
-        let groups: Vec<LanShareGroup> = read_array(&context.paths.lan_share_files.groups)?;
-        let sessions: Vec<LanShareSession> = read_array(&context.paths.lan_share_files.sessions)?;
-
-        groups
-            .into_iter()
-            .filter_map(|group| {
-                let session = sessions.iter().find(|session| {
-                    session.group_id == group.id
-                        && session.device_id == device_id
-                        && session.mode == "group"
-                })?;
-
-                Some(json!({
-                    "id": group.id,
-                    "name": group.name,
-                    "inviteCode": group.invite_code,
-                    "messageVisibility": group.message_visibility,
-                    "sessionId": session.id,
-                    "joinedAt": session.joined_at
-                }))
-            })
-            .collect::<Vec<_>>()
-    };
-
-    Ok(api_success(json!(groups)))
 }
 
 async fn append_download_record(
@@ -6442,224 +6321,6 @@ async fn create_mobile_session(
         "messages": [],
         "files": []
     })))
-}
-
-async fn join_mobile_group(
-    request: Request<Incoming>,
-    context: &HttpContext,
-    addr: SocketAddr,
-) -> Result<Response<BoxBody>, ManagerError> {
-    let body = request
-        .into_body()
-        .collect()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?
-        .to_bytes();
-    let payload: Value = serde_json::from_slice(&body)?;
-    let token = string_value(payload.get("token"));
-
-    if !is_request_token_valid(&context.registry, &token).await {
-        return Ok(api_error(
-            StatusCode::UNAUTHORIZED,
-            "访问已失效，请重新扫码。",
-        ));
-    }
-
-    let invite_code = string_value(payload.get("inviteCode")).to_uppercase();
-
-    if invite_code.is_empty() {
-        return Ok(api_error(StatusCode::BAD_REQUEST, "请输入群邀请码。"));
-    }
-
-    let ip = client_ip(addr);
-    let requested_device_id = string_value(payload.get("deviceId"));
-    let device_id = resolve_guest_device_id(&context.paths, &requested_device_id, &ip)?;
-
-    if device_id.is_empty() {
-        return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
-    }
-
-    let device_name = normalize_device_name(&string_value(payload.get("deviceName")));
-    let user_agent = string_value(payload.get("userAgent"));
-    let device = upsert_device(
-        &context.registry,
-        &context.paths,
-        &device_id,
-        &device_name,
-        &user_agent,
-        &ip,
-    )
-    .await?;
-    let (group, session, messages) = {
-        let _storage = context.registry.storage.lock().await;
-        let mut groups: Vec<LanShareGroup> = read_array(&context.paths.lan_share_files.groups)?;
-        let Some(group_index) = groups
-            .iter()
-            .position(|group| group.invite_code.eq_ignore_ascii_case(&invite_code))
-        else {
-            return Ok(api_error(StatusCode::NOT_FOUND, "群邀请码不存在。"));
-        };
-
-        let session =
-            upsert_group_session_blocking(&context.paths, &mut groups[group_index], &device, &ip)?;
-        let group = groups[group_index].clone();
-        write_json(&context.paths.lan_share_files.groups, &json!(groups)).await?;
-        let all_messages: Vec<LanShareMessage> =
-            read_array(&context.paths.lan_share_files.messages)?;
-        let sessions: Vec<LanShareSession> = read_array(&context.paths.lan_share_files.sessions)?;
-        let group_session_ids = sessions
-            .iter()
-            .filter(|item| item.group_id == group.id)
-            .map(|item| item.id.clone())
-            .collect::<Vec<_>>();
-        let messages = group_messages_for_member(&all_messages, &group_session_ids, &session);
-
-        (group, session, messages)
-    };
-
-    context
-        .registry
-        .inner
-        .lock()
-        .await
-        .active_sessions
-        .insert(device.id.clone(), session.id.clone());
-    emit_state_changed(&context.app, &context.registry, &context.paths).await?;
-
-    Ok(api_success(json!({
-        "device": device,
-        "group": group,
-        "currentSession": session,
-        "messages": messages,
-        "files": []
-    })))
-}
-
-async fn leave_mobile_group(
-    request: Request<Incoming>,
-    context: &HttpContext,
-    addr: SocketAddr,
-) -> Result<Response<BoxBody>, ManagerError> {
-    let body = request
-        .into_body()
-        .collect()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?
-        .to_bytes();
-    let payload: Value = serde_json::from_slice(&body)?;
-    let token = string_value(payload.get("token"));
-
-    if !is_request_token_valid(&context.registry, &token).await {
-        return Ok(api_error(
-            StatusCode::UNAUTHORIZED,
-            "访问已失效，请重新扫码。",
-        ));
-    }
-
-    let group_id = string_value(payload.get("groupId"));
-
-    if group_id.is_empty() {
-        return Ok(api_error(StatusCode::BAD_REQUEST, "群聊不能为空。"));
-    }
-
-    let local_owner_id = context.registry.inner.lock().await.native.config.id.clone();
-
-    let ip = client_ip(addr);
-    let requested_device_id = string_value(payload.get("deviceId"));
-    let device_id = resolve_guest_device_id(&context.paths, &requested_device_id, &ip)?;
-
-    if device_id.is_empty() {
-        return Ok(api_error(StatusCode::BAD_REQUEST, "设备标识不能为空。"));
-    }
-
-    {
-        let _storage = context.registry.storage.lock().await;
-        let mut groups: Vec<LanShareGroup> = read_array(&context.paths.lan_share_files.groups)?;
-        let Some(group) = groups.iter_mut().find(|group| group.id == group_id) else {
-            return Ok(api_error(StatusCode::NOT_FOUND, "群聊不存在。"));
-        };
-
-        let owner_id = if group.owner_device_id.is_empty() {
-            local_owner_id.clone()
-        } else {
-            group.owner_device_id.clone()
-        };
-        if !owner_id.is_empty() && device_id == owner_id {
-            return Ok(api_error(
-                StatusCode::CONFLICT,
-                "群主不能退出群聊，请由群主解散群聊。",
-            ));
-        }
-
-        let mut removed_session_ids = Vec::new();
-        let sessions_before: Vec<LanShareSession> =
-            read_array(&context.paths.lan_share_files.sessions)?;
-        for session in sessions_before.iter().filter(|session| {
-            session.mode == "group" && session.group_id == group_id && session.device_id == device_id
-        }) {
-            removed_session_ids.push(session.id.clone());
-        }
-
-        group.members.retain(|member| member.device_id != device_id);
-        group.updated_at = now_millis();
-
-        let mut sessions = sessions_before;
-        sessions.retain(|session| {
-            !(session.mode == "group"
-                && session.group_id == group_id
-                && session.device_id == device_id)
-        });
-
-        // 访客退出后彻底清除其本机群聊缓存，避免退出后仍能通过旧会话读取历史。
-        let mut messages: Vec<LanShareMessage> =
-            read_array(&context.paths.lan_share_files.messages)?;
-        messages.retain(|message| !removed_session_ids.contains(&message.session_id));
-        let mut files: Vec<LanShareFile> = read_array(&context.paths.lan_share_files.files)?;
-        let removed_files = files
-            .iter()
-            .filter(|file| removed_session_ids.contains(&file.session_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        files.retain(|file| !removed_session_ids.contains(&file.session_id));
-
-        // 仅删除快传上传目录中的缓存，用户原始文件路径不会被退出操作触碰。
-        let uploads = Path::new(&context.paths.lan_share_dir).join("uploads");
-        if let Ok(directory) = tokio::fs::canonicalize(&uploads).await {
-            for file in &removed_files {
-                let Ok(path) = tokio::fs::canonicalize(&file.path).await else {
-                    continue;
-                };
-                if path.parent() == Some(directory.as_path()) {
-                    let _ = tokio::fs::remove_file(path).await;
-                }
-            }
-        }
-
-        write_json(&context.paths.lan_share_files.groups, &json!(groups)).await?;
-        write_json(&context.paths.lan_share_files.sessions, &json!(sessions)).await?;
-        write_json(&context.paths.lan_share_files.messages, &json!(messages)).await?;
-        write_json(&context.paths.lan_share_files.files, &json!(files)).await?;
-    }
-
-    {
-        let mut runtime = context.registry.inner.lock().await;
-        if runtime
-            .active_sessions
-            .get(&device_id)
-            .and_then(|session_id| {
-                group_session_by_id(&context.paths, session_id)
-                    .ok()
-                    .flatten()
-            })
-            .map(|session| session.group_id == group_id)
-            .unwrap_or(false)
-        {
-            runtime.active_sessions.remove(&device_id);
-        }
-    }
-
-    emit_state_changed(&context.app, &context.registry, &context.paths).await?;
-    Ok(api_success(json!(true)))
 }
 
 async fn register_device_request(
@@ -6900,12 +6561,18 @@ async fn deliver_pending_web_messages(
 ) -> Result<(), ManagerError> {
     let pending = {
         let _storage = registry.storage.lock().await;
+        let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
         read_array::<LanShareMessage>(&paths.lan_share_files.messages)?
             .into_iter()
             .filter(|message| {
                 message.device_id == device_id
                     && message.direction == "desktop-to-mobile"
                     && !message.delivered
+                    && sessions.iter().any(|session| {
+                        session.id == message.session_id
+                            && session.device_id == device_id
+                            && session.mode != "group"
+                    })
             })
             .collect::<Vec<_>>()
     };
@@ -6945,7 +6612,9 @@ async fn store_guest_message(
     let session_id = string_value(payload.get("sessionId"));
     let session = read_array::<LanShareSession>(&context.paths.lan_share_files.sessions)?
         .into_iter()
-        .find(|session| session.id == session_id && session.device_id == device_id)
+        .find(|session| {
+            session.id == session_id && session.device_id == device_id && session.mode != "group"
+        })
         .ok_or_else(|| ManagerError::System("请先选择当前设备的有效会话。".into()))?;
     let content = string_value(payload.get("content"));
     let files = attachments::prepare(
@@ -6974,13 +6643,7 @@ async fn store_guest_message(
     )
     .await?;
     attachments::publish(&context.registry, &context.paths, &files).await?;
-    if let Some(group_session) = group_session_by_id(&context.paths, &message.session_id)? {
-        for (_, sender) in
-            group_online_targets(&context.registry, &context.paths, &group_session.group_id).await?
-        {
-            let _ = send_stored_message_to_client(&sender, &message);
-        }
-    } else if let Some(sender) = context.registry.inner.lock().await.clients.get(device_id) {
+    if let Some(sender) = context.registry.inner.lock().await.clients.get(device_id) {
         let _ = send_stored_message_to_client(sender, &message);
     }
     emit_message_created(&context.app, &message);
@@ -7133,12 +6796,39 @@ mod tests {
             let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
             let registry = LanShareServerRegistry::new();
-            let removed = upsert_device(&registry, &paths, "", "待删除", "Chrome", "192.168.1.31")
-                .await
-                .unwrap();
-            let kept = upsert_device(&registry, &paths, "", "保留", "Chrome", "192.168.1.32")
-                .await
-                .unwrap();
+            let removed = upsert_device(
+                &registry,
+                &paths,
+                "native-removed",
+                "待删除",
+                "MonkeyThief/Desktop",
+                "192.168.1.31",
+            )
+            .await
+            .unwrap();
+            let kept = upsert_device(
+                &registry,
+                &paths,
+                "native-kept",
+                "保留",
+                "MonkeyThief/Desktop",
+                "192.168.1.32",
+            )
+            .await
+            .unwrap();
+            for device in [&removed, &kept] {
+                registry.inner.lock().await.native.config.peers.push(
+                    super::native::TrustedPeer {
+                        peer: super::native::Peer {
+                            id: device.id.clone(),
+                            supports_groups: true,
+                            ..Default::default()
+                        },
+                        secure: true,
+                        ..Default::default()
+                    },
+                );
+            }
             let removed_session =
                 create_session(&registry, &paths, json!({ "deviceId": removed.id }))
                     .await
@@ -7289,6 +6979,10 @@ mod tests {
                 upsert_device(&registry, &paths, "", "网页设备", "Chrome", "192.168.1.11")
                     .await
                     .unwrap();
+            let another_browser =
+                upsert_device(&registry, &paths, "", "另一网页", "Safari", "192.168.1.13")
+                    .await
+                    .unwrap();
             let native = upsert_device(
                 &registry,
                 &paths,
@@ -7303,6 +6997,9 @@ mod tests {
                 json!([]),
                 json!([browser.id, "missing"]),
                 json!([native.id]),
+                json!([browser.id, native.id]),
+                json!([browser.id, another_browser.id]),
+                json!([native.id, another_browser.id]),
             ] {
                 assert!(create_group(
                     &registry,
@@ -7327,7 +7024,7 @@ mod tests {
     }
 
     #[test]
-    fn group_creation_adds_unique_invitees_persists_sessions_and_notifies_online_devices() {
+    fn group_creation_only_adds_paired_native_clients_and_never_notifies_web_clients() {
         tauri::async_runtime::block_on(async {
             let root = std::env::temp_dir().join(create_id());
             let paths = resolve_app_paths(&root);
@@ -7335,13 +7032,56 @@ mod tests {
                 .await
                 .unwrap();
             let registry = LanShareServerRegistry::new();
-            let online = upsert_device(&registry, &paths, "", "在线设备", "Chrome", "192.168.1.11")
+            let online = upsert_device(
+                &registry,
+                &paths,
+                "native-online",
+                "在线设备",
+                "MonkeyThief/Desktop",
+                "192.168.1.11",
+            )
+            .await
+            .unwrap();
+            let offline = upsert_device(
+                &registry,
+                &paths,
+                "native-offline",
+                "离线设备",
+                "MonkeyThief/Desktop",
+                "192.168.1.12",
+            )
+            .await
+            .unwrap();
+            let payload = json!({
+                "name": "测试群聊",
+                "messageVisibility": "afterJoin",
+                "deviceIds": [online.id, offline.id, online.id]
+            });
+            assert!(create_group(&registry, &paths, payload.clone())
                 .await
-                .unwrap();
-            let offline =
-                upsert_device(&registry, &paths, "", "离线设备", "Chrome", "192.168.1.12")
-                    .await
-                    .unwrap();
+                .is_err());
+            // 配对记录无可连接地址，测试只验证本地持久化及网页投递边界。
+            for device in [&online, &offline] {
+                registry.inner.lock().await.native.config.peers.push(
+                    super::native::TrustedPeer {
+                        peer: super::native::Peer {
+                            id: device.id.clone(),
+                            name: device.name.clone(),
+                            supports_groups: device.id == online.id,
+                            ..Default::default()
+                        },
+                        secure: true,
+                        ..Default::default()
+                    },
+                );
+            }
+            assert!(create_group(&registry, &paths, payload.clone())
+                .await
+                .is_err());
+            assert!(read_array::<super::LanShareGroup>(&paths.lan_share_files.groups)
+                .unwrap()
+                .is_empty());
+            registry.inner.lock().await.native.config.peers[1].peer.supports_groups = true;
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
             registry
                 .inner
@@ -7349,7 +7089,7 @@ mod tests {
                 .await
                 .clients
                 .insert(online.id.clone(), sender);
-            let result = create_group(&registry, &paths, json!({ "name": "测试群聊", "messageVisibility": "afterJoin", "deviceIds": [online.id, offline.id, online.id] })).await.unwrap();
+            let result = create_group(&registry, &paths, payload).await.unwrap();
             let group_id = result["data"]["currentSession"]["groupId"]
                 .as_str()
                 .unwrap();
@@ -7370,12 +7110,27 @@ mod tests {
                 .iter()
                 .any(|session| session.device_id == offline.id
                     && session.message_visibility == "afterJoin"));
-            assert_eq!(
-                receiver.try_recv().unwrap().payload["type"],
-                "groupsChanged"
-            );
             assert!(receiver.try_recv().is_err());
-            assert!(super::mobile_page_html().contains("payload.type === \"groupsChanged\""));
+            assert!(!result["data"]["groups"][0]
+                .as_object()
+                .unwrap()
+                .contains_key("inviteUrl"));
+            assert!(!result["data"]["groups"][0]
+                .as_object()
+                .unwrap()
+                .contains_key("qrSvg"));
+            let member_session = sessions
+                .iter()
+                .find(|session| session.device_id == online.id && session.mode == "group")
+                .unwrap();
+            assert!(super::ensure_session(
+                &paths,
+                &online.id,
+                &member_session.id,
+                &online.name,
+                &online.ip,
+            )
+            .is_err());
             tokio::fs::remove_dir_all(root).await.unwrap();
         });
     }
@@ -8872,30 +8627,27 @@ mod service_tests {
     #[test]
     fn mobile_page_defaults_to_message_view_first() {
         let html = mobile_page_html();
-        let direct_mode_index = html.find("data-mode=\"direct\"").unwrap();
-        let group_mode_index = html.find("data-mode=\"group\"").unwrap();
         let messages_tab_index = html.find("data-view=\"messages\"").unwrap();
         let files_tab_index = html.find("data-view=\"files\"").unwrap();
         let messages_panel_index = html.find("id=\"messagesView\"").unwrap();
         let files_panel_index = html.find("id=\"filesView\"").unwrap();
 
-        assert!(direct_mode_index < group_mode_index);
         assert!(messages_tab_index < files_tab_index);
         assert!(messages_panel_index < files_panel_index);
-        assert!(html.contains("class=\"mode-tab active\" data-mode=\"direct\""));
         assert!(html.contains("class=\"view-tab active\" data-view=\"messages\""));
         assert!(html.contains("id=\"messagesView\" class=\"card view-panel active\""));
     }
 
     #[test]
-    fn mobile_page_group_mode_starts_from_joined_group_records() {
+    fn mobile_page_has_no_group_entry_or_invitation_requests() {
         let html = mobile_page_html();
 
-        assert!(html.contains("id=\"groupListView\""));
-        assert!(html.contains("已加入群聊"));
-        assert!(html.contains("openGroupSession"));
-        assert!(html.contains("返回群列表"));
-        assert!(html.contains("currentMode === \"group\" && !currentGroupId"));
+        assert!(!html.contains("id=\"groupListView\""));
+        assert!(!html.contains("id=\"joinGroup\""));
+        assert!(!html.contains("id=\"inviteCode\""));
+        assert!(!html.contains("data-mode=\"group\""));
+        assert!(!html.contains("/api/groups"));
+        assert!(!html.contains("joinGroup"));
     }
 
     #[test]

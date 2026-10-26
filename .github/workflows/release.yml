@@ -48,13 +48,38 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
-      - name: 检查发布说明
+      - name: 检查版本与发布说明
+        id: release-version
         shell: pwsh
         run: |
-          $notes = Get-Content build/release-notes.md -Raw
-          if ($notes -match '请在发布前删除此行') {
-            throw '请先更新 build/release-notes.md，再创建 tag 发布。'
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = [string]$package.version
+          $packageLock = Get-Content package-lock.json -Raw | ConvertFrom-Json -AsHashtable
+          $tauriConfig = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
+          $cargo = Get-Content src-tauri/Cargo.toml -Raw
+          $cargoLock = Get-Content src-tauri/Cargo.lock -Raw
+          $cargoVersion = [regex]::Match($cargo, '(?ms)^\[package\]\s*.*?^version\s*=\s*"([^"]+)"').Groups[1].Value
+          $cargoLockVersion = [regex]::Match($cargoLock, '(?m)^name = "monkey-thief"\r?\nversion = "([^"]+)"').Groups[1].Value
+          $versions = @(
+            [string]$packageLock.version
+            [string]$packageLock['packages']['']['version']
+            [string]$tauriConfig.version
+            $cargoVersion
+            $cargoLockVersion
+          )
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or @($versions | Where-Object { $_ -ne $version }).Count -gt 0) {
+            throw 'package.json、锁文件、Cargo.toml 与 Tauri 配置中的版本号必须一致。'
           }
+
+          $notes = Get-Content build/release-notes.md -Raw
+          if ($notes -match '请在发布前删除此行' -or $notes.TrimStart() -notmatch "^## $([regex]::Escape($version)) 变更说明(?:\r?\n|$)") {
+            throw '请先将 build/release-notes.md 更新为当前版本的变更说明，再发布。'
+          }
+          $releaseTag = "v$version"
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne $releaseTag) {
+            throw "发布标签必须为 $releaseTag，当前为 $env:GITHUB_REF_NAME。"
+          }
+          "tag=$releaseTag" >> $env:GITHUB_OUTPUT
 
       - name: 打包 Windows 安装程序
         env:
@@ -130,6 +155,8 @@ jobs:
 
       - name: 生成 Tauri 更新元数据
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.release-version.outputs.tag }}
         run: |
           $bundleDir = 'src-tauri/target/release/bundle/nsis'
           $updatePackage = Get-ChildItem $bundleDir -Filter '*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -147,7 +174,7 @@ jobs:
           $releaseDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
           $notes = (Get-Content build/release-notes.md -Raw).Trim()
           $signature = (Get-Content $signatureFile.FullName -Raw).Trim()
-          $downloadUrl = "https://github.com/hxysj/AI-Manager/releases/download/$env:GITHUB_REF_NAME/$($updatePackage.Name)"
+          $downloadUrl = "https://github.com/hxysj/AI-Manager/releases/download/$env:RELEASE_TAG/$($updatePackage.Name)"
           $platform = @{
             signature = $signature
             url = $downloadUrl
@@ -169,6 +196,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tag_name: ${{ steps.release-version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           body_path: build/release-notes.md
           files: |
             src-tauri/target/release/bundle/nsis/*.exe

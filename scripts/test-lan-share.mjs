@@ -82,6 +82,10 @@ const api = {
     fixture.native.hidden = hidden
     return structuredClone(fixture.native)
   },
+  createGroup: async (payload) => {
+    calls.push({ createGroup: structuredClone(payload) })
+    return { currentSession: { id: "group-session", groupId: "new-group" } }
+  },
   deleteDevice: async (payload) => {
     calls.push({ delete: payload })
     return structuredClone(fixture)
@@ -308,7 +312,7 @@ state.requestDeleteDevice(known)
 state.closeDeleteDevice()
 assert.equal(state.deleteDeviceTarget, null)
 
-// 验证创建群聊面板交互与新版原生客户端群聊能力。
+// 群聊只邀请已配对的客户端，网页设备不能显示、选中或随旧选择提交。
 state.openCreateGroup()
 assert.equal(state.createGroupOpen, true)
 assert.equal(state.newGroup.name, "新的群聊")
@@ -332,9 +336,32 @@ const browserGroupDevice = state.connectedDevices.find(
   (device) => device.id === "browser"
 )
 state.toggleGroupDevice(browserGroupDevice)
-assert.deepEqual(state.newGroup.deviceIds, ["known", "browser"])
-assert.deepEqual(state.selectedGroupDeviceIds, ["browser", "known"])
-state.toggleGroupDevice(browserGroupDevice)
+assert.deepEqual(state.newGroup.deviceIds, ["known"])
+assert.deepEqual(state.selectedGroupDeviceIds, ["known"])
+assert.ok(state.groupDevices.every((device) => device.native && device.paired))
+assert.ok(!state.groupDevices.some((device) => device.id === "browser"))
+state.newGroup.deviceIds.push("browser", "legacy")
+assert.deepEqual(state.selectedGroupDeviceIds, ["known"])
+const createdGroupsBefore = calls.filter((call) => call.createGroup).length
+await state.createGroup()
+assert.equal(
+  calls.filter((call) => call.createGroup).length,
+  createdGroupsBefore,
+  "一个客户端加网页设备不能满足三人群聊要求"
+)
+const anotherGroupDevice = state.groupDevices.find(
+  (device) => device.id === "candidate"
+)
+state.toggleGroupDevice(anotherGroupDevice)
+await state.createGroup()
+assert.deepEqual(calls.at(-1).createGroup.deviceIds.sort(), ["candidate", "known"])
+state.state.native.peers.find((device) => device.id === "candidate").remoteDeleted =
+  true
+assert.ok(!state.groupDevices.some((device) => device.id === "candidate"))
+assert.deepEqual(state.selectedGroupDeviceIds, ["known"])
+state.state.native.peers.find((device) => device.id === "candidate").remoteDeleted =
+  false
+state.newGroup.deviceIds = ["known"]
 state.toggleGroupDevice(nativeGroupDevice)
 assert.deepEqual(state.newGroup.deviceIds, [])
 state.createGroupOpen = false
@@ -526,9 +553,9 @@ const guestPageSource = readFileSync(
 const guestScript = guestPageSource.match(/<script>([\s\S]*?)<\/script>/)[1]
 
 async function openGuestPage({
-  groupsFail = false,
   registerFails = false,
-  holdHistory = false
+  holdHistory = false,
+  inviteCode = ""
 } = {}) {
   const requests = []
   const sockets = []
@@ -590,7 +617,7 @@ async function openGuestPage({
     Uint8Array,
     crypto: webcrypto,
     location: {
-      search: "?token=guest-token",
+      search: "?token=guest-token" + (inviteCode ? "&invite=" + inviteCode : ""),
       protocol: "http:",
       host: "192.168.1.1:17631",
       hostname: "192.168.1.1",
@@ -674,9 +701,6 @@ async function openGuestPage({
           device: { id: "guest-device" },
           currentSession: { id: "new-guest-session" }
         }
-      } else if (path.startsWith("/api/groups?")) {
-        data = []
-        if (groupsFail) message = "群聊列表暂不可用"
       } else if (path.startsWith("/api/files/upload?")) {
         data = { id: "guest-file" }
       } else if (path.startsWith("/api/files?")) {
@@ -800,26 +824,33 @@ assert.equal(
   "电脑回复"
 )
 
-// 群聊加载失败时，扫码设备仍应上线并可发送单聊消息和附件。
-const guestWithGroupFailure = await openGuestPage({ groupsFail: true })
-assert.equal(guestWithGroupFailure.sockets.length, 1)
+// 旧邀请链接打开网页仍只建立单聊，不显示群聊入口或发起群聊请求。
+const guestWithInvite = await openGuestPage({ inviteCode: "old-invite" })
+assert.equal(guestWithInvite.sockets.length, 1)
+assert.ok(!guestWithInvite.elements.has("joinGroup"))
+assert.ok(!guestWithInvite.elements.has("groupListView"))
+assert.ok(!guestPageSource.includes('data-mode="group"'))
 assert.equal(
-  runInContext("currentSessionId", guestWithGroupFailure.guest),
+  runInContext("currentSessionId", guestWithInvite.guest),
   "guest-session"
 )
 runInContext(
   'addPendingAttachments([{ name: "扫码附件.txt" }])',
-  guestWithGroupFailure.guest
+  guestWithInvite.guest
 )
-guestWithGroupFailure.elements.get("messageInput").value = "附带文件"
-await guestWithGroupFailure.elements.get("sendMessage").click()
-const attachmentMessage = guestWithGroupFailure.requests.find(
+guestWithInvite.elements.get("messageInput").value = "附带文件"
+await guestWithInvite.elements.get("sendMessage").click()
+const attachmentMessage = guestWithInvite.requests.find(
   (item) => item.method === "POST" && item.path.startsWith("/api/messages?")
 )
 assert.deepEqual([...attachmentMessage.body.attachmentIds], ["guest-file"])
 assert.equal(
-  guestWithGroupFailure.elements.get("pendingAttachments").children.length,
+  guestWithInvite.elements.get("pendingAttachments").children.length,
   0
+)
+assert.ok(
+  !guestWithInvite.requests.some((request) => request.path.startsWith("/api/groups")),
+  "网页端不能加载、加入或退出群聊"
 )
 
 // 发送失败保留文本和同一个消息标识，重试成功后再清空草稿。
@@ -928,5 +959,5 @@ guestWithSlowHistory.releaseHistory()
 await guestWithSlowHistory.settle()
 assert.equal(guestWithSlowHistory.elements.get("sendMessage").disabled, false)
 console.log(
-  "设备快传连接确认、IP 过滤、隐藏、删除、发送进度、扫码上线、双向消息、手机复制与输入、重连及 Vue/Less 编译检查通过"
+  "设备快传客户端群聊限制、连接确认、IP 过滤、隐藏、删除、发送进度、扫码上线、双向消息、手机复制与输入、重连及 Vue/Less 编译检查通过"
 )

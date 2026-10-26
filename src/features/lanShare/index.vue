@@ -484,7 +484,9 @@
             <Radio :size="28" class="radar-center-icon" />
           </div>
           <span class="cyber-empty-title">
-            {{ chatMode === "group" ? "NO ACTIVE GROUP" : "NO DEVICE SELECTED" }}
+            {{
+              chatMode === "group" ? "NO ACTIVE GROUP" : "NO DEVICE SELECTED"
+            }}
           </span>
           <p class="cyber-empty-hint">
             {{
@@ -831,7 +833,7 @@
           <div class="drop-group-header-text">
             <h2 class="drop-group-title">创建加密群聊信道</h2>
             <p class="drop-group-description">
-              选择局域网内的设备组建多方加密群聊信道
+              选择局域网内使用相同客户端的设备组建多方加密群聊信道
             </p>
           </div>
         </div>
@@ -864,7 +866,7 @@
           <Info :size="16" class="drop-group-notice-icon" />
           <div class="drop-group-notice-text">
             群聊至少需要 3
-            人（包含本机），请至少选择两台设备。离线的网页设备重新连接后可查看邀请。
+            人（包含本机），请至少选择两台已配对的客户端设备，网页设备不支持加入群聊。
           </div>
         </div>
 
@@ -882,7 +884,7 @@
             aria-label="可选设备列表"
           >
             <div
-              v-for="device in connectedDevices"
+              v-for="device in groupDevices"
               :key="device.id"
               class="drop-group-device-card"
               :class="{
@@ -947,11 +949,11 @@
               </div>
             </div>
 
-            <div v-if="!connectedDevices.length" class="drop-group-empty">
+            <div v-if="!groupDevices.length" class="drop-group-empty">
               <Users :size="32" class="drop-group-empty-icon" />
               <p class="drop-group-empty-text">暂无可邀请设备</p>
               <p class="drop-group-empty-subtext">
-                请先让至少一台移动设备或浏览器通过扫码/访客地址接入。
+                请先连接并配对至少两台支持群聊的客户端设备。
               </p>
             </div>
           </div>
@@ -1274,8 +1276,15 @@ const connectedDevices = computed(() => {
   return [...devices.values()]
 })
 
+// 群聊仅邀请已配对的客户端，网页访客和已解除配对的设备不参与。
+const groupDevices = computed(() =>
+  connectedDevices.value.filter(
+    (device) => device.native && device.paired && !device.remoteDeleted
+  )
+)
+
 const selectedGroupDeviceIds = computed(() =>
-  connectedDevices.value
+  groupDevices.value
     .filter(
       (device) =>
         device.groupSupported !== false &&
@@ -1693,7 +1702,12 @@ function openCreateGroup() {
 }
 
 function toggleGroupDevice(device) {
-  if (loading.value || device?.groupSupported === false) return
+  if (
+    loading.value ||
+    !groupDevices.value.some((item) => item.id === device?.id) ||
+    device.groupSupported === false
+  )
+    return
   const index = newGroup.deviceIds.indexOf(device.id)
   if (index > -1) {
     newGroup.deviceIds.splice(index, 1)

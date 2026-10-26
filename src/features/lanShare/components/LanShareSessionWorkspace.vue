@@ -246,29 +246,6 @@
           保存群设置
         </el-button>
 
-        <div class="workspace-group-invite">
-          <span>邀请访客加入群聊</span>
-          <div
-            v-if="currentGroup.qrSvg"
-            class="workspace-group-qr"
-            v-html="currentGroup.qrSvg"
-          ></div>
-          <small class="invite-code-text"
-            >邀请码 {{ currentGroup.inviteCode }}</small
-          >
-          <el-button
-            size="small"
-            @click="
-              $emit(
-                'copy-text',
-                currentGroup.inviteUrl || currentGroup.inviteCode
-              )
-            "
-          >
-            复制邀请链接
-          </el-button>
-        </div>
-
         <div class="workspace-group-members">
           <span>群组成员 · {{ currentGroup.members?.length || 0 }}</span>
           <div
@@ -741,40 +718,6 @@ function deleteGroup() {
     gap: 6px;
     font-size: 12.5px;
     color: var(--color-text-muted);
-  }
-
-  .workspace-group-invite {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    padding: 16px;
-    border: 1px dashed var(--color-primary);
-    border-radius: 8px;
-    background: var(--color-primary-soft);
-    font-size: 12px;
-
-    .workspace-group-qr {
-      width: 140px;
-      height: 140px;
-      background: #ffffff;
-      padding: 8px;
-      border-radius: 8px;
-
-      :deep(svg) {
-        width: 100%;
-        height: 100%;
-      }
-    }
-
-    .invite-code-text {
-      font-family:
-        ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      color: var(--color-primary);
-      letter-spacing: 1px;
-      font-size: 12px;
-      font-weight: 600;
-    }
   }
 
   .workspace-group-members {
