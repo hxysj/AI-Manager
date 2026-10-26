@@ -1579,6 +1579,16 @@ impl ManagerState {
                 self.refresh_state().await?;
                 Ok(self.state.clone())
             }
+            "claude-models:fetch" => {
+                let catalog = runtime_provider::fetch_claude_models(
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                self.refresh_state().await?;
+                self.emit_state_changed(&app)?;
+                Ok(catalog)
+            }
             "codex-models:fetch" => {
                 runtime_provider::fetch_codex_models(
                     &self.paths,

@@ -254,13 +254,52 @@ pub async fn fetch_codex_models(
         )
         .await;
     }
+    let value = fetch_provider_model_catalog(paths, &payload, false).await?;
+    codex_models::normalize_catalog(&value)
+}
+
+pub async fn fetch_claude_models(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+    let provider_id = string_value(payload.get("providerId"));
+    if !provider_id.is_empty() && find_provider(paths, &provider_id)?["cli"] != "claude" {
+        return Err(ManagerError::System("只能获取 Claude Provider 的模型列表".into()));
+    }
+    let value = fetch_provider_model_catalog(paths, &payload, true).await?;
+    let items = value["data"].as_array().unwrap();
+    let names = items.iter().filter_map(|item| {
+        item.get("id")
+            .or_else(|| item.get("slug"))
+            .and_then(Value::as_str)
+            .or_else(|| item.as_str())
+    }).collect::<Vec<_>>();
+    let models = parse_model_list(&json!(names));
+    if models.is_empty() {
+        return Err(ManagerError::System("上游未返回有效模型，已保存的模型列表保持不变".into()));
+    }
+    if !provider_id.is_empty() {
+        // 只更新模型候选列表，保留当前模型映射、密钥和尚未提交的编辑内容。
+        let mut provider = find_provider(paths, &provider_id)?;
+        provider["runtimeConfig"]["modelList"] = json!(models);
+        provider["updatedAt"] = json!(now_millis());
+        provider_store::update_provider(paths, &provider)?;
+    }
+    Ok(json!({ "models": models }))
+}
+
+async fn fetch_provider_model_catalog(
+    paths: &AppPaths,
+    payload: &Value,
+    claude: bool,
+) -> Result<Value, ManagerError> {
     let provider_id = string_value(payload.get("providerId"));
     let provider = if provider_id.is_empty() {
         json!({})
     } else {
         find_provider(paths, &provider_id)?
     };
-    let base_url = first_string(payload.get("baseUrl"), provider.get("baseUrl"));
+    let mut base_url = first_string(payload.get("baseUrl"), provider.get("baseUrl"));
+    if claude && base_url.is_empty() {
+        base_url = "https://api.anthropic.com".into();
+    }
     let api_key = if let Some(key) = payload
         .get("apiKey")
         .and_then(Value::as_str)
@@ -268,7 +307,7 @@ pub async fn fetch_codex_models(
     {
         key.to_string()
     } else if !string_value(payload.get("keyId")).is_empty() {
-        string_value(read_provider_key_value(paths, &payload)?.get("apiKey"))
+        string_value(read_provider_key_value(paths, payload)?.get("apiKey"))
     } else {
         get_provider_api_key(paths, &provider_id)?
     };
@@ -286,34 +325,58 @@ pub async fn fetch_codex_models(
     let client = builder
         .build()
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    let mut request = client
-        .get(codex_models::models_url(&base_url)?)
-        .header("Accept", "application/json");
-    if let Some(headers) = provider.get("headers").and_then(Value::as_object) {
-        for (name, value) in headers {
-            if let Some(value) = value.as_str() {
-                request = request.header(name, value);
+    let url = codex_models::models_url(&base_url)?;
+    let auth_field = first_string(payload.get("authField"), provider.get("authField"));
+    let mut models = Vec::new();
+    let mut after_id = String::new();
+    let mut cursors = std::collections::HashSet::new();
+    loop {
+        let mut request = client.get(url.clone()).header("Accept", "application/json");
+        if claude {
+            request = request.header("anthropic-version", "2023-06-01");
+        }
+        if let Some(headers) = provider.get("headers").and_then(Value::as_object) {
+            for (name, value) in headers {
+                if let Some(value) = value.as_str() {
+                    request = request.header(name, value);
+                }
             }
         }
+        if !api_key.is_empty() {
+            request = if claude && auth_field == "ANTHROPIC_API_KEY" {
+                request.header("x-api-key", &api_key)
+            } else {
+                request.bearer_auth(&api_key)
+            };
+        }
+        if !after_id.is_empty() {
+            request = request.query(&[("after_id", &after_id)]);
+        }
+        let response = request.send().await
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        if !response.status().is_success() {
+            return Err(ManagerError::System(format!(
+                "获取模型列表失败：HTTP {}",
+                response.status().as_u16()
+            )));
+        }
+        let value = response.json::<Value>().await
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        if !claude {
+            return Ok(value);
+        }
+        let items = value.get("data").or_else(|| value.get("models")).unwrap_or(&value)
+            .as_array().ok_or_else(|| ManagerError::System("模型列表必须是 data、models 或 JSON 数组".into()))?;
+        models.extend(items.iter().cloned());
+        if value["has_more"] != true {
+            return Ok(json!({ "data": models }));
+        }
+        // 分页全部成功后才保存，避免后续页失败时覆盖已有列表。
+        after_id = string_value(value.get("last_id"));
+        if after_id.is_empty() || !cursors.insert(after_id.clone()) {
+            return Err(ManagerError::System("上游模型列表分页游标无效，已保存的模型列表保持不变".into()));
+        }
     }
-    if !api_key.is_empty() {
-        request = request.bearer_auth(api_key);
-    }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-    if !response.status().is_success() {
-        return Err(ManagerError::System(format!(
-            "获取模型列表失败：HTTP {}",
-            response.status().as_u16()
-        )));
-    }
-    let value = response
-        .json::<Value>()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
-    codex_models::normalize_catalog(&value)
 }
 
 pub async fn save_runtime_model(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
@@ -2647,6 +2710,7 @@ async fn sync_claude_runtime_to_manager(
           "apiKey": string_value(env.get(&auth_field)),
           "runtimeConfig": {
             "mainModel": main_model,
+            "modelList": provider["runtimeConfig"]["modelList"],
             "haikuModel": string_value(env.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")),
             "sonnetModel": string_value(env.get("ANTHROPIC_DEFAULT_SONNET_MODEL")),
             "opusModel": string_value(env.get("ANTHROPIC_DEFAULT_OPUS_MODEL")),
@@ -2967,6 +3031,8 @@ fn normalize_runtime_config(value: Option<&Value>, cli: &str) -> Value {
         } else {
             Vec::new()
         }
+    } else if cli == "claude" {
+        requested_model_list
     } else {
         Vec::new()
     };
@@ -3963,6 +4029,153 @@ mod tests {
             assert!(fs::read_to_string(config_dir.join("config.toml")).unwrap().contains("model = \"active-new\""));
             assert_eq!(find_provider(&paths, "inactive-provider").unwrap()["runtimeConfig"]["modelList"], json!([]));
             assert_eq!(find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]["serviceTierFast"], true);
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
+
+    #[test]
+    fn claude_models_fetch_paginates_and_preserves_provider_configuration() {
+        tauri::async_runtime::block_on(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (test_root, paths, _) = create_codex_runtime_fixture();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            save_provider(&paths, json!({
+                "id": "provider-claude", "cli": "claude", "name": "Claude", "type": "anthropic",
+                "baseUrl": format!("http://{address}/v1/messages"), "authField": "ANTHROPIC_API_KEY",
+                "headers": { "x-models-test": "custom-header" },
+                "apiKeys": [
+                    { "id": "primary", "apiKey": "primary-secret" },
+                    { "id": "selected", "apiKey": "selected-secret" }
+                ],
+                "activeApiKeyId": "primary",
+                "runtimeConfig": { "modelList": ["old-model"], "mainModel": "private-alias", "haikuModel": "custom-haiku" }
+            })).await.unwrap();
+            let keys_before = provider_store::read_keys(&paths).unwrap();
+            let server = tokio::spawn(async move {
+                for (index, body) in [
+                    r#"{"data":[{"id":"claude-a"},{"id":"claude-b"}],"has_more":true,"last_id":"claude-b"}"#,
+                    r#"{"data":[{"id":"claude-b"},{"id":"claude-c"},{"id":""}],"has_more":false}"#,
+                ].into_iter().enumerate() {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = vec![0; 8192];
+                    let length = socket.read(&mut request).await.unwrap();
+                    let request = String::from_utf8_lossy(&request[..length]).to_lowercase();
+                    assert!(request.starts_with(if index == 0 { "get /v1/models " } else { "get /v1/models?after_id=claude-b " }));
+                    assert!(request.contains("x-api-key: selected-secret"));
+                    assert!(request.contains("anthropic-version: 2023-06-01"));
+                    assert!(request.contains("x-models-test: custom-header"));
+                    assert!(!request.contains("authorization:"));
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+                }
+            });
+            let catalog = fetch_claude_models(&paths, json!({ "providerId": "provider-claude", "keyId": "selected" })).await.unwrap();
+            assert_eq!(catalog["models"], json!(["claude-a", "claude-b", "claude-c"]));
+            server.await.unwrap();
+            let saved = find_provider(&paths, "provider-claude").unwrap();
+            assert_eq!(saved["runtimeConfig"]["modelList"], catalog["models"]);
+            assert_eq!(saved["runtimeConfig"]["mainModel"], "private-alias");
+            assert_eq!(saved["runtimeConfig"]["haikuModel"], "custom-haiku");
+            assert_eq!(saved["headers"]["x-models-test"], "custom-header");
+            assert_eq!(provider_store::read_keys(&paths).unwrap(), keys_before);
+            assert_eq!(find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]["modelList"], json!(["gpt-5.6-sol"]));
+            save_provider(&paths, saved).await.unwrap();
+            assert_eq!(find_provider(&paths, "provider-claude").unwrap()["runtimeConfig"]["modelList"], catalog["models"]);
+            let config_dir = test_root.join("claude-config");
+            fs::create_dir_all(&config_dir).unwrap();
+            fs::write(config_dir.join("settings.json"), json!({
+                "env": { "ANTHROPIC_BASE_URL": format!("http://{address}"), "ANTHROPIC_API_KEY": "primary-secret", "ANTHROPIC_MODEL": "private-alias" }
+            }).to_string()).unwrap();
+            sync_claude_runtime_to_manager(
+                &paths,
+                config_dir.to_str().unwrap(),
+                find_provider(&paths, "provider-claude").unwrap(),
+                json!({ "id": "profile-claude", "cli": "claude", "providerId": "provider-claude", "model": "private-alias" }),
+            ).await.unwrap();
+            assert_eq!(find_provider(&paths, "provider-claude").unwrap()["runtimeConfig"]["modelList"], catalog["models"]);
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
+
+    #[test]
+    fn claude_models_failed_fetch_keeps_saved_list() {
+        tauri::async_runtime::block_on(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (test_root, paths, _) = create_codex_runtime_fixture();
+            save_provider(&paths, json!({
+                "id": "provider-claude", "cli": "claude", "name": "Claude", "type": "anthropic",
+                "runtimeConfig": { "modelList": ["saved-model"], "mainModel": "manual-model" }
+            })).await.unwrap();
+            let previous = find_provider(&paths, "provider-claude").unwrap();
+            for responses in [
+                vec![("200 OK", r#"{"data":[]}"#)],
+                vec![("200 OK", r#"{"error":"invalid catalog"}"#)],
+                vec![("401 Unauthorized", r#"{"error":"unauthorized"}"#)],
+                vec![("200 OK", r#"{"data":[{"id":"partial-model"}],"has_more":true}"#)],
+                vec![
+                    ("200 OK", r#"{"data":[{"id":"partial-model"}],"has_more":true,"last_id":"partial-model"}"#),
+                    ("500 Internal Server Error", r#"{"error":"page failed"}"#),
+                ],
+            ] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let server = tokio::spawn(async move {
+                    for (status, body) in responses {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+                        let mut request = vec![0; 8192];
+                        socket.read(&mut request).await.unwrap();
+                        socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+                    }
+                });
+                assert!(fetch_claude_models(&paths, json!({
+                    "providerId": "provider-claude", "baseUrl": format!("http://{address}/v1")
+                })).await.is_err());
+                server.await.unwrap();
+                assert_eq!(find_provider(&paths, "provider-claude").unwrap(), previous);
+            }
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
+
+    #[test]
+    fn claude_models_unsaved_provider_accepts_catalog_formats_and_bearer_auth() {
+        tauri::async_runtime::block_on(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let (test_root, paths, _) = create_codex_runtime_fixture();
+            let previous = provider_store::read_providers(&paths).unwrap();
+            for body in [
+                r#"{"data":[{"id":"claude-a"},{"id":"claude-b"}]}"#,
+                r#"{"models":[{"slug":"claude-a"},{"slug":"claude-b"}]}"#,
+                r#"["claude-a","claude-b","claude-a",""]"#,
+            ] {
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let address = listener.local_addr().unwrap();
+                let server = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = vec![0; 8192];
+                    let length = socket.read(&mut request).await.unwrap();
+                    assert!(String::from_utf8_lossy(&request[..length]).to_lowercase().contains("authorization: bearer new-key"));
+                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+                });
+                let catalog = fetch_claude_models(&paths, json!({
+                    "baseUrl": format!("http://{address}"), "apiKey": "new-key", "authField": "ANTHROPIC_AUTH_TOKEN"
+                })).await.unwrap();
+                server.await.unwrap();
+                assert_eq!(catalog["models"], json!(["claude-a", "claude-b"]));
+                assert_eq!(provider_store::read_providers(&paths).unwrap(), previous);
+            }
+            let normalized = normalize_runtime_config(Some(&json!({
+                "modelList": "claude-a\nclaude-b,claude-a", "mainModel": "manual-model",
+                "haikuModel": "custom-haiku", "sonnetModel": "custom-sonnet", "opusModel": "custom-opus",
+                "syncModelList": true
+            })), "claude");
+            assert_eq!(normalized["modelList"], json!(["claude-a", "claude-b"]));
+            assert_eq!(normalized["mainModel"], "manual-model");
+            assert_eq!(normalized["haikuModel"], "custom-haiku");
+            assert_eq!(normalized["sonnetModel"], "custom-sonnet");
+            assert_eq!(normalized["opusModel"], "custom-opus");
+            assert_eq!(normalized["syncModelList"], false);
+            assert_eq!(normalize_runtime_config(None, "claude")["modelList"], json!([]));
             fs::remove_dir_all(test_root).unwrap();
         });
     }

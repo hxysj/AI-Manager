@@ -1,6 +1,8 @@
 import { request } from '../request'
 
 export const providerApi = {
+  // 获取成功后，已有 Claude 供应商的模型列表由后端单独缓存。
+  fetchClaudeModels: payload => request('claude-models:fetch', payload),
   fetchCodexModels: payload => request('codex-models:fetch', payload),
   syncCodexModels: payload => request('codex-models:sync', payload),
   getKeyValue: payload => request('provider:key-value', payload),

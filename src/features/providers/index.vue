@@ -361,7 +361,7 @@
         :proxy-state="activeProxyState"
         @account-model-save="emit('codex-proxy-account-model-save', $event)"
         @add-provider="
-          payload => {
+          (payload) => {
             showProxyAddAction = false
             emitProxyEvent('provider-add', payload)
           }
@@ -389,7 +389,7 @@
           :proxy-state="activeProxyState"
           @account-model-save="emit('codex-proxy-account-model-save', $event)"
           @add-provider="
-            payload => {
+            (payload) => {
               showProxyAddAction = false
               emitProxyEvent('provider-add', payload)
             }
@@ -1218,16 +1218,45 @@
           class="providers-view__models"
         >
           <div class="providers-view__section-title">
-            <div>
-              <h2>模型映射</h2>
-              <p>
-                每行填写一个上游模型；仅勾选同步模型列表并启用此 Provider
-                时同步到 Codex，未勾选或留空时使用官方默认列表。
-              </p>
+            <div class="providers-model-heading">
+              <h2 class="providers-model-title">模型映射</h2>
+              <div
+                v-if="draft.cli === 'claude'"
+                class="providers-model-actions"
+              >
+                <button
+                  class="providers-model-action"
+                  type="button"
+                  @click="showClaudeModelList = true"
+                >
+                  <Eye :size="14" />
+                  查看模型列表
+                </button>
+                <button
+                  class="providers-model-action providers-model-fetch"
+                  type="button"
+                  :disabled="claudeModelsPending || pending"
+                  :aria-busy="claudeModelsPending"
+                  @click="fetchClaudeModels"
+                >
+                  <RefreshCw
+                    class="providers-model-fetch-icon"
+                    :class="{
+                      'providers-model-fetch-pending': claudeModelsPending
+                    }"
+                    :size="14"
+                  />
+                  {{ claudeModelsPending ? "获取中…" : "获取上游模型" }}
+                </button>
+              </div>
             </div>
-            <!-- <div class="providers-view__section-actions">
-              <button type="button">获取模型列表</button>
-            </div> -->
+            <p v-if="draft.cli === 'claude'">
+              获取后自动保存模型列表，新建供应商随配置保存。模型可下拉选择或手动输入后回车。
+            </p>
+            <p v-else>
+              每行填写一个上游模型；仅勾选同步模型列表并启用此 Provider 时同步到
+              Codex，未勾选或留空时使用官方默认列表。
+            </p>
           </div>
 
           <div class="providers-view__form-grid">
@@ -1240,7 +1269,8 @@
                 <label
                   class="providers-model-field-label"
                   :for="`provider-edit-model-${field.key}`"
-                >{{ field.label }}</label>
+                  >{{ field.label }}</label
+                >
                 <div
                   v-if="draft.cli === 'codex' && field.key === 'modelList'"
                   class="providers-model-actions"
@@ -1254,7 +1284,9 @@
                   >
                     <RefreshCw
                       class="providers-model-fetch-icon"
-                      :class="{ 'providers-model-fetch-pending': codexModelsPending }"
+                      :class="{
+                        'providers-model-fetch-pending': codexModelsPending
+                      }"
                       :size="14"
                     />
                     {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
@@ -1288,6 +1320,28 @@
                 rows="5"
                 placeholder="每行一个模型，也支持逗号分隔"
               />
+              <el-select
+                v-else-if="draft.cli === 'claude'"
+                :id="`provider-edit-model-${field.key}`"
+                class="providers-model-select"
+                :model-value="modelDrafts[field.key]"
+                :aria-label="field.label"
+                placeholder="选择模型或输入后回车"
+                filterable
+                allow-create
+                default-first-option
+                clearable
+                @update:model-value="
+                  modelDrafts[field.key] = ($event || '').trim()
+                "
+              >
+                <el-option
+                  v-for="model in claudeModelOptions"
+                  :key="model"
+                  :label="model"
+                  :value="model"
+                />
+              </el-select>
               <input
                 v-else
                 :id="`provider-edit-model-${field.key}`"
@@ -1357,7 +1411,7 @@
         <button
           class="providers-view__primary"
           type="button"
-          :disabled="pending"
+          :disabled="pending || claudeModelsPending"
           @click="submitProvider"
         >
           <Save :size="16" />
@@ -1574,16 +1628,45 @@
           class="providers-view__models"
         >
           <div class="providers-view__section-title">
-            <div>
-              <h2>模型映射</h2>
-              <p>
-                每行填写一个上游模型；仅勾选同步模型列表并启用此 Provider
-                时同步到 Codex，未勾选或留空时使用官方默认列表。
-              </p>
+            <div class="providers-model-heading">
+              <h2 class="providers-model-title">模型映射</h2>
+              <div
+                v-if="draft.cli === 'claude'"
+                class="providers-model-actions"
+              >
+                <button
+                  class="providers-model-action"
+                  type="button"
+                  @click="showClaudeModelList = true"
+                >
+                  <Eye :size="14" />
+                  查看模型列表
+                </button>
+                <button
+                  class="providers-model-action providers-model-fetch"
+                  type="button"
+                  :disabled="claudeModelsPending || pending"
+                  :aria-busy="claudeModelsPending"
+                  @click="fetchClaudeModels"
+                >
+                  <RefreshCw
+                    class="providers-model-fetch-icon"
+                    :class="{
+                      'providers-model-fetch-pending': claudeModelsPending
+                    }"
+                    :size="14"
+                  />
+                  {{ claudeModelsPending ? "获取中…" : "获取上游模型" }}
+                </button>
+              </div>
             </div>
-            <!-- <div class="providers-view__section-actions">
-              <button type="button">获取模型列表</button>
-            </div> -->
+            <p v-if="draft.cli === 'claude'">
+              获取后自动保存模型列表，新建供应商随配置保存。模型可下拉选择或手动输入后回车。
+            </p>
+            <p v-else>
+              每行填写一个上游模型；仅勾选同步模型列表并启用此 Provider 时同步到
+              Codex，未勾选或留空时使用官方默认列表。
+            </p>
           </div>
 
           <div class="providers-view__form-grid">
@@ -1596,7 +1679,8 @@
                 <label
                   class="providers-model-field-label"
                   :for="`provider-create-model-${field.key}`"
-                >{{ field.label }}</label>
+                  >{{ field.label }}</label
+                >
                 <div
                   v-if="draft.cli === 'codex' && field.key === 'modelList'"
                   class="providers-model-actions"
@@ -1610,7 +1694,9 @@
                   >
                     <RefreshCw
                       class="providers-model-fetch-icon"
-                      :class="{ 'providers-model-fetch-pending': codexModelsPending }"
+                      :class="{
+                        'providers-model-fetch-pending': codexModelsPending
+                      }"
                       :size="14"
                     />
                     {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
@@ -1644,6 +1730,28 @@
                 rows="5"
                 placeholder="每行一个模型，也支持逗号分隔"
               />
+              <el-select
+                v-else-if="draft.cli === 'claude'"
+                :id="`provider-create-model-${field.key}`"
+                class="providers-model-select"
+                :model-value="modelDrafts[field.key]"
+                :aria-label="field.label"
+                placeholder="选择模型或输入后回车"
+                filterable
+                allow-create
+                default-first-option
+                clearable
+                @update:model-value="
+                  modelDrafts[field.key] = ($event || '').trim()
+                "
+              >
+                <el-option
+                  v-for="model in claudeModelOptions"
+                  :key="model"
+                  :label="model"
+                  :value="model"
+                />
+              </el-select>
               <input
                 v-else
                 :id="`provider-create-model-${field.key}`"
@@ -1820,13 +1928,34 @@
         <button
           class="providers-view__primary"
           type="button"
-          :disabled="pending || desktopBusy"
+          :disabled="pending || desktopBusy || claudeModelsPending"
           @click="submitProvider"
         >
           <Save :size="16" />
           保存
         </button>
       </footer>
+    </BaseModal>
+
+    <BaseModal
+      v-if="showClaudeModelList && draft.cli === 'claude'"
+      class="providers-model-list-modal"
+      title="上游模型列表"
+      :description="`${draft.name || '当前供应商'} · 共 ${claudeModelList.length} 个模型`"
+      @close="showClaudeModelList = false"
+    >
+      <ol v-if="claudeModelList.length" class="providers-model-list">
+        <li
+          v-for="model in claudeModelList"
+          :key="model"
+          class="providers-model-list-item"
+        >
+          {{ model }}
+        </li>
+      </ol>
+      <div v-else class="providers-model-list-empty" role="status">
+        暂无上游模型列表，请先点击“获取上游模型”。
+      </div>
     </BaseModal>
 
     <ApiKeyManagerModal
@@ -1840,8 +1969,8 @@
       @close="closeApiKeyManager"
       @save="saveApiKeyManager"
       @add="addApiKey(apiKeyManagerDraft)"
-      @remove="index => removeApiKey(index, apiKeyManagerDraft)"
-      @activate="id => activateApiKey(id, apiKeyManagerDraft)"
+      @remove="(index) => removeApiKey(index, apiKeyManagerDraft)"
+      @activate="(id) => activateApiKey(id, apiKeyManagerDraft)"
       @update-key="updateApiKeyManagerItem"
       @refresh="refreshApiKeyUsage"
     />
@@ -2865,6 +2994,8 @@ import {
   watch
 } from "vue"
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
+import { ElOption, ElSelect } from "element-plus"
+import "element-plus/es/components/select/style/css"
 import {
   ArrowLeft,
   Ban,
@@ -3062,6 +3193,71 @@ const modelDrafts = reactive({
   opusModel: ""
 })
 
+const claudeModelsPending = ref(false)
+const showClaudeModelList = ref(false)
+let claudeModelsRequest = 0
+// 查看弹框只展示获取到的列表，手动填写的映射仍保留在下拉选项中。
+const claudeModelList = computed(() => [
+  ...new Set(
+    String(modelDrafts.modelList || "")
+      .split(/[\n,，]+/)
+      .map((model) => model.trim())
+      .filter(Boolean)
+  )
+])
+// 保留已填写的自定义模型，未获取列表时也能继续编辑现有配置。
+const claudeModelOptions = computed(() => [
+  ...new Set(
+    [
+      ...claudeModelList.value,
+      modelDrafts.mainModel,
+      modelDrafts.haikuModel,
+      modelDrafts.sonnetModel,
+      modelDrafts.opusModel
+    ]
+      .map((model) => model.trim())
+      .filter(Boolean)
+  )
+])
+
+async function fetchClaudeModels() {
+  const requestId = ++claudeModelsRequest
+  const providerId = draft.id
+  const keyId = draft.activeApiKeyId
+  const payload = {
+    providerId: providerId || undefined,
+    baseUrl: draft.baseUrl,
+    proxy: draft.proxy,
+    authField: draft.authField,
+    keyId: activeDraftApiKey.value?.masked ? keyId : undefined,
+    apiKey: activeDraftApiKey.value?.apiKey || draft.apiKey
+  }
+  claudeModelsPending.value = true
+  try {
+    const catalog = await providerApi.fetchClaudeModels(payload)
+    // 切换供应商或修改请求配置后，迟到的结果不能覆盖当前编辑内容。
+    if (
+      requestId !== claudeModelsRequest ||
+      draft.cli !== "claude" ||
+      draft.id !== providerId ||
+      draft.baseUrl !== payload.baseUrl ||
+      draft.proxy !== payload.proxy ||
+      draft.authField !== payload.authField ||
+      draft.activeApiKeyId !== keyId ||
+      (activeDraftApiKey.value?.apiKey || draft.apiKey) !== payload.apiKey
+    )
+      return
+    modelDrafts.modelList = catalog.models.join("\n")
+    createMessage.success(
+      `已获取 ${catalog.models.length} 个模型，${providerId ? "列表已保存" : "保存供应商后保留列表"}。`
+    )
+  } catch (error) {
+    if (requestId === claudeModelsRequest) createMessage.error(String(error))
+  } finally {
+    if (requestId === claudeModelsRequest) claudeModelsPending.value = false
+  }
+}
+
 const codexModelsPending = ref(false)
 const codexModelCatalog = ref(null)
 const codexSessionUrl = "https://chatgpt.com/api/auth/session"
@@ -3079,9 +3275,9 @@ async function fetchCodexModels() {
     })
     if (draft.id !== providerId) return
     codexModelCatalog.value = catalog
-    modelDrafts.modelList = catalog.models.map(model => model.slug).join("\n")
+    modelDrafts.modelList = catalog.models.map((model) => model.slug).join("\n")
     modelDrafts.mainModel =
-      catalog.models.find(model => model.visibility !== "hide")?.slug ||
+      catalog.models.find((model) => model.visibility !== "hide")?.slug ||
       catalog.models[0].slug
     createMessage.success(
       `已获取 ${catalog.models.length} 个模型；勾选同步模型列表并保存后，启用此 Provider 时生效。`
@@ -3104,10 +3300,10 @@ function resetCodexDraftModels() {
 function getCodexDraftModels() {
   const models = String(modelDrafts.modelList || "")
     .split(/[\n,;]+/)
-    .map(item => item.trim())
+    .map((item) => item.trim())
     .filter(Boolean)
   const seenModels = new Set()
-  const uniqueModels = models.filter(model => {
+  const uniqueModels = models.filter((model) => {
     const key = model.toLowerCase()
     if (seenModels.has(key)) {
       return false
@@ -3125,7 +3321,7 @@ function getCodexDraftCatalog() {
   return {
     models: models.map((model, index) => {
       const metadata = codexModelCatalog.value?.models.find(
-        item => item.slug === model
+        (item) => item.slug === model
       )
       const contextWindow = metadata?.context_window || template.context_window
       return {
@@ -3157,8 +3353,9 @@ const showGoogleAccountModal = ref(false)
 const googleProviderId = ref("")
 const googleProvider = computed(
   () =>
-    props.providers.find(provider => provider.id === googleProviderId.value) ||
-    null
+    props.providers.find(
+      (provider) => provider.id === googleProviderId.value
+    ) || null
 )
 const showProviderCreateModal = ref(false)
 const showApiKeyManager = ref(false)
@@ -3222,14 +3419,14 @@ const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
   import: "default"
 })
 const iconOptions = Object.keys(iconModules)
-  .map(item => item.split("/").pop())
+  .map((item) => item.split("/").pop())
   .sort((left, right) => left.localeCompare(right))
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
   // 统一使用应用安装检测结果，只有已安装且支持配置的应用才显示入口。
   return props.cliTargets.filter(
-    item =>
+    (item) =>
       item.installed === true &&
       (item.id === "claude-desktop" ||
         props.runtimeConfigSchemas[item.id]?.enabled)
@@ -3253,7 +3450,7 @@ const activeRuntimeSchema = computed(() => {
   return {
     ...schema,
     configFiles: schema.configFiles.filter(
-      file => file.name !== ".monkey_thief_model_catalog.json"
+      (file) => file.name !== ".monkey_thief_model_catalog.json"
     )
   }
 })
@@ -3292,32 +3489,32 @@ function normalizeModelReasoningEffort(model, effort) {
 
 const activeCliName = computed(() => {
   return (
-    visibleCliTargets.value.find(item => item.id === activeCli.value)?.name ||
+    visibleCliTargets.value.find((item) => item.id === activeCli.value)?.name ||
     activeCli.value ||
     "Runtime"
   )
 })
 
 const activeDraftApiKey = computed(() => {
-  return draft.apiKeys.find(item => item.id === draft.activeApiKeyId) || null
+  return draft.apiKeys.find((item) => item.id === draft.activeApiKeyId) || null
 })
 
 const scopedProviders = computed(() => {
-  return props.providers.filter(item => item.cli === activeCli.value)
+  return props.providers.filter((item) => item.cli === activeCli.value)
 })
 
 // 分组额度直接使用 Google 返回的窗口，复用列表已有的卡片、颜色和倒计时。
 const googleQuotaGroupsMap = computed(() =>
   Object.fromEntries(
     scopedProviders.value
-      .filter(provider => provider.type === "google-account")
-      .map(provider => [
+      .filter((provider) => provider.type === "google-account")
+      .map((provider) => [
         provider.id,
         (provider.google?.quotaGroups || [])
-          .map(group => ({
+          .map((group) => ({
             name: group.displayName || "共享额度",
             windows: (group.buckets || [])
-              .map(bucket => {
+              .map((bucket) => {
                 const window = String(bucket.window || "")
                   .replace(/^WINDOW_/i, "")
                   .toLowerCase()
@@ -3346,7 +3543,7 @@ const googleQuotaGroupsMap = computed(() =>
               })
               .sort((left, right) => left.order - right.order)
           }))
-          .filter(group => group.windows.length)
+          .filter((group) => group.windows.length)
       ])
   )
 )
@@ -3354,11 +3551,11 @@ const googleQuotaGroupsMap = computed(() =>
 // 统计当前 CLI 下可按需展示的禁用项。
 const disabledItemCount = computed(() => {
   const disabledProviderCount = scopedProviders.value.filter(
-    provider => provider.enabled === false
+    (provider) => provider.enabled === false
   ).length
   const disabledAccountCount =
     activeCli.value === "codex"
-      ? props.codexAccounts.filter(account => account.disabled).length
+      ? props.codexAccounts.filter((account) => account.disabled).length
       : 0
 
   return disabledProviderCount + disabledAccountCount
@@ -3366,8 +3563,8 @@ const disabledItemCount = computed(() => {
 
 const mixedItems = computed(() => {
   const providerItems = scopedProviders.value
-    .filter(provider => showDisabledItems.value || provider.enabled !== false)
-    .map(provider => ({
+    .filter((provider) => showDisabledItems.value || provider.enabled !== false)
+    .map((provider) => ({
       type: "provider",
       provider,
       key: `provider:${provider.id}`,
@@ -3390,8 +3587,8 @@ const mixedItems = computed(() => {
   const accountItems =
     activeCli.value === "codex"
       ? props.codexAccounts
-          .filter(account => showDisabledItems.value || !account.disabled)
-          .map(account => ({
+          .filter((account) => showDisabledItems.value || !account.disabled)
+          .map((account) => ({
             type: "account",
             account,
             key: `account:${account.id}`,
@@ -3416,7 +3613,9 @@ const mixedItems = computed(() => {
 })
 
 const profileMap = computed(() => {
-  return Object.fromEntries(props.runtimeProfiles.map(item => [item.cli, item]))
+  return Object.fromEntries(
+    props.runtimeProfiles.map((item) => [item.cli, item])
+  )
 })
 
 const runtimeState = computed(() => {
@@ -3464,7 +3663,7 @@ const runtimeConfigDescription = computed(() => {
 const filteredIconOptions = computed(() => {
   const keyword = iconKeyword.value.toLowerCase()
 
-  return iconOptions.filter(item =>
+  return iconOptions.filter((item) =>
     iconLabel(item).toLowerCase().includes(keyword)
   )
 })
@@ -3475,7 +3674,7 @@ const codexLoginTitle = computed(() => {
 
 const configPreviewMap = computed(() => {
   return Object.fromEntries(
-    activeRuntimeSchema.value.configFiles.map(file => [
+    activeRuntimeSchema.value.configFiles.map((file) => [
       file.name,
       formatConfigPreview(file, applyConfigTemplate(file.template))
     ])
@@ -3495,13 +3694,13 @@ const emptyUsageSummary = {
 // 额度阶段按重置时间持久化，当前阶段和历史阶段分别展示。
 const codexCurrentQuotaStages = computed(() => {
   return (codexAccountDetail.value?.quotaStages || []).filter(
-    stage => stage.active
+    (stage) => stage.active
   )
 })
 
 const codexQuotaStageHistory = computed(() => {
   return (codexAccountDetail.value?.quotaStages || [])
-    .filter(stage => !stage.active)
+    .filter((stage) => !stage.active)
     .slice(0, 12)
 })
 
@@ -3529,7 +3728,7 @@ const codexAccountUsageLogs = computed(() => {
     return []
   }
 
-  return (usageStats.value.logs || []).filter(item =>
+  return (usageStats.value.logs || []).filter((item) =>
     codexAccountUsageProviderIds.value.includes(item.providerId)
   )
 })
@@ -3540,7 +3739,7 @@ const codexAccountUsageSummary = computed(() => {
   }
 
   return mergeUsageSummaries(
-    (usageStats.value.providerStats || []).filter(item =>
+    (usageStats.value.providerStats || []).filter((item) =>
       codexAccountUsageProviderIds.value.includes(item.providerId)
     )
   )
@@ -3552,7 +3751,7 @@ const codexAccountUsageTodaySummary = computed(() => {
   }
 
   return mergeUsageLogSummaries(
-    codexAccountUsageLogs.value.filter(item => isTodayUsageLog(item))
+    codexAccountUsageLogs.value.filter((item) => isTodayUsageLog(item))
   )
 })
 
@@ -3562,13 +3761,13 @@ const codexAccountUsageTodayModelStats = computed(() => {
   }
 
   return mergeUsageLogModelStats(
-    codexAccountUsageLogs.value.filter(item => isTodayUsageLog(item))
+    codexAccountUsageLogs.value.filter((item) => isTodayUsageLog(item))
   )
 })
 
 const codexAccountUsageModelStats = computed(() => {
   return mergeUsageModelStats(
-    (usageStats.value.modelStats || []).filter(item => {
+    (usageStats.value.modelStats || []).filter((item) => {
       return (
         usageStatsTarget.value === codexAccountUsageTarget.value ||
         codexAccountUsageProviderIds.value.includes(item.providerId)
@@ -3601,7 +3800,7 @@ const providerUsageLogs = computed(() => {
     return []
   }
 
-  return (usageStats.value.logs || []).filter(item => {
+  return (usageStats.value.logs || []).filter((item) => {
     return (
       item.providerId === providerUsageProviderId.value &&
       (providerUsageAppType.value === "all" ||
@@ -3616,7 +3815,7 @@ const providerUsageSummary = computed(() => {
   }
 
   return mergeUsageSummaries(
-    (usageStats.value.modelStats || []).filter(item => {
+    (usageStats.value.modelStats || []).filter((item) => {
       return (
         item.providerId === providerUsageProviderId.value &&
         (providerUsageAppType.value === "all" ||
@@ -3632,7 +3831,7 @@ const providerUsageTodaySummary = computed(() => {
   }
 
   return mergeUsageLogSummaries(
-    providerUsageLogs.value.filter(item => isTodayUsageLog(item))
+    providerUsageLogs.value.filter((item) => isTodayUsageLog(item))
   )
 })
 
@@ -3642,13 +3841,13 @@ const providerUsageTodayModelStats = computed(() => {
   }
 
   return mergeUsageLogModelStats(
-    providerUsageLogs.value.filter(item => isTodayUsageLog(item))
+    providerUsageLogs.value.filter((item) => isTodayUsageLog(item))
   )
 })
 
 const providerUsageModelStats = computed(() => {
   return mergeUsageModelStats(
-    (usageStats.value.modelStats || []).filter(item => {
+    (usageStats.value.modelStats || []).filter((item) => {
       return (
         usageStatsTarget.value === providerUsageTarget.value ||
         (item.providerId === providerUsageProviderId.value &&
@@ -3666,9 +3865,9 @@ onMounted(() => {
   }, 1000)
 
   if (activeCli.value === "codex") {
-    const hasCodexAccounts = props.codexAccounts.some(a => !a.disabled)
+    const hasCodexAccounts = props.codexAccounts.some((a) => !a.disabled)
     const hasGoogleAccounts = props.providers.some(
-      p =>
+      (p) =>
         p.type === "google-account" &&
         p.enabled !== false &&
         (p.cli === "codex" || !p.cli)
@@ -3747,7 +3946,7 @@ function applyConfigTemplate(template) {
 }
 
 function ensureActiveCli() {
-  if (visibleCliTargets.value.find(item => item.id === activeCli.value)) {
+  if (visibleCliTargets.value.find((item) => item.id === activeCli.value)) {
     return
   }
 
@@ -3805,7 +4004,7 @@ async function refreshGoogleAccount(provider, options = {}) {
 }
 
 function refreshGoogleAccounts() {
-  props.providers.forEach(provider => {
+  props.providers.forEach((provider) => {
     if (provider.type !== "google-account" || provider.enabled === false) {
       return
     }
@@ -3835,6 +4034,9 @@ function editProvider(provider) {
   }
   closeCodexAccountDetail()
   closeProviderDetail()
+  claudeModelsRequest += 1
+  claudeModelsPending.value = false
+  showClaudeModelList.value = false
   draft.id = provider.id
   draft.cli = provider.cli || activeCli.value
   draft.icon = provider.icon || ""
@@ -3848,7 +4050,7 @@ function editProvider(provider) {
   draft.apiKeys = normalizeApiKeyDrafts(provider)
   draft.activeApiKeyId = provider.activeApiKeyId || draft.apiKeys[0]?.id || ""
   const activeApiKey = draft.apiKeys.find(
-    item => item.id === draft.activeApiKeyId
+    (item) => item.id === draft.activeApiKeyId
   )
   if (activeApiKey && provider.apiKey) {
     activeApiKey.apiKey = provider.apiKey
@@ -3860,7 +4062,8 @@ function editProvider(provider) {
   codexModelCatalog.value = provider.runtimeConfig?.modelCatalog || null
   modelDrafts.modelList = Array.isArray(provider.runtimeConfig?.modelList)
     ? provider.runtimeConfig.modelList.join("\n")
-    : provider.runtimeConfig?.modelList || modelDrafts.mainModel
+    : provider.runtimeConfig?.modelList ||
+      (draft.cli === "codex" ? modelDrafts.mainModel : "")
   modelDrafts.haikuModel = provider.runtimeConfig?.haikuModel || ""
   modelDrafts.sonnetModel = provider.runtimeConfig?.sonnetModel || ""
   modelDrafts.opusModel = provider.runtimeConfig?.opusModel || ""
@@ -3901,6 +4104,9 @@ function startProviderCreate() {
 
 function closeProviderCreateModal() {
   if (desktopBusy.value && draft.cli === "claude-desktop") return
+  claudeModelsRequest += 1
+  claudeModelsPending.value = false
+  showClaudeModelList.value = false
   showProviderCreateModal.value = false
   showIconPicker.value = false
   iconKeyword.value = ""
@@ -4054,7 +4260,7 @@ function closeProviderDetail() {
   providerDetailTab.value = "config"
 }
 
-watch(showApiKeyManager, visible => {
+watch(showApiKeyManager, (visible) => {
   window.clearInterval(apiKeyUsageTimer)
   apiKeyUsageRequest += 1
   apiKeyUsage.value = {}
@@ -4089,7 +4295,7 @@ async function refreshApiKeyUsage() {
 }
 
 function updateApiKeyManagerItem(id, patch) {
-  const item = apiKeyManagerDraft.apiKeys.find(key => key.id === id)
+  const item = apiKeyManagerDraft.apiKeys.find((key) => key.id === id)
   if (item) Object.assign(item, patch)
 }
 
@@ -4104,7 +4310,7 @@ function openApiKeyManager(provider) {
     provider.activeApiKeyId || apiKeyManagerDraft.apiKeys[0]?.id || ""
 
   const activeApiKey = apiKeyManagerDraft.apiKeys.find(
-    item => item.id === apiKeyManagerDraft.activeApiKeyId
+    (item) => item.id === apiKeyManagerDraft.activeApiKeyId
   )
   if (activeApiKey && provider.apiKey) {
     activeApiKey.apiKey = provider.apiKey
@@ -4128,7 +4334,7 @@ function closeApiKeyManager() {
 }
 
 async function saveApiKeyManager() {
-  if (apiKeyManagerDraft.apiKeys.some(item => !item.apiKey && !item.masked)) {
+  if (apiKeyManagerDraft.apiKeys.some((item) => !item.apiKey && !item.masked)) {
     createMessage.error("请填写新增的 API Key，或删除空白项。")
     return
   }
@@ -4140,7 +4346,7 @@ async function saveApiKeyManager() {
     }
     const result = await desktopPanelRef.value.saveProvider({
       id: apiKeyManagerDraft.providerId,
-      apiKeys: apiKeyManagerDraft.apiKeys.map(item => ({
+      apiKeys: apiKeyManagerDraft.apiKeys.map((item) => ({
         id: item.id,
         name: item.name,
         note: item.note,
@@ -4157,7 +4363,7 @@ async function saveApiKeyManager() {
     {
       ...apiKeyManagerProvider.value,
       id: apiKeyManagerDraft.providerId,
-      apiKeys: apiKeyManagerDraft.apiKeys.map(item => ({
+      apiKeys: apiKeyManagerDraft.apiKeys.map((item) => ({
         id: item.id,
         name: item.name,
         note: item.note,
@@ -4222,7 +4428,7 @@ function rateLimitWindows(rateLimit) {
   return [
     { key: "primary", window: rateLimit.primary_window },
     { key: "secondary", window: rateLimit.secondary_window }
-  ].filter(item => item.window)
+  ].filter((item) => item.window)
 }
 
 function formatPlanName(value) {
@@ -4377,7 +4583,7 @@ function mergeUsageLogSummaries(items) {
 
 function mergeUsageLogModelStats(items) {
   return mergeUsageModelStats(
-    items.map(item => ({
+    items.map((item) => ({
       appType: item.appType,
       model: item.model || "未识别模型",
       requestCount: 1,
@@ -4474,7 +4680,7 @@ function isCodexAccountRefreshing(account) {
 }
 
 function refreshCodexAccounts() {
-  props.codexAccounts.forEach(account => {
+  props.codexAccounts.forEach((account) => {
     if (account.disabled) {
       return
     }
@@ -4559,7 +4765,7 @@ function addApiKey(target = draft) {
 
 function activateApiKey(id, target = draft) {
   target.activeApiKeyId = id
-  target.apiKey = target.apiKeys.find(item => item.id === id)?.apiKey || ""
+  target.apiKey = target.apiKeys.find((item) => item.id === id)?.apiKey || ""
 }
 
 function removeApiKey(index, target = draft) {
@@ -4578,6 +4784,9 @@ function removeApiKey(index, target = draft) {
 }
 
 function clearDraft() {
+  claudeModelsRequest += 1
+  claudeModelsPending.value = false
+  showClaudeModelList.value = false
   draft.id = ""
   draft.cli = activeCli.value
   draft.icon = ""
@@ -4615,7 +4824,8 @@ function clearDraft() {
 
 function firstModelName(providerId) {
   return (
-    props.runtimeModels.find(item => item.providerId === providerId)?.name || ""
+    props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
+    ""
   )
 }
 
@@ -4671,6 +4881,7 @@ function uploadCustomIcon(event) {
 }
 
 async function submitProvider() {
+  if (claudeModelsPending.value) return
   const payload = {
     id: draft.id || undefined,
     cli: draft.cli,
@@ -4682,7 +4893,7 @@ async function submitProvider() {
     baseUrl: draft.baseUrl,
     proxy: draft.proxy,
     authField: draft.authField,
-    apiKeys: draft.apiKeys.map(item => ({
+    apiKeys: draft.apiKeys.map((item) => ({
       id: item.id,
       name: item.name,
       note: item.note,
@@ -4717,7 +4928,7 @@ async function submitProvider() {
   if (draft.cli === "claude-desktop") {
     if (
       !draft.apiKeys.length ||
-      draft.apiKeys.some(item => !item.apiKey && !item.masked)
+      draft.apiKeys.some((item) => !item.apiKey && !item.masked)
     ) {
       createMessage.error("至少保留一个 API Key，并填写新增的 Key。")
       return
@@ -4915,7 +5126,7 @@ function openDesktopProviderEditor(provider, defaultRoutes) {
     mode: provider.mode || "direct",
     apiFormat: provider.apiFormat || "anthropic",
     headersText: JSON.stringify(provider.headers || {}, null, 2),
-    routes: defaultRoutes.map(route => {
+    routes: defaultRoutes.map((route) => {
       const entry = Object.entries(provider.routes || {}).find(([name]) =>
         provider.mode === "proxy"
           ? name === route.id
@@ -4954,7 +5165,7 @@ async function openDesktopRuntimeConfig(status) {
     Object.assign(desktopConfigStatus, status)
     desktopConfigFiles.value = result.files
     selectDesktopConfigFile(
-      result.files.find(file => file.path === runtimeConfigPath.value) ||
+      result.files.find((file) => file.path === runtimeConfigPath.value) ||
         result.files[0]
     )
     showRuntimeConfig.value = true
@@ -5062,7 +5273,7 @@ watch(
       deleteConfirmation.value.kind === "account"
         ? props.codexAccounts
         : props.providers
-    const exists = items.some(item => item.id === deleteConfirmation.value.id)
+    const exists = items.some((item) => item.id === deleteConfirmation.value.id)
     deleteSubmitted.value = false
     if (exists) {
       deleteError.value = "删除未完成，请根据错误提示处理后重试。"
@@ -5085,9 +5296,9 @@ watch(
   () => [props.codexAccounts, props.providers],
   () => {
     if (activeCli.value === "codex" && !initialCodexRefreshDone.value) {
-      const hasCodexAccounts = props.codexAccounts.some(a => !a.disabled)
+      const hasCodexAccounts = props.codexAccounts.some((a) => !a.disabled)
       const hasGoogleAccounts = props.providers.some(
-        p =>
+        (p) =>
           p.type === "google-account" &&
           p.enabled !== false &&
           (p.cli === "codex" || !p.cli)
@@ -5103,7 +5314,7 @@ watch(
 
 watch(
   () => props.usage,
-  usage => {
+  (usage) => {
     if (!usageStatsLoading.value) {
       usageStats.value = usage || {}
       usageStatsTarget.value = ""
@@ -5126,13 +5337,13 @@ watch(
   }
 )
 
-watch(codexAccountDetailTab, tab => {
+watch(codexAccountDetailTab, (tab) => {
   if (tab === "usage") {
     ensureUsageStatsReady()
   }
 })
 
-watch(providerDetailTab, tab => {
+watch(providerDetailTab, (tab) => {
   if (tab === "usage") {
     ensureUsageStatsReady()
   }
@@ -5140,8 +5351,8 @@ watch(providerDetailTab, tab => {
 
 watch(
   () => props.codexAccounts,
-  accounts => {
-    accounts.forEach(account => {
+  (accounts) => {
+    accounts.forEach((account) => {
       codexAccountProxyDrafts[account.id] = account.proxy || ""
     })
   },
@@ -5157,7 +5368,7 @@ watch(
 
 watch(
   () => activeProxyState.value?.enabled,
-  enabled => {
+  (enabled) => {
     proxySwitchEnabled.value = Boolean(enabled)
     proxyTab.value = enabled ? "proxy" : "providers"
   },
@@ -5166,7 +5377,7 @@ watch(
 
 watch(
   () => props.pending,
-  pending => {
+  (pending) => {
     if (!pending) {
       proxySwitchEnabled.value = activeProxyEnabled.value
     }
@@ -5175,10 +5386,10 @@ watch(
 
 watch(
   () => props.codexAccounts,
-  accounts => {
+  (accounts) => {
     if (codexAuthUpdateAccountId.value) {
       const account = accounts.find(
-        item => item.id === codexAuthUpdateAccountId.value
+        (item) => item.id === codexAuthUpdateAccountId.value
       )
 
       if (account && account.refresh_status !== "failed") {
@@ -5189,7 +5400,7 @@ watch(
 
     if (
       codexAccountDetail.value &&
-      !accounts.find(item => item.id === codexAccountDetail.value.id)
+      !accounts.find((item) => item.id === codexAccountDetail.value.id)
     ) {
       closeCodexAccountDetail()
     }
@@ -5199,11 +5410,11 @@ watch(
 
 watch(
   () => props.providers,
-  providers => {
+  (providers) => {
     if (
       providerDetail.value &&
       providerDetail.value.cli !== "claude-desktop" &&
-      !providers.find(item => item.id === providerDetail.value.id)
+      !providers.find((item) => item.id === providerDetail.value.id)
     ) {
       closeProviderDetail()
     }
@@ -7600,8 +7811,80 @@ watch(
     line-height: 1.6;
   }
 
+  .providers-model-list-modal {
+    z-index: 45;
+
+    :deep(.base-modal__panel) {
+      width: 560px;
+      max-width: 100%;
+    }
+
+    :deep(.base-modal__header) {
+      align-items: center;
+      padding: 16px 20px;
+    }
+
+    :deep(.base-modal__content) {
+      padding: 0 20px 20px;
+    }
+
+    .providers-model-list {
+      min-height: 0;
+      max-height: min(420px, 55vh);
+      margin: 0;
+      padding: 0;
+      overflow-y: auto;
+      list-style: decimal inside;
+
+      .providers-model-list-item {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--color-line);
+        color: var(--color-text);
+        font-size: var(--font-size-base);
+        line-height: 1.6;
+        overflow-wrap: anywhere;
+
+        &:last-child {
+          border-bottom: 0;
+        }
+      }
+    }
+
+    .providers-model-list-empty {
+      padding: 24px 12px;
+      color: var(--color-text-muted);
+      font-size: var(--font-size-base);
+      text-align: center;
+    }
+  }
+
   .providers-view__models {
-    .providers-model-field-header {
+    .providers-view__section-title {
+      display: block;
+
+      .providers-model-heading {
+        margin-bottom: 8px;
+
+        .providers-model-title {
+          margin: 0;
+        }
+      }
+    }
+
+    .providers-view__field {
+      .providers-model-select {
+        width: 100%;
+
+        :deep(.el-select__wrapper) {
+          min-height: 38px;
+          border-radius: 8px;
+          background: var(--color-panel);
+        }
+      }
+    }
+
+    .providers-model-field-header,
+    .providers-model-heading {
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -7635,7 +7918,9 @@ watch(
           font-size: var(--font-size-sm);
           white-space: nowrap;
           cursor: pointer;
-          transition: background-color 0.15s ease, border-color 0.15s ease;
+          transition:
+            background-color 0.15s ease,
+            border-color 0.15s ease;
 
           &:hover:not(:disabled) {
             border-color: var(--color-line-strong);
@@ -7685,7 +7970,9 @@ watch(
           font-size: var(--font-size-sm);
           white-space: nowrap;
           cursor: pointer;
-          transition: background-color 0.15s ease, border-color 0.15s ease;
+          transition:
+            background-color 0.15s ease,
+            border-color 0.15s ease;
 
           &:has(:checked) {
             border-color: var(--color-info-line);

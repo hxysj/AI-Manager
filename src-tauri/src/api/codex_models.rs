@@ -124,6 +124,7 @@ pub(crate) fn models_url(base_url: &str) -> Result<url::Url, ManagerError> {
             .strip_suffix("/responses/compact")
             .or_else(|| path.strip_suffix("/responses"))
             .or_else(|| path.strip_suffix("/chat/completions"))
+            .or_else(|| path.strip_suffix("/messages"))
             .unwrap_or(path);
         url.set_path(&format!(
             "{}/models",
@@ -180,6 +181,10 @@ mod tests {
             ("https://example.com", "https://example.com/v1/models"),
             (
                 "https://example.com/v1/responses",
+                "https://example.com/v1/models",
+            ),
+            (
+                "https://example.com/v1/messages",
                 "https://example.com/v1/models",
             ),
             (

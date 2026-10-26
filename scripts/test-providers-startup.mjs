@@ -35,7 +35,15 @@ const api = new Proxy(
   {},
   { get: () => () => assert.fail("首屏测试不应发起外部请求") }
 )
-const providerApi = api
+const modelFetchCalls = []
+const modelFetchErrors = []
+let fetchClaudeModelsResult = () => assert.fail("未配置模型获取结果")
+const providerApi = {
+  fetchClaudeModels: payload => {
+    modelFetchCalls.push(payload)
+    return fetchClaudeModelsResult(payload)
+  }
+}
 const openedUrls = []
 const copiedUrls = []
 Object.defineProperty(globalThis, "navigator", {
@@ -43,6 +51,7 @@ Object.defineProperty(globalThis, "navigator", {
   value: { clipboard: { writeText: async value => copiedUrls.push(value) } }
 })
 const localRequire = name => {
+  if (name.endsWith("/style/css")) return {}
   if (name === "@/components/BaseModal.vue") {
     return {
       default: {
@@ -72,7 +81,7 @@ const localRequire = name => {
     return { claudeDesktopApi: api, providerApi }
   if (name === "@/utils/message")
     return {
-      createMessage: { success() {}, error: error => assert.fail(error) }
+      createMessage: { success() {}, error: error => modelFetchErrors.push(error) }
     }
   if (name === "@/utils/typography") return { getFontSize: () => 14 }
   if (name === "@/utils/formatters")
@@ -255,6 +264,137 @@ await authBindings.copyAuthUrl(authBindings.codexSessionUrl)
 assert.deepEqual(openedUrls, ["https://chatgpt.com/api/auth/session"])
 assert.deepEqual(copiedUrls, ["https://chatgpt.com/api/auth/session"])
 assert.deepEqual(failures, [])
+assert.deepEqual(modelFetchErrors, [])
+
+// 使用真实组件进行离线渲染，验证 Claude 列表、手输模型和供应商隔离。
+const claudeProvider = {
+  id: "claude-provider",
+  cli: "claude",
+  name: "Claude Provider",
+  type: "anthropic",
+  baseUrl: "https://example.com",
+  authField: "ANTHROPIC_API_KEY",
+  activeApiKeyId: "saved-key",
+  apiKeys: [{ id: "saved-key", name: "已保存的 Key", masked: "sk-***" }],
+  runtimeConfig: {
+    modelList: ["saved-model"],
+    mainModel: "custom-main",
+    haikuModel: "custom-haiku",
+    sonnetModel: "custom-sonnet",
+    opusModel: "custom-opus"
+  }
+}
+const otherClaudeProvider = {
+  ...claudeProvider,
+  id: "other-claude-provider",
+  name: "Other Claude Provider",
+  runtimeConfig: { modelList: ["other-model"], mainModel: "other-model" }
+}
+let claudeBindings
+const ClaudeEditor = {
+  ...Providers,
+  setup(props, context) {
+    claudeBindings = Providers.setup(props, context)
+    claudeBindings.editProvider(claudeProvider)
+    return claudeBindings
+  }
+}
+const claudeSaves = []
+const claudeApp = createSSRApp(ClaudeEditor, {
+  ...props,
+  cliTargets: [{ id: "claude", name: "Claude", installed: true }],
+  runtimeConfigSchemas: {
+    claude: {
+      ...schema,
+      defaultProviderType: "anthropic",
+      authFields: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
+      modelFields: [
+        { key: "mainModel", label: "主模型" },
+        { key: "haikuModel", label: "Haiku 默认模型" },
+        { key: "sonnetModel", label: "Sonnet 默认模型" },
+        { key: "opusModel", label: "Opus 默认模型" }
+      ]
+    }
+  },
+  providers: [claudeProvider, otherClaudeProvider],
+  onSaveProvider: payload => claudeSaves.push(payload)
+})
+claudeApp.component("ElInput", { render: () => null })
+const { ID_INJECTION_KEY, ZINDEX_INJECTION_KEY } = require("element-plus")
+claudeApp.provide(ID_INJECTION_KEY, { prefix: 1, current: 0 })
+claudeApp.provide(ZINDEX_INJECTION_KEY, { current: 0 })
+claudeApp.config.errorHandler = error => failures.push(error)
+const claudeHtml = await renderToString(claudeApp)
+assert.deepEqual(failures, [])
+assert.ok(claudeHtml.includes("获取上游模型"))
+assert.equal((claudeHtml.match(/class="[^"]*providers-model-select/g) || []).length, 4)
+assert.ok(!claudeHtml.includes("同步到 Codex"))
+assert.ok(!claudeHtml.includes("同步模型列表"))
+assert.deepEqual(claudeBindings.claudeModelOptions.value, [
+  "saved-model", "custom-main", "custom-haiku", "custom-sonnet", "custom-opus"
+])
+fetchClaudeModelsResult = async () => ({ models: ["claude-a", "claude-b"] })
+await claudeBindings.fetchClaudeModels()
+assert.equal(modelFetchCalls.at(-1).providerId, claudeProvider.id)
+assert.equal(modelFetchCalls.at(-1).keyId, "saved-key")
+assert.equal(modelFetchCalls.at(-1).authField, "ANTHROPIC_API_KEY")
+assert.equal(modelFetchCalls.at(-1).apiKey, "")
+assert.equal(claudeBindings.modelDrafts.modelList, "claude-a\nclaude-b")
+assert.equal(claudeBindings.modelDrafts.mainModel, "custom-main")
+assert.equal(claudeBindings.modelDrafts.haikuModel, "custom-haiku")
+assert.equal(claudeBindings.modelDrafts.sonnetModel, "custom-sonnet")
+assert.equal(claudeBindings.modelDrafts.opusModel, "custom-opus")
+claudeBindings.modelDrafts.mainModel = "manually-entered-model"
+await claudeBindings.submitProvider()
+assert.equal(claudeSaves.at(-1).runtimeConfig.mainModel, "manually-entered-model")
+assert.equal(claudeSaves.at(-1).runtimeConfig.modelList, "claude-a\nclaude-b")
+claudeBindings.editProvider({
+  ...claudeProvider,
+  runtimeConfig: { ...claudeSaves.at(-1).runtimeConfig, modelList: ["claude-a", "claude-b"] }
+})
+assert.ok(claudeBindings.claudeModelOptions.value.includes("claude-b"))
+assert.equal(claudeBindings.modelDrafts.mainModel, "manually-entered-model")
+claudeBindings.editProvider(otherClaudeProvider)
+assert.deepEqual(claudeBindings.claudeModelOptions.value, ["other-model"])
+
+let finishModelFetch
+fetchClaudeModelsResult = () => new Promise(resolve => { finishModelFetch = resolve })
+claudeBindings.editProvider(claudeProvider)
+const pendingModelFetch = claudeBindings.fetchClaudeModels()
+assert.equal(claudeBindings.claudeModelsPending.value, true)
+const savesBeforePending = claudeSaves.length
+await claudeBindings.submitProvider()
+assert.equal(claudeSaves.length, savesBeforePending)
+claudeBindings.editProvider(otherClaudeProvider)
+finishModelFetch({ models: ["late-model"] })
+await pendingModelFetch
+assert.equal(claudeBindings.claudeModelsPending.value, false)
+assert.deepEqual(claudeBindings.claudeModelOptions.value, ["other-model"])
+
+fetchClaudeModelsResult = async () => { throw new Error("模拟上游获取失败") }
+await claudeBindings.fetchClaudeModels()
+assert.equal(claudeBindings.modelDrafts.modelList, "other-model")
+assert.deepEqual(modelFetchErrors, ["Error: 模拟上游获取失败"])
+claudeBindings.clearDraft()
+assert.deepEqual(claudeBindings.claudeModelOptions.value, [])
+claudeBindings.modelDrafts.mainModel = "manual-model-without-list"
+await claudeBindings.submitProvider()
+assert.equal(claudeSaves.at(-1).runtimeConfig.mainModel, "manual-model-without-list")
+assert.equal(claudeSaves.at(-1).runtimeConfig.modelList, "")
+claudeBindings.clearDraft()
+fetchClaudeModelsResult = async () => ({ models: ["new-provider-model"] })
+await claudeBindings.fetchClaudeModels()
+assert.equal(modelFetchCalls.at(-1).providerId, undefined)
+assert.equal(claudeBindings.modelDrafts.mainModel, "")
+claudeBindings.modelDrafts.mainModel = "custom-without-upstream"
+claudeBindings.modelDrafts.sonnetModel = "new-provider-model"
+await claudeBindings.submitProvider()
+assert.equal(claudeSaves.at(-1).id, undefined)
+assert.equal(claudeSaves.at(-1).runtimeConfig.modelList, "new-provider-model")
+assert.equal(claudeSaves.at(-1).runtimeConfig.mainModel, "custom-without-upstream")
+assert.equal(claudeSaves.at(-1).runtimeConfig.sonnetModel, "new-provider-model")
+assert.deepEqual(claudeProvider.runtimeConfig.modelList, ["saved-model"])
+assert.deepEqual(failures, [])
 console.log(
-  "Providers 安装状态筛选、空状态、首屏、同步选项默认关闭与保存隔离、认证链接打开及复制回归通过"
+  "Providers 安装状态、Codex 同步、Claude 模型列表与手动输入、保存隔离、请求竞态及获取失败回归通过"
 )
