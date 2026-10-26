@@ -1,7 +1,7 @@
 use crate::api::{
     app, app_logs, claude_desktop, codex_account, data, git_tool, google_account, image_workbench,
     lan_share, network_quality, proxy, repos, rules, runtime_provider, sessions, settings, skills,
-    system, tools, translation, usage,
+    screenshot, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
@@ -195,6 +195,13 @@ impl AppState {
                 "tools:image-web-conversations-delete" => image_workbench::delete_web_conversations(&paths, &cli_targets, payload).await,
                 _ => image_workbench::models(&paths, payload).await,
             };
+        }
+        if channel == "screenshot:ocr" {
+            let manager = self.manager.lock().await;
+            let paths = manager.paths.clone();
+            let cli_targets = manager.state["cliTargets"].clone();
+            drop(manager);
+            return screenshot::ocr::recognize(&app, &paths, &cli_targets, payload.unwrap_or_else(|| json!({}))).await;
         }
         if channel == "translation:translate" {
             let manager = self.manager.lock().await;

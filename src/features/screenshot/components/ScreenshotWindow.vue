@@ -1153,7 +1153,29 @@ async function output(data) {
       ocrLoading.value = true
       // 先让 loading 状态完成渲染，再开始模型加载和推理。
       await nextTick()
-      ocrResult.value = await recognizePpocr(data.source)
+      const generation = frameGeneration
+      const documentVersion = documentGeneration
+      const settings = await screenshotApi.call("status")
+      let result
+      if (settings?.ocr?.useLargeModel) {
+        let source = data.source
+        // 已有贴图使用 Blob 地址，提交识别前转成图片数据，原图不会写入操作日志。
+        if (source.startsWith("blob:")) {
+          const blob = await fetch(source).then((response) => response.blob())
+          source = await new Promise((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result)
+            reader.onerror = () => reject(reader.error || new Error("OCR 图片读取失败"))
+            reader.readAsDataURL(blob)
+          })
+        }
+        result = await screenshotApi.call("ocr", { source })
+      } else {
+        result = await recognizePpocr(data.source)
+      }
+      if (!disposed && generation === frameGeneration && documentVersion === documentGeneration) {
+        ocrResult.value = result
+      }
       return
     }
     if (savedOutput?.output !== data.output) {

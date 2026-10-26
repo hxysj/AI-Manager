@@ -19,6 +19,7 @@ use tauri_plugin_opener::OpenerExt;
 
 #[cfg(windows)]
 mod windows;
+pub mod ocr;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -65,6 +66,8 @@ pub struct Settings {
     pub history_limit: usize,
     #[serde(default)]
     pub shortcuts: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub ocr: ocr::OcrSettings,
 }
 
 fn default_enabled() -> bool {
@@ -88,6 +91,7 @@ impl Default for Settings {
             restore_pins: true,
             history_limit: default_history_limit(),
             shortcuts: std::collections::HashMap::new(),
+            ocr: ocr::OcrSettings::default(),
         }
     }
 }
@@ -111,6 +115,7 @@ impl Settings {
     }
 
     fn validate(&self) -> Result<(), ManagerError> {
+        self.ocr.validate()?;
         if !matches!(self.shortcut_style.as_str(), "alt" | "shift") {
             return Err(failure("不支持的快捷键组合"));
         }
@@ -1994,6 +1999,30 @@ mod tests {
         assert_eq!(old.shortcut_bindings()[1].2, "Ctrl+Shift+A");
         assert_eq!(old.shortcut_bindings()[2].2, "Ctrl+Shift+P");
         assert_eq!(old.shortcut_bindings()[4].2, "Ctrl+F3");
+    }
+
+    #[test]
+    fn ocr_defaults_to_builtin_and_large_model_settings_survive_reload() {
+        let root = TestRoot::new();
+        let service = ScreenshotService::new(&root.0).unwrap();
+        assert!(!service.settings().ocr.use_large_model);
+        let mut session = service.session.lock().unwrap().clone();
+        session.settings.ocr.use_large_model = true;
+        assert!(session.settings.validate().is_err());
+        session.settings.ocr.target_id = "vision-provider".into();
+        session.settings.ocr.model = "vision-model".into();
+        session.settings.validate().unwrap();
+        service.commit(&session).unwrap();
+        drop(service);
+        let restored = ScreenshotService::new(&root.0).unwrap();
+        assert!(restored.settings().ocr.use_large_model);
+        assert_eq!(restored.settings().ocr.target_id, "vision-provider");
+        assert_eq!(restored.settings().ocr.model, "vision-model");
+        let old: Settings = serde_json::from_value(json!({
+            "hotkeys": true, "shortcutStyle": "shift", "restorePins": true
+        })).unwrap();
+        assert!(!old.ocr.use_large_model);
+        old.validate().unwrap();
     }
 
     #[test]

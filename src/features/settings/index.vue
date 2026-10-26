@@ -452,7 +452,11 @@
         class="settings-view__panel settings-agent-panel"
       >
         <div class="settings-agent-list">
-          <ScreenshotExtension />
+          <ScreenshotExtension
+            :providers="providers"
+            :codex-accounts="codexAccounts"
+            :runtime-models="runtimeModels"
+          />
           <article
             class="settings-agent-card"
             tabindex="0"

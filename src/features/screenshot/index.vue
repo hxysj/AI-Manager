@@ -79,7 +79,7 @@
       v-if="showSettings"
       class="screenshot-settings-modal"
       title="截图贴图设置"
-      description="设置快捷键、历史数量和贴图恢复方式。"
+      description="设置快捷键、文字识别、历史数量和贴图恢复方式。"
       @close="closeSettings"
     >
       <div v-if="!ready && !error" class="screenshot-warning" role="status">
@@ -112,6 +112,69 @@
             "
           />
         </label>
+        <label class="setting-row">
+          <input
+            v-model="settingsDraft.ocr.useLargeModel"
+            type="checkbox"
+            :disabled="busy || !ready"
+          />启用大模型 OCR
+        </label>
+        <template v-if="settingsDraft.ocr.useLargeModel">
+          <label class="setting-row">
+            OCR 服务商
+            <select
+              v-model="settingsDraft.ocr.targetId"
+              class="setting-input"
+              aria-label="OCR 服务商"
+              :disabled="busy || !ready"
+              required
+              @change="selectOcrTarget"
+            >
+              <option value="" disabled>请选择服务商或官方账号</option>
+              <optgroup
+                v-for="group in ocrTargetGroups"
+                :key="group.label"
+                :label="group.label"
+              >
+                <option
+                  v-for="target in group.items"
+                  :key="target.id"
+                  :value="target.id"
+                >
+                  {{ target.name }}
+                </option>
+              </optgroup>
+            </select>
+          </label>
+          <label class="setting-row">
+            OCR 模型
+            <input
+              v-model.trim="settingsDraft.ocr.model"
+              class="setting-input"
+              aria-label="OCR 模型"
+              list="screenshot-ocr-models"
+              placeholder="选择或输入支持图片识别的模型"
+              :disabled="busy || !ready || !settingsDraft.ocr.targetId"
+              required
+            />
+            <datalist id="screenshot-ocr-models">
+              <option
+                v-for="model in ocrModelOptions"
+                :key="model"
+                :value="model"
+              />
+            </datalist>
+          </label>
+          <span v-if="invalidOcrTarget" class="settings-error" role="alert">
+            已配置的 OCR 服务商不存在或已禁用，请重新选择。
+          </span>
+          <span class="setting-hint"
+            >截图将发送至所选服务商，请选择支持图片识别的模型。</span
+          >
+        </template>
+        <span v-else class="setting-hint"
+          >默认使用内置 OCR 模型，本地识别，无需配置服务商。</span
+        >
         <label class="setting-row"
           >历史记录上限
           <input
@@ -304,7 +367,10 @@ import { createMessage } from "@/utils/message"
 import BaseModal from "@/components/BaseModal.vue"
 
 const props = defineProps({
-  settingsOnly: { type: Boolean, default: false }
+  settingsOnly: { type: Boolean, default: false },
+  providers: { type: Array, default: () => [] },
+  codexAccounts: { type: Array, default: () => [] },
+  runtimeModels: { type: Array, default: () => [] }
 })
 const emit = defineEmits(["close"])
 const entries = ref([])
@@ -316,6 +382,7 @@ function defaultSettings() {
     shortcutStyle: "alt",
     restorePins: true,
     historyLimit: 50,
+    ocr: { useLargeModel: false, targetId: "", model: "" },
     shortcuts: {
       captureAutoCopy: "Ctrl+F1",
       capture: "Shift+F1",
@@ -329,6 +396,74 @@ function defaultSettings() {
 }
 const settings = ref(defaultSettings())
 const settingsDraft = ref(defaultSettings())
+const ocrTargetGroups = computed(() =>
+  [
+    {
+      label: "Codex Provider",
+      items: props.providers
+        .filter(
+          (provider) => provider.cli === "codex" && provider.enabled !== false
+        )
+        .map((provider) => ({ id: provider.id, name: provider.name }))
+    },
+    {
+      label: "Codex 官方账号",
+      items: props.codexAccounts
+        .filter((account) => !account.disabled)
+        .map((account) => ({
+          id: `account:${account.id}`,
+          name: account.email || account.accountId || account.id
+        }))
+    }
+  ].filter((group) => group.items.length)
+)
+const invalidOcrTarget = computed(
+  () =>
+    settingsDraft.value.ocr.targetId &&
+    !ocrTargetGroups.value.some((group) =>
+      group.items.some(
+        (target) => target.id === settingsDraft.value.ocr.targetId
+      )
+    )
+)
+const ocrModelOptions = computed(() => {
+  const targetId = settingsDraft.value.ocr.targetId
+  return [
+    ...new Set(
+      [
+        props.providers.find((provider) => provider.id === targetId)
+          ?.runtimeConfig?.mainModel,
+        ...props.runtimeModels
+          .filter(
+            (model) =>
+              model.providerId === targetId ||
+              (targetId.startsWith("account:") &&
+                props.providers.some(
+                  (provider) =>
+                    provider.id === model.providerId && provider.cli === "codex"
+                ))
+          )
+          .map((model) => model.name || model.id),
+        settingsDraft.value.ocr.model
+      ].filter(Boolean)
+    )
+  ]
+})
+
+function selectOcrTarget() {
+  // 切换服务商后重置模型，避免沿用另一个服务商的模型名称。
+  const targetId = settingsDraft.value.ocr.targetId
+  const model = props.runtimeModels.find(
+    (model) => model.providerId === targetId
+  )
+  settingsDraft.value.ocr.model =
+    props.providers.find((provider) => provider.id === targetId)?.runtimeConfig
+      ?.mainModel ||
+    model?.name ||
+    model?.id ||
+    ""
+}
+
 const shortcutFields = [
   { id: "captureAutoCopy", label: "截屏并自动复制" },
   { id: "capture", label: "自定义截屏" },
@@ -387,6 +522,7 @@ async function load() {
     settings.value = {
       ...defaultSettings(),
       ...result.settings,
+      ocr: { ...defaultSettings().ocr, ...result.settings.ocr },
       shortcuts: {
         ...defaultSettings().shortcuts,
         ...result.settings.shortcuts
@@ -489,6 +625,13 @@ function recordShortcut(event, id) {
 async function saveSettings() {
   if (busy.value || !ready.value) return
   const draft = settingsDraft.value
+  if (
+    draft.ocr.useLargeModel &&
+    (!draft.ocr.targetId || !draft.ocr.model.trim() || invalidOcrTarget.value)
+  ) {
+    error.value = "启用大模型 OCR 时请选择有效服务商并填写模型"
+    return
+  }
   if (
     !Number.isInteger(draft.historyLimit) ||
     draft.historyLimit < 1 ||

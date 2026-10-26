@@ -70,6 +70,9 @@
     <ScreenshotView
       v-if="showSettings"
       settings-only
+      :providers="providers"
+      :codex-accounts="codexAccounts"
+      :runtime-models="runtimeModels"
       @close="showSettings = false"
     />
   </section>
@@ -81,6 +84,12 @@ import { Clock, Scissors, Settings } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import { screenshotApi } from "@/api/modules/screenshot"
 import { subscribeReady } from "@/api/request"
+
+defineProps({
+  providers: { type: Array, default: () => [] },
+  codexAccounts: { type: Array, default: () => [] },
+  runtimeModels: { type: Array, default: () => [] }
+})
 
 // 管理页与原生截图窗口共用独立模块，打开详情后才加载管理界面。
 const ScreenshotView = defineAsyncComponent(

@@ -70,6 +70,7 @@ pub(crate) struct LlmTarget {
     headers: HeaderMap,
     key_id: String,
     api_key: String,
+    low_reasoning: bool,
 }
 
 pub(crate) fn translation_target_info(
@@ -95,7 +96,20 @@ pub(crate) async fn prepare_translation_target(
     settings: &crate::core::settings::TranslationAgentSettings,
 ) -> Result<LlmTarget, ManagerError> {
     let info = translation_target_info(paths, settings)?;
-    let target = get_target(paths, "codex", &json!({}), &settings.target_id)?;
+    let mut target = prepare_llm_target(paths, cli_targets, &settings.target_id, &settings.model).await?;
+    target.info = info;
+    target.low_reasoning = true;
+    Ok(target)
+}
+
+// 文本扩展共用服务商认证、代理、自定义请求头及用量统计，不切换当前 CLI 配置。
+pub(crate) async fn prepare_llm_target(
+    paths: &AppPaths,
+    cli_targets: &Value,
+    target_id: &str,
+    model: &str,
+) -> Result<LlmTarget, ManagerError> {
+    let target = get_target(paths, "codex", &json!({}), target_id)?;
     let mut headers = hyper::HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     if let Some(custom) = target.provider.as_ref().and_then(|item| item["headers"].as_object()) {
@@ -105,7 +119,7 @@ pub(crate) async fn prepare_translation_target(
             headers.insert(name, value);
         }
     }
-    let (headers, tracking) = build_forward_headers(paths, cli_targets, "codex", &headers, &settings.target_id).await?;
+    let (headers, tracking) = build_forward_headers(paths, cli_targets, "codex", &headers, target_id).await?;
     let key_id = tracking.as_ref().map(|item| item.key_id().to_string()).unwrap_or_default();
     let api_key = if tracking.is_some() {
         headers.get("authorization").and_then(|item| item.to_str().ok()).unwrap_or("").trim_start_matches("Bearer ").to_string()
@@ -113,12 +127,13 @@ pub(crate) async fn prepare_translation_target(
         String::new()
     };
     Ok(LlmTarget {
-        info,
+        info: json!({"targetId": target_id, "providerName": target.name, "model": model}),
         client: target_http_client(&target)?,
         upstream_url: build_upstream_url(&target.base_url, "/responses", "")?,
         headers,
         key_id,
         api_key,
+        low_reasoning: false,
     })
 }
 
@@ -134,7 +149,9 @@ impl LlmTarget {
         body["tool_choice"] = json!("none");
         body["store"] = json!(false);
         // 在真正发送上游前统一限制，官方 CLI 和 LangChain 都不能提升翻译推理强度。
-        body["reasoning"] = json!({ "effort": "low" });
+        if self.low_reasoning {
+            body["reasoning"] = json!({ "effort": "low" });
+        }
         self.client.post(&self.upstream_url).headers(self.headers.clone()).json(&body).send().await
             .map_err(|error| ManagerError::System(error.to_string()))
     }

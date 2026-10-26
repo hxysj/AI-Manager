@@ -61,6 +61,9 @@ let captureLong = false
 let pendingSmartSelection = null
 let pendingLongCapture = null
 let pendingPinMenuAction = null
+let useLargeModelOcr = false
+let pendingModelOcr = null
+const builtinOcrSources = []
 const imageRequests = []
 const imageUrls = new Set()
 const imageBlobs = new Map()
@@ -155,6 +158,9 @@ const localRequire = (name) => {
         },
         call: async (action, payload) => {
           requests.push({ action, payload })
+          if (action === "status")
+            return { enabled: true, ocr: { useLargeModel: useLargeModelOcr } }
+          if (action === "ocr") return pendingModelOcr(payload)
           if (
             action === "pin-action" &&
             payload.action.startsWith("context-menu-") &&
@@ -212,11 +218,14 @@ const localRequire = (name) => {
     }
   if (name === "../ocr")
     return {
-      recognizePpocr: async () => ({
-        text: "识别成功",
-        lines: [],
-        engine: "测试"
-      })
+      recognizePpocr: async (source) => {
+        builtinOcrSources.push(source)
+        return {
+          text: "识别成功",
+          lines: [],
+          engine: "测试"
+        }
+      }
     }
   if (name === "../long-screenshot")
     return { captureLongScreenshot: (options) => pendingLongCapture(options) }
@@ -714,6 +723,73 @@ assert.equal(copiedColors.length, colorCopyCount)
 assert.equal(state.colorValue, "10, 20, 30")
 await state.movePointer({ clientX: 790, clientY: 590 })
 assert.deepEqual(state.magnifierStyle, { left: "582px", top: "342px" })
+// 默认内置识别不会发送大模型请求；开启后沿用 loading、结果和失败恢复。
+const ocrSource = `data:image/png;base64,${pngBytes.toString("base64")}`
+await state.output({ action: "ocr", source: ocrSource })
+assert.deepEqual(builtinOcrSources, [ocrSource])
+assert.equal(
+  requests.some((request) => request.action === "ocr"),
+  false
+)
+assert.equal(state.ocrResult.text, "识别成功")
+useLargeModelOcr = true
+let completeModelOcr
+pendingModelOcr = (payload) => {
+  assert.deepEqual(payload, { source: ocrSource })
+  return new Promise((resolve) => {
+    completeModelOcr = resolve
+  })
+}
+const modelOcr = state.output({ action: "ocr", source: ocrSource })
+await tick()
+assert.equal(state.ocrLoading, true)
+assert.equal(state.busy, true)
+assert.ok(
+  findElement(
+    teleportTarget,
+    (element) => element.props.class === "ocr-loading-mask"
+  )
+)
+assert.equal(state.ocrResult, null)
+await state.output({ action: "ocr", source: ocrSource })
+assert.equal(requests.filter((request) => request.action === "ocr").length, 1)
+completeModelOcr({
+  text: "模型识别结果",
+  lines: [{ text: "模型识别结果" }],
+  engine: "大模型 OCR · 测试"
+})
+await modelOcr
+assert.equal(state.ocrLoading, false)
+assert.equal(state.busy, false)
+assert.equal(state.ocrResult.text, "模型识别结果")
+assert.equal(builtinOcrSources.length, 1)
+pendingModelOcr = async () => {
+  throw new Error("模型不支持图片")
+}
+await state.output({ action: "ocr", source: ocrSource })
+assert.equal(state.ocrResult, null)
+assert.equal(state.ocrLoading, false)
+assert.equal(state.busy, false)
+assert.match(state.error, /模型不支持图片/)
+assert.equal(builtinOcrSources.length, 1)
+// 编辑已有贴图时，Blob 地址必须先转换为图片数据，再交给原生识别接口。
+const fetchImage = globalThis.fetch
+globalThis.fetch = async (source) => {
+  assert.equal(source, "blob:existing-pin")
+  return { blob: async () => ({ data: ocrSource }) }
+}
+pendingModelOcr = async (payload) => {
+  assert.deepEqual(payload, { source: ocrSource })
+  return { text: "已有贴图文字", lines: [], engine: "大模型 OCR" }
+}
+await state.output({ action: "ocr", source: "blob:existing-pin" })
+globalThis.fetch = fetchImage
+assert.equal(state.ocrResult.text, "已有贴图文字")
+useLargeModelOcr = false
+await state.output({ action: "ocr", source: ocrSource })
+assert.equal(builtinOcrSources.length, 2)
+state.ocrResult = null
+
 // 保存失败时保留选区并恢复按钮，允许直接重试。
 saveFailure = true
 await state.output({
@@ -847,23 +923,35 @@ captureFrame = { ...captureFrame, autoCopy: false }
 await listeners.get("screenshot:frame")()
 await tick()
 const smartReplies = []
-pendingSmartSelection = payload => new Promise(resolve => smartReplies.push({ payload, resolve }))
+pendingSmartSelection = (payload) =>
+  new Promise((resolve) => smartReplies.push({ payload, resolve }))
 await state.movePointer({ clientX: 50, clientY: 50 })
-await new Promise(resolve => setTimeout(resolve, 55))
-smartReplies[0].resolve({ regions: [{ x: 20, y: 20, width: 200, height: 200 }] })
+await new Promise((resolve) => setTimeout(resolve, 55))
+smartReplies[0].resolve({
+  regions: [{ x: 20, y: 20, width: 200, height: 200 }]
+})
 await tick()
 assert.deepEqual(state.activeRegion, { x: 20, y: 20, width: 200, height: 200 })
-assert.ok(findElement(root, element => element.props.class === "capture-selection"))
-assert.equal(findElement(root, element => element.props.class === "capture-auto-region"), undefined)
+assert.ok(
+  findElement(root, (element) => element.props.class === "capture-selection")
+)
+assert.equal(
+  findElement(root, (element) => element.props.class === "capture-auto-region"),
+  undefined
+)
 await state.movePointer({ clientX: 200, clientY: 50 })
 assert.equal(state.activeRegion, null)
-await new Promise(resolve => setTimeout(resolve, 55))
+await new Promise((resolve) => setTimeout(resolve, 55))
 await state.movePointer({ clientX: 350, clientY: 50 })
-smartReplies[1].resolve({ regions: [{ x: 300, y: 0, width: 600, height: 200 }] })
+smartReplies[1].resolve({
+  regions: [{ x: 300, y: 0, width: 600, height: 200 }]
+})
 await tick()
 assert.equal(state.activeRegion, null)
-await new Promise(resolve => setTimeout(resolve, 55))
-smartReplies[2].resolve({ regions: [{ x: 650, y: 20, width: 200, height: 200 }] })
+await new Promise((resolve) => setTimeout(resolve, 55))
+smartReplies[2].resolve({
+  regions: [{ x: 650, y: 20, width: 200, height: 200 }]
+})
 await tick()
 assert.equal(state.activeRegion.x, 650)
 pendingSmartSelection = null
@@ -876,12 +964,20 @@ for (const finishMethod of ["escape", "native", "button"]) {
   await tick()
   assert.equal(state.longCaptureRequested, true)
   let longOptions
-  pendingLongCapture = async options => {
+  pendingLongCapture = async (options) => {
     longOptions = options
     await options.onProgress({ width: 200, height: 600 }, 3)
-    await new Promise(resolve => options.signal.addEventListener("abort", resolve, { once: true }))
-    if (options.signal.reason !== "finish") throw new DOMException("已取消", "AbortError")
-    return { source: "long.png", thumbnail: "long-thumb.png", width: 200, height: 600 }
+    await new Promise((resolve) =>
+      options.signal.addEventListener("abort", resolve, { once: true })
+    )
+    if (options.signal.reason !== "finish")
+      throw new DOMException("已取消", "AbortError")
+    return {
+      source: "long.png",
+      thumbnail: "long-thumb.png",
+      width: 200,
+      height: 600
+    }
   }
   state.startSelection({ button: 0, pointerId: 6, clientX: 20, clientY: 30 })
   await state.movePointer({ clientX: 120, clientY: 130 })
@@ -889,13 +985,29 @@ for (const finishMethod of ["escape", "native", "button"]) {
   await tick()
   assert.equal(state.longBusy, true)
   assert.equal(state.magnifierVisible, false)
-  assert.ok(findElement(root, element => element.props.class === "long-screenshot-preview"))
-  assert.equal(teleportTarget.children.some(element => element.props.class === "capture-magnifier"), false)
+  assert.ok(
+    findElement(
+      root,
+      (element) => element.props.class === "long-screenshot-preview"
+    )
+  )
+  assert.equal(
+    teleportTarget.children.some(
+      (element) => element.props.class === "capture-magnifier"
+    ),
+    false
+  )
   assert.deepEqual(longOptions.rect, { x: 40, y: 60, width: 200, height: 200 })
   assert.deepEqual(state.longSize, { width: 200, height: 600 })
   assert.equal(state.longProgress, 3)
-  const scrollButton = findElement(root, element => element.props.class === "long-scroll-button")
-  const finishButton = findElement(root, element => element.props.class === "long-finish-button")
+  const scrollButton = findElement(
+    root,
+    (element) => element.props.class === "long-scroll-button"
+  )
+  const finishButton = findElement(
+    root,
+    (element) => element.props.class === "long-finish-button"
+  )
   assert.ok(finishButton)
   assert.equal(longOptions.shouldAutoScroll(), false)
   scrollButton.props.onClick({ stopPropagation() {} })
@@ -904,23 +1016,38 @@ for (const finishMethod of ["escape", "native", "button"]) {
   assert.equal(scrollButton.props["aria-pressed"], true)
   scrollButton.props.onClick({ stopPropagation() {} })
   assert.equal(longOptions.shouldAutoScroll(), false)
-  assert.ok(requests.some(request => request.action === "long-preview" && request.payload.width > 0))
+  assert.ok(
+    requests.some(
+      (request) =>
+        request.action === "long-preview" && request.payload.width > 0
+    )
+  )
   const copiedBefore = copiedColors.length
   await state.keydown(colorKey("c"))
   await state.keydown(colorKey("Shift"))
   assert.equal(copiedColors.length, copiedBefore)
   assert.equal(state.colorFormat, "rgb")
-  const cancelledBefore = requests.filter(request => request.action === "cancel").length
+  const cancelledBefore = requests.filter(
+    (request) => request.action === "cancel"
+  ).length
   scrollButton.props.onClick({ stopPropagation() {} })
   if (finishMethod === "native") listeners.get("screenshot:long-finish")()
-  else if (finishMethod === "button") finishButton.props.onClick({ stopPropagation() {} })
+  else if (finishMethod === "button")
+    finishButton.props.onClick({ stopPropagation() {} })
   else await state.keydown(colorKey("Escape"))
   assert.equal(longOptions.signal.reason, "finish")
   assert.equal(longOptions.shouldAutoScroll(), false)
   await captured
   await tick()
-  assert.equal(requests.findLast(request => request.action === "save-document").payload.source, "long.png")
-  assert.ok(requests.filter(request => request.action === "cancel").length > cancelledBefore)
+  assert.equal(
+    requests.findLast((request) => request.action === "save-document").payload
+      .source,
+    "long.png"
+  )
+  assert.ok(
+    requests.filter((request) => request.action === "cancel").length >
+      cancelledBefore
+  )
   assert.equal(state.longBusy, false)
   assert.equal(state.frame, null)
 }
@@ -931,16 +1058,34 @@ state.startSelection({ button: 0, pointerId: 7, clientX: 20, clientY: 30 })
 await state.movePointer({ clientX: 120, clientY: 130 })
 const cancelledLong = state.finishSelection()
 await tick()
-const savedBeforeCancel = requests.filter(request => request.action === "save-document").length
+const savedBeforeCancel = requests.filter(
+  (request) => request.action === "save-document"
+).length
 await state.cancel()
 await cancelledLong
-assert.equal(requests.filter(request => request.action === "save-document").length, savedBeforeCancel)
+assert.equal(
+  requests.filter((request) => request.action === "save-document").length,
+  savedBeforeCancel
+)
 captureLong = false
 await listeners.get("screenshot:frame")()
 await tick()
 assert.equal(state.longCaptureRequested, false)
 assert.equal(state.magnifierVisible, true)
 assert.deepEqual(failures, [])
+// 切换截图后丢弃旧截图迟到的识别结果。
+useLargeModelOcr = true
+pendingModelOcr = () =>
+  new Promise((resolve) => {
+    completeModelOcr = resolve
+  })
+const staleOcr = state.output({ action: "ocr", source: ocrSource })
+await tick()
+await listeners.get("screenshot:frame")()
+completeModelOcr({ text: "旧截图文字", lines: [], engine: "大模型 OCR" })
+await staleOcr
+assert.equal(state.ocrResult, null)
+useLargeModelOcr = false
 captureApp.unmount()
 assert.equal(listeners.size, 0)
 async function loadTestComponent(filename, mocks) {
@@ -1024,12 +1169,35 @@ const ScreenshotPage = await loadTestComponent(
     }
   }
 )
-const pageApp = renderer.createApp(ScreenshotPage)
+const pageApp = renderer.createApp(ScreenshotPage, {
+  providers: [
+    {
+      id: "vision-provider",
+      cli: "codex",
+      name: "图片服务商",
+      runtimeConfig: { mainModel: "vision-default" }
+    },
+    {
+      id: "disabled-provider",
+      cli: "codex",
+      name: "已禁用服务商",
+      enabled: false
+    }
+  ],
+  runtimeModels: [
+    { id: "vision-model", providerId: "vision-provider", name: "vision-custom" }
+  ]
+})
 pageApp.config.errorHandler = (error) => failures.push(String(error))
 pageApp.mount(node("root"))
 await tick()
 const page = pageApp._instance.setupState
 assert.equal(page.settings.historyLimit, 50)
+assert.deepEqual(page.settings.ocr, {
+  useLargeModel: false,
+  targetId: "",
+  model: ""
+})
 assert.equal(page.captureShortcut, "Shift+F1")
 assert.deepEqual(Object.values(page.settings.shortcuts), [
   "Ctrl+F1",
@@ -1046,6 +1214,19 @@ assert.deepEqual(settingsRequests.at(-1), {
   action: "pause-hotkeys",
   payload: { paused: true }
 })
+page.settingsDraft.ocr.useLargeModel = true
+await page.saveSettings()
+assert.match(page.error, /请选择有效服务商并填写模型/)
+page.settingsDraft.ocr.targetId = "disabled-provider"
+page.settingsDraft.ocr.model = "vision-model"
+await page.saveSettings()
+assert.equal(page.invalidOcrTarget, true)
+assert.match(page.error, /请选择有效服务商并填写模型/)
+page.settingsDraft.ocr.targetId = "vision-provider"
+page.selectOcrTarget()
+assert.equal(page.settingsDraft.ocr.model, "vision-default")
+assert.deepEqual([...page.ocrModelOptions], ["vision-default", "vision-custom"])
+page.settingsDraft.ocr.model = "vision-custom"
 page.recordShortcut(
   { key: "F8", ctrlKey: true, shiftKey: true, preventDefault() {} },
   "capture"
@@ -1070,6 +1251,11 @@ window.confirm = () => true
 await page.saveSettings()
 await tick()
 assert.equal(storedSettings.historyLimit, 2)
+assert.deepEqual(storedSettings.ocr, {
+  useLargeModel: true,
+  targetId: "vision-provider",
+  model: "vision-custom"
+})
 assert.equal(page.captureShortcut, "Ctrl+Shift+F8")
 assert.equal(page.entries.length, 2)
 assert.equal(page.showSettings, false)
@@ -1077,6 +1263,14 @@ assert.deepEqual(settingsRequests.at(-1), {
   action: "pause-hotkeys",
   payload: { paused: false }
 })
+page.openSettings()
+await tick()
+page.settingsDraft.ocr.useLargeModel = false
+await page.saveSettings()
+assert.equal(storedSettings.ocr.useLargeModel, false)
+assert.equal(storedSettings.ocr.targetId, "vision-provider")
+assert.equal(storedSettings.ocr.model, "vision-custom")
+assert.equal(page.defaultSettings().ocr.useLargeModel, false)
 page.openSettings()
 await tick()
 pageApp.unmount()
@@ -1117,34 +1311,56 @@ const ScreenshotExtension = await loadTestComponent(
     "@/api/request": {
       subscribeReady: async (_, callback) => {
         extensionChanged = callback
-        return () => { extensionUnsubscribed++ }
+        return () => {
+          extensionUnsubscribed++
+        }
       }
     },
     "@/components/BaseModal.vue": {
       __esModule: true,
-      default: { render() { return vue.h("div", this.$slots.default?.()) } }
+      default: {
+        render() {
+          return vue.h("div", this.$slots.default?.())
+        }
+      }
     }
   }
 )
 const extensionRoot = node("root")
 const extensionApp = renderer.createApp(ScreenshotExtension)
-extensionApp.config.errorHandler = error => failures.push(String(error))
+extensionApp.config.errorHandler = (error) => failures.push(String(error))
 extensionApp.mount(extensionRoot)
 await tick()
 const extension = extensionApp._instance.setupState
 assert.equal(extension.enabled, true)
-assert.equal(extensionRequests.filter(request => request.action === "set-enabled").length, 0)
+assert.equal(
+  extensionRequests.filter((request) => request.action === "set-enabled")
+    .length,
+  0
+)
 const stopping = extension.toggleEnabled()
 await tick()
 assert.equal(extension.pending, true)
-assert.equal(findElement(extensionRoot, element => element.props.role === "switch").props.disabled, true)
+assert.equal(
+  findElement(extensionRoot, (element) => element.props.role === "switch").props
+    .disabled,
+  true
+)
 await extension.toggleEnabled()
-assert.equal(extensionRequests.filter(request => request.action === "set-enabled").length, 1)
+assert.equal(
+  extensionRequests.filter((request) => request.action === "set-enabled")
+    .length,
+  1
+)
 finishExtensionToggle()
 await stopping
 await tick()
 assert.equal(extension.enabled, false)
-assert.equal(findElement(extensionRoot, element => element.props.role === "switch").props["aria-checked"], false)
+assert.equal(
+  findElement(extensionRoot, (element) => element.props.role === "switch")
+    .props["aria-checked"],
+  false
+)
 const failedStart = extension.toggleEnabled()
 finishExtensionToggle("模拟截图设置写入失败")
 await failedStart
@@ -1154,18 +1370,52 @@ extension.openManager(true)
 await tick()
 assert.equal(extension.showSettings, true)
 assert.equal(extension.showManager, false)
-assert.ok(findElement(extensionRoot, element => element.props.class === "screenshot-settings-modal"))
-assert.equal(findElement(extensionRoot, element => element.props.class === "screenshot-actions"), undefined)
-findElement(extensionRoot, element => element.props["aria-label"] === "取消截图设置").props.onClick()
+assert.ok(
+  findElement(
+    extensionRoot,
+    (element) => element.props.class === "screenshot-settings-modal"
+  )
+)
+assert.equal(
+  findElement(
+    extensionRoot,
+    (element) => element.props.class === "screenshot-actions"
+  ),
+  undefined
+)
+findElement(
+  extensionRoot,
+  (element) => element.props["aria-label"] === "取消截图设置"
+).props.onClick()
 await tick()
 assert.equal(extension.showSettings, false)
-assert.deepEqual(settingsRequests.at(-1), { action: "pause-hotkeys", payload: { paused: false } })
+assert.deepEqual(settingsRequests.at(-1), {
+  action: "pause-hotkeys",
+  payload: { paused: false }
+})
 extension.openManager()
 await tick()
 assert.equal(extension.showManager, true)
-assert.ok(findElement(extensionRoot, element => element.props.class === "screenshot-actions"))
-assert.equal(findElement(extensionRoot, element => element.props["aria-label"] === "截图设置"), undefined)
-assert.equal(findElement(extensionRoot, element => element.props.class === "screenshot-primary").props.disabled, true)
+assert.ok(
+  findElement(
+    extensionRoot,
+    (element) => element.props.class === "screenshot-actions"
+  )
+)
+assert.equal(
+  findElement(
+    extensionRoot,
+    (element) => element.props["aria-label"] === "截图设置"
+  ),
+  undefined
+)
+assert.equal(
+  findElement(
+    extensionRoot,
+    (element) => element.props.class === "screenshot-primary"
+  ).props.disabled,
+  true
+)
 extensionEnabled = true
 await extensionChanged()
 await tick()
@@ -1460,7 +1710,7 @@ assert.equal(
 )
 assert.deepEqual(previewSize, [320, 180])
 document.createElement = createCanvas
-console.log("截图设置、历史上限、原位坐标和标注工具回归通过")
+console.log("截图设置、内置与大模型 OCR、历史上限、原位坐标和标注工具回归通过")
 console.log(
   "Screenshot window: cursor menu positioning, overflow, editor guards and double-click removal passed"
 )

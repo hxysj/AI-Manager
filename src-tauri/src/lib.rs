@@ -24,7 +24,7 @@ async fn dispatch_api(
     if let Some(action) = channel.strip_prefix("translation:desktop-") {
         return translation::desktop::dispatch(&app, action, payload).map_err(|error| error.to_string());
     }
-    if channel.starts_with("translation:") {
+    if channel.starts_with("translation:") || channel == "screenshot:ocr" {
         return state.dispatch(app, &channel, payload).await.map_err(|error| error.to_string());
     }
     // 截图数据走独立服务，不写操作日志，也不重建 Provider 托盘。
