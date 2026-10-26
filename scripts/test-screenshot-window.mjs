@@ -57,12 +57,14 @@ const requests = []
 const listeners = new Map()
 let captureFrame = null
 let saveFailure = false
+let pendingSaveDocument = null
 let captureLong = false
 let pendingSmartSelection = null
 let pendingLongCapture = null
 let pendingPinMenuAction = null
 let useLargeModelOcr = false
 let pendingModelOcr = null
+let ocrWindowResult = null
 const builtinOcrSources = []
 const imageRequests = []
 const imageUrls = new Set()
@@ -161,6 +163,11 @@ const localRequire = (name) => {
           if (action === "status")
             return { enabled: true, ocr: { useLargeModel: useLargeModelOcr } }
           if (action === "ocr") return pendingModelOcr(payload)
+          if (action === "ocr-result-open") {
+            ocrWindowResult = payload.result
+            return "test-ocr-result"
+          }
+          if (action === "ocr-result") return structuredClone(ocrWindowResult)
           if (
             action === "pin-action" &&
             payload.action.startsWith("context-menu-") &&
@@ -178,11 +185,12 @@ const localRequire = (name) => {
               annotations: [],
               width: 800,
               height: 600,
-              pin: { width: 800, height: 600 }
+              pin: { x: -1720, y: 100, width: 800, height: 600 }
             }
           }
           if (action === "save-document") {
             if (saveFailure) throw new Error("保存失败")
+            if (pendingSaveDocument) return pendingSaveDocument(payload)
             return "saved-pin"
           }
           if (action === "pin-show")
@@ -723,15 +731,33 @@ assert.equal(copiedColors.length, colorCopyCount)
 assert.equal(state.colorValue, "10, 20, 30")
 await state.movePointer({ clientX: 790, clientY: 590 })
 assert.deepEqual(state.magnifierStyle, { left: "582px", top: "342px" })
-// 默认内置识别不会发送大模型请求；开启后沿用 loading、结果和失败恢复。
+// 识别成功后自动贴图，结果交给独立窗口；重试仍以同一个已确认选区开始。
 const ocrSource = `data:image/png;base64,${pngBytes.toString("base64")}`
+const ocrSelection = { ...state.selection }
+async function restoreOcrSelection() {
+  await listeners.get("screenshot:frame")()
+  await tick()
+  state.selection = { ...ocrSelection }
+  state.editorSource = ocrSource
+}
 await state.output({ action: "ocr", source: ocrSource })
 assert.deepEqual(builtinOcrSources, [ocrSource])
 assert.equal(
   requests.some((request) => request.action === "ocr"),
   false
 )
-assert.equal(state.ocrResult.text, "识别成功")
+assert.equal(requests.at(-1).action, "ocr-result-open")
+assert.equal(requests.at(-1).payload.result.text, "识别成功")
+assert.equal(requests.at(-1).payload.id, "saved-pin")
+assert.equal(requests.at(-2).action, "pin")
+assert.equal(state.frame, null)
+assert.equal(state.selection, null)
+assert.equal(state.ocrResult, null)
+assert.deepEqual(
+  requests.findLast((request) => request.action === "save-document").payload.origin,
+  { x: -1720, y: 100 }
+)
+await restoreOcrSelection()
 useLargeModelOcr = true
 let completeModelOcr
 pendingModelOcr = (payload) => {
@@ -750,6 +776,14 @@ assert.ok(
     (element) => element.props.class === "ocr-loading-mask"
   )
 )
+assert.deepEqual(state.ocrLoadingStyle, {
+  left: "100px", top: "100px", width: "263.5px", height: "157px"
+})
+assert.equal(state.magnifierVisible, false)
+assert.equal(
+  findElement(teleportTarget, (element) => element.props.class === "ocr-result-mask"),
+  undefined
+)
 assert.equal(state.ocrResult, null)
 await state.output({ action: "ocr", source: ocrSource })
 assert.equal(requests.filter((request) => request.action === "ocr").length, 1)
@@ -761,8 +795,11 @@ completeModelOcr({
 await modelOcr
 assert.equal(state.ocrLoading, false)
 assert.equal(state.busy, false)
-assert.equal(state.ocrResult.text, "模型识别结果")
+assert.equal(requests.at(-1).payload.result.text, "模型识别结果")
+assert.equal(state.frame, null)
 assert.equal(builtinOcrSources.length, 1)
+await restoreOcrSelection()
+const pinsBeforeOcrFailure = requests.filter((request) => request.action === "pin").length
 pendingModelOcr = async () => {
   throw new Error("模型不支持图片")
 }
@@ -772,6 +809,11 @@ assert.equal(state.ocrLoading, false)
 assert.equal(state.busy, false)
 assert.match(state.error, /模型不支持图片/)
 assert.equal(builtinOcrSources.length, 1)
+assert.ok(state.selection)
+assert.equal(
+  requests.filter((request) => request.action === "pin").length,
+  pinsBeforeOcrFailure
+)
 // 编辑已有贴图时，Blob 地址必须先转换为图片数据，再交给原生识别接口。
 const fetchImage = globalThis.fetch
 globalThis.fetch = async (source) => {
@@ -784,11 +826,17 @@ pendingModelOcr = async (payload) => {
 }
 await state.output({ action: "ocr", source: "blob:existing-pin" })
 globalThis.fetch = fetchImage
-assert.equal(state.ocrResult.text, "已有贴图文字")
+assert.equal(requests.at(-1).payload.result.text, "已有贴图文字")
+assert.equal(
+  requests.findLast((request) => request.action === "save-document").payload.source,
+  ocrSource
+)
+await restoreOcrSelection()
 useLargeModelOcr = false
 await state.output({ action: "ocr", source: ocrSource })
 assert.equal(builtinOcrSources.length, 2)
 state.ocrResult = null
+await restoreOcrSelection()
 
 // 保存失败时保留选区并恢复按钮，允许直接重试。
 saveFailure = true
@@ -1074,7 +1122,10 @@ assert.equal(state.longCaptureRequested, false)
 assert.equal(state.magnifierVisible, true)
 assert.deepEqual(failures, [])
 // 切换截图后丢弃旧截图迟到的识别结果。
+await restoreOcrSelection()
 useLargeModelOcr = true
+const ocrWindowsBeforeReset = requests.filter((request) => request.action === "ocr-result-open").length
+const pinsBeforeOcrReset = requests.filter((request) => request.action === "pin").length
 pendingModelOcr = () =>
   new Promise((resolve) => {
     completeModelOcr = resolve
@@ -1085,9 +1136,111 @@ await listeners.get("screenshot:frame")()
 completeModelOcr({ text: "旧截图文字", lines: [], engine: "大模型 OCR" })
 await staleOcr
 assert.equal(state.ocrResult, null)
+assert.equal(requests.filter((request) => request.action === "ocr-result-open").length, ocrWindowsBeforeReset)
+assert.equal(requests.filter((request) => request.action === "pin").length, pinsBeforeOcrReset)
+// 图片保存期间切换截图，也不能把旧文档缓存为新选区的贴图。
+await restoreOcrSelection()
+let completeOcrSave
+pendingSaveDocument = () => new Promise((resolve) => {
+  completeOcrSave = resolve
+})
+pendingModelOcr = async () => ({ text: "识别文字", lines: [], engine: "大模型 OCR" })
+const staleOcrSave = state.output({ action: "ocr", source: ocrSource })
+await tick()
+assert.equal(typeof completeOcrSave, "function")
+await listeners.get("screenshot:frame")()
+completeOcrSave("stale-pin")
+await staleOcrSave
+assert.equal(requests.filter((request) => request.action === "pin").length, pinsBeforeOcrReset)
+pendingSaveDocument = null
+const savesAfterOcrReset = requests.filter((request) => request.action === "save-document").length
+state.selection = { ...ocrSelection }
+state.editorSource = ocrSource
+await state.output({ action: "ocr", source: ocrSource })
+assert.equal(requests.filter((request) => request.action === "save-document").length, savesAfterOcrReset + 1)
+assert.equal(requests.at(-1).payload.id, "saved-pin")
 useLargeModelOcr = false
 captureApp.unmount()
 assert.equal(listeners.size, 0)
+// 结果窗口独立于框选和贴图，标题拖动、文本复制及关闭只操作自身。
+globalThis.location.search = "?mode=ocr&id=test-ocr-result"
+const ocrResultRoot = node("root")
+const ocrResultApp = renderer.createApp(module.exports.default)
+ocrResultApp.config.errorHandler = (error) => failures.push(String(error))
+const imagesBeforeResult = imageRequests.length
+ocrResultApp.mount(ocrResultRoot)
+await tick()
+const ocrResultState = ocrResultApp._instance.setupState
+assert.deepEqual(requests.at(-1), {
+  action: "ocr-result-action",
+  payload: { id: "test-ocr-result", action: "ready" }
+})
+assert.equal(imageRequests.length, imagesBeforeResult)
+assert.equal(findElement(ocrResultRoot, (element) => element.props.class?.includes("pin-window")), undefined)
+assert.ok(findElement(ocrResultRoot, (element) => element.props.class === "ocr-result-dialog"))
+const resultHeader = findElement(ocrResultRoot, (element) => element.props.class === "ocr-result-head")
+await resultHeader.props.onPointerdown({ button: 0 })
+assert.deepEqual(requests.at(-1), {
+  action: "ocr-result-action",
+  payload: { id: "test-ocr-result", action: "drag" }
+})
+const beforeRightDrag = requests.length
+await resultHeader.props.onPointerdown({ button: 2 })
+assert.equal(requests.length, beforeRightDrag)
+ocrResultState.ocrResult.text = "可以编辑并复制的识别结果"
+await ocrResultState.copyOcrResult()
+assert.equal(copiedColors.at(-1), "可以编辑并复制的识别结果")
+const resultClose = findElement(ocrResultRoot, (element) => element.props.class === "ocr-result-close")
+await resultClose.props.onClick()
+assert.deepEqual(requests.at(-1), {
+  action: "ocr-result-action",
+  payload: { id: "test-ocr-result", action: "close" }
+})
+await ocrResultState.keydown(pinKey("Escape", { target: { tagName: "TEXTAREA" } }))
+assert.deepEqual(requests.at(-1), {
+  action: "ocr-result-action",
+  payload: { id: "test-ocr-result", action: "close" }
+})
+assert.deepEqual(failures, [])
+ocrResultApp.unmount()
+// 已有贴图识别会先传递结果，再关闭旧贴图，防止页面提前销毁。
+globalThis.location.search = "?mode=pin&id=test-pin"
+const ocrPinApp = renderer.createApp(module.exports.default)
+ocrPinApp.config.errorHandler = (error) => failures.push(String(error))
+ocrPinApp.mount(node("root"))
+await tick()
+const ocrPinState = ocrPinApp._instance.setupState
+useLargeModelOcr = true
+globalThis.fetch = async (source) => {
+  assert.equal(source, ocrPinState.document.output)
+  return { blob: async () => ({ data: ocrSource }) }
+}
+pendingModelOcr = async (payload) => {
+  assert.deepEqual(payload, { source: ocrSource })
+  return { text: "贴图文字", lines: [{ text: "贴图文字" }], engine: "大模型 OCR" }
+}
+await ocrPinState.output({
+  action: "ocr",
+  source: ocrPinState.document.output,
+  output: ocrPinState.document.output,
+  annotations: []
+})
+globalThis.fetch = fetchImage
+assert.equal(requests.at(-2).action, "ocr-result-open")
+assert.equal(requests.at(-2).payload.result.text, "贴图文字")
+assert.deepEqual(requests.at(-1), {
+  action: "pin-action",
+  payload: { id: "test-pin", action: "close" }
+})
+assert.equal(
+  requests.findLast((request) => request.action === "save-document").payload.editingPinId,
+  "test-pin"
+)
+assert.deepEqual(failures, [])
+ocrPinApp.unmount()
+assert.equal(imageUrls.size, 0)
+useLargeModelOcr = false
+globalThis.location.search = "?mode=capture"
 async function loadTestComponent(filename, mocks) {
   const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
     filename

@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "screenshot",
   "description": "截图和桌面贴图窗口的事件权限，原生操作由专用后端控制",
-  "windows": ["screenshot-capture", "screenshot-pin-*"],
+  "windows": ["screenshot-capture", "screenshot-pin-*", "screenshot-ocr-*"],
   "permissions": ["core:event:default"]
 }

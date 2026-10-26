@@ -195,6 +195,8 @@ pub struct ScreenshotService {
     hotkeys_paused: AtomicBool,
     view_save_pending: AtomicBool,
     menu_windows: Mutex<HashMap<String, (PhysicalPosition<i32>, PhysicalSize<u32>)>>,
+    // 识别文本只在结果窗口存活期间保存在内存中。
+    ocr_results: Mutex<HashMap<String, Value>>,
     pub hotkey_errors: Mutex<Vec<String>>,
     pub startup_errors: Mutex<Vec<String>>,
 }
@@ -259,6 +261,7 @@ impl ScreenshotService {
             hotkey_errors: Mutex::new(Vec::new()),
             startup_errors: Mutex::new(errors),
             menu_windows: Mutex::new(HashMap::new()),
+            ocr_results: Mutex::new(HashMap::new()),
         };
         {
             let mut guard = service.session.lock().unwrap();
@@ -763,6 +766,84 @@ pub async fn dispatch(
                 true,
                 payload["capture"].as_bool().unwrap_or(false),
             )?;
+            Ok(json!(true))
+        }
+        "ocr-result-open" => {
+            let id = id_from(&payload)?;
+            let entry = service.session.lock().unwrap().entries.iter()
+                .find(|entry| entry.id == id).cloned()
+                .ok_or_else(|| failure("截图记录不存在"))?;
+            let origin = entry.origin.ok_or_else(|| failure("截图选区位置不存在"))?;
+            let rect = CaptureRect {
+                x: origin.x, y: origin.y, width: entry.width, height: entry.height,
+            };
+            let center_x = f64::from(rect.x) + f64::from(rect.width) / 2.0;
+            let center_y = f64::from(rect.y) + f64::from(rect.height) / 2.0;
+            let monitor = app.monitor_from_point(center_x, center_y).map_err(failure)?
+                .or(app.primary_monitor().map_err(failure)?)
+                .ok_or_else(|| failure("没有可用显示器"))?;
+            let scale = monitor.scale_factor();
+            let (position, size) = ocr_result_bounds(rect, scale, monitor.work_area());
+            let result = &payload["result"];
+            if !result["text"].is_string() || !result["lines"].is_array() || !result["engine"].is_string() {
+                return Err(failure("OCR 识别结果无效"));
+            }
+            let pin_window = app.get_webview_window(&format!("screenshot-pin-{id}"))
+                .ok_or_else(|| failure("贴图窗口不存在"))?;
+            let result_id = uuid::Uuid::new_v4().to_string();
+            let builder = WebviewWindowBuilder::new(
+                &app,
+                format!("screenshot-ocr-{result_id}"),
+                WebviewUrl::App(format!("index.html?panel=screenshot&mode=ocr&id={result_id}").into()),
+            )
+            .title("OCR 识别结果")
+            .decorations(false)
+            .resizable(false)
+            .skip_taskbar(true)
+            .always_on_top(true)
+            .transparent(true)
+            .background_color(tauri::window::Color(0, 0, 0, 0))
+            .shadow(false)
+            .focused(false)
+            .position(f64::from(position.x) / scale, f64::from(position.y) / scale)
+            .inner_size(f64::from(size.width) / scale, f64::from(size.height) / scale)
+            .visible(false)
+            // 结果窗口始终显示在对应贴图上方，仍可独立拖动和关闭。
+            .parent(&pin_window)
+            .map_err(failure)?;
+            service.ocr_results.lock().unwrap().insert(result_id.clone(), result.clone());
+            let window = builder.build();
+            match window {
+                Ok(window) => {
+                    // 使用物理像素精确落位，兼容负坐标和不同缩放比例的显示器。
+                    let positioned = window.set_position(position).and_then(|_| window.set_size(size));
+                    if let Err(error) = positioned {
+                        service.ocr_results.lock().unwrap().remove(&result_id);
+                        let _ = window.destroy();
+                        return Err(failure(error));
+                    }
+                }
+                Err(error) => {
+                    service.ocr_results.lock().unwrap().remove(&result_id);
+                    return Err(failure(error));
+                }
+            }
+            Ok(json!(result_id))
+        }
+        "ocr-result" => service.ocr_results.lock().unwrap().get(id_from(&payload)?).cloned()
+            .ok_or_else(|| failure("OCR 识别结果不存在")),
+        "ocr-result-action" => {
+            let window = app.get_webview_window(&format!("screenshot-ocr-{}", id_from(&payload)?))
+                .ok_or_else(|| failure("OCR 结果窗口不存在"))?;
+            match payload["action"].as_str().unwrap_or("") {
+                "ready" => {
+                    window.show().map_err(failure)?;
+                    window.set_focus().map_err(failure)?;
+                }
+                "drag" => window.start_dragging().map_err(failure)?,
+                "close" => window.destroy().map_err(failure)?,
+                _ => return Err(failure("不支持的 OCR 结果操作")),
+            }
             Ok(json!(true))
         }
         "copy" => {
@@ -1373,6 +1454,26 @@ fn open_pin(app: &AppHandle, id: &str) -> Result<(), ManagerError> {
     open_pin_with_visibility(app, id, true, false)
 }
 
+fn ocr_result_bounds(
+    rect: CaptureRect,
+    scale: f64,
+    work_area: &tauri::PhysicalRect<i32, u32>,
+) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
+    let width = (720.0 * scale).round().max(1.0).min(f64::from(work_area.size.width.max(1))) as u32;
+    let height = (480.0 * scale).round().max(1.0).min(f64::from(work_area.size.height.max(1))) as u32;
+    // 默认以已确认选区的中心定位，靠边时仅做工作区边界约束。
+    let x = i64::from(rect.x) + (i64::from(rect.width) - i64::from(width)) / 2;
+    let y = i64::from(rect.y) + (i64::from(rect.height) - i64::from(height)) / 2;
+    let left = i64::from(work_area.position.x);
+    let top = i64::from(work_area.position.y);
+    let right = left + i64::from(work_area.size.width.saturating_sub(width));
+    let bottom = top + i64::from(work_area.size.height.saturating_sub(height));
+    (
+        PhysicalPosition::new(x.clamp(left, right) as i32, y.clamp(top, bottom) as i32),
+        PhysicalSize::new(width, height),
+    )
+}
+
 fn open_pin_with_visibility(
     app: &AppHandle,
     id: &str,
@@ -1501,6 +1602,12 @@ pub fn window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent) {
     let Some(service) = app.try_state::<ScreenshotService>() else {
         return;
     };
+    if let Some(id) = label.strip_prefix("screenshot-ocr-") {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            service.ocr_results.lock().unwrap().remove(id);
+        }
+        return;
+    }
     if label == "screenshot-capture" {
         if matches!(event, tauri::WindowEvent::Destroyed) {
             service.capturing.store(false, Ordering::SeqCst);
@@ -1701,6 +1808,7 @@ fn sync_runtime(app: &AppHandle) -> Result<(), ManagerError> {
             }
         }
         service.menu_windows.lock().unwrap().clear();
+        service.ocr_results.lock().unwrap().clear();
         return Ok(());
     }
     let bounds = app
@@ -1747,6 +1855,63 @@ pub fn flush(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_result_centers_on_selection_across_monitors_and_scale_factors() {
+        for (rect, scale, work_area, expected_position, expected_size) in [
+            (
+                CaptureRect { x: 200, y: 200, width: 800, height: 600 },
+                1.0,
+                tauri::PhysicalRect {
+                    position: PhysicalPosition::new(0, 0),
+                    size: PhysicalSize::new(1920, 1040),
+                },
+                PhysicalPosition::new(240, 260),
+                PhysicalSize::new(720, 480),
+            ),
+            (
+                CaptureRect { x: -1720, y: 100, width: 800, height: 600 },
+                1.0,
+                tauri::PhysicalRect {
+                    position: PhysicalPosition::new(-1920, -100),
+                    size: PhysicalSize::new(1920, 1040),
+                },
+                PhysicalPosition::new(-1680, 160),
+                PhysicalSize::new(720, 480),
+            ),
+            (
+                CaptureRect { x: -2200, y: 200, width: 1600, height: 1000 },
+                2.0,
+                tauri::PhysicalRect {
+                    position: PhysicalPosition::new(-2560, 0),
+                    size: PhysicalSize::new(2560, 1440),
+                },
+                PhysicalPosition::new(-2120, 220),
+                PhysicalSize::new(1440, 960),
+            ),
+        ] {
+            let (position, size) = ocr_result_bounds(rect, scale, &work_area);
+            assert_eq!(position, expected_position);
+            assert_eq!(size, expected_size);
+        }
+    }
+
+    #[test]
+    fn ocr_result_stays_inside_work_area_near_edges_and_on_small_screens() {
+        let rect = CaptureRect { x: 1880, y: 1020, width: 40, height: 20 };
+        let (position, size) = ocr_result_bounds(rect, 1.0, &tauri::PhysicalRect {
+            position: PhysicalPosition::new(0, 0),
+            size: PhysicalSize::new(1920, 1040),
+        });
+        assert_eq!(position, PhysicalPosition::new(1200, 560));
+        assert_eq!(size, PhysicalSize::new(720, 480));
+        let (position, size) = ocr_result_bounds(rect, 2.0, &tauri::PhysicalRect {
+            position: PhysicalPosition::new(0, 0),
+            size: PhysicalSize::new(800, 600),
+        });
+        assert_eq!(position, PhysicalPosition::new(0, 0));
+        assert_eq!(size, PhysicalSize::new(800, 600));
+    }
 
     struct TestRoot(PathBuf);
     impl TestRoot {

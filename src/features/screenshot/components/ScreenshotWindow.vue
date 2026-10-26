@@ -160,7 +160,7 @@
     <div v-if="error" class="capture-error" role="alert">{{ error }}</div>
   </div>
   <div
-    v-else
+    v-else-if="mode === 'pin'"
     class="pin-window"
     tabindex="0"
     :class="pinWindowClass"
@@ -435,6 +435,7 @@
     <div
       v-if="ocrLoading"
       class="ocr-loading-mask"
+      :style="ocrLoadingStyle"
       role="status"
       aria-live="polite"
       aria-label="OCR 正在识别"
@@ -445,58 +446,53 @@
         <span class="ocr-loading-description">正在分析截图内容，请稍候…</span>
       </section>
     </div>
-    <div
-      v-if="ocrResult"
-      class="ocr-result-mask"
-      @pointerdown.self="ocrResult = null"
-    >
-      <section
-        class="ocr-result-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-label="OCR 识别结果"
-      >
-        <header class="ocr-result-head">
-          <strong>识别结果</strong>
-          <span>{{ ocrResult.engine }}</span>
-          <button
-            type="button"
-            aria-label="关闭识别结果"
-            @click="ocrResult = null"
-          >
-            ×
-          </button>
-        </header>
-        <textarea
-          v-model="ocrResult.text"
-          class="ocr-result-text"
-          spellcheck="false"
-          aria-label="识别文字"
-        />
-        <footer class="ocr-result-actions">
-          <span v-if="!ocrResult.text" class="ocr-result-empty"
-            >没有识别到文字</span
-          >
-          <span v-else>{{ ocrResult.lines.length }} 行文字</span>
-          <button
-            type="button"
-            class="ocr-result-button"
-            :disabled="!ocrResult.text"
-            @click="copyOcrResult"
-          >
-            复制文字
-          </button>
-          <button
-            type="button"
-            class="ocr-result-button primary"
-            @click="ocrResult = null"
-          >
-            关闭
-          </button>
-        </footer>
-      </section>
-    </div>
   </Teleport>
+  <section
+    v-if="mode === 'ocr' && ocrResult"
+    class="ocr-result-dialog"
+    role="dialog"
+    aria-label="OCR 识别结果"
+  >
+    <header class="ocr-result-head" @pointerdown="dragOcrResult">
+      <span class="ocr-result-title">识别结果</span>
+      <span class="ocr-result-engine">{{ ocrResult.engine }}</span>
+      <button
+        type="button"
+        class="ocr-result-close"
+        aria-label="关闭识别结果"
+        @pointerdown.stop
+        @click="closeOcrResult"
+      >
+        ×
+      </button>
+    </header>
+    <textarea
+      v-model="ocrResult.text"
+      class="ocr-result-text"
+      spellcheck="false"
+      aria-label="识别文字"
+    />
+    <footer class="ocr-result-actions">
+      <span v-if="!ocrResult.text" class="ocr-result-empty">没有识别到文字</span>
+      <span v-else>{{ ocrResult.lines.length }} 行文字</span>
+      <button
+        type="button"
+        class="ocr-result-button"
+        :disabled="!ocrResult.text"
+        @click="copyOcrResult"
+      >
+        复制文字
+      </button>
+      <button
+        type="button"
+        class="ocr-result-button primary"
+        @click="closeOcrResult"
+      >
+        关闭
+      </button>
+    </footer>
+    <div v-if="error" class="ocr-result-error" role="alert">{{ error }}</div>
+  </section>
 </template>
 
 <script setup>
@@ -551,6 +547,25 @@ const busy = ref(false)
 const ocrLoading = ref(false)
 const error = ref("")
 const ocrResult = ref(null)
+const ocrLoadingStyle = computed(() => {
+  if (mode !== "capture")
+    return {
+      left: "0px",
+      top: "0px",
+      width: `${innerWidth}px`,
+      height: `${innerHeight}px`
+    }
+  const rect = selection.value
+  const bounds = desktop.value?.getBoundingClientRect()
+  if (!rect || !bounds || !frame.value) return {}
+  // 框选坐标是截图物理像素，loading 只覆盖映射后的选区。
+  return {
+    left: `${bounds.left + (rect.x * bounds.width) / frame.value.width}px`,
+    top: `${bounds.top + (rect.y * bounds.height) / frame.value.height}px`,
+    width: `${(rect.width * bounds.width) / frame.value.width}px`,
+    height: `${(rect.height * bounds.height) / frame.value.height}px`
+  }
+})
 const longBusy = ref(false)
 const longProgress = ref(0)
 const longPreview = ref(null)
@@ -594,6 +609,7 @@ const handles = Object.keys(resizeCursors)
 const magnifierVisible = computed(
   () =>
     !longBusy.value &&
+    !ocrLoading.value &&
     !longCaptureRequested.value &&
     !toolbarHovered.value &&
     !resizeHovered.value &&
@@ -1148,35 +1164,49 @@ async function output(data) {
   busy.value = true
   error.value = ""
   try {
+    const generation = frameGeneration
+    const documentVersion = documentGeneration
+    const origin =
+      mode === "capture"
+        ? {
+            x: frame.value.left + selection.value.x,
+            y: frame.value.top + selection.value.y
+          }
+        : { x: document.value.pin.x, y: document.value.pin.y }
+    let result
     if (data.action === "ocr") {
       ocrResult.value = null
       ocrLoading.value = true
       // 先让 loading 状态完成渲染，再开始模型加载和推理。
       await nextTick()
-      const generation = frameGeneration
-      const documentVersion = documentGeneration
+      let source = data.source
+      // 已有贴图的 Blob 地址需要转成图片数据，供识别和自动贴图共同使用。
+      if (source.startsWith("blob:")) {
+        const blob = await fetch(source).then((response) => response.blob())
+        source = await new Promise((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result)
+          reader.onerror = () => reject(reader.error || new Error("OCR 图片读取失败"))
+          reader.readAsDataURL(blob)
+        })
+      }
+      data = {
+        ...data,
+        source,
+        output: !data.output || data.output === data.source ? source : data.output
+      }
       const settings = await screenshotApi.call("status")
-      let result
       if (settings?.ocr?.useLargeModel) {
-        let source = data.source
-        // 已有贴图使用 Blob 地址，提交识别前转成图片数据，原图不会写入操作日志。
-        if (source.startsWith("blob:")) {
-          const blob = await fetch(source).then((response) => response.blob())
-          source = await new Promise((resolve, reject) => {
-            const reader = new FileReader()
-            reader.onload = () => resolve(reader.result)
-            reader.onerror = () => reject(reader.error || new Error("OCR 图片读取失败"))
-            reader.readAsDataURL(blob)
-          })
-        }
-        result = await screenshotApi.call("ocr", { source })
+        result = await screenshotApi.call("ocr", { source: data.source })
       } else {
         result = await recognizePpocr(data.source)
       }
-      if (!disposed && generation === frameGeneration && documentVersion === documentGeneration) {
-        ocrResult.value = result
-      }
-      return
+      if (
+        disposed ||
+        generation !== frameGeneration ||
+        documentVersion !== documentGeneration
+      )
+        return
     }
     if (savedOutput?.output !== data.output) {
       const newId = await screenshotApi.call("save-document", {
@@ -1185,14 +1215,15 @@ async function output(data) {
         thumbnail: data.thumbnail,
         annotations: data.annotations,
         editingPinId: mode === "capture" ? null : id,
-        origin:
-          mode === "capture"
-            ? {
-                x: frame.value.left + selection.value.x,
-                y: frame.value.top + selection.value.y
-              }
-            : { x: document.value.pin.x, y: document.value.pin.y }
+        origin
       })
+      if (
+        data.action === "ocr" &&
+        (disposed ||
+          generation !== frameGeneration ||
+          documentVersion !== documentGeneration)
+      )
+        return
       savedOutput = { id: newId, output: data.output }
     }
     const newId = savedOutput.id
@@ -1201,15 +1232,21 @@ async function output(data) {
       const result = await screenshotApi.call("export", { id: newId })
       if (!result.saved) return
     }
-    if (data.action === "pin")
+    if (data.action === "pin" || data.action === "ocr")
       await screenshotApi.call("pin", {
         id: newId,
         capture: mode === "capture"
       })
+    if (result) {
+      // 先打开独立结果窗口，避免已有贴图关闭时中断后续调用。
+      await screenshotApi.call("ocr-result-open", { id: newId, result })
+    }
     if (mode === "capture") {
-      if (data.action !== "pin") await screenshotApi.call("cancel")
+      if (data.action !== "pin" && data.action !== "ocr")
+        await screenshotApi.call("cancel")
     } else {
-      if (data.action !== "pin") await screenshotApi.call("pin", { id: newId })
+      if (data.action !== "pin" && data.action !== "ocr")
+        await screenshotApi.call("pin", { id: newId })
       await screenshotApi.call("pin-action", { id, action: "close" })
     }
     return true
@@ -1218,6 +1255,23 @@ async function output(data) {
   } finally {
     ocrLoading.value = false
     busy.value = false
+  }
+}
+
+async function dragOcrResult(event) {
+  if (event.button !== 0) return
+  try {
+    await screenshotApi.call("ocr-result-action", { id, action: "drag" })
+  } catch (cause) {
+    error.value = `移动识别结果失败：${String(cause)}`
+  }
+}
+
+async function closeOcrResult() {
+  try {
+    await screenshotApi.call("ocr-result-action", { id, action: "close" })
+  } catch (cause) {
+    error.value = `关闭识别结果失败：${String(cause)}`
   }
 }
 
@@ -1557,6 +1611,14 @@ async function setOpacity(event) {
 }
 
 async function keydown(event) {
+  // 结果窗口只关闭自身，文本编辑与复制继续由输入框处理。
+  if (mode === "ocr") {
+    if (event.key === "Escape" && !event.isComposing) {
+      event.preventDefault()
+      await closeOcrResult()
+    }
+    return
+  }
   if (mode === "capture" && longBusy.value) {
     if (event.key === "Escape") {
       event.preventDefault()
@@ -1662,6 +1724,7 @@ function resetCapture() {
   longBusy.value = false
   longAutoScroll.value = false
   longCaptureRequested.value = false
+  ocrLoading.value = false
   frameGeneration += 1
   // 仅清空像素，保留画布缓冲区，下一次唤出不再反复缩小和扩容。
   if (captureBackground.value) {
@@ -1755,6 +1818,12 @@ onMounted(async () => {
       )
       await loadFrame()
       if (!frame.value) await screenshotApi.call("capture-window-ready")
+    } else if (mode === "ocr") {
+      // 先完成结果布局再显示原生窗口，避免弹出空白窗口。
+      ocrResult.value = await screenshotApi.call("ocr-result", { id })
+      if (disposed) return
+      await nextTick()
+      await screenshotApi.call("ocr-result-action", { id, action: "ready" })
     } else {
       if (!(await loadDocument())) return
       opacity.value = document.value.pin?.opacity ?? 1
@@ -2332,57 +2401,40 @@ onBeforeUnmount(() => {
   }
 }
 
-.ocr-result-mask {
-  position: fixed;
-  z-index: 3000;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: #0007;
-}
-
 .ocr-loading-mask {
   position: fixed;
   z-index: 3001;
-  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  overflow: hidden;
   background: #0007;
-}
-
-.ocr-loading-dialog {
-  display: flex;
-  min-width: 230px;
-  align-items: center;
-  gap: 10px;
-  padding: 18px 20px;
-  border: 1px solid #b7c4d4;
-  border-radius: 10px;
-  background: #fff;
-  color: #1f2937;
-  box-shadow: 0 18px 60px #0005;
-  font-size: 13px;
-  .ocr-loading-title {
-    flex: 0 0 auto;
+  cursor: progress;
+  .ocr-loading-dialog {
+    display: flex;
+    max-width: 100%;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    box-sizing: border-box;
+    color: #fff;
+    text-align: center;
+    font-size: 13px;
+    .ocr-loading-spinner {
+      width: 18px;
+      height: 18px;
+      flex: 0 0 auto;
+      border: 2px solid #ffffff66;
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: ocr-loading-spin 0.8s linear infinite;
+    }
+    .ocr-loading-description {
+      color: #e2e8f0;
+      font-size: 12px;
+    }
   }
-  .ocr-loading-description {
-    color: #64748b;
-    font-size: 12px;
-  }
-}
-
-.ocr-loading-spinner {
-  width: 18px;
-  height: 18px;
-  flex: 0 0 auto;
-  border: 2px solid #dbeafe;
-  border-top-color: #2563eb;
-  border-radius: 50%;
-  animation: ocr-loading-spin 0.8s linear infinite;
 }
 
 @keyframes ocr-loading-spin {
@@ -2393,83 +2445,92 @@ onBeforeUnmount(() => {
 
 .ocr-result-dialog {
   display: flex;
-  width: min(720px, calc(100vw - 48px));
-  max-height: min(680px, calc(100vh - 48px));
+  width: 100vw;
+  height: 100vh;
   flex-direction: column;
+  box-sizing: border-box;
   overflow: hidden;
   border: 1px solid #b7c4d4;
   border-radius: 10px;
   background: #fff;
   color: #1f2937;
   box-shadow: 0 18px 60px #0005;
-}
-
-.ocr-result-head,
-.ocr-result-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-}
-
-.ocr-result-head {
-  border-bottom: 1px solid #e5e7eb;
-  strong {
-    font-size: 15px;
+  .ocr-result-head,
+  .ocr-result-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
   }
-  span {
+  .ocr-result-head {
+    border-bottom: 1px solid #e5e7eb;
+    cursor: move;
+    user-select: none;
+    .ocr-result-title {
+      flex-shrink: 0;
+      font-size: 15px;
+    }
+    .ocr-result-engine {
+      overflow: hidden;
+      color: #64748b;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+    .ocr-result-close {
+      margin-left: auto;
+      border: 0;
+      background: transparent;
+      color: #64748b;
+      cursor: pointer;
+      font-size: 24px;
+      line-height: 20px;
+    }
+  }
+  .ocr-result-text {
+    min-height: 0;
+    flex: 1;
+    padding: 14px 16px;
+    border: 0;
+    outline: 0;
+    resize: none;
+    color: #111827;
+    font:
+      14px/1.7 Consolas,
+      "Microsoft YaHei",
+      sans-serif;
+  }
+  .ocr-result-actions {
+    border-top: 1px solid #e5e7eb;
     color: #64748b;
     font-size: 12px;
+    .ocr-result-empty {
+      color: #b45309;
+    }
+    .ocr-result-button {
+      padding: 6px 12px;
+      border: 1px solid #cbd5e1;
+      border-radius: 6px;
+      background: #fff;
+      color: #334155;
+      cursor: pointer;
+      &:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+      &.primary {
+        margin-left: auto;
+        border-color: #2563eb;
+        background: #2563eb;
+        color: #fff;
+      }
+    }
   }
-  button {
-    margin-left: auto;
-    border: 0;
-    background: transparent;
-    color: #64748b;
-    cursor: pointer;
-    font-size: 24px;
-    line-height: 20px;
-  }
-}
-
-.ocr-result-text {
-  min-height: 320px;
-  flex: 1;
-  padding: 14px 16px;
-  border: 0;
-  outline: 0;
-  resize: vertical;
-  color: #111827;
-  font:
-    14px/1.7 Consolas,
-    "Microsoft YaHei",
-    sans-serif;
-}
-
-.ocr-result-actions {
-  border-top: 1px solid #e5e7eb;
-  color: #64748b;
-  font-size: 12px;
-  .ocr-result-empty {
+  .ocr-result-error {
+    padding: 8px 16px;
     color: #b45309;
-  }
-  .ocr-result-button {
-    padding: 6px 12px;
-    border: 1px solid #cbd5e1;
-    border-radius: 6px;
-    background: #fff;
-    color: #334155;
-    cursor: pointer;
-    &:disabled {
-      cursor: not-allowed;
-      opacity: 0.45;
-    }
-    &.primary {
-      margin-left: auto;
-      border-color: #2563eb;
-      background: #2563eb;
-      color: #fff;
-    }
+    font-size: 12px;
   }
 }
 </style>
