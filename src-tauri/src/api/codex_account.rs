@@ -347,9 +347,6 @@ pub async fn update_account_proxy(paths: &AppPaths, payload: Value) -> Result<()
         .map(|mut account| {
             if string_value(account.get("id")) == account_id {
                 exists = true;
-                if account.get("disabled").and_then(Value::as_bool) == Some(true) {
-                    return account;
-                }
                 account["proxy"] = json!(proxy);
                 account["updatedAt"] = json!(now_millis());
             }
@@ -359,15 +356,6 @@ pub async fn update_account_proxy(paths: &AppPaths, payload: Value) -> Result<()
 
     if !exists {
         return Err(ManagerError::System("Codex 官方账号不存在".to_string()));
-    }
-
-    if accounts.iter().any(|account| {
-        string_value(account.get("id")) == account_id
-            && account.get("disabled").and_then(Value::as_bool) == Some(true)
-    }) {
-        return Err(ManagerError::System(
-            "Codex 官方账号已禁用，不能编辑".to_string(),
-        ));
     }
 
     provider_store::write_codex_accounts(paths, &accounts)
@@ -380,17 +368,10 @@ pub async fn delete_account(
 ) -> Result<(), ManagerError> {
     let account_id = string_value(payload.get("accountId"));
     let accounts = provider_store::read_codex_accounts(paths)?;
-    let account = accounts
+    accounts
         .iter()
         .find(|account| string_value(account.get("id")) == account_id)
-        .cloned()
         .ok_or_else(|| ManagerError::System("Codex 官方账号不存在".to_string()))?;
-
-    if account.get("disabled").and_then(Value::as_bool) == Some(true) {
-        return Err(ManagerError::System(
-            "Codex 官方账号已禁用，不能删除".to_string(),
-        ));
-    }
 
     let active_account_id = read_active_account_id(paths)?;
     let next_accounts = accounts
@@ -1930,6 +1911,39 @@ mod tests {
           "auth": { "accessToken": "old-access", "refreshToken": "old-refresh", "expiresAt": now_millis() + 3_600_000 },
           "requires_reauth": false
         })
+    }
+
+    #[test]
+    fn disabled_account_supports_management_without_reactivation() {
+        with_account_paths(|paths| {
+            tauri::async_runtime::block_on(async {
+                let mut disabled = cached_account();
+                disabled["disabled"] = json!(true);
+                let mut active = cached_account();
+                active["id"] = json!("active-account");
+                provider_store::write_codex_accounts(paths, &[disabled.clone(), active.clone()]).unwrap();
+                let original_accounts = provider_store::read_codex_accounts(paths).unwrap();
+                provider_store::write_active_codex_account_id(paths, "active-account").unwrap();
+                let config_dir = Path::new(&paths.workspace_root).join("codex-config");
+                tokio::fs::create_dir_all(&config_dir).await.unwrap();
+                tokio::fs::write(config_dir.join("auth.json"), "active-account-auth").await.unwrap();
+                update_account_proxy(paths, json!({
+                    "accountId": "account-1", "proxy": "http://127.0.0.1:7890"
+                })).await.unwrap();
+                let accounts = provider_store::read_codex_accounts(paths).unwrap();
+                assert_eq!(accounts[0]["disabled"], true);
+                assert_eq!(accounts[0]["proxy"], "http://127.0.0.1:7890");
+                assert_eq!(accounts[0]["auth"], original_accounts[0]["auth"]);
+                let detail = account_detail(paths, json!({ "accountId": "account-1" })).await.unwrap();
+                assert_eq!(detail["data"]["disabled"], true);
+                delete_account(paths, &json!([{
+                    "id": "codex", "configPath": config_dir.to_string_lossy()
+                }]), json!({ "accountId": "account-1" })).await.unwrap();
+                assert_eq!(provider_store::read_codex_accounts(paths).unwrap(), vec![original_accounts[1].clone()]);
+                assert_eq!(read_active_account_id(paths).unwrap(), "active-account");
+                assert_eq!(tokio::fs::read_to_string(config_dir.join("auth.json")).await.unwrap(), "active-account-auth");
+            });
+        });
     }
 
     #[test]

@@ -460,9 +460,6 @@ pub async fn save_settings(
     let id = payload["providerId"].as_str().unwrap_or("");
     let mut provider = find_account(paths, id)?;
     let previous_provider = provider.clone();
-    if provider["enabled"] == false {
-        return Err(error("Google 账号已禁用，请先恢复"));
-    }
     let model = payload["model"].as_str().unwrap_or("");
     if !model.is_empty()
         && model
@@ -482,6 +479,10 @@ pub async fn save_settings(
     provider["google"]["proxy"] = json!(proxy_url);
     provider["runtimeConfig"]["mainModel"] = json!(model);
     write_provider(paths, &provider)?;
+    // 禁用账号仅保存本地设置，不更新正在使用的运行配置。
+    if provider["enabled"] == false {
+        return Ok(provider);
+    }
     let mut profiles = provider_store::read_profiles(paths)?;
     let previous_profiles = profiles.clone();
     for profile in &mut profiles {
@@ -587,6 +588,33 @@ fn error(message: &str) -> ManagerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_google_account_settings_remain_editable_without_reactivation() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("google-disabled-test-{}", uuid::Uuid::new_v4()));
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let provider = json!({
+                "id": "disabled-google", "type": "google-account", "cli": "codex",
+                "enabled": false, "runtimeConfig": { "mainModel": "old-model" },
+                "google": { "email": "test@example.com", "models": [{ "id": "new-model" }] }
+            });
+            let tokens = json!({ "access_token": "private-access", "refresh_token": "private-refresh" });
+            save_login(&paths, &provider, &tokens).unwrap();
+            let original_keys = provider_store::read_keys(&paths).unwrap();
+            let original_profiles = provider_store::read_profiles(&paths).unwrap();
+            let saved = save_settings(&paths, &json!([]), &json!({
+                "providerId": "disabled-google", "model": "new-model", "proxy": "http://127.0.0.1:7890"
+            })).await.unwrap();
+            assert_eq!(saved["enabled"], false);
+            assert_eq!(saved["runtimeConfig"]["mainModel"], "new-model");
+            assert_eq!(saved["google"]["proxy"], "http://127.0.0.1:7890");
+            assert_eq!(find_account(&paths, "disabled-google").unwrap(), saved);
+            assert_eq!(provider_store::read_profiles(&paths).unwrap(), original_profiles);
+            assert_eq!(provider_store::read_keys(&paths).unwrap(), original_keys);
+            std::fs::remove_dir_all(root).unwrap();
+        });
+    }
 
     #[test]
     fn google_quota_uses_matching_stricter_window_and_keeps_unknown_unknown() {

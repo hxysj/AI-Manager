@@ -39,18 +39,6 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
         .find(|item| item.get("id") == payload.get("id"))
         .cloned();
 
-    if previous
-        .as_ref()
-        .and_then(|item| item.get("enabled"))
-        .and_then(Value::as_bool)
-        == Some(false)
-        && payload.get("enabled").and_then(Value::as_bool) != Some(true)
-    {
-        return Err(ManagerError::System(
-            "Provider 已禁用，不能编辑".to_string(),
-        ));
-    }
-
     // Google 授权、转发地址和本地密钥由专用流程维护，通用操作只允许禁用或恢复。
     let provider = if let Some(previous) = previous.as_ref().filter(|item| item["type"] == "google-account") {
         let mut provider = previous.clone();
@@ -169,17 +157,6 @@ pub async fn delete_provider(paths: &AppPaths, payload: Value) -> Result<(), Man
         .iter()
         .find(|item| item.get("id").and_then(Value::as_str) == Some(provider_id.as_str()))
         .cloned();
-
-    if provider
-        .as_ref()
-        .and_then(|item| item.get("enabled"))
-        .and_then(Value::as_bool)
-        == Some(false)
-    {
-        return Err(ManagerError::System(
-            "Provider 已禁用，不能删除".to_string(),
-        ));
-    }
 
     providers.retain(|item| item.get("id").and_then(Value::as_str) != Some(provider_id.as_str()));
     let mut models = provider_store::read_models(paths)?;
@@ -3803,6 +3780,47 @@ mod tests {
     use crate::core::paths::{resolve_app_paths, AppPaths};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn disabled_provider_supports_management_without_reactivation() {
+        tauri::async_runtime::block_on(async {
+            let (test_root, paths, config_dir) = create_codex_runtime_fixture();
+            let original_config = write_codex_config(&paths, &config_dir).await;
+            let original_providers = provider_store::read_providers(&paths).unwrap();
+            let original_models = provider_store::read_models(&paths).unwrap();
+            let original_profiles = provider_store::read_profiles(&paths).unwrap();
+            let original_keys = provider_store::read_keys(&paths).unwrap();
+            for cli in ["claude", "codex"] {
+                let id = format!("disabled-{cli}");
+                save_provider(&paths, json!({
+                    "id": id, "cli": cli, "name": "禁用供应商",
+                    "type": if cli == "claude" { "anthropic" } else { "openai" },
+                    "enabled": false, "baseUrl": "https://example.com/v1",
+                    "apiKey": "disabled-provider-secret",
+                    "runtimeConfig": { "modelList": ["old-model"], "mainModel": "old-model" }
+                })).await.unwrap();
+                let mut provider = find_provider(&paths, &id).unwrap();
+                provider["name"] = json!("已编辑的禁用供应商");
+                provider["runtimeConfig"]["modelList"] = json!(["new-model"]);
+                provider["runtimeConfig"]["mainModel"] = json!("new-model");
+                save_provider(&paths, provider).await.unwrap();
+                let updated = find_provider(&paths, &id).unwrap();
+                assert_eq!(updated["enabled"], false);
+                assert_eq!(updated["name"], "已编辑的禁用供应商");
+                assert_eq!(updated["runtimeConfig"]["mainModel"], "new-model");
+                assert_eq!(get_provider_api_key(&paths, &id).unwrap(), "disabled-provider-secret");
+                let public = read_public_providers(&paths).unwrap();
+                assert!(public.as_array().unwrap().iter().any(|item| item["id"] == id && item["enabled"] == false));
+                delete_provider(&paths, json!({ "providerId": id })).await.unwrap();
+                assert_eq!(provider_store::read_providers(&paths).unwrap(), original_providers);
+                assert_eq!(provider_store::read_models(&paths).unwrap(), original_models);
+                assert_eq!(provider_store::read_profiles(&paths).unwrap(), original_profiles);
+                assert_eq!(provider_store::read_keys(&paths).unwrap(), original_keys);
+                assert_eq!(fs::read_to_string(config_dir.join("config.toml")).unwrap(), original_config);
+            }
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
 
     #[test]
     fn new_provider_records_use_uuid_and_model_refresh_preserves_ids() {

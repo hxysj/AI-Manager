@@ -665,7 +665,6 @@
                 </button>
 
                 <button
-                  v-if="!item.account.disabled"
                   class="providers-view__icon-button"
                   type="button"
                   title="编辑代理"
@@ -685,7 +684,6 @@
                   <Ban :size="15" />
                 </button>
                 <button
-                  v-if="!item.account.disabled"
                   class="providers-view__icon-button providers-view__icon-button--danger"
                   type="button"
                   title="删除账号"
@@ -946,10 +944,7 @@
                   <SquareTerminal :size="16" />
                 </button>
                 <button
-                  v-if="
-                    item.provider.enabled !== false &&
-                    item.provider.type !== 'google-account'
-                  "
+                  v-if="item.provider.type !== 'google-account'"
                   class="providers-view__icon-button"
                   type="button"
                   title="管理 API Key"
@@ -959,7 +954,6 @@
                   <KeyRound :size="16" />
                 </button>
                 <button
-                  v-if="item.provider.enabled !== false"
                   class="providers-view__icon-button"
                   type="button"
                   title="编辑 Provider"
@@ -979,7 +973,6 @@
                   <Ban :size="16" />
                 </button>
                 <button
-                  v-if="item.provider.enabled !== false"
                   class="providers-view__icon-button providers-view__icon-button--danger"
                   type="button"
                   title="删除 Provider"
@@ -1253,10 +1246,6 @@
             <p v-if="draft.cli === 'claude'">
               获取后自动保存模型列表，新建供应商随配置保存。模型可下拉选择或手动输入后回车。
             </p>
-            <p v-else>
-              每行填写一个上游模型；仅勾选同步模型列表并启用此 Provider 时同步到
-              Codex，未勾选或留空时使用官方默认列表。
-            </p>
           </div>
 
           <div class="providers-view__form-grid">
@@ -1265,90 +1254,61 @@
               :key="field.key"
               class="providers-view__field"
             >
-              <div class="providers-model-field-header">
-                <label
-                  class="providers-model-field-label"
-                  :for="`provider-edit-model-${field.key}`"
-                  >{{ field.label }}</label
-                >
-                <div
-                  v-if="draft.cli === 'codex' && field.key === 'modelList'"
-                  class="providers-model-actions"
-                >
-                  <button
-                    class="providers-model-action providers-model-fetch"
-                    type="button"
-                    :disabled="codexModelsPending || pending"
-                    :aria-busy="codexModelsPending"
-                    @click="fetchCodexModels"
-                  >
-                    <RefreshCw
-                      class="providers-model-fetch-icon"
-                      :class="{
-                        'providers-model-fetch-pending': codexModelsPending
-                      }"
-                      :size="14"
-                    />
-                    {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
-                  </button>
-                  <button
-                    class="providers-model-action"
-                    type="button"
-                    :disabled="codexModelsPending || pending"
-                    @click="resetCodexDraftModels"
-                  >
-                    <RotateCcw :size="14" />
-                    恢复默认模型
-                  </button>
+              <ProviderModelListEditor
+                v-if="draft.cli === 'codex' && field.key === 'modelList'"
+                :key="draft.id || 'new'"
+                v-model="modelDrafts.modelList"
+                v-model:sync-model-list="draft.syncModelList"
+                :loading="codexModelsPending"
+                :disabled="pending"
+                @fetch="fetchCodexModels"
+                @reset="resetCodexDraftModels"
+              />
+              <template v-else>
+                <div class="providers-model-field-header">
                   <label
-                    class="providers-model-sync"
-                    title="默认关闭；保存后，仅启用此 Provider 时同步模型列表，停用或切换到未勾选的 Provider 时恢复默认"
+                    class="providers-model-field-label"
+                    :for="`provider-edit-model-${field.key}`"
+                    >{{ field.label }}</label
                   >
-                    <input
-                      v-model="draft.syncModelList"
-                      class="providers-model-sync-input"
-                      type="checkbox"
-                      :disabled="codexModelsPending || pending"
-                    />同步模型列表
-                  </label>
                 </div>
-              </div>
-              <textarea
-                v-if="field.type === 'textarea'"
-                :id="`provider-edit-model-${field.key}`"
-                v-model="modelDrafts[field.key]"
-                rows="5"
-                placeholder="每行一个模型，也支持逗号分隔"
-              />
-              <el-select
-                v-else-if="draft.cli === 'claude'"
-                :id="`provider-edit-model-${field.key}`"
-                class="providers-model-select"
-                :model-value="modelDrafts[field.key]"
-                :aria-label="field.label"
-                placeholder="选择模型或输入后回车"
-                filterable
-                allow-create
-                default-first-option
-                clearable
-                @update:model-value="
-                  modelDrafts[field.key] = ($event || '').trim()
-                "
-              >
-                <el-option
-                  v-for="model in claudeModelOptions"
-                  :key="model"
-                  :label="model"
-                  :value="model"
+                <textarea
+                  v-if="field.type === 'textarea'"
+                  :id="`provider-edit-model-${field.key}`"
+                  v-model="modelDrafts[field.key]"
+                  rows="5"
+                  placeholder="每行一个模型，也支持逗号分隔"
                 />
-              </el-select>
-              <input
-                v-else
-                :id="`provider-edit-model-${field.key}`"
-                v-model.trim="modelDrafts[field.key]"
-                type="text"
-              />
-              <small v-if="field.description">{{ field.description }}</small>
+                <el-select
+                  v-else-if="draft.cli === 'claude'"
+                  :id="`provider-edit-model-${field.key}`"
+                  class="providers-model-select"
+                  :model-value="modelDrafts[field.key]"
+                  :aria-label="field.label"
+                  placeholder="选择模型或输入后回车"
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  @update:model-value="
+                    modelDrafts[field.key] = ($event || '').trim()
+                  "
+                >
+                  <el-option
+                    v-for="model in claudeModelOptions"
+                    :key="model"
+                    :label="model"
+                    :value="model"
+                  />
+                </el-select>
+                <input
+                  v-else
+                  :id="`provider-edit-model-${field.key}`"
+                  v-model.trim="modelDrafts[field.key]"
+                  type="text"
+                />
+                <small v-if="field.description">{{ field.description }}</small>
+              </template>
             </div>
           </div>
         </section>
@@ -1663,10 +1623,6 @@
             <p v-if="draft.cli === 'claude'">
               获取后自动保存模型列表，新建供应商随配置保存。模型可下拉选择或手动输入后回车。
             </p>
-            <p v-else>
-              每行填写一个上游模型；仅勾选同步模型列表并启用此 Provider 时同步到
-              Codex，未勾选或留空时使用官方默认列表。
-            </p>
           </div>
 
           <div class="providers-view__form-grid">
@@ -1675,90 +1631,61 @@
               :key="field.key"
               class="providers-view__field"
             >
-              <div class="providers-model-field-header">
-                <label
-                  class="providers-model-field-label"
-                  :for="`provider-create-model-${field.key}`"
-                  >{{ field.label }}</label
-                >
-                <div
-                  v-if="draft.cli === 'codex' && field.key === 'modelList'"
-                  class="providers-model-actions"
-                >
-                  <button
-                    class="providers-model-action providers-model-fetch"
-                    type="button"
-                    :disabled="codexModelsPending || pending"
-                    :aria-busy="codexModelsPending"
-                    @click="fetchCodexModels"
-                  >
-                    <RefreshCw
-                      class="providers-model-fetch-icon"
-                      :class="{
-                        'providers-model-fetch-pending': codexModelsPending
-                      }"
-                      :size="14"
-                    />
-                    {{ codexModelsPending ? "获取中…" : "获取上游模型" }}
-                  </button>
-                  <button
-                    class="providers-model-action"
-                    type="button"
-                    :disabled="codexModelsPending || pending"
-                    @click="resetCodexDraftModels"
-                  >
-                    <RotateCcw :size="14" />
-                    恢复默认模型
-                  </button>
+              <ProviderModelListEditor
+                v-if="draft.cli === 'codex' && field.key === 'modelList'"
+                :key="draft.id || 'new'"
+                v-model="modelDrafts.modelList"
+                v-model:sync-model-list="draft.syncModelList"
+                :loading="codexModelsPending"
+                :disabled="pending"
+                @fetch="fetchCodexModels"
+                @reset="resetCodexDraftModels"
+              />
+              <template v-else>
+                <div class="providers-model-field-header">
                   <label
-                    class="providers-model-sync"
-                    title="默认关闭；保存后，仅启用此 Provider 时同步模型列表，停用或切换到未勾选的 Provider 时恢复默认"
+                    class="providers-model-field-label"
+                    :for="`provider-create-model-${field.key}`"
+                    >{{ field.label }}</label
                   >
-                    <input
-                      v-model="draft.syncModelList"
-                      class="providers-model-sync-input"
-                      type="checkbox"
-                      :disabled="codexModelsPending || pending"
-                    />同步模型列表
-                  </label>
                 </div>
-              </div>
-              <textarea
-                v-if="field.type === 'textarea'"
-                :id="`provider-create-model-${field.key}`"
-                v-model="modelDrafts[field.key]"
-                rows="5"
-                placeholder="每行一个模型，也支持逗号分隔"
-              />
-              <el-select
-                v-else-if="draft.cli === 'claude'"
-                :id="`provider-create-model-${field.key}`"
-                class="providers-model-select"
-                :model-value="modelDrafts[field.key]"
-                :aria-label="field.label"
-                placeholder="选择模型或输入后回车"
-                filterable
-                allow-create
-                default-first-option
-                clearable
-                @update:model-value="
-                  modelDrafts[field.key] = ($event || '').trim()
-                "
-              >
-                <el-option
-                  v-for="model in claudeModelOptions"
-                  :key="model"
-                  :label="model"
-                  :value="model"
+                <textarea
+                  v-if="field.type === 'textarea'"
+                  :id="`provider-create-model-${field.key}`"
+                  v-model="modelDrafts[field.key]"
+                  rows="5"
+                  placeholder="每行一个模型，也支持逗号分隔"
                 />
-              </el-select>
-              <input
-                v-else
-                :id="`provider-create-model-${field.key}`"
-                v-model.trim="modelDrafts[field.key]"
-                type="text"
-              />
-              <small v-if="field.description">{{ field.description }}</small>
+                <el-select
+                  v-else-if="draft.cli === 'claude'"
+                  :id="`provider-create-model-${field.key}`"
+                  class="providers-model-select"
+                  :model-value="modelDrafts[field.key]"
+                  :aria-label="field.label"
+                  placeholder="选择模型或输入后回车"
+                  filterable
+                  allow-create
+                  default-first-option
+                  clearable
+                  @update:model-value="
+                    modelDrafts[field.key] = ($event || '').trim()
+                  "
+                >
+                  <el-option
+                    v-for="model in claudeModelOptions"
+                    :key="model"
+                    :label="model"
+                    :value="model"
+                  />
+                </el-select>
+                <input
+                  v-else
+                  :id="`provider-create-model-${field.key}`"
+                  v-model.trim="modelDrafts[field.key]"
+                  type="text"
+                />
+                <small v-if="field.description">{{ field.description }}</small>
+              </template>
             </div>
           </div>
         </section>
@@ -1944,18 +1871,11 @@
       :description="`${draft.name || '当前供应商'} · 共 ${claudeModelList.length} 个模型`"
       @close="showClaudeModelList = false"
     >
-      <ol v-if="claudeModelList.length" class="providers-model-list">
-        <li
-          v-for="model in claudeModelList"
-          :key="model"
-          class="providers-model-list-item"
-        >
-          {{ model }}
-        </li>
-      </ol>
-      <div v-else class="providers-model-list-empty" role="status">
-        暂无上游模型列表，请先点击“获取上游模型”。
-      </div>
+      <ProviderModelListEditor
+        :model-value="modelDrafts.modelList"
+        readonly
+        max-height="min(420px, 55vh)"
+      />
     </BaseModal>
 
     <ApiKeyManagerModal
@@ -3009,7 +2929,6 @@ import {
   Play,
   Plus,
   RefreshCw,
-  RotateCcw,
   Save,
   Server,
   ShieldCheck,
@@ -3025,6 +2944,7 @@ import BaseModal from "@/components/BaseModal.vue"
 import ClaudeDesktopPanel from "./components/ClaudeDesktopPanel.vue"
 import ApiKeyManagerModal from "./components/ApiKeyManagerModal.vue"
 import ProviderApiKeyInput from "./components/ProviderApiKeyInput.vue"
+import ProviderModelListEditor from "./components/ProviderModelListEditor.vue"
 import ProviderDeleteConfirmModal from "./components/ProviderDeleteConfirmModal.vue"
 import TokenCount from "@/components/TokenCount.vue"
 import CodexProxyPanel from "@/features/providers/components/CodexProxyPanel.vue"
@@ -7815,7 +7735,7 @@ watch(
     z-index: 45;
 
     :deep(.base-modal__panel) {
-      width: 560px;
+      width: 760px;
       max-width: 100%;
     }
 
@@ -7826,35 +7746,6 @@ watch(
 
     :deep(.base-modal__content) {
       padding: 0 20px 20px;
-    }
-
-    .providers-model-list {
-      min-height: 0;
-      max-height: min(420px, 55vh);
-      margin: 0;
-      padding: 0;
-      overflow-y: auto;
-      list-style: decimal inside;
-
-      .providers-model-list-item {
-        padding: 10px 12px;
-        border-bottom: 1px solid var(--color-line);
-        color: var(--color-text);
-        font-size: var(--font-size-base);
-        line-height: 1.6;
-        overflow-wrap: anywhere;
-
-        &:last-child {
-          border-bottom: 0;
-        }
-      }
-    }
-
-    .providers-model-list-empty {
-      padding: 24px 12px;
-      color: var(--color-text-muted);
-      font-size: var(--font-size-base);
-      text-align: center;
     }
   }
 
@@ -7951,56 +7842,6 @@ watch(
               &.providers-model-fetch-pending {
                 animation: providers-refresh-spin 1s linear infinite;
               }
-            }
-          }
-        }
-
-        .providers-model-sync {
-          display: inline-flex;
-          box-sizing: border-box;
-          height: 30px;
-          align-items: center;
-          gap: 6px;
-          margin-left: 4px;
-          padding: 0 10px;
-          border: 1px solid var(--color-line);
-          border-radius: 6px;
-          background: var(--color-panel-soft);
-          color: var(--color-text-muted);
-          font-size: var(--font-size-sm);
-          white-space: nowrap;
-          cursor: pointer;
-          transition:
-            background-color 0.15s ease,
-            border-color 0.15s ease;
-
-          &:has(:checked) {
-            border-color: var(--color-info-line);
-            background: var(--color-primary-soft);
-            color: var(--color-primary);
-          }
-
-          &:hover:not(:has(:disabled)) {
-            border-color: var(--color-primary);
-          }
-
-          &:has(:disabled) {
-            opacity: 0.5;
-            cursor: not-allowed;
-          }
-
-          .providers-model-sync-input {
-            width: 14px;
-            height: 14px;
-            flex: none;
-            margin: 0;
-            padding: 0;
-            accent-color: var(--color-primary-solid);
-            cursor: inherit;
-
-            &:focus-visible {
-              outline: 2px solid var(--color-primary);
-              outline-offset: 2px;
             }
           }
         }

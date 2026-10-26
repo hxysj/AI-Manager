@@ -166,7 +166,7 @@
               v-model="model"
               type="radio"
               :value="item.id"
-              :disabled="busy || waiting || account.enabled === false"
+              :disabled="busy || waiting"
             />
             <div class="google-model-info">
               <span data-emphasis>{{ item.displayName }}</span>
@@ -205,7 +205,7 @@
           >
           <button
             class="google-button google-primary"
-            :disabled="busy || waiting || account.enabled === false"
+            :disabled="busy || waiting"
             @click="save"
           >
             保存设置

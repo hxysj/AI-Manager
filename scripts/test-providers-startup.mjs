@@ -3,34 +3,11 @@ import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { parse, compileScript, compileTemplate } from "@vue/compiler-sfc"
 import { transformSync } from "esbuild"
-import { createSSRApp } from "vue"
+import { createSSRApp, reactive } from "vue"
 import { renderToString } from "@vue/server-renderer"
 
 const require = createRequire(import.meta.url)
-const filename = "src/features/providers/index.vue"
-const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
-  filename
-})
-assert.deepEqual(errors, [])
-const script = compileScript(descriptor, {
-  id: "providers-startup",
-  genDefaultAs: "__component"
-})
-const template = compileTemplate({
-  source: descriptor.template.content,
-  filename,
-  id: "providers-startup",
-  compilerOptions: { bindingMetadata: script.bindings }
-})
-assert.deepEqual(template.errors, [])
-const code = transformSync(
-  `${script.content}\n${template.code}\n__component.render = render\nexport default __component`.replaceAll(
-    "import.meta.glob",
-    "globAssets"
-  ),
-  { format: "cjs" }
-).code
-const module = { exports: {} }
+const { ID_INJECTION_KEY, ZINDEX_INJECTION_KEY } = require("element-plus")
 const api = new Proxy(
   {},
   { get: () => () => assert.fail("首屏测试不应发起外部请求") }
@@ -39,7 +16,7 @@ const modelFetchCalls = []
 const modelFetchErrors = []
 let fetchClaudeModelsResult = () => assert.fail("未配置模型获取结果")
 const providerApi = {
-  fetchClaudeModels: payload => {
+  fetchClaudeModels: (payload) => {
     modelFetchCalls.push(payload)
     return fetchClaudeModelsResult(payload)
   }
@@ -48,10 +25,13 @@ const openedUrls = []
 const copiedUrls = []
 Object.defineProperty(globalThis, "navigator", {
   configurable: true,
-  value: { clipboard: { writeText: async value => copiedUrls.push(value) } }
+  value: { clipboard: { writeText: async (value) => copiedUrls.push(value) } }
 })
-const localRequire = name => {
+const localRequire = (name) => {
   if (name.endsWith("/style/css")) return {}
+  if (name.endsWith("/ProviderModelListEditor.vue")) {
+    return { default: ModelListEditor, __esModule: true }
+  }
   if (name === "@/components/BaseModal.vue") {
     return {
       default: {
@@ -72,7 +52,7 @@ const localRequire = name => {
       accountApi: api,
       runtimeApi: api,
       systemApi: {
-        openExternal: async payload => openedUrls.push(payload.url)
+        openExternal: async (payload) => openedUrls.push(payload.url)
       },
       usageApi: api
     }
@@ -81,20 +61,53 @@ const localRequire = name => {
     return { claudeDesktopApi: api, providerApi }
   if (name === "@/utils/message")
     return {
-      createMessage: { success() {}, error: error => modelFetchErrors.push(error) }
+      createMessage: {
+        success() {},
+        error: (error) => modelFetchErrors.push(error)
+      }
     }
   if (name === "@/utils/typography") return { getFontSize: () => 14 }
   if (name === "@/utils/formatters")
-    return { formatTokenCount: value => String(value) }
+    return { formatTokenCount: (value) => String(value) }
   return require(name)
 }
-new Function("require", "module", "exports", "globAssets", code)(
-  localRequire,
-  module,
-  module.exports,
-  () => ({})
+// 两个编辑入口加载真实的模型编辑组件，保留父子绑定和保存流程的回归覆盖。
+function loadComponent(filename) {
+  const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
+    filename
+  })
+  assert.deepEqual(errors, [])
+  const script = compileScript(descriptor, {
+    id: "providers-startup",
+    genDefaultAs: "__component"
+  })
+  const template = compileTemplate({
+    source: descriptor.template.content,
+    filename,
+    id: "providers-startup",
+    compilerOptions: { bindingMetadata: script.bindings }
+  })
+  assert.deepEqual(template.errors, [])
+  const code = transformSync(
+    `${script.content}\n${template.code}\n__component.render = render\nexport default __component`.replaceAll(
+      "import.meta.glob",
+      "globAssets"
+    ),
+    { format: "cjs" }
+  ).code
+  const module = { exports: {} }
+  new Function("require", "module", "exports", "globAssets", code)(
+    localRequire,
+    module,
+    module.exports,
+    () => ({})
+  )
+  return module.exports.default
+}
+const ModelListEditor = loadComponent(
+  "src/features/providers/components/ProviderModelListEditor.vue"
 )
-const Providers = module.exports.default
+const Providers = loadComponent("src/features/providers/index.vue")
 const props = {
   cliTargets: [],
   pending: false,
@@ -123,12 +136,12 @@ for (const cli of [null, "claude", "codex", "claude-desktop"]) {
   })
   const failures = []
   app.component("ElInput", { render: () => null })
-  app.config.errorHandler = error => failures.push(error)
+  app.config.errorHandler = (error) => failures.push(error)
   const html = await renderToString(app)
   assert.deepEqual(
     failures,
     [],
-    `${cli || "空状态"} 首屏初始化失败：${failures.map(error => error.stack).join("\n")}`
+    `${cli || "空状态"} 首屏初始化失败：${failures.map((error) => error.stack).join("\n")}`
   )
   assert.ok(html.includes("providers-view"))
   if (cli) assert.ok(html.includes(cli))
@@ -203,7 +216,7 @@ const editor = createSSRApp(Editor, {
   ...props,
   cliTargets: [{ id: "codex", name: "Codex", installed: true }],
   runtimeConfigSchemas: { codex: schema },
-  onSaveProvider: payload => providerSaves.push(payload),
+  onSaveProvider: (payload) => providerSaves.push(payload),
   providers: [activeProvider, editedProvider],
   runtimeProfiles: [
     { cli: "codex", providerId: activeProvider.id, model: "active-model" }
@@ -211,12 +224,17 @@ const editor = createSSRApp(Editor, {
 })
 const failures = []
 editor.component("ElInput", { render: () => null })
-editor.config.errorHandler = error => failures.push(error)
+editor.provide(ID_INJECTION_KEY, { prefix: 2, current: 0 })
+editor.provide(ZINDEX_INJECTION_KEY, { current: 0 })
+editor.config.errorHandler = (error) => failures.push(error)
 const editorHtml = await renderToString(editor)
 assert.deepEqual(failures, [])
 assert.ok(editorHtml.includes("同步模型列表"))
 assert.ok(editorHtml.includes("恢复默认模型"))
-assert.ok(editorHtml.includes('class="providers-model-sync"'))
+assert.ok(editorHtml.includes('class="provider-model-sync"'))
+assert.ok(editorHtml.includes('class="provider-model-item"'))
+assert.ok(editorHtml.includes('class="provider-model-input"'))
+assert.equal((editorHtml.match(/保存并启用此供应商后生效/g) || []).length, 1)
 assert.equal(bindings.draft.syncModelList, false)
 bindings.modelDrafts.modelList = "edited-new-model"
 bindings.modelDrafts.mainModel = "edited-new-model"
@@ -254,7 +272,7 @@ const authApp = createSSRApp(Auth, {
   runtimeConfigSchemas: { codex: schema }
 })
 authApp.component("ElInput", { render: () => null })
-authApp.config.errorHandler = error => failures.push(error)
+authApp.config.errorHandler = (error) => failures.push(error)
 const authHtml = await renderToString(authApp)
 assert.ok(authHtml.includes('href="https://chatgpt.com/api/auth/session"'))
 assert.ok(authHtml.includes("复制地址"))
@@ -317,21 +335,27 @@ const claudeApp = createSSRApp(ClaudeEditor, {
     }
   },
   providers: [claudeProvider, otherClaudeProvider],
-  onSaveProvider: payload => claudeSaves.push(payload)
+  onSaveProvider: (payload) => claudeSaves.push(payload)
 })
 claudeApp.component("ElInput", { render: () => null })
-const { ID_INJECTION_KEY, ZINDEX_INJECTION_KEY } = require("element-plus")
 claudeApp.provide(ID_INJECTION_KEY, { prefix: 1, current: 0 })
 claudeApp.provide(ZINDEX_INJECTION_KEY, { current: 0 })
-claudeApp.config.errorHandler = error => failures.push(error)
+claudeApp.config.errorHandler = (error) => failures.push(error)
 const claudeHtml = await renderToString(claudeApp)
 assert.deepEqual(failures, [])
 assert.ok(claudeHtml.includes("获取上游模型"))
-assert.equal((claudeHtml.match(/class="[^"]*providers-model-select/g) || []).length, 4)
+assert.equal(
+  (claudeHtml.match(/class="[^"]*providers-model-select/g) || []).length,
+  4
+)
 assert.ok(!claudeHtml.includes("同步到 Codex"))
 assert.ok(!claudeHtml.includes("同步模型列表"))
 assert.deepEqual(claudeBindings.claudeModelOptions.value, [
-  "saved-model", "custom-main", "custom-haiku", "custom-sonnet", "custom-opus"
+  "saved-model",
+  "custom-main",
+  "custom-haiku",
+  "custom-sonnet",
+  "custom-opus"
 ])
 fetchClaudeModelsResult = async () => ({ models: ["claude-a", "claude-b"] })
 await claudeBindings.fetchClaudeModels()
@@ -346,11 +370,17 @@ assert.equal(claudeBindings.modelDrafts.sonnetModel, "custom-sonnet")
 assert.equal(claudeBindings.modelDrafts.opusModel, "custom-opus")
 claudeBindings.modelDrafts.mainModel = "manually-entered-model"
 await claudeBindings.submitProvider()
-assert.equal(claudeSaves.at(-1).runtimeConfig.mainModel, "manually-entered-model")
+assert.equal(
+  claudeSaves.at(-1).runtimeConfig.mainModel,
+  "manually-entered-model"
+)
 assert.equal(claudeSaves.at(-1).runtimeConfig.modelList, "claude-a\nclaude-b")
 claudeBindings.editProvider({
   ...claudeProvider,
-  runtimeConfig: { ...claudeSaves.at(-1).runtimeConfig, modelList: ["claude-a", "claude-b"] }
+  runtimeConfig: {
+    ...claudeSaves.at(-1).runtimeConfig,
+    modelList: ["claude-a", "claude-b"]
+  }
 })
 assert.ok(claudeBindings.claudeModelOptions.value.includes("claude-b"))
 assert.equal(claudeBindings.modelDrafts.mainModel, "manually-entered-model")
@@ -358,7 +388,10 @@ claudeBindings.editProvider(otherClaudeProvider)
 assert.deepEqual(claudeBindings.claudeModelOptions.value, ["other-model"])
 
 let finishModelFetch
-fetchClaudeModelsResult = () => new Promise(resolve => { finishModelFetch = resolve })
+fetchClaudeModelsResult = () =>
+  new Promise((resolve) => {
+    finishModelFetch = resolve
+  })
 claudeBindings.editProvider(claudeProvider)
 const pendingModelFetch = claudeBindings.fetchClaudeModels()
 assert.equal(claudeBindings.claudeModelsPending.value, true)
@@ -371,7 +404,9 @@ await pendingModelFetch
 assert.equal(claudeBindings.claudeModelsPending.value, false)
 assert.deepEqual(claudeBindings.claudeModelOptions.value, ["other-model"])
 
-fetchClaudeModelsResult = async () => { throw new Error("模拟上游获取失败") }
+fetchClaudeModelsResult = async () => {
+  throw new Error("模拟上游获取失败")
+}
 await claudeBindings.fetchClaudeModels()
 assert.equal(claudeBindings.modelDrafts.modelList, "other-model")
 assert.deepEqual(modelFetchErrors, ["Error: 模拟上游获取失败"])
@@ -379,7 +414,10 @@ claudeBindings.clearDraft()
 assert.deepEqual(claudeBindings.claudeModelOptions.value, [])
 claudeBindings.modelDrafts.mainModel = "manual-model-without-list"
 await claudeBindings.submitProvider()
-assert.equal(claudeSaves.at(-1).runtimeConfig.mainModel, "manual-model-without-list")
+assert.equal(
+  claudeSaves.at(-1).runtimeConfig.mainModel,
+  "manual-model-without-list"
+)
 assert.equal(claudeSaves.at(-1).runtimeConfig.modelList, "")
 claudeBindings.clearDraft()
 fetchClaudeModelsResult = async () => ({ models: ["new-provider-model"] })
@@ -391,10 +429,135 @@ claudeBindings.modelDrafts.sonnetModel = "new-provider-model"
 await claudeBindings.submitProvider()
 assert.equal(claudeSaves.at(-1).id, undefined)
 assert.equal(claudeSaves.at(-1).runtimeConfig.modelList, "new-provider-model")
-assert.equal(claudeSaves.at(-1).runtimeConfig.mainModel, "custom-without-upstream")
+assert.equal(
+  claudeSaves.at(-1).runtimeConfig.mainModel,
+  "custom-without-upstream"
+)
 assert.equal(claudeSaves.at(-1).runtimeConfig.sonnetModel, "new-provider-model")
 assert.deepEqual(claudeProvider.runtimeConfig.modelList, ["saved-model"])
+
+// 禁用状态仍允许查看、编辑和删除，保存不能隐式恢复供应商。
+for (const cli of ["claude", "codex"]) {
+  const disabledProvider = {
+    ...editedProvider,
+    id: `disabled-${cli}`,
+    cli,
+    type: cli === "claude" ? "anthropic" : "openai",
+    enabled: false
+  }
+  let disabledBindings
+  const saves = []
+  const deletions = []
+  const DisabledProviders = {
+    ...Providers,
+    setup(props, context) {
+      disabledBindings = Providers.setup(props, context)
+      disabledBindings.showDisabledItems.value = true
+      return disabledBindings
+    }
+  }
+  const app = createSSRApp(DisabledProviders, {
+    ...props,
+    cliTargets: [{ id: cli, name: cli, installed: true }],
+    runtimeConfigSchemas: { [cli]: schema },
+    providers: [disabledProvider],
+    onSaveProvider: payload => saves.push(payload),
+    onDeleteProvider: id => deletions.push(id)
+  })
+  app.component("ElInput", { render: () => null })
+  app.config.errorHandler = error => failures.push(error)
+  const html = await renderToString(app)
+  for (const label of ["查看详情", "编辑 Provider", "删除 Provider", "管理 API Key"]) {
+    assert.ok(html.includes(`aria-label="${label}"`))
+  }
+  assert.ok(!html.includes(`aria-label="启动 ${cli === "claude" ? "Claude" : "Codex"} 实例"`))
+  disabledBindings.openProviderDetail(disabledProvider)
+  assert.equal(disabledBindings.showProviderDrawer.value, true)
+  assert.equal(disabledBindings.providerDetail.value.id, disabledProvider.id)
+  disabledBindings.editProvider(disabledProvider)
+  assert.equal(disabledBindings.draft.enabled, false)
+  disabledBindings.draft.name = "编辑后仍禁用"
+  await disabledBindings.submitProvider()
+  assert.equal(saves.at(-1).enabled, false)
+  assert.equal(saves.at(-1).name, "编辑后仍禁用")
+  disabledBindings.removeProvider(disabledProvider)
+  disabledBindings.confirmDelete()
+  assert.deepEqual(deletions, [disabledProvider.id])
+}
+
+const disabledAccount = {
+  id: "disabled-official-account",
+  email: "disabled@example.com",
+  disabled: true
+}
+let disabledAccountBindings
+const accountDeletions = []
+const DisabledAccounts = {
+  ...Providers,
+  setup(props, context) {
+    disabledAccountBindings = Providers.setup(props, context)
+    disabledAccountBindings.showDisabledItems.value = true
+    return disabledAccountBindings
+  }
+}
+const accountApp = createSSRApp(DisabledAccounts, {
+  ...props,
+  cliTargets: [{ id: "codex", name: "Codex", installed: true }],
+  runtimeConfigSchemas: { codex: schema },
+  codexAccounts: [disabledAccount],
+  onCodexAccountDelete: payload => accountDeletions.push(payload)
+})
+accountApp.component("ElInput", { render: () => null })
+accountApp.config.errorHandler = error => failures.push(error)
+const accountHtml = await renderToString(accountApp)
+for (const label of ["查看详情", "编辑代理", "删除账号"]) {
+  assert.ok(accountHtml.includes(`aria-label="${label}"`))
+}
+assert.ok(!accountHtml.includes('aria-label="启动官方账号实例"'))
+disabledAccountBindings.openCodexAccountProxy(disabledAccount)
+assert.equal(disabledAccountBindings.showCodexProxyModal.value, true)
+disabledAccountBindings.deleteCodexAccount(disabledAccount)
+disabledAccountBindings.confirmDelete()
+assert.deepEqual(accountDeletions, [{ accountId: disabledAccount.id }])
+
+// Claude 弹框复用相同列表样式，但不显示编辑、删除或同步控件。
+const ClaudeModelViewer = {
+  ...Providers,
+  setup(props, context) {
+    const bindings = Providers.setup(props, context)
+    bindings.editProvider(claudeProvider)
+    bindings.showClaudeModelList.value = true
+    return bindings
+  }
+}
+const viewer = createSSRApp(ClaudeModelViewer, claudeApp._props)
+viewer.component("ElInput", { render: () => null })
+viewer.provide(ID_INJECTION_KEY, { prefix: 3, current: 0 })
+viewer.provide(ZINDEX_INJECTION_KEY, { current: 0 })
+viewer.config.errorHandler = error => failures.push(error)
+const viewerHtml = await renderToString(viewer)
+assert.ok(viewerHtml.includes('class="provider-model-item"'))
+assert.ok(viewerHtml.includes('class="provider-model-name"'))
+assert.ok(!viewerHtml.includes('class="provider-model-remove"'))
+assert.ok(!viewerHtml.includes('class="provider-model-input"'))
+assert.ok(!viewerHtml.includes("同步模型列表"))
+const emptyViewerHtml = await renderToString(createSSRApp(ModelListEditor, {
+  modelValue: "",
+  readonly: true
+}))
+assert.ok(emptyViewerHtml.includes("暂无上游模型"))
+assert.ok(!emptyViewerHtml.includes('class="provider-model-add"'))
+const readonlyEvents = []
+const readonlyBindings = ModelListEditor.setup(reactive({
+  readonly: true,
+  modelValue: "saved-model"
+}), { expose() {}, emit: (...args) => readonlyEvents.push(args) })
+readonlyBindings.modelInput.value = "new-model"
+readonlyBindings.addModels()
+readonlyBindings.removeModel("saved-model")
+readonlyBindings.resetModels()
+assert.deepEqual(readonlyEvents, [])
 assert.deepEqual(failures, [])
 console.log(
-  "Providers 安装状态、Codex 同步、Claude 模型列表与手动输入、保存隔离、请求竞态及获取失败回归通过"
+  "Providers 安装状态、禁用配置管理、Claude 模型弹框、模型保存隔离与获取竞态回归通过"
 )
