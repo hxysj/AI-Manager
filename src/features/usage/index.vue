@@ -2084,11 +2084,11 @@ async function renderUsageReportCanvas() {
 function drawReportHeader(context, x, y, width) {
   drawReportText(context, "TOKEN USAGE", x, y + 14, {
     color: "#7a8da8",
-    font: `700 ${getFontSize('xs')}px Arial`
+    font: `700 ${getFontSize("xs")}px Arial`
   })
   drawReportText(context, "模型用量统计", x, y + 48, {
     color: "#17233a",
-    font: `700 ${getFontSize('xl')}px Arial`
+    font: `700 ${getFontSize("xl")}px Arial`
   })
   drawReportText(
     context,
@@ -2098,7 +2098,7 @@ function drawReportHeader(context, x, y, width) {
     {
       align: "right",
       color: "#6c7d94",
-      font: `600 ${getFontSize('sm')}px Arial`
+      font: `600 ${getFontSize("sm")}px Arial`
     }
   )
 }
@@ -2114,7 +2114,12 @@ function drawReportFilters(context, x, y, width) {
   let currentX = x
 
   for (const filter of filters) {
-    const text = fitReportText(context, filter, 190, `600 ${getFontSize('sm')}px Arial`)
+    const text = fitReportText(
+      context,
+      filter,
+      190,
+      `600 ${getFontSize("sm")}px Arial`
+    )
     const itemWidth = Math.min(210, context.measureText(text).width + 26)
 
     if (currentX + itemWidth > x + width) {
@@ -2133,7 +2138,7 @@ function drawReportFilters(context, x, y, width) {
     )
     drawReportText(context, text, currentX + 13, y + 20, {
       color: "#476179",
-      font: `600 ${getFontSize('sm')}px Arial`
+      font: `600 ${getFontSize("sm")}px Arial`
     })
     currentX += itemWidth + 10
   }
@@ -2179,26 +2184,36 @@ function drawReportMetrics(context, x, y, width, gap) {
     )
     drawReportText(context, item.label, cardX + 18, y + 28, {
       color: "#718197",
-      font: `700 ${getFontSize('sm')}px Arial`
+      font: `700 ${getFontSize("sm")}px Arial`
     })
     drawReportText(
       context,
-      fitReportText(context, item.value, cardWidth - 36, `700 ${getFontSize('xl')}px Arial`),
+      fitReportText(
+        context,
+        item.value,
+        cardWidth - 36,
+        `700 ${getFontSize("xl")}px Arial`
+      ),
       cardX + 18,
       y + 62,
       {
         color: "#19314d",
-        font: `700 ${getFontSize('xl')}px Arial`
+        font: `700 ${getFontSize("xl")}px Arial`
       }
     )
     drawReportText(
       context,
-      fitReportText(context, item.note, cardWidth - 36, `600 ${getFontSize('xs')}px Arial`),
+      fitReportText(
+        context,
+        item.note,
+        cardWidth - 36,
+        `600 ${getFontSize("xs")}px Arial`
+      ),
       cardX + 18,
       y + 84,
       {
         color: "#8290a4",
-        font: `600 ${getFontSize('xs')}px Arial`
+        font: `600 ${getFontSize("xs")}px Arial`
       }
     )
   })
@@ -2224,7 +2239,7 @@ function drawReportChart(
     drawReportText(context, emptyText, x + width / 2, y + height / 2 + 12, {
       align: "center",
       color: "#8b98aa",
-      font: `600 ${getFontSize('sm')}px Arial`
+      font: `600 ${getFontSize("sm")}px Arial`
     })
   }
 }
@@ -2247,7 +2262,7 @@ function drawReportList(
     drawReportText(context, emptyText, x + width / 2, y + 86, {
       align: "center",
       color: "#8b98aa",
-      font: `600 ${getFontSize('sm')}px Arial`
+      font: `600 ${getFontSize("sm")}px Arial`
     })
     return
   }
@@ -2267,33 +2282,43 @@ function drawReportList(
     )
     drawReportText(
       context,
-      fitReportText(context, item.title, width - 210, `700 ${getFontSize('sm')}px Arial`),
+      fitReportText(
+        context,
+        item.title,
+        width - 210,
+        `700 ${getFontSize("sm")}px Arial`
+      ),
       x + 30,
       currentY + 23,
       {
         color: "#253852",
-        font: `700 ${getFontSize('sm')}px Arial`
+        font: `700 ${getFontSize("sm")}px Arial`
       }
     )
     drawReportText(
       context,
-      fitReportText(context, item.description, width - 210, `600 ${getFontSize('xs')}px Arial`),
+      fitReportText(
+        context,
+        item.description,
+        width - 210,
+        `600 ${getFontSize("xs")}px Arial`
+      ),
       x + 30,
       currentY + 43,
       {
         color: "#7a8799",
-        font: `600 ${getFontSize('xs')}px Arial`
+        font: `600 ${getFontSize("xs")}px Arial`
       }
     )
     drawReportText(context, item.value, x + width - 30, currentY + 24, {
       align: "right",
       color: "#1c3450",
-      font: `700 ${getFontSize('base')}px Arial`
+      font: `700 ${getFontSize("base")}px Arial`
     })
     drawReportText(context, item.note, x + width - 30, currentY + 43, {
       align: "right",
       color: "#7a8799",
-      font: `600 ${getFontSize('xs')}px Arial`
+      font: `600 ${getFontSize("xs")}px Arial`
     })
     currentY += 66
   })
@@ -2302,16 +2327,16 @@ function drawReportList(
 function drawReportSectionHeader(context, x, y, width, title, subtitle) {
   drawReportText(context, title, x, y, {
     color: "#1e334d",
-    font: `700 ${getFontSize('lg')}px Arial`
+    font: `700 ${getFontSize("lg")}px Arial`
   })
   drawReportText(
     context,
-    fitReportText(context, subtitle, width, `600 ${getFontSize('xs')}px Arial`),
+    fitReportText(context, subtitle, width, `600 ${getFontSize("xs")}px Arial`),
     x,
     y + 21,
     {
       color: "#7a8799",
-      font: `600 ${getFontSize('xs')}px Arial`
+      font: `600 ${getFontSize("xs")}px Arial`
     }
   )
 }
@@ -2332,7 +2357,7 @@ function drawReportImage(context, image, x, y, width, height) {
 
 function drawReportText(context, text, x, y, options = {}) {
   context.fillStyle = options.color || "#1f2937"
-  context.font = options.font || `${getFontSize('sm')}px Arial`
+  context.font = options.font || `${getFontSize("sm")}px Arial`
   context.textAlign = options.align || "left"
   context.textBaseline = "alphabetic"
   context.fillText(String(text || ""), x, y)
@@ -3414,7 +3439,7 @@ function formatSessionLabel(item) {
   &__dialog {
     display: flex;
     width: 1040px;
-    max-height: 680px;
+    max-height: min(680px, calc(100dvh - 32px));
     flex-direction: column;
     gap: 14px;
     padding: 18px;
@@ -3571,6 +3596,7 @@ function formatSessionLabel(item) {
 
   &__pricing-list {
     display: flex;
+    height: 374px;
     min-height: 0;
     flex-direction: column;
     overflow: auto;
