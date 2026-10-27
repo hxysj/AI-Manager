@@ -94,69 +94,25 @@
         @pointerdown.stop="startResize($event, handle)"
       />
     </div>
-    <aside
+    <LongScreenshotPreview
       v-if="longBusy"
-      ref="longPreviewPanel"
-      class="long-screenshot-preview"
-      :style="longPreviewStyle"
-      aria-label="长截图实时预览"
-      @pointerdown.stop
-    >
-      <div class="long-preview-head">
-        <span class="long-preview-title">拼接预览</span>
-        <span class="long-preview-count">{{ longProgress }} 屏</span>
-      </div>
-      <div class="long-preview-image">
-        <canvas ref="longPreview" class="long-preview-canvas" />
-      </div>
-      <span class="long-preview-size"
-        >{{ longSize.width }} × {{ longSize.height }}</span
-      >
-      <div class="long-preview-actions">
-        <button
-          class="long-scroll-button"
-          :aria-pressed="longAutoScroll"
-          @click.stop="longAutoScroll = !longAutoScroll"
-        >
-          {{ longAutoScroll ? "暂停滚动" : "自动滚动" }}
-        </button>
-        <button class="long-finish-button" @click.stop="finishLongCapture">
-          完成截图
-        </button>
-      </div>
-      <span class="long-preview-hint">按 Esc 也可完成</span>
-    </aside>
-    <Teleport to="body">
-      <div
-        v-if="frame && pointer && !longBusy && !longCaptureRequested"
-        v-show="magnifierVisible"
-        class="capture-magnifier"
-        :style="magnifierStyle"
-      >
-        <div class="magnifier-preview">
-          <canvas
-            ref="magnifier"
-            class="magnifier-canvas"
-            width="168"
-            height="120"
-          />
-          <span class="magnifier-crosshair" />
-          <span class="magnifier-pixel" :style="{ background: pixelColor }" />
-        </div>
-        <span class="magnifier-coordinates"
-          >({{ Math.min(frame.width - 1, Math.floor(pointer.x)) + frame.left }},
-          {{
-            Math.min(frame.height - 1, Math.floor(pointer.y)) + frame.top
-          }})</span
-        >
-        <div class="magnifier-color">
-          <span class="magnifier-swatch" :style="{ background: pixelColor }" />
-          <span class="magnifier-value">{{ colorValue }}</span>
-        </div>
-        <span class="magnifier-hint">按 C 复制颜色值</span>
-        <span class="magnifier-hint">按 Shift 切换 RGB/HEX</span>
-      </div>
-    </Teleport>
+      ref="longPreview"
+      :panel-style="longPreviewStyle"
+      :progress="longProgress"
+      :size="longSize"
+      :auto-scroll="longAutoScroll"
+      @update:auto-scroll="longAutoScroll = $event"
+      @finish="finishLongCapture"
+    />
+    <CaptureMagnifier
+      v-if="frame && pointer && !longBusy && !longCaptureRequested"
+      ref="magnifier"
+      :frame="frame"
+      :pointer="pointer"
+      :pixel-color="pixelColor"
+      :color-value="colorValue"
+      :visible="magnifierVisible"
+    />
     <div v-if="error" class="capture-error" role="alert">{{ error }}</div>
   </div>
   <div
@@ -393,106 +349,17 @@
         </div>
       </div>
     </div>
-    <div
+    <PinToolbar
       v-if="toolbarVisible && !editing"
-      class="pin-toolbar"
-      @pointerdown.stop
-    >
-      <button
-        class="pin-toolbar-button"
-        type="button"
-        @click="pinAction('copy')"
-      >
-        复制
-      </button>
-      <button
-        class="pin-toolbar-button"
-        type="button"
-        @click="pinAction('export')"
-      >
-        保存
-      </button>
-      <button
-        class="pin-toolbar-button"
-        type="button"
-        @click="pinAction('edit')"
-      >
-        编辑
-      </button>
-      <button
-        class="pin-toolbar-button"
-        type="button"
-        @click="setZoom(currentZoom === 1 ? 2 : 1)"
-      >
-        缩放 {{ Math.round(currentZoom * 1000) / 10 }}%
-      </button>
-    </div>
+      :current-zoom="currentZoom"
+      @action="pinAction"
+      @toggle-zoom="setZoom(currentZoom === 1 ? 2 : 1)"
+    />
     <div v-if="error" class="pin-error" role="alert" @pointerdown.stop>
       {{ error }}
     </div>
   </div>
-  <Teleport to="body">
-    <div
-      v-if="ocrLoading"
-      class="ocr-loading-mask"
-      :style="ocrLoadingStyle"
-      role="status"
-      aria-live="polite"
-      aria-label="OCR 正在识别"
-    >
-      <section class="ocr-loading-dialog">
-        <span class="ocr-loading-spinner" aria-hidden="true" />
-        <span class="ocr-loading-title">正在识别文字</span>
-        <span class="ocr-loading-description">正在分析截图内容，请稍候…</span>
-      </section>
-    </div>
-  </Teleport>
-  <section
-    v-if="mode === 'ocr' && ocrResult"
-    class="ocr-result-dialog"
-    role="dialog"
-    aria-label="OCR 识别结果"
-  >
-    <header class="ocr-result-head" @pointerdown="dragOcrResult">
-      <span class="ocr-result-title">识别结果</span>
-      <span class="ocr-result-engine">{{ ocrResult.engine }}</span>
-      <button
-        type="button"
-        class="ocr-result-close"
-        aria-label="关闭识别结果"
-        @pointerdown.stop
-        @click="closeOcrResult"
-      >
-        ×
-      </button>
-    </header>
-    <textarea
-      v-model="ocrResult.text"
-      class="ocr-result-text"
-      spellcheck="false"
-      aria-label="识别文字"
-    />
-    <footer class="ocr-result-actions">
-      <span v-if="!ocrResult.text" class="ocr-result-empty">没有识别到文字</span>
-      <span v-else>{{ ocrResult.lines.length }} 行文字</span>
-      <button
-        type="button"
-        class="ocr-result-button"
-        :disabled="!ocrResult.text"
-        @click="copyOcrResult"
-      >
-        复制文字
-      </button>
-      <button
-        type="button"
-        class="ocr-result-button primary"
-        @click="closeOcrResult"
-      >
-        关闭
-      </button>
-    </footer>
-    <div v-if="error" class="ocr-result-error" role="alert">{{ error }}</div>
-  </section>
+  <OcrResultPanel v-if="mode === 'ocr'" :result-id="id" />
 </template>
 
 <script setup>
@@ -500,15 +367,18 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 import { screenshotApi } from "@/api/modules/screenshot"
 import { systemApi } from "@/api/modules/system"
 import { subscribeReady } from "@/api/request"
-import ImageEditor from "./ImageEditor.vue"
+import ImageEditor from "../ImageEditor/index.vue"
+import CaptureMagnifier from "./components/CaptureMagnifier.vue"
+import LongScreenshotPreview from "./components/LongScreenshotPreview.vue"
+import OcrResultPanel from "./components/OcrResultPanel.vue"
+import PinToolbar from "./components/PinToolbar.vue"
 import {
   canvasSource,
   detectPageRegions,
   selectionRect,
   thumbnailSource
-} from "../renderer"
-import { recognizePpocr } from "../ocr"
-import { captureLongScreenshot } from "../long-screenshot"
+} from "../../renderer"
+import { captureLongScreenshot } from "../../long-screenshot"
 
 const query = new URLSearchParams(location.search)
 const mode = query.get("mode")
@@ -543,33 +413,10 @@ const colorValue = computed(() =>
         .join(", ")
 )
 const busy = ref(false)
-// OCR 推理耗时较长时单独展示状态，避免与保存操作共用忙碌状态。
-const ocrLoading = ref(false)
 const error = ref("")
-const ocrResult = ref(null)
-const ocrLoadingStyle = computed(() => {
-  if (mode !== "capture")
-    return {
-      left: "0px",
-      top: "0px",
-      width: `${innerWidth}px`,
-      height: `${innerHeight}px`
-    }
-  const rect = selection.value
-  const bounds = desktop.value?.getBoundingClientRect()
-  if (!rect || !bounds || !frame.value) return {}
-  // 框选坐标是截图物理像素，loading 只覆盖映射后的选区。
-  return {
-    left: `${bounds.left + (rect.x * bounds.width) / frame.value.width}px`,
-    top: `${bounds.top + (rect.y * bounds.height) / frame.value.height}px`,
-    width: `${(rect.width * bounds.width) / frame.value.width}px`,
-    height: `${(rect.height * bounds.height) / frame.value.height}px`
-  }
-})
 const longBusy = ref(false)
 const longProgress = ref(0)
 const longPreview = ref(null)
-const longPreviewPanel = ref(null)
 const longAutoScroll = ref(false)
 const longSize = ref({ width: 0, height: 0 })
 let longController = null
@@ -609,7 +456,6 @@ const handles = Object.keys(resizeCursors)
 const magnifierVisible = computed(
   () =>
     !longBusy.value &&
-    !ocrLoading.value &&
     !longCaptureRequested.value &&
     !toolbarHovered.value &&
     !resizeHovered.value &&
@@ -684,17 +530,6 @@ const toolbarStyle = computed(() => {
       )
     )}px`,
     maxWidth: "calc(100vw - 8px)"
-  }
-})
-const magnifierStyle = computed(() => {
-  // 靠近屏幕边缘时翻到鼠标另一侧，保持预览和操作提示完整可见。
-  const { clientX, clientY } = pointer.value
-  const width = 186
-  const height = 226
-  const gap = 22
-  return {
-    left: `${Math.max(0, Math.min(clientX + gap + width <= innerWidth ? clientX + gap : clientX - width - gap, innerWidth - width))}px`,
-    top: `${Math.max(0, Math.min(clientY + gap + height <= innerHeight ? clientY + gap : clientY - height - gap, innerHeight - height))}px`
   }
 })
 // 阴影开关同时控制边框颜色，轮廓线不占用原图的显示尺寸。
@@ -959,22 +794,7 @@ async function movePointer(event) {
       .toUpperCase()}`
     // 放大镜已挂载后直接同步绘制，避免每次移动都等待 Vue 调度。
     if (!magnifier.value) await nextTick()
-    if (magnifier.value) {
-      const ctx = magnifier.value.getContext("2d")
-      ctx.clearRect(0, 0, 168, 120)
-      ctx.imageSmoothingEnabled = false
-      ctx.drawImage(
-        pixelCanvas,
-        Math.min(frame.value.width - 1, Math.floor(point.x)) - 10,
-        Math.min(frame.value.height - 1, Math.floor(point.y)) - 7,
-        21,
-        15,
-        0,
-        0,
-        168,
-        120
-      )
-    }
+    magnifier.value?.draw(pixelCanvas, point, frame.value)
   }
 }
 
@@ -1092,27 +912,8 @@ async function startLongCapture() {
         longSize.value = { width: canvas.width, height: canvas.height }
         await nextTick()
         if (!longPreview.value || controller !== longController) return
-        // 仅缩绘预览，不对每一帧生成整张 PNG，长图增长时保持较低内存占用。
-        const top = Number.parseFloat(longPreviewStyle.value.top)
-        const scale = Math.min(
-          174 / canvas.width,
-          Math.min(260, Math.max(40, innerHeight - top - 164)) / canvas.height
-        )
-        longPreview.value.width = Math.max(1, Math.round(canvas.width * scale))
-        longPreview.value.height = Math.max(
-          1,
-          Math.round(canvas.height * scale)
-        )
-        longPreview.value
-          .getContext("2d")
-          .drawImage(
-            canvas,
-            0,
-            0,
-            longPreview.value.width,
-            longPreview.value.height
-          )
-        const panel = longPreviewPanel.value.getBoundingClientRect()
+        const panel = await longPreview.value.draw(canvas)
+        if (!panel || controller !== longController) return
         const bounds = desktop.value.getBoundingClientRect()
         await screenshotApi.call("long-preview", {
           x: Math.round(
@@ -1164,8 +965,6 @@ async function output(data) {
   busy.value = true
   error.value = ""
   try {
-    const generation = frameGeneration
-    const documentVersion = documentGeneration
     const origin =
       mode === "capture"
         ? {
@@ -1173,40 +972,23 @@ async function output(data) {
             y: frame.value.top + selection.value.y
           }
         : { x: document.value.pin.x, y: document.value.pin.y }
-    let result
-    if (data.action === "ocr") {
-      ocrResult.value = null
-      ocrLoading.value = true
-      // 先让 loading 状态完成渲染，再开始模型加载和推理。
-      await nextTick()
+    if (data.action === "ocr" && data.source.startsWith("blob:")) {
       let source = data.source
-      // 已有贴图的 Blob 地址需要转成图片数据，供识别和自动贴图共同使用。
-      if (source.startsWith("blob:")) {
-        const blob = await fetch(source).then((response) => response.blob())
-        source = await new Promise((resolve, reject) => {
-          const reader = new FileReader()
-          reader.onload = () => resolve(reader.result)
-          reader.onerror = () => reject(reader.error || new Error("OCR 图片读取失败"))
-          reader.readAsDataURL(blob)
-        })
-      }
+      // 已有贴图的 Blob 地址先恢复为可持久化图片，识别改由结果窗异步执行。
+      const blob = await fetch(source).then((response) => response.blob())
+      source = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = () =>
+          reject(reader.error || new Error("OCR 图片读取失败"))
+        reader.readAsDataURL(blob)
+      })
       data = {
         ...data,
         source,
-        output: !data.output || data.output === data.source ? source : data.output
+        output:
+          !data.output || data.output === data.source ? source : data.output
       }
-      const settings = await screenshotApi.call("status")
-      if (settings?.ocr?.useLargeModel) {
-        result = await screenshotApi.call("ocr", { source: data.source })
-      } else {
-        result = await recognizePpocr(data.source)
-      }
-      if (
-        disposed ||
-        generation !== frameGeneration ||
-        documentVersion !== documentGeneration
-      )
-        return
     }
     if (savedOutput?.output !== data.output) {
       const newId = await screenshotApi.call("save-document", {
@@ -1217,13 +999,6 @@ async function output(data) {
         editingPinId: mode === "capture" ? null : id,
         origin
       })
-      if (
-        data.action === "ocr" &&
-        (disposed ||
-          generation !== frameGeneration ||
-          documentVersion !== documentGeneration)
-      )
-        return
       savedOutput = { id: newId, output: data.output }
     }
     const newId = savedOutput.id
@@ -1237,10 +1012,9 @@ async function output(data) {
         id: newId,
         capture: mode === "capture"
       })
-    if (result) {
-      // 先打开独立结果窗口，避免已有贴图关闭时中断后续调用。
-      await screenshotApi.call("ocr-result-open", { id: newId, result })
-    }
+    if (data.action === "ocr")
+      // 贴图创建后立即打开右侧结果窗，模型加载和推理只影响该窗口。
+      await screenshotApi.call("ocr-result-open", { id: newId })
     if (mode === "capture") {
       if (data.action !== "pin" && data.action !== "ocr")
         await screenshotApi.call("cancel")
@@ -1253,35 +1027,7 @@ async function output(data) {
   } catch (cause) {
     error.value = `操作失败：${String(cause)}`
   } finally {
-    ocrLoading.value = false
     busy.value = false
-  }
-}
-
-async function dragOcrResult(event) {
-  if (event.button !== 0) return
-  try {
-    await screenshotApi.call("ocr-result-action", { id, action: "drag" })
-  } catch (cause) {
-    error.value = `移动识别结果失败：${String(cause)}`
-  }
-}
-
-async function closeOcrResult() {
-  try {
-    await screenshotApi.call("ocr-result-action", { id, action: "close" })
-  } catch (cause) {
-    error.value = `关闭识别结果失败：${String(cause)}`
-  }
-}
-
-async function copyOcrResult() {
-  if (!ocrResult.value?.text) return
-  try {
-    await navigator.clipboard.writeText(ocrResult.value.text)
-    error.value = ""
-  } catch (cause) {
-    error.value = `复制识别文字失败：${String(cause)}`
   }
 }
 
@@ -1611,14 +1357,8 @@ async function setOpacity(event) {
 }
 
 async function keydown(event) {
-  // 结果窗口只关闭自身，文本编辑与复制继续由输入框处理。
-  if (mode === "ocr") {
-    if (event.key === "Escape" && !event.isComposing) {
-      event.preventDefault()
-      await closeOcrResult()
-    }
-    return
-  }
+  // OCR 子组件独立处理结果窗口快捷键，避免与截图快捷键耦合。
+  if (mode === "ocr") return
   if (mode === "capture" && longBusy.value) {
     if (event.key === "Escape") {
       event.preventDefault()
@@ -1724,7 +1464,6 @@ function resetCapture() {
   longBusy.value = false
   longAutoScroll.value = false
   longCaptureRequested.value = false
-  ocrLoading.value = false
   frameGeneration += 1
   // 仅清空像素，保留画布缓冲区，下一次唤出不再反复缩小和扩容。
   if (captureBackground.value) {
@@ -1818,13 +1557,7 @@ onMounted(async () => {
       )
       await loadFrame()
       if (!frame.value) await screenshotApi.call("capture-window-ready")
-    } else if (mode === "ocr") {
-      // 先完成结果布局再显示原生窗口，避免弹出空白窗口。
-      ocrResult.value = await screenshotApi.call("ocr-result", { id })
-      if (disposed) return
-      await nextTick()
-      await screenshotApi.call("ocr-result-action", { id, action: "ready" })
-    } else {
+    } else if (mode !== "ocr") {
       if (!(await loadDocument())) return
       opacity.value = document.value.pin?.opacity ?? 1
       pinGroup.value = document.value.pin?.group || "Default"
@@ -1927,86 +1660,6 @@ onBeforeUnmount(() => {
     background: #17212bec;
     font-size: var(--font-size-sm);
     white-space: nowrap;
-  }
-  .long-screenshot-preview {
-    position: absolute;
-    z-index: 8;
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    width: 196px;
-    padding: 10px;
-    gap: 8px;
-    border: 1px solid #334155;
-    border-radius: 9px;
-    background: #111827f5;
-    color: #e2e8f0;
-    box-shadow: 0 6px 24px #0005;
-    font-size: 12px;
-    pointer-events: auto;
-    .long-preview-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      .long-preview-title {
-        color: #f8fafc;
-      }
-      .long-preview-count {
-        color: #86efac;
-      }
-    }
-    .long-preview-image {
-      display: flex;
-      justify-content: center;
-      overflow: hidden;
-      border-radius: 3px;
-      background: #020617;
-      .long-preview-canvas {
-        display: block;
-        max-width: 100%;
-      }
-    }
-    .long-preview-size {
-      align-self: center;
-      color: #94a3b8;
-    }
-    .long-preview-actions {
-      display: flex;
-      gap: 6px;
-      .long-scroll-button,
-      .long-finish-button {
-        flex: 1;
-        padding: 7px 0;
-        border: 1px solid #475569;
-        border-radius: 5px;
-        background: #1e293b;
-        color: #e2e8f0;
-        font-size: 12px;
-        cursor: pointer;
-        &:hover {
-          background: #334155;
-        }
-      }
-      .long-scroll-button[aria-pressed="true"] {
-        border-color: #7dd3fc;
-        color: #7dd3fc;
-      }
-      .long-finish-button {
-        border-color: #4ade80;
-        background: #166534;
-        color: #f0fdf4;
-        &:hover {
-          background: #15803d;
-        }
-      }
-    }
-    .long-preview-hint {
-      padding-top: 8px;
-      border-top: 1px solid #334155;
-      color: #bbf7d0;
-      text-align: center;
-    }
   }
   .capture-selection {
     position: absolute;
@@ -2147,92 +1800,6 @@ onBeforeUnmount(() => {
     font-size: var(--font-size-sm);
   }
 }
-.capture-magnifier {
-  position: fixed;
-  z-index: 1100;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  box-sizing: border-box;
-  width: 186px;
-  padding: 8px;
-  gap: 4px;
-  border: 1px solid #b7b7b7;
-  background: #1b1b1bf2;
-  color: #fff;
-  font-family: Consolas, "Microsoft YaHei", monospace;
-  font-size: 12px;
-  line-height: 18px;
-  text-align: center;
-  pointer-events: none;
-  .magnifier-preview {
-    position: relative;
-    width: 168px;
-    height: 120px;
-    overflow: hidden;
-    background: #252525;
-    .magnifier-canvas {
-      display: block;
-      width: 168px;
-      height: 120px;
-      image-rendering: pixelated;
-    }
-    .magnifier-crosshair {
-      position: absolute;
-      inset: 0;
-      &::before,
-      &::after {
-        position: absolute;
-        content: "";
-        background: #4aa3df66;
-      }
-      &::before {
-        left: 80px;
-        top: 0;
-        width: 8px;
-        height: 100%;
-      }
-      &::after {
-        left: 0;
-        top: 56px;
-        width: 100%;
-        height: 8px;
-      }
-    }
-    .magnifier-pixel {
-      position: absolute;
-      left: 80px;
-      top: 56px;
-      box-sizing: border-box;
-      width: 8px;
-      height: 8px;
-      border: 1px solid #fff;
-      outline: 1px solid #111;
-    }
-  }
-  .magnifier-coordinates,
-  .magnifier-hint {
-    white-space: nowrap;
-  }
-  .magnifier-color {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-    .magnifier-swatch {
-      box-sizing: border-box;
-      width: 14px;
-      height: 14px;
-      border: 1px solid #ddd;
-    }
-    .magnifier-value {
-      white-space: nowrap;
-    }
-  }
-  .magnifier-hint {
-    color: #e6e6e6;
-  }
-}
 .pin-window {
   position: fixed;
   inset: 0;
@@ -2362,33 +1929,6 @@ onBeforeUnmount(() => {
       justify-content: space-between;
     }
   }
-  .pin-toolbar {
-    position: absolute;
-    top: 8px;
-    left: 50%;
-    z-index: 8;
-    display: flex;
-    gap: 2px;
-    padding: 4px;
-    border: 1px solid #a7a7a7;
-    border-radius: 5px;
-    background: #f8f8f8;
-    box-shadow: 0 2px 8px #0004;
-    transform: translateX(-50%);
-    .pin-toolbar-button {
-      min-width: 45px;
-      padding: 4px 8px;
-      border: 0;
-      border-radius: 3px;
-      background: transparent;
-      color: #1d1d1d;
-      cursor: pointer;
-      font-size: 12px;
-      &:hover {
-        background: #c7e4ff;
-      }
-    }
-  }
   .pin-error {
     position: absolute;
     z-index: 20;
@@ -2398,139 +1938,6 @@ onBeforeUnmount(() => {
     background: #7f1d1d;
     color: #fff;
     font-size: var(--font-size-xs);
-  }
-}
-
-.ocr-loading-mask {
-  position: fixed;
-  z-index: 3001;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  background: #0007;
-  cursor: progress;
-  .ocr-loading-dialog {
-    display: flex;
-    max-width: 100%;
-    flex-direction: column;
-    align-items: center;
-    gap: 8px;
-    padding: 10px;
-    box-sizing: border-box;
-    color: #fff;
-    text-align: center;
-    font-size: 13px;
-    .ocr-loading-spinner {
-      width: 18px;
-      height: 18px;
-      flex: 0 0 auto;
-      border: 2px solid #ffffff66;
-      border-top-color: #fff;
-      border-radius: 50%;
-      animation: ocr-loading-spin 0.8s linear infinite;
-    }
-    .ocr-loading-description {
-      color: #e2e8f0;
-      font-size: 12px;
-    }
-  }
-}
-
-@keyframes ocr-loading-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-.ocr-result-dialog {
-  display: flex;
-  width: 100vw;
-  height: 100vh;
-  flex-direction: column;
-  box-sizing: border-box;
-  overflow: hidden;
-  border: 1px solid #b7c4d4;
-  border-radius: 10px;
-  background: #fff;
-  color: #1f2937;
-  box-shadow: 0 18px 60px #0005;
-  .ocr-result-head,
-  .ocr-result-actions {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 12px;
-    padding: 12px 16px;
-  }
-  .ocr-result-head {
-    border-bottom: 1px solid #e5e7eb;
-    cursor: move;
-    user-select: none;
-    .ocr-result-title {
-      flex-shrink: 0;
-      font-size: 15px;
-    }
-    .ocr-result-engine {
-      overflow: hidden;
-      color: #64748b;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 12px;
-    }
-    .ocr-result-close {
-      margin-left: auto;
-      border: 0;
-      background: transparent;
-      color: #64748b;
-      cursor: pointer;
-      font-size: 24px;
-      line-height: 20px;
-    }
-  }
-  .ocr-result-text {
-    min-height: 0;
-    flex: 1;
-    padding: 14px 16px;
-    border: 0;
-    outline: 0;
-    resize: none;
-    color: #111827;
-    font:
-      14px/1.7 Consolas,
-      "Microsoft YaHei",
-      sans-serif;
-  }
-  .ocr-result-actions {
-    border-top: 1px solid #e5e7eb;
-    color: #64748b;
-    font-size: 12px;
-    .ocr-result-empty {
-      color: #b45309;
-    }
-    .ocr-result-button {
-      padding: 6px 12px;
-      border: 1px solid #cbd5e1;
-      border-radius: 6px;
-      background: #fff;
-      color: #334155;
-      cursor: pointer;
-      &:disabled {
-        cursor: not-allowed;
-        opacity: 0.45;
-      }
-      &.primary {
-        margin-left: auto;
-        border-color: #2563eb;
-        background: #2563eb;
-        color: #fff;
-      }
-    }
-  }
-  .ocr-result-error {
-    padding: 8px 16px;
-    color: #b45309;
-    font-size: 12px;
   }
 }
 </style>

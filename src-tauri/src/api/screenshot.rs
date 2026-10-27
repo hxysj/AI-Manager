@@ -195,7 +195,7 @@ pub struct ScreenshotService {
     hotkeys_paused: AtomicBool,
     view_save_pending: AtomicBool,
     menu_windows: Mutex<HashMap<String, (PhysicalPosition<i32>, PhysicalSize<u32>)>>,
-    // 识别文本只在结果窗口存活期间保存在内存中。
+    // OCR 任务只在结果窗口存活期间保存在内存中。
     ocr_results: Mutex<HashMap<String, Value>>,
     pub hotkey_errors: Mutex<Vec<String>>,
     pub startup_errors: Mutex<Vec<String>>,
@@ -773,9 +773,9 @@ pub async fn dispatch(
             let entry = service.session.lock().unwrap().entries.iter()
                 .find(|entry| entry.id == id).cloned()
                 .ok_or_else(|| failure("截图记录不存在"))?;
-            let origin = entry.origin.ok_or_else(|| failure("截图选区位置不存在"))?;
+            let pin = entry.pin.ok_or_else(|| failure("贴图窗口尚未创建"))?;
             let rect = CaptureRect {
-                x: origin.x, y: origin.y, width: entry.width, height: entry.height,
+                x: pin.x, y: pin.y, width: pin.width, height: pin.height,
             };
             let center_x = f64::from(rect.x) + f64::from(rect.width) / 2.0;
             let center_y = f64::from(rect.y) + f64::from(rect.height) / 2.0;
@@ -783,11 +783,20 @@ pub async fn dispatch(
                 .or(app.primary_monitor().map_err(failure)?)
                 .ok_or_else(|| failure("没有可用显示器"))?;
             let scale = monitor.scale_factor();
-            let (position, size) = ocr_result_bounds(rect, scale, monitor.work_area());
-            let result = &payload["result"];
-            if !result["text"].is_string() || !result["lines"].is_array() || !result["engine"].is_string() {
-                return Err(failure("OCR 识别结果无效"));
-            }
+            let (position, size) =
+                ocr_result_bounds(rect, scale, monitor.work_area(), 420.0, 480.0);
+            let min_width = (420.0 * scale)
+                .round()
+                .max(1.0)
+                .min(f64::from(monitor.work_area().size.width.max(1))) as u32;
+            let max_width = (960.0 * scale)
+                .round()
+                .max(f64::from(min_width))
+                .min(f64::from(monitor.work_area().size.width.max(1))) as u32;
+            let min_height = (280.0 * scale)
+                .round()
+                .max(1.0)
+                .min(f64::from(monitor.work_area().size.height.max(1))) as u32;
             let pin_window = app.get_webview_window(&format!("screenshot-pin-{id}"))
                 .ok_or_else(|| failure("贴图窗口不存在"))?;
             let result_id = uuid::Uuid::new_v4().to_string();
@@ -798,7 +807,12 @@ pub async fn dispatch(
             )
             .title("OCR 识别结果")
             .decorations(false)
-            .resizable(false)
+            .resizable(true)
+            .min_inner_size(f64::from(min_width) / scale, f64::from(min_height) / scale)
+            .max_inner_size(
+                f64::from(max_width) / scale,
+                f64::from(monitor.work_area().size.height) / scale,
+            )
             .skip_taskbar(true)
             .always_on_top(true)
             .transparent(true)
@@ -811,7 +825,10 @@ pub async fn dispatch(
             // 结果窗口始终显示在对应贴图上方，仍可独立拖动和关闭。
             .parent(&pin_window)
             .map_err(failure)?;
-            service.ocr_results.lock().unwrap().insert(result_id.clone(), result.clone());
+            service.ocr_results.lock().unwrap().insert(
+                result_id.clone(),
+                json!({ "documentId": id }),
+            );
             let window = builder.build();
             match window {
                 Ok(window) => {
@@ -833,12 +850,46 @@ pub async fn dispatch(
         "ocr-result" => service.ocr_results.lock().unwrap().get(id_from(&payload)?).cloned()
             .ok_or_else(|| failure("OCR 识别结果不存在")),
         "ocr-result-action" => {
-            let window = app.get_webview_window(&format!("screenshot-ocr-{}", id_from(&payload)?))
+            let result_id = id_from(&payload)?.to_string();
+            let window = app.get_webview_window(&format!("screenshot-ocr-{result_id}"))
                 .ok_or_else(|| failure("OCR 结果窗口不存在"))?;
             match payload["action"].as_str().unwrap_or("") {
                 "ready" => {
                     window.show().map_err(failure)?;
                     window.set_focus().map_err(failure)?;
+                }
+                "resize" => {
+                    let width = payload["width"].as_f64()
+                        .filter(|width| *width > 0.0)
+                        .ok_or_else(|| failure("OCR 结果窗口宽度无效"))?;
+                    let document_id = service.ocr_results.lock().unwrap()
+                        .get(&result_id)
+                        .and_then(|task| task["documentId"].as_str())
+                        .map(str::to_string)
+                        .ok_or_else(|| failure("OCR 任务不存在"))?;
+                    let entry = service.session.lock().unwrap().entries.iter()
+                        .find(|entry| entry.id == document_id).cloned()
+                        .ok_or_else(|| failure("截图记录不存在"))?;
+                    let pin = entry.pin.ok_or_else(|| failure("贴图窗口尚未创建"))?;
+                    let rect = CaptureRect {
+                        x: pin.x, y: pin.y, width: pin.width, height: pin.height,
+                    };
+                    let center_x = f64::from(rect.x) + f64::from(rect.width) / 2.0;
+                    let center_y = f64::from(rect.y) + f64::from(rect.height) / 2.0;
+                    let monitor = app.monitor_from_point(center_x, center_y).map_err(failure)?
+                        .or(app.primary_monitor().map_err(failure)?)
+                        .ok_or_else(|| failure("没有可用显示器"))?;
+                    let scale = monitor.scale_factor();
+                    let current = window.inner_size().map_err(failure)?;
+                    let (position, size) = ocr_result_bounds(
+                        rect,
+                        scale,
+                        monitor.work_area(),
+                        width,
+                        f64::from(current.height) / scale,
+                    );
+                    window.set_position(position).map_err(failure)?;
+                    window.set_size(size).map_err(failure)?;
                 }
                 "drag" => window.start_dragging().map_err(failure)?,
                 "close" => window.destroy().map_err(failure)?,
@@ -1458,18 +1509,35 @@ fn ocr_result_bounds(
     rect: CaptureRect,
     scale: f64,
     work_area: &tauri::PhysicalRect<i32, u32>,
+    logical_width: f64,
+    logical_height: f64,
 ) -> (PhysicalPosition<i32>, PhysicalSize<u32>) {
-    let width = (720.0 * scale).round().max(1.0).min(f64::from(work_area.size.width.max(1))) as u32;
-    let height = (480.0 * scale).round().max(1.0).min(f64::from(work_area.size.height.max(1))) as u32;
-    // 默认以已确认选区的中心定位，靠边时仅做工作区边界约束。
-    let x = i64::from(rect.x) + (i64::from(rect.width) - i64::from(width)) / 2;
-    let y = i64::from(rect.y) + (i64::from(rect.height) - i64::from(height)) / 2;
+    let width = (logical_width.clamp(420.0, 960.0) * scale)
+        .round()
+        .max(1.0)
+        .min(f64::from(work_area.size.width.max(1))) as u32;
+    let height = (logical_height * scale)
+        .round()
+        .max(1.0)
+        .min(f64::from(work_area.size.height.max(1))) as u32;
     let left = i64::from(work_area.position.x);
     let top = i64::from(work_area.position.y);
     let right = left + i64::from(work_area.size.width.saturating_sub(width));
     let bottom = top + i64::from(work_area.size.height.saturating_sub(height));
+    let gap = (12.0 * scale).round() as i64;
+    let preferred_right = i64::from(rect.x) + i64::from(rect.width) + gap;
+    let preferred_left = i64::from(rect.x) - i64::from(width) - gap;
+    // 优先紧邻贴图右侧；右侧空间不足时放到左侧，极窄工作区才贴边显示。
+    let x = if preferred_right + i64::from(width) <= left + i64::from(work_area.size.width) {
+        preferred_right
+    } else if preferred_left >= left && preferred_left <= right {
+        preferred_left
+    } else {
+        preferred_right.clamp(left, right)
+    };
+    let y = i64::from(rect.y).clamp(top, bottom);
     (
-        PhysicalPosition::new(x.clamp(left, right) as i32, y.clamp(top, bottom) as i32),
+        PhysicalPosition::new(x as i32, y as i32),
         PhysicalSize::new(width, height),
     )
 }
@@ -1857,7 +1925,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ocr_result_centers_on_selection_across_monitors_and_scale_factors() {
+    fn ocr_result_opens_beside_pin_across_monitors_and_scale_factors() {
         for (rect, scale, work_area, expected_position, expected_size) in [
             (
                 CaptureRect { x: 200, y: 200, width: 800, height: 600 },
@@ -1866,8 +1934,8 @@ mod tests {
                     position: PhysicalPosition::new(0, 0),
                     size: PhysicalSize::new(1920, 1040),
                 },
-                PhysicalPosition::new(240, 260),
-                PhysicalSize::new(720, 480),
+                PhysicalPosition::new(1012, 200),
+                PhysicalSize::new(420, 480),
             ),
             (
                 CaptureRect { x: -1720, y: 100, width: 800, height: 600 },
@@ -1876,8 +1944,8 @@ mod tests {
                     position: PhysicalPosition::new(-1920, -100),
                     size: PhysicalSize::new(1920, 1040),
                 },
-                PhysicalPosition::new(-1680, 160),
-                PhysicalSize::new(720, 480),
+                PhysicalPosition::new(-908, 100),
+                PhysicalSize::new(420, 480),
             ),
             (
                 CaptureRect { x: -2200, y: 200, width: 1600, height: 1000 },
@@ -1886,11 +1954,12 @@ mod tests {
                     position: PhysicalPosition::new(-2560, 0),
                     size: PhysicalSize::new(2560, 1440),
                 },
-                PhysicalPosition::new(-2120, 220),
-                PhysicalSize::new(1440, 960),
+                PhysicalPosition::new(-840, 200),
+                PhysicalSize::new(840, 960),
             ),
         ] {
-            let (position, size) = ocr_result_bounds(rect, scale, &work_area);
+            let (position, size) =
+                ocr_result_bounds(rect, scale, &work_area, 420.0, 480.0);
             assert_eq!(position, expected_position);
             assert_eq!(size, expected_size);
         }
@@ -1899,18 +1968,45 @@ mod tests {
     #[test]
     fn ocr_result_stays_inside_work_area_near_edges_and_on_small_screens() {
         let rect = CaptureRect { x: 1880, y: 1020, width: 40, height: 20 };
-        let (position, size) = ocr_result_bounds(rect, 1.0, &tauri::PhysicalRect {
-            position: PhysicalPosition::new(0, 0),
-            size: PhysicalSize::new(1920, 1040),
-        });
-        assert_eq!(position, PhysicalPosition::new(1200, 560));
-        assert_eq!(size, PhysicalSize::new(720, 480));
-        let (position, size) = ocr_result_bounds(rect, 2.0, &tauri::PhysicalRect {
-            position: PhysicalPosition::new(0, 0),
-            size: PhysicalSize::new(800, 600),
-        });
+        let (position, size) = ocr_result_bounds(
+            rect,
+            1.0,
+            &tauri::PhysicalRect {
+                position: PhysicalPosition::new(0, 0),
+                size: PhysicalSize::new(1920, 1040),
+            },
+            420.0,
+            480.0,
+        );
+        assert_eq!(position, PhysicalPosition::new(1448, 560));
+        assert_eq!(size, PhysicalSize::new(420, 480));
+        let (position, size) = ocr_result_bounds(
+            rect,
+            2.0,
+            &tauri::PhysicalRect {
+                position: PhysicalPosition::new(0, 0),
+                size: PhysicalSize::new(800, 600),
+            },
+            420.0,
+            480.0,
+        );
         assert_eq!(position, PhysicalPosition::new(0, 0));
         assert_eq!(size, PhysicalSize::new(800, 600));
+    }
+
+    #[test]
+    fn ocr_result_width_stays_between_minimum_and_maximum() {
+        let rect = CaptureRect { x: 100, y: 100, width: 300, height: 200 };
+        let work_area = tauri::PhysicalRect {
+            position: PhysicalPosition::new(0, 0),
+            size: PhysicalSize::new(2560, 1440),
+        };
+        let (_, minimum) =
+            ocr_result_bounds(rect, 1.0, &work_area, 120.0, 480.0);
+        let (_, maximum) =
+            ocr_result_bounds(rect, 1.0, &work_area, 1600.0, 480.0);
+        assert_eq!(minimum.width, 420);
+        assert_eq!(maximum.width, 960);
     }
 
     struct TestRoot(PathBuf);

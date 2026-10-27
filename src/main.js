@@ -9,7 +9,7 @@ installRuntimeLogging()
 if (new URLSearchParams(location.search).get("panel") === "screenshot") {
   document.documentElement.style.background = "transparent"
   document.body.style.background = "transparent"
-  import("./features/screenshot/components/ScreenshotWindow.vue").then(
+  import("./features/screenshot/components/ScreenshotWindow/index.vue").then(
     ({ default: ScreenshotWindow }) => {
       installAppLogging(createApp(ScreenshotWindow)).mount("#app")
     }
