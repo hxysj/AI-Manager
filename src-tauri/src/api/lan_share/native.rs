@@ -1196,6 +1196,85 @@ async fn process_secure_operation(
                 });
             Ok(json!({ "exists": exists }))
         }
+        "upload-status" => {
+            let source_id = string_value(payload.get("messageId"));
+            if source_id.is_empty()
+                || source_id.len() > 100
+                || !source_id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || character == '-' || character == '_'
+                })
+            {
+                return Err(ManagerError::System("消息标识无效。".into()));
+            }
+            let session = peer_session(
+                registry,
+                paths,
+                peer,
+                &string_value(payload.get("sessionId")),
+                payload.get("group"),
+            )
+            .await?;
+            let requests = payload["files"]
+                .as_array()
+                .filter(|files| {
+                    !files.is_empty() && files.len() <= attachments::MAX_ATTACHMENTS
+                })
+                .ok_or_else(|| ManagerError::System("附件状态查询无效。".into()))?;
+            attachments::cleanup_uploads(registry, paths).await?;
+            let mut statuses = Vec::with_capacity(requests.len());
+            let mut event_files = Vec::with_capacity(requests.len());
+            let mut total_bytes = 0u64;
+            for (index, request) in requests.iter().enumerate() {
+                if request["fileIndex"].as_u64() != Some(index as u64) {
+                    return Err(ManagerError::System("附件状态顺序无效。".into()));
+                }
+                let total_size = request["totalSize"]
+                    .as_u64()
+                    .ok_or_else(|| ManagerError::System("附件大小无效。".into()))?;
+                let name = string_value(request.get("name"));
+                let mime_type = mime_guess::from_path(&name)
+                    .first_or_octet_stream()
+                    .essence_str()
+                    .to_string();
+                let status = attachments::upload_status(
+                    registry,
+                    paths,
+                    &session.id,
+                    &string_value(request.get("uploadId")),
+                    &name,
+                    request["chunkTotal"]
+                        .as_u64()
+                        .ok_or_else(|| ManagerError::System("附件分块数无效。".into()))?,
+                    total_size,
+                )
+                .await?;
+                total_bytes = total_bytes.saturating_add(total_size);
+                event_files.push(json!({
+                    "index": index,
+                    "name": name,
+                    "size": total_size,
+                    "mimeType": mime_type,
+                    "loadedBytes": status["loadedBytes"],
+                    "complete": status["complete"]
+                }));
+                statuses.push(status);
+            }
+            if let Some(app) = app {
+                let _ = app.emit(
+                    EVENT_INCOMING_TRANSFER_PROGRESS,
+                    json!({
+                        "phase": "start",
+                        "messageId": source_id,
+                        "sessionId": session.id,
+                        "deviceId": peer.id,
+                        "deviceName": peer.name,
+                        "totalBytes": total_bytes,
+                        "files": event_files
+                    }),
+                );
+            }
+            Ok(json!({ "sessionId": session.id, "files": statuses }))
+        }
         "file-chunk" => {
             let session = peer_session(
                 registry,
@@ -1210,8 +1289,33 @@ async fn process_secure_operation(
                     .as_u64()
                     .ok_or_else(|| ManagerError::System(format!("分块参数 {key} 无效。")))
             };
+            let source_id = string_value(payload.get("messageId"));
+            if !source_id.is_empty()
+                && (source_id.len() > 100
+                    || !source_id.chars().all(|character| {
+                        character.is_ascii_alphanumeric() || character == '-' || character == '_'
+                    }))
+            {
+                return Err(ManagerError::System("消息标识无效。".into()));
+            }
             let upload_id = string_value(payload.get("uploadId"));
             let chunk_index = number("chunkIndex")?;
+            let total_size = number("totalSize")?;
+            let progress = if source_id.is_empty() {
+                None
+            } else {
+                let file_index = number("fileIndex")?;
+                let file_count = number("fileCount")?;
+                let message_total_bytes = number("messageTotalBytes")?;
+                if file_count == 0
+                    || file_count > attachments::MAX_ATTACHMENTS as u64
+                    || file_index >= file_count
+                    || message_total_bytes < total_size
+                {
+                    return Err(ManagerError::System("附件进度参数无效。".into()));
+                }
+                Some((file_index, file_count, message_total_bytes))
+            };
             let file = attachments::upload_chunk(
                 Full::new(bytes),
                 registry,
@@ -1222,12 +1326,35 @@ async fn process_secure_operation(
                 chunk_index,
                 number("chunkTotal")?,
                 number("offset")?,
-                number("totalSize")?,
+                total_size,
                 number("contentLength")?,
                 &string_value(payload.get("contentRange")),
                 &string_value(payload.get("sha256")),
             )
             .await?;
+            if let (Some(app), Some((file_index, file_count, message_total_bytes))) =
+                (app, progress)
+            {
+                let _ = app.emit(
+                    EVENT_INCOMING_TRANSFER_PROGRESS,
+                    json!({
+                        "phase": "progress",
+                        "messageId": source_id,
+                        "sessionId": session.id,
+                        "deviceId": peer.id,
+                        "deviceName": peer.name,
+                        "fileIndex": file_index,
+                        "fileCount": file_count,
+                        "fileName": string_value(payload.get("name")),
+                        "fileSize": total_size,
+                        "fileLoadedBytes": (chunk_index + 1)
+                            .saturating_mul(attachments::FILE_CHUNK_BYTES)
+                            .min(total_size),
+                        "fileComplete": file.is_some(),
+                        "totalBytes": message_total_bytes
+                    }),
+                );
+            }
             Ok(json!({
                 "complete": file.is_some(), "file": file.as_ref().map(attachments::Attachment::from),
                 "sessionId": session.id, "uploadId": upload_id, "chunkIndex": chunk_index
@@ -1285,6 +1412,18 @@ async fn process_secure_operation(
             attachments::publish(registry, paths, &files).await?;
             if let Some(app) = app {
                 emit_message_created(app, &stored);
+                if !files.is_empty() {
+                    let _ = app.emit(
+                        EVENT_INCOMING_TRANSFER_PROGRESS,
+                        json!({
+                            "phase": "complete",
+                            "messageId": source_id,
+                            "storedMessageId": stored.id,
+                            "sessionId": stored.session_id,
+                            "deviceId": peer.id
+                        }),
+                    );
+                }
                 emit_state_changed(app, registry, paths).await?;
             }
             Ok(json!({ "messageId": stored.id }))
@@ -1517,7 +1656,13 @@ where
             }
             "paired" => matches!(
                 operation.as_str(),
-                "ping" | "message-exists" | "file-chunk" | "message" | "group-sync" | "device-removed"
+                "ping"
+                    | "message-exists"
+                    | "upload-status"
+                    | "file-chunk"
+                    | "message"
+                    | "group-sync"
+                    | "device-removed"
             ),
             _ => false,
         } && !(auth.receiver.is_empty() && operation != "info");
@@ -1689,6 +1834,17 @@ pub(super) async fn sync_group_to_peer(
     Ok(true)
 }
 
+fn transfer_upload_id(
+    sender_id: &str,
+    group_id: &str,
+    message_id: &str,
+    file_id: &str,
+) -> String {
+    create_stable_id(&format!(
+        "lan-upload:{sender_id}:{group_id}:{message_id}:{file_id}"
+    ))
+}
+
 async fn deliver_to_peer(
     registry: &LanShareServerRegistry,
     paths: &AppPaths,
@@ -1759,10 +1915,101 @@ async fn deliver_to_peer(
     if existing["exists"] == true {
         return Ok(true);
     }
-    // 进度以对端已确认的字节为准，只推送小事件，不写盘或刷新聊天历史。
     let total_bytes = files.iter().map(|file| file.size).sum::<u64>();
+    let group_id = group.map(|item| item.id.as_str()).unwrap_or("direct");
+    let mut remote_session = String::new();
+    let mut resume_by_upload = HashMap::<String, (u64, String)>::new();
+    if !files.is_empty() {
+        let requests = files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| {
+                let chunk_total = file
+                    .size
+                    .div_ceil(attachments::FILE_CHUNK_BYTES)
+                    .max(1);
+                json!({
+                    "fileIndex": index,
+                    "uploadId": transfer_upload_id(
+                        &auth.sender,
+                        group_id,
+                        message_id,
+                        &file.id
+                    ),
+                    "name": file.name,
+                    "chunkTotal": chunk_total,
+                    "totalSize": file.size
+                })
+            })
+            .collect::<Vec<_>>();
+        match secure_call(
+            &client,
+            &trusted.peer,
+            &auth,
+            "upload-status",
+            json!({
+                "messageId": message_id,
+                "sessionId": "",
+                "group": group,
+                "files": requests
+            }),
+            &[],
+            None,
+        )
+        .await
+        {
+            Ok(status) => {
+                remote_session = string_value(status.get("sessionId"));
+                if remote_session.is_empty() {
+                    return Err(ManagerError::System("对方返回的会话无效。".into()));
+                }
+                let statuses = status["files"]
+                    .as_array()
+                    .filter(|items| items.len() == files.len())
+                    .ok_or_else(|| ManagerError::System("对方返回的附件状态无效。".into()))?;
+                for (file, item) in files.iter().zip(statuses) {
+                    let upload_id = string_value(item.get("uploadId"));
+                    let expected_upload_id =
+                        transfer_upload_id(&auth.sender, group_id, message_id, &file.id);
+                    let next_index = item["nextIndex"].as_u64().ok_or_else(|| {
+                        ManagerError::System("对方返回的分块检查点无效。".into())
+                    })?;
+                    if upload_id != expected_upload_id
+                        || resume_by_upload
+                            .insert(
+                                upload_id,
+                                (next_index, string_value(item["file"].get("id"))),
+                            )
+                            .is_some()
+                    {
+                        return Err(ManagerError::System(
+                            "对方返回的附件状态重复或缺失。".into(),
+                        ));
+                    }
+                }
+            }
+            Err(ManagerError::System(message)) if message == "不支持的设备快传操作。" => {}
+            Err(error) => return Err(error),
+        }
+    }
+    // 进度以对端已确认的字节为准，只推送小事件，不写盘或刷新聊天历史。
+    let confirmed_bytes = files
+        .iter()
+        .map(|file| {
+            let upload_id = transfer_upload_id(&auth.sender, group_id, message_id, &file.id);
+            resume_by_upload
+                .get(&upload_id)
+                .map(|(next_index, _)| {
+                    next_index
+                        .saturating_mul(attachments::FILE_CHUNK_BYTES)
+                        .min(file.size)
+                })
+                .unwrap_or(0)
+        })
+        .sum::<u64>();
     let started = tokio::time::Instant::now();
-    let progress = std::sync::Mutex::new((0u64, started - Duration::from_secs(1)));
+    let progress =
+        std::sync::Mutex::new((confirmed_bytes, started - Duration::from_secs(1)));
     let report_progress = |index: usize, size: u64, complete: bool| {
         let mut progress = progress.lock().unwrap();
         progress.0 += size;
@@ -1775,7 +2022,8 @@ async fn deliver_to_peer(
                     json!({
                         "messageId": message_id, "fileIndex": index, "fileComplete": complete,
                         "loadedBytes": progress.0, "totalBytes": total_bytes,
-                        "bytesPerSecond": progress.0.saturating_mul(1000) / elapsed
+                        "bytesPerSecond": progress.0.saturating_sub(confirmed_bytes)
+                            .saturating_mul(1000) / elapsed
                     }),
                 );
             }
@@ -1788,9 +2036,10 @@ async fn deliver_to_peer(
             let trusted = &trusted;
             let auth = &auth;
             let report_progress = &report_progress;
+            let resume_by_upload = &resume_by_upload;
+            let initial_session = &remote_session;
             async move {
-                let mut remote_session = String::new();
-                let mut identifier = String::new();
+                let mut remote_session = initial_session.clone();
                 let _permit = registry.transfer.acquire_file().await;
                 let mut source = File::open(&file.path).await?;
                 let metadata = source.metadata().await?;
@@ -1801,13 +2050,27 @@ async fn deliver_to_peer(
                     )));
                 }
                 let chunk_total = file.size.div_ceil(attachments::FILE_CHUNK_BYTES).max(1);
-                let upload_id = create_stable_id(&format!(
-                    "lan-upload:{}:{}:{message_id}:{}",
-                    auth.sender,
-                    group.map(|item| item.id.as_str()).unwrap_or("direct"),
-                    file.id
-                ));
-                for chunk_index in 0..chunk_total {
+                let upload_id =
+                    transfer_upload_id(&auth.sender, group_id, message_id, &file.id);
+                let (next_index, mut identifier) = resume_by_upload
+                    .get(&upload_id)
+                    .cloned()
+                    .unwrap_or((0, String::new()));
+                if next_index > chunk_total {
+                    return Err(ManagerError::System(
+                        "对方返回的分块检查点超过附件范围。".into(),
+                    ));
+                }
+                if next_index == chunk_total {
+                    if identifier.is_empty() {
+                        return Err(ManagerError::System(
+                            "对方未返回已接收附件的信息。".into(),
+                        ));
+                    }
+                    report_progress(index, 0, true);
+                    return Ok((index, remote_session, identifier));
+                }
+                for chunk_index in next_index..chunk_total {
                     if registry
                         .inner
                         .lock()
@@ -1848,6 +2111,10 @@ async fn deliver_to_peer(
                             auth,
                             "file-chunk",
                             json!({
+                                "messageId": message_id,
+                                "fileIndex": index,
+                                "fileCount": files.len(),
+                                "messageTotalBytes": total_bytes,
                                 "name": file.name, "sessionId": remote_session, "uploadId": upload_id,
                                 "group": group,
                                 "chunkIndex": chunk_index, "chunkTotal": chunk_total, "offset": offset,
@@ -2820,7 +3087,7 @@ mod tests {
             let root = std::env::temp_dir().join(create_id());
             let paths = crate::core::paths::resolve_app_paths(&root.join("receiver"));
             tokio::fs::create_dir_all(&root).await.unwrap();
-            let first_content = vec![b'a'; attachments::FILE_CHUNK_BYTES as usize + 3];
+            let first_content = vec![b'a'; attachments::FILE_CHUNK_BYTES as usize * 2 + 3];
             let first_path = root.join("first.txt");
             let second_path = root.join("second.png");
             let empty_path = root.join("empty.txt");
@@ -2866,6 +3133,39 @@ mod tests {
                 .authenticate("native-sender")
                 .unwrap();
             remember(&receiver, &paths, trusted).await.unwrap();
+            let receiver_session = read_array::<LanShareSession>(&paths.lan_share_files.sessions)
+                .unwrap()
+                .into_iter()
+                .find(|session| session.device_id == "native-sender")
+                .unwrap();
+            let resumed_upload_id = transfer_upload_id(
+                "native-sender",
+                "direct",
+                "batch_message",
+                &files[0].id,
+            );
+            let resumed_chunk = &first_content[..attachments::FILE_CHUNK_BYTES as usize];
+            attachments::upload_chunk(
+                Full::new(Bytes::copy_from_slice(resumed_chunk)),
+                &receiver,
+                &paths,
+                &receiver_session.id,
+                &resumed_upload_id,
+                &files[0].name,
+                0,
+                3,
+                0,
+                first_content.len() as u64,
+                attachments::FILE_CHUNK_BYTES,
+                &format!(
+                    "bytes 0-{}/{}",
+                    attachments::FILE_CHUNK_BYTES - 1,
+                    first_content.len()
+                ),
+                &format!("{:x}", Sha256::digest(resumed_chunk)),
+            )
+            .await
+            .unwrap();
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let port = listener.local_addr().unwrap().port();
             let records = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
@@ -2985,7 +3285,14 @@ mod tests {
             assert!(dropped_ack.load(Ordering::SeqCst));
             assert_eq!(maximum.load(Ordering::SeqCst), 2);
             let records = records.lock().await;
-            assert_eq!(records.len(), 8);
+            assert_eq!(records.len(), 9);
+            let audit_auth = TransportAuth {
+                sender: "native-sender".into(),
+                receiver: "native-receiver".into(),
+                secret: "fixture-secret".into(),
+                pairing_id: String::new(),
+            };
+            let mut resumed_chunks = Vec::new();
             for body in records.iter() {
                 for plaintext in [
                     b"fixture-secret".as_slice(),
@@ -2996,7 +3303,18 @@ mod tests {
                     assert!(!body.windows(plaintext.len()).any(|part| part == plaintext));
                 }
                 assert!(transport::decrypt("wrong-secret", "wrong-context", body).is_err());
+                let (metadata, _) = transport::unpack(
+                    transport::decrypt(&audit_auth.secret, &audit_auth.aad(), body).unwrap(),
+                )
+                .unwrap();
+                if metadata["operation"] == "file-chunk"
+                    && metadata["payload"]["uploadId"] == resumed_upload_id
+                {
+                    resumed_chunks.push(metadata["payload"]["chunkIndex"].as_u64().unwrap());
+                }
             }
+            assert!(!resumed_chunks.is_empty());
+            assert!(resumed_chunks.iter().all(|index| *index > 0));
             let uploaded: Vec<LanShareFile> = read_array(&paths.lan_share_files.files).unwrap();
             assert_eq!(uploaded.len(), 3);
             assert_eq!(

@@ -41,259 +41,313 @@
           }"
         >
           <div class="chat-message-meta">
-          <span class="chat-sender-name">{{
-            message.direction === "desktop-to-mobile"
-              ? "本机节点"
-              : message.deviceName || currentDevice?.name || "目标节点"
-          }}</span>
-          <time class="chat-timestamp">{{
-            formatDateTime(message.createdAt)
-          }}</time>
+            <span class="chat-sender-name">{{
+              message.direction === "desktop-to-mobile"
+                ? "本机节点"
+                : message.deviceName || currentDevice?.name || "目标节点"
+            }}</span>
+            <time class="chat-timestamp">{{
+              formatDateTime(message.createdAt)
+            }}</time>
 
-          <!-- 如果是后台正在发送的任务 -->
-          <template v-if="message.isPending">
-            <div
-              v-if="message.status === 'error'"
-              class="chat-task-status chat-task-status--error"
-            >
-              <AlertCircle :size="12" />
-              <span class="chat-task-status-text">发送失败</span>
-              <button
-                class="chat-task-action-btn"
-                type="button"
-                :disabled="sendBlocked"
-                :title="sendBlocked ? '对方已删除此设备' : '重新发送'"
-                @click="retryTask(message)"
+            <!-- 如果是后台正在发送的任务 -->
+            <template v-if="message.isPending">
+              <div
+                v-if="message.status === 'error'"
+                class="chat-task-status chat-task-status--error"
               >
-                <RotateCw :size="10" />
-                <span>重试</span>
-              </button>
-              <button
-                class="chat-task-action-btn"
-                type="button"
-                title="取消并移除"
-                @click="cancelTask(message.id)"
-              >
-                <X :size="10" />
-              </button>
-            </div>
-            <div v-else class="chat-task-status chat-task-status--sending">
-              <LoaderCircle :size="12" class="cyber-spin" />
-              <span class="chat-task-status-text">{{
-                message.statusText || "正在发送..."
-              }}</span>
-              <span
-                v-if="message.progress > 0 && message.progress < 100"
-                class="chat-task-percent"
-              >
-                {{ Math.round(message.progress) }}%
-              </span>
-            </div>
-          </template>
-
-          <!-- 离线/待接收状态指示与重试操作 (服务端已存储消息) -->
-          <template v-else>
-            <div
-              v-if="
-                message.direction === 'desktop-to-mobile' && !message.delivered
-              "
-              class="chat-offline-badge"
-            >
-              <span class="cyber-pulse-dot cyber-pulse-dot--amber"></span>
-              <span class="chat-delivery-text">{{
-                sendBlocked ? "对方已删除此设备" : "待对方接收 (离线)"
-              }}</span>
-              <button
-                class="chat-retry-btn"
-                type="button"
-                :disabled="retryingMessageId === message.id || sendBlocked"
-                :title="sendBlocked ? '对方已删除此设备' : '立即向对方重试发送'"
-                @click="retryMessage(message.id)"
-              >
-                <RotateCw
-                  :size="11"
-                  :class="{ 'cyber-spin': retryingMessageId === message.id }"
-                />
-                <span>{{
-                  retryingMessageId === message.id ? "重试中" : "重试"
-                }}</span>
-              </button>
-            </div>
-            <span
-              v-else-if="message.direction === 'desktop-to-mobile'"
-              class="chat-delivered-badge"
-            >
-              <span class="cyber-dot-emerald"></span>
-              <span>已送达</span>
-            </span>
-          </template>
-        </div>
-
-        <div class="chat-message-body">
-          <div
-            class="chat-bubble"
-            :class="{
-              'chat-bubble-attachments':
-                !message.content?.trim() &&
-                (message.attachments?.length || message.files?.length),
-              'chat-bubble-pending': message.isPending
-            }"
-          >
-            <!-- 文本内容 -->
-            <p v-if="message.content?.trim()" class="chat-text">
-              {{ message.content }}
-            </p>
-
-            <!-- 服务端已确认存储的附件 -->
-            <LanShareAttachmentGallery
-              v-if="!message.isPending && message.attachments?.length"
-              :files="message.attachments"
-              :service="service"
-              :session-id="currentSessionId"
-              @preview="$emit('preview-file', $event)"
-              @download="$emit('download-file', $event)"
-            />
-
-            <!-- 后台正在发送的文件与进度卡片 -->
-            <div
-              v-if="message.isPending && message.files?.length"
-              class="chat-sending-attachments"
-            >
-              <div class="chat-sending-files-list">
-                <div
-                  v-for="file in message.files"
-                  :key="file.id"
-                  class="chat-sending-file-item"
+                <AlertCircle :size="12" />
+                <span class="chat-task-status-text">发送失败</span>
+                <button
+                  class="chat-task-action-btn"
+                  type="button"
+                  :disabled="sendBlocked"
+                  :title="sendBlocked ? '对方已删除此设备' : '重新发送'"
+                  @click="retryTask(message)"
                 >
-                  <div class="sending-file-preview">
-                    <img
-                      v-if="file.previewUrl"
-                      :src="file.previewUrl"
-                      :alt="file.name"
-                      class="sending-file-thumb"
-                    />
-                    <div v-else class="sending-file-icon">
-                      <File :size="18" />
+                  <RotateCw :size="10" />
+                  <span>重试</span>
+                </button>
+                <button
+                  class="chat-task-action-btn"
+                  type="button"
+                  title="取消并移除"
+                  @click="cancelTask(message.id)"
+                >
+                  <X :size="10" />
+                </button>
+              </div>
+              <div
+                v-else-if="message.incoming"
+                class="chat-task-status chat-task-status--receiving"
+              >
+                <LoaderCircle :size="12" class="cyber-spin" />
+                <span class="chat-task-status-text">{{
+                  message.statusText || "正在接收文件..."
+                }}</span>
+                <span
+                  v-if="message.progress > 0 && message.progress < 100"
+                  class="chat-task-percent"
+                >
+                  {{ Math.round(message.progress) }}%
+                </span>
+              </div>
+              <div v-else class="chat-task-status chat-task-status--sending">
+                <LoaderCircle :size="12" class="cyber-spin" />
+                <span class="chat-task-status-text">{{
+                  message.statusText || "正在发送..."
+                }}</span>
+                <span
+                  v-if="message.progress > 0 && message.progress < 100"
+                  class="chat-task-percent"
+                >
+                  {{ Math.round(message.progress) }}%
+                </span>
+              </div>
+            </template>
+
+            <!-- 离线/待接收状态指示与重试操作 (服务端已存储消息) -->
+            <template v-else>
+              <div
+                v-if="
+                  message.direction === 'desktop-to-mobile' &&
+                  !message.delivered
+                "
+                class="chat-offline-badge"
+                :class="{
+                  'is-transferring': message.transferProgress?.active
+                }"
+              >
+                <span class="cyber-pulse-dot cyber-pulse-dot--amber"></span>
+                <span class="chat-delivery-text">{{
+                  sendBlocked
+                    ? "对方已删除此设备"
+                    : message.transferProgress?.active
+                      ? `正在补发 ${Math.round(message.transferProgress.progress)}%`
+                      : "等待对方重新上线"
+                }}</span>
+                <span
+                  v-if="
+                    message.transferProgress?.active &&
+                    message.transferProgress.bytesPerSecond > 0
+                  "
+                  class="chat-transfer-speed"
+                >
+                  {{
+                    formatFileSize(message.transferProgress.bytesPerSecond)
+                  }}/秒
+                </span>
+                <button
+                  class="chat-retry-btn"
+                  type="button"
+                  :disabled="
+                    retryingMessageId === message.id ||
+                    sendBlocked ||
+                    message.transferProgress?.active
+                  "
+                  :title="
+                    sendBlocked ? '对方已删除此设备' : '立即向对方重试发送'
+                  "
+                  @click="retryMessage(message.id)"
+                >
+                  <RotateCw
+                    :size="11"
+                    :class="{ 'cyber-spin': retryingMessageId === message.id }"
+                  />
+                  <span>{{
+                    retryingMessageId === message.id ? "重试中" : "重试"
+                  }}</span>
+                </button>
+              </div>
+              <span
+                v-else-if="message.direction === 'desktop-to-mobile'"
+                class="chat-delivered-badge"
+              >
+                <span class="cyber-dot-emerald"></span>
+                <span>已送达</span>
+              </span>
+            </template>
+          </div>
+
+          <div class="chat-message-body">
+            <div
+              class="chat-bubble"
+              :class="{
+                'chat-bubble-attachments':
+                  !message.content?.trim() &&
+                  (message.attachments?.length || message.files?.length),
+                'chat-bubble-pending': message.isPending
+              }"
+            >
+              <!-- 文本内容 -->
+              <p v-if="message.content?.trim()" class="chat-text">
+                {{ message.content }}
+              </p>
+
+              <!-- 服务端已确认存储的附件 -->
+              <LanShareAttachmentGallery
+                v-if="!message.isPending && message.attachments?.length"
+                :files="message.attachments"
+                :service="service"
+                :session-id="currentSessionId"
+                @preview="$emit('preview-file', $event)"
+                @download="$emit('download-file', $event)"
+              />
+
+              <!-- 后台正在发送的文件与进度卡片 -->
+              <div
+                v-if="message.isPending && message.files?.length"
+                class="chat-sending-attachments"
+              >
+                <div class="chat-sending-files-list">
+                  <div
+                    v-for="file in message.files"
+                    :key="file.id"
+                    class="chat-sending-file-item"
+                  >
+                    <div class="sending-file-preview">
+                      <img
+                        v-if="file.previewUrl"
+                        :src="file.previewUrl"
+                        :alt="file.name"
+                        class="sending-file-thumb"
+                      />
+                      <div v-else class="sending-file-icon">
+                        <File :size="18" />
+                      </div>
+                    </div>
+                    <div class="sending-file-meta">
+                      <span class="sending-file-name" :title="file.name">{{
+                        file.name
+                      }}</span>
+                      <span class="sending-file-size">{{
+                        formatFileSize(file.size)
+                      }}</span>
+                    </div>
+                    <div class="sending-file-state">
+                      <span
+                        v-if="
+                          file.transferred ||
+                          (!message.incoming &&
+                            (message.nativeDelivery
+                              ? file.transferred
+                              : file.uploadedId || file.path))
+                        "
+                        class="state-done"
+                        title="已准备完成"
+                      >
+                        <Check :size="13" />
+                      </span>
+                      <span
+                        v-else-if="message.status === 'error'"
+                        class="state-error"
+                        title="失败"
+                      >
+                        <AlertCircle :size="13" />
+                      </span>
+                      <span v-else class="state-uploading" title="传输中">
+                        <LoaderCircle :size="13" class="cyber-spin" />
+                      </span>
                     </div>
                   </div>
-                  <div class="sending-file-meta">
-                    <span class="sending-file-name" :title="file.name">{{
-                      file.name
-                    }}</span>
-                    <span class="sending-file-size">{{
-                      formatFileSize(file.size)
-                    }}</span>
-                  </div>
-                  <div class="sending-file-state">
-                    <span
-                      v-if="message.nativeDelivery ? file.transferred : file.uploadedId || file.path"
-                      class="state-done"
-                      title="已准备完成"
-                    >
-                      <Check :size="13" />
-                    </span>
-                    <span
-                      v-else-if="message.status === 'error'"
-                      class="state-error"
-                      title="失败"
-                    >
-                      <AlertCircle :size="13" />
-                    </span>
-                    <span v-else class="state-uploading" title="传输中">
-                      <LoaderCircle :size="13" class="cyber-spin" />
-                    </span>
-                  </div>
                 </div>
-              </div>
 
-              <!-- 传输进度条 -->
-              <div class="chat-sending-progress-shell">
-                <div class="progress-bar-track">
-                  <div
-                    class="progress-bar-fill"
-                    :class="{
-                      'is-error': message.status === 'error',
-                      'is-indeterminate':
-                        message.status !== 'error' && message.progress === 0
-                    }"
-                    :style="{
-                      width: `${Math.max(4, Math.min(100, message.progress))}%`
-                    }"
-                  ></div>
-                </div>
-                <div class="progress-info-row">
-                  <span class="progress-status-desc">
-                    {{
-                      message.status === "error"
-                        ? message.errorMessage || "发送失败"
-                        : message.statusText || "正在发送附件..."
-                    }}
-                  </span>
-                  <span class="progress-ratio">
-                    <template v-if="message.bytesPerSecond > 0">
-                      {{ formatFileSize(message.bytesPerSecond) }}/秒 ·
-                      约 {{ Math.ceil((message.totalBytes - message.loadedBytes) / message.bytesPerSecond) }} 秒
-                    </template>
-                    <template
-                      v-if="message.totalBytes > 0 && message.loadedBytes > 0"
-                    >
-                      {{ formatFileSize(message.loadedBytes) }} /
-                      {{ formatFileSize(message.totalBytes) }} ({{
-                        Math.round(message.progress)
-                      }}%)
-                    </template>
-                    <template v-else-if="message.progress > 0">
-                      {{ Math.round(message.progress) }}%
-                    </template>
-                  </span>
+                <!-- 传输进度条 -->
+                <div class="chat-sending-progress-shell">
+                  <div class="progress-bar-track">
+                    <div
+                      class="progress-bar-fill"
+                      :class="{
+                        'is-error': message.status === 'error',
+                        'is-indeterminate':
+                          message.status !== 'error' &&
+                          message.status !== 'waiting' &&
+                          message.progress === 0
+                      }"
+                      :style="{
+                        width: `${Math.max(4, Math.min(100, message.progress))}%`
+                      }"
+                    ></div>
+                  </div>
+                  <div class="progress-info-row">
+                    <span class="progress-status-desc">
+                      {{
+                        message.status === "error"
+                          ? message.errorMessage || "发送失败"
+                          : message.statusText || "正在发送附件..."
+                      }}
+                    </span>
+                    <span class="progress-ratio">
+                      <template v-if="message.bytesPerSecond > 0">
+                        {{ formatFileSize(message.bytesPerSecond) }}/秒 · 约
+                        {{
+                          Math.ceil(
+                            (message.totalBytes - message.loadedBytes) /
+                              message.bytesPerSecond
+                          )
+                        }}
+                        秒
+                      </template>
+                      <template
+                        v-if="message.totalBytes > 0 && message.loadedBytes > 0"
+                      >
+                        {{ formatFileSize(message.loadedBytes) }} /
+                        {{ formatFileSize(message.totalBytes) }} ({{
+                          Math.round(message.progress)
+                        }}%)
+                      </template>
+                      <template v-else-if="message.progress > 0">
+                        {{ Math.round(message.progress) }}%
+                      </template>
+                    </span>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          <!-- 消息操作按钮 -->
-          <div v-if="!message.isPending" class="chat-message-actions">
-            <button
-              v-if="message.content"
-              class="chat-icon-button"
-              type="button"
-              title="复制消息"
-              aria-label="复制消息"
-              @click="copyMessage(message)"
-            >
-              <Copy :size="12" />
-            </button>
-            <button
-              class="chat-icon-button"
-              type="button"
-              title="删除本机消息"
-              aria-label="删除本机消息"
-              @click="deleteMessages([message.id])"
-            >
-              <Trash2 :size="12" />
-            </button>
-          </div>
-          <div v-else class="chat-message-actions">
-            <button
-              v-if="message.status === 'error'"
-              class="chat-icon-button"
-              type="button"
-              title="重新发送"
-              aria-label="重新发送"
-              @click="retryTask(message)"
-            >
-              <RotateCw :size="12" />
-            </button>
-            <button
-              class="chat-icon-button"
-              type="button"
-              title="取消发送"
-              aria-label="取消发送"
-              @click="cancelTask(message.id)"
-            >
-              <Trash2 :size="12" />
-            </button>
-          </div>
+            <!-- 消息操作按钮 -->
+            <div v-if="!message.isPending" class="chat-message-actions">
+              <button
+                v-if="message.content"
+                class="chat-icon-button"
+                type="button"
+                title="复制消息"
+                aria-label="复制消息"
+                @click="copyMessage(message)"
+              >
+                <Copy :size="12" />
+              </button>
+              <button
+                class="chat-icon-button"
+                type="button"
+                title="删除本机消息"
+                aria-label="删除本机消息"
+                @click="deleteMessages([message.id])"
+              >
+                <Trash2 :size="12" />
+              </button>
+            </div>
+            <div v-else-if="!message.incoming" class="chat-message-actions">
+              <button
+                v-if="message.status === 'error'"
+                class="chat-icon-button"
+                type="button"
+                title="重新发送"
+                aria-label="重新发送"
+                @click="retryTask(message)"
+              >
+                <RotateCw :size="12" />
+              </button>
+              <button
+                class="chat-icon-button"
+                type="button"
+                title="取消发送"
+                aria-label="取消发送"
+                @click="cancelTask(message.id)"
+              >
+                <Trash2 :size="12" />
+              </button>
+            </div>
           </div>
         </article>
       </template>
@@ -544,6 +598,7 @@ let dragDepth = 0
 const messages = ref([])
 const drafts = reactive({})
 const sendingTasks = ref([])
+const incomingTasks = ref([])
 const sendStatus = ref("")
 const retryingMessageId = ref("")
 const searchOpen = ref(false)
@@ -552,11 +607,15 @@ const timeFilter = ref("all")
 const selectedIds = ref([])
 let stopMessageListener = null
 let stopTransferListener = null
+let stopIncomingTransferListener = null
 let stopDropListener = null
 let disposed = false
 let loadSeed = 0
 let readActivationSessionId = ""
 let readActivationInFlight = false
+const pendingPathReads = new Set()
+const incomingIdleTimers = new Map()
+const outgoingProgressTimers = new Map()
 
 const activeSendingCount = computed(
   () =>
@@ -580,7 +639,10 @@ const displayMessages = computed(() => {
     (task) =>
       task.sessionId === props.currentSessionId && !serverIds.has(task.id)
   )
-  return [...serverList, ...pendingTasks].sort(
+  const incoming = incomingTasks.value.filter(
+    (task) => task.sessionId === props.currentSessionId
+  )
+  return [...serverList, ...pendingTasks, ...incoming].sort(
     (left, right) => left.createdAt - right.createdAt
   )
 })
@@ -658,21 +720,51 @@ onMounted(async () => {
     const task = sendingTasks.value.find(
       (item) => item.id === progress.messageId
     )
-    if (!task || task.status !== "sending") return
-    task.loadedBytes = progress.loadedBytes
-    task.totalBytes = progress.totalBytes
-    task.bytesPerSecond = progress.bytesPerSecond
-    task.progress = task.totalBytes
-      ? Math.min(99, (task.loadedBytes / task.totalBytes) * 100)
-      : 0
-    if (progress.fileComplete && task.files[progress.fileIndex]) {
-      task.files[progress.fileIndex].transferred = true
+    if (task && task.status === "sending") {
+      task.loadedBytes = progress.loadedBytes
+      task.totalBytes = progress.totalBytes
+      task.bytesPerSecond = progress.bytesPerSecond
+      task.progress = task.totalBytes
+        ? Math.min(99, (task.loadedBytes / task.totalBytes) * 100)
+        : 0
+      if (progress.fileComplete && task.files[progress.fileIndex]) {
+        task.files[progress.fileIndex].transferred = true
+      }
+      task.statusText =
+        task.loadedBytes === task.totalBytes
+          ? "文件已接收，等待消息确认…"
+          : "正在发送文件…"
+      return
     }
-    task.statusText =
-      task.loadedBytes === task.totalBytes
-        ? "文件已接收，等待消息确认…"
-        : "正在发送文件…"
+    const message = messages.value.find(
+      (item) => item.id === progress.messageId && !item.delivered
+    )
+    if (!message) return
+    const updatedAt = Date.now()
+    message.transferProgress = {
+      active: true,
+      loadedBytes: progress.loadedBytes,
+      totalBytes: progress.totalBytes,
+      bytesPerSecond: progress.bytesPerSecond,
+      progress: progress.totalBytes
+        ? Math.min(99, (progress.loadedBytes / progress.totalBytes) * 100)
+        : 0,
+      updatedAt
+    }
+    clearTimeout(outgoingProgressTimers.get(message.id))
+    outgoingProgressTimers.set(
+      message.id,
+      setTimeout(() => {
+        const current = messages.value.find((item) => item.id === message.id)
+        if (current?.transferProgress?.updatedAt !== updatedAt) return
+        current.transferProgress.active = false
+        current.transferProgress.bytesPerSecond = 0
+      }, 15000)
+    )
   })
+  stopIncomingTransferListener = lanShareApi.onIncomingTransferProgress(
+    handleIncomingTransferProgress
+  )
   stopMessageListener = lanShareApi.onMessageCreated((message) => {
     if (
       message.sessionId === props.currentSessionId ||
@@ -711,7 +803,10 @@ onBeforeUnmount(() => {
   loadSeed++
   stopMessageListener?.()
   stopTransferListener?.()
+  stopIncomingTransferListener?.()
   stopDropListener?.()
+  for (const timer of incomingIdleTimers.values()) clearTimeout(timer)
+  for (const timer of outgoingProgressTimers.values()) clearTimeout(timer)
   for (const draft of Object.values(drafts)) {
     for (const file of draft.files)
       if (file.previewUrl) URL.revokeObjectURL(file.previewUrl)
@@ -731,6 +826,113 @@ onBeforeUnmount(() => {
 
 function unwrap(result) {
   return result?.status && "data" in result ? result.data : result
+}
+
+function handleIncomingTransferProgress(progress) {
+  const taskId = `incoming:${progress.deviceId}:${progress.messageId}`
+  if (progress.phase === "complete") {
+    clearTimeout(incomingIdleTimers.get(taskId))
+    incomingIdleTimers.delete(taskId)
+    incomingTasks.value = incomingTasks.value.filter(
+      (task) => task.id !== taskId
+    )
+    if (progress.sessionId === props.currentSessionId) loadMessages()
+    return
+  }
+
+  let task = incomingTasks.value.find((item) => item.id === taskId)
+  if (!task) {
+    const files =
+      progress.phase === "start"
+        ? progress.files || []
+        : Array.from({ length: progress.fileCount || 1 }, (_, index) => ({
+            index,
+            name: `附件 ${index + 1}`,
+            size: 0,
+            loadedBytes: 0,
+            complete: false
+          }))
+    task = reactive({
+      id: taskId,
+      sessionId: progress.sessionId,
+      deviceId: progress.deviceId,
+      deviceName: progress.deviceName,
+      direction: "mobile-to-desktop",
+      content: "",
+      createdAt: Date.now(),
+      files: files.map((file, index) => ({
+        id: `${taskId}:${index}`,
+        name: file.name,
+        size: file.size,
+        mimeType: file.mimeType || "",
+        loadedBytes: file.loadedBytes || 0,
+        transferred: Boolean(file.complete)
+      })),
+      incoming: true,
+      isPending: true,
+      status: "receiving",
+      progress: 0,
+      loadedBytes: 0,
+      bytesPerSecond: 0,
+      totalBytes: progress.totalBytes || 0,
+      statusText: "正在接收文件…",
+      updatedAt: Date.now()
+    })
+    incomingTasks.value.push(task)
+    if (task.sessionId === props.currentSessionId) scrollToBottom()
+  }
+
+  const previousLoaded = task.loadedBytes
+  if (progress.phase === "start") {
+    task.files = (progress.files || []).map((file, index) => ({
+      id: `${taskId}:${index}`,
+      name: file.name,
+      size: file.size,
+      mimeType: file.mimeType || "",
+      loadedBytes: file.loadedBytes || 0,
+      transferred: Boolean(file.complete)
+    }))
+    task.totalBytes = progress.totalBytes || 0
+  } else {
+    const file = task.files[progress.fileIndex]
+    if (file) {
+      file.name = progress.fileName || file.name
+      file.size = progress.fileSize || file.size
+      file.loadedBytes = Math.max(
+        file.loadedBytes || 0,
+        progress.fileLoadedBytes || 0
+      )
+      file.transferred = Boolean(progress.fileComplete)
+    }
+    task.totalBytes = progress.totalBytes || task.totalBytes
+  }
+  task.loadedBytes = task.files.reduce(
+    (total, file) => total + (file.loadedBytes || 0),
+    0
+  )
+  const now = Date.now()
+  const elapsed = Math.max(1, now - task.updatedAt)
+  const delta = Math.max(0, task.loadedBytes - previousLoaded)
+  task.bytesPerSecond = delta ? Math.round((delta * 1000) / elapsed) : 0
+  task.progress = task.totalBytes
+    ? Math.min(99, (task.loadedBytes / task.totalBytes) * 100)
+    : 0
+  task.status = "receiving"
+  task.statusText = task.loadedBytes > 0 ? "正在接收文件…" : "等待文件传输…"
+  task.updatedAt = now
+
+  // 分块长时间没有进展时保留临时卡片，明确表示可以继续断点传输。
+  clearTimeout(incomingIdleTimers.get(taskId))
+  incomingIdleTimers.set(
+    taskId,
+    setTimeout(() => {
+      const current = incomingTasks.value.find((item) => item.id === taskId)
+      if (!current || current.updatedAt !== now) return
+      current.status = "waiting"
+      current.statusText = "等待对方继续发送…"
+      current.bytesPerSecond = 0
+    }, 15000)
+  )
 }
 
 async function markCurrentSessionRead() {
@@ -771,6 +973,33 @@ async function loadMessages() {
     const nextMessages = (Array.isArray(result) ? result : []).sort(
       (left, right) => left.createdAt - right.createdAt
     )
+    const progressById = new Map(
+      messages.value
+        .filter((message) => message.transferProgress)
+        .map((message) => [message.id, message.transferProgress])
+    )
+    for (const message of nextMessages) {
+      if (message.delivered) {
+        clearTimeout(outgoingProgressTimers.get(message.id))
+        outgoingProgressTimers.delete(message.id)
+        continue
+      }
+      const progress = progressById.get(message.id)
+      const task = sendingTasks.value.find((item) => item.id === message.id)
+      if (progress) message.transferProgress = progress
+      else if (task?.nativeDelivery && task.totalBytes > 0) {
+        message.transferProgress = {
+          active: false,
+          loadedBytes: task.loadedBytes,
+          totalBytes: task.totalBytes,
+          bytesPerSecond: 0,
+          progress: task.totalBytes
+            ? Math.min(99, (task.loadedBytes / task.totalBytes) * 100)
+            : 0,
+          updatedAt: Date.now()
+        }
+      }
+    }
     const changed = nextMessages.at(-1)?.id !== messages.value.at(-1)?.id
     messages.value = nextMessages
     selectedIds.value = selectedIds.value.filter((id) =>
@@ -834,6 +1063,7 @@ function appendFiles(files) {
       id: crypto.randomUUID(),
       name: file.name || `剪贴板-${Date.now()}.png`,
       size: file.size,
+      mimeType: file.type || "application/octet-stream",
       file,
       previewUrl: file.type.startsWith("image/")
         ? URL.createObjectURL(file)
@@ -842,20 +1072,46 @@ function appendFiles(files) {
   }
 }
 
-function addPaths(paths) {
-  if (!props.currentSessionId) return
-  for (const path of paths) {
-    if (currentDraft.value.files.some((item) => item.path === path)) continue
-    if (currentDraft.value.files.length >= 100) {
-      createMessage.warning("一条消息最多添加 100 个附件。")
-      break
+async function addPaths(paths) {
+  const sessionId = props.currentSessionId
+  if (!sessionId || sendBlocked.value) return
+  const draft = drafts[sessionId]
+  const existing = new Set(draft.files.map((item) => item.path).filter(Boolean))
+  const candidates = [...new Set(paths)].filter(
+    (path) =>
+      !existing.has(path) && !pendingPathReads.has(`${sessionId}\0${path}`)
+  )
+  const pendingCount = [...pendingPathReads].filter((key) =>
+    key.startsWith(`${sessionId}\0`)
+  ).length
+  const remaining = Math.max(0, 100 - draft.files.length - pendingCount)
+  if (candidates.length > remaining)
+    createMessage.warning("一条消息最多添加 100 个附件。")
+  const selected = candidates.slice(0, remaining)
+  if (!selected.length) return
+  for (const path of selected) pendingPathReads.add(`${sessionId}\0${path}`)
+  try {
+    // 本机路径无法从浏览器 File 对象读取，统一由后端批量返回真实文件信息。
+    const result = unwrap(await lanShareApi.getFileInfo({ paths: selected }))
+    for (const file of Array.isArray(result) ? result : []) {
+      if (file.size > 10 * 1024 ** 3) {
+        createMessage.warning(`${file.name} 超过单文件 10 GiB 限制。`)
+        continue
+      }
+      if (draft.files.some((item) => item.path === file.path)) continue
+      draft.files.push({
+        id: crypto.randomUUID(),
+        path: file.path,
+        name: file.name,
+        size: file.size,
+        mimeType: file.mimeType
+      })
     }
-    currentDraft.value.files.push({
-      id: crypto.randomUUID(),
-      path,
-      name: path.split(/[/\\]/).pop() || path,
-      size: 0
-    })
+  } catch (error) {
+    createMessage.error(`读取文件信息失败：${error?.message || error}`)
+  } finally {
+    for (const path of selected)
+      pendingPathReads.delete(`${sessionId}\0${path}`)
   }
 }
 
@@ -872,8 +1128,8 @@ async function pickFiles() {
         title: "选择快传文件",
         multiple: true
       })
-      if (Array.isArray(selected)) addPaths(selected)
-      else if (selected) addPaths([selected])
+      if (Array.isArray(selected)) await addPaths(selected)
+      else if (selected) await addPaths([selected])
     } catch (error) {
       createMessage.error(`选择文件失败：${error?.message || error}`)
     }
@@ -1442,6 +1698,12 @@ defineExpose({
             color: var(--color-danger);
           }
 
+          &.chat-task-status--receiving {
+            background: var(--color-success-soft);
+            border: 1px solid var(--color-success-line);
+            color: var(--color-success);
+          }
+
           .chat-task-status-text {
             max-width: 140px;
             overflow: hidden;
@@ -1480,6 +1742,17 @@ defineExpose({
           border: 1px solid var(--color-warning-line);
           border-radius: 4px;
           color: var(--color-warning);
+
+          &.is-transferring {
+            background: var(--color-primary-soft);
+            border-color: var(--color-info-line);
+            color: var(--color-primary);
+          }
+
+          .chat-transfer-speed {
+            color: inherit;
+            font-size: 10px;
+          }
 
           .chat-retry-btn {
             display: inline-flex;

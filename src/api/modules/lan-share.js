@@ -4,6 +4,7 @@ export const lanShareApi = {
   getState: () => request("lan-share:state"),
   setAccessIp: (payload) => request("lan-share:set-access-ip", payload),
   getClipboardFiles: () => request("lan-share:clipboard-files"),
+  getFileInfo: (payload) => request("lan-share:file-info", payload),
   connectPeer: (payload) => request("lan-share:connect-peer", payload),
   respondPairing: (payload) => request("lan-share:respond-pairing", payload),
   discardUploads: (payload) => request("lan-share:discard-uploads", payload),
@@ -26,6 +27,8 @@ export const lanShareApi = {
   // 文件进度独立推送，避免每个分块重新加载整个会话。
   onTransferProgress: (callback) =>
     subscribe("lan-share:transfer-progress", callback),
+  onIncomingTransferProgress: (callback) =>
+    subscribe("lan-share:incoming-transfer-progress", callback),
   scanDevices: () => request("lan-share:scan-devices"),
   createSession: (payload) => request("lan-share:create-session", payload),
   activateSession: (payload) => request("lan-share:activate-session", payload),

@@ -76,7 +76,10 @@ impl AppState {
         // 文件传输仅持有快照，限速等待期间不阻塞其他页面。
         if matches!(
             channel,
-            "lan-share:send-message" | "lan-share:retry-message" | "lan-share:add-files"
+            "lan-share:send-message"
+                | "lan-share:retry-message"
+                | "lan-share:add-files"
+                | "lan-share:file-info"
         ) {
             let (registry, paths) = {
                 let manager = self.manager.lock().await;
@@ -90,6 +93,7 @@ impl AppState {
                 "lan-share:retry-message" => {
                     lan_share::retry_message(app, &registry, &paths, payload).await
                 }
+                "lan-share:file-info" => lan_share::file_info(payload).await,
                 _ => {
                     let result = lan_share::add_files(&registry, &paths, payload).await?;
                     lan_share::broadcast_files_changed(&registry).await?;

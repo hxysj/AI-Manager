@@ -49,6 +49,7 @@ pub const EVENT_MESSAGE_CREATED: &str = "lan-share:message-created";
 pub const EVENT_DEVICES_CHANGED: &str = "lan-share:devices-changed";
 pub const EVENT_NATIVE_CHANGED: &str = "lan-share:native-changed";
 pub const EVENT_TRANSFER_PROGRESS: &str = "lan-share:transfer-progress";
+pub const EVENT_INCOMING_TRANSFER_PROGRESS: &str = "lan-share:incoming-transfer-progress";
 
 #[derive(Clone)]
 pub struct LanShareServerRegistry {
@@ -408,6 +409,28 @@ pub async fn file_payload(path: &str, session_id: &str) -> Result<LanShareFile, 
         updated_at,
         enabled: true,
     })
+}
+
+pub async fn file_info(payload: Value) -> Result<Value, ManagerError> {
+    let selected_paths = string_array_value(payload.get("paths"));
+    if selected_paths.len() > attachments::MAX_ATTACHMENTS {
+        return Err(ManagerError::System("一次最多读取 100 个附件。".into()));
+    }
+    let mut files = Vec::with_capacity(selected_paths.len());
+    for path in selected_paths {
+        let metadata = tokio::fs::metadata(&path).await?;
+        if !metadata.is_file() {
+            return Err(ManagerError::System(format!("附件不是文件：{path}")));
+        }
+        let file = file_payload(&path, "").await?;
+        files.push(json!({
+            "path": file.path,
+            "name": file.name,
+            "size": file.size,
+            "mimeType": file.mime_type
+        }));
+    }
+    Ok(lan_share_response(json!(files)))
 }
 
 pub async fn add_files(

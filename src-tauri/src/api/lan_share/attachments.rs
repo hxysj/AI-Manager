@@ -232,14 +232,7 @@ where
         return Err(ManagerError::System("请先选择有效会话。".into()));
     }
     let safe_name = safe_name(name)?;
-    if upload_id.is_empty()
-        || upload_id.len() > 120
-        || !upload_id.chars().all(|character| {
-            character.is_ascii_alphanumeric() || character == '-' || character == '_'
-        })
-    {
-        return Err(ManagerError::System("分块上传标识无效。".into()));
-    }
+    validate_upload_id(upload_id)?;
     if chunk_total != total_size.div_ceil(FILE_CHUNK_BYTES).max(1)
         || chunk_index >= chunk_total
         || total_size > MAX_FILE_BYTES
@@ -503,6 +496,115 @@ where
     )
     .await?;
     Ok(Some(uploaded))
+}
+
+pub(super) async fn upload_status(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    session_id: &str,
+    upload_id: &str,
+    name: &str,
+    chunk_total: u64,
+    total_size: u64,
+) -> Result<Value, ManagerError> {
+    validate_upload_id(upload_id)?;
+    let safe_name = safe_name(name)?;
+    if chunk_total != total_size.div_ceil(FILE_CHUNK_BYTES).max(1)
+        || total_size > MAX_FILE_BYTES
+    {
+        return Err(ManagerError::System("分块上传参数无效。".into()));
+    }
+    // 状态查询与同一附件的分块提交串行，避免读到元数据和临时文件的中间状态。
+    let upload_lock = {
+        let mut uploads = registry.uploads.lock().await;
+        uploads.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = uploads.get(upload_id).and_then(std::sync::Weak::upgrade) {
+            lock
+        } else {
+            let lock = Arc::new(Mutex::new(()));
+            uploads.insert(upload_id.to_string(), Arc::downgrade(&lock));
+            lock
+        }
+    };
+    let _upload = upload_lock.lock().await;
+    let directory = Path::new(&paths.lan_share_dir).join("uploads");
+    let part_path = directory.join(format!(".lan-upload-{upload_id}.part"));
+    let metadata_path = directory.join(format!(".lan-upload-{upload_id}.json"));
+    let metadata = match tokio::fs::read(&metadata_path).await {
+        Ok(bytes) => serde_json::from_slice::<Value>(&bytes)?,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            return Ok(json!({
+                "uploadId": upload_id,
+                "nextIndex": 0,
+                "loadedBytes": 0,
+                "complete": false,
+                "file": Value::Null
+            }))
+        }
+        Err(error) => return Err(error.into()),
+    };
+    if metadata["sessionId"] != session_id
+        || metadata["name"] != safe_name
+        || metadata["chunkTotal"] != chunk_total
+        || metadata["totalSize"] != total_size
+    {
+        return Err(ManagerError::System("已接收分块与当前附件不匹配。".into()));
+    }
+    let next_index = metadata["nextIndex"]
+        .as_u64()
+        .filter(|next| *next <= chunk_total)
+        .ok_or_else(|| ManagerError::System("分块检查点无效。".into()))?;
+    let loaded_bytes = next_index
+        .saturating_mul(FILE_CHUNK_BYTES)
+        .min(total_size);
+    let completed = if let Some(file_id) = metadata["fileId"].as_str() {
+        let file = {
+            let _storage = registry.storage.lock().await;
+            read_array::<LanShareFile>(&paths.lan_share_files.files)?
+                .into_iter()
+                .find(|file| file.id == file_id && file.session_id == session_id)
+                .ok_or_else(|| {
+                    ManagerError::System("已接收的附件已被移除，请重新发送。".into())
+                })?
+        };
+        let file_metadata = tokio::fs::metadata(&file.path).await?;
+        if !file_metadata.is_file() || file_metadata.len() != total_size {
+            return Err(ManagerError::System("已接收的附件内容已改变。".into()));
+        }
+        Some(file)
+    } else {
+        let part_size = match tokio::fs::metadata(&part_path).await {
+            Ok(metadata) => metadata.len(),
+            Err(error) if error.kind() == ErrorKind::NotFound && next_index == 0 => 0,
+            Err(error) => return Err(error.into()),
+        };
+        if part_size != loaded_bytes {
+            return Err(ManagerError::System("分块检查点与临时文件不一致。".into()));
+        }
+        None
+    };
+    if completed.is_some() != (next_index == chunk_total) {
+        return Err(ManagerError::System("附件完成状态与分块检查点不一致。".into()));
+    }
+    Ok(json!({
+        "uploadId": upload_id,
+        "nextIndex": next_index,
+        "loadedBytes": loaded_bytes,
+        "complete": completed.is_some(),
+        "file": completed.as_ref().map(Attachment::from)
+    }))
+}
+
+fn validate_upload_id(upload_id: &str) -> Result<(), ManagerError> {
+    if upload_id.is_empty()
+        || upload_id.len() > 120
+        || !upload_id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '-' || character == '_'
+        })
+    {
+        return Err(ManagerError::System("分块上传标识无效。".into()));
+    }
+    Ok(())
 }
 
 fn safe_name(name: &str) -> Result<String, ManagerError> {
@@ -1187,6 +1289,21 @@ mod tests {
             )
             .await;
             assert_eq!(first["data"]["complete"], false);
+            let partial_status = upload_status(
+                &registry,
+                &paths,
+                &session_id,
+                upload_id,
+                "assembled.bin",
+                chunk_total as u64,
+                total_size,
+            )
+            .await
+            .unwrap();
+            assert_eq!(partial_status["nextIndex"], 1);
+            assert_eq!(partial_status["loadedBytes"], FILE_CHUNK_BYTES);
+            assert_eq!(partial_status["complete"], false);
+            assert!(partial_status["file"].is_null());
             let duplicate = send_chunk(
                 0,
                 chunks[0].clone(),
@@ -1217,6 +1334,24 @@ mod tests {
             )
             .await;
             assert_eq!(third["data"]["complete"], true);
+            let complete_status = upload_status(
+                &registry,
+                &paths,
+                &session_id,
+                upload_id,
+                "assembled.bin",
+                chunk_total as u64,
+                total_size,
+            )
+            .await
+            .unwrap();
+            assert_eq!(complete_status["nextIndex"], chunk_total as u64);
+            assert_eq!(complete_status["loadedBytes"], total_size);
+            assert_eq!(complete_status["complete"], true);
+            assert_eq!(
+                complete_status["file"]["id"],
+                third["data"]["file"]["id"]
+            );
             let repeated = send_chunk(
                 2,
                 chunks[2].clone(),
