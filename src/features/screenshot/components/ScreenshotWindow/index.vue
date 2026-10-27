@@ -120,7 +120,6 @@
     class="pin-window"
     tabindex="0"
     :class="pinWindowClass"
-    :style="{ opacity: pinReady ? opacity : 0 }"
     @pointerdown="dragPin"
     @pointermove="movePin"
     @pointerup="cancelPinDrag"
@@ -134,6 +133,7 @@
       :source="document.source"
       :initial-annotations="document.annotations"
       :busy="busy"
+      :style="{ opacity: pinReady ? opacity : 0 }"
       @output="output"
       @cancel="stopEditing"
       @error="error = $event"
@@ -146,7 +146,8 @@
       :style="{
         width: menuExpanded ? `${menuSize.width}px` : '100%',
         height: menuExpanded ? `${menuSize.height}px` : '100%',
-        imageRendering: smoothScaling ? 'auto' : 'pixelated'
+        imageRendering: smoothScaling ? 'auto' : 'pixelated',
+        opacity: pinReady ? opacity : 0
       }"
       draggable="false"
     />
