@@ -33,7 +33,8 @@ const JSON_AGENT_STREAM_EVENT: &str = "tools:json-agent-stream";
 #[derive(Clone)]
 pub struct ProxyServerRegistry {
     inner: Arc<Mutex<HashMap<String, tauri::async_runtime::JoinHandle<()>>>>,
-    provider_instance_inner: Arc<Mutex<HashMap<String, (SocketAddr, tauri::async_runtime::JoinHandle<()>)>>>,
+    provider_instance_inner:
+        Arc<Mutex<HashMap<String, (SocketAddr, tauri::async_runtime::JoinHandle<()>)>>>,
 }
 
 #[derive(Clone)]
@@ -78,7 +79,9 @@ pub(crate) fn translation_target_info(
     settings: &crate::core::settings::TranslationAgentSettings,
 ) -> Result<Value, ManagerError> {
     if settings.target_id.is_empty() || settings.model.is_empty() {
-        return Err(ManagerError::System("请在设置 → 功能扩展 → 划词翻译中选择 Provider / 账号并填写模型".to_string()));
+        return Err(ManagerError::System(
+            "请在设置 → 功能扩展 → 划词翻译中选择 Provider / 账号并填写模型".to_string(),
+        ));
     }
     if settings.target_language.len() > 100 {
         return Err(ManagerError::System("翻译目标语言过长".to_string()));
@@ -96,7 +99,8 @@ pub(crate) async fn prepare_translation_target(
     settings: &crate::core::settings::TranslationAgentSettings,
 ) -> Result<LlmTarget, ManagerError> {
     let info = translation_target_info(paths, settings)?;
-    let mut target = prepare_llm_target(paths, cli_targets, &settings.target_id, &settings.model).await?;
+    let mut target =
+        prepare_llm_target(paths, cli_targets, &settings.target_id, &settings.model).await?;
     target.info = info;
     target.low_reasoning = true;
     Ok(target)
@@ -112,17 +116,32 @@ pub(crate) async fn prepare_llm_target(
     let target = get_target(paths, "codex", &json!({}), target_id)?;
     let mut headers = hyper::HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
-    if let Some(custom) = target.provider.as_ref().and_then(|item| item["headers"].as_object()) {
+    if let Some(custom) = target
+        .provider
+        .as_ref()
+        .and_then(|item| item["headers"].as_object())
+    {
         for (key, value) in custom {
-            let name = HeaderName::from_bytes(key.as_bytes()).map_err(|error| ManagerError::System(error.to_string()))?;
-            let value = HeaderValue::from_str(&string_value(Some(value))).map_err(|error| ManagerError::System(error.to_string()))?;
+            let name = HeaderName::from_bytes(key.as_bytes())
+                .map_err(|error| ManagerError::System(error.to_string()))?;
+            let value = HeaderValue::from_str(&string_value(Some(value)))
+                .map_err(|error| ManagerError::System(error.to_string()))?;
             headers.insert(name, value);
         }
     }
-    let (headers, tracking) = build_forward_headers(paths, cli_targets, "codex", &headers, target_id).await?;
-    let key_id = tracking.as_ref().map(|item| item.key_id().to_string()).unwrap_or_default();
+    let (headers, tracking) =
+        build_forward_headers(paths, cli_targets, "codex", &headers, target_id).await?;
+    let key_id = tracking
+        .as_ref()
+        .map(|item| item.key_id().to_string())
+        .unwrap_or_default();
     let api_key = if tracking.is_some() {
-        headers.get("authorization").and_then(|item| item.to_str().ok()).unwrap_or("").trim_start_matches("Bearer ").to_string()
+        headers
+            .get("authorization")
+            .and_then(|item| item.to_str().ok())
+            .unwrap_or("")
+            .trim_start_matches("Bearer ")
+            .to_string()
     } else {
         String::new()
     };
@@ -139,7 +158,14 @@ pub(crate) async fn prepare_llm_target(
 
 impl LlmTarget {
     pub(crate) fn tracking(&self, paths: &AppPaths) -> Option<KeyRequest> {
-        (!self.key_id.is_empty()).then(|| KeyRequest::new(paths, self.info["targetId"].as_str().unwrap_or(""), &self.key_id, &self.api_key))
+        (!self.key_id.is_empty()).then(|| {
+            KeyRequest::new(
+                paths,
+                self.info["targetId"].as_str().unwrap_or(""),
+                &self.key_id,
+                &self.api_key,
+            )
+        })
     }
 
     pub(crate) async fn send(&self, mut body: Value) -> Result<reqwest::Response, ManagerError> {
@@ -152,7 +178,12 @@ impl LlmTarget {
         if self.low_reasoning {
             body["reasoning"] = json!({ "effort": "low" });
         }
-        self.client.post(&self.upstream_url).headers(self.headers.clone()).json(&body).send().await
+        self.client
+            .post(&self.upstream_url)
+            .headers(self.headers.clone())
+            .json(&body)
+            .send()
+            .await
             .map_err(|error| ManagerError::System(error.to_string()))
     }
 }
@@ -246,7 +277,10 @@ where
         && model != target.model
         && !model_belongs_to_provider
         && !target.model_aliases.contains_key(&model)
-        && target.provider.as_ref().is_some_and(runtime_provider::codex_has_custom_models)
+        && target
+            .provider
+            .as_ref()
+            .is_some_and(runtime_provider::codex_has_custom_models)
     {
         return Err(ManagerError::System(
             "所选模型不属于当前 Codex Provider".to_string(),
@@ -600,9 +634,16 @@ pub async fn enable_proxy(
         );
         codex_config = set_codex_model_catalog_config(
             &codex_config,
-            active_target.provider.as_ref().is_some_and(runtime_provider::codex_has_custom_models),
+            active_target
+                .provider
+                .as_ref()
+                .is_some_and(runtime_provider::codex_has_custom_models),
         );
-        if active_target.provider.as_ref().is_some_and(|provider| !runtime_provider::codex_has_custom_models(provider)) {
+        if active_target
+            .provider
+            .as_ref()
+            .is_some_and(|provider| !runtime_provider::codex_has_custom_models(provider))
+        {
             codex_config = remove_toml_root_value(&codex_config, "model");
         }
         json!({
@@ -826,8 +867,18 @@ pub async fn activate_provider(
                     target_client_model(&target, cli)
                 },
             );
-            codex_config = set_codex_model_catalog_config(&codex_config, target.provider.as_ref().is_some_and(runtime_provider::codex_has_custom_models));
-            if target.provider.as_ref().is_some_and(|provider| !runtime_provider::codex_has_custom_models(provider)) {
+            codex_config = set_codex_model_catalog_config(
+                &codex_config,
+                target
+                    .provider
+                    .as_ref()
+                    .is_some_and(runtime_provider::codex_has_custom_models),
+            );
+            if target
+                .provider
+                .as_ref()
+                .is_some_and(|provider| !runtime_provider::codex_has_custom_models(provider))
+            {
                 codex_config = remove_toml_root_value(&codex_config, "model");
             }
             if cli == "codex" {
@@ -1230,8 +1281,16 @@ async fn forward_request(
         target.model.clone()
     };
 
-    let use_client_model = cli == "codex" && target.provider.as_ref().is_some_and(|provider| !runtime_provider::codex_has_custom_models(provider));
-    if method != hyper::Method::GET && method != hyper::Method::HEAD && !model.is_empty() && !use_client_model {
+    let use_client_model = cli == "codex"
+        && target
+            .provider
+            .as_ref()
+            .is_some_and(|provider| !runtime_provider::codex_has_custom_models(provider));
+    if method != hyper::Method::GET
+        && method != hyper::Method::HEAD
+        && !model.is_empty()
+        && !use_client_model
+    {
         let mut payload: Value = serde_json::from_slice(&request_body)?;
         let requested_model = string_value(payload.get("model"));
         let upstream_model = target
@@ -1241,7 +1300,10 @@ async fn forward_request(
             .unwrap_or_else(|| {
                 if requested_model.is_empty()
                     || target.model_aliases.is_empty()
-                    || !target.model_aliases.values().any(|item| item == &requested_model)
+                    || !target
+                        .model_aliases
+                        .values()
+                        .any(|item| item == &requested_model)
                 {
                     model.clone()
                 } else {
@@ -1396,7 +1458,8 @@ async fn get_target_auth(
         }));
     }
 
-    google_gateway::ensure_started(paths, &runtime_provider::find_provider(paths, target_id)?).await?;
+    google_gateway::ensure_started(paths, &runtime_provider::find_provider(paths, target_id)?)
+        .await?;
     let (key_id, api_key) = runtime_provider::get_provider_api_key_with_id(paths, target_id)?;
     if api_key.is_empty() {
         return Err(ManagerError::System(format!(
@@ -1426,14 +1489,19 @@ async fn assert_target_ready(
         return Ok(());
     }
 
-    google_gateway::ensure_started(paths, &runtime_provider::find_provider(paths, target_id)?).await?;
+    google_gateway::ensure_started(paths, &runtime_provider::find_provider(paths, target_id)?)
+        .await?;
     get_provider_api_key(paths, cli, target_id)?;
     Ok(())
 }
 
 fn target_client_model(target: &ProxyTarget, cli: &str) -> String {
     if cli == "codex" {
-        if let Some(provider) = target.provider.as_ref().filter(|provider| runtime_provider::codex_has_custom_models(provider)) {
+        if let Some(provider) = target
+            .provider
+            .as_ref()
+            .filter(|provider| runtime_provider::codex_has_custom_models(provider))
+        {
             if let Some((client_model, _)) = runtime_provider::codex_model_aliases(provider)
                 .into_iter()
                 .find(|(_, upstream_model)| upstream_model == &target.model)
@@ -1976,7 +2044,11 @@ fn set_codex_proxy_config_toml(content: &str, local_base_url: &str, model: &str)
 
 fn set_codex_model_catalog_config(content: &str, enabled: bool) -> String {
     if enabled {
-        set_toml_root_value(content, "model_catalog_json", ".monkey_thief_model_catalog.json")
+        set_toml_root_value(
+            content,
+            "model_catalog_json",
+            ".monkey_thief_model_catalog.json",
+        )
     } else {
         let mut content = content.to_string();
         for key in [
@@ -2116,8 +2188,15 @@ fn set_toml_section_value(content: &str, section_name: &str, key: &str, value: &
 }
 
 fn target_http_client(target: &ProxyTarget) -> Result<reqwest::Client, ManagerError> {
-    if target.provider.as_ref().is_some_and(|provider| provider["type"] == "google-account") {
-        return reqwest::Client::builder().no_proxy().build().map_err(|error| ManagerError::System(error.to_string()));
+    if target
+        .provider
+        .as_ref()
+        .is_some_and(|provider| provider["type"] == "google-account")
+    {
+        return reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .map_err(|error| ManagerError::System(error.to_string()));
     }
     http_client(&target.proxy)
 }

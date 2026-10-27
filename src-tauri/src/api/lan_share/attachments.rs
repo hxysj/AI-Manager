@@ -509,9 +509,7 @@ pub(super) async fn upload_status(
 ) -> Result<Value, ManagerError> {
     validate_upload_id(upload_id)?;
     let safe_name = safe_name(name)?;
-    if chunk_total != total_size.div_ceil(FILE_CHUNK_BYTES).max(1)
-        || total_size > MAX_FILE_BYTES
-    {
+    if chunk_total != total_size.div_ceil(FILE_CHUNK_BYTES).max(1) || total_size > MAX_FILE_BYTES {
         return Err(ManagerError::System("分块上传参数无效。".into()));
     }
     // 状态查询与同一附件的分块提交串行，避免读到元数据和临时文件的中间状态。
@@ -554,18 +552,14 @@ pub(super) async fn upload_status(
         .as_u64()
         .filter(|next| *next <= chunk_total)
         .ok_or_else(|| ManagerError::System("分块检查点无效。".into()))?;
-    let loaded_bytes = next_index
-        .saturating_mul(FILE_CHUNK_BYTES)
-        .min(total_size);
+    let loaded_bytes = next_index.saturating_mul(FILE_CHUNK_BYTES).min(total_size);
     let completed = if let Some(file_id) = metadata["fileId"].as_str() {
         let file = {
             let _storage = registry.storage.lock().await;
             read_array::<LanShareFile>(&paths.lan_share_files.files)?
                 .into_iter()
                 .find(|file| file.id == file_id && file.session_id == session_id)
-                .ok_or_else(|| {
-                    ManagerError::System("已接收的附件已被移除，请重新发送。".into())
-                })?
+                .ok_or_else(|| ManagerError::System("已接收的附件已被移除，请重新发送。".into()))?
         };
         let file_metadata = tokio::fs::metadata(&file.path).await?;
         if !file_metadata.is_file() || file_metadata.len() != total_size {
@@ -584,7 +578,9 @@ pub(super) async fn upload_status(
         None
     };
     if completed.is_some() != (next_index == chunk_total) {
-        return Err(ManagerError::System("附件完成状态与分块检查点不一致。".into()));
+        return Err(ManagerError::System(
+            "附件完成状态与分块检查点不一致。".into(),
+        ));
     }
     Ok(json!({
         "uploadId": upload_id,
@@ -1348,10 +1344,7 @@ mod tests {
             assert_eq!(complete_status["nextIndex"], chunk_total as u64);
             assert_eq!(complete_status["loadedBytes"], total_size);
             assert_eq!(complete_status["complete"], true);
-            assert_eq!(
-                complete_status["file"]["id"],
-                third["data"]["file"]["id"]
-            );
+            assert_eq!(complete_status["file"]["id"], third["data"]["file"]["id"]);
             let repeated = send_chunk(
                 2,
                 chunks[2].clone(),

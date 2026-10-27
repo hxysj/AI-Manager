@@ -7,12 +7,21 @@ use std::{
     time::Duration,
 };
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
-use windows_sys::{core::BOOL, Win32::{
-    Foundation::{GlobalFree, HGLOBAL, HWND, LPARAM, POINT, RECT},
-    Graphics::{Dwm::{DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_TRANSITIONS_FORCEDISABLED}, Gdi::*},
-    System::{DataExchange::*, Memory::*},
-    UI::{Input::KeyboardAndMouse::*, Shell::DragQueryFileW, WindowsAndMessaging::*},
-}};
+use windows_sys::{
+    core::BOOL,
+    Win32::{
+        Foundation::{GlobalFree, HGLOBAL, HWND, LPARAM, POINT, RECT},
+        Graphics::{
+            Dwm::{
+                DwmGetWindowAttribute, DwmSetWindowAttribute, DWMWA_CLOAKED,
+                DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_TRANSITIONS_FORCEDISABLED,
+            },
+            Gdi::*,
+        },
+        System::{DataExchange::*, Memory::*},
+        UI::{Input::KeyboardAndMouse::*, Shell::DragQueryFileW, WindowsAndMessaging::*},
+    },
+};
 
 pub fn disable_window_transitions(window: &WebviewWindow) -> Result<(), ManagerError> {
     let hwnd = window.hwnd().map_err(failure)?;
@@ -54,17 +63,24 @@ struct SmartQuery {
 // 控件识别放到独立线程，避免无障碍提供程序卡住截图界面。
 mod block_detection {
     use super::SmartRegion;
-    use std::{collections::VecDeque, sync::{mpsc::{self, SyncSender}, OnceLock}, thread, time::Duration};
-    use ::windows::{
-        Win32::{
-            Foundation::{HWND, RECT},
-            System::{
-                Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, COINIT_MULTITHREADED, CLSCTX_INPROC_SERVER},
-            },
-            UI::{
-                Accessibility::{CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker},
-            },
+    use ::windows::Win32::{
+        Foundation::{HWND, RECT},
+        System::Com::{
+            CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+            COINIT_MULTITHREADED,
         },
+        UI::Accessibility::{
+            CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
+        },
+    };
+    use std::{
+        collections::VecDeque,
+        sync::{
+            mpsc::{self, SyncSender},
+            OnceLock,
+        },
+        thread,
+        time::Duration,
     };
 
     struct Request {
@@ -79,7 +95,10 @@ mod block_detection {
     }
 
     fn same_rect(left: &RECT, right: &RECT) -> bool {
-        left.left == right.left && left.top == right.top && left.right == right.right && left.bottom == right.bottom
+        left.left == right.left
+            && left.top == right.top
+            && left.right == right.right
+            && left.bottom == right.bottom
     }
 
     fn element_rect(element: &IUIAutomationElement, x: i32, y: i32) -> Option<RECT> {
@@ -145,9 +164,9 @@ mod block_detection {
         if target == 0 {
             return Vec::new();
         }
-        let Ok(mut element) = (unsafe {
-            automation.ElementFromHandle(HWND(target as *mut core::ffi::c_void))
-        }) else {
+        let Ok(mut element) =
+            (unsafe { automation.ElementFromHandle(HWND(target as *mut core::ffi::c_void)) })
+        else {
             return Vec::new();
         };
         let Ok(walker) = (unsafe { automation.ControlViewWalker() }) else {
@@ -178,9 +197,15 @@ mod block_detection {
         regions
     }
 
-    fn query(x: i32, y: i32, target: isize, automation: &mut Option<IUIAutomation>) -> Vec<SmartRegion> {
+    fn query(
+        x: i32,
+        y: i32,
+        target: isize,
+        automation: &mut Option<IUIAutomation>,
+    ) -> Vec<SmartRegion> {
         if automation.is_none() {
-            *automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok() };
+            *automation =
+                unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok() };
         }
         automation
             .as_ref()
@@ -190,33 +215,67 @@ mod block_detection {
 
     fn sender() -> SyncSender<Request> {
         static CHANNEL: OnceLock<SyncSender<Request>> = OnceLock::new();
-        CHANNEL.get_or_init(|| {
-            let (input, output) = mpsc::sync_channel::<Request>(1);
-            thread::Builder::new().name("截图块识别".into()).spawn(move || {
-                let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
-                let mut automation = None;
-                let mut cache = VecDeque::<(i32, i32, isize, Vec<SmartRegion>)>::new();
-                while let Ok(request) = output.recv() {
-                    if let Some((_, _, _, regions)) = cache.iter().find(|(x, y, target, _)| *x == request.x && *y == request.y && *target == request.target) {
-                        let _ = request.reply.send(regions.clone());
-                        continue;
-                    }
-                    let regions = query(request.x, request.y, request.target, &mut automation);
-                    cache.retain(|(x, y, target, _)| *x != request.x || *y != request.y || *target != request.target);
-                    cache.push_front((request.x, request.y, request.target, regions.clone()));
-                    cache.truncate(24);
-                    let _ = request.reply.send(regions);
-                }
-                if initialized { unsafe { CoUninitialize(); } }
-            }).expect("无法启动截图块识别线程");
-            input
-        }).clone()
+        CHANNEL
+            .get_or_init(|| {
+                let (input, output) = mpsc::sync_channel::<Request>(1);
+                thread::Builder::new()
+                    .name("截图块识别".into())
+                    .spawn(move || {
+                        let initialized =
+                            unsafe { CoInitializeEx(None, COINIT_MULTITHREADED).is_ok() };
+                        let mut automation = None;
+                        let mut cache = VecDeque::<(i32, i32, isize, Vec<SmartRegion>)>::new();
+                        while let Ok(request) = output.recv() {
+                            if let Some((_, _, _, regions)) =
+                                cache.iter().find(|(x, y, target, _)| {
+                                    *x == request.x && *y == request.y && *target == request.target
+                                })
+                            {
+                                let _ = request.reply.send(regions.clone());
+                                continue;
+                            }
+                            let regions =
+                                query(request.x, request.y, request.target, &mut automation);
+                            cache.retain(|(x, y, target, _)| {
+                                *x != request.x || *y != request.y || *target != request.target
+                            });
+                            cache.push_front((
+                                request.x,
+                                request.y,
+                                request.target,
+                                regions.clone(),
+                            ));
+                            cache.truncate(24);
+                            let _ = request.reply.send(regions);
+                        }
+                        if initialized {
+                            unsafe {
+                                CoUninitialize();
+                            }
+                        }
+                    })
+                    .expect("无法启动截图块识别线程");
+                input
+            })
+            .clone()
     }
 
     pub fn query_async(x: i32, y: i32, target: isize) -> Vec<SmartRegion> {
         let (reply, result) = mpsc::sync_channel(1);
-        if sender().try_send(Request { x, y, target, reply }).is_err() { return Vec::new(); }
-        result.recv_timeout(Duration::from_millis(220)).unwrap_or_default()
+        if sender()
+            .try_send(Request {
+                x,
+                y,
+                target,
+                reply,
+            })
+            .is_err()
+        {
+            return Vec::new();
+        }
+        result
+            .recv_timeout(Duration::from_millis(220))
+            .unwrap_or_default()
     }
 }
 
@@ -260,13 +319,22 @@ unsafe extern "system" fn collect_smart_window(hwnd: HWND, param: LPARAM) -> BOO
     }
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
-    if width < 30 || height < 30 || query.x < rect.left || query.x >= rect.right || query.y < rect.top || query.y >= rect.bottom {
+    if width < 30
+        || height < 30
+        || query.x < rect.left
+        || query.x >= rect.right
+        || query.y < rect.top
+        || query.y >= rect.bottom
+    {
         return 1;
     }
     let mut class_name = [0_u16; 256];
     let class_len = GetClassNameW(hwnd, class_name.as_mut_ptr(), class_name.len() as i32);
     let class_name = String::from_utf16_lossy(&class_name[..class_len.max(0) as usize]);
-    if matches!(class_name.as_str(), "WorkerW" | "Progman" | "Windows.UI.Core.CoreWindow") {
+    if matches!(
+        class_name.as_str(),
+        "WorkerW" | "Progman" | "Windows.UI.Core.CoreWindow"
+    ) {
         return 1;
     }
     query.result.push(SmartRegion {
@@ -288,21 +356,37 @@ pub fn smart_selection(app: &AppHandle, x: i32, y: i32) -> Result<Vec<SmartRegio
             .and_then(|window| window.hwnd().ok())
             .map(|hwnd| hwnd.0 as isize)
             .unwrap_or(0);
-        let mut query = SmartQuery { x, y, skip, target: 0, result: Vec::new() };
-        EnumWindows(Some(collect_smart_window), (&mut query as *mut SmartQuery) as isize);
+        let mut query = SmartQuery {
+            x,
+            y,
+            skip,
+            target: 0,
+            result: Vec::new(),
+        };
+        EnumWindows(
+            Some(collect_smart_window),
+            (&mut query as *mut SmartQuery) as isize,
+        );
         let target = query.target;
         let windows = query.result;
         let mut result = block_detection::query_async(x, y, target);
         // 无障碍树的根节点通常就是窗口本身，去掉重复矩形后再补回窗口层级。
-        result.retain(|region| !windows.iter().any(|window| {
-            region.x == window.x &&
-                region.y == window.y &&
-                region.width == window.width &&
-                region.height == window.height
-        }));
+        result.retain(|region| {
+            !windows.iter().any(|window| {
+                region.x == window.x
+                    && region.y == window.y
+                    && region.width == window.width
+                    && region.height == window.height
+            })
+        });
         result.extend(windows);
         let point = POINT { x, y };
-        let mut monitor_rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        let mut monitor_rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
         let monitor = MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST);
         if !monitor.is_null() {
             let mut info: MONITORINFO = zeroed();
@@ -616,7 +700,9 @@ pub fn read_clipboard() -> Result<Vec<DynamicImage>, ManagerError> {
 }
 
 pub(super) fn cursor_in_rect(rect: Option<&CaptureRect>) -> bool {
-    let Some(rect) = rect else { return false; };
+    let Some(rect) = rect else {
+        return false;
+    };
     let mut cursor = POINT { x: 0, y: 0 };
     (unsafe { GetCursorPos(&mut cursor) != 0 })
         && i64::from(cursor.x) >= i64::from(rect.x)
@@ -626,7 +712,9 @@ pub(super) fn cursor_in_rect(rect: Option<&CaptureRect>) -> bool {
 }
 
 pub fn scroll_at(x: i32, y: i32, delta: i32) -> Result<(), ManagerError> {
-    if delta == 0 { return Ok(()); }
+    if delta == 0 {
+        return Ok(());
+    }
     unsafe {
         let mut previous = POINT { x: 0, y: 0 };
         if GetCursorPos(&mut previous) == 0 {
@@ -644,24 +732,39 @@ pub fn scroll_at(x: i32, y: i32, delta: i32) -> Result<(), ManagerError> {
         let height = GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1);
         let move_to = |px: i32, py: i32| INPUT {
             r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 { mi: MOUSEINPUT {
-                // 对准像素中心，避免每次恢复鼠标时向左上方偏移一个像素。
-                dx: (((i64::from(px) - i64::from(left)) * 65536 + 32768) / i64::from(width)) as i32,
-                dy: (((i64::from(py) - i64::from(top)) * 65536 + 32768) / i64::from(height)) as i32,
-                dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
-                ..zeroed()
-            } },
+            Anonymous: INPUT_0 {
+                mi: MOUSEINPUT {
+                    // 对准像素中心，避免每次恢复鼠标时向左上方偏移一个像素。
+                    dx: (((i64::from(px) - i64::from(left)) * 65536 + 32768) / i64::from(width))
+                        as i32,
+                    dy: (((i64::from(py) - i64::from(top)) * 65536 + 32768) / i64::from(height))
+                        as i32,
+                    dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
+                    ..zeroed()
+                },
+            },
         };
         // 移入选区、滚动并恢复鼠标放在同一批输入中，用户仍可在预览区点击暂停或完成。
-        let inputs = [move_to(x, y), INPUT {
-            r#type: INPUT_MOUSE,
-            Anonymous: INPUT_0 { mi: MOUSEINPUT {
-                mouseData: delta as u32,
-                dwFlags: MOUSEEVENTF_WHEEL,
-                ..zeroed()
-            } },
-        }, move_to(previous.x, previous.y)];
-        if SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) != inputs.len() as u32 {
+        let inputs = [
+            move_to(x, y),
+            INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT {
+                        mouseData: delta as u32,
+                        dwFlags: MOUSEEVENTF_WHEEL,
+                        ..zeroed()
+                    },
+                },
+            },
+            move_to(previous.x, previous.y),
+        ];
+        if SendInput(
+            inputs.len() as u32,
+            inputs.as_ptr(),
+            size_of::<INPUT>() as i32,
+        ) != inputs.len() as u32
+        {
             let _ = SetCursorPos(previous.x, previous.y);
             return Err(failure("无法发送长截图自动滚动输入"));
         }
@@ -679,22 +782,33 @@ pub fn start_hotkeys(app: AppHandle) {
             let settings = service.settings();
             // 鼠标穿透后焦点可能在被截应用，仍要让 Esc 完成长截图；不依赖全局快捷键开关。
             let escape_down = settings.enabled && unsafe { GetAsyncKeyState(VK_ESCAPE as i32) } < 0;
-            if escape_down && !escape_pressed
-                && service.long_capturing.swap(false, std::sync::atomic::Ordering::SeqCst)
+            if escape_down
+                && !escape_pressed
+                && service
+                    .long_capturing
+                    .swap(false, std::sync::atomic::Ordering::SeqCst)
             {
                 if let Some(window) = app.get_webview_window("screenshot-capture") {
                     let _ = window.emit("screenshot:long-finish", ());
                 }
             }
             escape_pressed = escape_down;
-            if service.long_capturing.load(std::sync::atomic::Ordering::SeqCst) {
+            if service
+                .long_capturing
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
                 let preview = service.long_preview_rect.lock().unwrap();
                 // 等锁期间可能已经结束截图，不能再把普通截图窗口改回穿透。
-                if let Some(window) = app.get_webview_window("screenshot-capture")
-                    .filter(|_| service.long_capturing.load(std::sync::atomic::Ordering::SeqCst))
-                {
+                if let Some(window) = app.get_webview_window("screenshot-capture").filter(|_| {
+                    service
+                        .long_capturing
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                }) {
                     if let Ok(hwnd) = window.hwnd() {
-                        let transparent = unsafe { GetWindowLongPtrW(hwnd.0 as _, GWL_EXSTYLE) } as u32 & WS_EX_TRANSPARENT != 0;
+                        let transparent = unsafe { GetWindowLongPtrW(hwnd.0 as _, GWL_EXSTYLE) }
+                            as u32
+                            & WS_EX_TRANSPARENT
+                            != 0;
                         let interactive = cursor_in_rect(preview.as_ref());
                         // 只有预览区接收点击，其他位置始终交给底层页面手动滚动。
                         if transparent == interactive {
@@ -703,7 +817,11 @@ pub fn start_hotkeys(app: AppHandle) {
                     }
                 }
             }
-            let enabled = settings.enabled && settings.hotkeys && !service.hotkeys_paused.load(std::sync::atomic::Ordering::SeqCst);
+            let enabled = settings.enabled
+                && settings.hotkeys
+                && !service
+                    .hotkeys_paused
+                    .load(std::sync::atomic::Ordering::SeqCst);
             let bindings = settings.shortcut_bindings();
             let key = format!("{enabled}:{bindings:?}");
             if key != previous {
@@ -717,9 +835,13 @@ pub fn start_hotkeys(app: AppHandle) {
                     for (id, name, shortcut) in bindings {
                         let (modifiers, code) = match super::parse_shortcut(&shortcut) {
                             Ok(binding) => binding,
-                            Err(error) => { errors.push(error.to_string()); continue; }
+                            Err(error) => {
+                                errors.push(error.to_string());
+                                continue;
+                            }
                         };
-                        if unsafe { RegisterHotKey(null_mut(), id, modifiers | MOD_NOREPEAT, code) } != 0
+                        if unsafe { RegisterHotKey(null_mut(), id, modifiers | MOD_NOREPEAT, code) }
+                            != 0
                         {
                             registered.push(id);
                         } else {
@@ -762,7 +884,11 @@ pub fn start_hotkeys(app: AppHandle) {
                     });
                 }
             }
-            std::thread::sleep(Duration::from_millis(if settings.enabled { 5 } else { 100 }));
+            std::thread::sleep(Duration::from_millis(if settings.enabled {
+                5
+            } else {
+                100
+            }));
         }
     });
 }
@@ -774,7 +900,12 @@ mod tests {
     #[test]
     fn native_bitmap_readback_preserves_pixel_position_and_rgb() {
         unsafe {
-            let mut dc = CaptureDc { screen: GetDC(null_mut()), memory: null_mut(), bitmap: null_mut(), previous: null_mut() };
+            let mut dc = CaptureDc {
+                screen: GetDC(null_mut()),
+                memory: null_mut(),
+                bitmap: null_mut(),
+                previous: null_mut(),
+            };
             assert!(!dc.screen.is_null());
             dc.memory = CreateCompatibleDC(dc.screen);
             dc.bitmap = CreateCompatibleBitmap(dc.screen, 3, 2);

@@ -238,9 +238,7 @@ pub(super) async fn secure_call(
         .and_then(|value| value.to_str().ok())
         == Some("true")
     {
-        return Err(ManagerError::System(
-            super::REMOTE_DELETED_MESSAGE.into(),
-        ));
+        return Err(ManagerError::System(super::REMOTE_DELETED_MESSAGE.into()));
     }
     if response
         .headers()

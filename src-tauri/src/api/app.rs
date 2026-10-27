@@ -158,10 +158,7 @@ pub async fn check_updates(app: &tauri::AppHandle, manual: bool) -> Result<Value
         }
 
         let updater = create_public_release_updater(app)?;
-        let update = updater
-            .check()
-            .await
-            .map_err(update_request_error)?;
+        let update = updater.check().await.map_err(update_request_error)?;
 
         *DOWNLOADED_UPDATE.lock().await = None;
 
@@ -205,11 +202,7 @@ pub async fn download_update(app: &tauri::AppHandle) -> Result<Value, ManagerErr
         }
 
         let updater = create_public_release_updater(app)?;
-        let Some(update) = updater
-            .check()
-            .await
-            .map_err(update_request_error)?
-        else {
+        let Some(update) = updater.check().await.map_err(update_request_error)? else {
             return Ok(json!({
               "phase": "not-available",
               "message": "当前已是最新版本。",
@@ -565,7 +558,10 @@ pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, 
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?
         .remove(&label);
-    let large = matches!(tool_id, "image-workbench" | "git" | "network-quality" | "lan-share");
+    let large = matches!(
+        tool_id,
+        "image-workbench" | "git" | "network-quality" | "lan-share"
+    );
     let window = WebviewWindowBuilder::new(
         app,
         &label,
@@ -574,7 +570,10 @@ pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, 
     // Windows 下原生拖放处理会拦截页面的 HTML5 拖拽事件，工具页需要自行接收文件拖放。
     .disable_drag_drop_handler()
     .title(format!("{title} · Monkey Thief"))
-    .inner_size(if large { 1120.0 } else { 960.0 }, if large { 760.0 } else { 680.0 })
+    .inner_size(
+        if large { 1120.0 } else { 960.0 },
+        if large { 760.0 } else { 680.0 },
+    )
     .min_inner_size(896.0, 576.0)
     .center()
     .focused(false)
@@ -583,15 +582,28 @@ pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, 
     .map_err(|error| ManagerError::System(error.to_string()))?;
 
     // 多个工具错开摆放，保留原生标题栏、缩放、最小化和单独关闭能力。
-    let count = app.webview_windows().keys().filter(|name| name.starts_with("tool-window-")).count();
+    let count = app
+        .webview_windows()
+        .keys()
+        .filter(|name| name.starts_with("tool-window-"))
+        .count();
     let offset = ((count.saturating_sub(1) % 5) * 24) as i32;
-    let position = window.outer_position().map_err(|error| ManagerError::System(error.to_string()))?;
-    window.set_position(PhysicalPosition::new(position.x + offset, position.y + offset))
+    let position = window
+        .outer_position()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    window
+        .set_position(PhysicalPosition::new(
+            position.x + offset,
+            position.y + offset,
+        ))
         .map_err(|error| ManagerError::System(error.to_string()))?;
     Ok(json!({ "visible": false }))
 }
 
-pub fn mark_tool_window_ready(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, ManagerError> {
+pub fn mark_tool_window_ready(
+    app: &tauri::AppHandle,
+    tool_id: &str,
+) -> Result<Value, ManagerError> {
     tool_window_title(tool_id)?;
     let _guard = QUICK_SWITCH_WINDOW_POSITION
         .lock()
@@ -609,15 +621,25 @@ pub fn mark_tool_window_ready(app: &tauri::AppHandle, tool_id: &str) -> Result<V
 
 fn show_tool_window(app: &tauri::AppHandle, window: &WebviewWindow) -> Result<bool, ManagerError> {
     if let Some(main) = app.get_webview_window("main") {
-        if main.is_visible().map_err(|error| ManagerError::System(error.to_string()))?
-            && !main.is_minimized().map_err(|error| ManagerError::System(error.to_string()))?
+        if main
+            .is_visible()
+            .map_err(|error| ManagerError::System(error.to_string()))?
+            && !main
+                .is_minimized()
+                .map_err(|error| ManagerError::System(error.to_string()))?
         {
             return Ok(false);
         }
     }
-    window.unminimize().map_err(|error| ManagerError::System(error.to_string()))?;
-    window.show().map_err(|error| ManagerError::System(error.to_string()))?;
-    window.set_focus().map_err(|error| ManagerError::System(error.to_string()))?;
+    window
+        .unminimize()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    window
+        .show()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
+    window
+        .set_focus()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
     Ok(true)
 }
 
@@ -631,7 +653,9 @@ fn hide_tool_windows(app: &tauri::AppHandle) -> Result<(), ManagerError> {
         .collect::<Vec<_>>();
     for label in labels {
         if let Some(window) = app.get_webview_window(&label) {
-            window.close().map_err(|error| ManagerError::System(error.to_string()))?;
+            window
+                .close()
+                .map_err(|error| ManagerError::System(error.to_string()))?;
         }
         READY_TOOL_WINDOWS
             .lock()
@@ -799,12 +823,15 @@ pub fn sync_quick_switch_window(
             let (center_x, center_y, edge) =
                 apply_quick_switch_collapsed(&window, true, &mut center)?;
             window
-                .emit("quick-switch:visibility-changed", json!({
-                    "visible": true,
-                    "centerX": center_x,
-                    "centerY": center_y,
-                    "edge": edge
-                }))
+                .emit(
+                    "quick-switch:visibility-changed",
+                    json!({
+                        "visible": true,
+                        "centerX": center_x,
+                        "centerY": center_y,
+                        "edge": edge
+                    }),
+                )
                 .map_err(|error| ManagerError::System(error.to_string()))?;
             window
                 .show()
@@ -896,7 +923,10 @@ fn hide_quick_switch_window(app: &tauri::AppHandle) -> Result<(), ManagerError> 
             .hide()
             .map_err(|error| ManagerError::System(error.to_string()))?;
         window
-            .emit("quick-switch:visibility-changed", json!({ "visible": false }))
+            .emit(
+                "quick-switch:visibility-changed",
+                json!({ "visible": false }),
+            )
             .map_err(|error| ManagerError::System(error.to_string()))?;
     }
     Ok(())
@@ -1267,9 +1297,7 @@ fn emit_update_status(app: &tauri::AppHandle, patch: Value) -> Result<Value, Man
 }
 
 fn create_public_release_updater(app: &tauri::AppHandle) -> Result<Updater, ManagerError> {
-    app.updater_builder()
-        .build()
-        .map_err(update_request_error)
+    app.updater_builder().build().map_err(update_request_error)
 }
 
 fn update_request_error(error: impl std::error::Error) -> ManagerError {
@@ -1572,8 +1600,10 @@ mod release_announcement_tests {
 
     impl TestStorage {
         fn new() -> Self {
-            let root = std::env::temp_dir()
-                .join(format!("monkey-thief-announcement-{}", uuid::Uuid::new_v4()));
+            let root = std::env::temp_dir().join(format!(
+                "monkey-thief-announcement-{}",
+                uuid::Uuid::new_v4()
+            ));
             let paths = resolve_app_paths(&root);
             Self { root, paths }
         }
@@ -1592,19 +1622,31 @@ mod release_announcement_tests {
             let receipt = Path::new(&storage.paths.storage_dir).join(RELEASE_ANNOUNCEMENT_RECEIPT);
             let first = release_announcement(&storage.paths).await.unwrap();
             assert_eq!(first["version"], RELEASE_ANNOUNCEMENT_VERSION);
-            assert!(first["releaseNotes"].as_str().unwrap().contains("### 应用更新"));
+            assert!(first["releaseNotes"]
+                .as_str()
+                .unwrap()
+                .contains("### 应用更新"));
             assert!(!receipt.exists());
             assert_eq!(release_announcement(&storage.paths).await.unwrap(), first);
 
             dismiss_release_announcement(&storage.paths).await.unwrap();
-            assert_eq!(std::fs::read_to_string(&receipt).unwrap(), RELEASE_ANNOUNCEMENT_VERSION);
-            assert!(release_announcement(&storage.paths).await.unwrap().is_null());
+            assert_eq!(
+                std::fs::read_to_string(&receipt).unwrap(),
+                RELEASE_ANNOUNCEMENT_VERSION
+            );
+            assert!(release_announcement(&storage.paths)
+                .await
+                .unwrap()
+                .is_null());
 
             // 模拟从旧版本升级，原已读版本不能屏蔽新版本的公告。
             tokio::fs::write(&receipt, "0.0.1").await.unwrap();
             assert_eq!(release_announcement(&storage.paths).await.unwrap(), first);
             dismiss_release_announcement(&storage.paths).await.unwrap();
-            assert!(release_announcement(&storage.paths).await.unwrap().is_null());
+            assert!(release_announcement(&storage.paths)
+                .await
+                .unwrap()
+                .is_null());
         });
     }
 

@@ -976,11 +976,10 @@ impl DesktopManager {
                 for source in sources.iter().filter(|provider| {
                     text(provider, "cli") == "claude" && selected_ids.contains(text(provider, "id"))
                 }) {
-                    if data
-                        .providers
-                        .iter()
-                        .any(|provider| text(provider, "id") == text(source, "id") || text(provider, "sourceProviderId") == text(source, "id"))
-                    {
+                    if data.providers.iter().any(|provider| {
+                        text(provider, "id") == text(source, "id")
+                            || text(provider, "sourceProviderId") == text(source, "id")
+                    }) {
                         skipped.push(format!(
                             "{}：已导入，保留 Desktop 现有配置",
                             text(source, "name")
@@ -1940,7 +1939,7 @@ mod tests {
             ];
             provider_store::write_provider_bundle(&fixture.paths, &sources, &[], &[], &keys)
                 .unwrap();
-            let sources=provider_store::read_providers(&fixture.paths).unwrap();
+            let sources = provider_store::read_providers(&fixture.paths).unwrap();
             let mut data = DesktopData::load(&fixture.paths).unwrap();
             data.upsert_provider(&json!({"id": "existing", "name": "Desktop 已编辑", "mode": "direct", "baseUrl": "https://desktop.invalid", "apiKey": "desktop-secret", "routes": {}})).unwrap();
             data.save(&fixture.paths).unwrap();
@@ -1998,8 +1997,15 @@ mod tests {
                     .unwrap()["name"],
                 "Desktop 已编辑"
             );
-            let imported_id = after.providers.iter().find(|provider| text(provider, "sourceProviderId") == "second").map(|provider| text(provider, "id")).unwrap();
-            assert!(after.keys.contains_key(&format!("claude-desktop:{imported_id}")));
+            let imported_id = after
+                .providers
+                .iter()
+                .find(|provider| text(provider, "sourceProviderId") == "second")
+                .map(|provider| text(provider, "id"))
+                .unwrap();
+            assert!(after
+                .keys
+                .contains_key(&format!("claude-desktop:{imported_id}")));
             assert!(!after.keys.contains_key("claude-desktop:first"));
             assert_eq!(after.current_id(), "");
             assert_eq!(
@@ -2562,7 +2568,10 @@ mod tests {
                 "upstream-secret".to_string(),
             )
             .unwrap();
-            data.settings.insert(GATEWAY_KEY.into(), json!(runtime_provider::encrypt_provider_key("local-secret").unwrap()));
+            data.settings.insert(
+                GATEWAY_KEY.into(),
+                json!(runtime_provider::encrypt_provider_key("local-secret").unwrap()),
+            );
             data.settings
                 .insert("currentProviderId".to_string(), json!("example"));
             data.save(&fixture.paths).unwrap();

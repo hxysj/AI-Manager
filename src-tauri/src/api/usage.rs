@@ -4167,10 +4167,15 @@ mod tests {
             let sessions = super::collect_usage_sessions(&paths, &state).unwrap();
             let id = sessions[0]["id"].as_str().unwrap();
             assert_eq!(uuid::Uuid::parse_str(id).unwrap().get_version_num(), 4);
-            crate::api::sessions::refresh_sessions_state(&paths, &mut state).await.unwrap();
+            crate::api::sessions::refresh_sessions_state(&paths, &mut state)
+                .await
+                .unwrap();
             assert_eq!(state["sessions"][0]["id"], id);
             refresh_usage(&paths, &state).await.unwrap();
-            assert_eq!(super::collect_usage_sessions(&paths, &state).unwrap()[0]["id"], id);
+            assert_eq!(
+                super::collect_usage_sessions(&paths, &state).unwrap()[0]["id"],
+                id
+            );
             std::fs::remove_dir_all(root).unwrap();
         });
     }
@@ -4226,7 +4231,14 @@ mod tests {
         ];
         runtime_provider::set_provider_keys(&mut keys, "provider", &key_records, "first".into())
             .unwrap();
-        provider_store::write_provider_bundle(&paths,&[json!({"id":"provider","cli":"claude"})],&[],&[],&keys).unwrap();
+        provider_store::write_provider_bundle(
+            &paths,
+            &[json!({"id":"provider","cli":"claude"})],
+            &[],
+            &[],
+            &keys,
+        )
+        .unwrap();
         provider_key_usage::sync_bindings(&paths, &serde_json::Map::from_iter([("provider".into(), json!({
             "apiKeyId": "first", "apiKeyHash": provider_key_usage::fingerprint("first-secret"), "singleKey": false
         }))]), 100).unwrap();

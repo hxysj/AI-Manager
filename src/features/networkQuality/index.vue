@@ -979,7 +979,7 @@
                       </td>
                       <td>
                         <div class="table-cell-title">
-                          <span>{{ target.method || "--" }}</span>
+                          <span>{{ formatPathMethod(target.method) }}</span>
                           <code class="table-code">{{
                             target.resolvedIp || ""
                           }}</code>
@@ -1044,6 +1044,10 @@
           <div class="footer-meta-item">
             <span>诊断时间:</span>
             <span>{{ formatDateTime(report.timestamp) }}</span>
+          </div>
+          <div class="footer-meta-item">
+            <span>网络路由:</span>
+            <span>{{ formatProxyRoute(report.transport?.proxy) }}</span>
           </div>
           <div v-if="partialErrorCount" class="footer-meta-item is-warning">
             <AlertTriangle :size="13" />
@@ -1314,6 +1318,13 @@ const connectivityChecks = computed(
 )
 const capability = computed(() => connectivity.value.capability || {})
 const pathTargets = computed(() => arrayOf(connectivity.value.targets))
+const proxyPathActive = computed(() =>
+  pathTargets.value.some((target) =>
+    String(target?.method || "")
+      .toLowerCase()
+      .includes("proxy")
+  )
+)
 const measuredPathTargets = computed(() =>
   pathTargets.value.filter((target) => {
     const state = String(target?.verdict?.class || "").toLowerCase()
@@ -1476,6 +1487,7 @@ const capabilityLabel = computed(() => {
   if (!pathTargets.value.length) return "未运行"
   if (capability.value.pathVisible) return "逐跳可见"
   if (capability.value.icmp) return "ICMP 终点"
+  if (proxyPathActive.value) return "系统代理"
   return "TCP 降级"
 })
 
@@ -1486,6 +1498,7 @@ const capabilitySummary = computed(() => {
   if (capability.value.icmp && capability.value.pathVisible)
     return "ICMP · 逐跳路径可见"
   if (capability.value.icmp) return "ICMP · 仅测量终点"
+  if (proxyPathActive.value) return "系统代理 · HTTP 端到端延迟"
   return "TCP 降级 · 仅测终点连接延迟"
 })
 
@@ -1717,7 +1730,7 @@ function pathStateLabel(target) {
   const verdict = target?.verdict?.class
   const method = String(target?.method || "").toLowerCase()
 
-  if (method.includes("tcp")) {
+  if (method.includes("tcp") || method.includes("proxy")) {
     if (["direct", "near_baseline"].includes(verdict)) return "接近基线"
     if (["regional", "local_region"].includes(verdict)) return "轻微偏离"
     if (["detour", "distant"].includes(verdict)) return "明显偏离"
@@ -1783,13 +1796,16 @@ function formatHops(value) {
 }
 
 function formatTargetHops(target) {
-  if (
-    String(target?.method || "")
-      .toLowerCase()
-      .includes("tcp")
-  )
-    return "--"
+  const method = String(target?.method || "").toLowerCase()
+  if (method.includes("tcp") || method.includes("proxy")) return "--"
   return formatHops(target?.verdict?.hopCount)
+}
+
+function formatPathMethod(value) {
+  const method = String(value || "").toLowerCase()
+  if (method === "https-proxy") return "HTTPS 系统代理"
+  if (method === "http-proxy") return "HTTP 系统代理"
+  return value || "--"
 }
 
 function formatScore(value) {
@@ -2035,6 +2051,14 @@ function formatTool(value) {
   if (!value) return "Network Quality Engine"
   if (typeof value === "string") return value
   return value.name || value.version || "Network Quality Engine"
+}
+
+function formatProxyRoute(value) {
+  const proxy = String(value || "direct")
+  if (proxy === "direct") return "本机直连"
+  if (proxy.startsWith("system:"))
+    return `系统代理 ${proxy.slice("system:".length)}`
+  return proxy
 }
 
 function formatDateTime(value) {

@@ -4,7 +4,7 @@ use futures_util::{
     future::{join, join5, join_all},
     StreamExt,
 };
-use reqwest::{header::LOCATION, Client, Method};
+use reqwest::{header::LOCATION, Client, ClientBuilder, Method, NoProxy, Proxy};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -19,6 +19,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::net::{lookup_host, TcpSocket};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
+use url::Url;
+#[cfg(windows)]
+use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 const TOOL_NAME: &str = "Monkey Thief Network Quality";
 const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
@@ -463,24 +466,34 @@ struct FamilyClients {
     no_redirects: Client,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SystemProxy {
+    http: Option<String>,
+    https: Option<String>,
+    no_proxy: Option<String>,
+}
+
 struct NetworkStack {
     ipv4: Option<FamilyClients>,
     ipv6: Option<FamilyClients>,
     metadata: Client,
+    proxy: Option<SystemProxy>,
 }
 
 impl NetworkStack {
     fn build(selection: FamilySelection) -> Result<Self, ManagerError> {
+        let proxy = detect_system_proxy()?;
         Ok(Self {
             ipv4: selection
                 .includes(AddressFamily::Ipv4)
-                .then(|| build_family_clients(AddressFamily::Ipv4))
+                .then(|| build_family_clients(AddressFamily::Ipv4, proxy.as_ref()))
                 .transpose()?,
             ipv6: selection
                 .includes(AddressFamily::Ipv6)
-                .then(|| build_family_clients(AddressFamily::Ipv6))
+                .then(|| build_family_clients(AddressFamily::Ipv6, proxy.as_ref()))
                 .transpose()?,
-            metadata: build_metadata_client()?,
+            metadata: build_metadata_client(proxy.as_ref())?,
+            proxy,
         })
     }
 
@@ -500,6 +513,21 @@ impl NetworkStack {
 
     fn metadata_client(&self) -> &Client {
         &self.metadata
+    }
+
+    fn proxy_report(&self) -> String {
+        self.proxy
+            .as_ref()
+            .map(SystemProxy::report)
+            .unwrap_or_else(|| "direct".to_string())
+    }
+
+    fn path_probe_mode(&self) -> PathProbeMode {
+        match self.proxy.as_ref() {
+            Some(proxy) if proxy.https.is_some() => PathProbeMode::ProxyHttps,
+            Some(_) => PathProbeMode::ProxyHttp,
+            None => PathProbeMode::Tcp,
+        }
     }
 }
 
@@ -913,11 +941,19 @@ impl ProbeFailure {
 #[derive(Clone)]
 struct RawPathTarget {
     target: PathTarget,
+    mode: PathProbeMode,
     resolved_ip: String,
     samples: Vec<f64>,
     attempts: usize,
     error: String,
     cancelled: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PathProbeMode {
+    Tcp,
+    ProxyHttp,
+    ProxyHttps,
 }
 
 pub async fn dispatch(
@@ -1092,37 +1128,215 @@ fn validate_run_id(run_id: &str) -> Result<(), ManagerError> {
     }
 }
 
-fn build_family_clients(family: AddressFamily) -> Result<FamilyClients, ManagerError> {
-    Ok(FamilyClients {
-        follow_redirects: build_http_client(family, false)?,
-        no_redirects: build_http_client(family, true)?,
+#[cfg(windows)]
+fn detect_system_proxy() -> Result<Option<SystemProxy>, ManagerError> {
+    let internet_settings = match RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")
+    {
+        Ok(settings) => settings,
+        Err(_) => return Ok(None),
+    };
+    let enabled = internet_settings
+        .get_value::<u32, _>("ProxyEnable")
+        .unwrap_or(0)
+        != 0;
+    if !enabled {
+        return Ok(None);
+    }
+    let proxy_server = internet_settings
+        .get_value::<String, _>("ProxyServer")
+        .map_err(|_| {
+            ManagerError::System("系统代理已开启，但没有读取到代理服务器地址".to_string())
+        })?;
+    let proxy_override = internet_settings
+        .get_value::<String, _>("ProxyOverride")
+        .unwrap_or_default();
+    parse_system_proxy(&proxy_server, &proxy_override).map(Some)
+}
+
+#[cfg(not(windows))]
+fn detect_system_proxy() -> Result<Option<SystemProxy>, ManagerError> {
+    Ok(None)
+}
+
+fn parse_system_proxy(
+    proxy_server: &str,
+    proxy_override: &str,
+) -> Result<SystemProxy, ManagerError> {
+    let proxy_server = proxy_server.trim();
+    if proxy_server.is_empty() {
+        return Err(ManagerError::System(
+            "系统代理已开启，但代理服务器地址为空".to_string(),
+        ));
+    }
+
+    let mut http = None;
+    let mut https = None;
+    let mut socks = None;
+    if proxy_server.contains('=') {
+        for entry in proxy_server
+            .split(';')
+            .map(str::trim)
+            .filter(|entry| !entry.is_empty())
+        {
+            let Some((protocol, address)) = entry.split_once('=') else {
+                continue;
+            };
+            match protocol.trim().to_ascii_lowercase().as_str() {
+                "http" => http = Some(normalize_proxy_url(address, "http")?),
+                "https" => https = Some(normalize_proxy_url(address, "http")?),
+                "socks" => socks = Some(normalize_proxy_url(address, "socks5h")?),
+                _ => {}
+            }
+        }
+    } else {
+        let proxy = normalize_proxy_url(proxy_server, "http")?;
+        http = Some(proxy.clone());
+        https = Some(proxy);
+    }
+
+    if http.is_none() && https.is_none() {
+        let Some(socks) = socks else {
+            return Err(ManagerError::System(
+                "系统代理配置中没有可用的 HTTP、HTTPS 或 SOCKS 地址".to_string(),
+            ));
+        };
+        http = Some(socks.clone());
+        https = Some(socks);
+    }
+
+    Ok(SystemProxy {
+        http,
+        https,
+        no_proxy: normalize_proxy_override(proxy_override),
     })
 }
 
-fn build_metadata_client() -> Result<Client, ManagerError> {
-    Client::builder()
-        .no_proxy()
+fn normalize_proxy_url(value: &str, default_scheme: &str) -> Result<String, ManagerError> {
+    let value = value.trim();
+    let candidate = if value.contains("://") {
+        value.to_string()
+    } else {
+        format!("{default_scheme}://{value}")
+    };
+    let url = Url::parse(&candidate)
+        .map_err(|_| ManagerError::System(format!("系统代理地址无效：{value}")))?;
+    if url.host_str().is_none() {
+        return Err(ManagerError::System(format!("系统代理地址无效：{value}")));
+    }
+    Ok(url.to_string())
+}
+
+fn normalize_proxy_override(value: &str) -> Option<String> {
+    let value = value
+        .split(';')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty() && !entry.eq_ignore_ascii_case("<local>"))
+        .map(|entry| entry.strip_prefix("*.").unwrap_or(entry))
+        .collect::<Vec<_>>()
+        .join(",");
+    (!value.is_empty()).then_some(value)
+}
+
+fn sanitized_proxy_url(value: &str) -> String {
+    let Ok(mut url) = Url::parse(value) else {
+        return "已配置".to_string();
+    };
+    let _ = url.set_password(None);
+    let _ = url.set_username("");
+    url.to_string().trim_end_matches('/').to_string()
+}
+
+impl SystemProxy {
+    fn configure(&self, builder: ClientBuilder) -> Result<ClientBuilder, ManagerError> {
+        let no_proxy = self.no_proxy.as_deref().and_then(NoProxy::from_string);
+        if self.http == self.https {
+            let proxy = self.http.as_ref().expect("系统代理至少包含一个地址");
+            let proxy = Proxy::all(proxy)
+                .map_err(|error| ManagerError::System(format!("系统代理配置无效：{error}")))?
+                .no_proxy(no_proxy);
+            return Ok(builder.proxy(proxy));
+        }
+
+        let mut builder = builder;
+        if let Some(proxy) = self.http.as_ref() {
+            let proxy = Proxy::http(proxy)
+                .map_err(|error| ManagerError::System(format!("HTTP 系统代理配置无效：{error}")))?
+                .no_proxy(no_proxy.clone());
+            builder = builder.proxy(proxy);
+        }
+        if let Some(proxy) = self.https.as_ref() {
+            let proxy = Proxy::https(proxy)
+                .map_err(|error| ManagerError::System(format!("HTTPS 系统代理配置无效：{error}")))?
+                .no_proxy(no_proxy);
+            builder = builder.proxy(proxy);
+        }
+        Ok(builder)
+    }
+
+    fn report(&self) -> String {
+        if self.http == self.https {
+            return format!(
+                "system:{}",
+                sanitized_proxy_url(self.http.as_deref().expect("系统代理至少包含一个地址"))
+            );
+        }
+        let mut entries = Vec::new();
+        if let Some(proxy) = self.http.as_deref() {
+            entries.push(format!("http={}", sanitized_proxy_url(proxy)));
+        }
+        if let Some(proxy) = self.https.as_deref() {
+            entries.push(format!("https={}", sanitized_proxy_url(proxy)));
+        }
+        format!("system:{}", entries.join(";"))
+    }
+}
+
+fn build_family_clients(
+    family: AddressFamily,
+    proxy: Option<&SystemProxy>,
+) -> Result<FamilyClients, ManagerError> {
+    Ok(FamilyClients {
+        follow_redirects: build_http_client(family, false, proxy)?,
+        no_redirects: build_http_client(family, true, proxy)?,
+    })
+}
+
+fn build_metadata_client(proxy: Option<&SystemProxy>) -> Result<Client, ManagerError> {
+    let builder = Client::builder()
         .connect_timeout(HTTP_CONNECT_TIMEOUT)
         .timeout(HTTP_REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(10))
-        .user_agent("Monkey-Thief-Network-Quality/1.0")
+        .user_agent("Monkey-Thief-Network-Quality/1.0");
+    let builder = match proxy {
+        Some(proxy) => proxy.configure(builder)?,
+        None => builder.no_proxy(),
+    };
+    builder
         .build()
         .map_err(|error| ManagerError::System(format!("创建 IP 情报客户端失败：{error}")))
 }
 
-fn build_http_client(family: AddressFamily, no_redirects: bool) -> Result<Client, ManagerError> {
+fn build_http_client(
+    family: AddressFamily,
+    no_redirects: bool,
+    proxy: Option<&SystemProxy>,
+) -> Result<Client, ManagerError> {
     let redirect = if no_redirects {
         reqwest::redirect::Policy::none()
     } else {
         reqwest::redirect::Policy::limited(10)
     };
-    Client::builder()
-        .no_proxy()
-        .local_address(family.unspecified())
+    let builder = Client::builder()
         .connect_timeout(HTTP_CONNECT_TIMEOUT)
         .timeout(HTTP_REQUEST_TIMEOUT)
         .redirect(redirect)
-        .user_agent("Monkey-Thief-Network-Quality/1.0")
+        .user_agent("Monkey-Thief-Network-Quality/1.0");
+    let builder = match proxy {
+        Some(proxy) => proxy.configure(builder)?,
+        None => builder.no_proxy().local_address(family.unspecified()),
+    };
+    builder
         .build()
         .map_err(|error| ManagerError::System(format!("创建网络检测客户端失败：{error}")))
 }
@@ -1192,7 +1406,7 @@ async fn run_report(
         if !options.modules.path {
             return ConnectivityReport::default();
         }
-        let result = run_path(primary_family, &path_cancel).await;
+        let result = run_path(stack, primary_family, &path_cancel).await;
         path_progress.complete("path", "目标连接质量检测完成");
         result
     };
@@ -1225,6 +1439,7 @@ async fn run_report(
         options,
         &identity,
         &connectivity_checks,
+        stack.path_probe_mode(),
         cancel.is_cancelled(),
     );
     let identity_available = selected_identity_available(options.family, &identity);
@@ -1245,7 +1460,7 @@ async fn run_report(
             family: options.family.as_str().to_string(),
             mask_ip: options.mask_ip,
             resolver: "system".to_string(),
-            proxy: "direct".to_string(),
+            proxy: stack.proxy_report(),
         },
         identity,
         ip_intelligence,
@@ -2739,13 +2954,31 @@ fn contains_region_denial(lower_body: &str) -> bool {
     .any(|marker| lower_body.contains(marker))
 }
 
-async fn run_path(family: AddressFamily, cancel: &CancellationToken) -> ConnectivityReport {
-    let raw_targets = join_all(
-        PATH_TARGETS
-            .iter()
-            .map(|target| probe_tcp_target(*target, family, cancel)),
-    )
-    .await;
+async fn run_path(
+    stack: &NetworkStack,
+    family: AddressFamily,
+    cancel: &CancellationToken,
+) -> ConnectivityReport {
+    let mode = stack.path_probe_mode();
+    let raw_targets = match mode {
+        PathProbeMode::Tcp => {
+            join_all(
+                PATH_TARGETS
+                    .iter()
+                    .map(|target| probe_tcp_target(*target, family, cancel)),
+            )
+            .await
+        }
+        PathProbeMode::ProxyHttp | PathProbeMode::ProxyHttps => {
+            let client = stack.client(family, false);
+            join_all(
+                PATH_TARGETS
+                    .iter()
+                    .map(|target| probe_proxy_target(*target, mode, client, cancel)),
+            )
+            .await
+        }
+    };
     finalize_connectivity(raw_targets)
 }
 
@@ -2756,6 +2989,7 @@ async fn probe_tcp_target(
 ) -> RawPathTarget {
     let mut raw = RawPathTarget {
         target,
+        mode: PathProbeMode::Tcp,
         resolved_ip: String::new(),
         samples: Vec::new(),
         attempts: 0,
@@ -2824,6 +3058,56 @@ async fn probe_tcp_target(
     raw
 }
 
+async fn probe_proxy_target(
+    target: PathTarget,
+    mode: PathProbeMode,
+    client: &Client,
+    cancel: &CancellationToken,
+) -> RawPathTarget {
+    let mut raw = RawPathTarget {
+        target,
+        mode,
+        resolved_ip: String::new(),
+        samples: Vec::new(),
+        attempts: 0,
+        error: String::new(),
+        cancelled: false,
+    };
+    let scheme = match mode {
+        PathProbeMode::ProxyHttps => "https",
+        PathProbeMode::ProxyHttp => "http",
+        PathProbeMode::Tcp => unreachable!("代理路径探测不能使用 TCP 模式"),
+    };
+    let url = format!("{scheme}://{}/", target.host);
+
+    for _ in 0..TCP_ROUNDS {
+        if cancel.is_cancelled() {
+            raw.cancelled = true;
+            raw.error = "检测已取消".to_string();
+            break;
+        }
+        raw.attempts += 1;
+        let started = Instant::now();
+        let request = client.head(&url).header("cache-control", "no-cache").send();
+        match cancel.run_until_cancelled(request).await {
+            None => {
+                raw.cancelled = true;
+                raw.error = "检测已取消".to_string();
+                break;
+            }
+            Some(Ok(response)) => {
+                drop(response);
+                raw.samples.push(elapsed_ms_f64(started));
+            }
+            Some(Err(error)) => raw.error = classify_request_error(error).message,
+        }
+    }
+    if !raw.cancelled && !raw.samples.is_empty() && raw.samples.len() < raw.attempts {
+        raw.error = "部分代理请求探测失败".to_string();
+    }
+    raw
+}
+
 async fn connect_tcp(
     address: SocketAddr,
     family: AddressFamily,
@@ -2884,7 +3168,12 @@ fn finalize_connectivity(raw_targets: Vec<RawPathTarget>) -> ConnectivityReport 
         grade: score_grade(score).to_string(),
         floor_ms: round_ms(floor_ms),
         median_rtt_ms: round_ms(median_rtt_ms),
-        capability: tcp_capability(),
+        capability: path_capability(
+            raw_targets
+                .first()
+                .map(|target| target.mode)
+                .unwrap_or(PathProbeMode::Tcp),
+        ),
         targets,
     }
 }
@@ -2911,10 +3200,17 @@ fn finalize_path_target(target: RawPathTarget, floor_ms: f64) -> PathTargetResul
         loss,
         !target.samples.is_empty(),
     );
-    let mut notes = vec![
-        "TCP 仅测量目标连接建立延迟".to_string(),
-        "TCP 无法显示逐跳路径，也不能证明直连或 Transit".to_string(),
-    ];
+    let mut notes = match target.mode {
+        PathProbeMode::Tcp => vec![
+            "TCP 仅测量目标连接建立延迟".to_string(),
+            "TCP 无法显示逐跳路径，也不能证明直连或 Transit".to_string(),
+        ],
+        PathProbeMode::ProxyHttp | PathProbeMode::ProxyHttps => vec![
+            "通过系统代理测量 HTTP 响应首包延迟".to_string(),
+            "结果包含本机到代理、代理转发和目标响应耗时".to_string(),
+            "代理模式不会执行绕过代理的本地 DNS 或 TCP 直连探测".to_string(),
+        ],
+    };
     if target.target.network.contains("Anycast") {
         notes.push("Anycast 延迟表示最近公告点，不表示服务器物理位置".to_string());
     }
@@ -2923,7 +3219,12 @@ fn finalize_path_target(target: RawPathTarget, floor_ms: f64) -> PathTargetResul
         name: target.target.name.to_string(),
         host: target.target.host.to_string(),
         network: target.target.network.to_string(),
-        method: "tcp".to_string(),
+        method: match target.mode {
+            PathProbeMode::Tcp => "tcp",
+            PathProbeMode::ProxyHttp => "http-proxy",
+            PathProbeMode::ProxyHttps => "https-proxy",
+        }
+        .to_string(),
         resolved_ip: target.resolved_ip,
         verdict: PathVerdict {
             class: class.to_string(),
@@ -2974,11 +3275,19 @@ fn score_grade(score: u8) -> &'static str {
 }
 
 fn tcp_capability() -> PathCapability {
+    path_capability(PathProbeMode::Tcp)
+}
+
+fn path_capability(mode: PathProbeMode) -> PathCapability {
+    let hint = match mode {
+        PathProbeMode::Tcp => "当前桌面版使用 TCP 握手降级，只能测量目标连接延迟；看不到逐跳路径，不能据此证明直连或 Transit。",
+        PathProbeMode::ProxyHttp | PathProbeMode::ProxyHttps => "当前电脑已开启系统代理，路径模块改用代理 HTTP 请求测量端到端延迟；不会执行绕过代理的本地 DNS、TCP 或 ICMP 探测。",
+    };
     PathCapability {
         icmp: false,
         raw: false,
         path_visible: false,
-        hint: "当前桌面版使用 TCP 握手降级，只能测量目标连接延迟；看不到逐跳路径，不能据此证明直连或 Transit。".to_string(),
+        hint: hint.to_string(),
     }
 }
 
@@ -2986,6 +3295,7 @@ fn build_findings(
     options: &RunPayload,
     identity: &IdentityReport,
     portal: &ConnectivityChecks,
+    path_mode: PathProbeMode,
     cancelled: bool,
 ) -> Vec<Finding> {
     let mut findings = Vec::new();
@@ -3074,11 +3384,17 @@ fn build_findings(
         });
     }
     if options.modules.path {
+        let (id, title) = match path_mode {
+            PathProbeMode::Tcp => ("tcp_path_limited", "路径能力已降级为 TCP"),
+            PathProbeMode::ProxyHttp | PathProbeMode::ProxyHttps => {
+                ("proxy_path_measurement", "路径质量通过系统代理测量")
+            }
+        };
         findings.push(Finding {
-            id: "tcp_path_limited".to_string(),
-            title: "路径能力已降级为 TCP".to_string(),
+            id: id.to_string(),
+            title: title.to_string(),
             severity: "info".to_string(),
-            detail: tcp_capability().hint,
+            detail: path_capability(path_mode).hint,
         });
     }
     if cancelled {
@@ -4026,6 +4342,7 @@ mod tests {
         assert_eq!(PATH_TARGETS[4].host, "dns.quad9.net");
         let measured = RawPathTarget {
             target: PATH_TARGETS[0],
+            mode: PathProbeMode::Tcp,
             resolved_ip: "1.1.1.1".to_string(),
             samples: vec![20.0, 22.0, 21.0],
             attempts: 3,
@@ -4034,6 +4351,7 @@ mod tests {
         };
         let dns_failure = RawPathTarget {
             target: PATH_TARGETS[1],
+            mode: PathProbeMode::Tcp,
             resolved_ip: String::new(),
             samples: Vec::new(),
             attempts: 0,
@@ -4042,6 +4360,7 @@ mod tests {
         };
         let cancelled_partial = RawPathTarget {
             target: PATH_TARGETS[2],
+            mode: PathProbeMode::Tcp,
             resolved_ip: "203.0.113.10".to_string(),
             samples: vec![250.0],
             attempts: 1,
@@ -4053,6 +4372,67 @@ mod tests {
         assert_eq!(report.targets[1].verdict.loss, 0.0);
         assert_eq!(report.targets[1].verdict.score, 0);
         assert!(report.targets[2].verdict.score < report.score);
+    }
+
+    #[test]
+    fn system_proxy_parses_shared_and_protocol_specific_addresses() {
+        let shared = parse_system_proxy("127.0.0.1:7890", "localhost;<local>").unwrap();
+        assert_eq!(shared.http.as_deref(), Some("http://127.0.0.1:7890/"));
+        assert_eq!(shared.https, shared.http);
+        assert_eq!(shared.no_proxy.as_deref(), Some("localhost"));
+        assert_eq!(shared.report(), "system:http://127.0.0.1:7890");
+
+        let split = parse_system_proxy(
+            "http=127.0.0.1:7890;https=127.0.0.1:7891;socks=127.0.0.1:7892",
+            "",
+        )
+        .unwrap();
+        assert_eq!(split.http.as_deref(), Some("http://127.0.0.1:7890/"));
+        assert_eq!(split.https.as_deref(), Some("http://127.0.0.1:7891/"));
+        assert_eq!(
+            split.report(),
+            "system:http=http://127.0.0.1:7890;https=http://127.0.0.1:7891"
+        );
+    }
+
+    #[test]
+    fn system_proxy_supports_socks_and_masks_credentials() {
+        let proxy = parse_system_proxy("socks=alice:secret@127.0.0.1:1080", "").unwrap();
+        assert_eq!(
+            proxy.http.as_deref(),
+            Some("socks5h://alice:secret@127.0.0.1:1080/")
+        );
+        assert_eq!(proxy.https, proxy.http);
+        assert_eq!(proxy.report(), "system:socks5h://127.0.0.1:1080");
+        assert!(!proxy.report().contains("alice"));
+        assert!(!proxy.report().contains("secret"));
+    }
+
+    #[test]
+    fn proxy_path_mode_prefers_https_and_never_uses_direct_tcp() {
+        let https = parse_system_proxy("127.0.0.1:7890", "").unwrap();
+        assert_eq!(
+            NetworkStack {
+                ipv4: None,
+                ipv6: None,
+                metadata: build_metadata_client(None).unwrap(),
+                proxy: Some(https),
+            }
+            .path_probe_mode(),
+            PathProbeMode::ProxyHttps
+        );
+
+        let http_only = parse_system_proxy("http=127.0.0.1:7890", "").unwrap();
+        assert_eq!(
+            NetworkStack {
+                ipv4: None,
+                ipv6: None,
+                metadata: build_metadata_client(None).unwrap(),
+                proxy: Some(http_only),
+            }
+            .path_probe_mode(),
+            PathProbeMode::ProxyHttp
+        );
     }
 
     #[test]
@@ -4138,7 +4518,7 @@ mod tests {
                         .await
                         .unwrap();
                 });
-                let client = build_http_client(AddressFamily::Ipv4, true).unwrap();
+                let client = build_http_client(AddressFamily::Ipv4, true, None).unwrap();
                 let cancel = CancellationToken::new();
                 let response = send_request(
                     &client,

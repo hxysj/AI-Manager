@@ -334,8 +334,11 @@ pub const SESSION_SKILL_PARSER_VERSION: u64 = 1;
 pub fn read_session_ids(paths: &AppPaths) -> Result<HashMap<String, String>, ManagerError> {
     initialize(paths)?;
     let connection = open_connection(paths)?;
-    let mut statement = connection.prepare("SELECT raw_path, session_id FROM usage_sessions WHERE session_id<>''")?;
-    let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let mut statement = connection
+        .prepare("SELECT raw_path, session_id FROM usage_sessions WHERE session_id<>''")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     Ok(rows.collect::<Result<HashMap<_, _>, _>>()?)
 }
 

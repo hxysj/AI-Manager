@@ -27,10 +27,14 @@ async fn dispatch_api(
     if channel == "app-log:record" {
         let path = state.user_data_path().await;
         return app_logs::record_renderer(&path, window.label(), payload.unwrap_or(Value::Null))
-            .await.map_err(|error| error.to_string());
+            .await
+            .map_err(|error| error.to_string());
     }
     if channel.starts_with("app-log:") {
-        return state.dispatch(app, &channel, payload).await.map_err(|error| error.to_string());
+        return state
+            .dispatch(app, &channel, payload)
+            .await
+            .map_err(|error| error.to_string());
     }
     let record_call = app_logs::should_record_call(&channel, payload.as_ref());
     let started = app_logs::begin_call(payload.as_ref(), window.label(), context);
@@ -71,8 +75,12 @@ async fn dispatch_command(
     }
     // 截图数据走独立服务，业务调用由入口记录脱敏摘要，不重建 Provider 托盘。
     if let Some(action) = channel.strip_prefix("screenshot:") {
-        let result = screenshot::dispatch(app.clone(), action.to_string(), payload.unwrap_or_else(|| serde_json::json!({})))
-            .await;
+        let result = screenshot::dispatch(
+            app.clone(),
+            action.to_string(),
+            payload.unwrap_or_else(|| serde_json::json!({})),
+        )
+        .await;
         // 设置或启停截图时同步托盘入口，截图首帧和逐帧操作不重建菜单。
         if matches!(action, "settings" | "set-enabled") && result.is_ok() {
             let snapshot = state.state_snapshot().await;
@@ -89,22 +97,20 @@ async fn dispatch_command(
     // 拖动和悬浮尺寸调整不改变业务状态，不逐帧写日志和重建托盘菜单。
     if matches!(
         channel,
-        "quick-switch:move-by" | "quick-switch:set-collapsed" | "quick-switch:ready"
-            | "tool-window:open" | "tool-window:ready" | "quick-switch:show-main"
+        "quick-switch:move-by"
+            | "quick-switch:set-collapsed"
+            | "quick-switch:ready"
+            | "tool-window:open"
+            | "tool-window:ready"
+            | "quick-switch:show-main"
     ) {
-        return state
-            .dispatch(app, channel, payload)
-            .await;
+        return state.dispatch(app, channel, payload).await;
     }
     if channel.starts_with("app-log:") || channel.starts_with("network-quality:") {
-        return state
-            .dispatch(app.clone(), channel, payload)
-            .await;
+        return state.dispatch(app.clone(), channel, payload).await;
     }
 
-    let result = state
-        .dispatch(app.clone(), channel, payload)
-        .await;
+    let result = state.dispatch(app.clone(), channel, payload).await;
 
     if result.is_ok() {
         let snapshot = state.state_snapshot().await;
@@ -215,28 +221,30 @@ pub fn run() {
             });
             app.manage(translation::desktop::DesktopTranslator::default());
             translation::desktop::sync(app.handle(), &app_settings.agents.translation);
-            let data_root = tauri::async_runtime::block_on(app.state::<AppState>().user_data_path());
+            let data_root =
+                tauri::async_runtime::block_on(app.state::<AppState>().user_data_path());
             match screenshot::ScreenshotService::new(&data_root) {
                 Ok(service) => {
                     app.manage(service);
                     let handle = app.handle().clone();
-                    tauri::async_runtime::spawn(async move { screenshot::start(handle); });
+                    tauri::async_runtime::spawn(async move {
+                        screenshot::start(handle);
+                    });
                 }
                 Err(error) => {
                     eprintln!("截图贴图数据加载失败，原数据保留：{error}");
                     let root = data_root.clone();
                     tauri::async_runtime::spawn(async move {
-                        if let Err(error) = app_logs::record_background_error(&root, "screenshot:startup", error).await {
+                        if let Err(error) =
+                            app_logs::record_background_error(&root, "screenshot:startup", error)
+                                .await
+                        {
                             eprintln!("[日志错误] {error}");
                         }
                     });
                 }
             }
-            app::sync_quick_switch_window(
-                app.handle(),
-                &app_settings,
-                quick_switch_collapsed,
-            )?;
+            app::sync_quick_switch_window(app.handle(), &app_settings, quick_switch_collapsed)?;
             create_tray(app.handle())?;
             app::start_update_checker(app.handle().clone());
             if let Some(state) = app.handle().try_state::<AppState>() {
@@ -249,7 +257,10 @@ pub fn run() {
                     if let Err(error) = state.start_lan_share_service(app_handle.clone()).await {
                         eprintln!("设备快传后台服务启动失败：{error}");
                         let root = state.user_data_path().await;
-                        if let Err(error) = app_logs::record_background_error(&root, "lan-share:startup", error).await {
+                        if let Err(error) =
+                            app_logs::record_background_error(&root, "lan-share:startup", error)
+                                .await
+                        {
                             eprintln!("[日志错误] {error}");
                         }
                     }
@@ -261,7 +272,9 @@ pub fn run() {
                     if let Err(error) = state.start_enabled_proxy_servers().await {
                         eprintln!("{error}");
                         let root = state.user_data_path().await;
-                        if let Err(error) = app_logs::record_background_error(&root, "proxy:startup", error).await {
+                        if let Err(error) =
+                            app_logs::record_background_error(&root, "proxy:startup", error).await
+                        {
                             eprintln!("[日志错误] {error}");
                         }
                     }
@@ -273,7 +286,9 @@ pub fn run() {
                     if let Some(state) = app_handle.try_state::<AppState>() {
                         match state.create_local_backup_if_due().await {
                             Ok(true) => {
-                                if let Err(error) = app_handle.emit("state:changed", state.state_snapshot().await) {
+                                if let Err(error) =
+                                    app_handle.emit("state:changed", state.state_snapshot().await)
+                                {
                                     eprintln!("{error}");
                                 }
                             }
@@ -286,7 +301,12 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![dispatch_api, screenshot::screenshot_frame, screenshot::screenshot_region_frame, screenshot::screenshot_image])
+        .invoke_handler(tauri::generate_handler![
+            dispatch_api,
+            screenshot::screenshot_frame,
+            screenshot::screenshot_region_frame,
+            screenshot::screenshot_image
+        ])
         .build(tauri::generate_context!())
         .expect("启动 Monkey Thief 失败")
         .run(|app, event| {
@@ -310,11 +330,19 @@ fn create_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
             match item_id.as_str() {
                 "show-main" => show_main_from_tray(app),
                 "quit" => app.exit(0),
-                "screenshot:capture-auto-copy" | "screenshot:capture" | "screenshot:clipboard" | "screenshot:toggle" | "screenshot:switch-group" | "screenshot:reset-input" => {
+                "screenshot:capture-auto-copy"
+                | "screenshot:capture"
+                | "screenshot:clipboard"
+                | "screenshot:toggle"
+                | "screenshot:switch-group"
+                | "screenshot:reset-input" => {
                     let action = item_id.trim_start_matches("screenshot:").to_string();
                     let handle = app.clone();
                     tauri::async_runtime::spawn(async move {
-                        if let Err(error) = screenshot::dispatch(handle.clone(), action, serde_json::json!({})).await {
+                        if let Err(error) =
+                            screenshot::dispatch(handle.clone(), action, serde_json::json!({}))
+                                .await
+                        {
                             let _ = handle.emit("screenshot:error", error.to_string());
                         }
                     });
@@ -355,8 +383,15 @@ fn build_tray_menu(app: &tauri::AppHandle, state: &Value) -> tauri::Result<Menu<
 
     append_quick_switch_tray_items(app, &switch_menu, state)?;
     menu.append(&show_item)?;
-    let settings = app.try_state::<screenshot::ScreenshotService>().map(|service| service.settings()).unwrap_or_default();
-    for (_, name, shortcut) in settings.shortcut_bindings().into_iter().filter(|_| settings.enabled) {
+    let settings = app
+        .try_state::<screenshot::ScreenshotService>()
+        .map(|service| service.settings())
+        .unwrap_or_default();
+    for (_, name, shortcut) in settings
+        .shortcut_bindings()
+        .into_iter()
+        .filter(|_| settings.enabled)
+    {
         let (id, label) = match name {
             "captureAutoCopy" => ("capture-auto-copy", "截屏并自动复制"),
             "capture" => ("capture", "自定义截屏"),
@@ -367,7 +402,13 @@ fn build_tray_menu(app: &tauri::AppHandle, state: &Value) -> tauri::Result<Menu<
             _ => continue,
         };
         // Tab 将组合键排在右侧；只显示文字，避免菜单再次注册同一全局快捷键。
-        menu.append(&MenuItem::with_id(app, format!("screenshot:{id}"), format!("{label}\t{shortcut}"), true, None::<&str>)?)?;
+        menu.append(&MenuItem::with_id(
+            app,
+            format!("screenshot:{id}"),
+            format!("{label}\t{shortcut}"),
+            true,
+            None::<&str>,
+        )?)?;
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&switch_menu)?;

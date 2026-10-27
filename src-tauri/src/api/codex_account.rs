@@ -1,5 +1,5 @@
-use crate::api::{codex_models, runtime_provider};
 use crate::api::usage;
+use crate::api::{codex_models, runtime_provider};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use crate::core::{provider_store, usage_store};
@@ -815,9 +815,12 @@ async fn refresh_account_usage(
         &claims,
         &string_value(account.get("proxy")),
     )
-    .await {
+    .await
+    {
         // 服务端可能在本地过期时间之前撤销 access_token，只续期重试一次。
-        Err(ManagerError::OpenAiRequest { status_code: 401, .. }) => {
+        Err(ManagerError::OpenAiRequest {
+            status_code: 401, ..
+        }) => {
             return perform_managed_token_refresh(paths, &account, cli_target).await;
         }
         result => result?,
@@ -1160,8 +1163,14 @@ async fn save_account(
     );
     let current_account = provider_store::read_codex_accounts(paths)?
         .into_iter()
-        .find(|account| ["id", "accountId", "account_id"].iter().any(|field| string_value(account.get(*field)) == account_id));
-    let id = current_account.as_ref().map(|account| string_value(account.get("id")))
+        .find(|account| {
+            ["id", "accountId", "account_id"]
+                .iter()
+                .any(|field| string_value(account.get(*field)) == account_id)
+        });
+    let id = current_account
+        .as_ref()
+        .map(|account| string_value(account.get("id")))
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let token_updated_at = tokens
         .token_updated_at
@@ -1308,7 +1317,11 @@ async fn mark_account_refresh_error(
         account["refresh_message"] = json!(message);
         if status_code == 401 || should_mark_reauth(&message) {
             account["requires_reauth"] = json!(true);
-            account["reauth_reason"] = json!(if status_code == 401 { "unauthorized" } else { "invalid_grant" });
+            account["reauth_reason"] = json!(if status_code == 401 {
+                "unauthorized"
+            } else {
+                "invalid_grant"
+            });
             account["reauth_message"] = json!("Codex 登录授权已失效，请重新登录。");
         }
         account["updatedAt"] = json!(now_millis());
@@ -1921,27 +1934,51 @@ mod tests {
                 disabled["disabled"] = json!(true);
                 let mut active = cached_account();
                 active["id"] = json!("active-account");
-                provider_store::write_codex_accounts(paths, &[disabled.clone(), active.clone()]).unwrap();
+                provider_store::write_codex_accounts(paths, &[disabled.clone(), active.clone()])
+                    .unwrap();
                 let original_accounts = provider_store::read_codex_accounts(paths).unwrap();
                 provider_store::write_active_codex_account_id(paths, "active-account").unwrap();
                 let config_dir = Path::new(&paths.workspace_root).join("codex-config");
                 tokio::fs::create_dir_all(&config_dir).await.unwrap();
-                tokio::fs::write(config_dir.join("auth.json"), "active-account-auth").await.unwrap();
-                update_account_proxy(paths, json!({
-                    "accountId": "account-1", "proxy": "http://127.0.0.1:7890"
-                })).await.unwrap();
+                tokio::fs::write(config_dir.join("auth.json"), "active-account-auth")
+                    .await
+                    .unwrap();
+                update_account_proxy(
+                    paths,
+                    json!({
+                        "accountId": "account-1", "proxy": "http://127.0.0.1:7890"
+                    }),
+                )
+                .await
+                .unwrap();
                 let accounts = provider_store::read_codex_accounts(paths).unwrap();
                 assert_eq!(accounts[0]["disabled"], true);
                 assert_eq!(accounts[0]["proxy"], "http://127.0.0.1:7890");
                 assert_eq!(accounts[0]["auth"], original_accounts[0]["auth"]);
-                let detail = account_detail(paths, json!({ "accountId": "account-1" })).await.unwrap();
+                let detail = account_detail(paths, json!({ "accountId": "account-1" }))
+                    .await
+                    .unwrap();
                 assert_eq!(detail["data"]["disabled"], true);
-                delete_account(paths, &json!([{
-                    "id": "codex", "configPath": config_dir.to_string_lossy()
-                }]), json!({ "accountId": "account-1" })).await.unwrap();
-                assert_eq!(provider_store::read_codex_accounts(paths).unwrap(), vec![original_accounts[1].clone()]);
+                delete_account(
+                    paths,
+                    &json!([{
+                        "id": "codex", "configPath": config_dir.to_string_lossy()
+                    }]),
+                    json!({ "accountId": "account-1" }),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    provider_store::read_codex_accounts(paths).unwrap(),
+                    vec![original_accounts[1].clone()]
+                );
                 assert_eq!(read_active_account_id(paths).unwrap(), "active-account");
-                assert_eq!(tokio::fs::read_to_string(config_dir.join("auth.json")).await.unwrap(), "active-account-auth");
+                assert_eq!(
+                    tokio::fs::read_to_string(config_dir.join("auth.json"))
+                        .await
+                        .unwrap(),
+                    "active-account-auth"
+                );
             });
         });
     }
@@ -1952,14 +1989,41 @@ mod tests {
             tauri::async_runtime::block_on(async {
                 let mut claims = json!({"account_id":"upstream-account"});
                 let profile = json!({"email":"test@example.com"});
-                let saved = save_account(paths, tokens_from_account(&cached_account()), profile.clone(), &mut claims, json!({}), String::new()).await.unwrap();
-                assert_eq!(uuid::Uuid::parse_str(saved["id"].as_str().unwrap()).unwrap().get_version_num(), 4);
+                let saved = save_account(
+                    paths,
+                    tokens_from_account(&cached_account()),
+                    profile.clone(),
+                    &mut claims,
+                    json!({}),
+                    String::new(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    uuid::Uuid::parse_str(saved["id"].as_str().unwrap())
+                        .unwrap()
+                        .get_version_num(),
+                    4
+                );
                 assert_eq!(saved["accountId"], "upstream-account");
-                provider_store::write_active_codex_account_id(paths, saved["id"].as_str().unwrap()).unwrap();
-                let refreshed = save_account(paths, tokens_from_account(&saved), profile, &mut claims, json!({}), String::new()).await.unwrap();
+                provider_store::write_active_codex_account_id(paths, saved["id"].as_str().unwrap())
+                    .unwrap();
+                let refreshed = save_account(
+                    paths,
+                    tokens_from_account(&saved),
+                    profile,
+                    &mut claims,
+                    json!({}),
+                    String::new(),
+                )
+                .await
+                .unwrap();
                 assert_eq!(refreshed["id"], saved["id"]);
                 assert_eq!(provider_store::read_codex_accounts(paths).unwrap().len(), 1);
-                assert_eq!(provider_store::read_active_codex_account_id(paths).unwrap(), saved["id"]);
+                assert_eq!(
+                    provider_store::read_active_codex_account_id(paths).unwrap(),
+                    saved["id"]
+                );
             });
         });
     }
@@ -2003,7 +2067,10 @@ mod tests {
     #[test]
     fn refresh_failures_invalidate_cached_membership_without_losing_credentials() {
         with_account_paths(|paths| {
-            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             runtime.block_on(async {
                 for (status_code, message, requires_reauth) in [
                     (401, "unauthorized", true),
@@ -2014,21 +2081,33 @@ mod tests {
                 ] {
                     let account = cached_account();
                     provider_store::write_codex_accounts(paths, &[account.clone()]).unwrap();
-                    let account = provider_store::read_codex_accounts(paths).unwrap().remove(0);
+                    let account = provider_store::read_codex_accounts(paths)
+                        .unwrap()
+                        .remove(0);
                     let error = if status_code == 0 {
                         ManagerError::System(message.to_string())
                     } else {
-                        ManagerError::OpenAiRequest { status_code, message: message.to_string() }
+                        ManagerError::OpenAiRequest {
+                            status_code,
+                            message: message.to_string(),
+                        }
                     };
-                    mark_account_refresh_error(paths, "account-1", &error).await.unwrap();
-                    let stored = provider_store::read_codex_accounts(paths).unwrap().remove(0);
+                    mark_account_refresh_error(paths, "account-1", &error)
+                        .await
+                        .unwrap();
+                    let stored = provider_store::read_codex_accounts(paths)
+                        .unwrap()
+                        .remove(0);
                     assert_eq!(stored["plan"], "");
                     assert_eq!(stored["usage"], json!({}));
                     assert_eq!(stored["auth"], account["auth"]);
                     assert_eq!(stored["refresh_status"], "failed");
                     assert_eq!(stored["refresh_status_code"], status_code);
                     assert_eq!(stored["requires_reauth"], requires_reauth);
-                    assert!(stored["refresh_message"].as_str().unwrap().contains(message));
+                    assert!(stored["refresh_message"]
+                        .as_str()
+                        .unwrap()
+                        .contains(message));
                     let public = read_public_accounts(paths).unwrap();
                     assert_eq!(public[0]["refresh_status"], "failed");
                     assert_eq!(public[0]["requires_reauth"], requires_reauth);
@@ -2044,7 +2123,10 @@ mod tests {
             let mut account = cached_account();
             account["auth"] = json!({ "accessToken": "expired", "expiresAt": 1 });
             provider_store::write_codex_accounts(paths, &[account]).unwrap();
-            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             let result = runtime.block_on(refresh_account(
                 paths,
                 &json!([{ "id": "codex", "configPath": paths.temp_dir }]),
@@ -2063,13 +2145,18 @@ mod tests {
     #[test]
     fn latest_usage_replaces_old_paid_plan_and_clears_refresh_errors() {
         with_account_paths(|paths| {
-            let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
             runtime.block_on(async {
                 let mut account = cached_account();
                 account["requires_reauth"] = json!(true);
                 account["refresh_status"] = json!("failed");
                 provider_store::write_codex_accounts(paths, &[account.clone()]).unwrap();
-                for (usage, expected_plan) in [(json!({ "plan_type": "free" }), "free"), (json!({}), "")] {
+                for (usage, expected_plan) in
+                    [(json!({ "plan_type": "free" }), "free"), (json!({}), "")]
+                {
                     let saved = save_account(
                         paths,
                         tokens_from_account(&account),
@@ -2077,7 +2164,9 @@ mod tests {
                         &mut json!({ "account_id": "account-1", "chatgpt_plan_type": "plus" }),
                         usage.clone(),
                         String::new(),
-                    ).await.unwrap();
+                    )
+                    .await
+                    .unwrap();
                     assert_eq!(saved["plan"], expected_plan);
                     assert_eq!(saved["usage"], usage);
                     assert_eq!(saved["requires_reauth"], false);
@@ -2089,7 +2178,10 @@ mod tests {
 
     #[test]
     fn http_errors_preserve_status_for_authentication_handling() {
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
         runtime.block_on(async {
             for status_code in [401, 403, 429, 500] {
                 let response = http::Response::builder().status(status_code).body("failure").unwrap();

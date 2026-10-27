@@ -17,9 +17,9 @@ use tauri::{
 };
 use tauri_plugin_opener::OpenerExt;
 
+pub mod ocr;
 #[cfg(windows)]
 mod windows;
-pub mod ocr;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -109,7 +109,14 @@ impl Settings {
         ]
         .into_iter()
         .map(|(id, name, default)| {
-            (id, name, self.shortcuts.get(name).cloned().unwrap_or_else(|| default.into()))
+            (
+                id,
+                name,
+                self.shortcuts
+                    .get(name)
+                    .cloned()
+                    .unwrap_or_else(|| default.into()),
+            )
         })
         .collect()
     }
@@ -145,18 +152,33 @@ fn parse_shortcut(value: &str) -> Result<(u32, u32), ManagerError> {
             _ => 0,
         };
         if modifier != 0 {
-            if modifiers & modifier != 0 { return Err(failure("快捷键包含重复修饰键")); }
+            if modifiers & modifier != 0 {
+                return Err(failure("快捷键包含重复修饰键"));
+            }
             modifiers |= modifier;
             continue;
         }
         let code = match part.as_str() {
             "PRINTSCREEN" => 0x2c,
             "SPACE" => 0x20,
-            value if value.len() == 1 && value.as_bytes()[0].is_ascii_alphanumeric() => u32::from(value.as_bytes()[0]),
-            value if value.starts_with('F') => value[1..].parse::<u32>().ok().filter(|number| (1..=24).contains(number)).map(|number| 0x70 + number - 1).ok_or_else(|| failure("不支持的功能键"))?,
-            _ => return Err(failure("快捷键请使用字母、数字、F1–F24、PrintScreen 或 Space")),
+            value if value.len() == 1 && value.as_bytes()[0].is_ascii_alphanumeric() => {
+                u32::from(value.as_bytes()[0])
+            }
+            value if value.starts_with('F') => value[1..]
+                .parse::<u32>()
+                .ok()
+                .filter(|number| (1..=24).contains(number))
+                .map(|number| 0x70 + number - 1)
+                .ok_or_else(|| failure("不支持的功能键"))?,
+            _ => {
+                return Err(failure(
+                    "快捷键请使用字母、数字、F1–F24、PrintScreen 或 Space",
+                ))
+            }
         };
-        if key.replace(code).is_some() { return Err(failure("每组快捷键只能包含一个主键")); }
+        if key.replace(code).is_some() {
+            return Err(failure("每组快捷键只能包含一个主键"));
+        }
     }
     let key = key.ok_or_else(|| failure("快捷键缺少主键"))?;
     if modifiers == 0 && !(0x70..=0x87).contains(&key) && key != 0x2c {
@@ -211,11 +233,16 @@ impl ScreenshotService {
         std::fs::create_dir_all(root.join("documents"))?;
         let mut options = std::fs::OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
-        #[cfg(windows)] {
+        #[cfg(windows)]
+        {
             use std::os::windows::fs::OpenOptionsExt;
             options.share_mode(0);
         }
-        let instance_lock = options.open(root.join("runtime.lock")).map_err(|error| failure(format!("无法打开截图数据目录，可能已有应用实例正在使用：{error}")))?;
+        let instance_lock = options.open(root.join("runtime.lock")).map_err(|error| {
+            failure(format!(
+                "无法打开截图数据目录，可能已有应用实例正在使用：{error}"
+            ))
+        })?;
         let file = root.join("session.json");
         let mut errors = Vec::new();
         let session = if file.exists() {
@@ -499,13 +526,27 @@ pub async fn dispatch(
     let service = app.try_state::<ScreenshotService>().ok_or_else(|| {
         failure("截图贴图数据未能加载，请检查数据目录中的 session.json；原数据已保留")
     })?;
-    if !matches!(action.as_str(), "status" | "set-enabled" | "list" | "settings" | "pause-hotkeys" | "document" | "delete" | "export" | "copy" | "cancel") {
+    if !matches!(
+        action.as_str(),
+        "status"
+            | "set-enabled"
+            | "list"
+            | "settings"
+            | "pause-hotkeys"
+            | "document"
+            | "delete"
+            | "export"
+            | "copy"
+            | "cancel"
+    ) {
         service.ensure_enabled()?;
     }
     match action.as_str() {
         "status" => Ok(json!(service.settings())),
         "set-enabled" => {
-            let enabled = payload["enabled"].as_bool().ok_or_else(|| failure("缺少截图启停状态"))?;
+            let enabled = payload["enabled"]
+                .as_bool()
+                .ok_or_else(|| failure("缺少截图启停状态"))?;
             service.set_enabled(enabled)?;
             let result = sync_runtime(&app);
             changed(&app);
@@ -549,7 +590,10 @@ pub async fn dispatch(
             Ok(json!(true))
         }
         "pause-hotkeys" => {
-            service.hotkeys_paused.store(payload["paused"].as_bool().unwrap_or(false), Ordering::SeqCst);
+            service.hotkeys_paused.store(
+                payload["paused"].as_bool().unwrap_or(false),
+                Ordering::SeqCst,
+            );
             Ok(json!(true))
         }
         "capture" => {
@@ -567,11 +611,9 @@ pub async fn dispatch(
             begin_capture(&app, false, true).await?;
             Ok(json!(true))
         }
-        "capture-mode" => {
-            Ok(json!({
-                "long": service.long_capture_requested.load(Ordering::SeqCst)
-            }))
-        }
+        "capture-mode" => Ok(json!({
+            "long": service.long_capture_requested.load(Ordering::SeqCst)
+        })),
         "long-start" => {
             let window = app
                 .get_webview_window("screenshot-capture")
@@ -586,9 +628,7 @@ pub async fn dispatch(
             let mut hidden = service.long_hidden_pins.lock().unwrap();
             hidden.clear();
             for (label, pin) in app.webview_windows() {
-                if !label.starts_with("screenshot-pin-")
-                    || !pin.is_visible().unwrap_or(false)
-                {
+                if !label.starts_with("screenshot-pin-") || !pin.is_visible().unwrap_or(false) {
                     continue;
                 }
                 pin.hide().map_err(failure)?;
@@ -604,18 +644,27 @@ pub async fn dispatch(
             Ok(json!(true))
         }
         "long-scroll" => {
-            #[cfg(windows)] {
+            #[cfg(windows)]
+            {
                 // 与鼠标穿透检测共用锁，注入滚轮期间不能重新拦截底层应用的鼠标事件。
                 let preview = service.long_preview_rect.lock().unwrap();
                 if service.long_capturing.load(Ordering::SeqCst) {
-                    let x = payload["x"].as_i64().ok_or_else(|| failure("缺少滚动横坐标"))? as i32;
-                    let y = payload["y"].as_i64().ok_or_else(|| failure("缺少滚动纵坐标"))? as i32;
+                    let x = payload["x"]
+                        .as_i64()
+                        .ok_or_else(|| failure("缺少滚动横坐标"))?
+                        as i32;
+                    let y = payload["y"]
+                        .as_i64()
+                        .ok_or_else(|| failure("缺少滚动纵坐标"))?
+                        as i32;
                     let delta = payload["delta"].as_i64().unwrap_or(-120).clamp(-120, 120) as i32;
                     if let Some(window) = app.get_webview_window("screenshot-capture") {
                         let interactive = windows::cursor_in_rect(preview.as_ref());
                         window.set_ignore_cursor_events(true).map_err(failure)?;
                         let result = windows::scroll_at(x, y, delta);
-                        window.set_ignore_cursor_events(!interactive).map_err(failure)?;
+                        window
+                            .set_ignore_cursor_events(!interactive)
+                            .map_err(failure)?;
                         result?;
                     }
                 }
@@ -634,29 +683,41 @@ pub async fn dispatch(
             Ok(json!(true))
         }
         "ready" => {
-            if !service.capturing.load(Ordering::SeqCst) { return Ok(json!(false)); }
+            if !service.capturing.load(Ordering::SeqCst) {
+                return Ok(json!(false));
+            }
             let window = app
                 .get_webview_window("screenshot-capture")
                 .ok_or_else(|| failure("截图窗口已关闭"))?;
             window.set_focusable(true).map_err(failure)?;
             window.set_ignore_cursor_events(false).map_err(failure)?;
-            if !window.is_visible().unwrap_or(false) { window.show().map_err(failure)?; }
+            if !window.is_visible().unwrap_or(false) {
+                window.show().map_err(failure)?;
+            }
             window.set_focus().map_err(failure)?;
             Ok(json!(true))
         }
         "capture-window-ready" => {
-            if service.capturing.load(Ordering::SeqCst) { return Ok(json!(false)); }
+            if service.capturing.load(Ordering::SeqCst) {
+                return Ok(json!(false));
+            }
             let window = app
                 .get_webview_window("screenshot-capture")
                 .ok_or_else(|| failure("截图窗口已关闭"))?;
             window.set_focusable(false).map_err(failure)?;
             window.set_ignore_cursor_events(true).map_err(failure)?;
-            if !window.is_visible().unwrap_or(false) { window.show().map_err(failure)?; }
+            if !window.is_visible().unwrap_or(false) {
+                window.show().map_err(failure)?;
+            }
             Ok(json!(true))
         }
         "smart-selection" => {
-            let x = payload["x"].as_i64().ok_or_else(|| failure("缺少智能选区横坐标"))? as i32;
-            let y = payload["y"].as_i64().ok_or_else(|| failure("缺少智能选区纵坐标"))? as i32;
+            let x = payload["x"]
+                .as_i64()
+                .ok_or_else(|| failure("缺少智能选区横坐标"))? as i32;
+            let y = payload["y"]
+                .as_i64()
+                .ok_or_else(|| failure("缺少智能选区纵坐标"))? as i32;
             #[cfg(windows)]
             {
                 let regions = windows::smart_selection(&app, x, y)?;
@@ -686,7 +747,8 @@ pub async fn dispatch(
                 if !window.is_visible().map_err(failure)? {
                     window.show().map_err(failure)?;
                 }
-                if action == "pin-ready" && payload["dismissCapture"].as_bool().unwrap_or(false)
+                if action == "pin-ready"
+                    && payload["dismissCapture"].as_bool().unwrap_or(false)
                     && service.capturing.load(Ordering::SeqCst)
                 {
                     cancel_capture(&app)?;
@@ -727,7 +789,8 @@ pub async fn dispatch(
             drop(service);
             // PNG 解码、缩略图和文件提交不占用处理窗口命令的线程。
             let id = tauri::async_runtime::spawn_blocking(move || save_document(&app, payload))
-                .await.map_err(failure)??;
+                .await
+                .map_err(failure)??;
             Ok(json!(id))
         }
         "document" => {
@@ -770,16 +833,27 @@ pub async fn dispatch(
         }
         "ocr-result-open" => {
             let id = id_from(&payload)?;
-            let entry = service.session.lock().unwrap().entries.iter()
-                .find(|entry| entry.id == id).cloned()
+            let entry = service
+                .session
+                .lock()
+                .unwrap()
+                .entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .cloned()
                 .ok_or_else(|| failure("截图记录不存在"))?;
             let pin = entry.pin.ok_or_else(|| failure("贴图窗口尚未创建"))?;
             let rect = CaptureRect {
-                x: pin.x, y: pin.y, width: pin.width, height: pin.height,
+                x: pin.x,
+                y: pin.y,
+                width: pin.width,
+                height: pin.height,
             };
             let center_x = f64::from(rect.x) + f64::from(rect.width) / 2.0;
             let center_y = f64::from(rect.y) + f64::from(rect.height) / 2.0;
-            let monitor = app.monitor_from_point(center_x, center_y).map_err(failure)?
+            let monitor = app
+                .monitor_from_point(center_x, center_y)
+                .map_err(failure)?
                 .or(app.primary_monitor().map_err(failure)?)
                 .ok_or_else(|| failure("没有可用显示器"))?;
             let scale = monitor.scale_factor();
@@ -788,22 +862,28 @@ pub async fn dispatch(
             let min_width = (420.0 * scale)
                 .round()
                 .max(1.0)
-                .min(f64::from(monitor.work_area().size.width.max(1))) as u32;
+                .min(f64::from(monitor.work_area().size.width.max(1)))
+                as u32;
             let max_width = (960.0 * scale)
                 .round()
                 .max(f64::from(min_width))
-                .min(f64::from(monitor.work_area().size.width.max(1))) as u32;
+                .min(f64::from(monitor.work_area().size.width.max(1)))
+                as u32;
             let min_height = (280.0 * scale)
                 .round()
                 .max(1.0)
-                .min(f64::from(monitor.work_area().size.height.max(1))) as u32;
-            let pin_window = app.get_webview_window(&format!("screenshot-pin-{id}"))
+                .min(f64::from(monitor.work_area().size.height.max(1)))
+                as u32;
+            let pin_window = app
+                .get_webview_window(&format!("screenshot-pin-{id}"))
                 .ok_or_else(|| failure("贴图窗口不存在"))?;
             let result_id = uuid::Uuid::new_v4().to_string();
             let builder = WebviewWindowBuilder::new(
                 &app,
                 format!("screenshot-ocr-{result_id}"),
-                WebviewUrl::App(format!("index.html?panel=screenshot&mode=ocr&id={result_id}").into()),
+                WebviewUrl::App(
+                    format!("index.html?panel=screenshot&mode=ocr&id={result_id}").into(),
+                ),
             )
             .title("OCR 识别结果")
             .decorations(false)
@@ -820,20 +900,26 @@ pub async fn dispatch(
             .shadow(false)
             .focused(false)
             .position(f64::from(position.x) / scale, f64::from(position.y) / scale)
-            .inner_size(f64::from(size.width) / scale, f64::from(size.height) / scale)
+            .inner_size(
+                f64::from(size.width) / scale,
+                f64::from(size.height) / scale,
+            )
             .visible(false)
             // 结果窗口始终显示在对应贴图上方，仍可独立拖动和关闭。
             .parent(&pin_window)
             .map_err(failure)?;
-            service.ocr_results.lock().unwrap().insert(
-                result_id.clone(),
-                json!({ "documentId": id }),
-            );
+            service
+                .ocr_results
+                .lock()
+                .unwrap()
+                .insert(result_id.clone(), json!({ "documentId": id }));
             let window = builder.build();
             match window {
                 Ok(window) => {
                     // 使用物理像素精确落位，兼容负坐标和不同缩放比例的显示器。
-                    let positioned = window.set_position(position).and_then(|_| window.set_size(size));
+                    let positioned = window
+                        .set_position(position)
+                        .and_then(|_| window.set_size(size));
                     if let Err(error) = positioned {
                         service.ocr_results.lock().unwrap().remove(&result_id);
                         let _ = window.destroy();
@@ -847,11 +933,17 @@ pub async fn dispatch(
             }
             Ok(json!(result_id))
         }
-        "ocr-result" => service.ocr_results.lock().unwrap().get(id_from(&payload)?).cloned()
+        "ocr-result" => service
+            .ocr_results
+            .lock()
+            .unwrap()
+            .get(id_from(&payload)?)
+            .cloned()
             .ok_or_else(|| failure("OCR 识别结果不存在")),
         "ocr-result-action" => {
             let result_id = id_from(&payload)?.to_string();
-            let window = app.get_webview_window(&format!("screenshot-ocr-{result_id}"))
+            let window = app
+                .get_webview_window(&format!("screenshot-ocr-{result_id}"))
                 .ok_or_else(|| failure("OCR 结果窗口不存在"))?;
             match payload["action"].as_str().unwrap_or("") {
                 "ready" => {
@@ -859,24 +951,39 @@ pub async fn dispatch(
                     window.set_focus().map_err(failure)?;
                 }
                 "resize" => {
-                    let width = payload["width"].as_f64()
+                    let width = payload["width"]
+                        .as_f64()
                         .filter(|width| *width > 0.0)
                         .ok_or_else(|| failure("OCR 结果窗口宽度无效"))?;
-                    let document_id = service.ocr_results.lock().unwrap()
+                    let document_id = service
+                        .ocr_results
+                        .lock()
+                        .unwrap()
                         .get(&result_id)
                         .and_then(|task| task["documentId"].as_str())
                         .map(str::to_string)
                         .ok_or_else(|| failure("OCR 任务不存在"))?;
-                    let entry = service.session.lock().unwrap().entries.iter()
-                        .find(|entry| entry.id == document_id).cloned()
+                    let entry = service
+                        .session
+                        .lock()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .find(|entry| entry.id == document_id)
+                        .cloned()
                         .ok_or_else(|| failure("截图记录不存在"))?;
                     let pin = entry.pin.ok_or_else(|| failure("贴图窗口尚未创建"))?;
                     let rect = CaptureRect {
-                        x: pin.x, y: pin.y, width: pin.width, height: pin.height,
+                        x: pin.x,
+                        y: pin.y,
+                        width: pin.width,
+                        height: pin.height,
                     };
                     let center_x = f64::from(rect.x) + f64::from(rect.width) / 2.0;
                     let center_y = f64::from(rect.y) + f64::from(rect.height) / 2.0;
-                    let monitor = app.monitor_from_point(center_x, center_y).map_err(failure)?
+                    let monitor = app
+                        .monitor_from_point(center_x, center_y)
+                        .map_err(failure)?
                         .or(app.primary_monitor().map_err(failure)?)
                         .ok_or_else(|| failure("没有可用显示器"))?;
                     let scale = monitor.scale_factor();
@@ -1029,12 +1136,23 @@ pub async fn dispatch(
                     let (sender, receiver) = tokio::sync::oneshot::channel();
                     let moving = window.clone();
                     // 读取和设置位置在同一个窗口线程任务中完成，长按方向键不会丢步。
-                    window.run_on_main_thread(move || {
-                        let result = moving.outer_position().map_err(failure).and_then(|position| {
-                            moving.set_position(PhysicalPosition::new(position.x + x, position.y + y)).map_err(failure)
-                        });
-                        let _ = sender.send(result);
-                    }).map_err(failure)?;
+                    window
+                        .run_on_main_thread(move || {
+                            let result =
+                                moving
+                                    .outer_position()
+                                    .map_err(failure)
+                                    .and_then(|position| {
+                                        moving
+                                            .set_position(PhysicalPosition::new(
+                                                position.x + x,
+                                                position.y + y,
+                                            ))
+                                            .map_err(failure)
+                                    });
+                            let _ = sender.send(result);
+                        })
+                        .map_err(failure)?;
                     receiver.await.map_err(failure)??;
                     return Ok(json!(true));
                 }
@@ -1046,13 +1164,17 @@ pub async fn dispatch(
                     window.close().map_err(failure)?;
                 }
                 "context-menu-open" => {
-                    let extra_width = payload["extraWidth"].as_u64().unwrap_or(560).min(4096) as u32;
-                    let extra_height = payload["extraHeight"].as_u64().unwrap_or(700).min(4096) as u32;
+                    let extra_width =
+                        payload["extraWidth"].as_u64().unwrap_or(560).min(4096) as u32;
+                    let extra_height =
+                        payload["extraHeight"].as_u64().unwrap_or(700).min(4096) as u32;
                     let size = window.inner_size().map_err(failure)?;
                     let position = window.outer_position().map_err(failure)?;
                     let mut menu_windows = service.menu_windows.lock().unwrap();
                     if let Some((_, original_size)) = menu_windows.get(id) {
-                        return Ok(json!({"width": original_size.width, "height": original_size.height}));
+                        return Ok(
+                            json!({"width": original_size.width, "height": original_size.height}),
+                        );
                     }
                     menu_windows.insert(id.to_string(), (position, size));
                     drop(menu_windows);
@@ -1125,7 +1247,13 @@ pub async fn dispatch(
                     window.set_focus().map_err(failure)?;
                 }
                 "display" => {
-                    let retained = service.session.lock().unwrap().entries.iter().any(|entry| entry.id == id);
+                    let retained = service
+                        .session
+                        .lock()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .any(|entry| entry.id == id);
                     if retained {
                         window.set_focusable(true).map_err(failure)?;
                     } else {
@@ -1173,9 +1301,16 @@ fn changed(app: &AppHandle) {
     let _ = app.emit("screenshot:changed", ());
 }
 
-fn remove_expired_history(app: &AppHandle, service: &ScreenshotService, ids: &[String], editing_pin_id: Option<&str>) {
+fn remove_expired_history(
+    app: &AppHandle,
+    service: &ScreenshotService,
+    ids: &[String],
+    editing_pin_id: Option<&str>,
+) {
     for id in ids {
-        if editing_pin_id == Some(id.as_str()) { continue; }
+        if editing_pin_id == Some(id.as_str()) {
+            continue;
+        }
         if let Some(window) = app.get_webview_window(&format!("screenshot-pin-{id}")) {
             if let Err(error) = window.destroy() {
                 let _ = app.emit("screenshot:error", format!("关闭过期贴图失败：{error}"));
@@ -1185,11 +1320,7 @@ fn remove_expired_history(app: &AppHandle, service: &ScreenshotService, ids: &[S
     service.remove_expired_documents(ids);
 }
 
-fn save_png(
-    path: &Path,
-    bytes: &[u8],
-    image: &DynamicImage,
-) -> Result<(), ManagerError> {
+fn save_png(path: &Path, bytes: &[u8], image: &DynamicImage) -> Result<(), ManagerError> {
     // 截图和编辑器都传 PNG，直接落盘可以避免再次解码后编码整张大图。
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         std::fs::write(path, bytes)?;
@@ -1204,7 +1335,11 @@ fn write_png(path: &Path, image: &DynamicImage) -> Result<(), ManagerError> {
     Ok(())
 }
 
-fn save_thumbnail(path: &Path, image: &DynamicImage, preview: Option<&str>) -> Result<(), ManagerError> {
+fn save_thumbnail(
+    path: &Path,
+    image: &DynamicImage,
+    preview: Option<&str>,
+) -> Result<(), ManagerError> {
     if let Some(data) = preview {
         let (bytes, thumbnail) = decode_data(data)?;
         if thumbnail.width() > 320 || thumbnail.height() > 200 {
@@ -1233,7 +1368,8 @@ fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError
     } else {
         Some(decode_data(output_data)?)
     };
-    let (output_bytes, output) = rendered.as_ref()
+    let (output_bytes, output) = rendered
+        .as_ref()
         .map(|(bytes, image)| (bytes.as_slice(), image))
         .unwrap_or((&source_bytes, &source));
     let annotations = payload
@@ -1249,7 +1385,11 @@ fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError
     std::fs::create_dir_all(&dir)?;
     save_png(&dir.join("source.png"), &source_bytes, &source)?;
     save_png(&dir.join("output.png"), output_bytes, output)?;
-    save_thumbnail(&dir.join("thumbnail.png"), output, payload["thumbnail"].as_str())?;
+    save_thumbnail(
+        &dir.join("thumbnail.png"),
+        output,
+        payload["thumbnail"].as_str(),
+    )?;
     atomic_write(
         &dir.join("document.json"),
         &serde_json::to_vec(&json!({"schemaVersion": 1, "annotations": annotations}))?,
@@ -1264,7 +1404,11 @@ fn save_document(app: &AppHandle, payload: Value) -> Result<String, ManagerError
             width: output.width(),
             height: output.height(),
             pin: None,
-            origin: payload.get("origin").filter(|value| !value.is_null()).map(|value| serde_json::from_value(value.clone())).transpose()?,
+            origin: payload
+                .get("origin")
+                .filter(|value| !value.is_null())
+                .map(|value| serde_json::from_value(value.clone()))
+                .transpose()?,
         },
     );
     let expired = service.prune_history(&mut next);
@@ -1322,7 +1466,9 @@ fn ensure_capture_window(
     bounds: Option<(i32, i32, u32, u32)>,
 ) -> Result<tauri::WebviewWindow, ManagerError> {
     app.state::<ScreenshotService>().ensure_enabled()?;
-    if let Some(window) = app.get_webview_window("screenshot-capture") { return Ok(window); }
+    if let Some(window) = app.get_webview_window("screenshot-capture") {
+        return Ok(window);
+    }
     let mut builder = WebviewWindowBuilder::new(
         app,
         "screenshot-capture",
@@ -1348,11 +1494,21 @@ fn ensure_capture_window(
 }
 
 fn capture_bounds(monitors: &[tauri::Monitor]) -> Result<(i32, i32, u32, u32), ManagerError> {
-    if monitors.is_empty() { return Err(failure("没有可截图的显示器")); }
+    if monitors.is_empty() {
+        return Err(failure("没有可截图的显示器"));
+    }
     let left = monitors.iter().map(|m| m.position().x).min().unwrap();
     let top = monitors.iter().map(|m| m.position().y).min().unwrap();
-    let right = monitors.iter().map(|m| i64::from(m.position().x) + i64::from(m.size().width)).max().unwrap();
-    let bottom = monitors.iter().map(|m| i64::from(m.position().y) + i64::from(m.size().height)).max().unwrap();
+    let right = monitors
+        .iter()
+        .map(|m| i64::from(m.position().x) + i64::from(m.size().width))
+        .max()
+        .unwrap();
+    let bottom = monitors
+        .iter()
+        .map(|m| i64::from(m.position().y) + i64::from(m.size().height))
+        .max()
+        .unwrap();
     let width = (right - i64::from(left)) as u32;
     let height = (bottom - i64::from(top)) as u32;
     if u64::from(width) * u64::from(height) > 40_000_000 {
@@ -1365,7 +1521,13 @@ fn capture_frame_data(image: DynamicImage, left: i32, top: i32, auto_copy: bool)
     let image = image.into_rgba8();
     // 20 字节小端帧头后直接跟 RGBA，首帧不再经过 PNG、Base64 和浏览器图片解码。
     let mut bytes = Vec::with_capacity(20 + image.as_raw().len());
-    for field in [left.to_le_bytes(), top.to_le_bytes(), image.width().to_le_bytes(), image.height().to_le_bytes(), u32::from(auto_copy).to_le_bytes()] {
+    for field in [
+        left.to_le_bytes(),
+        top.to_le_bytes(),
+        image.width().to_le_bytes(),
+        image.height().to_le_bytes(),
+        u32::from(auto_copy).to_le_bytes(),
+    ] {
         bytes.extend_from_slice(&field);
     }
     bytes.extend_from_slice(image.as_raw());
@@ -1388,11 +1550,20 @@ pub async fn screenshot_region_frame(
     width: u32,
     height: u32,
 ) -> Result<tauri::ipc::Response, String> {
-    app.state::<ScreenshotService>().ensure_enabled().map_err(|error| error.to_string())?;
-    if width == 0 || height == 0 || width > 8192 || height > 8192 || u64::from(width) * u64::from(height) > 20_000_000 {
+    app.state::<ScreenshotService>()
+        .ensure_enabled()
+        .map_err(|error| error.to_string())?;
+    if width == 0
+        || height == 0
+        || width > 8192
+        || height > 8192
+        || u64::from(width) * u64::from(height) > 20_000_000
+    {
         return Err("长截图区域尺寸无效或过大".into());
     }
-    let monitors = app.available_monitors().map_err(|error| error.to_string())?;
+    let monitors = app
+        .available_monitors()
+        .map_err(|error| error.to_string())?;
     let image = tauri::async_runtime::spawn_blocking(move || {
         #[cfg(windows)]
         {
@@ -1407,10 +1578,16 @@ pub async fn screenshot_region_frame(
     .await
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())?;
-    Ok(tauri::ipc::Response::new(capture_frame_data(image, left, top, false)))
+    Ok(tauri::ipc::Response::new(capture_frame_data(
+        image, left, top, false,
+    )))
 }
 
-fn document_image_path(service: &ScreenshotService, id: &str, kind: &str) -> Result<PathBuf, ManagerError> {
+fn document_image_path(
+    service: &ScreenshotService,
+    id: &str,
+    kind: &str,
+) -> Result<PathBuf, ManagerError> {
     let file = match kind {
         "source" => "source.png",
         "output" => "output.png",
@@ -1420,44 +1597,74 @@ fn document_image_path(service: &ScreenshotService, id: &str, kind: &str) -> Res
 }
 
 #[tauri::command]
-pub async fn screenshot_image(app: AppHandle, id: String, kind: String) -> Result<tauri::ipc::Response, String> {
+pub async fn screenshot_image(
+    app: AppHandle,
+    id: String,
+    kind: String,
+) -> Result<tauri::ipc::Response, String> {
     let path = {
-        let service = app.try_state::<ScreenshotService>().ok_or("截图服务未就绪")?;
+        let service = app
+            .try_state::<ScreenshotService>()
+            .ok_or("截图服务未就绪")?;
         document_image_path(&service, &id, &kind).map_err(|error| error.to_string())?
     };
-    let bytes = tokio::fs::read(path).await.map_err(|error| error.to_string())?;
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(tauri::ipc::Response::new(bytes))
 }
 
-pub async fn begin_capture(app: &AppHandle, auto_copy: bool, long_capture: bool) -> Result<(), ManagerError> {
+pub async fn begin_capture(
+    app: &AppHandle,
+    auto_copy: bool,
+    long_capture: bool,
+) -> Result<(), ManagerError> {
     let service = app.state::<ScreenshotService>();
     service.ensure_enabled()?;
     if service.capturing.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
-    service.long_capture_requested.store(long_capture, Ordering::SeqCst);
+    service
+        .long_capture_requested
+        .store(long_capture, Ordering::SeqCst);
     let result = async {
         let monitors = app.available_monitors().map_err(failure)?;
         let (left, top, width, height) = capture_bounds(&monitors)?;
         let frame = tauri::async_runtime::spawn_blocking(move || {
             #[cfg(windows)]
-            { Ok::<_, ManagerError>(capture_frame_data(windows::capture(&monitors, left, top, width, height)?, left, top, auto_copy)) }
+            {
+                Ok::<_, ManagerError>(capture_frame_data(
+                    windows::capture(&monitors, left, top, width, height)?,
+                    left,
+                    top,
+                    auto_copy,
+                ))
+            }
             #[cfg(not(windows))]
-            { Err::<Vec<u8>, ManagerError>(failure("桌面截图目前仅支持 Windows")) }
-        }).await.map_err(failure)??;
+            {
+                Err::<Vec<u8>, ManagerError>(failure("桌面截图目前仅支持 Windows"))
+            }
+        })
+        .await
+        .map_err(failure)??;
         // 采集期间用户可能已经关闭扩展，不能再创建截图窗口。
         service.ensure_enabled()?;
         let window = ensure_capture_window(app, Some((left, top, width, height)))?;
         if window.inner_size().map_err(failure)? != PhysicalSize::new(width, height) {
-            window.set_size(PhysicalSize::new(width, height)).map_err(failure)?;
+            window
+                .set_size(PhysicalSize::new(width, height))
+                .map_err(failure)?;
         }
         if window.outer_position().map_err(failure)? != PhysicalPosition::new(left, top) {
-            window.set_position(PhysicalPosition::new(left, top)).map_err(failure)?;
+            window
+                .set_position(PhysicalPosition::new(left, top))
+                .map_err(failure)?;
         }
         *service.frame.lock().unwrap() = Some(frame);
         window.emit("screenshot:frame", ()).map_err(failure)?;
         Ok(())
-    }.await;
+    }
+    .await;
     if result.is_err() {
         let _ = cancel_capture(app);
     }
@@ -1474,7 +1681,9 @@ fn cancel_capture(app: &AppHandle) -> Result<(), ManagerError> {
     let service = app.state::<ScreenshotService>();
     *service.frame.lock().unwrap() = None;
     service.capturing.store(false, Ordering::SeqCst);
-    service.long_capture_requested.store(false, Ordering::SeqCst);
+    service
+        .long_capture_requested
+        .store(false, Ordering::SeqCst);
     Ok(())
 }
 
@@ -1588,8 +1797,16 @@ fn open_pin_with_visibility(
         .pin
         .filter(|p| p.lifecycle != "destroyed")
         .unwrap_or(Pin {
-            x: entry.origin.as_ref().map(|origin| origin.x).unwrap_or(monitor.position().x + 80),
-            y: entry.origin.as_ref().map(|origin| origin.y).unwrap_or(monitor.position().y + 80),
+            x: entry
+                .origin
+                .as_ref()
+                .map(|origin| origin.x)
+                .unwrap_or(monitor.position().x + 80),
+            y: entry
+                .origin
+                .as_ref()
+                .map(|origin| origin.y)
+                .unwrap_or(monitor.position().y + 80),
             width: entry.width.max(1),
             height: entry.height.max(1),
             opacity: 1.0,
@@ -1613,37 +1830,37 @@ fn open_pin_with_visibility(
         pin.visible = true;
     }
     pin.lifecycle = "open".into();
-    let scale = monitors.iter().find(|m| {
-        i64::from(pin.x) >= i64::from(m.position().x)
-            && i64::from(pin.x) < i64::from(m.position().x) + i64::from(m.size().width)
-            && i64::from(pin.y) >= i64::from(m.position().y)
-            && i64::from(pin.y) < i64::from(m.position().y) + i64::from(m.size().height)
-    }).unwrap_or(&monitor).scale_factor();
+    let scale = monitors
+        .iter()
+        .find(|m| {
+            i64::from(pin.x) >= i64::from(m.position().x)
+                && i64::from(pin.x) < i64::from(m.position().x) + i64::from(m.size().width)
+                && i64::from(pin.y) >= i64::from(m.position().y)
+                && i64::from(pin.y) < i64::from(m.position().y) + i64::from(m.size().height)
+        })
+        .unwrap_or(&monitor)
+        .scale_factor();
     let url = if dismiss_capture {
         format!("index.html?panel=screenshot&mode=pin&id={id}&capture=1")
     } else {
         format!("index.html?panel=screenshot&mode=pin&id={id}")
     };
-    let window = WebviewWindowBuilder::new(
-        app,
-        &label,
-        WebviewUrl::App(url.into()),
-    )
-    .title("桌面贴图")
-    .decorations(false)
-    .resizable(false)
-    .skip_taskbar(true)
-    .always_on_top(true)
-    .focused(false)
-    .transparent(true)
-    .background_color(tauri::window::Color(0, 0, 0, 0))
-    .shadow(false)
-    // 构造器使用逻辑像素，文档保存的是物理像素；不能直接混用。
-    .position(f64::from(pin.x) / scale, f64::from(pin.y) / scale)
-    .inner_size(f64::from(pin.width) / scale, f64::from(pin.height) / scale)
-    .visible(false)
-    .build()
-    .map_err(failure)?;
+    let window = WebviewWindowBuilder::new(app, &label, WebviewUrl::App(url.into()))
+        .title("桌面贴图")
+        .decorations(false)
+        .resizable(false)
+        .skip_taskbar(true)
+        .always_on_top(true)
+        .focused(false)
+        .transparent(true)
+        .background_color(tauri::window::Color(0, 0, 0, 0))
+        .shadow(false)
+        // 构造器使用逻辑像素，文档保存的是物理像素；不能直接混用。
+        .position(f64::from(pin.x) / scale, f64::from(pin.y) / scale)
+        .inner_size(f64::from(pin.width) / scale, f64::from(pin.height) / scale)
+        .visible(false)
+        .build()
+        .map_err(failure)?;
     #[cfg(windows)]
     windows::disable_window_transitions(&window)?;
     window
@@ -1794,7 +2011,10 @@ pub fn switch_pin_group(app: &AppHandle) -> Result<(), ManagerError> {
                 .map(|pin| pin.group.clone())
         })
         .unwrap_or_else(|| groups[0].clone());
-    let current_index = groups.iter().position(|group| group == &current).unwrap_or(0);
+    let current_index = groups
+        .iter()
+        .position(|group| group == &current)
+        .unwrap_or(0);
     let next_group = &groups[(current_index + 1) % groups.len()];
     for entry in &mut next.entries {
         if let Some(pin) = entry.pin.as_mut().filter(|pin| pin.lifecycle == "open") {
@@ -1897,7 +2117,10 @@ fn sync_runtime(app: &AppHandle) -> Result<(), ManagerError> {
         .map(|e| e.id.clone())
         .collect::<Vec<_>>();
     for id in ids {
-        if app.get_webview_window(&format!("screenshot-pin-{id}")).is_some() {
+        if app
+            .get_webview_window(&format!("screenshot-pin-{id}"))
+            .is_some()
+        {
             continue;
         }
         if let Err(error) = open_pin_with_visibility(app, &id, false, false) {
@@ -1928,7 +2151,12 @@ mod tests {
     fn ocr_result_opens_beside_pin_across_monitors_and_scale_factors() {
         for (rect, scale, work_area, expected_position, expected_size) in [
             (
-                CaptureRect { x: 200, y: 200, width: 800, height: 600 },
+                CaptureRect {
+                    x: 200,
+                    y: 200,
+                    width: 800,
+                    height: 600,
+                },
                 1.0,
                 tauri::PhysicalRect {
                     position: PhysicalPosition::new(0, 0),
@@ -1938,7 +2166,12 @@ mod tests {
                 PhysicalSize::new(420, 480),
             ),
             (
-                CaptureRect { x: -1720, y: 100, width: 800, height: 600 },
+                CaptureRect {
+                    x: -1720,
+                    y: 100,
+                    width: 800,
+                    height: 600,
+                },
                 1.0,
                 tauri::PhysicalRect {
                     position: PhysicalPosition::new(-1920, -100),
@@ -1948,7 +2181,12 @@ mod tests {
                 PhysicalSize::new(420, 480),
             ),
             (
-                CaptureRect { x: -2200, y: 200, width: 1600, height: 1000 },
+                CaptureRect {
+                    x: -2200,
+                    y: 200,
+                    width: 1600,
+                    height: 1000,
+                },
                 2.0,
                 tauri::PhysicalRect {
                     position: PhysicalPosition::new(-2560, 0),
@@ -1958,8 +2196,7 @@ mod tests {
                 PhysicalSize::new(840, 960),
             ),
         ] {
-            let (position, size) =
-                ocr_result_bounds(rect, scale, &work_area, 420.0, 480.0);
+            let (position, size) = ocr_result_bounds(rect, scale, &work_area, 420.0, 480.0);
             assert_eq!(position, expected_position);
             assert_eq!(size, expected_size);
         }
@@ -1967,7 +2204,12 @@ mod tests {
 
     #[test]
     fn ocr_result_stays_inside_work_area_near_edges_and_on_small_screens() {
-        let rect = CaptureRect { x: 1880, y: 1020, width: 40, height: 20 };
+        let rect = CaptureRect {
+            x: 1880,
+            y: 1020,
+            width: 40,
+            height: 20,
+        };
         let (position, size) = ocr_result_bounds(
             rect,
             1.0,
@@ -1996,15 +2238,18 @@ mod tests {
 
     #[test]
     fn ocr_result_width_stays_between_minimum_and_maximum() {
-        let rect = CaptureRect { x: 100, y: 100, width: 300, height: 200 };
+        let rect = CaptureRect {
+            x: 100,
+            y: 100,
+            width: 300,
+            height: 200,
+        };
         let work_area = tauri::PhysicalRect {
             position: PhysicalPosition::new(0, 0),
             size: PhysicalSize::new(2560, 1440),
         };
-        let (_, minimum) =
-            ocr_result_bounds(rect, 1.0, &work_area, 120.0, 480.0);
-        let (_, maximum) =
-            ocr_result_bounds(rect, 1.0, &work_area, 1600.0, 480.0);
+        let (_, minimum) = ocr_result_bounds(rect, 1.0, &work_area, 120.0, 480.0);
+        let (_, maximum) = ocr_result_bounds(rect, 1.0, &work_area, 1600.0, 480.0);
         assert_eq!(minimum.width, 420);
         assert_eq!(maximum.width, 960);
     }
@@ -2057,11 +2302,30 @@ mod tests {
             .rev()
             .map(|age| history_entry(age, lifecycles[age as usize % lifecycles.len()]))
             .collect();
-        let expected: Vec<_> = session.entries.iter().rev().take(50).map(|entry| entry.id.clone()).collect();
-        let expected_expired: Vec<_> = session.entries.iter().take(5).rev().map(|entry| entry.id.clone()).collect();
+        let expected: Vec<_> = session
+            .entries
+            .iter()
+            .rev()
+            .take(50)
+            .map(|entry| entry.id.clone())
+            .collect();
+        let expected_expired: Vec<_> = session
+            .entries
+            .iter()
+            .take(5)
+            .rev()
+            .map(|entry| entry.id.clone())
+            .collect();
         let expired = service.prune_history(&mut session);
         assert_eq!(expired, expected_expired);
-        assert_eq!(session.entries.iter().map(|entry| entry.id.clone()).collect::<Vec<_>>(), expected);
+        assert_eq!(
+            session
+                .entries
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect::<Vec<_>>(),
+            expected
+        );
         assert!(service.prune_history(&mut session).is_empty());
         assert_eq!(session.entries.len(), 50);
         session.entries.clear();
@@ -2073,7 +2337,9 @@ mod tests {
         let root = TestRoot::new();
         let service = ScreenshotService::new(&root.0).unwrap();
         let mut session = service.session.lock().unwrap().clone();
-        session.entries = (0..53).map(|age| history_entry(age, Some("closed"))).collect();
+        session.entries = (0..53)
+            .map(|age| history_entry(age, Some("closed")))
+            .collect();
         for entry in &session.entries {
             let dir = service.document_dir(&entry.id).unwrap();
             std::fs::create_dir_all(&dir).unwrap();
@@ -2081,21 +2347,40 @@ mod tests {
                 std::fs::write(dir.join(file), b"test").unwrap();
             }
         }
-        let retained: Vec<_> = session.entries[..50].iter().map(|entry| entry.id.clone()).collect();
-        let expired: Vec<_> = session.entries[50..].iter().map(|entry| entry.id.clone()).collect();
+        let retained: Vec<_> = session.entries[..50]
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect();
+        let expired: Vec<_> = session.entries[50..]
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect();
         service.commit(&session).unwrap();
         drop(service);
         let restored = ScreenshotService::new(&root.0).unwrap();
         assert_eq!(restored.session.lock().unwrap().entries.len(), 50);
         assert!(restored.startup_errors.lock().unwrap().is_empty());
         for id in &retained {
-            assert!(restored.document_dir(id).unwrap().join("output.png").exists());
+            assert!(restored
+                .document_dir(id)
+                .unwrap()
+                .join("output.png")
+                .exists());
         }
         for id in &expired {
             assert!(!restored.document_dir(id).unwrap().exists());
         }
-        let persisted: Session = serde_json::from_slice(&std::fs::read(restored.root.join("session.json")).unwrap()).unwrap();
-        assert_eq!(persisted.entries.iter().map(|entry| entry.id.clone()).collect::<Vec<_>>(), retained);
+        let persisted: Session =
+            serde_json::from_slice(&std::fs::read(restored.root.join("session.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            persisted
+                .entries
+                .iter()
+                .map(|entry| entry.id.clone())
+                .collect::<Vec<_>>(),
+            retained
+        );
         drop(restored);
         let reloaded = ScreenshotService::new(&root.0).unwrap();
         assert_eq!(reloaded.session.lock().unwrap().entries.len(), 50);
@@ -2106,7 +2391,9 @@ mod tests {
         let root = TestRoot::new();
         let service = ScreenshotService::new(&root.0).unwrap();
         let mut session = service.session.lock().unwrap().clone();
-        session.entries = (40..43).map(|days| history_entry(days * 24 * 60 * 60, None)).collect();
+        session.entries = (40..43)
+            .map(|days| history_entry(days * 24 * 60 * 60, None))
+            .collect();
         let latest_id = session.entries[0].id.clone();
         assert_eq!(service.prune_history(&mut session).len(), 2);
         assert_eq!(session.entries.len(), 1);
@@ -2125,7 +2412,10 @@ mod tests {
         session.settings.history_limit = 1;
         assert_eq!(service.prune_history(&mut session).len(), 1);
         assert_eq!(session.entries.len(), 1);
-        let old: Settings = serde_json::from_value(json!({"hotkeys":true,"shortcutStyle":"shift","restorePins":true})).unwrap();
+        let old: Settings = serde_json::from_value(
+            json!({"hotkeys":true,"shortcutStyle":"shift","restorePins":true}),
+        )
+        .unwrap();
         assert!(old.enabled);
         assert_eq!(old.history_limit, 50);
         assert_eq!(old.shortcut_bindings()[0].2, "Ctrl+F1");
@@ -2143,7 +2433,10 @@ mod tests {
         let mut session = service.session.lock().unwrap();
         session.settings.hotkeys = false;
         session.settings.history_limit = 25;
-        session.settings.shortcuts.insert("capture".into(), "Ctrl+F8".into());
+        session
+            .settings
+            .shortcuts
+            .insert("capture".into(), "Ctrl+F8".into());
         let entry = history_entry(0, Some("open"));
         let dir = service.document_dir(&entry.id).unwrap();
         std::fs::create_dir_all(&dir).unwrap();
@@ -2155,17 +2448,26 @@ mod tests {
         service.set_enabled(false).unwrap();
         assert!(service.ensure_enabled().is_err());
         expected["settings"]["enabled"] = json!(false);
-        assert_eq!(serde_json::to_value(&*service.session.lock().unwrap()).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_value(&*service.session.lock().unwrap()).unwrap(),
+            expected
+        );
         drop(service);
 
         let restored = ScreenshotService::new(&root.0).unwrap();
         assert!(!restored.settings().enabled);
         assert!(restored.ensure_enabled().is_err());
-        assert_eq!(std::fs::read(dir.join("output.png")).unwrap(), b"retained-image");
+        assert_eq!(
+            std::fs::read(dir.join("output.png")).unwrap(),
+            b"retained-image"
+        );
         restored.set_enabled(true).unwrap();
         restored.ensure_enabled().unwrap();
         expected["settings"]["enabled"] = json!(true);
-        assert_eq!(serde_json::to_value(&*restored.session.lock().unwrap()).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_value(&*restored.session.lock().unwrap()).unwrap(),
+            expected
+        );
     }
 
     #[test]
@@ -2186,21 +2488,35 @@ mod tests {
             assert!(settings.validate().is_err());
         }
         settings.history_limit = 100;
-        settings.shortcuts.insert("capture".into(), "Shift+Alt+F12".into());
+        settings
+            .shortcuts
+            .insert("capture".into(), "Shift+Alt+F12".into());
         settings.validate().unwrap();
         assert_eq!(parse_shortcut("Shift+Alt+F12").unwrap(), (5, 0x7b));
         assert_eq!(parse_shortcut("PrintScreen").unwrap(), (0, 0x2c));
         assert_eq!(parse_shortcut("Win+Space").unwrap(), (8, 0x20));
-        for shortcut in ["A", "Ctrl", "Ctrl+Ctrl+A", "Ctrl+A+B", "F25", "Ctrl+Escape", ""] {
+        for shortcut in [
+            "A",
+            "Ctrl",
+            "Ctrl+Ctrl+A",
+            "Ctrl+A+B",
+            "F25",
+            "Ctrl+Escape",
+            "",
+        ] {
             assert!(parse_shortcut(shortcut).is_err(), "{shortcut}");
         }
-        settings.shortcuts.insert("clipboard".into(), "alt+shift+F12".into());
+        settings
+            .shortcuts
+            .insert("clipboard".into(), "alt+shift+F12".into());
         assert!(settings.validate().is_err());
     }
 
     #[test]
     fn capture_pixels_are_lossless_and_origin_survives_reload() {
-        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8 * 30, y as u8 * 60, 255, 255])));
+        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| {
+            image::Rgba([x as u8 * 30, y as u8 * 60, 255, 255])
+        }));
         let pixels = image.to_rgba8().into_raw();
         for auto_copy in [false, true] {
             let frame = capture_frame_data(image.clone(), -1275, 146, auto_copy);
@@ -2208,7 +2524,10 @@ mod tests {
             assert_eq!(i32::from_le_bytes(frame[4..8].try_into().unwrap()), 146);
             assert_eq!(u32::from_le_bytes(frame[8..12].try_into().unwrap()), 3);
             assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 2);
-            assert_eq!(u32::from_le_bytes(frame[16..20].try_into().unwrap()), u32::from(auto_copy));
+            assert_eq!(
+                u32::from_le_bytes(frame[16..20].try_into().unwrap()),
+                u32::from(auto_copy)
+            );
             assert_eq!(&frame[20..], pixels.as_slice());
         }
         let root = TestRoot::new();
@@ -2225,7 +2544,10 @@ mod tests {
         let session = restored.session.lock().unwrap();
         let entry = &session.entries[0];
         let origin = entry.origin.as_ref().unwrap();
-        assert_eq!((origin.x, origin.y, entry.width, entry.height), (-1275, 146, 527, 314));
+        assert_eq!(
+            (origin.x, origin.y, entry.width, entry.height),
+            (-1275, 146, 527, 314)
+        );
     }
 
     #[test]
@@ -2242,19 +2564,31 @@ mod tests {
             ("resetInput", "Ctrl+Alt+F10"),
         ];
         for (action, shortcut) in shortcuts {
-            session.settings.shortcuts.insert(action.into(), shortcut.into());
+            session
+                .settings
+                .shortcuts
+                .insert(action.into(), shortcut.into());
         }
         session.settings.validate().unwrap();
         service.commit(&session).unwrap();
         drop(service);
         let restored = ScreenshotService::new(&root.0).unwrap();
-        for ((_, action, shortcut), (expected_action, expected_shortcut)) in restored.settings().shortcut_bindings().into_iter().zip(shortcuts) {
-            assert_eq!((action, shortcut.as_str()), (expected_action, expected_shortcut));
+        for ((_, action, shortcut), (expected_action, expected_shortcut)) in restored
+            .settings()
+            .shortcut_bindings()
+            .into_iter()
+            .zip(shortcuts)
+        {
+            assert_eq!(
+                (action, shortcut.as_str()),
+                (expected_action, expected_shortcut)
+            );
         }
         let old: Settings = serde_json::from_value(json!({
             "hotkeys": true, "shortcutStyle": "shift", "restorePins": true,
             "shortcuts": {"capture": "Ctrl+Shift+A", "clipboard": "Ctrl+Shift+P"}
-        })).unwrap();
+        }))
+        .unwrap();
         old.validate().unwrap();
         assert_eq!(old.shortcut_bindings()[0].2, "Ctrl+F1");
         assert_eq!(old.shortcut_bindings()[1].2, "Ctrl+Shift+A");
@@ -2281,7 +2615,8 @@ mod tests {
         assert_eq!(restored.settings().ocr.model, "vision-model");
         let old: Settings = serde_json::from_value(json!({
             "hotkeys": true, "shortcutStyle": "shift", "restorePins": true
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(!old.ocr.use_large_model);
         old.validate().unwrap();
     }
@@ -2356,7 +2691,13 @@ mod tests {
             .unwrap()
             .starts_with(root.0.join("screenshots/documents")));
         for kind in ["source", "output"] {
-            assert_eq!(document_image_path(&service, &id, kind).unwrap(), service.document_dir(&id).unwrap().join(format!("{kind}.png")));
+            assert_eq!(
+                document_image_path(&service, &id, kind).unwrap(),
+                service
+                    .document_dir(&id)
+                    .unwrap()
+                    .join(format!("{kind}.png"))
+            );
         }
         assert!(document_image_path(&service, "../other", "output").is_err());
         assert!(document_image_path(&service, &id, "../session.json").is_err());
@@ -2365,15 +2706,27 @@ mod tests {
     #[test]
     fn saved_png_reuses_bytes_and_preserves_transparency() {
         let root = TestRoot::new();
-        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| image::Rgba([x as u8 * 60, y as u8 * 90, 100, x as u8 * 100])));
+        let image = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3, 2, |x, y| {
+            image::Rgba([x as u8 * 60, y as u8 * 90, 100, x as u8 * 100])
+        }));
         let bytes = encode_png_fast(&image).unwrap();
         let path = root.0.join("image.png");
         save_png(&path, &bytes, &image).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        assert_eq!(decode_bytes(&std::fs::read(&path).unwrap()).unwrap().to_rgba8(), image.to_rgba8());
+        assert_eq!(
+            decode_bytes(&std::fs::read(&path).unwrap())
+                .unwrap()
+                .to_rgba8(),
+            image.to_rgba8()
+        );
         // 非 PNG 输入仍编码为 PNG，保留旧导入流程的格式转换能力。
         save_png(&path, &[], &image).unwrap();
-        assert_eq!(decode_bytes(&std::fs::read(&path).unwrap()).unwrap().to_rgba8(), image.to_rgba8());
+        assert_eq!(
+            decode_bytes(&std::fs::read(&path).unwrap())
+                .unwrap()
+                .to_rgba8(),
+            image.to_rgba8()
+        );
     }
 
     #[test]
@@ -2384,7 +2737,10 @@ mod tests {
         let data = image_data(&preview).unwrap();
         let path = root.0.join("thumbnail.png");
         save_thumbnail(&path, &original, Some(&data)).unwrap();
-        assert_eq!(std::fs::read(&path).unwrap(), encode_png_fast(&preview).unwrap());
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            encode_png_fast(&preview).unwrap()
+        );
         let oversized = image_data(&DynamicImage::new_rgba8(321, 180)).unwrap();
         assert!(save_thumbnail(&path, &original, Some(&oversized)).is_err());
         assert!(save_thumbnail(&path, &original, Some("broken")).is_err());

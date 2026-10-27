@@ -49,35 +49,59 @@ impl ThumbnailCache {
         limits.max_image_height = Some(8192);
         limits.max_alloc = Some(256 * 1024 * 1024);
         reader.limits(limits);
-        let thumbnail = reader.decode()
+        let thumbnail = reader
+            .decode()
             .map_err(|error| ManagerError::System(format!("读取预览图片失败：{error}")))?
             .thumbnail(320, 240);
         let mut bytes = Cursor::new(Vec::new());
-        thumbnail.write_to(&mut bytes, image::ImageFormat::Png)
+        thumbnail
+            .write_to(&mut bytes, image::ImageFormat::Png)
             .map_err(|error| ManagerError::System(format!("生成缩略图失败：{error}")))?;
-        let data_url = format!("data:image/png;base64,{}", STANDARD.encode(bytes.into_inner()));
+        let data_url = format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(bytes.into_inner())
+        );
 
         // 只缓存压缩后的临时预览，按最近使用顺序淘汰，同时限制容量和条目数。
         while self.bytes + data_url.len() > 8 * 1024 * 1024 || self.entries.len() >= 128 {
-            let Some(entry) = self.entries.pop_front() else { break };
+            let Some(entry) = self.entries.pop_front() else {
+                break;
+            };
             self.bytes -= entry.3.len();
         }
         self.bytes += data_url.len();
-        self.entries.push_back((path.to_path_buf(), modified, metadata.len(), data_url.clone()));
+        self.entries.push_back((
+            path.to_path_buf(),
+            modified,
+            metadata.len(),
+            data_url.clone(),
+        ));
         Ok(data_url)
     }
 }
 
 fn task_thumbnail(paths: &AppPaths, meta: &TaskMeta) -> Result<String, ManagerError> {
-    let Some((_, image_id, format)) = image_records_from_json(&meta.images_json).into_iter().next() else {
+    let Some((_, image_id, format)) = image_records_from_json(&meta.images_json)
+        .into_iter()
+        .next()
+    else {
         return Ok(String::new());
     };
-    let group_id = if meta.conversation_id.is_empty() { "legacy" } else { &meta.conversation_id };
-    let path = output_path(paths, &output_relative_path(group_id, &meta.id, &image_id, &format))?;
+    let group_id = if meta.conversation_id.is_empty() {
+        "legacy"
+    } else {
+        &meta.conversation_id
+    };
+    let path = output_path(
+        paths,
+        &output_relative_path(group_id, &meta.id, &image_id, &format),
+    )?;
     // 整个解码过程共用一把锁，即使多个页面同时请求，也只解码一张原图。
     static CACHE: OnceLock<Mutex<ThumbnailCache>> = OnceLock::new();
-    let mut cache = CACHE.get_or_init(|| Mutex::new(ThumbnailCache::default()))
-        .lock().map_err(|_| ManagerError::System("预览缓存不可用".into()))?;
+    let mut cache = CACHE
+        .get_or_init(|| Mutex::new(ThumbnailCache::default()))
+        .lock()
+        .map_err(|_| ManagerError::System("预览缓存不可用".into()))?;
     cache.load(&path)
 }
 
@@ -100,14 +124,22 @@ fn safe_path_part(value: &str) -> String {
             }
         })
         .collect::<String>();
-    if value.is_empty() { "image".into() } else { value }
+    if value.is_empty() {
+        "image".into()
+    } else {
+        value
+    }
 }
 
 fn output_group_id(task: &Value) -> String {
     task["request"]["conversationId"]
         .as_str()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| task["conversationId"].as_str().filter(|value| !value.trim().is_empty()))
+        .or_else(|| {
+            task["conversationId"]
+                .as_str()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or("legacy")
         .to_string()
 }
@@ -125,9 +157,12 @@ fn output_relative_path(group_id: &str, task_id: &str, image_id: &str, format: &
 fn output_path(paths: &AppPaths, relative: &str) -> Result<PathBuf, ManagerError> {
     let relative_path = Path::new(relative);
     if relative_path.is_absolute()
-        || relative_path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+        || relative_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
     {
         return Err(ManagerError::System("图片文件路径无效".into()));
     }
@@ -146,9 +181,12 @@ fn input_relative_path(owner_id: &str, image_id: &str, format: &str) -> String {
 fn input_path(paths: &AppPaths, relative: &str) -> Result<PathBuf, ManagerError> {
     let relative_path = Path::new(relative);
     if relative_path.is_absolute()
-        || relative_path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+        || relative_path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
     {
         return Err(ManagerError::System("引用图片文件路径无效".into()));
     }
@@ -352,7 +390,11 @@ const TASK_SELECT: &str = "id, created_at, status,
 fn task_meta_from_value(task: &Value, created_at: i64, status: Option<&str>) -> TaskMeta {
     let request = &task["request"];
     let edit_mode = matches!(
-        request["mode"].as_str().unwrap_or("").to_ascii_lowercase().as_str(),
+        request["mode"]
+            .as_str()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
         "edit" | "image-to-image" | "image_to_image" | "img2img" | "img-to-img"
     );
     let string = |value: &Value| value.as_str().unwrap_or("").to_string();
@@ -373,7 +415,11 @@ fn task_meta_from_value(task: &Value, created_at: i64, status: Option<&str>) -> 
         conversation_id: request["conversationId"]
             .as_str()
             .filter(|value| !value.trim().is_empty())
-            .or_else(|| task["conversationId"].as_str().filter(|value| !value.trim().is_empty()))
+            .or_else(|| {
+                task["conversationId"]
+                    .as_str()
+                    .filter(|value| !value.trim().is_empty())
+            })
             .unwrap_or("")
             .to_string(),
         round_id: string(&request["roundId"]),
@@ -418,7 +464,13 @@ fn task_meta_from_value(task: &Value, created_at: i64, status: Option<&str>) -> 
         edit_mode,
         reference_image_ids: task["referenceImageIds"]
             .as_array()
-            .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
             .unwrap_or_default(),
         web_session_id: task["webSessionId"].as_str().unwrap_or("").to_string(),
         web_session_deleted: task["webSessionDeleted"] == true,
@@ -433,19 +485,33 @@ fn image_records_from_json(raw: &str) -> Vec<(usize, String, String)> {
     parse_json_column(raw, json!([]))
         .as_array()
         .map(|items| {
-            items.iter().enumerate().filter_map(|(position, item)| {
-                let image_id = item["imageId"].as_str()?.trim();
-                if image_id.is_empty() { return None; }
-                let format = item["format"].as_str().filter(|value| !value.is_empty()).unwrap_or("png");
-                Some((position, image_id.to_string(), format.to_string()))
-            }).collect()
+            items
+                .iter()
+                .enumerate()
+                .filter_map(|(position, item)| {
+                    let image_id = item["imageId"].as_str()?.trim();
+                    if image_id.is_empty() {
+                        return None;
+                    }
+                    let format = item["format"]
+                        .as_str()
+                        .filter(|value| !value.is_empty())
+                        .unwrap_or("png");
+                    Some((position, image_id.to_string(), format.to_string()))
+                })
+                .collect()
         })
         .unwrap_or_default()
 }
 
-fn task_image_records(connection: &Connection, task_id: &str) -> Result<Vec<(usize, String, String)>, ManagerError> {
+fn task_image_records(
+    connection: &Connection,
+    task_id: &str,
+) -> Result<Vec<(usize, String, String)>, ManagerError> {
     let raw: String = connection.query_row(
-        "SELECT images_json FROM image_tasks WHERE id = ?1", [task_id], |row| row.get(0)
+        "SELECT images_json FROM image_tasks WHERE id = ?1",
+        [task_id],
+        |row| row.get(0),
     )?;
     Ok(image_records_from_json(&raw))
 }
@@ -455,29 +521,49 @@ fn update_task_images(
     task_id: &str,
     records: &[(usize, String, String, Option<String>)],
 ) -> Result<(), ManagerError> {
-    let mut items = records.iter().map(|(position, image_id, format, revised_prompt)| {
-        let mut item = json!({ "imageId": image_id, "format": format, "position": position });
-        if let Some(prompt) = revised_prompt { item["revisedPrompt"] = json!(prompt); }
-        item
-    }).collect::<Vec<_>>();
+    let mut items = records
+        .iter()
+        .map(|(position, image_id, format, revised_prompt)| {
+            let mut item = json!({ "imageId": image_id, "format": format, "position": position });
+            if let Some(prompt) = revised_prompt {
+                item["revisedPrompt"] = json!(prompt);
+            }
+            item
+        })
+        .collect::<Vec<_>>();
     items.sort_by_key(|item| item["position"].as_u64().unwrap_or(0));
-    for (position, item) in items.iter_mut().enumerate() { item["position"] = json!(position); }
+    for (position, item) in items.iter_mut().enumerate() {
+        item["position"] = json!(position);
+    }
     transaction.execute(
         "UPDATE image_tasks SET images_json = ?2, image_count = ?3, updated_at = ?4 WHERE id = ?1",
-        params![task_id, Value::Array(items).to_string(), records.len() as i64, chrono::Utc::now().timestamp_millis()],
+        params![
+            task_id,
+            Value::Array(items).to_string(),
+            records.len() as i64,
+            chrono::Utc::now().timestamp_millis()
+        ],
     )?;
     Ok(())
 }
 
-fn find_input_file(paths: &AppPaths, owner_id: &str, image_id: &str) -> Result<(String, PathBuf), ManagerError> {
+fn find_input_file(
+    paths: &AppPaths,
+    owner_id: &str,
+    image_id: &str,
+) -> Result<(String, PathBuf), ManagerError> {
     let directory = input_path(paths, &format!("{}/", safe_path_part(owner_id)))?;
     if directory.is_dir() {
         for entry in fs::read_dir(directory)? {
             let path = entry?.path();
-            if path.file_stem().and_then(|value| value.to_str()) == Some(image_id)
-                && path.is_file()
+            if path.file_stem().and_then(|value| value.to_str()) == Some(image_id) && path.is_file()
             {
-                let format = path.extension().and_then(|value| value.to_str()).filter(|value| !value.is_empty()).unwrap_or("url").to_string();
+                let format = path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or("url")
+                    .to_string();
                 return Ok((format, path));
             }
         }
@@ -601,7 +687,11 @@ struct OutputFileGuard<'a> {
 
 impl<'a> OutputFileGuard<'a> {
     fn new(paths: &'a AppPaths) -> Self {
-        Self { paths, files: Vec::new(), committed: false }
+        Self {
+            paths,
+            files: Vec::new(),
+            committed: false,
+        }
     }
 }
 
@@ -621,7 +711,11 @@ struct InputFileGuard<'a> {
 
 impl<'a> InputFileGuard<'a> {
     fn new(paths: &'a AppPaths) -> Self {
-        Self { paths, files: Vec::new(), committed: false }
+        Self {
+            paths,
+            files: Vec::new(),
+            committed: false,
+        }
     }
 }
 
@@ -795,10 +889,11 @@ fn migrate_task_columns(connection: &Connection) -> Result<(), ManagerError> {
     let has_legacy_payload = {
         let mut statement = connection.prepare("PRAGMA table_info(image_tasks)")?;
         let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
-        rows.collect::<Result<HashSet<_>, _>>()?.contains("payload_json")
+        rows.collect::<Result<HashSet<_>, _>>()?
+            .contains("payload_json")
     };
     if has_legacy_payload {
-      connection.execute_batch(
+        connection.execute_batch(
         "UPDATE image_tasks SET
            conversation_id = COALESCE(NULLIF(conversation_id, ''), NULLIF(json_extract(payload_json, '$.request.conversationId'), ''), NULLIF(json_extract(payload_json, '$.conversationId'), ''), ''),
            round_id = COALESCE(NULLIF(round_id, ''), NULLIF(json_extract(payload_json, '$.request.roundId'), ''), ''),
@@ -843,7 +938,7 @@ fn migrate_task_columns(connection: &Connection) -> Result<(), ManagerError> {
            updated_at = CASE WHEN updated_at = 0 THEN created_at ELSE updated_at END
          WHERE storage_version = 0;",
       )?;
-      connection.execute_batch(
+        connection.execute_batch(
         "DROP TRIGGER IF EXISTS trg_image_tasks_payload_state_sync;
          ALTER TABLE image_tasks RENAME TO image_tasks_legacy;
          CREATE TABLE image_tasks (
@@ -952,13 +1047,19 @@ fn ensure_web_session_schema(connection: &Connection) -> Result<(), ManagerError
             "task_ids",
         ];
         if !columns.contains("payload_json")
-            && required[..required.len() - 1].iter().all(|column| columns.contains(*column))
+            && required[..required.len() - 1]
+                .iter()
+                .all(|column| columns.contains(*column))
             && !columns.contains("task_ids")
         {
-            connection.execute_batch("ALTER TABLE image_web_sessions ADD COLUMN task_ids TEXT NOT NULL DEFAULT '';")?;
+            connection.execute_batch(
+                "ALTER TABLE image_web_sessions ADD COLUMN task_ids TEXT NOT NULL DEFAULT '';",
+            )?;
         } else if required.iter().any(|column| !columns.contains(*column)) {
             if !columns.contains("payload_json") {
-                return Err(ManagerError::System("图片会话表缺少必要字段，已保留原表".into()));
+                return Err(ManagerError::System(
+                    "图片会话表缺少必要字段，已保留原表".into(),
+                ));
             }
             let legacy_rows = if columns.contains("payload_json") {
                 let local_column = if columns.contains("local_id") {
@@ -1005,7 +1106,11 @@ fn ensure_web_session_schema(connection: &Connection) -> Result<(), ManagerError
                 let conversation_id = payload["conversationId"]
                     .as_str()
                     .filter(|value| !value.is_empty())
-                    .or_else(|| payload["conversation_id"].as_str().filter(|value| !value.is_empty()))
+                    .or_else(|| {
+                        payload["conversation_id"]
+                            .as_str()
+                            .filter(|value| !value.is_empty())
+                    })
                     .unwrap_or(local_conversation_id);
                 if conversation_id.is_empty() {
                     continue;
@@ -1034,7 +1139,11 @@ fn ensure_web_session_schema(connection: &Connection) -> Result<(), ManagerError
                     .map(str::to_string)
                     .or_else(|| {
                         payload["taskIds"].as_array().map(|items| {
-                            items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(",")
+                            items
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(",")
                         })
                     })
                     .unwrap_or_default();
@@ -1138,9 +1247,13 @@ fn migrate_legacy_assets(connection: &Connection) -> Result<(), ManagerError> {
     }
     // 旧版本曾把 image_inputs/image_outputs 建成依赖 image_assets 的视图；迁移后连同视图一起移除。
     for name in ["image_inputs", "image_outputs"] {
-        let object_type: Option<String> = connection.query_row(
-            "SELECT type FROM sqlite_master WHERE name = ?1", [name], |row| row.get(0)
-        ).optional()?;
+        let object_type: Option<String> = connection
+            .query_row(
+                "SELECT type FROM sqlite_master WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()?;
         if object_type.as_deref() == Some("view") {
             connection.execute_batch(&format!("DROP VIEW {name}"))?;
         }
@@ -1166,21 +1279,31 @@ fn migrate_legacy_inputs(paths: &AppPaths, connection: &Connection) -> Result<us
         rows.collect::<Result<HashSet<_>, _>>()?
     };
     if !columns.contains("image_id") {
-        connection.execute("ALTER TABLE image_inputs ADD COLUMN image_id TEXT NOT NULL DEFAULT ''", [])?;
+        connection.execute(
+            "ALTER TABLE image_inputs ADD COLUMN image_id TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
         columns.insert("image_id".into());
     }
     if !columns.contains("format") {
-        connection.execute("ALTER TABLE image_inputs ADD COLUMN format TEXT NOT NULL DEFAULT 'url'", [])?;
+        connection.execute(
+            "ALTER TABLE image_inputs ADD COLUMN format TEXT NOT NULL DEFAULT 'url'",
+            [],
+        )?;
         columns.insert("format".into());
     }
     if !columns.contains("data_url") {
         return Ok(0);
     }
-    let missing_ids = connection.prepare("SELECT rowid FROM image_inputs WHERE image_id = ''")?
-        .query_map([], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<_>, _>>()?;
+    let missing_ids = connection
+        .prepare("SELECT rowid FROM image_inputs WHERE image_id = ''")?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     for row_id in missing_ids {
-        connection.execute("UPDATE image_inputs SET image_id = ?1 WHERE rowid = ?2",
-            params![uuid::Uuid::new_v4().to_string(), row_id])?;
+        connection.execute(
+            "UPDATE image_inputs SET image_id = ?1 WHERE rowid = ?2",
+            params![uuid::Uuid::new_v4().to_string(), row_id],
+        )?;
     }
     let mut statement = connection.prepare(
         "SELECT task_id, position, image_id, format, data_url
@@ -1204,7 +1327,9 @@ fn migrate_legacy_inputs(paths: &AppPaths, connection: &Connection) -> Result<us
         } else {
             let relative = input_relative_path(&owner_id, &image_id, &format);
             let target = input_path(paths, &relative)?;
-            if let Some(parent) = target.parent() { fs::create_dir_all(parent)?; }
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
             fs::write(target, data_url.as_bytes())?;
             format
         };
@@ -1217,9 +1342,7 @@ fn migrate_legacy_inputs(paths: &AppPaths, connection: &Connection) -> Result<us
     }
     drop(statement);
     let transaction = connection.unchecked_transaction()?;
-    transaction.execute_batch(
-        "DROP TRIGGER IF EXISTS trg_image_inputs_assign_id;",
-    )?;
+    transaction.execute_batch("DROP TRIGGER IF EXISTS trg_image_inputs_assign_id;")?;
     transaction.execute_batch(
         "CREATE TABLE image_inputs_compact (
            task_id TEXT NOT NULL, position INTEGER NOT NULL,
@@ -1241,7 +1364,10 @@ fn output_schema_columns(connection: &Connection) -> Result<HashSet<String>, Man
     Ok(rows.collect::<Result<HashSet<_>, _>>()?)
 }
 
-fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<usize, ManagerError> {
+fn migrate_legacy_outputs(
+    paths: &AppPaths,
+    connection: &Connection,
+) -> Result<usize, ManagerError> {
     // 兼容视图只用于旧代码读取，不能当作待迁移的物理表处理。
     let object_type: Option<String> = connection
         .query_row(
@@ -1255,7 +1381,10 @@ fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<u
     }
     let mut columns = output_schema_columns(connection)?;
     if !columns.contains("image_id") {
-        connection.execute("ALTER TABLE image_outputs ADD COLUMN image_id TEXT NOT NULL DEFAULT ''", [])?;
+        connection.execute(
+            "ALTER TABLE image_outputs ADD COLUMN image_id TEXT NOT NULL DEFAULT ''",
+            [],
+        )?;
         columns.insert("image_id".into());
     }
     let has_bytes = columns.contains("bytes");
@@ -1263,11 +1392,15 @@ fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<u
     let mut migrated = 0;
 
     // 为旧记录补发图片 ID，之后所有文件路径都只依赖会话、任务和图片 ID。
-    let missing_ids = connection.prepare("SELECT rowid FROM image_outputs WHERE image_id = ''")?
-        .query_map([], |row| row.get::<_, i64>(0))?.collect::<Result<Vec<_>, _>>()?;
+    let missing_ids = connection
+        .prepare("SELECT rowid FROM image_outputs WHERE image_id = ''")?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     for row_id in missing_ids {
-        connection.execute("UPDATE image_outputs SET image_id = ?1 WHERE rowid = ?2",
-            params![uuid::Uuid::new_v4().to_string(), row_id])?;
+        connection.execute(
+            "UPDATE image_outputs SET image_id = ?1 WHERE rowid = ?2",
+            params![uuid::Uuid::new_v4().to_string(), row_id],
+        )?;
     }
 
     if has_bytes {
@@ -1332,8 +1465,7 @@ fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<u
         };
         for (task_id, position, image_id, format, old_file_path, group_id) in legacy_files {
             let expected_file_path = output_relative_path(&group_id, &task_id, &image_id, &format);
-            if old_file_path != expected_file_path
-                && output_path(paths, &old_file_path)?.is_file()
+            if old_file_path != expected_file_path && output_path(paths, &old_file_path)?.is_file()
             {
                 move_output_file(paths, &old_file_path, &expected_file_path)?;
                 migrated += 1;
@@ -1344,7 +1476,6 @@ fn migrate_legacy_outputs(paths: &AppPaths, connection: &Connection) -> Result<u
                 params![task_id, position, image_id, expected_file_path],
             )?;
         }
-
     }
 
     if has_bytes || has_file_path {
@@ -1400,7 +1531,10 @@ fn migrate_output_metadata(connection: &Connection, table: &str) -> Result<(), M
     let rows = rows.collect::<Result<Vec<_>, _>>()?;
     let mut grouped = std::collections::BTreeMap::<String, Vec<(i64, String, String)>>::new();
     for (task_id, position, image_id, format) in rows {
-        grouped.entry(task_id).or_default().push((position, image_id, format));
+        grouped
+            .entry(task_id)
+            .or_default()
+            .push((position, image_id, format));
     }
     for (task_id, entries) in grouped {
         let current: String = connection
@@ -1412,7 +1546,9 @@ fn migrate_output_metadata(connection: &Connection, table: &str) -> Result<(), M
             .optional()?
             .unwrap_or_else(|| "[]".into());
         let mut images = parse_json_column(&current, json!([]));
-        let Some(items) = images.as_array_mut() else { continue };
+        let Some(items) = images.as_array_mut() else {
+            continue;
+        };
         for (position, image_id, format) in entries {
             let position = position.max(0) as usize;
             while items.len() <= position {
@@ -1451,18 +1587,29 @@ fn migrate_input_metadata(connection: &Connection, table: &str) -> Result<(), Ma
     );
     let mut statement = connection.prepare(&query)?;
     let rows = statement.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+        ))
     })?;
     let rows = rows.collect::<Result<Vec<_>, _>>()?;
     let mut grouped = std::collections::BTreeMap::<String, Vec<(i64, String)>>::new();
     for (input_id, position, image_id) in rows {
-        grouped.entry(input_id).or_default().push((position, image_id));
+        grouped
+            .entry(input_id)
+            .or_default()
+            .push((position, image_id));
     }
     for (input_id, entries) in grouped {
         // 新结构约定遮罩放在引用列表末尾，不能在过滤负位置时丢掉旧遮罩。
-        let ids = entries.iter().filter(|(position, _)| *position >= 0)
+        let ids = entries
+            .iter()
+            .filter(|(position, _)| *position >= 0)
             .chain(entries.iter().filter(|(position, _)| *position < 0))
-            .map(|(_, id)| id.clone()).collect::<Vec<_>>().join(",");
+            .map(|(_, id)| id.clone())
+            .collect::<Vec<_>>()
+            .join(",");
         let has_mask = entries.iter().any(|(position, _)| *position == -1);
         connection.execute(
             "UPDATE image_tasks SET reference_image_ids = CASE
@@ -1471,7 +1618,15 @@ fn migrate_input_metadata(connection: &Connection, table: &str) -> Result<(), Ma
                 input_count = CASE WHEN ?2 = '' THEN input_count ELSE ?3 END,
                 has_mask = CASE WHEN ?4 = 1 THEN 1 ELSE has_mask END
              WHERE input_id = ?1",
-            params![input_id, ids, entries.iter().filter(|(position, _)| *position >= 0).count() as i64, has_mask as i64],
+            params![
+                input_id,
+                ids,
+                entries
+                    .iter()
+                    .filter(|(position, _)| *position >= 0)
+                    .count() as i64,
+                has_mask as i64
+            ],
         )?;
     }
     Ok(())
@@ -1482,9 +1637,13 @@ fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
     let transaction = connection.unchecked_transaction()?;
     // 旧版本的兼容视图可能引用已经删除的 image_assets，先移除，避免 SQLite 在重建任务表时解析失败。
     for name in ["image_inputs", "image_outputs"] {
-        let object_type: Option<String> = transaction.query_row(
-            "SELECT type FROM sqlite_master WHERE name = ?1", [name], |row| row.get(0)
-        ).optional()?;
+        let object_type: Option<String> = transaction
+            .query_row(
+                "SELECT type FROM sqlite_master WHERE name = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()?;
         if object_type.as_deref() == Some("view") {
             transaction.execute_batch(&format!("DROP VIEW {name}"))?;
         }
@@ -1531,7 +1690,7 @@ fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
             ON image_web_sessions(account_id, local_conversation_id, updated_at DESC);
           CREATE INDEX IF NOT EXISTS idx_image_web_sessions_reuse
             ON image_web_sessions(account_id, updated_at DESC);",
-     )?;
+    )?;
     ensure_asset_storage(&transaction)?;
     ensure_output_columns(&transaction)?;
     ensure_input_columns(&transaction)?;
@@ -1576,7 +1735,10 @@ pub fn find_web_conversation(
 
 pub fn save_web_conversation(paths: &AppPaths, conversation: &Value) -> Result<(), ManagerError> {
     let account_id = conversation["accountId"].as_str().unwrap_or("").trim();
-    let local_conversation_id = conversation["localConversationId"].as_str().unwrap_or("").trim();
+    let local_conversation_id = conversation["localConversationId"]
+        .as_str()
+        .unwrap_or("")
+        .trim();
     let conversation_id = conversation["conversationId"].as_str().unwrap_or("").trim();
     if account_id.is_empty() || conversation_id.is_empty() {
         return Err(ManagerError::System("Web 会话记录缺少账号或会话 ID".into()));
@@ -1625,7 +1787,10 @@ pub fn list_web_conversations(paths: &AppPaths) -> Result<Value, ManagerError> {
     Ok(json!(rows))
 }
 
-pub fn read_web_conversations(paths: &AppPaths, ids: &[String]) -> Result<Vec<Value>, ManagerError> {
+pub fn read_web_conversations(
+    paths: &AppPaths,
+    ids: &[String],
+) -> Result<Vec<Value>, ManagerError> {
     if ids.is_empty() || ids.len() > 10000 {
         return Err(ManagerError::System("请选取 1–10000 个 Web 会话".into()));
     }
@@ -1657,7 +1822,8 @@ pub fn mark_web_conversations_deleted(
                 "SELECT conversation_id FROM image_web_sessions
                  WHERE id IN (SELECT value FROM json_each(?1))",
             )?;
-            let rows = statement.query_map([serde_json::to_string(ids)?], |row| row.get::<_, String>(0))?;
+            let rows = statement
+                .query_map([serde_json::to_string(ids)?], |row| row.get::<_, String>(0))?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
         let conversation_json = serde_json::to_string(&conversation_ids)?;
@@ -1692,7 +1858,11 @@ pub fn mark_web_conversation_deleted_by_upstream(
         "UPDATE image_tasks SET web_session_deleted = 1,
          updated_at = ?3
          WHERE account_id = ?1 AND web_session_id = ?2",
-        params![account_id, conversation_id, chrono::Utc::now().timestamp_millis()],
+        params![
+            account_id,
+            conversation_id,
+            chrono::Utc::now().timestamp_millis()
+        ],
     )?;
     transaction.commit()?;
     Ok(())
@@ -1730,14 +1900,17 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
         if let Err(error) = connection.execute_batch(
             "PRAGMA wal_checkpoint(TRUNCATE);
              VACUUM;
-             PRAGMA user_version = 2;"
+             PRAGMA user_version = 2;",
         ) {
             // 图片和元数据已经迁移成功；空间不足等原因只延后压缩，不阻止应用启动。
             eprintln!("图片迁移已完成，数据库空间回收将在下次启动重试：{error}");
             return Ok(());
         }
         if thumbnail_compaction {
-            connection.execute("DELETE FROM app_metadata WHERE key = 'image_thumbnail_compaction_pending'", [])?;
+            connection.execute(
+                "DELETE FROM app_metadata WHERE key = 'image_thumbnail_compaction_pending'",
+                [],
+            )?;
         }
     }
     Ok(())
@@ -1823,11 +1996,23 @@ pub fn export_task_bundle(paths: &AppPaths, ids: &[String]) -> Result<Value, Man
             "SELECT reference_image_ids, input_id, has_mask FROM image_tasks WHERE input_id = ?1 LIMIT 1",
             [&input_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         ).optional()?;
-        let ids_for_input = input_task.map(|(ids, _, _)| ids.split(',').filter(|id| !id.is_empty()).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+        let ids_for_input = input_task
+            .map(|(ids, _, _)| {
+                ids.split(',')
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         for (position, image_id) in ids_for_input.into_iter().enumerate() {
             let (format, path) = find_input_file(paths, &input_id, &image_id)?;
             let bytes = fs::read(path)?;
-            let data_url = if format == "url" { String::from_utf8(bytes).map_err(|_| ManagerError::System("引用图片数据损坏".into()))? } else { format!("data:image/{};base64,{}", format, STANDARD.encode(bytes)) };
+            let data_url = if format == "url" {
+                String::from_utf8(bytes)
+                    .map_err(|_| ManagerError::System("引用图片数据损坏".into()))?
+            } else {
+                format!("data:image/{};base64,{}", format, STANDARD.encode(bytes))
+            };
             raw_bytes = raw_bytes.saturating_add(data_url.len());
             if raw_bytes > MAX_TASK_BACKUP_BYTES {
                 return Err(ManagerError::System(
@@ -1890,10 +2075,7 @@ pub fn import_task_bundle(
             payload["request"]["conversationId"] = json!(target_conversation_id);
             if payload["batchKey"].is_string() {
                 if let Some(round_id) = payload["request"]["roundId"].as_str() {
-                    payload["batchKey"] = json!(format!(
-                        "{}:{}",
-                        target_conversation_id, round_id
-                    ));
+                    payload["batchKey"] = json!(format!("{}:{}", target_conversation_id, round_id));
                 }
             }
         }
@@ -1940,16 +2122,21 @@ pub fn import_task_bundle(
             imported += 1;
         }
         let old_json: String = transaction.query_row(
-            "SELECT images_json FROM image_tasks WHERE id = ?1", [id], |row| row.get(0)
+            "SELECT images_json FROM image_tasks WHERE id = ?1",
+            [id],
+            |row| row.get(0),
         )?;
         let old_files = image_records_from_json(&old_json)
-            .into_iter().map(|(_, image_id, format)| (image_id, format)).collect::<Vec<_>>();
+            .into_iter()
+            .map(|(_, image_id, format)| (image_id, format))
+            .collect::<Vec<_>>();
         let group_id = output_group_id(&payload);
         for (image_id, format) in old_files {
             stale_output_files.push(output_relative_path(&group_id, id, &image_id, &format));
         }
         transaction.execute(
-            "UPDATE image_tasks SET images_json = '[]', image_count = 0 WHERE id = ?1", [id]
+            "UPDATE image_tasks SET images_json = '[]', image_count = 0 WHERE id = ?1",
+            [id],
         )?;
     }
 
@@ -1962,7 +2149,8 @@ pub fn import_task_bundle(
             let mut imported_ids = Vec::new();
             let mut has_mask = false;
             for item in input["items"].as_array().cloned().unwrap_or_default() {
-                let position = item["position"].as_i64()
+                let position = item["position"]
+                    .as_i64()
                     .ok_or_else(|| ManagerError::System("任务备份包含无效输入位置".into()))?;
                 let data_url = item["dataUrl"]
                     .as_str()
@@ -1975,11 +2163,16 @@ pub fn import_task_bundle(
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 let (format, relative) = write_input_file(paths, input_id, &image_id, data_url)?;
                 input_guard.files.push(relative);
-                if position < 0 { has_mask = true; } else { imported_ids.push(image_id); }
+                if position < 0 {
+                    has_mask = true;
+                } else {
+                    imported_ids.push(image_id);
+                }
                 let _ = format;
             }
             let joined = imported_ids.join(",");
-            let owner_ids = transaction.prepare("SELECT id FROM image_tasks WHERE input_id = ?1")?
+            let owner_ids = transaction
+                .prepare("SELECT id FROM image_tasks WHERE input_id = ?1")?
                 .query_map([input_id], |row| row.get::<_, String>(0))?
                 .collect::<Result<Vec<_>, _>>()?;
             for owner_id in owner_ids {
@@ -2032,9 +2225,12 @@ pub fn import_task_bundle(
             )?;
             output_guard.files.push(file_path.clone());
             let current_json: String = transaction.query_row(
-                "SELECT images_json FROM image_tasks WHERE id = ?1", [task_id], |row| row.get(0)
+                "SELECT images_json FROM image_tasks WHERE id = ?1",
+                [task_id],
+                |row| row.get(0),
             )?;
-            let mut records = image_records_from_json(&current_json).into_iter()
+            let mut records = image_records_from_json(&current_json)
+                .into_iter()
                 .filter(|(old_position, _, _)| *old_position != position.max(0) as usize)
                 .map(|(old_position, old_id, old_format)| (old_position, old_id, old_format, None))
                 .collect::<Vec<_>>();
@@ -2060,10 +2256,18 @@ pub fn import_task_bundle(
 }
 
 // 一轮任务原子入队，共享输入图片，避免 100 张生成重复保存 100 份参考图。
-pub fn create_batch(paths: &AppPaths, tasks: &[Value], images: &[String], mask: &str) -> Result<(), ManagerError> {
-    if tasks.is_empty() || tasks.len() > 10000 { return Err(ManagerError::System("一轮可提交 1–10000 个任务".into())); }
+pub fn create_batch(
+    paths: &AppPaths,
+    tasks: &[Value],
+    images: &[String],
+    mask: &str,
+) -> Result<(), ManagerError> {
+    if tasks.is_empty() || tasks.len() > 10000 {
+        return Err(ManagerError::System("一轮可提交 1–10000 个任务".into()));
+    }
     let mut connection = open(paths)?;
-    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let input_id = tasks[0]["inputId"]
         .as_str()
         .filter(|value| !value.is_empty())
@@ -2090,10 +2294,18 @@ pub fn create_batch(paths: &AppPaths, tasks: &[Value], images: &[String], mask: 
         let mut stored_task = task.clone();
         stored_task["referenceImageIds"] = reference_image_ids.clone();
         stored_task["editMode"] = json!(matches!(
-            stored_task["request"]["mode"].as_str().unwrap_or("").to_ascii_lowercase().as_str(),
+            stored_task["request"]["mode"]
+                .as_str()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .as_str(),
             "edit" | "image-to-image" | "image_to_image" | "img2img" | "img-to-img"
         ));
-        let mut meta = task_meta_from_value(&stored_task, chrono::Utc::now().timestamp_millis(), Some("queued"));
+        let mut meta = task_meta_from_value(
+            &stored_task,
+            chrono::Utc::now().timestamp_millis(),
+            Some("queued"),
+        );
         meta.status = "queued".into();
         meta.input_id = input_id.to_string();
         meta.input_count = images.len() as i64;
@@ -2126,7 +2338,12 @@ pub fn start(paths: &AppPaths, task: &Value) -> Result<Option<Value>, ManagerErr
         .transpose()
 }
 
-pub fn checkpoint(paths: &AppPaths, id: &str, revision: u64, recovery: &Value) -> Result<(), ManagerError> {
+pub fn checkpoint(
+    paths: &AppPaths,
+    id: &str,
+    revision: u64,
+    recovery: &Value,
+) -> Result<(), ManagerError> {
     open(paths)?.execute(
         "UPDATE image_tasks SET recovery_json = ?2, can_resume = 1,
          web_session_id = COALESCE(NULLIF(json_extract(?2, '$.conversationId'), ''), web_session_id),
@@ -2149,7 +2366,8 @@ pub fn requeue_with_concurrency(
     generation_mode: Option<&str>,
 ) -> Result<Value, ManagerError> {
     let mut connection = open(paths)?;
-    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let record: TaskRecord = transaction.query_row(
         &format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id = ?1 AND status IN ('failed', 'interrupted')"),
         [id],
@@ -2194,11 +2412,16 @@ pub fn history(paths: &AppPaths) -> Result<Value, ManagerError> {
     Ok(json!(rows))
 }
 
-pub fn finish(paths: &AppPaths, task: &Value, images: &[StoredImage]) -> Result<Option<Value>, ManagerError> {
+pub fn finish(
+    paths: &AppPaths,
+    task: &Value,
+    images: &[StoredImage],
+) -> Result<Option<Value>, ManagerError> {
     let mut created_files = Vec::new();
     let result = (|| {
         let mut connection = open(paths)?;
-        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut task = task.clone();
         let saved: Option<TaskRecord> = transaction
             .query_row(
@@ -2214,7 +2437,8 @@ pub fn finish(paths: &AppPaths, task: &Value, images: &[StoredImage]) -> Result<
             return Ok(None);
         }
         task["recovery"] = saved_task["recovery"].clone();
-        task["canResume"] = json!(task["status"] == "failed" && task["recovery"]["conversationId"].is_string());
+        task["canResume"] =
+            json!(task["status"] == "failed" && task["recovery"]["conversationId"].is_string());
         task["revision"] = json!(saved_task["revision"].as_u64().unwrap_or(0) + 1);
         let mut image_records = Vec::with_capacity(images.len());
         for (index, image) in images.iter().enumerate() {
@@ -2253,7 +2477,12 @@ pub fn finish(paths: &AppPaths, task: &Value, images: &[StoredImage]) -> Result<
         task.as_object_mut().unwrap().remove("thumbnail");
         Ok(Some(task))
     })();
-    if result.is_err() || result.as_ref().map(|value| value.is_none()).unwrap_or(false) {
+    if result.is_err()
+        || result
+            .as_ref()
+            .map(|value| value.is_none())
+            .unwrap_or(false)
+    {
         remove_output_files(paths, &created_files);
     }
     result
@@ -2274,16 +2503,25 @@ pub fn task_states(paths: &AppPaths, ids: &[String]) -> Result<Vec<Value>, Manag
 }
 
 pub fn previews(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
-    if ids.is_empty() || ids.len() > 100 { return Err(ManagerError::System("请选取 1–100 个任务".into())); }
+    if ids.is_empty() || ids.len() > 100 {
+        return Err(ManagerError::System("请选取 1–100 个任务".into()));
+    }
     let connection = open(paths)?;
-    let mut statement = connection.prepare(&format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id IN (SELECT value FROM json_each(?1))"))?;
-    let rows = statement.query_map([serde_json::to_string(ids)?], task_record_from_row)?.collect::<Result<Vec<_>, _>>()?;
+    let mut statement = connection.prepare(&format!(
+        "SELECT {TASK_SELECT} FROM image_tasks WHERE id IN (SELECT value FROM json_each(?1))"
+    ))?;
+    let rows = statement
+        .query_map([serde_json::to_string(ids)?], task_record_from_row)?
+        .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
     drop(connection);
-    Ok(json!(rows.into_iter().map(|record| json!({
-        "id": record.meta.id,
-        "thumbnail": task_thumbnail(paths, &record.meta).unwrap_or_default()
-    })).collect::<Vec<_>>()))
+    Ok(json!(rows
+        .into_iter()
+        .map(|record| json!({
+            "id": record.meta.id,
+            "thumbnail": task_thumbnail(paths, &record.meta).unwrap_or_default()
+        }))
+        .collect::<Vec<_>>()))
 }
 
 pub fn list(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
@@ -2296,10 +2534,15 @@ pub fn list(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
     let include_thumbnails = payload["includeThumbnails"] != false;
     let filter = "(?1 = '' OR status = ?1) AND (?2 = '' OR conversation_id = ?2)";
     let round_key = "COALESCE(NULLIF(round_id, ''), id)";
-    let count = if grouped { format!("COUNT(DISTINCT {round_key})") } else { "COUNT(*)".to_string() };
+    let count = if grouped {
+        format!("COUNT(DISTINCT {round_key})")
+    } else {
+        "COUNT(*)".to_string()
+    };
     let total: u64 = connection.query_row(
         &format!("SELECT {count} FROM image_tasks WHERE {filter}"),
-        params![status, conversation_id], |row| row.get(0),
+        params![status, conversation_id],
+        |row| row.get(0),
     )?;
     // 按轮分页，100 张图片始终一起展示，不在任务分页边界拆开。
     let query = if grouped {
@@ -2312,7 +2555,10 @@ pub fn list(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
     };
     let mut statement = connection.prepare(&query)?;
     let rows = statement
-        .query_map(params![status, conversation_id, page_size, (page - 1) * page_size], task_record_from_row)?
+        .query_map(
+            params![status, conversation_id, page_size, (page - 1) * page_size],
+            task_record_from_row,
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     drop(statement);
     drop(connection);
@@ -2322,7 +2568,9 @@ pub fn list(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
             let mut task = record.value()?;
             task["thumbnail"] = if include_thumbnails {
                 json!(task_thumbnail(paths, &record.meta).unwrap_or_default())
-            } else { json!("") };
+            } else {
+                json!("")
+            };
             Ok(task)
         })
         .collect::<Result<Vec<Value>, ManagerError>>()?;
@@ -2358,7 +2606,10 @@ pub fn inputs(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
         "SELECT COALESCE(NULLIF(input_id, ''), id), reference_image_ids, has_mask FROM image_tasks WHERE id = ?1",
         [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
     )?;
-    let ids = reference_ids.split(',').filter(|value| !value.is_empty()).collect::<Vec<_>>();
+    let ids = reference_ids
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
     let mut images = Vec::new();
     let mut mask = String::new();
     for (index, image_id) in ids.iter().enumerate() {
@@ -2369,7 +2620,11 @@ pub fn inputs(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
         } else {
             format!("data:image/{};base64,{}", format, STANDARD.encode(bytes))
         };
-        if has_mask && index + 1 == ids.len() { mask = url; } else { images.push(url); }
+        if has_mask && index + 1 == ids.len() {
+            mask = url;
+        } else {
+            images.push(url);
+        }
     }
     Ok(json!({ "images": images, "mask": mask }))
 }
@@ -2385,9 +2640,16 @@ pub fn read_images(
     let mut output = Vec::new();
     let mut total_bytes = 0;
     for id in ids {
-        let Some(task) = connection.query_row(
-            &format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id = ?1"), [id], task_record_from_row
-        ).optional()? else { continue };
+        let Some(task) = connection
+            .query_row(
+                &format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id = ?1"),
+                [id],
+                task_record_from_row,
+            )
+            .optional()?
+        else {
+            continue;
+        };
         let group_id = output_group_id(&task.value()?);
         for (position, image_id, format) in task_image_records(&connection, id)? {
             let bytes = read_output_file(paths, &group_id, id, &image_id, &format)?;
@@ -2408,7 +2670,12 @@ pub fn export_image_count(paths: &AppPaths, ids: &[String]) -> Result<usize, Man
         return Err(ManagerError::System("请选取 1–10000 个任务".into()));
     }
     let connection = open(paths)?;
-    Ok(ids.iter().map(|id| task_image_records(&connection, id).map(|records| records.len())).collect::<Result<Vec<_>, _>>()?.into_iter().sum())
+    Ok(ids
+        .iter()
+        .map(|id| task_image_records(&connection, id).map(|records| records.len()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .sum())
 }
 
 fn sanitize_export_stem(value: &str) -> String {
@@ -2451,8 +2718,8 @@ where
     let file = File::create(target)?;
     let mut archive = zip::ZipWriter::new(file);
     // PNG、JPEG、WebP 已经压缩过，直接存储可避免再次 Deflate 消耗 CPU。
-    let file_options = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Stored);
+    let file_options =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     let mut entry_names = HashSet::new();
     let mut count = 0;
     for id in ids {
@@ -2463,7 +2730,9 @@ where
         let stem = sanitize_export_stem(&batch_name);
         let id_prefix = id.chars().take(8).collect::<String>();
         let task: TaskRecord = connection.query_row(
-            &format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id = ?1"), [id], task_record_from_row
+            &format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id = ?1"),
+            [id],
+            task_record_from_row,
         )?;
         let group_id = output_group_id(&task.value()?);
         for (index, image_id, format) in task_image_records(&connection, id)? {
@@ -2514,7 +2783,11 @@ where
     Ok(count)
 }
 
-pub fn write_export_zip(paths: &AppPaths, ids: &[String], target: &str) -> Result<usize, ManagerError> {
+pub fn write_export_zip(
+    paths: &AppPaths,
+    ids: &[String],
+    target: &str,
+) -> Result<usize, ManagerError> {
     write_export_zip_with_progress(paths, ids, target, |_| {})
 }
 
@@ -2524,9 +2797,16 @@ fn output_files_for_tasks(
 ) -> Result<Vec<String>, ManagerError> {
     let mut files = Vec::new();
     for task_id in ids {
-        let Some(record) = connection.query_row(
-            &format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id = ?1"), [task_id], task_record_from_row
-        ).optional()? else { continue };
+        let Some(record) = connection
+            .query_row(
+                &format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id = ?1"),
+                [task_id],
+                task_record_from_row,
+            )
+            .optional()?
+        else {
+            continue;
+        };
         let group_id = output_group_id(&record.value()?);
         for (_, image_id, format) in task_image_records(connection, task_id)? {
             files.push(output_relative_path(&group_id, task_id, &image_id, &format));
@@ -2566,7 +2846,8 @@ pub fn cancel(paths: &AppPaths, ids: &[String], recoverable: bool) -> Result<Val
         return Err(ManagerError::System("请选取 1–10000 个任务".into()));
     }
     let mut connection = open(paths)?;
-    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let ids_json = serde_json::to_string(ids)?;
     let error_message = if recoverable {
         "批量任务已暂停"
@@ -2584,12 +2865,15 @@ pub fn cancel(paths: &AppPaths, ids: &[String], recoverable: bool) -> Result<Val
              WHERE id IN (SELECT value FROM json_each(?1)) AND status IN ('queued', 'processing')
              RETURNING {TASK_SELECT}"
         ))?;
-        let rows = statement.query_map(params![
-            ids_json,
-            if recoverable { 1 } else { 0 },
-            error_json,
-            chrono::Utc::now().timestamp_millis()
-        ], task_record_from_row)?;
+        let rows = statement.query_map(
+            params![
+                ids_json,
+                if recoverable { 1 } else { 0 },
+                error_json,
+                chrono::Utc::now().timestamp_millis()
+            ],
+            task_record_from_row,
+        )?;
         let records = rows.collect::<Result<Vec<_>, _>>()?;
         records
             .into_iter()
@@ -2597,7 +2881,9 @@ pub fn cancel(paths: &AppPaths, ids: &[String], recoverable: bool) -> Result<Val
             .collect::<Result<Vec<_>, _>>()?
     };
     transaction.commit()?;
-    Ok(json!({ "cancelled": items.len(), "ids": items.iter().map(|task| &task["id"]).collect::<Vec<_>>(), "items": items }))
+    Ok(
+        json!({ "cancelled": items.len(), "ids": items.iter().map(|task| &task["id"]).collect::<Vec<_>>(), "items": items }),
+    )
 }
 
 pub fn clear_results(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerError> {
@@ -2608,7 +2894,11 @@ pub fn clear_results(paths: &AppPaths, ids: &[String]) -> Result<Value, ManagerE
     let output_files = output_files_for_tasks(&connection, ids)?;
     let transaction = connection.transaction()?;
     for id in ids {
-        let status: String = transaction.query_row("SELECT status FROM image_tasks WHERE id = ?1", [id], |row| row.get(0))?;
+        let status: String = transaction.query_row(
+            "SELECT status FROM image_tasks WHERE id = ?1",
+            [id],
+            |row| row.get(0),
+        )?;
         if matches!(status.as_str(), "processing" | "queued") {
             return Err(ManagerError::System("请等待本轮任务完成后删除结果".into()));
         }
@@ -2644,22 +2934,31 @@ mod tests {
         let group_id = output_group_id(&task);
         let image_id = uuid::Uuid::new_v4().to_string();
         write_output_file(paths, &group_id, task_id, &image_id, format, bytes).unwrap();
-        let current: String = connection.query_row("SELECT images_json FROM image_tasks WHERE id = ?1", [task_id], |row| row.get(0)).unwrap();
+        let current: String = connection
+            .query_row(
+                "SELECT images_json FROM image_tasks WHERE id = ?1",
+                [task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
         let mut records = image_records_from_json(&current).into_iter()
             .filter(|(old_position, _, _)| *old_position != position.max(0) as usize)
             .map(|(old_position, old_id, old_format)| json!({ "position": old_position, "imageId": old_id, "format": old_format }))
             .collect::<Vec<_>>();
         records.push(json!({ "position": position.max(0), "imageId": image_id, "format": format }));
         let image_count = records.len() as i64;
-        connection.execute(
-            "UPDATE image_tasks SET images_json = ?2, image_count = ?3 WHERE id = ?1",
-            params![task_id, Value::Array(records).to_string(), image_count],
-        ).unwrap();
+        connection
+            .execute(
+                "UPDATE image_tasks SET images_json = ?2, image_count = ?3 WHERE id = ?1",
+                params![task_id, Value::Array(records).to_string(), image_count],
+            )
+            .unwrap();
     }
 
     #[test]
     fn web_conversation_records_keep_reuse_and_deleted_state() {
-        let root = std::env::temp_dir().join(format!("image-web-session-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("image-web-session-test-{}", uuid::Uuid::new_v4()));
         let paths = resolve_app_paths(&root);
         save_web_conversation(
             &paths,
@@ -2676,15 +2975,30 @@ mod tests {
             .unwrap();
         assert_eq!(saved["conversationId"], "upstream");
         assert_eq!(saved["deleted"], false);
-        assert_eq!(list_web_conversations(&paths).unwrap().as_array().unwrap().len(), 1);
-        assert!(find_web_conversation(&paths, "other-account", "").unwrap().is_none());
+        assert_eq!(
+            list_web_conversations(&paths)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(find_web_conversation(&paths, "other-account", "")
+            .unwrap()
+            .is_none());
 
         // 切换本地历史分组仍使用同一个上游记录，早期 SSE 检查点不能清空父消息。
-        save_web_conversation(&paths, &json!({
-            "accountId": "account", "localConversationId": "another-workbench",
-            "conversationId": "upstream", "parentMessageId": ""
-        })).unwrap();
-        let reused = find_web_conversation(&paths, "account", "").unwrap().unwrap();
+        save_web_conversation(
+            &paths,
+            &json!({
+                "accountId": "account", "localConversationId": "another-workbench",
+                "conversationId": "upstream", "parentMessageId": ""
+            }),
+        )
+        .unwrap();
+        let reused = find_web_conversation(&paths, "account", "")
+            .unwrap()
+            .unwrap();
         assert_eq!(reused["id"], saved["id"]);
         assert_eq!(reused["parentMessageId"], "message-1");
 
@@ -2693,7 +3007,11 @@ mod tests {
         assert!(find_web_conversation(&paths, "account", "")
             .unwrap()
             .is_none());
-        assert!(list_web_conversations(&paths).unwrap().as_array().unwrap().is_empty());
+        assert!(list_web_conversations(&paths)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty());
         assert!(find_web_conversation(&paths, "account", "upstream")
             .unwrap()
             .is_none());
@@ -2701,17 +3019,30 @@ mod tests {
         save_web_conversation(&paths, &json!({
             "accountId": "account", "conversationId": "upstream", "parentMessageId": "late-message"
         })).unwrap();
-        assert_eq!(find_web_conversation(&paths, "account", "").unwrap().unwrap()["parentMessageId"], "late-message");
+        assert_eq!(
+            find_web_conversation(&paths, "account", "")
+                .unwrap()
+                .unwrap()["parentMessageId"],
+            "late-message"
+        );
         save_web_conversation(&paths, &json!({
             "accountId": "account", "conversationId": "new-upstream", "parentMessageId": "new-message"
         })).unwrap();
-        assert_eq!(find_web_conversation(&paths, "account", "").unwrap().unwrap()["conversationId"], "new-upstream");
+        assert_eq!(
+            find_web_conversation(&paths, "account", "")
+                .unwrap()
+                .unwrap()["conversationId"],
+            "new-upstream"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn legacy_task_payload_is_migrated_and_removed() {
-        let root = std::env::temp_dir().join(format!("image-task-payload-migrate-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "image-task-payload-migrate-{}",
+            uuid::Uuid::new_v4()
+        ));
         let paths = resolve_app_paths(&root);
         let connection = database::open(&paths).unwrap();
         connection.execute_batch(
@@ -2725,9 +3056,14 @@ mod tests {
         drop(connection);
         let connection = open(&paths).unwrap();
         let columns = {
-            let mut statement = connection.prepare("PRAGMA table_info(image_tasks)").unwrap();
-            statement.query_map([], |row| row.get::<_, String>(1)).unwrap()
-                .collect::<Result<Vec<_>, _>>().unwrap()
+            let mut statement = connection
+                .prepare("PRAGMA table_info(image_tasks)")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
         };
         assert!(!columns.iter().any(|column| column == "payload_json"));
         assert!(!columns.iter().any(|column| column == "thumbnail"));
@@ -2742,7 +3078,8 @@ mod tests {
 
     #[test]
     fn open_migrates_legacy_web_session_payload_before_creating_indexes() {
-        let root = std::env::temp_dir().join(format!("image-web-schema-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("image-web-schema-test-{}", uuid::Uuid::new_v4()));
         let paths = resolve_app_paths(&root);
         let connection = database::open(&paths).unwrap();
         connection
@@ -2775,7 +3112,10 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(session, ("account".into(), "local".into(), "upstream".into()));
+        assert_eq!(
+            session,
+            ("account".into(), "local".into(), "upstream".into())
+        );
         let old_count: i64 = connection
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
@@ -2796,26 +3136,58 @@ mod tests {
         let queued = json!({ "id": "task", "createdAt": 1, "status": "queued", "request": { "generationMode": "web" }, "imageCount": 0 });
         create_batch(&paths, std::slice::from_ref(&queued), &[], "").unwrap();
         let mut old = start(&paths, &queued).unwrap().unwrap();
-        checkpoint(&paths, "task", old["revision"].as_u64().unwrap(), &json!({"conversationId": "old"})).unwrap();
+        checkpoint(
+            &paths,
+            "task",
+            old["revision"].as_u64().unwrap(),
+            &json!({"conversationId": "old"}),
+        )
+        .unwrap();
         let cancelled = cancel(&paths, &["task".into()], true).unwrap();
         assert_eq!(cancelled["cancelled"], 1);
         assert_eq!(cancelled["items"][0]["status"], "interrupted");
-        assert_eq!(cancel(&paths, &["task".into()], true).unwrap()["ids"], json!([]));
+        assert_eq!(
+            cancel(&paths, &["task".into()], true).unwrap()["ids"],
+            json!([])
+        );
         let resumed = requeue(&paths, "task").unwrap();
         assert!(start(&paths, &queued).unwrap().is_none());
         let mut current = start(&paths, &resumed).unwrap().unwrap();
-        checkpoint(&paths, "task", current["revision"].as_u64().unwrap(), &json!({"conversationId": "new"})).unwrap();
-        checkpoint(&paths, "task", old["revision"].as_u64().unwrap(), &json!({"conversationId": "stale"})).unwrap();
+        checkpoint(
+            &paths,
+            "task",
+            current["revision"].as_u64().unwrap(),
+            &json!({"conversationId": "new"}),
+        )
+        .unwrap();
+        checkpoint(
+            &paths,
+            "task",
+            old["revision"].as_u64().unwrap(),
+            &json!({"conversationId": "stale"}),
+        )
+        .unwrap();
         old["status"] = json!("completed");
-        let image = StoredImage { bytes: vec![1], format: "png".into(), width: 1, height: 1, revised_prompt: String::new() };
-        assert!(finish(&paths, &old, std::slice::from_ref(&image)).unwrap().is_none());
+        let image = StoredImage {
+            bytes: vec![1],
+            format: "png".into(),
+            width: 1,
+            height: 1,
+            revised_prompt: String::new(),
+        };
+        assert!(finish(&paths, &old, std::slice::from_ref(&image))
+            .unwrap()
+            .is_none());
         assert!(read_images(&paths, &["task".into()]).unwrap().is_empty());
         current["status"] = json!("failed");
         let saved = finish(&paths, &current, &[]).unwrap().unwrap();
         assert_eq!(saved["canResume"], true);
         assert_eq!(saved["recovery"]["conversationId"], "new");
         assert_eq!(saved["revision"], current["revision"].as_u64().unwrap() + 1);
-        assert_eq!(cancel(&paths, &["task".into()], false).unwrap()["cancelled"], 0);
+        assert_eq!(
+            cancel(&paths, &["task".into()], false).unwrap()["cancelled"],
+            0
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2829,18 +3201,42 @@ mod tests {
         task["status"] = json!("completed");
         task["imageCount"] = json!(1);
         let mut bytes = Cursor::new(Vec::new());
-        image::DynamicImage::new_rgba8(640, 480).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
-        let image = StoredImage { bytes: bytes.into_inner(), format: "png".into(), width: 640, height: 480, revised_prompt: String::new() };
-        let saved = finish(&paths, &task, std::slice::from_ref(&image)).unwrap().unwrap();
+        image::DynamicImage::new_rgba8(640, 480)
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .unwrap();
+        let image = StoredImage {
+            bytes: bytes.into_inner(),
+            format: "png".into(),
+            width: 640,
+            height: 480,
+            revised_prompt: String::new(),
+        };
+        let saved = finish(&paths, &task, std::slice::from_ref(&image))
+            .unwrap()
+            .unwrap();
         assert!(saved.get("thumbnail").is_none());
-        assert_eq!(task_states(&paths, &["task".into()]).unwrap()[0]["status"], "completed");
+        assert_eq!(
+            task_states(&paths, &["task".into()]).unwrap()[0]["status"],
+            "completed"
+        );
         assert_eq!(read_images(&paths, &["task".into()]).unwrap().len(), 1);
-        assert_eq!(list(&paths, &json!({ "includeThumbnails": false })).unwrap()["items"][0]["thumbnail"], "");
-        let preview = previews(&paths, &["task".into()]).unwrap()[0]["thumbnail"].as_str().unwrap().to_string();
-        let decoded = STANDARD.decode(preview.strip_prefix("data:image/png;base64,").unwrap()).unwrap();
+        assert_eq!(
+            list(&paths, &json!({ "includeThumbnails": false })).unwrap()["items"][0]["thumbnail"],
+            ""
+        );
+        let preview = previews(&paths, &["task".into()]).unwrap()[0]["thumbnail"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let decoded = STANDARD
+            .decode(preview.strip_prefix("data:image/png;base64,").unwrap())
+            .unwrap();
         let thumbnail = image::load_from_memory(&decoded).unwrap();
         assert_eq!((thumbnail.width(), thumbnail.height()), (320, 240));
-        assert_eq!(list(&paths, &json!({})).unwrap()["items"][0]["thumbnail"], preview);
+        assert_eq!(
+            list(&paths, &json!({})).unwrap()["items"][0]["thumbnail"],
+            preview
+        );
         let connection = open(&paths).unwrap();
         assert_eq!(connection.query_row(
             "SELECT COUNT(*) FROM pragma_table_info('image_tasks') WHERE name = 'thumbnail'",
@@ -2849,24 +3245,32 @@ mod tests {
         let bundle = export_task_bundle(&paths, &["task".into()]).unwrap();
         assert!(bundle["tasks"][0].get("thumbnail").is_none());
         assert!(bundle["tasks"][0]["payload"].get("thumbnail").is_none());
-        assert_eq!(fs::read_dir(output_root(&paths).join("legacy")).unwrap().count(), 1);
+        assert_eq!(
+            fs::read_dir(output_root(&paths).join("legacy"))
+                .unwrap()
+                .count(),
+            1
+        );
         drop(connection);
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn initialize_removes_existing_thumbnail_column_and_keeps_originals() {
-        let root = std::env::temp_dir().join(format!("image-thumbnail-migrate-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("image-thumbnail-migrate-{}", uuid::Uuid::new_v4()));
         let paths = resolve_app_paths(&root);
         let task = json!({ "id": "old-task", "request": { "conversationId": "old-conversation", "prompt": "原有提示词" } });
         create_batch(&paths, &[task], &[], "").unwrap();
         insert_output(&paths, "old-task", 0, "png", &[1, 2, 3]);
         let connection = open(&paths).unwrap();
-        connection.execute_batch(
-            "ALTER TABLE image_tasks ADD COLUMN thumbnail TEXT NOT NULL DEFAULT '';
+        connection
+            .execute_batch(
+                "ALTER TABLE image_tasks ADD COLUMN thumbnail TEXT NOT NULL DEFAULT '';
              UPDATE image_tasks SET status = 'completed', thumbnail = 'data:image/png;base64,b2xk';
              PRAGMA user_version = 2;",
-        ).unwrap();
+            )
+            .unwrap();
         drop(connection);
 
         initialize(&paths).unwrap();
@@ -2876,16 +3280,29 @@ mod tests {
             "SELECT COUNT(*) FROM pragma_table_info('image_tasks') WHERE name = 'thumbnail'",
             [], |row| row.get::<_, i64>(0),
         ).unwrap(), 0);
-        let saved = connection.query_row(
-            &format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id = 'old-task'"),
-            [], task_record_from_row,
-        ).unwrap().value().unwrap();
+        let saved = connection
+            .query_row(
+                &format!("SELECT {TASK_SELECT} FROM image_tasks WHERE id = 'old-task'"),
+                [],
+                task_record_from_row,
+            )
+            .unwrap()
+            .value()
+            .unwrap();
         assert_eq!(saved["request"]["conversationId"], "old-conversation");
         assert_eq!(saved["request"]["prompt"], "原有提示词");
         assert_eq!(saved["status"], "completed");
         assert_eq!(saved["imageCount"], 1);
-        assert_eq!(read_images(&paths, &["old-task".into()]).unwrap()[0].3, vec![1, 2, 3]);
-        assert_eq!(connection.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0)).unwrap(), "ok");
+        assert_eq!(
+            read_images(&paths, &["old-task".into()]).unwrap()[0].3,
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            connection
+                .query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
         assert_eq!(connection.query_row(
             "SELECT COUNT(*) FROM app_metadata WHERE key = 'image_thumbnail_compaction_pending'",
             [], |row| row.get::<_, i64>(0),
@@ -2896,10 +3313,13 @@ mod tests {
 
     #[test]
     fn thumbnail_cache_refreshes_changed_files_and_does_not_hide_missing_originals() {
-        let root = std::env::temp_dir().join(format!("image-thumbnail-cache-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("image-thumbnail-cache-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&root).unwrap();
         let path = root.join("original.png");
-        image::DynamicImage::new_rgba8(640, 480).save(&path).unwrap();
+        image::DynamicImage::new_rgba8(640, 480)
+            .save(&path)
+            .unwrap();
         let mut cache = ThumbnailCache::default();
         let first = cache.load(&path).unwrap();
         assert_eq!(cache.load(&path).unwrap(), first);
@@ -2915,9 +3335,11 @@ mod tests {
 
     #[test]
     fn initialize_migrates_legacy_outputs_to_workspace_files() {
-        let root = std::env::temp_dir().join(format!("image-migrate-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("image-migrate-test-{}", uuid::Uuid::new_v4()));
         let paths = resolve_app_paths(&root);
-        let task = json!({ "id": "legacy-task", "createdAt": 1, "status": "completed", "imageCount": 1 });
+        let task =
+            json!({ "id": "legacy-task", "createdAt": 1, "status": "completed", "imageCount": 1 });
         create_batch(&paths, std::slice::from_ref(&task), &[], "").unwrap();
         let connection = open(&paths).unwrap();
         connection
@@ -2936,20 +3358,34 @@ mod tests {
 
         initialize(&paths).unwrap();
         let connection = open(&paths).unwrap();
-        assert!(connection.query_row(
-            "SELECT type FROM sqlite_master WHERE name = 'image_outputs'", [], |row| row.get::<_, String>(0)
-        ).optional().unwrap().is_none());
-        let stored = task_image_records(&connection, "legacy-task").unwrap().remove(0);
+        assert!(connection
+            .query_row(
+                "SELECT type FROM sqlite_master WHERE name = 'image_outputs'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .optional()
+            .unwrap()
+            .is_none());
+        let stored = task_image_records(&connection, "legacy-task")
+            .unwrap()
+            .remove(0);
         drop(connection);
         let relative = output_relative_path("legacy", "legacy-task", &stored.1, &stored.2);
         assert!(output_path(&paths, &relative).unwrap().is_file());
-        assert_eq!(read_images(&paths, &["legacy-task".into()]).unwrap()[0].3, vec![4, 5, 6]);
+        assert_eq!(
+            read_images(&paths, &["legacy-task".into()]).unwrap()[0].3,
+            vec![4, 5, 6]
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn initialize_merges_old_task_directories_by_conversation() {
-        let root = std::env::temp_dir().join(format!("image-directory-migrate-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "image-directory-migrate-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let paths = resolve_app_paths(&root);
         let tasks = vec![
             json!({
@@ -2998,19 +3434,34 @@ mod tests {
         initialize(&paths).unwrap();
 
         let connection = open(&paths).unwrap();
-        assert!(connection.query_row(
-            "SELECT type FROM sqlite_master WHERE name = 'image_outputs'", [], |row| row.get::<_, String>(0)
-        ).optional().unwrap().is_none());
-        let records = ["old-task-1", "old-task-2"].iter().flat_map(|task_id| {
-            task_image_records(&connection, task_id).unwrap().into_iter()
-                .map(move |(_, image_id, format)| ((*task_id).to_string(), image_id, format))
-        }).collect::<Vec<_>>();
+        assert!(connection
+            .query_row(
+                "SELECT type FROM sqlite_master WHERE name = 'image_outputs'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .optional()
+            .unwrap()
+            .is_none());
+        let records = ["old-task-1", "old-task-2"]
+            .iter()
+            .flat_map(|task_id| {
+                task_image_records(&connection, task_id)
+                    .unwrap()
+                    .into_iter()
+                    .map(move |(_, image_id, format)| ((*task_id).to_string(), image_id, format))
+            })
+            .collect::<Vec<_>>();
         assert_eq!(records.len(), 2);
         let file_paths = records
             .iter()
-            .map(|(task_id, image_id, format)| output_relative_path("shared-conversation", task_id, image_id, format))
+            .map(|(task_id, image_id, format)| {
+                output_relative_path("shared-conversation", task_id, image_id, format)
+            })
             .collect::<Vec<_>>();
-        assert!(file_paths.iter().all(|path| path.starts_with("shared-conversation/old-task-")));
+        assert!(file_paths
+            .iter()
+            .all(|path| path.starts_with("shared-conversation/old-task-")));
         drop(connection);
         assert_eq!(
             std::fs::read(output_root.join(&file_paths[0])).unwrap(),
@@ -3027,7 +3478,10 @@ mod tests {
 
     #[test]
     fn outputs_from_one_conversation_share_one_directory() {
-        let root = std::env::temp_dir().join(format!("image-conversation-output-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "image-conversation-output-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let paths = resolve_app_paths(&root);
         let tasks = (0..2)
             .map(|index| {
@@ -3059,12 +3513,21 @@ mod tests {
             .unwrap();
         }
         let connection = open(&paths).unwrap();
-        let file_paths = ["task-0", "task-1"].iter().flat_map(|task_id| {
-            task_image_records(&connection, task_id).unwrap().into_iter()
-                .map(move |(_, image_id, format)| output_relative_path("conversation-a", task_id, &image_id, &format))
-        }).collect::<Vec<_>>();
+        let file_paths = ["task-0", "task-1"]
+            .iter()
+            .flat_map(|task_id| {
+                task_image_records(&connection, task_id)
+                    .unwrap()
+                    .into_iter()
+                    .map(move |(_, image_id, format)| {
+                        output_relative_path("conversation-a", task_id, &image_id, &format)
+                    })
+            })
+            .collect::<Vec<_>>();
         assert_eq!(file_paths.len(), 2);
-        assert!(file_paths.iter().all(|path| path.starts_with("conversation-a/")));
+        assert!(file_paths
+            .iter()
+            .all(|path| path.starts_with("conversation-a/")));
         assert_ne!(file_paths[0], file_paths[1]);
         assert!(root.join("workspace/image-outputs/conversation-a").is_dir());
         drop(connection);
@@ -3073,7 +3536,8 @@ mod tests {
 
     #[test]
     fn task_core_fields_are_structured_without_payload_column() {
-        let root = std::env::temp_dir().join(format!("image-task-schema-test-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("image-task-schema-test-{}", uuid::Uuid::new_v4()));
         let paths = resolve_app_paths(&root);
         let task = json!({
             "id": "structured-task",
@@ -3114,10 +3578,13 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .unwrap();
-        let payload_columns: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('image_tasks') WHERE name = 'payload_json'",
-            [], |row| row.get(0)
-        ).unwrap();
+        let payload_columns: i64 = connection
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('image_tasks') WHERE name = 'payload_json'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(payload_columns, 0);
         assert_eq!(stored.0, "conversation-structured");
         assert_eq!(stored.1, "a red fox");
@@ -3127,7 +3594,10 @@ mod tests {
 
         let hydrated = detail(&paths, "structured-task").unwrap();
         assert_eq!(hydrated["request"]["prompt"], "a red fox");
-        assert_eq!(hydrated["request"]["conversationId"], "conversation-structured");
+        assert_eq!(
+            hydrated["request"]["conversationId"],
+            "conversation-structured"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -3156,7 +3626,10 @@ mod tests {
             insert_output(&paths, id, 0, "png", &[1u8, 2, 3]);
         }
         let target = root.join("images.zip");
-        assert_eq!(write_export_zip(&paths, &ids, target.to_str().unwrap()).unwrap(), 101);
+        assert_eq!(
+            write_export_zip(&paths, &ids, target.to_str().unwrap()).unwrap(),
+            101
+        );
         let archive = zip::ZipArchive::new(File::open(&target).unwrap()).unwrap();
         assert_eq!(archive.len(), 101);
         std::fs::remove_dir_all(root).unwrap();
@@ -3164,7 +3637,10 @@ mod tests {
 
     #[test]
     fn export_zip_reports_progress_and_names_batch_images() {
-        let root = std::env::temp_dir().join(format!("image-export-progress-test-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "image-export-progress-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let paths = resolve_app_paths(&root);
         let task = json!({
             "id": "named-task",
@@ -3178,7 +3654,10 @@ mod tests {
         for position in 0..2 {
             insert_output(&paths, "named-task", position, "png", &[position as u8]);
         }
-        assert_eq!(export_image_count(&paths, &["named-task".into()]).unwrap(), 2);
+        assert_eq!(
+            export_image_count(&paths, &["named-task".into()]).unwrap(),
+            2
+        );
         let target = root.join("images.zip");
         let mut progress = Vec::new();
         assert_eq!(
@@ -3258,10 +3737,18 @@ mod tests {
             inputs(&target_paths, "task-1").unwrap()["images"][0],
             "data:image/png;base64,reference"
         );
-        assert_eq!(read_images(&target_paths, &["task-1".to_string()]).unwrap()[0].3, vec![1, 2, 3]);
-        let stored = task_image_records(&open(&target_paths).unwrap(), "task-1").unwrap().remove(0);
+        assert_eq!(
+            read_images(&target_paths, &["task-1".to_string()]).unwrap()[0].3,
+            vec![1, 2, 3]
+        );
+        let stored = task_image_records(&open(&target_paths).unwrap(), "task-1")
+            .unwrap()
+            .remove(0);
         let relative = output_relative_path("target-conversation", "task-1", &stored.1, &stored.2);
-        assert!(target_root.join("workspace/image-outputs").join(relative).is_file());
+        assert!(target_root
+            .join("workspace/image-outputs")
+            .join(relative)
+            .is_file());
 
         std::fs::remove_dir_all(source_root).unwrap();
         std::fs::remove_dir_all(target_root).unwrap();

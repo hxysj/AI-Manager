@@ -186,7 +186,9 @@ impl NativeRuntime {
             .find(|trusted| trusted.peer.id == device_id)
             .cloned()
         {
-            config.revoked_peers.retain(|trusted| trusted.peer.id != device_id);
+            config
+                .revoked_peers
+                .retain(|trusted| trusted.peer.id != device_id);
             config.revoked_peers.push(removed);
             if config.revoked_peers.len() > 100 {
                 let excess = config.revoked_peers.len() - 100;
@@ -571,14 +573,7 @@ pub(super) async fn probe_known_peers(
     };
 
     for trusted in known {
-        schedule_peer_check(
-            registry,
-            paths,
-            app.clone(),
-            trusted.peer.clone(),
-            trusted,
-        )
-        .await;
+        schedule_peer_check(registry, paths, app.clone(), trusted.peer.clone(), trusted).await;
     }
 }
 
@@ -640,11 +635,7 @@ async fn mark_remote_deleted(
             .config
             .remote_deleted_peers
             .push(device_id.to_string());
-        write_json(
-            &paths.lan_share_files.config,
-            &json!(runtime.native.config),
-        )
-        .await?;
+        write_json(&paths.lan_share_files.config, &json!(runtime.native.config)).await?;
     }
     if let Some(task) = runtime.native.delivery_tasks.remove(device_id) {
         task.abort();
@@ -847,12 +838,21 @@ pub async fn connect_peer(
     let (private_key, public_key) = transport::keypair()?;
     let request_id = create_id();
     auth.receiver = peer.id.clone();
-    let response = secure_call(&client, &peer, &auth, "pair", json!({
-        "requestId": request_id, "publicKey": public_key, "peer": {
-            "id": identity.id, "name": identity.name, "ip": "", "port": own_port,
-            "supportsGroups": true
-        }
-    }), &[], None).await?;
+    let response = secure_call(
+        &client,
+        &peer,
+        &auth,
+        "pair",
+        json!({
+            "requestId": request_id, "publicKey": public_key, "peer": {
+                "id": identity.id, "name": identity.name, "ip": "", "port": own_port,
+                "supportsGroups": true
+            }
+        }),
+        &[],
+        None,
+    )
+    .await?;
     let receiver_key = string_value(response.get("publicKey"));
     let secret = transport::pair_secret(
         private_key,
@@ -996,7 +996,10 @@ async fn peer_session(
         if group.id.is_empty()
             || group.owner_device_id.is_empty()
             || (group.owner_device_id != peer.id
-                && !group.members.iter().any(|member| member.device_id == peer.id))
+                && !group
+                    .members
+                    .iter()
+                    .any(|member| member.device_id == peer.id))
         {
             return Err(ManagerError::System("群聊成员身份无效。".into()));
         }
@@ -1025,10 +1028,9 @@ async fn ensure_native_group_session(
     let mut sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions)?;
     let now = now_millis();
 
-    let owner_session = if let Some(session) = sessions
-        .iter_mut()
-        .find(|session| session.mode == "group" && session.group_id == group.id && session.device_id.is_empty())
-    {
+    let owner_session = if let Some(session) = sessions.iter_mut().find(|session| {
+        session.mode == "group" && session.group_id == group.id && session.device_id.is_empty()
+    }) {
         session.group_name = group.name.clone();
         session.message_visibility = group.message_visibility.clone();
         session.updated_at = now;
@@ -1216,9 +1218,7 @@ async fn process_secure_operation(
             .await?;
             let requests = payload["files"]
                 .as_array()
-                .filter(|files| {
-                    !files.is_empty() && files.len() <= attachments::MAX_ATTACHMENTS
-                })
+                .filter(|files| !files.is_empty() && files.len() <= attachments::MAX_ATTACHMENTS)
                 .ok_or_else(|| ManagerError::System("附件状态查询无效。".into()))?;
             attachments::cleanup_uploads(registry, paths).await?;
             let mut statuses = Vec::with_capacity(requests.len());
@@ -1458,7 +1458,9 @@ fn device_removed_response() -> Response<BoxBody> {
         .header(CONTENT_TYPE, "application/json; charset=utf-8")
         .header("x-lan-device-removed", "true")
         .header("x-lan-version", transport::VERSION)
-        .body(boxed_full(Bytes::from(serde_json::to_vec(&payload).unwrap())))
+        .body(boxed_full(Bytes::from(
+            serde_json::to_vec(&payload).unwrap(),
+        )))
         .unwrap()
 }
 
@@ -1537,29 +1539,15 @@ where
                     .iter()
                     .any(|id| id == &sender)
                 {
-                    let Some(deleted) = runtime
-                        .native
-                        .config
-                        .peers
-                        .iter()
-                        .find(|trusted| {
-                            trusted.peer.id == sender
-                                && trusted.secure
-                                && !trusted.secret.is_empty()
-                        })
-                    else {
+                    let Some(deleted) = runtime.native.config.peers.iter().find(|trusted| {
+                        trusted.peer.id == sender && trusted.secure && !trusted.secret.is_empty()
+                    }) else {
                         return Ok(api_error(StatusCode::UNAUTHORIZED, "设备尚未安全配对。"));
                     };
                     (deleted.peer.clone(), deleted.secret.clone(), true)
-                } else if let Some(revoked) = runtime
-                    .native
-                    .config
-                    .revoked_peers
-                    .iter()
-                    .find(|trusted| {
-                        trusted.peer.id == sender
-                            && trusted.secure
-                            && !trusted.secret.is_empty()
+                } else if let Some(revoked) =
+                    runtime.native.config.revoked_peers.iter().find(|trusted| {
+                        trusted.peer.id == sender && trusted.secure && !trusted.secret.is_empty()
                     })
                 {
                     (revoked.peer.clone(), revoked.secret.clone(), true)
@@ -1734,7 +1722,10 @@ pub(super) async fn deliver(
     message_id: &str,
     app: Option<&tauri::AppHandle>,
 ) -> Result<bool, ManagerError> {
-    deliver_to_peer(registry, paths, device_id, content, files, message_id, app, None).await
+    deliver_to_peer(
+        registry, paths, device_id, content, files, message_id, app, None,
+    )
+    .await
 }
 
 pub(super) async fn deliver_group(
@@ -1834,12 +1825,7 @@ pub(super) async fn sync_group_to_peer(
     Ok(true)
 }
 
-fn transfer_upload_id(
-    sender_id: &str,
-    group_id: &str,
-    message_id: &str,
-    file_id: &str,
-) -> String {
+fn transfer_upload_id(sender_id: &str, group_id: &str, message_id: &str, file_id: &str) -> String {
     create_stable_id(&format!(
         "lan-upload:{sender_id}:{group_id}:{message_id}:{file_id}"
     ))
@@ -1924,10 +1910,7 @@ async fn deliver_to_peer(
             .iter()
             .enumerate()
             .map(|(index, file)| {
-                let chunk_total = file
-                    .size
-                    .div_ceil(attachments::FILE_CHUNK_BYTES)
-                    .max(1);
+                let chunk_total = file.size.div_ceil(attachments::FILE_CHUNK_BYTES).max(1);
                 json!({
                     "fileIndex": index,
                     "uploadId": transfer_upload_id(
@@ -1971,9 +1954,9 @@ async fn deliver_to_peer(
                     let upload_id = string_value(item.get("uploadId"));
                     let expected_upload_id =
                         transfer_upload_id(&auth.sender, group_id, message_id, &file.id);
-                    let next_index = item["nextIndex"].as_u64().ok_or_else(|| {
-                        ManagerError::System("对方返回的分块检查点无效。".into())
-                    })?;
+                    let next_index = item["nextIndex"]
+                        .as_u64()
+                        .ok_or_else(|| ManagerError::System("对方返回的分块检查点无效。".into()))?;
                     if upload_id != expected_upload_id
                         || resume_by_upload
                             .insert(
@@ -1988,7 +1971,8 @@ async fn deliver_to_peer(
                     }
                 }
             }
-            Err(ManagerError::System(message)) if message == "不支持的设备快传操作。" => {}
+            Err(ManagerError::System(message)) if message == "不支持的设备快传操作。" => {
+            }
             Err(error) => return Err(error),
         }
     }
@@ -2008,8 +1992,7 @@ async fn deliver_to_peer(
         })
         .sum::<u64>();
     let started = tokio::time::Instant::now();
-    let progress =
-        std::sync::Mutex::new((confirmed_bytes, started - Duration::from_secs(1)));
+    let progress = std::sync::Mutex::new((confirmed_bytes, started - Duration::from_secs(1)));
     let report_progress = |index: usize, size: u64, complete: bool| {
         let mut progress = progress.lock().unwrap();
         progress.0 += size;
@@ -2191,10 +2174,19 @@ async fn deliver_to_peer(
         .iter()
         .map(|(_, _, identifier)| identifier)
         .collect::<Vec<_>>();
-    let result = secure_call(&client, &trusted.peer, &auth, "message", json!({
-        "messageId": message_id, "sessionId": remote_session, "content": content,
-        "attachmentIds": identifiers, "group": group
-    }), &[], None).await;
+    let result = secure_call(
+        &client,
+        &trusted.peer,
+        &auth,
+        "message",
+        json!({
+            "messageId": message_id, "sessionId": remote_session, "content": content,
+            "attachmentIds": identifiers, "group": group
+        }),
+        &[],
+        None,
+    )
+    .await;
     if let Err(error) = &result {
         if is_remote_deleted_error(error) {
             let _ = mark_remote_deleted(registry, paths, device_id).await;
@@ -3138,12 +3130,8 @@ mod tests {
                 .into_iter()
                 .find(|session| session.device_id == "native-sender")
                 .unwrap();
-            let resumed_upload_id = transfer_upload_id(
-                "native-sender",
-                "direct",
-                "batch_message",
-                &files[0].id,
-            );
+            let resumed_upload_id =
+                transfer_upload_id("native-sender", "direct", "batch_message", &files[0].id);
             let resumed_chunk = &first_content[..attachments::FILE_CHUNK_BYTES as usize];
             attachments::upload_chunk(
                 Full::new(Bytes::copy_from_slice(resumed_chunk)),
@@ -3433,7 +3421,13 @@ mod tests {
             )
             .await
             .unwrap();
-            assert!(registry.inner.lock().await.native.authenticate(&peer.id).is_none());
+            assert!(registry
+                .inner
+                .lock()
+                .await
+                .native
+                .authenticate(&peer.id)
+                .is_none());
             assert_eq!(
                 registry.inner.lock().await.native.snapshot()["peers"]
                     .as_array()
@@ -3464,7 +3458,13 @@ mod tests {
             .await
             .unwrap();
             assert!(ensure_send_allowed(&registry, &peer.id).await.is_ok());
-            assert!(registry.inner.lock().await.native.authenticate(&peer.id).is_some());
+            assert!(registry
+                .inner
+                .lock()
+                .await
+                .native
+                .authenticate(&peer.id)
+                .is_some());
             tokio::fs::remove_dir_all(root).await.unwrap();
         });
     }
@@ -3545,9 +3545,8 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let registry = LanShareServerRegistry::new();
             registry.inner.lock().await.native.config.id = "native-local".into();
-            let paths = crate::core::paths::resolve_app_paths(
-                &std::env::temp_dir().join(create_id()),
-            );
+            let paths =
+                crate::core::paths::resolve_app_paths(&std::env::temp_dir().join(create_id()));
             let info = process_secure_operation(
                 &registry,
                 &paths,
@@ -3595,22 +3594,23 @@ mod tests {
                     active: true,
                 }],
             };
-            let session = peer_session(
-                &registry,
-                &paths,
-                &owner,
-                "",
-                Some(&json!(group)),
-            )
-            .await
-            .unwrap();
+            let session = peer_session(&registry, &paths, &owner, "", Some(&json!(group)))
+                .await
+                .unwrap();
             assert_eq!(session.mode, "group");
             assert_eq!(session.group_id, "group-1");
             let groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups).unwrap();
             assert_eq!(groups.len(), 1);
             assert_eq!(groups[0].members.len(), 1);
-            let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
-            assert_eq!(sessions.iter().filter(|item| item.group_id == "group-1").count(), 2);
+            let sessions: Vec<LanShareSession> =
+                read_array(&paths.lan_share_files.sessions).unwrap();
+            assert_eq!(
+                sessions
+                    .iter()
+                    .filter(|item| item.group_id == "group-1")
+                    .count(),
+                2
+            );
             tokio::fs::remove_dir_all(root).await.unwrap();
         });
     }

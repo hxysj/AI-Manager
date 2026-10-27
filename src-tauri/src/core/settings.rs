@@ -185,7 +185,10 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
                 model: string_value(translation.get("model")),
                 target_language: non_empty_string(translation.get("targetLanguage"), "简体中文"),
                 shortcut: non_empty_string(translation.get("shortcut"), "Ctrl+Alt+T"),
-                clipboard_shortcut: non_empty_string(translation.get("clipboardShortcut"), "Ctrl+Alt+Shift+T"),
+                clipboard_shortcut: non_empty_string(
+                    translation.get("clipboardShortcut"),
+                    "Ctrl+Alt+Shift+T",
+                ),
             },
         },
         restart_required: false,
@@ -257,12 +260,21 @@ mod floating_tools_tests {
         let path = PathBuf::from("settings.json");
         let defaults = normalize_app_settings(path.clone(), None);
         assert!(defaults.system.log_enabled);
-        let settings = normalize_app_settings(path.clone(), Some(json!({"system": {"logEnabled": false}})));
+        let settings =
+            normalize_app_settings(path.clone(), Some(json!({"system": {"logEnabled": false}})));
         let restored = normalize_app_settings(path, Some(serialize_app_settings(&settings)));
         assert!(!restored.system.log_enabled);
         let mut legacy = serialize_app_settings(&defaults);
-        legacy["system"].as_object_mut().unwrap().remove("logEnabled");
-        assert!(serde_json::from_value::<AppSettings>(legacy).unwrap().system.log_enabled);
+        legacy["system"]
+            .as_object_mut()
+            .unwrap()
+            .remove("logEnabled");
+        assert!(
+            serde_json::from_value::<AppSettings>(legacy)
+                .unwrap()
+                .system
+                .log_enabled
+        );
     }
 
     #[test]

@@ -10,7 +10,9 @@ mod file_history;
 mod operations;
 mod worktrees;
 pub use file_history::{list_file_history, list_worktree_files};
-pub use operations::{execute_operation, get_branch_diff, get_status, get_worktree_diff, preview_revision};
+pub use operations::{
+    execute_operation, get_branch_diff, get_status, get_worktree_diff, preview_revision,
+};
 
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -27,9 +29,11 @@ pub async fn scan_branches(
     let mut branch_scan = get_local_branch_scan(&string_value(project.get("projectPath"))).await?;
     if let Some(branches) = branch_scan["branches"].as_array_mut() {
         for branch in branches {
-            branch["worktreePath"] = project["worktrees"].as_array().and_then(|trees| {
-                trees.iter().find(|tree| tree["branch"] == branch["name"])
-            }).map(|tree| tree["path"].clone()).unwrap_or_else(|| json!(""));
+            branch["worktreePath"] = project["worktrees"]
+                .as_array()
+                .and_then(|trees| trees.iter().find(|tree| tree["branch"] == branch["name"]))
+                .map(|tree| tree["path"].clone())
+                .unwrap_or_else(|| json!(""));
         }
     }
     let archives = list_archives(paths, repos, json!({ "repoId": repo_id })).await?;
@@ -100,12 +104,13 @@ pub async fn list_commits(
 
             if let Some(cached_commit) = commit_check_cache_map.get(&cache_key) {
                 let mut commit = commit.clone();
-                commit["checkStatus"] =
-                    json!(match string_value(cached_commit.get("matchedBy")).as_str() {
-                        "hash" => "exists-hash",
-                        "similar-content" => "exists-content",
-                        _ => "exists-subject",
-                    });
+                commit["checkStatus"] = json!(match string_value(cached_commit.get("matchedBy"))
+                    .as_str()
+                {
+                    "hash" => "exists-hash",
+                    "similar-content" => "exists-content",
+                    _ => "exists-subject",
+                });
                 commit["checkTargetBranch"] = json!(check_branch_name);
                 return commit;
             }
@@ -323,9 +328,10 @@ pub async fn archive_branch(
     if !branch_exists(&project_path, &branch_name).await? {
         return Err(ManagerError::System("本地分支不存在".to_string()));
     }
-    if let Some(tree) = project["worktrees"].as_array().and_then(|trees| {
-        trees.iter().find(|tree| tree["branch"] == branch_name)
-    }) {
+    if let Some(tree) = project["worktrees"]
+        .as_array()
+        .and_then(|trees| trees.iter().find(|tree| tree["branch"] == branch_name))
+    {
         return Err(ManagerError::System(format!(
             "此分支正在工作树 {} 中使用，请先在该工作树切换分支。",
             string_value(tree.get("path"))
@@ -1784,7 +1790,10 @@ async fn run_git(args: &[&str], cwd: &str) -> Result<String, ManagerError> {
 }
 
 async fn run_git_raw(args: &[&str], cwd: &str) -> Result<String, ManagerError> {
-    let args = args.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+    let args = args
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
     let output = run_git_output(&args, cwd).await?;
 
     if !output.status.success() {

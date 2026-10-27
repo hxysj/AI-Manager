@@ -1806,8 +1806,11 @@ fn scan_repository_archive(
             format!("{}/SKILL.md", skill_path)
         };
 
-        let id = repository["skills"].as_array().and_then(|items| items.iter().find(|item| item["skillPath"] == skill_path))
-            .and_then(|item| item["id"].as_str()).map(str::to_string)
+        let id = repository["skills"]
+            .as_array()
+            .and_then(|items| items.iter().find(|item| item["skillPath"] == skill_path))
+            .and_then(|item| item["id"].as_str())
+            .map(str::to_string)
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         skills.push(json!({
           "id": id,
@@ -3977,10 +3980,8 @@ mod tests {
     #[test]
     fn delete_skill_moves_source_directory_to_trash() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!(
-                "skill_delete_test_{}",
-                super::create_id()
-            ));
+            let root =
+                std::env::temp_dir().join(format!("skill_delete_test_{}", super::create_id()));
             let paths = resolve_app_paths(&root);
             let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
             let mut state = json!({
@@ -4034,10 +4035,8 @@ mod tests {
     #[test]
     fn expired_skill_trash_items_are_removed_after_ten_days() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!(
-                "skill_trash_expired_test_{}",
-                super::create_id()
-            ));
+            let root = std::env::temp_dir()
+                .join(format!("skill_trash_expired_test_{}", super::create_id()));
             let paths = resolve_app_paths(&root);
             let trash_root = skill_trash_root(&paths);
             let expired_path = trash_root.join("expired-skill");
@@ -4071,10 +4070,8 @@ mod tests {
     #[test]
     fn skill_group_persists_unique_skill_ids() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!(
-                "skill_group_save_test_{}",
-                super::create_id()
-            ));
+            let root =
+                std::env::temp_dir().join(format!("skill_group_save_test_{}", super::create_id()));
             let paths = resolve_app_paths(&root);
             skill_store::write_skills(
                 &paths,
@@ -4115,10 +4112,8 @@ mod tests {
     #[test]
     fn moving_skill_to_group_removes_it_from_other_groups() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!(
-                "skill_group_move_test_{}",
-                super::create_id()
-            ));
+            let root =
+                std::env::temp_dir().join(format!("skill_group_move_test_{}", super::create_id()));
             let paths = resolve_app_paths(&root);
             skill_store::write_skills(
                 &paths,
@@ -4237,10 +4232,8 @@ mod tests {
     #[test]
     fn empty_skill_group_can_be_renamed_without_changing_id() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!(
-                "skill_group_rename_test_{}",
-                super::create_id()
-            ));
+            let root = std::env::temp_dir()
+                .join(format!("skill_group_rename_test_{}", super::create_id()));
             let paths = resolve_app_paths(&root);
             skill_store::write_skills(
                 &paths,
@@ -4304,10 +4297,8 @@ mod tests {
     #[test]
     fn batch_install_uses_selected_cli_targets() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!(
-                "skill_batch_target_test_{}",
-                super::create_id()
-            ));
+            let root = std::env::temp_dir()
+                .join(format!("skill_batch_target_test_{}", super::create_id()));
             let paths = resolve_app_paths(&root);
             let skill_root = Path::new(&paths.skills_dir).join("demo-skill");
             let target_a = root.join("target-a");
@@ -4552,10 +4543,8 @@ mod tests {
 
     #[test]
     fn archive_content_dir_removes_single_archive_root_prefix() {
-        let root = std::env::temp_dir().join(format!(
-            "skill_archive_root_test_{}",
-            super::create_id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("skill_archive_root_test_{}", super::create_id()));
         let archive_root = root.join("skills-main");
 
         std::fs::create_dir_all(&archive_root).unwrap();
@@ -4569,10 +4558,8 @@ mod tests {
 
     #[test]
     fn archive_skill_source_dir_rejects_path_traversal() {
-        let root = std::env::temp_dir().join(format!(
-            "skill_archive_path_test_{}",
-            super::create_id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("skill_archive_path_test_{}", super::create_id()));
 
         std::fs::create_dir_all(&root).unwrap();
 
@@ -4605,10 +4592,8 @@ mod tests {
 
     #[test]
     fn scan_repository_archive_reads_skill_from_local_archive_content() {
-        let root = std::env::temp_dir().join(format!(
-            "skill_archive_scan_test_{}",
-            super::create_id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("skill_archive_scan_test_{}", super::create_id()));
         let content_dir = root.join("skills-main");
         let skill_dir = content_dir.join("skills").join("vue-debug-guides");
 
@@ -4663,10 +4648,7 @@ mod tests {
     }
     #[test]
     fn skill_content_is_read_on_demand_from_source_and_repository_zip() {
-        let root = std::env::temp_dir().join(format!(
-            "skill-lazy-content-{}",
-            super::create_id()
-        ));
+        let root = std::env::temp_dir().join(format!("skill-lazy-content-{}", super::create_id()));
         let paths = resolve_app_paths(&root);
         let source = Path::new(&paths.skills_dir).join("demo");
         write_test_skill(&source, "demo");
@@ -4689,8 +4671,9 @@ mod tests {
             "新正文"
         );
         let repository = json!({"id":"repo","source":"https://github.com/owner/repo","owner":"owner","repository":"repo","branch":"main"});
-        let mut cached_repository=repository.clone();
-        cached_repository["skills"]=json!([{"name":"demo","skillPath":"skills/demo","content":"不应缓存"}]);
+        let mut cached_repository = repository.clone();
+        cached_repository["skills"] =
+            json!([{"name":"demo","skillPath":"skills/demo","content":"不应缓存"}]);
         skill_store::write_repositories(&paths, &[cached_repository]).unwrap();
         let cache_path = repository_archive_cache_path(&paths, &repository, "main");
         std::fs::create_dir_all(cache_path.parent().unwrap()).unwrap();

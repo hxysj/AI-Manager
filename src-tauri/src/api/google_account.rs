@@ -216,13 +216,19 @@ fn save_login(paths: &AppPaths, provider: &Value, tokens: &Value) -> Result<(), 
     let id = provider["id"].as_str().unwrap();
     let mut connection = database::open(paths)?;
     let transaction = connection.transaction()?;
-    provider_store::upsert_provider(&transaction,provider)?;
-    let oauth=json!(runtime_provider::encrypt_provider_key(&tokens.to_string())?);
-    provider_store::set_key(&transaction,&format!("google-oauth:{id}"),Some(&oauth))?;
-    let has_key=transaction.query_row("SELECT EXISTS(SELECT 1 FROM provider_keys WHERE provider_id=?1)",[id],|row|row.get::<_,bool>(0))?;
+    provider_store::upsert_provider(&transaction, provider)?;
+    let oauth = json!(runtime_provider::encrypt_provider_key(&tokens.to_string())?);
+    provider_store::set_key(&transaction, &format!("google-oauth:{id}"), Some(&oauth))?;
+    let has_key = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM provider_keys WHERE provider_id=?1)",
+        [id],
+        |row| row.get::<_, bool>(0),
+    )?;
     if !has_key {
-        let token=json!(runtime_provider::encrypt_provider_key(&uuid::Uuid::new_v4().to_string())?);
-        provider_store::set_key(&transaction,id,Some(&token))?;
+        let token = json!(runtime_provider::encrypt_provider_key(
+            &uuid::Uuid::new_v4().to_string()
+        )?);
+        provider_store::set_key(&transaction, id, Some(&token))?;
     }
     transaction.commit()?;
     Ok(())
@@ -514,7 +520,7 @@ pub(crate) fn update_metadata(
 }
 
 fn write_provider(paths: &AppPaths, provider: &Value) -> Result<(), ManagerError> {
-    provider_store::update_provider(paths,provider)
+    provider_store::update_provider(paths, provider)
 }
 
 async fn token_json(response: reqwest::Response) -> Result<Value, ManagerError> {
@@ -592,14 +598,16 @@ mod tests {
     #[test]
     fn disabled_google_account_settings_remain_editable_without_reactivation() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!("google-disabled-test-{}", uuid::Uuid::new_v4()));
+            let root =
+                std::env::temp_dir().join(format!("google-disabled-test-{}", uuid::Uuid::new_v4()));
             let paths = crate::core::paths::resolve_app_paths(&root);
             let provider = json!({
                 "id": "disabled-google", "type": "google-account", "cli": "codex",
                 "enabled": false, "runtimeConfig": { "mainModel": "old-model" },
                 "google": { "email": "test@example.com", "models": [{ "id": "new-model" }] }
             });
-            let tokens = json!({ "access_token": "private-access", "refresh_token": "private-refresh" });
+            let tokens =
+                json!({ "access_token": "private-access", "refresh_token": "private-refresh" });
             save_login(&paths, &provider, &tokens).unwrap();
             let original_keys = provider_store::read_keys(&paths).unwrap();
             let original_profiles = provider_store::read_profiles(&paths).unwrap();
@@ -610,7 +618,10 @@ mod tests {
             assert_eq!(saved["runtimeConfig"]["mainModel"], "new-model");
             assert_eq!(saved["google"]["proxy"], "http://127.0.0.1:7890");
             assert_eq!(find_account(&paths, "disabled-google").unwrap(), saved);
-            assert_eq!(provider_store::read_profiles(&paths).unwrap(), original_profiles);
+            assert_eq!(
+                provider_store::read_profiles(&paths).unwrap(),
+                original_profiles
+            );
             assert_eq!(provider_store::read_keys(&paths).unwrap(), original_keys);
             std::fs::remove_dir_all(root).unwrap();
         });

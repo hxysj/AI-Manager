@@ -282,13 +282,14 @@ pub async fn delete_web_conversations(
             deleted_ids.push(record_id);
             continue;
         }
-        let (client, auth) = match image_account_session(paths, cli_targets, account_id, "web").await {
-            Ok(value) => value,
-            Err(error) => {
-                failures.push(json!({ "id": record_id, "message": error.to_string() }));
-                continue;
-            }
-        };
+        let (client, auth) =
+            match image_account_session(paths, cli_targets, account_id, "web").await {
+                Ok(value) => value,
+                Err(error) => {
+                    failures.push(json!({ "id": record_id, "message": error.to_string() }));
+                    continue;
+                }
+            };
         let mut context = WebContext::new();
         context.account_id = account_id.to_string();
         let upstream_id = record["conversationId"].as_str().unwrap_or("");
@@ -370,7 +371,9 @@ async fn fetch_image_models(
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
-        if (is_image_model(&slug) || slug.starts_with("gpt-5") || slug.starts_with("gpt5")) && ids.insert(slug.clone()) {
+        if (is_image_model(&slug) || slug.starts_with("gpt-5") || slug.starts_with("gpt5"))
+            && ids.insert(slug.clone())
+        {
             data.push(json!({ "id": slug, "object": "model", "owned_by": "openai" }));
         }
     }
@@ -450,10 +453,22 @@ pub async fn submit(
     let mut request: ImageRequest = serde_json::from_value(payload)?;
     request.model = request.model.trim().to_string();
     request.validate()?;
-    let account = accounts(paths)?.as_array().unwrap().iter().find(|item| item["id"] == request.account_id && item["disabled"] != true && item["requiresReauth"] != true).cloned().ok_or_else(|| failure("所选官方账号不可用"))?;
+    let account = accounts(paths)?
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["id"] == request.account_id
+                && item["disabled"] != true
+                && item["requiresReauth"] != true
+        })
+        .cloned()
+        .ok_or_else(|| failure("所选官方账号不可用"))?;
     let count = request.n;
     request.n = 1;
-    if request.round_id.is_empty() { request.round_id = Uuid::new_v4().to_string(); }
+    if request.round_id.is_empty() {
+        request.round_id = Uuid::new_v4().to_string();
+    }
     let mut metadata = serde_json::to_value(&request)?;
     metadata.as_object_mut().unwrap().remove("images");
     metadata.as_object_mut().unwrap().remove("mask");
@@ -485,8 +500,22 @@ pub async fn submit_batch(
     if !(1..=MAX_BATCH_CONCURRENCY).contains(&batch.concurrency) {
         return Err(failure("批量并发数需在 1 到 10 之间"));
     }
-    let account = accounts(paths)?.as_array().unwrap().iter().find(|item| item["id"] == batch.account_id && item["disabled"] != true && item["requiresReauth"] != true).cloned().ok_or_else(|| failure("所选官方账号不可用"))?;
-    let round_id = if batch.round_id.is_empty() { Uuid::new_v4().to_string() } else { batch.round_id.clone() };
+    let account = accounts(paths)?
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["id"] == batch.account_id
+                && item["disabled"] != true
+                && item["requiresReauth"] != true
+        })
+        .cloned()
+        .ok_or_else(|| failure("所选官方账号不可用"))?;
+    let round_id = if batch.round_id.is_empty() {
+        Uuid::new_v4().to_string()
+    } else {
+        batch.round_id.clone()
+    };
     let batch_key = format!("{}:{}", batch.conversation_id, round_id);
     let input_id = Uuid::new_v4().to_string();
     let mut tasks = Vec::with_capacity(batch.items.len());
@@ -529,7 +558,12 @@ pub async fn submit_batch(
     Ok(json!({ "items": tasks, "roundId": round_id }))
 }
 
-pub async fn resume(app: &tauri::AppHandle, paths: &AppPaths, cli_targets: &Value, payload: Value) -> Result<Value, ManagerError> {
+pub async fn resume(
+    app: &tauri::AppHandle,
+    paths: &AppPaths,
+    cli_targets: &Value,
+    payload: Value,
+) -> Result<Value, ManagerError> {
     let requested = payload["concurrency"].as_u64().map(|value| value as u8);
     if let Some(concurrency) = requested {
         if !(1..=MAX_BATCH_CONCURRENCY).contains(&concurrency) {
@@ -562,13 +596,21 @@ pub async fn resume(app: &tauri::AppHandle, paths: &AppPaths, cli_targets: &Valu
 fn default_slots() -> Arc<tokio::sync::Semaphore> {
     static SLOTS: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> = std::sync::OnceLock::new();
     SLOTS
-        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(DEFAULT_BATCH_CONCURRENCY as usize)))
+        .get_or_init(|| {
+            Arc::new(tokio::sync::Semaphore::new(
+                DEFAULT_BATCH_CONCURRENCY as usize,
+            ))
+        })
         .clone()
 }
 
 fn batch_slots(key: &str, concurrency: u8) -> Arc<tokio::sync::Semaphore> {
-    static SLOTS: std::sync::OnceLock<Mutex<HashMap<String, (u8, Arc<tokio::sync::Semaphore>)>>> = std::sync::OnceLock::new();
-    let mut entries = SLOTS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+    static SLOTS: std::sync::OnceLock<Mutex<HashMap<String, (u8, Arc<tokio::sync::Semaphore>)>>> =
+        std::sync::OnceLock::new();
+    let mut entries = SLOTS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
     if let Some((current, slots)) = entries.get(key) {
         if *current == concurrency {
             return slots.clone();
@@ -582,7 +624,10 @@ fn batch_slots(key: &str, concurrency: u8) -> Arc<tokio::sync::Semaphore> {
 fn web_conversation_lock(key: &str) -> Arc<tokio::sync::Mutex<()>> {
     static LOCKS: std::sync::OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> =
         std::sync::OnceLock::new();
-    let mut locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap();
+    let mut locks = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
     locks
         .entry(key.to_string())
         .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
@@ -615,7 +660,9 @@ fn task_updates() -> &'static TaskUpdates {
 pub fn notify_deleted_tasks(ids: &[String]) {
     for id in ids {
         task_updates().storage_errors.lock().unwrap().remove(id);
-        let _ = task_updates().sender.send(json!({ "id": id, "deleted": true }));
+        let _ = task_updates()
+            .sender
+            .send(json!({ "id": id, "deleted": true }));
     }
 }
 
@@ -642,24 +689,38 @@ pub fn publish_task(app: &tauri::AppHandle, task: &Value) {
 
 fn publish_storage_error(app: &tauri::AppHandle, task: &Value, error: &ManagerError) {
     let update = json!({ "id": task["id"], "revision": task["revision"].as_u64().unwrap_or(0), "storageError": error.to_string() });
-    task_updates().storage_errors.lock().unwrap().insert(task["id"].as_str().unwrap().to_string(), update.clone());
+    task_updates()
+        .storage_errors
+        .lock()
+        .unwrap()
+        .insert(task["id"].as_str().unwrap().to_string(), update.clone());
     let _ = task_updates().sender.send(update);
-    let _ = app.emit("images:storage-error", json!({ "taskId": task["id"], "message": error.to_string() }));
+    let _ = app.emit(
+        "images:storage-error",
+        json!({ "taskId": task["id"], "message": error.to_string() }),
+    );
 }
 
 // 一个批次只保留一个等待请求；注册后先读快照，之后等待后端通知，避免前端轮询和事件丢失挂起。
 pub async fn wait_tasks(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
     let ids = serde_json::from_value::<Vec<String>>(payload["ids"].clone())?;
-    if ids.is_empty() || ids.len() > 10000 { return Err(failure("请选取 1–10000 个任务")); }
+    if ids.is_empty() || ids.len() > 10000 {
+        return Err(failure("请选取 1–10000 个任务"));
+    }
     let mut receiver = task_updates().sender.subscribe();
     let mut pending: HashSet<String> = ids.iter().cloned().collect();
     let mut results = HashMap::new();
     loop {
         let paths = paths.clone();
         let pending_ids = pending.iter().cloned().collect::<Vec<_>>();
-        let states = tauri::async_runtime::spawn_blocking(move || image_store::task_states(&paths, &pending_ids))
-            .await.map_err(|error| failure(&error.to_string()))??;
-        if states.len() != pending.len() { return Err(failure("等待的图片任务已被删除")); }
+        let states = tauri::async_runtime::spawn_blocking(move || {
+            image_store::task_states(&paths, &pending_ids)
+        })
+        .await
+        .map_err(|error| failure(&error.to_string()))??;
+        if states.len() != pending.len() {
+            return Err(failure("等待的图片任务已被删除"));
+        }
         for state in states {
             let id = state["id"].as_str().unwrap().to_string();
             if matches!(state["status"].as_str(), Some("queued" | "processing")) {
@@ -681,10 +742,20 @@ pub async fn wait_tasks(paths: &AppPaths, payload: Value) -> Result<Value, Manag
                 Err(error) => return Err(failure(&error.to_string())),
             };
             let id = update["id"].as_str().unwrap();
-            if !pending.contains(id) { continue; }
-            if update["deleted"] == true { return Err(failure("等待的图片任务已被删除")); }
-            if update["revision"].as_u64().unwrap_or(0) < results[id]["revision"].as_u64().unwrap_or(0) { continue; }
-            if let Some(error) = update["storageError"].as_str() { return Err(failure(error)); }
+            if !pending.contains(id) {
+                continue;
+            }
+            if update["deleted"] == true {
+                return Err(failure("等待的图片任务已被删除"));
+            }
+            if update["revision"].as_u64().unwrap_or(0)
+                < results[id]["revision"].as_u64().unwrap_or(0)
+            {
+                continue;
+            }
+            if let Some(error) = update["storageError"].as_str() {
+                return Err(failure(error));
+            }
             pending.remove(id);
             results.insert(id.to_string(), update);
         }
@@ -701,7 +772,11 @@ fn spawn_task(
     task: Value,
     slots: Arc<tokio::sync::Semaphore>,
 ) {
-    task_updates().storage_errors.lock().unwrap().remove(task["id"].as_str().unwrap());
+    task_updates()
+        .storage_errors
+        .lock()
+        .unwrap()
+        .remove(task["id"].as_str().unwrap());
     // 每个批次共享自己的并发信号量，普通任务使用默认并发限制。
     let app = app.clone();
     let paths = paths.clone();
@@ -710,7 +785,11 @@ fn spawn_task(
         let _permit = slots.acquire().await.unwrap();
         // GPT Web 会话按官方账号复用，本地历史分组不决定是否新建上游会话。
         let _web_conversation_guard = if task["request"]["generationMode"] == "web" {
-            Some(web_conversation_lock(task["request"]["accountId"].as_str().unwrap_or("")).lock_owned().await)
+            Some(
+                web_conversation_lock(task["request"]["accountId"].as_str().unwrap_or(""))
+                    .lock_owned()
+                    .await,
+            )
         } else {
             None
         };
@@ -730,19 +809,37 @@ fn spawn_task(
             request.images = serde_json::from_value(inputs["images"].clone())?;
             request.mask = inputs["mask"].as_str().unwrap_or("").to_string();
             // 排队时不持有访问凭证；轮到执行再刷新账号会话。
-            let (client, auth) = image_account_session(&paths, &cli_targets, &request.account_id, &request.generation_mode).await?;
+            let (client, auth) = image_account_session(
+                &paths,
+                &cli_targets,
+                &request.account_id,
+                &request.generation_mode,
+            )
+            .await?;
             let mut context = WebContext::new();
-            context.task = Some((paths.clone(), id.clone(), task["revision"].as_u64().unwrap_or(0)));
+            context.task = Some((
+                paths.clone(),
+                id.clone(),
+                task["revision"].as_u64().unwrap_or(0),
+            ));
             context.account_id = request.account_id.clone();
             context.local_conversation_id = request.conversation_id.clone();
-            if request.generation_mode == "web"
-                && task["recovery"]["conversationId"].is_string()
-            {
+            if request.generation_mode == "web" && task["recovery"]["conversationId"].is_string() {
                 let recovery = &task["recovery"];
-                context.input_message_id = recovery["inputMessageId"].as_str().unwrap_or("").to_string();
-                context.device_id = recovery["deviceId"].as_str().unwrap_or(&context.device_id).to_string();
-                context.session_id = recovery["sessionId"].as_str().unwrap_or(&context.session_id).to_string();
-                let recovery_conversation_id = recovery["conversationId"].as_str().unwrap().to_string();
+                context.input_message_id = recovery["inputMessageId"]
+                    .as_str()
+                    .unwrap_or("")
+                    .to_string();
+                context.device_id = recovery["deviceId"]
+                    .as_str()
+                    .unwrap_or(&context.device_id)
+                    .to_string();
+                context.session_id = recovery["sessionId"]
+                    .as_str()
+                    .unwrap_or(&context.session_id)
+                    .to_string();
+                let recovery_conversation_id =
+                    recovery["conversationId"].as_str().unwrap().to_string();
                 // 恢复先以本地 GPT 会话记录为准，用户删除记录后不能再从任务快照复用旧会话。
                 let saved = image_store::find_web_conversation(
                     &paths,
@@ -751,38 +848,69 @@ fn spawn_task(
                 )?;
                 // 导入和旧任务可能尚无独立会话记录，仍应优先查询其原上游会话。
                 let upstream = if task["webSessionDeleted"].as_bool().unwrap_or(false)
-                    || saved.as_ref().is_some_and(|record| record["deleted"] == true)
+                    || saved
+                        .as_ref()
+                        .is_some_and(|record| record["deleted"] == true)
                 {
                     None
                 } else {
-                    web_read_conversation(&client, &auth, &context, &recovery_conversation_id).await?
+                    web_read_conversation(&client, &auth, &context, &recovery_conversation_id)
+                        .await?
                 };
                 if let Some(upstream) = upstream {
                     context.conversation_id = recovery_conversation_id.clone();
-                    context.parent_message_id = recovery["parentMessageId"].as_str().unwrap_or("").to_string();
+                    context.parent_message_id = recovery["parentMessageId"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
                     let mut ids = WebAssetIds {
                         conversation_id: recovery_conversation_id.clone(),
-                        parent_message_id: upstream["current_node"].as_str().unwrap_or(&context.parent_message_id).to_string(),
-                        file_ids: serde_json::from_value(recovery["fileIds"].clone()).unwrap_or_default(),
-                        sediment_ids: serde_json::from_value(recovery["sedimentIds"].clone()).unwrap_or_default(),
+                        parent_message_id: upstream["current_node"]
+                            .as_str()
+                            .unwrap_or(&context.parent_message_id)
+                            .to_string(),
+                        file_ids: serde_json::from_value(recovery["fileIds"].clone())
+                            .unwrap_or_default(),
+                        sediment_ids: serde_json::from_value(recovery["sedimentIds"].clone())
+                            .unwrap_or_default(),
                         ..Default::default()
                     };
-                    let input_ids: HashSet<String> = serde_json::from_value(recovery["inputIds"].clone())?;
+                    let input_ids: HashSet<String> =
+                        serde_json::from_value(recovery["inputIds"].clone())?;
                     // 恢复先确认上游会话仍存在，存在时只继续查询原会话。
-                    let (_, images, error) = web_finish_assets(&client, &auth, &context, &input_ids, &mut ids).await?;
-                    return Ok(GenerationResult { images, error, usage: json!({"web_conversations": [ids.conversation_id], "resumed": true}), endpoint: "/backend-api/conversation".into(), request_id: id.clone() });
+                    let (_, images, error) =
+                        web_finish_assets(&client, &auth, &context, &input_ids, &mut ids).await?;
+                    return Ok(GenerationResult {
+                        images,
+                        error,
+                        usage: json!({"web_conversations": [ids.conversation_id], "resumed": true}),
+                        endpoint: "/backend-api/conversation".into(),
+                        request_id: id.clone(),
+                    });
                 }
                 // 只记录已确认不存在的会话，网络或权限异常会直接保留原任务恢复信息。
-                image_store::mark_web_conversation_deleted_by_upstream(&paths, &request.account_id, &recovery_conversation_id)?;
+                image_store::mark_web_conversation_deleted_by_upstream(
+                    &paths,
+                    &request.account_id,
+                    &recovery_conversation_id,
+                )?;
                 task["webSessionDeleted"] = json!(true);
                 task["recovery"] = Value::Null;
             }
             if request.generation_mode == "web" {
                 execute_web(&client, &auth, &request, &id, &mut context).await
             } else {
-                execute(&client, &auth, &request, &id, "https://chatgpt.com/backend-api/codex").await
+                execute(
+                    &client,
+                    &auth,
+                    &request,
+                    &id,
+                    "https://chatgpt.com/backend-api/codex",
+                )
+                .await
             }
-        }.await;
+        }
+        .await;
         let images = match result {
             Ok(result) => {
                 task["endpoint"] = json!(result.endpoint);
@@ -797,7 +925,9 @@ fn spawn_task(
                 })).collect::<Vec<_>>());
                 task["status"] = json!(if result.images.is_empty() {
                     "failed"
-                } else if !task["error"].is_null() || result.images.len() < task["request"]["n"].as_u64().unwrap_or(1) as usize {
+                } else if !task["error"].is_null()
+                    || result.images.len() < task["request"]["n"].as_u64().unwrap_or(1) as usize
+                {
                     "partial"
                 } else {
                     "completed"
@@ -816,7 +946,7 @@ fn spawn_task(
         task["finishedAt"] = json!(chrono::Utc::now().timestamp_millis());
         match image_store::finish(&paths, &task, &images) {
             Ok(Some(saved)) => publish_task(&app, &saved),
-            Ok(None) => {},
+            Ok(None) => {}
             Err(error) => {
                 // 保存失败不能声称生成成功；重启仍会把未写回任务标成中断。
                 publish_storage_error(&app, &task, &error);
@@ -962,12 +1092,18 @@ async fn execute_web(
     let references = web_upload_references(client, auth, &context, request).await?;
     web_bootstrap(client, auth, context).await?;
     if let Some((paths, _, _)) = &context.task {
-        while let Some(saved) = image_store::find_web_conversation(paths, &request.account_id, "")? {
+        while let Some(saved) = image_store::find_web_conversation(paths, &request.account_id, "")?
+        {
             let upstream_id = saved["conversationId"].as_str().unwrap_or("").to_string();
-            if let Some(upstream) = web_read_conversation(client, auth, context, &upstream_id).await? {
+            if let Some(upstream) =
+                web_read_conversation(client, auth, context, &upstream_id).await?
+            {
                 context.conversation_id = upstream_id;
-                context.parent_message_id = upstream["current_node"].as_str()
-                    .or_else(|| saved["parentMessageId"].as_str()).unwrap_or("").to_string();
+                context.parent_message_id = upstream["current_node"]
+                    .as_str()
+                    .or_else(|| saved["parentMessageId"].as_str())
+                    .unwrap_or("")
+                    .to_string();
                 // 保存旧轮次的资源排除范围，后续查询整段会话时只收集本轮图片。
                 let mut previous = WebAssetIds::default();
                 web_collect_assets(&upstream, &HashSet::new(), &mut previous);
@@ -1236,7 +1372,13 @@ async fn web_execute_once(
     result
 }
 
-async fn web_finish_assets(client: &reqwest::Client, auth: &Value, context: &WebContext, input_ids: &HashSet<String>, ids: &mut WebAssetIds) -> Result<(String, Vec<StoredImage>, Value), ManagerError> {
+async fn web_finish_assets(
+    client: &reqwest::Client,
+    auth: &Value,
+    context: &WebContext,
+    input_ids: &HashSet<String>,
+    ids: &mut WebAssetIds,
+) -> Result<(String, Vec<StoredImage>, Value), ManagerError> {
     web_poll_assets(client, auth, context, input_ids, ids).await?;
 
     let mut images = Vec::new();
@@ -1293,7 +1435,9 @@ async fn web_read_conversation(
         .await
         .map_err(|error| failure(&format!("Web 会话存在性检查失败：{error}")))?;
     if response.status().is_success() {
-        let payload = response.json::<Value>().await
+        let payload = response
+            .json::<Value>()
+            .await
             .map_err(|error| failure(&format!("Web 会话响应解析失败：{error}")))?;
         return Ok((payload["is_visible"] != false).then_some(payload));
     }
@@ -1417,15 +1561,17 @@ async fn read_web_sse_with_checkpoint(
             continue;
         }
         pending.extend_from_slice(&chunk);
-        while let Some((index, separator_len)) = pending.iter().enumerate().find_map(|(index, _)| {
-            if pending[index..].starts_with(b"\r\n\r\n") {
-                Some((index, 4))
-            } else if pending[index..].starts_with(b"\n\n") {
-                Some((index, 2))
-            } else {
-                None
-            }
-        }) {
+        while let Some((index, separator_len)) =
+            pending.iter().enumerate().find_map(|(index, _)| {
+                if pending[index..].starts_with(b"\r\n\r\n") {
+                    Some((index, 4))
+                } else if pending[index..].starts_with(b"\n\n") {
+                    Some((index, 2))
+                } else {
+                    None
+                }
+            })
+        {
             let frame = pending.drain(..index + separator_len).collect::<Vec<_>>();
             let Some(conversation_id) = web_sse_conversation_id(&frame) else {
                 continue;
@@ -2463,7 +2609,9 @@ fn web_parse_sse(bytes: &[u8], references: &[WebReference]) -> WebAssetIds {
                 .or_else(|| payload["v"].get("message"))
             {
                 if message["author"]["role"] != "user" {
-                    if let Some(message_id) = message["id"].as_str().filter(|value| !value.is_empty()) {
+                    if let Some(message_id) =
+                        message["id"].as_str().filter(|value| !value.is_empty())
+                    {
                         result.parent_message_id = message_id.to_string();
                     }
                 }
@@ -2705,17 +2853,28 @@ fn web_collect_turn_assets(
         web_collect_assets(payload, input_ids, ids);
         return;
     }
-    let Some(mapping) = payload["mapping"].as_object() else { return };
-    let mut pending = mapping.iter()
-        .filter(|(id, node)| id.as_str() == input_message_id || node["message"]["id"] == input_message_id)
-        .map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+    let Some(mapping) = payload["mapping"].as_object() else {
+        return;
+    };
+    let mut pending = mapping
+        .iter()
+        .filter(|(id, node)| {
+            id.as_str() == input_message_id || node["message"]["id"] == input_message_id
+        })
+        .map(|(id, _)| id.as_str())
+        .collect::<Vec<_>>();
     let mut visited = HashSet::new();
     while let Some(id) = pending.pop() {
-        if !visited.insert(id) { continue; }
-        let Some(node) = mapping.get(id) else { continue };
+        if !visited.insert(id) {
+            continue;
+        }
+        let Some(node) = mapping.get(id) else {
+            continue;
+        };
         // 下一条用户消息属于另一次生成，恢复较早任务时不能把后续图片一起下载。
         if node["message"]["author"]["role"] == "user"
-            && id != input_message_id && node["message"]["id"] != input_message_id
+            && id != input_message_id
+            && node["message"]["id"] != input_message_id
         {
             continue;
         }
@@ -2865,7 +3024,9 @@ fn web_download_retry_after(headers: &reqwest::header::HeaderMap) -> Option<std:
         return Some(std::time::Duration::from_secs(seconds));
     }
     let date = chrono::DateTime::parse_from_rfc2822(value).ok()?;
-    Some(std::time::Duration::from_secs((date.timestamp() - chrono::Utc::now().timestamp()).max(0) as u64))
+    Some(std::time::Duration::from_secs(
+        (date.timestamp() - chrono::Utc::now().timestamp()).max(0) as u64,
+    ))
 }
 
 async fn web_download_asset(
@@ -2879,7 +3040,12 @@ async fn web_download_asset(
     // 文件 ID 先于下载地址就绪；只重查已有资源，不创建新的图片会话。
     for attempt in 0..6 {
         if attempt > 0 {
-            tokio::time::sleep(retry_after.take().unwrap_or_else(|| std::time::Duration::from_secs(1 << attempt.min(4)))).await;
+            tokio::time::sleep(
+                retry_after
+                    .take()
+                    .unwrap_or_else(|| std::time::Duration::from_secs(1 << attempt.min(4))),
+            )
+            .await;
         }
         let response = match web_builder(client, auth, context, reqwest::Method::GET, path)
             .header("Accept", "application/json")
@@ -2906,17 +3072,24 @@ async fn web_download_asset(
             last_error = "Web 图片地址尚未就绪：HTTP 202".into();
             continue;
         }
-        let payload = response.json::<Value>().await
-            .map_err(|error| failure(&format!("Web 图片地址响应解析失败：{}", error.without_url())))?;
-        let url = ["download_url", "url"].iter()
+        let payload = response.json::<Value>().await.map_err(|error| {
+            failure(&format!(
+                "Web 图片地址响应解析失败：{}",
+                error.without_url()
+            ))
+        })?;
+        let url = ["download_url", "url"]
+            .iter()
             .filter_map(|key| payload[*key].as_str().map(str::trim))
             .find(|url| !url.is_empty());
         let Some(url) = url else {
-            last_error = format!("Web 图片地址尚未就绪：HTTP {}，响应没有有效 download_url 或 url", status.as_u16());
+            last_error = format!(
+                "Web 图片地址尚未就绪：HTTP {}，响应没有有效 download_url 或 url",
+                status.as_u16()
+            );
             continue;
         };
-        let resource_url = url::Url::parse(url)
-            .map_err(|_| failure("Web 图片地址无效"))?;
+        let resource_url = url::Url::parse(url).map_err(|_| failure("Web 图片地址无效"))?;
         // ChatGPT 的 estuary 内容接口仍需原账号认证；外部签名 URL 不能携带凭据。
         let authenticated_content = resource_url.path() == "/backend-api/estuary/content"
             && url::Url::parse(&context.base_url)
@@ -2931,7 +3104,9 @@ async fn web_download_asset(
             Err(error) => {
                 let error = error.without_url();
                 last_error = format!("Web 图片内容下载失败：{error}");
-                if error.is_builder() { return Err(failure(&last_error)); }
+                if error.is_builder() {
+                    return Err(failure(&last_error));
+                }
                 continue;
             }
         };
@@ -2940,7 +3115,9 @@ async fn web_download_asset(
         if !status.is_success() {
             last_error = format!("Web 图片内容下载失败：HTTP {}", status.as_u16());
             // CDN 签名过期时必须重新解析地址，不能反复请求同一个过期 URL。
-            if matches!(status.as_u16(), 401 | 403 | 404 | 408 | 409 | 425 | 429) || status.is_server_error() {
+            if matches!(status.as_u16(), 401 | 403 | 404 | 408 | 409 | 425 | 429)
+                || status.is_server_error()
+            {
                 continue;
             }
             return Err(failure(&last_error));
@@ -2948,7 +3125,9 @@ async fn web_download_asset(
         let (_, bytes) = read_response_limited(response, "Web 图片内容").await?;
         return Ok(bytes);
     }
-    Err(failure(&format!("{last_error}；已查询 6 次，可稍后继续等待原任务")))
+    Err(failure(&format!(
+        "{last_error}；已查询 6 次，可稍后继续等待原任务"
+    )))
 }
 
 async fn execute(
@@ -3262,10 +3441,14 @@ pub async fn export(
         if images.is_empty() {
             return Err(failure("所选任务没有可导出的图片"));
         }
-        let (_, _, _, bytes) = images.get(index as usize).ok_or_else(|| failure("图片不存在"))?;
+        let (_, _, _, bytes) = images
+            .get(index as usize)
+            .ok_or_else(|| failure("图片不存在"))?;
         let image = decode_image(bytes)?;
         let mut png = Cursor::new(Vec::new());
-        image.write_to(&mut png, image::ImageFormat::Png).map_err(|_| failure("PNG 转换失败"))?;
+        image
+            .write_to(&mut png, image::ImageFormat::Png)
+            .map_err(|_| failure("PNG 转换失败"))?;
         tokio::fs::write(target, png.into_inner()).await?;
         return Ok(json!({"imageCount": 1, "filePath": target}));
     }
@@ -3357,12 +3540,15 @@ pub async fn export(
             return Err(error);
         }
     };
-    let _ = app.emit("images:export-progress", json!({
-        "exportId": export_id,
-        "phase": "completed",
-        "completed": count,
-        "total": total
-    }));
+    let _ = app.emit(
+        "images:export-progress",
+        json!({
+            "exportId": export_id,
+            "phase": "completed",
+            "completed": count,
+            "total": total
+        }),
+    );
     Ok(json!({ "imageCount": count, "filePath": output_path }))
 }
 
@@ -3484,14 +3670,25 @@ mod tests {
                     200,
                     r#"{"models":[{"slug":"gpt-image-example"},{"slug":"gpt-image-example"},{"slug":"gpt-image-other"},{"slug":"gpt-5"},{"slug":"gpt-5-mini"},{"slug":"gpt-4o"},{"slug":""},{}]}"#,
                     "",
-                    vec!["gpt-image-example", "gpt-image-other", "gpt-5", "gpt-5-mini"],
+                    vec![
+                        "gpt-image-example",
+                        "gpt-image-other",
+                        "gpt-5",
+                        "gpt-5-mini",
+                    ],
                 ),
                 (403, 200, "{}", "会话初始化失败", vec![]),
                 (200, 403, "{}", "获取 OpenAI 模型失败", vec![]),
                 (200, 200, "<html>challenge</html>", "响应解析失败", vec![]),
                 (200, 200, "{}", "缺少 models 列表", vec![]),
                 (200, 200, r#"{"models":[]}"#, "", vec![]),
-                (200, 200, r#"{"models":[{"slug":"gpt-5"}]}"#, "", vec!["gpt-5"]),
+                (
+                    200,
+                    200,
+                    r#"{"models":[{"slug":"gpt-5"}]}"#,
+                    "",
+                    vec!["gpt-5"],
+                ),
             ] {
                 let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
                 let base_url = format!("http://{}", listener.local_addr().unwrap());
@@ -3801,32 +3998,60 @@ mod tests {
     #[test]
     fn web_sse_conversation_id_can_be_saved_before_stream_end() {
         let frame = b"data: {\"conversation_id\":\"conversation-1\"}\r\n\r\n";
-        assert_eq!(web_sse_conversation_id(frame).as_deref(), Some("conversation-1"));
+        assert_eq!(
+            web_sse_conversation_id(frame).as_deref(),
+            Some("conversation-1")
+        );
         assert_eq!(web_sse_conversation_id(b"data: [DONE]\r\n\r\n"), None);
     }
 
     #[test]
     fn web_sse_checkpoint_handles_crlf_and_preserves_recovery_exclusions() {
         tauri::async_runtime::block_on(async {
-            let root = std::env::temp_dir().join(format!("image-web-checkpoint-{}", Uuid::new_v4()));
+            let root =
+                std::env::temp_dir().join(format!("image-web-checkpoint-{}", Uuid::new_v4()));
             let paths = crate::core::paths::resolve_app_paths(&root);
             let task = json!({"id":"task", "createdAt":0, "revision":0, "request":{}});
             image_store::create_batch(&paths, &[task.clone()], &[], "").unwrap();
             let started = image_store::start(&paths, &task).unwrap().unwrap();
             let (address, handle) = mock_http_responder(1, |_, _, _| {
-                (200, "text/event-stream".into(), events(&[json!({"conversation_id":"saved"})]))
-            }).await;
+                (
+                    200,
+                    "text/event-stream".into(),
+                    events(&[json!({"conversation_id":"saved"})]),
+                )
+            })
+            .await;
             let context = WebContext {
-                task: Some((paths.clone(), "task".into(), started["revision"].as_u64().unwrap())),
-                account_id: "official".into(), ..WebContext::new()
+                task: Some((
+                    paths.clone(),
+                    "task".into(),
+                    started["revision"].as_u64().unwrap(),
+                )),
+                account_id: "official".into(),
+                ..WebContext::new()
             };
-            let response = reqwest::Client::builder().no_proxy().build().unwrap().get(address).send().await.unwrap();
+            let response = reqwest::Client::builder()
+                .no_proxy()
+                .build()
+                .unwrap()
+                .get(address)
+                .send()
+                .await
+                .unwrap();
             let excluded = HashSet::from(["old-output".to_string()]);
-            read_web_sse_with_checkpoint(response, &context, &excluded).await.unwrap();
+            read_web_sse_with_checkpoint(response, &context, &excluded)
+                .await
+                .unwrap();
             let recovery = image_store::detail(&paths, "task").unwrap()["recovery"].clone();
             assert_eq!(recovery["conversationId"], "saved");
             assert_eq!(recovery["inputIds"], json!(["old-output"]));
-            assert_eq!(image_store::find_web_conversation(&paths, "official", "").unwrap().unwrap()["conversationId"], "saved");
+            assert_eq!(
+                image_store::find_web_conversation(&paths, "official", "")
+                    .unwrap()
+                    .unwrap()["conversationId"],
+                "saved"
+            );
             assert_eq!(handle.join().unwrap().len(), 1);
             std::fs::remove_dir_all(root).unwrap();
         });
@@ -3925,34 +4150,65 @@ mod tests {
             let paths = crate::core::paths::resolve_app_paths(&root);
             let first_id = Uuid::new_v4().to_string();
             let second_id = Uuid::new_v4().to_string();
-            let tasks = [&first_id, &second_id].iter().map(|id| json!({ "id": id, "createdAt": 1, "status": "queued", "imageCount": 0 })).collect::<Vec<_>>();
+            let tasks = [&first_id, &second_id]
+                .iter()
+                .map(|id| json!({ "id": id, "createdAt": 1, "status": "queued", "imageCount": 0 }))
+                .collect::<Vec<_>>();
             image_store::create_batch(&paths, &tasks, &[], "").unwrap();
             let mut first = image_store::start(&paths, &tasks[0]).unwrap().unwrap();
             first["status"] = json!("completed");
             image_store::finish(&paths, &first, &[]).unwrap().unwrap();
             // 第一个任务在等待注册前已经完成，第二个在快照加载期间完成且通知积压。
-            let mut wait = Box::pin(wait_tasks(&paths, json!({ "ids": [&first_id, &second_id] })));
+            let mut wait = Box::pin(wait_tasks(
+                &paths,
+                json!({ "ids": [&first_id, &second_id] }),
+            ));
             assert!(futures_util::poll!(&mut wait).is_pending());
             let mut second = image_store::start(&paths, &tasks[1]).unwrap().unwrap();
             second["status"] = json!("failed");
             let saved = image_store::finish(&paths, &second, &[]).unwrap().unwrap();
-            for _ in 0..300 { let _ = task_updates().sender.send(json!({ "id": "unrelated", "revision": 0 })); }
+            for _ in 0..300 {
+                let _ = task_updates()
+                    .sender
+                    .send(json!({ "id": "unrelated", "revision": 0 }));
+            }
             let _ = task_updates().sender.send(saved);
-            let result = tokio::time::timeout(std::time::Duration::from_secs(5), wait).await.unwrap().unwrap();
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+                .await
+                .unwrap()
+                .unwrap();
             assert_eq!(result["items"][0]["status"], "completed");
             assert_eq!(result["items"][1]["status"], "failed");
             let resumed = image_store::requeue(&paths, &second_id).unwrap();
             let mut wait = Box::pin(wait_tasks(&paths, json!({ "ids": [&second_id] })));
             assert!(futures_util::poll!(&mut wait).is_pending());
-            let cancellation = image_store::cancel(&paths, std::slice::from_ref(&second_id), true).unwrap();
+            let cancellation =
+                image_store::cancel(&paths, std::slice::from_ref(&second_id), true).unwrap();
             let _ = task_updates().sender.send(cancellation["items"][0].clone());
-            assert_eq!(tokio::time::timeout(std::time::Duration::from_secs(5), wait).await.unwrap().unwrap()["items"][0]["status"], "interrupted");
+            assert_eq!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), wait)
+                    .await
+                    .unwrap()
+                    .unwrap()["items"][0]["status"],
+                "interrupted"
+            );
             let queued = image_store::requeue(&paths, &second_id).unwrap();
             assert!(queued["revision"].as_u64() > resumed["revision"].as_u64());
             // 写库失败即使早于等待请求也应直接返回错误。
-            task_updates().storage_errors.lock().unwrap().insert(second_id.clone(), json!({ "revision": queued["revision"], "storageError": "磁盘写入失败" }));
-            assert!(wait_tasks(&paths, json!({ "ids": [&second_id] })).await.unwrap_err().to_string().contains("磁盘写入失败"));
-            task_updates().storage_errors.lock().unwrap().remove(&second_id);
+            task_updates().storage_errors.lock().unwrap().insert(
+                second_id.clone(),
+                json!({ "revision": queued["revision"], "storageError": "磁盘写入失败" }),
+            );
+            assert!(wait_tasks(&paths, json!({ "ids": [&second_id] }))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("磁盘写入失败"));
+            task_updates()
+                .storage_errors
+                .lock()
+                .unwrap()
+                .remove(&second_id);
             std::fs::remove_dir_all(root).unwrap();
         });
     }
@@ -4020,15 +4276,28 @@ mod tests {
             "request": {"conversationId": "conversation", "roundId": "round", "generationMode": "web", "responseFormat": "url"}
         })).collect::<Vec<_>>();
         image_store::create_batch(&paths, &tasks, &["input".into()], "mask").unwrap();
-        let page = image_store::list(&paths, &json!({"conversationId":"conversation", "groupByRound":true, "pageSize":1})).unwrap();
+        let page = image_store::list(
+            &paths,
+            &json!({"conversationId":"conversation", "groupByRound":true, "pageSize":1}),
+        )
+        .unwrap();
         assert_eq!(page["total"], 1);
         assert_eq!(page["items"].as_array().unwrap().len(), 100);
-        assert_eq!(image_store::list(&paths, &json!({"conversationId":"other"})).unwrap()["total"], 0);
+        assert_eq!(
+            image_store::list(&paths, &json!({"conversationId":"other"})).unwrap()["total"],
+            0
+        );
         // 删除队头不影响剩余任务的共享参考图，已取消任务不会进入执行状态。
         image_store::delete(&paths, &["task-0".into()]).unwrap();
         assert!(image_store::start(&paths, &tasks[0]).unwrap().is_none());
-        assert_eq!(image_store::inputs(&paths, "task-99").unwrap()["images"], json!(["input"]));
-        assert_eq!(image_store::inputs(&paths, "task-99").unwrap()["mask"], "mask");
+        assert_eq!(
+            image_store::inputs(&paths, "task-99").unwrap()["images"],
+            json!(["input"])
+        );
+        assert_eq!(
+            image_store::inputs(&paths, "task-99").unwrap()["mask"],
+            "mask"
+        );
         let running = image_store::start(&paths, &tasks[1]).unwrap().unwrap();
         image_store::checkpoint(&paths, "task-1", running["revision"].as_u64().unwrap(), &json!({"conversationId":"upstream", "inputIds": ["file-input"], "fileIds":[], "sedimentIds":[]})).unwrap();
         let failed_task = json!({
@@ -4039,30 +4308,27 @@ mod tests {
         let failed_running = image_store::start(&paths, &failed_task).unwrap().unwrap();
         image_store::checkpoint(&paths, "failed-web", failed_running["revision"].as_u64().unwrap(), &json!({"conversationId":"failed-upstream", "inputIds": [], "fileIds":[], "sedimentIds":[]})).unwrap();
         image_store::initialize(&paths).unwrap();
-        assert_eq!(image_store::detail(&paths, "task-99").unwrap()["status"], "interrupted");
+        assert_eq!(
+            image_store::detail(&paths, "task-99").unwrap()["status"],
+            "interrupted"
+        );
         let connection = crate::core::database::open(&paths).unwrap();
-        connection.execute(
-            "UPDATE image_tasks SET status = 'failed' WHERE id = 'failed-web'",
-            [],
-        ).unwrap();
+        connection
+            .execute(
+                "UPDATE image_tasks SET status = 'failed' WHERE id = 'failed-web'",
+                [],
+            )
+            .unwrap();
         drop(connection);
-        let recovered = image_store::requeue_with_concurrency(
-            &paths,
-            "task-1",
-            None,
-            Some("web"),
-        ).unwrap();
+        let recovered =
+            image_store::requeue_with_concurrency(&paths, "task-1", None, Some("web")).unwrap();
         assert_eq!(recovered["recovery"]["conversationId"], "upstream");
         assert!(image_store::requeue(&paths, "task-1").is_err());
         let retried_failed = image_store::requeue(&paths, "failed-web").unwrap();
         assert_eq!(retried_failed["status"], "queued");
         assert!(retried_failed["recovery"].is_null());
-        let recovered_queued = image_store::requeue_with_concurrency(
-            &paths,
-            "task-99",
-            None,
-            Some("codex"),
-        ).unwrap();
+        let recovered_queued =
+            image_store::requeue_with_concurrency(&paths, "task-99", None, Some("codex")).unwrap();
         assert_eq!(recovered_queued["status"], "queued");
         assert_eq!(recovered_queued["request"]["generationMode"], "codex");
         assert!(recovered_queued["recovery"].is_null());
@@ -4070,14 +4336,24 @@ mod tests {
         assert!(image_store::clear_results(&paths, &["task-1".into()]).is_err());
         finished["status"] = json!("completed");
         finished["imageCount"] = json!(1);
-        image_store::finish(&paths, &finished, &[store_image(&png(), &json!({})).unwrap()]).unwrap();
+        image_store::finish(
+            &paths,
+            &finished,
+            &[store_image(&png(), &json!({})).unwrap()],
+        )
+        .unwrap();
         image_store::clear_results(&paths, &["task-1".into()]).unwrap();
         let cleared = image_store::detail(&paths, "task-1").unwrap();
         assert_eq!(cleared["data"], json!([]));
         assert_eq!(cleared["imageCount"], 0);
         assert_eq!(cleared["request"]["roundId"], "round");
-        assert_eq!(image_store::inputs(&paths, "task-1").unwrap()["mask"], "mask");
-        let mut ids = (1..100).map(|index| format!("task-{index}")).collect::<Vec<_>>();
+        assert_eq!(
+            image_store::inputs(&paths, "task-1").unwrap()["mask"],
+            "mask"
+        );
+        let mut ids = (1..100)
+            .map(|index| format!("task-{index}"))
+            .collect::<Vec<_>>();
         ids.push("failed-web".into());
         image_store::delete(&paths, &ids).unwrap();
         assert_eq!(image_store::history(&paths).unwrap(), json!([]));
@@ -4088,18 +4364,61 @@ mod tests {
     fn web_continue_waiting_only_reads_original_conversation() {
         tauri::async_runtime::block_on(async {
             let (address, handle) = mock_http_responder(4, |index, raw, address| {
-                let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                let path = raw
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap();
                 match index {
-                    0 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/tasks"); (200, "application/json".into(), b"{}".to_vec()) },
-                    1 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/conversation/original"); (200, "application/json".into(), b"{}".to_vec()) },
-                    2 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/backend-api/files/output/download"); (200, "application/json".into(), serde_json::to_vec(&json!({"download_url":format!("{address}/image")})).unwrap()) },
-                    3 => { assert!(raw.starts_with("GET ")); assert_eq!(path, "/image"); (200, "image/png".into(), STANDARD.decode(png()).unwrap()) },
-                    _ => unreachable!()
+                    0 => {
+                        assert!(raw.starts_with("GET "));
+                        assert_eq!(path, "/backend-api/tasks");
+                        (200, "application/json".into(), b"{}".to_vec())
+                    }
+                    1 => {
+                        assert!(raw.starts_with("GET "));
+                        assert_eq!(path, "/backend-api/conversation/original");
+                        (200, "application/json".into(), b"{}".to_vec())
+                    }
+                    2 => {
+                        assert!(raw.starts_with("GET "));
+                        assert_eq!(path, "/backend-api/files/output/download");
+                        (
+                            200,
+                            "application/json".into(),
+                            serde_json::to_vec(&json!({"download_url":format!("{address}/image")}))
+                                .unwrap(),
+                        )
+                    }
+                    3 => {
+                        assert!(raw.starts_with("GET "));
+                        assert_eq!(path, "/image");
+                        (200, "image/png".into(), STANDARD.decode(png()).unwrap())
+                    }
+                    _ => unreachable!(),
                 }
-            }).await;
-            let context = WebContext { base_url: address, ..WebContext::new() };
-            let mut ids = WebAssetIds { conversation_id: "original".into(), file_ids: vec!["output".into()], ..Default::default() };
-            let (conversation, images, error) = web_finish_assets(&reqwest::Client::builder().no_proxy().build().unwrap(), &json!({}), &context, &HashSet::new(), &mut ids).await.unwrap();
+            })
+            .await;
+            let context = WebContext {
+                base_url: address,
+                ..WebContext::new()
+            };
+            let mut ids = WebAssetIds {
+                conversation_id: "original".into(),
+                file_ids: vec!["output".into()],
+                ..Default::default()
+            };
+            let (conversation, images, error) = web_finish_assets(
+                &reqwest::Client::builder().no_proxy().build().unwrap(),
+                &json!({}),
+                &context,
+                &HashSet::new(),
+                &mut ids,
+            )
+            .await
+            .unwrap();
             assert_eq!(conversation, "original");
             assert_eq!(images.len(), 1);
             assert!(error.is_null());
@@ -4113,10 +4432,14 @@ mod tests {
             for exists in [true, false] {
                 let root = std::env::temp_dir().join(format!("image-web-reuse-{}", Uuid::new_v4()));
                 let paths = crate::core::paths::resolve_app_paths(&root);
-                image_store::save_web_conversation(&paths, &json!({
-                    "accountId": "official", "localConversationId": "old-local",
-                    "conversationId": "saved", "parentMessageId": "stale-parent"
-                })).unwrap();
+                image_store::save_web_conversation(
+                    &paths,
+                    &json!({
+                        "accountId": "official", "localConversationId": "old-local",
+                        "conversationId": "saved", "parentMessageId": "stale-parent"
+                    }),
+                )
+                .unwrap();
                 let upstream_id = if exists { "saved" } else { "replacement" };
                 let mut input_message_ids = Vec::new();
                 let mut prepared_message_id = String::new();
@@ -4191,8 +4514,10 @@ mod tests {
                     }
                 }).await;
                 let mut context = WebContext {
-                    base_url: address, task: Some((paths.clone(), "task".into(), 0)),
-                    account_id: "official".into(), local_conversation_id: "new-local".into(),
+                    base_url: address,
+                    task: Some((paths.clone(), "task".into(), 0)),
+                    account_id: "official".into(),
+                    local_conversation_id: "new-local".into(),
                     ..WebContext::new()
                 };
                 let mut request = request();
@@ -4200,14 +4525,19 @@ mod tests {
                 request.conversation_id = "new-local".into();
                 request.n = 2;
                 let client = reqwest::Client::builder().no_proxy().build().unwrap();
-                let result = execute_web(&client, &json!({}), &request, "task", &mut context).await.unwrap();
+                let result = execute_web(&client, &json!({}), &request, "task", &mut context)
+                    .await
+                    .unwrap();
                 assert_eq!(result.images.len(), 2);
                 assert_eq!(result.usage["web_conversations"], json!([upstream_id]));
-                let saved = image_store::find_web_conversation(&paths, "official", "").unwrap().unwrap();
+                let saved = image_store::find_web_conversation(&paths, "official", "")
+                    .unwrap()
+                    .unwrap();
                 assert_eq!(saved["conversationId"], upstream_id);
                 assert_eq!(saved["parentMessageId"], "message-2");
                 assert_eq!(saved["localConversationId"], "new-local");
-                let old_session = image_store::find_web_conversation(&paths, "official", "saved").unwrap();
+                let old_session =
+                    image_store::find_web_conversation(&paths, "official", "saved").unwrap();
                 if exists {
                     assert_eq!(old_session.unwrap()["deleted"], false);
                 } else {
@@ -4229,17 +4559,25 @@ mod tests {
                     2 => (404, "{}"),
                     3 => (403, "{}"),
                     4 => (400, "{}"),
-                    _ => (503, "{}")
+                    _ => (503, "{}"),
                 };
                 (status, "application/json".into(), body.as_bytes().to_vec())
-            }).await;
-            let context = WebContext { base_url: address, ..WebContext::new() };
+            })
+            .await;
+            let context = WebContext {
+                base_url: address,
+                ..WebContext::new()
+            };
             let client = reqwest::Client::builder().no_proxy().build().unwrap();
             for index in 0..6 {
                 let result = web_read_conversation(&client, &json!({}), &context, "saved").await;
-                if index == 0 { assert_eq!(result.unwrap().unwrap()["current_node"], "parent"); }
-                else if index < 3 { assert!(result.unwrap().is_none()); }
-                else { assert!(result.is_err()); }
+                if index == 0 {
+                    assert_eq!(result.unwrap().unwrap()["current_node"], "parent");
+                } else if index < 3 {
+                    assert!(result.unwrap().is_none());
+                } else {
+                    assert!(result.is_err());
+                }
             }
             assert_eq!(handle.join().unwrap().len(), 6);
         });
@@ -4251,12 +4589,23 @@ mod tests {
             let (address, handle) = mock_http_responder(1, |index, raw, _| {
                 assert_eq!(index, 0);
                 assert!(raw.starts_with("PATCH /backend-api/conversation/conv-delete-123 "));
-                assert!(raw.to_ascii_lowercase().contains("authorization: bearer del-token"));
-                let body: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+                assert!(raw
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer del-token"));
+                let body: Value =
+                    serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
                 assert_eq!(body["is_visible"], false);
-                (200, "application/json".into(), serde_json::to_vec(&json!({"success": true})).unwrap())
-            }).await;
-            let context = WebContext { base_url: address, ..WebContext::new() };
+                (
+                    200,
+                    "application/json".into(),
+                    serde_json::to_vec(&json!({"success": true})).unwrap(),
+                )
+            })
+            .await;
+            let context = WebContext {
+                base_url: address,
+                ..WebContext::new()
+            };
             let client = reqwest::Client::builder().no_proxy().build().unwrap();
             let auth = json!({"accessToken": "del-token"});
             web_delete_conversation(&client, &auth, &context, "conv-delete-123").await;
@@ -4467,7 +4816,13 @@ mod tests {
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
             )
             .unwrap();
-            let account = connection.query_row("SELECT * FROM providers WHERE id=?1 AND type='codex-account'", [format!("account:{}",account_id)], provider_store::item_from_row).unwrap();
+            let account = connection
+                .query_row(
+                    "SELECT * FROM providers WHERE id=?1 AND type='codex-account'",
+                    [format!("account:{}", account_id)],
+                    provider_store::item_from_row,
+                )
+                .unwrap();
             let auth = json!({
                 "accessToken": account["auth"]["accessToken"].as_str().or_else(|| account["access_token"].as_str()).unwrap(),
                 "accountId": account["account_id"].as_str().or_else(|| account["accountId"].as_str()).unwrap_or("")
@@ -4530,12 +4885,20 @@ mod tests {
                     _ => unreachable!()
                 }
             }).await;
-            let context = WebContext { base_url: address, ..WebContext::new() };
+            let context = WebContext {
+                base_url: address,
+                ..WebContext::new()
+            };
             let client = reqwest::Client::builder().no_proxy().build().unwrap();
             let auth = json!({"accessToken":"test-token"});
-            let bytes = web_download_file(&client, &auth, &context, "output").await.unwrap();
+            let bytes = web_download_file(&client, &auth, &context, "output")
+                .await
+                .unwrap();
             assert!(decode_image(&bytes).is_ok());
-            let error = web_download_sediment(&client, &auth, &context, "original", "output").await.unwrap_err().to_string();
+            let error = web_download_sediment(&client, &auth, &context, "original", "output")
+                .await
+                .unwrap_err()
+                .to_string();
             assert!(error.contains("图片地址查询失败：HTTP 403"));
             assert!(!error.contains("暂不可下载"));
             assert_eq!(handle.join().unwrap().len(), 9);
@@ -4546,49 +4909,91 @@ mod tests {
     fn web_estuary_download_authenticates_only_the_original_origin() {
         tauri::async_runtime::block_on(async {
             let (address, handle) = mock_http_responder(7, |index, raw, address| {
-                let path = raw.lines().next().unwrap().split_whitespace().nth(1).unwrap();
-                let authorized = raw.to_ascii_lowercase().contains("authorization: bearer original-token");
+                let path = raw
+                    .lines()
+                    .next()
+                    .unwrap()
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap();
+                let authorized = raw
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer original-token");
                 assert!(raw.starts_with("GET "));
                 match index {
                     0 | 2 | 4 => {
                         assert!(authorized);
-                        assert_eq!(path, "/backend-api/conversation/original/attachment/file_output/download");
+                        assert_eq!(
+                            path,
+                            "/backend-api/conversation/original/attachment/file_output/download"
+                        );
                         let url = match index {
-                            0 => format!("{address}/backend-api/estuary/content?id=file_output&sig=private"),
-                            2 => format!("{}/backend-api/estuary/content?id=file_output", address.replace("127.0.0.1", "localhost")),
-                            _ => format!("{address}/backend-api/estuary/content?redirect=true")
+                            0 => format!(
+                                "{address}/backend-api/estuary/content?id=file_output&sig=private"
+                            ),
+                            2 => format!(
+                                "{}/backend-api/estuary/content?id=file_output",
+                                address.replace("127.0.0.1", "localhost")
+                            ),
+                            _ => format!("{address}/backend-api/estuary/content?redirect=true"),
                         };
-                        (200, "application/json".into(), serde_json::to_vec(&json!({"download_url":url})).unwrap())
-                    },
+                        (
+                            200,
+                            "application/json".into(),
+                            serde_json::to_vec(&json!({"download_url":url})).unwrap(),
+                        )
+                    }
                     1 => {
                         assert!(authorized);
-                        assert_eq!(path, "/backend-api/estuary/content?id=file_output&sig=private");
+                        assert_eq!(
+                            path,
+                            "/backend-api/estuary/content?id=file_output&sig=private"
+                        );
                         (200, "image/png".into(), STANDARD.decode(png()).unwrap())
-                    },
+                    }
                     3 => {
                         // 即便路径相同，其他域名也不能获得认证头。
                         assert!(!authorized);
                         assert!(!raw.to_ascii_lowercase().contains("authorization:"));
                         assert_eq!(path, "/backend-api/estuary/content?id=file_output");
                         (200, "image/png".into(), STANDARD.decode(png()).unwrap())
-                    },
+                    }
                     5 => {
                         assert!(authorized);
                         assert_eq!(path, "/backend-api/estuary/content?redirect=true");
-                        (302, format!("text/plain\r\nLocation: {}/cdn-image", address.replace("127.0.0.1", "localhost")), vec![])
-                    },
+                        (
+                            302,
+                            format!(
+                                "text/plain\r\nLocation: {}/cdn-image",
+                                address.replace("127.0.0.1", "localhost")
+                            ),
+                            vec![],
+                        )
+                    }
                     6 => {
                         assert!(!raw.to_ascii_lowercase().contains("authorization:"));
                         assert_eq!(path, "/cdn-image");
                         (200, "image/png".into(), STANDARD.decode(png()).unwrap())
-                    },
-                    _ => unreachable!()
+                    }
+                    _ => unreachable!(),
                 }
-            }).await;
-            let context = WebContext { base_url: address, ..WebContext::new() };
+            })
+            .await;
+            let context = WebContext {
+                base_url: address,
+                ..WebContext::new()
+            };
             let client = reqwest::Client::builder().no_proxy().build().unwrap();
             for _ in 0..3 {
-                let bytes = web_download_sediment(&client, &json!({"accessToken":"original-token"}), &context, "original", "file_output").await.unwrap();
+                let bytes = web_download_sediment(
+                    &client,
+                    &json!({"accessToken":"original-token"}),
+                    &context,
+                    "original",
+                    "file_output",
+                )
+                .await
+                .unwrap();
                 assert!(decode_image(&bytes).is_ok());
             }
             assert_eq!(handle.join().unwrap().len(), 7);
@@ -4598,19 +5003,53 @@ mod tests {
     #[test]
     fn web_asset_download_preserves_terminal_and_exhausted_errors() {
         tauri::async_runtime::block_on(async {
-            for (status, expected_count, message) in [(401, 1, "HTTP 401"), (403, 1, "HTTP 403"), (429, 6, "HTTP 429"), (200, 6, "没有有效 download_url 或 url")] {
-                let (address, handle) = mock_http_responder(expected_count, move |_, _, _| (status, "application/json\r\nRetry-After: 0".into(), b"{}".to_vec())).await;
-                let context = WebContext { base_url: address, ..WebContext::new() };
-                let error = web_download_file(&reqwest::Client::builder().no_proxy().build().unwrap(), &json!({}), &context, "output").await.unwrap_err().to_string();
+            for (status, expected_count, message) in [
+                (401, 1, "HTTP 401"),
+                (403, 1, "HTTP 403"),
+                (429, 6, "HTTP 429"),
+                (200, 6, "没有有效 download_url 或 url"),
+            ] {
+                let (address, handle) = mock_http_responder(expected_count, move |_, _, _| {
+                    (
+                        status,
+                        "application/json\r\nRetry-After: 0".into(),
+                        b"{}".to_vec(),
+                    )
+                })
+                .await;
+                let context = WebContext {
+                    base_url: address,
+                    ..WebContext::new()
+                };
+                let error = web_download_file(
+                    &reqwest::Client::builder().no_proxy().build().unwrap(),
+                    &json!({}),
+                    &context,
+                    "output",
+                )
+                .await
+                .unwrap_err()
+                .to_string();
                 assert!(error.contains(message), "{error}");
-                if expected_count > 1 { assert!(error.contains("可稍后继续等待原任务")); }
+                if expected_count > 1 {
+                    assert!(error.contains("可稍后继续等待原任务"));
+                }
                 assert_eq!(handle.join().unwrap().len(), expected_count);
             }
             let mut headers = reqwest::header::HeaderMap::new();
             headers.insert(reqwest::header::RETRY_AFTER, "0".parse().unwrap());
-            assert_eq!(web_download_retry_after(&headers), Some(std::time::Duration::ZERO));
-            headers.insert(reqwest::header::RETRY_AFTER, "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap());
-            assert_eq!(web_download_retry_after(&headers), Some(std::time::Duration::ZERO));
+            assert_eq!(
+                web_download_retry_after(&headers),
+                Some(std::time::Duration::ZERO)
+            );
+            headers.insert(
+                reqwest::header::RETRY_AFTER,
+                "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap(),
+            );
+            assert_eq!(
+                web_download_retry_after(&headers),
+                Some(std::time::Duration::ZERO)
+            );
         });
     }
 
@@ -4621,28 +5060,60 @@ mod tests {
             let root = std::env::var("AI_MANAGER_WEB_DIAGNOSTIC_DATA_ROOT").unwrap();
             let task_id = std::env::var("AI_MANAGER_WEB_DIAGNOSTIC_TASK_ID").unwrap();
             let paths = crate::core::paths::resolve_app_paths(std::path::Path::new(&root));
-            let connection = rusqlite::Connection::open_with_flags(&paths.storage_files.database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
-            let account_id: String = connection.query_row("SELECT account_id FROM image_tasks WHERE id = ?1", [&task_id], |row| row.get(0)).unwrap();
+            let connection = rusqlite::Connection::open_with_flags(
+                &paths.storage_files.database,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )
+            .unwrap();
+            let account_id: String = connection
+                .query_row(
+                    "SELECT account_id FROM image_tasks WHERE id = ?1",
+                    [&task_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
             let task = json!({"request": {"accountId": account_id}});
-            let account = connection.query_row("SELECT * FROM providers WHERE id=?1 AND type='codex-account'", [format!("account:{}",task["request"]["accountId"].as_str().unwrap())], provider_store::item_from_row).unwrap();
+            let account = connection
+                .query_row(
+                    "SELECT * FROM providers WHERE id=?1 AND type='codex-account'",
+                    [format!(
+                        "account:{}",
+                        task["request"]["accountId"].as_str().unwrap()
+                    )],
+                    provider_store::item_from_row,
+                )
+                .unwrap();
             let auth = json!({"accessToken": account["auth"]["accessToken"].as_str().or_else(|| account["access_token"].as_str()).unwrap(), "accountId": account["account_id"].as_str().or_else(|| account["accountId"].as_str()).unwrap_or("")});
             drop(connection);
-            let mut builder = reqwest::Client::builder().cookie_store(true).user_agent(WEB_USER_AGENT);
-            if let Some(proxy) = account["proxy"].as_str().filter(|proxy| !proxy.is_empty()) { builder = builder.proxy(reqwest::Proxy::all(proxy).unwrap()); }
+            let mut builder = reqwest::Client::builder()
+                .cookie_store(true)
+                .user_agent(WEB_USER_AGENT);
+            if let Some(proxy) = account["proxy"].as_str().filter(|proxy| !proxy.is_empty()) {
+                builder = builder.proxy(reqwest::Proxy::all(proxy).unwrap());
+            }
             let client = builder.build().unwrap();
             let mut context = WebContext::new();
             let recovery = &task["recovery"];
             context.device_id = recovery["deviceId"].as_str().unwrap().to_string();
             context.session_id = recovery["sessionId"].as_str().unwrap().to_string();
             let conversation = recovery["conversationId"].as_str().unwrap();
-            let asset = recovery["sedimentIds"][0].as_str().or_else(|| recovery["fileIds"][0].as_str()).unwrap();
+            let asset = recovery["sedimentIds"][0]
+                .as_str()
+                .or_else(|| recovery["fileIds"][0].as_str())
+                .unwrap();
             let bytes = if recovery["sedimentIds"][0].is_string() {
                 web_download_sediment(&client, &auth, &context, conversation, asset).await
             } else {
                 web_download_file(&client, &auth, &context, asset).await
-            }.unwrap();
+            }
+            .unwrap();
             let image = decode_image(&bytes).unwrap();
-            eprintln!("已有图片下载验证通过：{} 字节，{}x{}；未新建生图会话", bytes.len(), image.width(), image.height());
+            eprintln!(
+                "已有图片下载验证通过：{} 字节，{}x{}；未新建生图会话",
+                bytes.len(),
+                image.width(),
+                image.height()
+            );
         });
     }
 

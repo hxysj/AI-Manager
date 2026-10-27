@@ -78,10 +78,17 @@ impl Control {
             {
                 let mut budget = self.budget.lock().unwrap();
                 let maximum = budget.settings.max_concurrent_files;
-                let active = if receiving { &mut budget.active_uploads } else { &mut budget.active_files };
+                let active = if receiving {
+                    &mut budget.active_uploads
+                } else {
+                    &mut budget.active_files
+                };
                 if *active < maximum {
                     *active += 1;
-                    return FilePermit { control: self.clone(), receiving };
+                    return FilePermit {
+                        control: self.clone(),
+                        receiving,
+                    };
                 }
             }
             notified.await;
@@ -189,7 +196,10 @@ mod tests {
     fn incoming_and_outgoing_files_share_the_total_rate() {
         tauri::async_runtime::block_on(async {
             let control = Arc::new(Control::default());
-            control.configure(Settings { send_mib_per_second: 1, max_concurrent_files: 1 });
+            control.configure(Settings {
+                send_mib_per_second: 1,
+                max_concurrent_files: 1,
+            });
             let started = Instant::now();
             let send = async {
                 let stream = control.bytes_stream(Bytes::from(vec![3; 128 * 1024]));

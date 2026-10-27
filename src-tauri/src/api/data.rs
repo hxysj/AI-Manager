@@ -2752,8 +2752,11 @@ fn backup_secret() -> [u8; 32] {
 
 fn export_provider_keys(paths: &AppPaths) -> Result<Value, ManagerError> {
     let mut providers = provider_store::read_providers(paths)?;
-    let google_credentials: Vec<_> = providers.iter().filter(|provider| provider["type"] == "google-account")
-        .map(|provider| json!({"id": format!("google-oauth:{}", string_value(provider.get("id")))})).collect();
+    let google_credentials: Vec<_> = providers
+        .iter()
+        .filter(|provider| provider["type"] == "google-account")
+        .map(|provider| json!({"id": format!("google-oauth:{}", string_value(provider.get("id")))}))
+        .collect();
     providers.extend(google_credentials);
     providers.extend(provider_store::read_desktop_providers(paths)?.iter().map(
         |provider| json!({"id": format!("claude-desktop:{}", string_value(provider.get("id")))}),
@@ -2886,8 +2889,12 @@ async fn merge_provider_keys(
         .iter()
         .map(|provider| string_value(provider.get("id")))
         .collect::<HashSet<_>>();
-    provider_ids.extend(provider_store::read_providers(paths)?.iter().filter(|provider| provider["type"] == "google-account")
-        .map(|provider| format!("google-oauth:{}", string_value(provider.get("id")))));
+    provider_ids.extend(
+        provider_store::read_providers(paths)?
+            .iter()
+            .filter(|provider| provider["type"] == "google-account")
+            .map(|provider| format!("google-oauth:{}", string_value(provider.get("id")))),
+    );
     provider_ids.extend(
         provider_store::read_desktop_providers(paths)?
             .iter()
@@ -3625,22 +3632,56 @@ fn is_database_backup_path(entry_path: &str) -> bool {
 mod tests {
     #[test]
     fn google_oauth_credentials_round_trip_through_encrypted_backup_fields() {
-        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
-            let root = std::env::temp_dir().join(format!("google-backup-test-{}", uuid::Uuid::new_v4()));
-            let paths = crate::core::paths::resolve_app_paths(&root);
-            let mut keys = serde_json::Map::new();
-            crate::api::runtime_provider::set_provider_key(&mut keys, "google-test", "local-key".into()).unwrap();
-            crate::api::runtime_provider::set_provider_key(&mut keys, "google-oauth:google-test", "private-token-json".into()).unwrap();
-            crate::core::provider_store::write_provider_bundle(&paths, &[serde_json::json!({"id": "google-test", "type": "google-account"})], &[], &[], &keys).unwrap();
-            let exported = super::export_provider_keys(&paths).unwrap();
-            assert_eq!(exported["google-oauth:google-test"]["apiKeys"][0]["apiKey"], "private-token-json");
-            let encrypted = super::encrypt_backup_data(&exported).unwrap();
-            let restored = super::decrypt_backup_data(&encrypted).unwrap();
-            crate::core::provider_store::write_keys(&paths, &serde_json::Map::new()).unwrap();
-            super::merge_provider_keys(&paths, &restored, &serde_json::Map::new()).await.unwrap();
-            assert_eq!(crate::api::runtime_provider::get_provider_api_key(&paths, "google-oauth:google-test").unwrap(), "private-token-json");
-            std::fs::remove_dir_all(root).unwrap();
-        });
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let root = std::env::temp_dir()
+                    .join(format!("google-backup-test-{}", uuid::Uuid::new_v4()));
+                let paths = crate::core::paths::resolve_app_paths(&root);
+                let mut keys = serde_json::Map::new();
+                crate::api::runtime_provider::set_provider_key(
+                    &mut keys,
+                    "google-test",
+                    "local-key".into(),
+                )
+                .unwrap();
+                crate::api::runtime_provider::set_provider_key(
+                    &mut keys,
+                    "google-oauth:google-test",
+                    "private-token-json".into(),
+                )
+                .unwrap();
+                crate::core::provider_store::write_provider_bundle(
+                    &paths,
+                    &[serde_json::json!({"id": "google-test", "type": "google-account"})],
+                    &[],
+                    &[],
+                    &keys,
+                )
+                .unwrap();
+                let exported = super::export_provider_keys(&paths).unwrap();
+                assert_eq!(
+                    exported["google-oauth:google-test"]["apiKeys"][0]["apiKey"],
+                    "private-token-json"
+                );
+                let encrypted = super::encrypt_backup_data(&exported).unwrap();
+                let restored = super::decrypt_backup_data(&encrypted).unwrap();
+                crate::core::provider_store::write_keys(&paths, &serde_json::Map::new()).unwrap();
+                super::merge_provider_keys(&paths, &restored, &serde_json::Map::new())
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    crate::api::runtime_provider::get_provider_api_key(
+                        &paths,
+                        "google-oauth:google-test"
+                    )
+                    .unwrap(),
+                    "private-token-json"
+                );
+                std::fs::remove_dir_all(root).unwrap();
+            });
     }
 
     use super::{
@@ -3947,17 +3988,21 @@ mod tests {
         let connection = rusqlite::Connection::open(&snapshot_path).unwrap();
         assert_eq!(
             connection
-                .query_row("SELECT COUNT(*) FROM providers WHERE cli='claude-desktop'", [], |row| {
-                    row.get::<_, i64>(0)
-                })
+                .query_row(
+                    "SELECT COUNT(*) FROM providers WHERE cli='claude-desktop'",
+                    [],
+                    |row| { row.get::<_, i64>(0) }
+                )
                 .unwrap(),
             1
         );
         assert_eq!(
             connection
-                .query_row("SELECT COUNT(*) FROM app_metadata WHERE key LIKE 'desktop:%'", [], |row| {
-                    row.get::<_, i64>(0)
-                })
+                .query_row(
+                    "SELECT COUNT(*) FROM app_metadata WHERE key LIKE 'desktop:%'",
+                    [],
+                    |row| { row.get::<_, i64>(0) }
+                )
                 .unwrap(),
             0
         );
@@ -4793,20 +4838,30 @@ mod tests {
         let source_paths = resolve_app_paths(&root.join("source"));
         let source_settings = normalize_app_settings(
             root.join("source/app-settings.json"),
-            Some(json!({"dataPath": root.join("source"), "cliConfigPaths": {"codex": root.join("codex")}})),
+            Some(
+                json!({"dataPath": root.join("source"), "cliConfigPaths": {"codex": root.join("codex")}}),
+            ),
         );
         let providers = [
             json!({"id": "claude-provider", "cli": "claude", "name": "Claude", "enabled": true}),
             json!({"id": "codex-provider", "cli": "codex", "name": "Codex", "enabled": true}),
         ];
         let desktop_providers = [json!({"id": "desktop-provider", "name": "Desktop"})];
-        let key_ids = ["claude-provider", "codex-provider", "claude-desktop:desktop-provider"];
+        let key_ids = [
+            "claude-provider",
+            "codex-provider",
+            "claude-desktop:desktop-provider",
+        ];
         let mut source_keys = Map::new();
         let mut local_keys = Map::new();
         for id in key_ids {
-            runtime_provider::set_provider_keys(&mut local_keys, id,
+            runtime_provider::set_provider_keys(
+                &mut local_keys,
+                id,
                 &[json!({"id":"default","name":"默认 Key","note":"","apiKey":"primary-secret"})],
-                "default".into()).unwrap();
+                "default".into(),
+            )
+            .unwrap();
             runtime_provider::set_provider_keys(
                 &mut source_keys,
                 id,
@@ -4821,7 +4876,10 @@ mod tests {
         provider_store::write_provider_bundle(&source_paths, &providers, &[], &[], &source_keys)
             .unwrap();
         provider_store::write_desktop_bundle(
-            &source_paths, &desktop_providers, &Map::new(), &source_keys,
+            &source_paths,
+            &desktop_providers,
+            &Map::new(),
+            &source_keys,
         )
         .unwrap();
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -4833,26 +4891,42 @@ mod tests {
             let paths = resolve_app_paths(&target_root);
             let mut settings = normalize_app_settings(
                 target_root.join("app-settings.json"),
-                Some(json!({"dataPath": target_root, "cliConfigPaths": {"codex": root.join("codex")}})),
+                Some(
+                    json!({"dataPath": target_root, "cliConfigPaths": {"codex": root.join("codex")}}),
+                ),
             );
             provider_store::write_provider_bundle(&paths, &providers, &[], &[], &local_keys)
                 .unwrap();
             provider_store::write_desktop_bundle(
-                &paths, &desktop_providers, &Map::new(), &local_keys,
+                &paths,
+                &desktop_providers,
+                &Map::new(),
+                &local_keys,
             )
             .unwrap();
             // Provider 配置不变时，新增密钥仍应独立预览、恢复，并保留本机生效 Key。
             let backup = runtime
-                .block_on(super::create_scoped_data_backup(&source_paths, &source_settings, scope))
+                .block_on(super::create_scoped_data_backup(
+                    &source_paths,
+                    &source_settings,
+                    scope,
+                ))
                 .unwrap();
             let preview = runtime
-                .block_on(preview_data_backup_restore_content(&paths, &settings, &backup))
+                .block_on(preview_data_backup_restore_content(
+                    &paths, &settings, &backup,
+                ))
                 .unwrap();
             assert_eq!(preview["conflictCount"], 0);
             assert_eq!(preview["addedCount"], 3);
             for _ in 0..2 {
                 runtime
-                    .block_on(restore_data_backup_content(&paths, &mut settings, &backup, &json!({})))
+                    .block_on(restore_data_backup_content(
+                        &paths,
+                        &mut settings,
+                        &backup,
+                        &json!({}),
+                    ))
                     .unwrap();
                 let restored_keys = super::export_provider_keys(&paths).unwrap();
                 for id in key_ids {

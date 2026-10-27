@@ -63,7 +63,10 @@ pub async fn refresh_sessions_state(
 
         match scan_session_metadata(&item).await {
             Ok(Some(mut session)) => {
-                if let Some(id) = previous_session_map.get(&raw_path).and_then(|item| item.get("id")) {
+                if let Some(id) = previous_session_map
+                    .get(&raw_path)
+                    .and_then(|item| item.get("id"))
+                {
                     session["id"] = id.clone();
                 } else {
                     if stored_ids.is_none() {

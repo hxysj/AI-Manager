@@ -40,9 +40,14 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
         .cloned();
 
     // Google 授权、转发地址和本地密钥由专用流程维护，通用操作只允许禁用或恢复。
-    let provider = if let Some(previous) = previous.as_ref().filter(|item| item["type"] == "google-account") {
+    let provider = if let Some(previous) = previous
+        .as_ref()
+        .filter(|item| item["type"] == "google-account")
+    {
         let mut provider = previous.clone();
-        if let Some(enabled) = payload["enabled"].as_bool() { provider["enabled"] = json!(enabled); }
+        if let Some(enabled) = payload["enabled"].as_bool() {
+            provider["enabled"] = json!(enabled);
+        }
         provider
     } else {
         normalize_provider(&payload, previous.as_ref())?
@@ -85,7 +90,9 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
     }
 
     if provider["type"] == "google-account" {
-        if provider["enabled"] == false { google_gateway::stop(paths, &provider_id).await; }
+        if provider["enabled"] == false {
+            google_gateway::stop(paths, &provider_id).await;
+        }
     } else if let Some(api_keys) = payload.get("apiKeys").and_then(Value::as_array) {
         set_provider_keys(
             &mut keys,
@@ -103,7 +110,11 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
                 profile["model"] = provider["runtimeConfig"]["mainModel"].clone();
             }
         }
-        let previous_models = models.iter().filter(|item| item["providerId"] == provider_id).cloned().collect::<Vec<_>>();
+        let previous_models = models
+            .iter()
+            .filter(|item| item["providerId"] == provider_id)
+            .cloned()
+            .collect::<Vec<_>>();
         models.retain(|item| {
             item.get("providerId").and_then(Value::as_str) != Some(provider_id.as_str())
         });
@@ -113,7 +124,9 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
                   "providerId": provider_id,
                   "name": model_name
                 }),
-                previous_models.iter().find(|item| item["providerId"] == provider_id && item["name"] == model_name),
+                previous_models
+                    .iter()
+                    .find(|item| item["providerId"] == provider_id && item["name"] == model_name),
             )?);
         }
     } else {
@@ -158,7 +171,10 @@ pub async fn delete_provider(paths: &AppPaths, payload: Value) -> Result<(), Man
         .cloned();
 
     google_gateway::stop(paths, &provider_id).await;
-    if provider.as_ref().is_some_and(|provider| provider["type"] == "google-account") {
+    if provider
+        .as_ref()
+        .is_some_and(|provider| provider["type"] == "google-account")
+    {
         crate::api::google_session::clear(paths, &provider_id)?;
     }
 
@@ -225,19 +241,26 @@ pub async fn fetch_codex_models(
 pub async fn fetch_claude_models(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
     let provider_id = string_value(payload.get("providerId"));
     if !provider_id.is_empty() && find_provider(paths, &provider_id)?["cli"] != "claude" {
-        return Err(ManagerError::System("只能获取 Claude Provider 的模型列表".into()));
+        return Err(ManagerError::System(
+            "只能获取 Claude Provider 的模型列表".into(),
+        ));
     }
     let value = fetch_provider_model_catalog(paths, &payload, true).await?;
     let items = value["data"].as_array().unwrap();
-    let names = items.iter().filter_map(|item| {
-        item.get("id")
-            .or_else(|| item.get("slug"))
-            .and_then(Value::as_str)
-            .or_else(|| item.as_str())
-    }).collect::<Vec<_>>();
+    let names = items
+        .iter()
+        .filter_map(|item| {
+            item.get("id")
+                .or_else(|| item.get("slug"))
+                .and_then(Value::as_str)
+                .or_else(|| item.as_str())
+        })
+        .collect::<Vec<_>>();
     let models = parse_model_list(&json!(names));
     if models.is_empty() {
-        return Err(ManagerError::System("上游未返回有效模型，已保存的模型列表保持不变".into()));
+        return Err(ManagerError::System(
+            "上游未返回有效模型，已保存的模型列表保持不变".into(),
+        ));
     }
     if !provider_id.is_empty() {
         // 只更新模型候选列表，保留当前模型映射、密钥和尚未提交的编辑内容。
@@ -316,7 +339,9 @@ async fn fetch_provider_model_catalog(
         if !after_id.is_empty() {
             request = request.query(&[("after_id", &after_id)]);
         }
-        let response = request.send().await
+        let response = request
+            .send()
+            .await
             .map_err(|error| ManagerError::System(error.to_string()))?;
         if !response.status().is_success() {
             return Err(ManagerError::System(format!(
@@ -324,13 +349,21 @@ async fn fetch_provider_model_catalog(
                 response.status().as_u16()
             )));
         }
-        let value = response.json::<Value>().await
+        let value = response
+            .json::<Value>()
+            .await
             .map_err(|error| ManagerError::System(error.to_string()))?;
         if !claude {
             return Ok(value);
         }
-        let items = value.get("data").or_else(|| value.get("models")).unwrap_or(&value)
-            .as_array().ok_or_else(|| ManagerError::System("模型列表必须是 data、models 或 JSON 数组".into()))?;
+        let items = value
+            .get("data")
+            .or_else(|| value.get("models"))
+            .unwrap_or(&value)
+            .as_array()
+            .ok_or_else(|| {
+                ManagerError::System("模型列表必须是 data、models 或 JSON 数组".into())
+            })?;
         models.extend(items.iter().cloned());
         if value["has_more"] != true {
             return Ok(json!({ "data": models }));
@@ -338,7 +371,9 @@ async fn fetch_provider_model_catalog(
         // 分页全部成功后才保存，避免后续页失败时覆盖已有列表。
         after_id = string_value(value.get("last_id"));
         if after_id.is_empty() || !cursors.insert(after_id.clone()) {
-            return Err(ManagerError::System("上游模型列表分页游标无效，已保存的模型列表保持不变".into()));
+            return Err(ManagerError::System(
+                "上游模型列表分页游标无效，已保存的模型列表保持不变".into(),
+            ));
         }
     }
 }
@@ -348,7 +383,10 @@ pub async fn save_runtime_model(paths: &AppPaths, payload: Value) -> Result<(), 
     let mut models = provider_store::read_models(paths)?;
     let previous = models
         .iter()
-        .find(|item| item.get("id") == payload.get("id") || (item["providerId"] == payload["providerId"] && item["name"] == payload["name"]))
+        .find(|item| {
+            item.get("id") == payload.get("id")
+                || (item["providerId"] == payload["providerId"] && item["name"] == payload["name"])
+        })
         .cloned();
     let model = normalize_model(&payload, previous.as_ref())?;
     let provider_id = string_value(model.get("providerId"));
@@ -472,7 +510,12 @@ pub async fn clear_runtime(
         let config_path = Path::new(&config_dir).join("config.toml");
         match tokio::fs::read_to_string(&config_path).await {
             Ok(mut content) => {
-                for key in ["model_catalog_json", "model", "model_context_window", "model_auto_compact_token_limit"] {
+                for key in [
+                    "model_catalog_json",
+                    "model",
+                    "model_context_window",
+                    "model_auto_compact_token_limit",
+                ] {
                     content = remove_toml_root_line(&content, key);
                 }
                 codex_models::write_atomic(&config_path, &content).await?;
@@ -741,7 +784,11 @@ pub async fn launch_codex_provider_instance(
         proxy::start_provider_instance_server(proxy_server_registry, paths, cli_targets, "codex")
             .await?
     } else {
-        string_value(catalog_provider.as_ref().and_then(|provider| provider.get("baseUrl")))
+        string_value(
+            catalog_provider
+                .as_ref()
+                .and_then(|provider| provider.get("baseUrl")),
+        )
     };
 
     let profile_dir = Path::new(&paths.workspace_root)
@@ -765,9 +812,16 @@ pub async fn launch_codex_provider_instance(
     let client_model = catalog_provider
         .as_ref()
         .filter(|provider| use_instance_proxy && codex_has_custom_models(provider))
-        .and_then(|provider| codex_model_aliases(provider).first().map(|item| item.0.clone()))
+        .and_then(|provider| {
+            codex_model_aliases(provider)
+                .first()
+                .map(|item| item.0.clone())
+        })
         .unwrap_or_else(|| {
-            if catalog_provider.as_ref().is_some_and(|provider| !codex_has_custom_models(provider)) {
+            if catalog_provider
+                .as_ref()
+                .is_some_and(|provider| !codex_has_custom_models(provider))
+            {
                 String::new()
             } else {
                 model.clone()
@@ -788,7 +842,10 @@ pub async fn launch_codex_provider_instance(
     if !client_model.is_empty() {
         config_lines.push(format!("model = {}", to_toml_string(client_model)));
     }
-    if catalog_provider.as_ref().is_some_and(codex_has_custom_models) {
+    if catalog_provider
+        .as_ref()
+        .is_some_and(codex_has_custom_models)
+    {
         config_lines.push("model_catalog_json = \".monkey_thief_model_catalog.json\"".to_string());
     }
 
@@ -837,12 +894,18 @@ pub async fn launch_codex_provider_instance(
     )
     .await?;
 
-    if let Some(provider) = catalog_provider.as_ref().filter(|provider| codex_has_custom_models(provider)) {
+    if let Some(provider) = catalog_provider
+        .as_ref()
+        .filter(|provider| codex_has_custom_models(provider))
+    {
         codex_models::write_atomic(
             &profile_dir.join(codex_models::CATALOG_FILE),
             &format!(
                 "{}\n",
-                serde_json::to_string_pretty(&codex_model_catalog_for_mode(provider, use_instance_proxy))?
+                serde_json::to_string_pretty(&codex_model_catalog_for_mode(
+                    provider,
+                    use_instance_proxy
+                ))?
             ),
         )
         .await?;
@@ -918,8 +981,7 @@ pub async fn launch_codex_provider_instance(
         codex_run_command,
         String::new(),
     ]);
-    tokio::fs::write(&launcher_path, launcher_lines.join("\r\n"))
-    .await?;
+    tokio::fs::write(&launcher_path, launcher_lines.join("\r\n")).await?;
 
     let mut command = std::process::Command::new("cmd.exe");
     command
@@ -3279,7 +3341,9 @@ pub(crate) fn set_provider_key(
         keys.remove(provider_id);
     } else {
         let existing = provider_key_records(keys.get(provider_id));
-        let id = existing.first().map(|key| string_value(key.get("id")))
+        let id = existing
+            .first()
+            .map(|key| string_value(key.get("id")))
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         keys.insert(provider_id.to_string(), json!({
             "activeKeyId": id,
@@ -3336,11 +3400,7 @@ pub(crate) fn set_provider_keys(
     let mut records = Vec::new();
 
     for (index, requested) in requested_keys.iter().enumerate() {
-        let id = non_empty_string(
-            requested.get("id"),
-            None,
-            &uuid::Uuid::new_v4().to_string(),
-        );
+        let id = non_empty_string(requested.get("id"), None, &uuid::Uuid::new_v4().to_string());
         let name = non_empty_string(requested.get("name"), None, &format!("Key {}", index + 1));
         let note = string_value(requested.get("note"));
         let api_key = string_value(requested.get("apiKey"));
@@ -3794,16 +3854,29 @@ mod tests {
                 expected_keys.remove(&format!("disabled-{cli}"));
             }
             let target_keys = provider_store::read_keys(&paths).unwrap();
-            let key_id = target_keys["disabled-claude"]["keys"][0]["id"].as_str().unwrap();
+            let key_id = target_keys["disabled-claude"]["keys"][0]["id"]
+                .as_str()
+                .unwrap();
             let mut request = crate::core::provider_key_usage::KeyRequest::new(
-                &paths, "disabled-claude", key_id, "target-secret",
+                &paths,
+                "disabled-claude",
+                key_id,
+                "target-secret",
             );
             request.start();
             for cli in ["claude", "codex"] {
                 let id = format!("disabled-{cli}");
-                delete_provider(&paths, json!({ "providerId": id })).await.unwrap();
-                assert!(!provider_store::read_providers(&paths).unwrap().iter().any(|item| item["id"] == id));
-                assert!(!provider_store::read_models(&paths).unwrap().iter().any(|item| item["providerId"] == id));
+                delete_provider(&paths, json!({ "providerId": id }))
+                    .await
+                    .unwrap();
+                assert!(!provider_store::read_providers(&paths)
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["id"] == id));
+                assert!(!provider_store::read_models(&paths)
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["providerId"] == id));
                 assert!(!provider_store::read_keys(&paths).unwrap().contains_key(&id));
                 assert_eq!(connection.query_row(
                     "SELECT COUNT(*) FROM provider_keys WHERE provider_id=?1 AND (is_current=1 OR is_active=1 OR value<>'')",
@@ -3812,14 +3885,33 @@ mod tests {
             }
             request.response(200, false);
             request.finish();
-            assert_eq!(crate::core::provider_key_usage::read(
-                &paths, "disabled-claude", key_id, "target-secret",
-            ).unwrap()["successCount"], 1);
-            assert_eq!(provider_store::read_providers(&paths).unwrap(), original_providers);
-            assert_eq!(provider_store::read_models(&paths).unwrap(), original_models);
-            assert_eq!(provider_store::read_profiles(&paths).unwrap(), original_profiles);
+            assert_eq!(
+                crate::core::provider_key_usage::read(
+                    &paths,
+                    "disabled-claude",
+                    key_id,
+                    "target-secret",
+                )
+                .unwrap()["successCount"],
+                1
+            );
+            assert_eq!(
+                provider_store::read_providers(&paths).unwrap(),
+                original_providers
+            );
+            assert_eq!(
+                provider_store::read_models(&paths).unwrap(),
+                original_models
+            );
+            assert_eq!(
+                provider_store::read_profiles(&paths).unwrap(),
+                original_profiles
+            );
             assert_eq!(provider_store::read_keys(&paths).unwrap(), expected_keys);
-            assert_eq!(fs::read_to_string(config_dir.join("config.toml")).unwrap(), original_config);
+            assert_eq!(
+                fs::read_to_string(config_dir.join("config.toml")).unwrap(),
+                original_config
+            );
             drop(connection);
             fs::remove_dir_all(test_root).unwrap();
         });
@@ -3836,13 +3928,18 @@ mod tests {
             let original_keys = provider_store::read_keys(&paths).unwrap();
             for cli in ["claude", "codex"] {
                 let id = format!("disabled-{cli}");
-                save_provider(&paths, json!({
-                    "id": id, "cli": cli, "name": "禁用供应商",
-                    "type": if cli == "claude" { "anthropic" } else { "openai" },
-                    "enabled": false, "baseUrl": "https://example.com/v1",
-                    "apiKey": "disabled-provider-secret",
-                    "runtimeConfig": { "modelList": ["old-model"], "mainModel": "old-model" }
-                })).await.unwrap();
+                save_provider(
+                    &paths,
+                    json!({
+                        "id": id, "cli": cli, "name": "禁用供应商",
+                        "type": if cli == "claude" { "anthropic" } else { "openai" },
+                        "enabled": false, "baseUrl": "https://example.com/v1",
+                        "apiKey": "disabled-provider-secret",
+                        "runtimeConfig": { "modelList": ["old-model"], "mainModel": "old-model" }
+                    }),
+                )
+                .await
+                .unwrap();
                 let mut provider = find_provider(&paths, &id).unwrap();
                 provider["name"] = json!("已编辑的禁用供应商");
                 provider["runtimeConfig"]["modelList"] = json!(["new-model"]);
@@ -3852,15 +3949,36 @@ mod tests {
                 assert_eq!(updated["enabled"], false);
                 assert_eq!(updated["name"], "已编辑的禁用供应商");
                 assert_eq!(updated["runtimeConfig"]["mainModel"], "new-model");
-                assert_eq!(get_provider_api_key(&paths, &id).unwrap(), "disabled-provider-secret");
+                assert_eq!(
+                    get_provider_api_key(&paths, &id).unwrap(),
+                    "disabled-provider-secret"
+                );
                 let public = read_public_providers(&paths).unwrap();
-                assert!(public.as_array().unwrap().iter().any(|item| item["id"] == id && item["enabled"] == false));
-                delete_provider(&paths, json!({ "providerId": id })).await.unwrap();
-                assert_eq!(provider_store::read_providers(&paths).unwrap(), original_providers);
-                assert_eq!(provider_store::read_models(&paths).unwrap(), original_models);
-                assert_eq!(provider_store::read_profiles(&paths).unwrap(), original_profiles);
+                assert!(public
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|item| item["id"] == id && item["enabled"] == false));
+                delete_provider(&paths, json!({ "providerId": id }))
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    provider_store::read_providers(&paths).unwrap(),
+                    original_providers
+                );
+                assert_eq!(
+                    provider_store::read_models(&paths).unwrap(),
+                    original_models
+                );
+                assert_eq!(
+                    provider_store::read_profiles(&paths).unwrap(),
+                    original_profiles
+                );
                 assert_eq!(provider_store::read_keys(&paths).unwrap(), original_keys);
-                assert_eq!(fs::read_to_string(config_dir.join("config.toml")).unwrap(), original_config);
+                assert_eq!(
+                    fs::read_to_string(config_dir.join("config.toml")).unwrap(),
+                    original_config
+                );
             }
             fs::remove_dir_all(test_root).unwrap();
         });
@@ -3876,14 +3994,35 @@ mod tests {
             let id = string_value(provider.get("id"));
             let models = provider_store::read_models(&paths).unwrap();
             let keys = provider_store::read_keys(&paths).unwrap();
-            for record_id in [&id, models[0]["id"].as_str().unwrap(), keys[&id]["keys"][0]["id"].as_str().unwrap()] {
-                assert_eq!(uuid::Uuid::parse_str(record_id).unwrap().get_version_num(), 4);
+            for record_id in [
+                &id,
+                models[0]["id"].as_str().unwrap(),
+                keys[&id]["keys"][0]["id"].as_str().unwrap(),
+            ] {
+                assert_eq!(
+                    uuid::Uuid::parse_str(record_id).unwrap().get_version_num(),
+                    4
+                );
             }
-            let profile = normalize_profile(&json!({"cli":"codex","providerId":id,"model":"model-a"}), None).unwrap();
-            assert_eq!(uuid::Uuid::parse_str(profile["id"].as_str().unwrap()).unwrap().get_version_num(), 4);
+            let profile = normalize_profile(
+                &json!({"cli":"codex","providerId":id,"model":"model-a"}),
+                None,
+            )
+            .unwrap();
+            assert_eq!(
+                uuid::Uuid::parse_str(profile["id"].as_str().unwrap())
+                    .unwrap()
+                    .get_version_num(),
+                4
+            );
             save_provider(&paths, provider.clone()).await.unwrap();
             assert_eq!(provider_store::read_models(&paths).unwrap(), models);
-            save_runtime_model(&paths, json!({"providerId":id,"name":"model-a","supportsVision":true})).await.unwrap();
+            save_runtime_model(
+                &paths,
+                json!({"providerId":id,"name":"model-a","supportsVision":true}),
+            )
+            .await
+            .unwrap();
             let updated_models = provider_store::read_models(&paths).unwrap();
             assert_eq!(updated_models.len(), models.len());
             assert_eq!(updated_models[0]["id"], models[0]["id"]);
@@ -3899,13 +4038,24 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let (test_root, paths, _) = create_codex_runtime_fixture();
             for sync in [None, Some(false), Some(true)] {
-                let mut runtime = json!({"modelList": ["custom-model"], "mainModel": "custom-model"});
-                if let Some(enabled) = sync { runtime["syncModelList"] = json!(enabled); }
+                let mut runtime =
+                    json!({"modelList": ["custom-model"], "mainModel": "custom-model"});
+                if let Some(enabled) = sync {
+                    runtime["syncModelList"] = json!(enabled);
+                }
                 let normalized = normalize_runtime_config(Some(&runtime), "codex");
                 assert_eq!(normalized["syncModelList"], sync == Some(true));
-                let provider = json!({"id":"provider-codex", "cli":"codex", "runtimeConfig":normalized});
-                let files = build_codex_config_files(&paths, &provider, &json!({"model":"custom-model"})).unwrap();
-                assert_eq!(files.iter().any(|file| file["name"] == codex_models::CATALOG_FILE), sync == Some(true));
+                let provider =
+                    json!({"id":"provider-codex", "cli":"codex", "runtimeConfig":normalized});
+                let files =
+                    build_codex_config_files(&paths, &provider, &json!({"model":"custom-model"}))
+                        .unwrap();
+                assert_eq!(
+                    files
+                        .iter()
+                        .any(|file| file["name"] == codex_models::CATALOG_FILE),
+                    sync == Some(true)
+                );
                 let root = parse_simple_toml(files[1]["content"].as_str().unwrap())["root"].clone();
                 assert_eq!(root.get("model_catalog_json").is_some(), sync == Some(true));
                 assert_eq!(root.get("model").is_some(), sync == Some(true));
@@ -3919,40 +4069,76 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let (test_root, paths, config_dir) = create_codex_runtime_fixture();
             let targets = json!([{"id":"codex", "configPath":config_dir.to_string_lossy()}]);
-            fs::write(config_dir.join("config.toml"), "sandbox_mode = 'workspace-write'\n[mcp_servers.demo]\ncommand = 'keep'\n").unwrap();
+            fs::write(
+                config_dir.join("config.toml"),
+                "sandbox_mode = 'workspace-write'\n[mcp_servers.demo]\ncommand = 'keep'\n",
+            )
+            .unwrap();
             let mut provider = find_provider(&paths, "provider-codex").unwrap();
             provider["runtimeConfig"]["modelList"] = json!(["custom-model"]);
             provider["runtimeConfig"]["mainModel"] = json!("custom-model");
             provider["runtimeConfig"]["syncModelList"] = json!(true);
             save_provider(&paths, provider.clone()).await.unwrap();
-            sync_active_provider_config(&paths, "provider-codex", &targets).await.unwrap();
-            assert!(fs::read_to_string(config_dir.join("config.toml")).unwrap().contains("model_catalog_json"));
+            sync_active_provider_config(&paths, "provider-codex", &targets)
+                .await
+                .unwrap();
+            assert!(fs::read_to_string(config_dir.join("config.toml"))
+                .unwrap()
+                .contains("model_catalog_json"));
             provider["runtimeConfig"]["syncModelList"] = json!(false);
             save_provider(&paths, provider.clone()).await.unwrap();
-            sync_active_provider_config(&paths, "provider-codex", &targets).await.unwrap();
+            sync_active_provider_config(&paths, "provider-codex", &targets)
+                .await
+                .unwrap();
             let config = fs::read_to_string(config_dir.join("config.toml")).unwrap();
-            assert!(parse_simple_toml(&config)["root"].get("model_catalog_json").is_none());
-            assert_eq!(find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]["modelList"], json!(["custom-model"]));
+            assert!(parse_simple_toml(&config)["root"]
+                .get("model_catalog_json")
+                .is_none());
+            assert_eq!(
+                find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]["modelList"],
+                json!(["custom-model"])
+            );
             provider["runtimeConfig"]["syncModelList"] = json!(true);
             save_provider(&paths, provider).await.unwrap();
-            sync_active_provider_config(&paths, "provider-codex", &targets).await.unwrap();
-            clear_runtime(&paths, json!({"cli":"codex"}), &targets).await.unwrap();
+            sync_active_provider_config(&paths, "provider-codex", &targets)
+                .await
+                .unwrap();
+            clear_runtime(&paths, json!({"cli":"codex"}), &targets)
+                .await
+                .unwrap();
             let config = fs::read_to_string(config_dir.join("config.toml")).unwrap();
             let root = parse_simple_toml(&config)["root"].clone();
             assert!(root.get("model_catalog_json").is_none());
             assert!(root.get("model").is_none());
             assert!(config.contains("[mcp_servers.demo]\ncommand = 'keep'"));
             assert!(config.contains("sandbox_mode = 'workspace-write'"));
-            switch_runtime(&paths, json!({"cli":"codex", "providerId":"provider-codex", "model":"custom-model"}), &targets).await.unwrap();
-            assert!(fs::read_to_string(config_dir.join("config.toml")).unwrap().contains("model_catalog_json"));
+            switch_runtime(
+                &paths,
+                json!({"cli":"codex", "providerId":"provider-codex", "model":"custom-model"}),
+                &targets,
+            )
+            .await
+            .unwrap();
+            assert!(fs::read_to_string(config_dir.join("config.toml"))
+                .unwrap()
+                .contains("model_catalog_json"));
             save_provider(&paths, json!({"id":"unsynced-provider", "cli":"codex", "name":"未勾选同步", "type":"openai", "baseUrl":"https://example.com/v1", "runtimeConfig":{"modelList":["other-model"], "mainModel":"other-model"}})).await.unwrap();
-            switch_runtime(&paths, json!({"cli":"codex", "providerId":"unsynced-provider", "model":"other-model"}), &targets).await.unwrap();
+            switch_runtime(
+                &paths,
+                json!({"cli":"codex", "providerId":"unsynced-provider", "model":"other-model"}),
+                &targets,
+            )
+            .await
+            .unwrap();
             let config = fs::read_to_string(config_dir.join("config.toml")).unwrap();
             let root = parse_simple_toml(&config)["root"].clone();
             assert!(root.get("model_catalog_json").is_none());
             assert!(root.get("model").is_none());
             assert!(config.contains("[mcp_servers.demo]\ncommand = 'keep'"));
-            assert_eq!(find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]["syncModelList"], true);
+            assert_eq!(
+                find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]["syncModelList"],
+                true
+            );
             fs::remove_dir_all(test_root).unwrap();
         });
     }
@@ -4066,7 +4252,8 @@ mod tests {
     fn codex_model_sync_only_changes_the_specified_provider() {
         tauri::async_runtime::block_on(async {
             let (test_root, paths, config_dir) = create_codex_runtime_fixture();
-            let cli_targets = json!([{ "id": "codex", "configPath": config_dir.to_string_lossy() }]);
+            let cli_targets =
+                json!([{ "id": "codex", "configPath": config_dir.to_string_lossy() }]);
             let original_config = write_codex_config(&paths, &config_dir).await;
             let active_provider = find_provider(&paths, "provider-codex").unwrap();
             save_provider(&paths, json!({
@@ -4076,21 +4263,55 @@ mod tests {
             assert!(!sync_codex_provider_models(&paths, json!({
                 "providerId": "inactive-provider", "runtimeConfig": { "modelList": "inactive-new" }
             }), &cli_targets).await.unwrap());
-            assert_eq!(find_provider(&paths, "inactive-provider").unwrap()["runtimeConfig"]["modelList"], json!(["inactive-new"]));
-            assert_eq!(find_provider(&paths, "provider-codex").unwrap(), active_provider);
-            assert_eq!(fs::read_to_string(config_dir.join("config.toml")).unwrap(), original_config);
+            assert_eq!(
+                find_provider(&paths, "inactive-provider").unwrap()["runtimeConfig"]["modelList"],
+                json!(["inactive-new"])
+            );
+            assert_eq!(
+                find_provider(&paths, "provider-codex").unwrap(),
+                active_provider
+            );
+            assert_eq!(
+                fs::read_to_string(config_dir.join("config.toml")).unwrap(),
+                original_config
+            );
             assert!(!sync_codex_provider_models(&paths, json!({
                 "providerId": "inactive-provider", "runtimeConfig": { "modelList": "", "mainModel": "inactive-new" }
             }), &cli_targets).await.unwrap());
-            assert_eq!(find_provider(&paths, "inactive-provider").unwrap()["runtimeConfig"]["modelList"], json!([]));
-            assert!(sync_codex_provider_models(&paths, json!({ "restore": true }), &cli_targets).await.is_err());
-            assert_eq!(fs::read_to_string(config_dir.join("config.toml")).unwrap(), original_config);
-            assert!(sync_codex_provider_models(&paths, json!({
-                "providerId": "provider-codex", "runtimeConfig": { "modelList": "active-new" }
-            }), &cli_targets).await.unwrap());
-            assert!(fs::read_to_string(config_dir.join("config.toml")).unwrap().contains("model = \"active-new\""));
-            assert_eq!(find_provider(&paths, "inactive-provider").unwrap()["runtimeConfig"]["modelList"], json!([]));
-            assert_eq!(find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]["serviceTierFast"], true);
+            assert_eq!(
+                find_provider(&paths, "inactive-provider").unwrap()["runtimeConfig"]["modelList"],
+                json!([])
+            );
+            assert!(
+                sync_codex_provider_models(&paths, json!({ "restore": true }), &cli_targets)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                fs::read_to_string(config_dir.join("config.toml")).unwrap(),
+                original_config
+            );
+            assert!(sync_codex_provider_models(
+                &paths,
+                json!({
+                    "providerId": "provider-codex", "runtimeConfig": { "modelList": "active-new" }
+                }),
+                &cli_targets
+            )
+            .await
+            .unwrap());
+            assert!(fs::read_to_string(config_dir.join("config.toml"))
+                .unwrap()
+                .contains("model = \"active-new\""));
+            assert_eq!(
+                find_provider(&paths, "inactive-provider").unwrap()["runtimeConfig"]["modelList"],
+                json!([])
+            );
+            assert_eq!(
+                find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]
+                    ["serviceTierFast"],
+                true
+            );
             fs::remove_dir_all(test_root).unwrap();
         });
     }
@@ -4131,8 +4352,16 @@ mod tests {
                     socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
                 }
             });
-            let catalog = fetch_claude_models(&paths, json!({ "providerId": "provider-claude", "keyId": "selected" })).await.unwrap();
-            assert_eq!(catalog["models"], json!(["claude-a", "claude-b", "claude-c"]));
+            let catalog = fetch_claude_models(
+                &paths,
+                json!({ "providerId": "provider-claude", "keyId": "selected" }),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                catalog["models"],
+                json!(["claude-a", "claude-b", "claude-c"])
+            );
             server.await.unwrap();
             let saved = find_provider(&paths, "provider-claude").unwrap();
             assert_eq!(saved["runtimeConfig"]["modelList"], catalog["models"]);
@@ -4140,9 +4369,15 @@ mod tests {
             assert_eq!(saved["runtimeConfig"]["haikuModel"], "custom-haiku");
             assert_eq!(saved["headers"]["x-models-test"], "custom-header");
             assert_eq!(provider_store::read_keys(&paths).unwrap(), keys_before);
-            assert_eq!(find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]["modelList"], json!(["gpt-5.6-sol"]));
+            assert_eq!(
+                find_provider(&paths, "provider-codex").unwrap()["runtimeConfig"]["modelList"],
+                json!(["gpt-5.6-sol"])
+            );
             save_provider(&paths, saved).await.unwrap();
-            assert_eq!(find_provider(&paths, "provider-claude").unwrap()["runtimeConfig"]["modelList"], catalog["models"]);
+            assert_eq!(
+                find_provider(&paths, "provider-claude").unwrap()["runtimeConfig"]["modelList"],
+                catalog["models"]
+            );
             let config_dir = test_root.join("claude-config");
             fs::create_dir_all(&config_dir).unwrap();
             fs::write(config_dir.join("settings.json"), json!({
@@ -4154,7 +4389,10 @@ mod tests {
                 find_provider(&paths, "provider-claude").unwrap(),
                 json!({ "id": "profile-claude", "cli": "claude", "providerId": "provider-claude", "model": "private-alias" }),
             ).await.unwrap();
-            assert_eq!(find_provider(&paths, "provider-claude").unwrap()["runtimeConfig"]["modelList"], catalog["models"]);
+            assert_eq!(
+                find_provider(&paths, "provider-claude").unwrap()["runtimeConfig"]["modelList"],
+                catalog["models"]
+            );
             fs::remove_dir_all(test_root).unwrap();
         });
     }
@@ -4164,18 +4402,29 @@ mod tests {
         tauri::async_runtime::block_on(async {
             use tokio::io::{AsyncReadExt, AsyncWriteExt};
             let (test_root, paths, _) = create_codex_runtime_fixture();
-            save_provider(&paths, json!({
-                "id": "provider-claude", "cli": "claude", "name": "Claude", "type": "anthropic",
-                "runtimeConfig": { "modelList": ["saved-model"], "mainModel": "manual-model" }
-            })).await.unwrap();
+            save_provider(
+                &paths,
+                json!({
+                    "id": "provider-claude", "cli": "claude", "name": "Claude", "type": "anthropic",
+                    "runtimeConfig": { "modelList": ["saved-model"], "mainModel": "manual-model" }
+                }),
+            )
+            .await
+            .unwrap();
             let previous = find_provider(&paths, "provider-claude").unwrap();
             for responses in [
                 vec![("200 OK", r#"{"data":[]}"#)],
                 vec![("200 OK", r#"{"error":"invalid catalog"}"#)],
                 vec![("401 Unauthorized", r#"{"error":"unauthorized"}"#)],
-                vec![("200 OK", r#"{"data":[{"id":"partial-model"}],"has_more":true}"#)],
+                vec![(
+                    "200 OK",
+                    r#"{"data":[{"id":"partial-model"}],"has_more":true}"#,
+                )],
                 vec![
-                    ("200 OK", r#"{"data":[{"id":"partial-model"}],"has_more":true,"last_id":"partial-model"}"#),
+                    (
+                        "200 OK",
+                        r#"{"data":[{"id":"partial-model"}],"has_more":true,"last_id":"partial-model"}"#,
+                    ),
                     ("500 Internal Server Error", r#"{"error":"page failed"}"#),
                 ],
             ] {
@@ -4189,9 +4438,14 @@ mod tests {
                         socket.write_all(format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
                     }
                 });
-                assert!(fetch_claude_models(&paths, json!({
-                    "providerId": "provider-claude", "baseUrl": format!("http://{address}/v1")
-                })).await.is_err());
+                assert!(fetch_claude_models(
+                    &paths,
+                    json!({
+                        "providerId": "provider-claude", "baseUrl": format!("http://{address}/v1")
+                    })
+                )
+                .await
+                .is_err());
                 server.await.unwrap();
                 assert_eq!(find_provider(&paths, "provider-claude").unwrap(), previous);
             }
@@ -4216,7 +4470,9 @@ mod tests {
                     let (mut socket, _) = listener.accept().await.unwrap();
                     let mut request = vec![0; 8192];
                     let length = socket.read(&mut request).await.unwrap();
-                    assert!(String::from_utf8_lossy(&request[..length]).to_lowercase().contains("authorization: bearer new-key"));
+                    assert!(String::from_utf8_lossy(&request[..length])
+                        .to_lowercase()
+                        .contains("authorization: bearer new-key"));
                     socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
                 });
                 let catalog = fetch_claude_models(&paths, json!({
@@ -4226,18 +4482,24 @@ mod tests {
                 assert_eq!(catalog["models"], json!(["claude-a", "claude-b"]));
                 assert_eq!(provider_store::read_providers(&paths).unwrap(), previous);
             }
-            let normalized = normalize_runtime_config(Some(&json!({
-                "modelList": "claude-a\nclaude-b,claude-a", "mainModel": "manual-model",
-                "haikuModel": "custom-haiku", "sonnetModel": "custom-sonnet", "opusModel": "custom-opus",
-                "syncModelList": true
-            })), "claude");
+            let normalized = normalize_runtime_config(
+                Some(&json!({
+                    "modelList": "claude-a\nclaude-b,claude-a", "mainModel": "manual-model",
+                    "haikuModel": "custom-haiku", "sonnetModel": "custom-sonnet", "opusModel": "custom-opus",
+                    "syncModelList": true
+                })),
+                "claude",
+            );
             assert_eq!(normalized["modelList"], json!(["claude-a", "claude-b"]));
             assert_eq!(normalized["mainModel"], "manual-model");
             assert_eq!(normalized["haikuModel"], "custom-haiku");
             assert_eq!(normalized["sonnetModel"], "custom-sonnet");
             assert_eq!(normalized["opusModel"], "custom-opus");
             assert_eq!(normalized["syncModelList"], false);
-            assert_eq!(normalize_runtime_config(None, "claude")["modelList"], json!([]));
+            assert_eq!(
+                normalize_runtime_config(None, "claude")["modelList"],
+                json!([])
+            );
             fs::remove_dir_all(test_root).unwrap();
         });
     }
@@ -4275,15 +4537,24 @@ mod tests {
     #[test]
     fn codex_model_list_uses_defaults_and_assigns_shell_slots() {
         let default_provider = json!({ "runtimeConfig": {} });
-        assert_eq!(codex_model_list(&default_provider).len(), DEFAULT_CODEX_MODEL_LIST.len());
+        assert_eq!(
+            codex_model_list(&default_provider).len(),
+            DEFAULT_CODEX_MODEL_LIST.len()
+        );
 
         let provider = json!({
           "runtimeConfig": { "modelList": "deepseek-v3\nqwen-max, deepseek-v3" }
         });
         let aliases = codex_model_aliases(&provider);
         assert_eq!(aliases.len(), 2);
-        assert_eq!(aliases[0], ("gpt-5.6-sol".to_string(), "deepseek-v3".to_string()));
-        assert_eq!(aliases[1], ("gpt-5.6-terra".to_string(), "qwen-max".to_string()));
+        assert_eq!(
+            aliases[0],
+            ("gpt-5.6-sol".to_string(), "deepseek-v3".to_string())
+        );
+        assert_eq!(
+            aliases[1],
+            ("gpt-5.6-terra".to_string(), "qwen-max".to_string())
+        );
 
         let provider_with_native_model = json!({
           "runtimeConfig": { "modelList": "deepseek-v3,gpt-5.6-sol" }
@@ -4325,9 +4596,22 @@ mod tests {
             )
             .unwrap();
         }
-        provider_store::write_provider_bundle(&paths,&[json!({"id":"provider-a","cli":"claude"})],&[],&[],&keys).unwrap();
+        provider_store::write_provider_bundle(
+            &paths,
+            &[json!({"id":"provider-a","cli":"claude"})],
+            &[],
+            &[],
+            &keys,
+        )
+        .unwrap();
         let settings = Map::from_iter([("currentProviderId".to_string(), json!("provider-a"))]);
-        provider_store::write_desktop_bundle(&paths, &[json!({"id":"provider-a","mode":"direct"})], &settings, &keys).unwrap();
+        provider_store::write_desktop_bundle(
+            &paths,
+            &[json!({"id":"provider-a","mode":"direct"})],
+            &settings,
+            &keys,
+        )
+        .unwrap();
         let runtime_state = provider_store::read_runtime_state(&paths).unwrap();
         let config_path = config_dir.join("config.toml");
         fs::write(&config_path, "model = 'unchanged'\n").unwrap();
@@ -4383,7 +4667,14 @@ mod tests {
             "active".to_string(),
         )
         .unwrap();
-        provider_store::write_provider_bundle(&paths,&[json!({"id":"provider-a","cli":"codex"})],&[],&[],&keys).unwrap();
+        provider_store::write_provider_bundle(
+            &paths,
+            &[json!({"id":"provider-a","cli":"codex"})],
+            &[],
+            &[],
+            &keys,
+        )
+        .unwrap();
         for payload in [
             json!({}),
             json!({ "providerId": "provider-a" }),
@@ -4406,8 +4697,15 @@ mod tests {
             "legacy-provider".to_string(),
             json!(encrypt_provider_key("sk-legacy-test").unwrap()),
         )]);
-        provider_store::write_provider_bundle(&paths,&[json!({"id":"legacy-provider","cli":"codex"})],&[],&[],&keys).unwrap();
-        let keys=provider_store::read_keys(&paths).unwrap();
+        provider_store::write_provider_bundle(
+            &paths,
+            &[json!({"id":"legacy-provider","cli":"codex"})],
+            &[],
+            &[],
+            &keys,
+        )
+        .unwrap();
+        let keys = provider_store::read_keys(&paths).unwrap();
         let result = read_provider_key_value(
             &paths,
             &json!({ "providerId": "legacy-provider", "keyId": "default", "cli": "codex" }),

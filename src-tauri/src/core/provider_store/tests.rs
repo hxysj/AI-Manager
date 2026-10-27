@@ -18,27 +18,69 @@ fn uuid_provider_ids_keep_keys_activation_and_instances_connected() {
     let desktop_id = uuid::Uuid::new_v4().to_string();
     let key_id = uuid::Uuid::new_v4().to_string();
     let key_alias = format!("claude-desktop:{desktop_id}");
-    let keys = Map::from_iter([(key_alias.clone(), json!({"keys":[{"id":key_id,"value":"encrypted"}],"activeKeyId":key_id}))]);
-    write_codex_accounts(&paths, &[json!({"id":account_id,"accountId":"upstream-account"})]).unwrap();
+    let keys = Map::from_iter([(
+        key_alias.clone(),
+        json!({"keys":[{"id":key_id,"value":"encrypted"}],"activeKeyId":key_id}),
+    )]);
+    write_codex_accounts(
+        &paths,
+        &[json!({"id":account_id,"accountId":"upstream-account"})],
+    )
+    .unwrap();
     write_active_codex_account_id(&paths, &account_id).unwrap();
     let settings = Map::from_iter([("currentProviderId".into(), json!(desktop_id))]);
-    write_desktop_bundle(&paths, &[json!({"id":desktop_id,"mode":"direct"})], &settings, &keys).unwrap();
+    write_desktop_bundle(
+        &paths,
+        &[json!({"id":desktop_id,"mode":"direct"})],
+        &settings,
+        &keys,
+    )
+    .unwrap();
     let instance_id = format!("account:{account_id}");
-    write_instances(&paths, &[json!({"providerId":instance_id,"profileDir":"instance","updatedAt":1})]).unwrap();
+    write_instances(
+        &paths,
+        &[json!({"providerId":instance_id,"profileDir":"instance","updatedAt":1})],
+    )
+    .unwrap();
 
     assert_eq!(read_active_codex_account_id(&paths).unwrap(), account_id);
-    assert_eq!(read_desktop_settings(&paths).unwrap()["currentProviderId"], desktop_id);
-    assert_eq!(read_keys(&paths).unwrap()[&key_alias]["keys"][0]["id"], key_id);
-    assert_eq!(read_instances(&paths).unwrap()[0]["providerId"], instance_id);
+    assert_eq!(
+        read_desktop_settings(&paths).unwrap()["currentProviderId"],
+        desktop_id
+    );
+    assert_eq!(
+        read_keys(&paths).unwrap()[&key_alias]["keys"][0]["id"],
+        key_id
+    );
+    assert_eq!(
+        read_instances(&paths).unwrap()[0]["providerId"],
+        instance_id
+    );
     let saved_keys = read_keys(&paths).unwrap();
     write_keys(&paths, &saved_keys).unwrap();
     assert_eq!(read_keys(&paths).unwrap(), saved_keys);
     let connection = database::open(&paths).unwrap();
-    let ids = connection.prepare("SELECT id FROM providers").unwrap().query_map([], |row| row.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+    let ids = connection
+        .prepare("SELECT id FROM providers")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
     assert_eq!(ids.len(), 2);
     assert!(ids.iter().all(|id| uuid::Uuid::parse_str(id).is_ok()));
-    assert_eq!(connection.query_row("SELECT provider_id FROM provider_keys", [], |row| row.get::<_, String>(0)).unwrap(), desktop_id);
-    assert!(!connection.prepare("PRAGMA foreign_key_check").unwrap().exists([]).unwrap());
+    assert_eq!(
+        connection
+            .query_row("SELECT provider_id FROM provider_keys", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        desktop_id
+    );
+    assert!(!connection
+        .prepare("PRAGMA foreign_key_check")
+        .unwrap()
+        .exists([])
+        .unwrap());
     drop(connection);
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -50,15 +92,29 @@ fn legacy_namespaced_uuid_keeps_its_primary_key_and_keys_on_save() {
     let id = uuid::Uuid::new_v4().to_string();
     let legacy_id = format!("claude-desktop:{id}");
     let connection = database::open(&paths).unwrap();
-    connection.execute("INSERT INTO providers(id,cli,type) VALUES(?1,'claude-desktop','anthropic')", [&legacy_id]).unwrap();
+    connection
+        .execute(
+            "INSERT INTO providers(id,cli,type) VALUES(?1,'claude-desktop','anthropic')",
+            [&legacy_id],
+        )
+        .unwrap();
     connection.execute("INSERT INTO provider_keys(provider_id,id,value,is_active) VALUES(?1,'legacy-key','encrypted',1)", [&legacy_id]).unwrap();
     let providers = read_desktop_providers(&paths).unwrap();
     let keys = read_keys(&paths).unwrap();
     let settings = Map::from_iter([("currentProviderId".into(), json!(id))]);
     write_desktop_bundle(&paths, &providers, &settings, &keys).unwrap();
-    assert_eq!(read_desktop_settings(&paths).unwrap()["currentProviderId"], id);
+    assert_eq!(
+        read_desktop_settings(&paths).unwrap()["currentProviderId"],
+        id
+    );
     assert_eq!(read_keys(&paths).unwrap(), keys);
-    assert_eq!(connection.query_row("SELECT id FROM providers", [], |row| row.get::<_, String>(0)).unwrap(), legacy_id);
+    assert_eq!(
+        connection
+            .query_row("SELECT id FROM providers", [], |row| row
+                .get::<_, String>(0))
+            .unwrap(),
+        legacy_id
+    );
     drop(connection);
     std::fs::remove_dir_all(root).unwrap();
 }

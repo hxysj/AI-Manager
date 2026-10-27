@@ -898,7 +898,13 @@ pub async fn delete_device(
         let mut groups: Vec<LanShareGroup> = read_array(&paths.lan_share_files.groups)?;
         {
             let mut runtime = registry.inner.lock().await;
-            if runtime.native.config.peers.iter().any(|trusted| trusted.peer.id == device_id) {
+            if runtime
+                .native
+                .config
+                .peers
+                .iter()
+                .any(|trusted| trusted.peer.id == device_id)
+            {
                 runtime.native.forget(paths, &device_id).await?;
             }
         }
@@ -1594,7 +1600,10 @@ fn refresh_access_address(runtime: &mut LanShareRuntime, lan_ips: &[String]) -> 
     let access_url = if lan_ip.is_empty() {
         String::new()
     } else {
-        format!("http://{}:{}/?token={}", lan_ip, runtime.port, runtime.token)
+        format!(
+            "http://{}:{}/?token={}",
+            lan_ip, runtime.port, runtime.token
+        )
     };
     if runtime.lan_ip == lan_ip && runtime.access_url == access_url {
         return false;
@@ -4591,9 +4600,11 @@ pub async fn start_service(
         })));
     }
 
-    let lan_ip = lan_ips.first().cloned().ok_or_else(|| ManagerError::System(
-        "未找到可用局域网 IP，请确认电脑已连接 Wi-Fi、局域网或热点。".to_string()
-    ))?;
+    let lan_ip = lan_ips.first().cloned().ok_or_else(|| {
+        ManagerError::System(
+            "未找到可用局域网 IP，请确认电脑已连接 Wi-Fi、局域网或热点。".to_string(),
+        )
+    })?;
     let token = create_token()?;
     let mut port = DEFAULT_PORT;
     let listener = loop {
@@ -4746,7 +4757,10 @@ async fn rotate_access_token(
     runtime.access_url = if runtime.lan_ip.is_empty() {
         String::new()
     } else {
-        format!("http://{}:{}/?token={}", runtime.lan_ip, runtime.port, token)
+        format!(
+            "http://{}:{}/?token={}",
+            runtime.lan_ip, runtime.port, token
+        )
     };
     drop(runtime);
     emit_state_changed(app, registry, paths).await?;
@@ -4855,14 +4869,18 @@ pub async fn upsert_device(
                     .map(|(index, _)| index)
             }
         })
-        .or_else(|| devices.iter().position(|device| device.id == canonical_device_id))
+        .or_else(|| {
+            devices
+                .iter()
+                .position(|device| device.id == canonical_device_id)
+        })
         .or_else(|| {
             if ip.is_empty() || native_device {
                 return None;
             }
-            devices.iter().position(|device| {
-                device.ip == ip && device.user_agent != "MonkeyThief/Desktop"
-            })
+            devices
+                .iter()
+                .position(|device| device.ip == ip && device.user_agent != "MonkeyThief/Desktop")
         });
 
     if let Some(index) = device_index {
@@ -4873,12 +4891,12 @@ pub async fn upsert_device(
         let matched_by_name = !normalized_name.is_empty()
             && devices[index].user_agent != "MonkeyThief/Desktop"
             && normalize_device_name(&devices[index].name) == normalized_name;
-        let next_device_id = if matched_by_requested_id || matched_by_canonical_id || matched_by_name
-        {
-            old_device_id.clone()
-        } else {
-            canonical_device_id.clone()
-        };
+        let next_device_id =
+            if matched_by_requested_id || matched_by_canonical_id || matched_by_name {
+                old_device_id.clone()
+            } else {
+                canonical_device_id.clone()
+            };
         let merged_device_ids = same_name_device_ids
             .iter()
             .filter(|id| *id != &next_device_id)
@@ -4898,10 +4916,10 @@ pub async fn upsert_device(
         devices.retain(|device| {
             !merged_device_ids.contains(&device.id)
                 && (native_device
-                || device.user_agent == "MonkeyThief/Desktop"
-                || device.id == next_device_id
-                || device.ip != ip
-                || device.ip.is_empty())
+                    || device.user_agent == "MonkeyThief/Desktop"
+                    || device.id == next_device_id
+                    || device.ip != ip
+                    || device.ip.is_empty())
         });
         for merged_device_id in &merged_device_ids {
             rewrite_device_references(paths, merged_device_id, &next_device_id, ip).await?;
@@ -5001,13 +5019,15 @@ fn update_device_ip_references(
     let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
     let mut changed_sessions = false;
     let mut changed_messages = false;
-    for session in sessions.iter_mut().filter(|session| {
-        session.device_id == device_id && session.mode != "group"
-    }) {
+    for session in sessions
+        .iter_mut()
+        .filter(|session| session.device_id == device_id && session.mode != "group")
+    {
         if !old_ip.is_empty() {
-            for message in messages.iter_mut().filter(|message| {
-                message.session_id == session.id && message.ip.is_empty()
-            }) {
+            for message in messages
+                .iter_mut()
+                .filter(|message| message.session_id == session.id && message.ip.is_empty())
+            {
                 message.ip = old_ip.to_string();
                 changed_messages = true;
             }
@@ -5042,10 +5062,7 @@ fn ensure_session(
         sessions
             .iter()
             .enumerate()
-            .filter(|(_, session)| {
-                session.device_id == device_id
-                    && session.mode != "group"
-            })
+            .filter(|(_, session)| session.device_id == device_id && session.mode != "group")
             .max_by_key(|(_, session)| session.updated_at)
             .map(|(index, _)| index)
     } else {
@@ -5057,9 +5074,7 @@ fn ensure_session(
     if let Some(index) = target_index {
         let session = &mut sessions[index];
         if session.mode == "group" {
-            return Err(ManagerError::System(
-                "网页设备不能访问群聊会话。".into(),
-            ));
+            return Err(ManagerError::System("网页设备不能访问群聊会话。".into()));
         }
         let old_ip = session.ip.clone();
         session.device_name = device_name.to_string();
@@ -5071,12 +5086,12 @@ fn ensure_session(
         sort_sessions(&mut sessions);
         write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
         if !old_ip.is_empty() && !ip.is_empty() && old_ip != ip {
-            let mut messages: Vec<LanShareMessage> =
-                read_array(&paths.lan_share_files.messages)?;
+            let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
             let mut changed = false;
-            for message in messages.iter_mut().filter(|message| {
-                message.session_id == next_session.id && message.ip.is_empty()
-            }) {
+            for message in messages
+                .iter_mut()
+                .filter(|message| message.session_id == next_session.id && message.ip.is_empty())
+            {
                 message.ip = old_ip.clone();
                 changed = true;
             }
@@ -5846,7 +5861,17 @@ pub(super) async fn deliver_pending_messages_for_peer(
 
     let mut delivered_ids = Vec::new();
     for (m, files) in pending_items {
-        match native::deliver(registry, paths, device_id, &m.content, &files, &m.id, Some(app)).await {
+        match native::deliver(
+            registry,
+            paths,
+            device_id,
+            &m.content,
+            &files,
+            &m.id,
+            Some(app),
+        )
+        .await
+        {
             Ok(true) => delivered_ids.push(m.id),
             _ => break,
         }
@@ -5987,9 +6012,7 @@ async fn process_http_request(
         query_value(request.uri(), "token")
     };
 
-    if request.method() != Method::POST
-        || (path != "/api/devices" && path != "/api/sessions")
-    {
+    if request.method() != Method::POST || (path != "/api/devices" && path != "/api/sessions") {
         if !is_request_token_valid(&context.registry, &request_token).await {
             return Ok(api_error(
                 StatusCode::UNAUTHORIZED,
@@ -6840,8 +6863,14 @@ mod tests {
             .await
             .unwrap();
             for device in [&removed, &kept] {
-                registry.inner.lock().await.native.config.peers.push(
-                    super::native::TrustedPeer {
+                registry
+                    .inner
+                    .lock()
+                    .await
+                    .native
+                    .config
+                    .peers
+                    .push(super::native::TrustedPeer {
                         peer: super::native::Peer {
                             id: device.id.clone(),
                             supports_groups: true,
@@ -6849,8 +6878,7 @@ mod tests {
                         },
                         secure: true,
                         ..Default::default()
-                    },
-                );
+                    });
             }
             let removed_session =
                 create_session(&registry, &paths, json!({ "deviceId": removed.id }))
@@ -7085,8 +7113,14 @@ mod tests {
                 .is_err());
             // 配对记录无可连接地址，测试只验证本地持久化及网页投递边界。
             for device in [&online, &offline] {
-                registry.inner.lock().await.native.config.peers.push(
-                    super::native::TrustedPeer {
+                registry
+                    .inner
+                    .lock()
+                    .await
+                    .native
+                    .config
+                    .peers
+                    .push(super::native::TrustedPeer {
                         peer: super::native::Peer {
                             id: device.id.clone(),
                             name: device.name.clone(),
@@ -7095,16 +7129,19 @@ mod tests {
                         },
                         secure: true,
                         ..Default::default()
-                    },
-                );
+                    });
             }
             assert!(create_group(&registry, &paths, payload.clone())
                 .await
                 .is_err());
-            assert!(read_array::<super::LanShareGroup>(&paths.lan_share_files.groups)
-                .unwrap()
-                .is_empty());
-            registry.inner.lock().await.native.config.peers[1].peer.supports_groups = true;
+            assert!(
+                read_array::<super::LanShareGroup>(&paths.lan_share_files.groups)
+                    .unwrap()
+                    .is_empty()
+            );
+            registry.inner.lock().await.native.config.peers[1]
+                .peer
+                .supports_groups = true;
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
             registry
                 .inner
@@ -7313,13 +7350,9 @@ mod tests {
                 1
             );
 
-            let cleared = activate_session(
-                &registry,
-                &paths,
-                json!({ "sessionId": session_id }),
-            )
-            .await
-            .unwrap();
+            let cleared = activate_session(&registry, &paths, json!({ "sessionId": session_id }))
+                .await
+                .unwrap();
             assert_eq!(cleared["data"]["totalUnread"], 1);
             assert_eq!(
                 cleared["data"]["sessions"]
@@ -7993,15 +8026,24 @@ mod tests {
             .await
             .unwrap();
             let devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices).unwrap();
-            let sessions: Vec<LanShareSession> = read_array(&paths.lan_share_files.sessions).unwrap();
-            let messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages).unwrap();
+            let sessions: Vec<LanShareSession> =
+                read_array(&paths.lan_share_files.sessions).unwrap();
+            let messages: Vec<LanShareMessage> =
+                read_array(&paths.lan_share_files.messages).unwrap();
 
             assert_eq!(second.id, first.id);
             assert_eq!(devices.len(), 1);
             assert_eq!(devices[0].ip, "192.168.1.20");
             assert_eq!(sessions.len(), 1);
             assert_eq!(latest.session_id, first_session_id);
-            assert_eq!(messages.iter().find(|item| item.content == "旧地址消息").unwrap().ip, "192.168.1.8");
+            assert_eq!(
+                messages
+                    .iter()
+                    .find(|item| item.content == "旧地址消息")
+                    .unwrap()
+                    .ip,
+                "192.168.1.8"
+            );
             assert_eq!(latest.ip, "192.168.1.20");
 
             let _ = tokio::fs::remove_dir_all(root).await;
@@ -8787,16 +8829,29 @@ mod service_tests {
             runtime.access_url = "http://192.168.1.10:17639/?token=stable-token".into();
             runtime.native.config.hidden = true;
             runtime.clients.insert("connected-device".into(), sender);
-            runtime.active_sessions.insert("connected-device".into(), "session".into());
+            runtime
+                .active_sessions
+                .insert("connected-device".into(), "session".into());
 
             // 多网卡顺序变化不覆盖仍然有效的手选地址。
-            assert!(!super::refresh_access_address(&mut runtime,
-                &["10.0.0.2".into(), "192.168.1.10".into()]));
+            assert!(!super::refresh_access_address(
+                &mut runtime,
+                &["10.0.0.2".into(), "192.168.1.10".into()]
+            ));
             assert_eq!(runtime.lan_ip, "192.168.1.10");
-            assert!(super::refresh_access_address(&mut runtime, &["192.168.2.20".into()]));
+            assert!(super::refresh_access_address(
+                &mut runtime,
+                &["192.168.2.20".into()]
+            ));
             assert_eq!(runtime.lan_ip, "192.168.2.20");
-            assert_eq!(runtime.access_url, "http://192.168.2.20:17639/?token=stable-token");
-            assert!(!super::refresh_access_address(&mut runtime, &["192.168.2.20".into()]));
+            assert_eq!(
+                runtime.access_url,
+                "http://192.168.2.20:17639/?token=stable-token"
+            );
+            assert!(!super::refresh_access_address(
+                &mut runtime,
+                &["192.168.2.20".into()]
+            ));
             assert_eq!(runtime.token, "stable-token");
             assert_eq!(runtime.port, 17639);
             assert!(runtime.handle.is_some());
@@ -8821,10 +8876,19 @@ mod service_tests {
             assert!(runtime.access_url.is_empty());
             assert!(runtime.handle.is_some());
             assert!(!super::refresh_access_address(&mut runtime, &[]));
-            assert!(super::refresh_access_address(&mut runtime, &["10.0.0.20".into()]));
-            assert_eq!(runtime.access_url, "http://10.0.0.20:17631/?token=stable-token");
+            assert!(super::refresh_access_address(
+                &mut runtime,
+                &["10.0.0.20".into()]
+            ));
+            assert_eq!(
+                runtime.access_url,
+                "http://10.0.0.20:17631/?token=stable-token"
+            );
             stop_runtime(&mut runtime);
-            assert!(!super::refresh_access_address(&mut runtime, &["10.0.0.20".into()]));
+            assert!(!super::refresh_access_address(
+                &mut runtime,
+                &["10.0.0.20".into()]
+            ));
             assert!(runtime.access_url.is_empty());
         });
     }

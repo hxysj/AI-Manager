@@ -1,4 +1,6 @@
-use super::{get_stashes, run_git, run_git_output, run_git_raw, run_git_raw_vec, string_value, worktrees};
+use super::{
+    get_stashes, run_git, run_git_output, run_git_raw, run_git_raw_vec, string_value, worktrees,
+};
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
 use serde_json::{json, Value};
@@ -10,7 +12,8 @@ pub async fn get_status(
     repos: &Value,
     payload: Value,
 ) -> Result<Value, ManagerError> {
-    let project = worktrees::project(paths, repos, &string_value(payload.get("repoId")), &payload).await?;
+    let project =
+        worktrees::project(paths, repos, &string_value(payload.get("repoId")), &payload).await?;
     let mut status = read_status(&string_value(project.get("projectPath"))).await?;
     status["worktrees"] = project["worktrees"].clone();
     Ok(status)
@@ -57,7 +60,8 @@ async fn project_directory(
     repos: &Value,
     payload: &Value,
 ) -> Result<String, ManagerError> {
-    let project = worktrees::project(paths, repos, &string_value(payload.get("repoId")), payload).await?;
+    let project =
+        worktrees::project(paths, repos, &string_value(payload.get("repoId")), payload).await?;
     Ok(string_value(project.get("projectPath")))
 }
 
@@ -409,7 +413,9 @@ async fn execute_in_repository(cwd: &str, payload: &Value) -> Result<Value, Mana
     let status = read_status(cwd).await?;
     if let Some(expected) = payload.get("expectedWorktreePath").and_then(Value::as_str) {
         if super::normalize_project_path(expected) != super::normalize_project_path(cwd) {
-            return Err(ManagerError::System("操作工作树已变化，请重新确认。".to_string()));
+            return Err(ManagerError::System(
+                "操作工作树已变化，请重新确认。".to_string(),
+            ));
         }
     }
     if let Some(head) = payload.get("expectedHead").and_then(Value::as_str) {
@@ -606,7 +612,12 @@ async fn execute_in_repository(cwd: &str, payload: &Value) -> Result<Value, Mana
         }
         "checkout-commit" => {
             let hash = resolve_commit(cwd, &string_value(payload.get("revision"))).await?;
-            args = vec!["switch".to_string(), "--detach".to_string(), "--".to_string(), hash];
+            args = vec![
+                "switch".to_string(),
+                "--detach".to_string(),
+                "--".to_string(),
+                hash,
+            ];
         }
         "rename-branch" => {
             let name = string_value(payload.get("branchName"));
@@ -885,7 +896,8 @@ mod tests {
         let base = repo.commit("base").await;
         let linked = repo.root.join("linked 中文 worktree");
         let linked_path = linked.to_str().unwrap();
-        repo.git(&["worktree", "add", "-b", "linked", linked_path]).await;
+        repo.git(&["worktree", "add", "-b", "linked", linked_path])
+            .await;
         assert!(linked.join(".git").is_file());
         repo.git(&["branch", "other"]).await;
         repo.write("main-only.txt", "keep main\n");
@@ -896,48 +908,91 @@ mod tests {
         let status = get_status(&paths, &repos, payload.clone()).await.unwrap();
         assert_eq!(status["branch"], "linked");
         assert_eq!(status["worktrees"].as_array().unwrap().len(), 2);
-        assert!(!status["files"].as_array().unwrap().iter().any(|file| file["path"] == "main-only.txt"));
-        let scan = super::super::scan_branches(&paths, &repos, payload.clone()).await.unwrap();
+        assert!(!status["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == "main-only.txt"));
+        let scan = super::super::scan_branches(&paths, &repos, payload.clone())
+            .await
+            .unwrap();
         assert_eq!(scan["currentBranch"], "linked");
-        assert_eq!(scan["project"]["projectPath"], super::super::normalize_project_path(linked_path));
-        assert!(scan["branches"].as_array().unwrap().iter().any(|branch| branch["name"] == "main" && branch["worktreePath"] != ""));
+        assert_eq!(
+            scan["project"]["projectPath"],
+            super::super::normalize_project_path(linked_path)
+        );
+        assert!(scan["branches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|branch| branch["name"] == "main" && branch["worktreePath"] != ""));
         payload["filePath"] = json!("tracked.txt");
-        let diff = get_worktree_diff(&paths, &repos, payload.clone()).await.unwrap();
+        let diff = get_worktree_diff(&paths, &repos, payload.clone())
+            .await
+            .unwrap();
         assert!(diff["patch"].as_str().unwrap().contains("linked change"));
         payload["action"] = json!("stage");
         payload["filePaths"] = json!(["tracked.txt"]);
         payload["expectedHead"] = status["headHash"].clone();
         payload["expectedBranch"] = status["branch"].clone();
         payload["expectedWorktreePath"] = status["projectPath"].clone();
-        assert_eq!(execute_operation(&paths, &repos, payload.clone()).await.unwrap()["success"], true);
+        assert_eq!(
+            execute_operation(&paths, &repos, payload.clone())
+                .await
+                .unwrap()["success"],
+            true
+        );
         assert!(repo.git(&["diff", "--cached"]).await.is_empty());
-        assert!(run_git(&["diff", "--cached"], linked_path).await.unwrap().contains("linked change"));
+        assert!(run_git(&["diff", "--cached"], linked_path)
+            .await
+            .unwrap()
+            .contains("linked change"));
         payload["action"] = json!("switch-branch");
         payload["branchName"] = json!("other");
-        let result = execute_operation(&paths, &repos, payload.clone()).await.unwrap();
+        let result = execute_operation(&paths, &repos, payload.clone())
+            .await
+            .unwrap();
         assert_eq!(result["success"], true);
         assert_eq!(result["status"]["branch"], "other");
         assert_eq!(repo.git(&["branch", "--show-current"]).await, "main");
         payload["expectedBranch"] = json!("other");
         payload["branchName"] = json!("main");
-        assert_eq!(execute_operation(&paths, &repos, payload.clone()).await.unwrap()["success"], false);
+        assert_eq!(
+            execute_operation(&paths, &repos, payload.clone())
+                .await
+                .unwrap()["success"],
+            false
+        );
         payload["expectedWorktreePath"] = json!(repo.cwd());
-        assert!(execute_operation(&paths, &repos, payload.clone()).await.is_err());
+        assert!(execute_operation(&paths, &repos, payload.clone())
+            .await
+            .is_err());
         payload["expectedWorktreePath"] = status["projectPath"].clone();
         payload["action"] = json!("checkout-commit");
         payload["revision"] = json!(base);
-        let result = execute_operation(&paths, &repos, payload.clone()).await.unwrap();
+        let result = execute_operation(&paths, &repos, payload.clone())
+            .await
+            .unwrap();
         assert_eq!(result["success"], true);
         assert_eq!(result["status"]["detached"], true);
         assert_eq!(repo.git(&["branch", "--show-current"]).await, "main");
         let imported = json!([{"id":"linked", "localPath":linked_path}]);
-        assert_eq!(get_status(&paths, &imported, json!({"repoId":"linked"})).await.unwrap()["detached"], true);
+        assert_eq!(
+            get_status(&paths, &imported, json!({"repoId":"linked"}))
+                .await
+                .unwrap()["detached"],
+            true
+        );
         payload["worktreePath"] = json!(repo.root.join("manager").to_str().unwrap());
         assert!(get_status(&paths, &repos, payload.clone()).await.is_err());
-        repo.git(&["worktree", "remove", "--force", linked_path]).await;
+        repo.git(&["worktree", "remove", "--force", linked_path])
+            .await;
         payload["worktreePath"] = json!(linked_path);
         assert!(get_status(&paths, &repos, payload).await.is_err());
-        assert_eq!(std::fs::read_to_string(repo.path.join("main-only.txt")).unwrap(), "keep main\n");
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("main-only.txt")).unwrap(),
+            "keep main\n"
+        );
     });
 
     git_test!(checkout_commit_refuses_to_overwrite_uncommitted_changes, {
@@ -947,10 +1002,15 @@ mod tests {
         repo.write("tracked.txt", "next\n");
         let head = repo.commit("next").await;
         repo.write("tracked.txt", "uncommitted\n");
-        let result = repo.perform(json!({"action":"checkout-commit", "revision":base})).await;
+        let result = repo
+            .perform(json!({"action":"checkout-commit", "revision":base}))
+            .await;
         assert_eq!(result["success"], false);
         assert_eq!(repo.git(&["rev-parse", "HEAD"]).await, head);
-        assert_eq!(std::fs::read_to_string(repo.path.join("tracked.txt")).unwrap(), "uncommitted\n");
+        assert_eq!(
+            std::fs::read_to_string(repo.path.join("tracked.txt")).unwrap(),
+            "uncommitted\n"
+        );
     });
 
     #[test]
@@ -970,8 +1030,12 @@ mod tests {
         let repo = Repository::new().await;
         repo.write("main.txt", "base\n");
         repo.commit("base").await;
-        let result = branch_diff(repo.cwd(), &json!({ "baseBranch": "main", "targetBranch": "main" }))
-            .await.unwrap();
+        let result = branch_diff(
+            repo.cwd(),
+            &json!({ "baseBranch": "main", "targetBranch": "main" }),
+        )
+        .await
+        .unwrap();
         assert_eq!(result["fileCount"], 0);
         assert_eq!(result["changedLines"], 0);
         assert_eq!(result["patch"], "");

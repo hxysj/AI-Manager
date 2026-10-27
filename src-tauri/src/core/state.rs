@@ -1,7 +1,7 @@
 use crate::api::{
     app, app_logs, claude_desktop, codex_account, data, git_tool, google_account, image_workbench,
-    lan_share, network_quality, proxy, repos, rules, runtime_provider, sessions, settings, skills,
-    screenshot, system, tools, translation, usage,
+    lan_share, network_quality, proxy, repos, rules, runtime_provider, screenshot, sessions,
+    settings, skills, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
@@ -57,7 +57,14 @@ impl AppState {
         // Git 写操作串行执行；远程同步仅持有路径快照，不阻塞应用状态。
         if channel.starts_with("git-tool:") {
             let _git_guard = self.git_tool_lock.lock().await;
-            if matches!(channel, "git-tool:status" | "git-tool:worktree-diff" | "git-tool:branch-diff" | "git-tool:revision-preview" | "git-tool:operation") {
+            if matches!(
+                channel,
+                "git-tool:status"
+                    | "git-tool:worktree-diff"
+                    | "git-tool:branch-diff"
+                    | "git-tool:revision-preview"
+                    | "git-tool:operation"
+            ) {
                 let manager = self.manager.lock().await;
                 let paths = manager.paths.clone();
                 let repos = manager.state["repos"].clone();
@@ -65,13 +72,24 @@ impl AppState {
                 let payload = payload.unwrap_or_else(|| json!({}));
                 return match channel {
                     "git-tool:status" => git_tool::get_status(&paths, &repos, payload).await,
-                    "git-tool:worktree-diff" => git_tool::get_worktree_diff(&paths, &repos, payload).await,
-                    "git-tool:branch-diff" => git_tool::get_branch_diff(&paths, &repos, payload).await,
-                    "git-tool:revision-preview" => git_tool::preview_revision(&paths, &repos, payload).await,
+                    "git-tool:worktree-diff" => {
+                        git_tool::get_worktree_diff(&paths, &repos, payload).await
+                    }
+                    "git-tool:branch-diff" => {
+                        git_tool::get_branch_diff(&paths, &repos, payload).await
+                    }
+                    "git-tool:revision-preview" => {
+                        git_tool::preview_revision(&paths, &repos, payload).await
+                    }
                     _ => git_tool::execute_operation(&paths, &repos, payload).await,
                 };
             }
-            return self.manager.lock().await.dispatch(app, channel, payload).await;
+            return self
+                .manager
+                .lock()
+                .await
+                .dispatch(app, channel, payload)
+                .await;
         }
         // 文件传输仅持有快照，限速等待期间不阻塞其他页面。
         if matches!(
@@ -111,7 +129,8 @@ impl AppState {
         if channel == "google-account:refresh" {
             let paths = self.manager.lock().await.paths.clone();
             let payload = payload.unwrap_or_else(|| json!({}));
-            let result = google_account::refresh(&paths, payload["providerId"].as_str().unwrap_or("")).await;
+            let result =
+                google_account::refresh(&paths, payload["providerId"].as_str().unwrap_or("")).await;
             let mut manager = self.manager.lock().await;
             manager.refresh_state().await?;
             manager.emit_state_changed(&app)?;
@@ -122,30 +141,74 @@ impl AppState {
             let manager = self.manager.lock().await;
             let paths = manager.paths.clone();
             let seed_path = if cfg!(debug_assertions) {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../assets/image-prompts/gpt-image-2-prompts.json")
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../assets/image-prompts/gpt-image-2-prompts.json")
             } else {
-                manager.resource_dir.join("assets/image-prompts/gpt-image-2-prompts.json")
+                manager
+                    .resource_dir
+                    .join("assets/image-prompts/gpt-image-2-prompts.json")
             };
             drop(manager);
             let channel = channel.to_string();
-            return tauri::async_runtime::spawn_blocking(move || crate::core::image_prompt_store::dispatch(&paths, &seed_path, &channel, payload.unwrap_or_else(|| json!({}))))
-                .await.map_err(|error| ManagerError::System(error.to_string()))?;
+            return tauri::async_runtime::spawn_blocking(move || {
+                crate::core::image_prompt_store::dispatch(
+                    &paths,
+                    &seed_path,
+                    &channel,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+            })
+            .await
+            .map_err(|error| ManagerError::System(error.to_string()))?;
         }
         // 图片读取与导出只需路径快照，不占用整个应用的状态锁。
-        if matches!(channel, "tools:image-clear-results" | "tools:image-history" | "tools:image-list" | "tools:image-wait" | "tools:image-previews" | "tools:image-detail" | "tools:image-inputs" | "tools:image-delete" | "tools:image-cancel" | "tools:image-export" | "tools:image-task-export" | "tools:image-task-import" | "tools:image-web-conversations") {
+        if matches!(
+            channel,
+            "tools:image-clear-results"
+                | "tools:image-history"
+                | "tools:image-list"
+                | "tools:image-wait"
+                | "tools:image-previews"
+                | "tools:image-detail"
+                | "tools:image-inputs"
+                | "tools:image-delete"
+                | "tools:image-cancel"
+                | "tools:image-export"
+                | "tools:image-task-export"
+                | "tools:image-task-import"
+                | "tools:image-web-conversations"
+        ) {
             let paths = self.manager.lock().await.paths.clone();
             let payload = payload.unwrap_or_else(|| json!({}));
             return match channel {
                 "tools:image-history" => crate::core::image_store::history(&paths),
-                "tools:image-web-conversations" => crate::core::image_store::list_web_conversations(&paths),
-                "tools:image-list" => tauri::async_runtime::spawn_blocking(move || crate::core::image_store::list(&paths, &payload))
-                    .await.map_err(|error| ManagerError::System(error.to_string()))?,
+                "tools:image-web-conversations" => {
+                    crate::core::image_store::list_web_conversations(&paths)
+                }
+                "tools:image-list" => tauri::async_runtime::spawn_blocking(move || {
+                    crate::core::image_store::list(&paths, &payload)
+                })
+                .await
+                .map_err(|error| ManagerError::System(error.to_string()))?,
                 "tools:image-wait" => image_workbench::wait_tasks(&paths, payload).await,
-                "tools:image-previews" => tauri::async_runtime::spawn_blocking(move || crate::core::image_store::previews(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?))
-                    .await.map_err(|error| ManagerError::System(error.to_string()))?,
-                "tools:image-detail" => crate::core::image_store::detail(&paths, payload["id"].as_str().unwrap_or("")),
-                "tools:image-inputs" => crate::core::image_store::inputs(&paths, payload["id"].as_str().unwrap_or("")),
-                "tools:image-clear-results" => crate::core::image_store::clear_results(&paths, &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?),
+                "tools:image-previews" => tauri::async_runtime::spawn_blocking(move || {
+                    crate::core::image_store::previews(
+                        &paths,
+                        &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?,
+                    )
+                })
+                .await
+                .map_err(|error| ManagerError::System(error.to_string()))?,
+                "tools:image-detail" => {
+                    crate::core::image_store::detail(&paths, payload["id"].as_str().unwrap_or(""))
+                }
+                "tools:image-inputs" => {
+                    crate::core::image_store::inputs(&paths, payload["id"].as_str().unwrap_or(""))
+                }
+                "tools:image-clear-results" => crate::core::image_store::clear_results(
+                    &paths,
+                    &serde_json::from_value::<Vec<String>>(payload["ids"].clone())?,
+                ),
                 "tools:image-delete" => {
                     let ids = serde_json::from_value::<Vec<String>>(payload["ids"].clone())?;
                     let result = crate::core::image_store::delete(&paths, &ids)?;
@@ -161,8 +224,12 @@ impl AppState {
                     }
                     Ok(result)
                 }
-                "tools:image-task-export" => image_workbench::export_task_bundle(&paths, payload).await,
-                "tools:image-task-import" => image_workbench::import_task_bundle(&paths, payload).await,
+                "tools:image-task-export" => {
+                    image_workbench::export_task_bundle(&paths, payload).await
+                }
+                "tools:image-task-import" => {
+                    image_workbench::import_task_bundle(&paths, payload).await
+                }
                 _ => image_workbench::export(&app, &paths, payload).await,
             };
         }
@@ -185,18 +252,34 @@ impl AppState {
             };
         }
         // 模型请求可能持续较久，快照后释放状态锁，让其他页面和设置保持可用。
-        if matches!(channel, "tools:image-models" | "tools:image-quota" | "tools:image-submit" | "tools:image-submit-batch" | "tools:image-resume" | "tools:image-web-conversations-delete") {
+        if matches!(
+            channel,
+            "tools:image-models"
+                | "tools:image-quota"
+                | "tools:image-submit"
+                | "tools:image-submit-batch"
+                | "tools:image-resume"
+                | "tools:image-web-conversations-delete"
+        ) {
             let manager = self.manager.lock().await;
             let paths = manager.paths.clone();
             let cli_targets = manager.state["cliTargets"].clone();
             drop(manager);
             let payload = payload.unwrap_or_else(|| json!({}));
             return match channel {
-                "tools:image-submit" => image_workbench::submit(&app, &paths, &cli_targets, payload).await,
-                "tools:image-submit-batch" => image_workbench::submit_batch(&app, &paths, &cli_targets, payload).await,
-                "tools:image-resume" => image_workbench::resume(&app, &paths, &cli_targets, payload).await,
+                "tools:image-submit" => {
+                    image_workbench::submit(&app, &paths, &cli_targets, payload).await
+                }
+                "tools:image-submit-batch" => {
+                    image_workbench::submit_batch(&app, &paths, &cli_targets, payload).await
+                }
+                "tools:image-resume" => {
+                    image_workbench::resume(&app, &paths, &cli_targets, payload).await
+                }
                 "tools:image-quota" => image_workbench::quota(&paths, &cli_targets, payload).await,
-                "tools:image-web-conversations-delete" => image_workbench::delete_web_conversations(&paths, &cli_targets, payload).await,
+                "tools:image-web-conversations-delete" => {
+                    image_workbench::delete_web_conversations(&paths, &cli_targets, payload).await
+                }
                 _ => image_workbench::models(&paths, payload).await,
             };
         }
@@ -205,7 +288,13 @@ impl AppState {
             let paths = manager.paths.clone();
             let cli_targets = manager.state["cliTargets"].clone();
             drop(manager);
-            return screenshot::ocr::recognize(&app, &paths, &cli_targets, payload.unwrap_or_else(|| json!({}))).await;
+            return screenshot::ocr::recognize(
+                &app,
+                &paths,
+                &cli_targets,
+                payload.unwrap_or_else(|| json!({})),
+            )
+            .await;
         }
         if channel == "translation:translate" {
             let manager = self.manager.lock().await;
@@ -215,7 +304,15 @@ impl AppState {
             let cli_targets = manager.state["cliTargets"].clone();
             let settings = manager.app_settings.agents.translation.clone();
             drop(manager);
-            let result = translation::translate_text(&paths, &workspace_root, &resource_dir, &cli_targets, &settings, payload.unwrap_or_else(|| json!({}))).await;
+            let result = translation::translate_text(
+                &paths,
+                &workspace_root,
+                &resource_dir,
+                &cli_targets,
+                &settings,
+                payload.unwrap_or_else(|| json!({})),
+            )
+            .await;
             let _ = app.emit("translation:changed", json!({}));
             return result;
         }
@@ -238,7 +335,12 @@ impl AppState {
         }
         let close_action = matches!(channel, "settings:save" | "app:close-action")
             .then(|| manager.app_settings.system.close_action.clone());
-        if result.is_ok() && matches!(channel, "data:restore" | "data:local-backup-restore" | "data:cloud-pull") {
+        if result.is_ok()
+            && matches!(
+                channel,
+                "data:restore" | "data:local-backup-restore" | "data:cloud-pull"
+            )
+        {
             app_logs::configure(manager.app_settings.system.log_enabled).await;
         }
         drop(manager);
@@ -456,11 +558,17 @@ impl ManagerState {
                 "login" => self.google_login.start(&app, &self.paths, payload).await?,
                 "cancel" => self.google_login.cancel().await,
                 "state" => self.google_login.state().await,
-                "save" => google_account::save_settings(&self.paths, &self.state["cliTargets"], &payload).await?,
+                "save" => {
+                    google_account::save_settings(&self.paths, &self.state["cliTargets"], &payload)
+                        .await?
+                }
                 _ => return Err(ManagerError::UnknownChannel(channel.into())),
             };
             if result["status"] == "success" {
-                result["provider"] = google_account::find_account(&self.paths, result["providerId"].as_str().unwrap_or(""))?;
+                result["provider"] = google_account::find_account(
+                    &self.paths,
+                    result["providerId"].as_str().unwrap_or(""),
+                )?;
             }
             if result["status"] == "success" || action == "save" {
                 self.refresh_state().await?;
@@ -490,8 +598,8 @@ impl ManagerState {
             }
             "settings:save" => {
                 let payload = payload.unwrap_or_else(|| json!({}));
-                let directories_changed = payload.get("dataPath").is_some()
-                    || payload.get("cliConfigPaths").is_some();
+                let directories_changed =
+                    payload.get("dataPath").is_some() || payload.get("cliConfigPaths").is_some();
                 let system = &payload["system"];
                 let translation_changed = payload
                     .get("agents")
@@ -550,7 +658,9 @@ impl ManagerState {
             }
             "app:update-status" => app::update_status().await,
             "app:release-announcement" => app::release_announcement(&self.paths).await,
-            "app:release-announcement-dismiss" => app::dismiss_release_announcement(&self.paths).await,
+            "app:release-announcement-dismiss" => {
+                app::dismiss_release_announcement(&self.paths).await
+            }
             "app:check-updates" => app::check_updates(&app, true).await,
             "app:update-download" => app::download_update(&app).await,
             "app:update-install" => {
@@ -587,27 +697,29 @@ impl ManagerState {
                 Ok(result)
             }
             "tool-window:open" | "tool-window:ready" => {
-                let tool_id = payload.as_ref().and_then(|value| value.get("toolId"))
-                    .and_then(Value::as_str).unwrap_or_default();
+                let tool_id = payload
+                    .as_ref()
+                    .and_then(|value| value.get("toolId"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if channel == "tool-window:open" {
                     app::open_tool_window(&app, tool_id)
                 } else {
                     app::mark_tool_window_ready(&app, tool_id)
                 }
             }
-            "quick-switch:show-main" => {
-                app::show_main_panel(
-                    &app,
-                    &self.app_settings,
-                    self.quick_switch_collapsed,
-                    payload.as_ref().and_then(|value| value.get("toolId")).and_then(Value::as_str),
-                )
-            }
-            "quick-switch:ready" => app::mark_quick_switch_ready(
+            "quick-switch:show-main" => app::show_main_panel(
                 &app,
                 &self.app_settings,
                 self.quick_switch_collapsed,
+                payload
+                    .as_ref()
+                    .and_then(|value| value.get("toolId"))
+                    .and_then(Value::as_str),
             ),
+            "quick-switch:ready" => {
+                app::mark_quick_switch_ready(&app, &self.app_settings, self.quick_switch_collapsed)
+            }
             "quick-switch:set-collapsed" => {
                 let payload = payload.unwrap_or_else(|| json!({}));
                 self.quick_switch_collapsed = payload
@@ -702,10 +814,13 @@ impl ManagerState {
                 )
                 .await
             }
-            "app-log:list" => app_logs::list_logs(
-                &self.user_data_path,
-                payload.as_ref().and_then(|value| value["date"].as_str()),
-            ).await,
+            "app-log:list" => {
+                app_logs::list_logs(
+                    &self.user_data_path,
+                    payload.as_ref().and_then(|value| value["date"].as_str()),
+                )
+                .await
+            }
             "app-log:clear" => app_logs::clear_logs(&self.user_data_path).await,
             "app-log:stats" => app_logs::stats(&self.user_data_path).await,
             "repo:add" => {
@@ -814,12 +929,7 @@ impl ManagerState {
                 .await
             }
             "lan-share:scan-devices" => {
-                lan_share::scan_devices(
-                    app.clone(),
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await
+                lan_share::scan_devices(app.clone(), &self.lan_share_registry, &self.paths).await
             }
             "lan-share:set-hidden" => {
                 lan_share::set_hidden(
@@ -846,12 +956,7 @@ impl ManagerState {
                 )
                 .await?;
                 // 会话清零后同步所有窗口的未读徽标。
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:delete-message" => {
@@ -861,12 +966,7 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:delete-messages" => {
@@ -876,12 +976,7 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:clear-session" => {
@@ -891,12 +986,7 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:delete-session" => {
@@ -907,12 +997,7 @@ impl ManagerState {
                 )
                 .await?;
                 lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:delete-device-history" => {
@@ -922,12 +1007,7 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:delete-device" => {
@@ -962,12 +1042,7 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:update-group" => {
@@ -977,12 +1052,7 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:remove-group-member" => {
@@ -992,12 +1062,7 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:clear-group-messages" => {
@@ -1007,12 +1072,7 @@ impl ManagerState {
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:delete-group" => {
@@ -1023,12 +1083,7 @@ impl ManagerState {
                 )
                 .await?;
                 lan_share::broadcast_files_changed(&self.lan_share_registry).await?;
-                lan_share::emit_state_changed(
-                    &app,
-                    &self.lan_share_registry,
-                    &self.paths,
-                )
-                .await?;
+                lan_share::emit_state_changed(&app, &self.lan_share_registry, &self.paths).await?;
                 Ok(result)
             }
             "lan-share:export-files-zip" => {
@@ -1520,8 +1575,9 @@ impl ManagerState {
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
-                let should_sync_api_key =
-                    payload.get("apiKeys").is_some() || payload.get("apiKey").is_some() || payload.get("runtimeConfig").is_some();
+                let should_sync_api_key = payload.get("apiKeys").is_some()
+                    || payload.get("apiKey").is_some()
+                    || payload.get("runtimeConfig").is_some();
                 let previous_provider_bundle = if should_sync_api_key {
                     Some((
                         provider_store::read_providers(&self.paths)?,
@@ -2163,7 +2219,10 @@ impl ManagerState {
                 )
                 .await
             }
-            "translation:list" => crate::core::translation_store::list(&self.paths, &payload.unwrap_or_else(|| json!({}))),
+            "translation:list" => crate::core::translation_store::list(
+                &self.paths,
+                &payload.unwrap_or_else(|| json!({})),
+            ),
             _ => Err(ManagerError::UnknownChannel(channel.to_string())),
         }
     }
