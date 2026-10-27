@@ -22,6 +22,18 @@
       class="capture-background"
     />
     <div
+      v-if="showDetectedRegions && !selection && !longBusy"
+      class="detected-region-layer"
+      aria-hidden="true"
+    >
+      <span
+        v-for="region in detectedRegions"
+        :key="region.overlayKey"
+        class="detected-region"
+        :style="region.overlayStyle"
+      />
+    </div>
+    <div
       v-if="frame && !selection && !activeRegion && !longBusy"
       class="capture-instructions"
     >
@@ -34,7 +46,10 @@
     <div
       v-if="frame && (selection || activeRegion)"
       class="capture-selection"
-      :class="{ 'is-resizing': drag?.kind === 'resize' }"
+      :class="{
+        'is-resizing': drag?.kind === 'resize',
+        'is-region-overview': showDetectedRegions && !selection
+      }"
       :style="selectionStyle"
     >
       <ImageEditor
@@ -51,6 +66,9 @@
         @toolbar-hover="toolbarHovered = $event"
       />
       <div v-if="!longBusy" class="selection-size">
+        {{
+          !selection && activeRegion?.label ? `${activeRegion.label} · ` : ""
+        }}
         {{ (selection || activeRegion).width }} ×
         {{ (selection || activeRegion).height }}
       </div>
@@ -380,6 +398,11 @@ import {
   thumbnailSource
 } from "../../renderer"
 import { captureLongScreenshot } from "../../long-screenshot"
+import {
+  detectUiElementRegions,
+  disposeUiElementDetector,
+  mergeUiElementRegions
+} from "../../ui-element-detector"
 
 const query = new URLSearchParams(location.search)
 const mode = query.get("mode")
@@ -396,6 +419,7 @@ const pageRegions = ref([])
 const activeRegion = ref(null)
 const smartLevels = ref([])
 const smartLevel = ref(0)
+const showDetectedRegions = ref(false)
 const editorSource = ref("")
 const pointer = ref(null)
 const magnifier = ref(null)
@@ -473,6 +497,9 @@ let resizeFrame
 let smartQueryTimer = 0
 let smartQueryPoint = null
 let smartQuerySequence = 0
+let smartQueryRunning = false
+let uiElementDetection = null
+let detectedRegionExporting = false
 let pinWidth = 0
 let pinDragStart = null
 let pinHeight = 0
@@ -495,6 +522,42 @@ const selectionStyle = computed(() => {
     width: `${(rect.width / frame.value.width) * 100}%`,
     height: `${(rect.height / frame.value.height) * 100}%`
   }
+})
+const detectedRegions = computed(() => {
+  if (!frame.value) return []
+  const regions = []
+  // 总览复用页面检测结果，并补入鼠标当前位置由原生 UIA 返回的包裹层级。
+  for (const item of [...pageRegions.value, ...smartLevels.value]) {
+    const left = Math.max(0, Math.round(item.x))
+    const top = Math.max(0, Math.round(item.y))
+    const right = Math.min(frame.value.width, Math.ceil(item.x + item.width))
+    const bottom = Math.min(frame.value.height, Math.ceil(item.y + item.height))
+    if (right <= left || bottom <= top) continue
+    const region = {
+      ...item,
+      x: left,
+      y: top,
+      width: right - left,
+      height: bottom - top
+    }
+    if (regions.some((current) => duplicateSmartRegion(current, region)))
+      continue
+    regions.push(region)
+  }
+  return regions
+    .sort(
+      (left, right) => right.width * right.height - left.width * left.height
+    )
+    .map((region, index) => ({
+      ...region,
+      overlayKey: `${region.kind || "region"}-${region.id || index}-${region.x}-${region.y}-${region.width}-${region.height}`,
+      overlayStyle: {
+        left: `${(region.x / frame.value.width) * 100}%`,
+        top: `${(region.y / frame.value.height) * 100}%`,
+        width: `${(region.width / frame.value.width) * 100}%`,
+        height: `${(region.height / frame.value.height) * 100}%`
+      }
+    }))
 })
 const longPreviewStyle = computed(() => {
   const bounds = desktop.value.getBoundingClientRect()
@@ -582,23 +645,53 @@ function regionAt(point) {
   )
 }
 
+function duplicateSmartRegion(left, right) {
+  const width = Math.max(
+    0,
+    Math.min(left.x + left.width, right.x + right.width) -
+      Math.max(left.x, right.x)
+  )
+  const height = Math.max(
+    0,
+    Math.min(left.y + left.height, right.y + right.height) -
+      Math.max(left.y, right.y)
+  )
+  const intersection = width * height
+  const leftArea = left.width * left.height
+  const rightArea = right.width * right.height
+  const smaller = Math.min(leftArea, rightArea)
+  const larger = Math.max(leftArea, rightArea)
+  return smaller > 0 && intersection / smaller > 0.88 && smaller / larger > 0.72
+}
+
 function applySmartLevels(regions) {
   if (!frame.value || !Array.isArray(regions)) return
-  const local = regions
-    .map((region) => ({
-      ...region,
-      x: region.x - frame.value.left,
-      y: region.y - frame.value.top
-    }))
-    .filter(
-      (region) =>
-        region.width >= 30 &&
-        region.height >= 30 &&
-        containsRegion(region, {
-          x: pointer.value?.x ?? 0,
-          y: pointer.value?.y ?? 0
-        })
+  const point = {
+    x: pointer.value?.x ?? 0,
+    y: pointer.value?.y ?? 0
+  }
+  const nativeRegions = regions.map((region) => ({
+    ...region,
+    x: region.x - frame.value.left,
+    y: region.y - frame.value.top
+  }))
+  const candidates = [...nativeRegions, ...pageRegions.value]
+    .filter((region) => {
+      const minimumSize = ["window", "screen"].includes(region.kind) ? 30 : 8
+      return (
+        region.width >= minimumSize &&
+        region.height >= minimumSize &&
+        containsRegion(region, point)
+      )
+    })
+    .sort(
+      (left, right) => left.width * left.height - right.width * right.height
     )
+  const local = []
+  for (const region of candidates) {
+    if (local.some((current) => duplicateSmartRegion(current, region))) continue
+    local.push(region)
+  }
   const anchor = local[0]
   if (
     !anchor ||
@@ -614,27 +707,49 @@ function applySmartLevels(regions) {
     local[Math.min(smartLevel.value, Math.max(local.length - 1, 0))] || null
 }
 
+function scheduleSmartSelection(delay = 45) {
+  if (
+    smartQueryTimer ||
+    smartQueryRunning ||
+    !smartQueryPoint ||
+    !frame.value
+  )
+    return
+  smartQueryTimer = window.setTimeout(runSmartSelection, delay)
+}
+
+async function runSmartSelection() {
+  smartQueryTimer = 0
+  const target = smartQueryPoint
+  if (!target || !frame.value || smartQueryRunning) return
+  const sequence = smartQuerySequence
+  smartQueryRunning = true
+  try {
+    const result = await screenshotApi.call("smart-selection", {
+      x: Math.round(frame.value.left + target.x),
+      y: Math.round(frame.value.top + target.y)
+    })
+    if (sequence === smartQuerySequence && !drag.value && !selection.value)
+      applySmartLevels(result?.regions || [])
+  } catch {
+    // 原生窗口识别不可用时保留当前图像区域识别结果。
+  } finally {
+    smartQueryRunning = false
+    if (
+      sequence !== smartQuerySequence &&
+      !disposed &&
+      !drag.value &&
+      !selection.value
+    )
+      scheduleSmartSelection(0)
+  }
+}
+
 function queueSmartSelection(point) {
   if (mode !== "capture" || !frame.value) return
   smartQueryPoint = point
   smartQuerySequence += 1
-  if (smartQueryTimer) return
-  smartQueryTimer = window.setTimeout(async () => {
-    smartQueryTimer = 0
-    const target = smartQueryPoint
-    if (!target || !frame.value) return
-    const sequence = smartQuerySequence
-    try {
-      const result = await screenshotApi.call("smart-selection", {
-        x: Math.round(frame.value.left + target.x),
-        y: Math.round(frame.value.top + target.y)
-      })
-      if (sequence === smartQuerySequence && !drag.value && !selection.value)
-        applySmartLevels(result?.regions || [])
-    } catch {
-      // 原生窗口识别不可用时保留当前图像区域识别结果。
-    }
-  }, 45)
+  scheduleSmartSelection()
 }
 
 function adjustSmartLevel(event) {
@@ -658,7 +773,14 @@ function adjustSmartLevel(event) {
 }
 
 function startSelection(event) {
-  if (!frame.value || busy.value || longBusy.value || event.button !== 0) return
+  if (
+    !frame.value ||
+    busy.value ||
+    detectedRegionExporting ||
+    longBusy.value ||
+    event.button !== 0
+  )
+    return
   if (selection.value && editorSource.value) return
   selectionGeneration += 1
   desktop.value.setPointerCapture(event.pointerId)
@@ -847,6 +969,74 @@ async function finishSelection() {
   }
 }
 
+async function exportDetectedRegions(action) {
+  if (
+    mode !== "capture" ||
+    !frame.value ||
+    !originalImage ||
+    selection.value ||
+    longBusy.value ||
+    busy.value ||
+    detectedRegionExporting
+  )
+    return
+  detectedRegionExporting = true
+  error.value = ""
+  const generation = frameGeneration
+  try {
+    // 快捷键导出需要等待本轮模型完成，避免刚打开截图时只画出像素检测框。
+    await uiElementDetection
+    if (disposed || generation !== frameGeneration || !frame.value) return
+    const regions = detectedRegions.value
+    if (!regions.length) {
+      error.value = "当前没有检测到可导出的矩形"
+      return
+    }
+    const canvas = window.document.createElement("canvas")
+    canvas.width = frame.value.width
+    canvas.height = frame.value.height
+    const context = canvas.getContext("2d")
+    context.drawImage(originalImage, 0, 0)
+    const lineWidth = Math.max(
+      2,
+      Math.round(Math.min(canvas.width, canvas.height) / 500)
+    )
+    context.lineWidth = lineWidth
+    context.strokeStyle = "#22d3ee"
+    for (const region of regions) {
+      context.strokeRect(
+        region.x + lineWidth / 2,
+        region.y + lineWidth / 2,
+        Math.max(0, region.width - lineWidth),
+        Math.max(0, region.height - lineWidth)
+      )
+    }
+    try {
+      const [source, thumbnail] = await Promise.all([
+        canvasSource(canvas),
+        thumbnailSource(canvas)
+      ])
+      if (disposed || generation !== frameGeneration) return
+      await output({
+        action,
+        source,
+        output: source,
+        thumbnail,
+        annotations: [],
+        origin: { x: frame.value.left, y: frame.value.top }
+      })
+    } finally {
+      canvas.width = 0
+      canvas.height = 0
+    }
+  } catch (cause) {
+    if (generation === frameGeneration)
+      error.value = `检测框图片生成失败：${String(cause)}`
+  } finally {
+    detectedRegionExporting = false
+  }
+}
+
 function cancelDrag() {
   selectionGeneration += 1
   drag.value = null
@@ -967,12 +1157,13 @@ async function output(data) {
   error.value = ""
   try {
     const origin =
-      mode === "capture"
+      data.origin ||
+      (mode === "capture"
         ? {
             x: frame.value.left + selection.value.x,
             y: frame.value.top + selection.value.y
           }
-        : { x: document.value.pin.x, y: document.value.pin.y }
+        : { x: document.value.pin.x, y: document.value.pin.y })
     if (data.action === "ocr" && data.source.startsWith("blob:")) {
       let source = data.source
       // 已有贴图的 Blob 地址先恢复为可持久化图片，识别改由结果窗异步执行。
@@ -1373,6 +1564,39 @@ async function keydown(event) {
     ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)
   )
     return
+  if (
+    mode === "capture" &&
+    frame.value &&
+    !selection.value &&
+    !drag.value &&
+    !longCaptureRequested.value
+  ) {
+    if (
+      event.key === "Alt" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey
+    ) {
+      event.preventDefault()
+      showDetectedRegions.value = true
+      return
+    }
+    if (
+      event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.shiftKey &&
+      ["s", "c"].includes(event.key.toLowerCase())
+    ) {
+      event.preventDefault()
+      showDetectedRegions.value = true
+      if (!event.repeat)
+        await exportDetectedRegions(
+          event.key.toLowerCase() === "s" ? "export" : "copy"
+        )
+      return
+    }
+  }
   if (event.key === "Escape")
     mode === "capture"
       ? await cancel()
@@ -1446,6 +1670,15 @@ async function keydown(event) {
   }
 }
 
+function releaseDetectedRegions() {
+  // 系统保存框会让窗口失焦，统一复位可避免 Alt 状态停留在总览模式。
+  showDetectedRegions.value = false
+}
+
+function keyup(event) {
+  if (mode === "capture" && event.key === "Alt") releaseDetectedRegions()
+}
+
 function checkViewport() {
   // 采集期间屏幕布局变化时终止本次会话，不继续使用旧的像素映射。
   const size = `${innerWidth}:${innerHeight}:${devicePixelRatio}`
@@ -1484,6 +1717,11 @@ function resetCapture() {
   smartLevels.value = []
   smartLevel.value = 0
   smartQuerySequence += 1
+  smartQueryPoint = null
+  if (smartQueryTimer) window.clearTimeout(smartQueryTimer)
+  smartQueryTimer = 0
+  uiElementDetection = null
+  releaseDetectedRegions()
   toolbarHovered.value = false
   resizeHovered.value = false
   savedOutput = null
@@ -1537,12 +1775,41 @@ async function loadFrame() {
     current.width,
     current.height
   )
+  // 深度检测异步补充 UIA 和像素算法遗漏的交互区域，不阻塞截图窗口显示。
+  const detection = detectUiElementRegions(
+    background,
+    current.width,
+    current.height
+  )
+    .then((regions) => {
+      if (disposed || generation !== frameGeneration) return
+      pageRegions.value = mergeUiElementRegions(pageRegions.value, regions)
+      if (!drag.value && !selection.value && pointer.value) {
+        const detected = regionAt(pointer.value)
+        const detectedArea = detected
+          ? detected.width * detected.height
+          : Infinity
+        const activeArea = activeRegion.value
+          ? activeRegion.value.width * activeRegion.value.height
+          : Infinity
+        if (detectedArea < activeArea) activeRegion.value = detected
+      }
+    })
+    .catch(() => {
+      // 模型不可用时继续使用现有 UIA 和像素矩形结果。
+    })
+    .finally(() => {
+      if (uiElementDetection === detection) uiElementDetection = null
+    })
+  uiElementDetection = detection
   checkViewport()
   await screenshotApi.call("ready")
 }
 
 onMounted(async () => {
   window.addEventListener("keydown", keydown)
+  window.addEventListener("keyup", keyup)
+  window.addEventListener("blur", releaseDetectedRegions)
   window.addEventListener("resize", checkViewport)
   try {
     if (mode === "capture") {
@@ -1604,7 +1871,10 @@ onBeforeUnmount(() => {
   documentGeneration += 1
   releaseDocumentImages(document.value)
   frameGeneration += 1
+  disposeUiElementDetector()
   window.removeEventListener("keydown", keydown)
+  window.removeEventListener("keyup", keyup)
+  window.removeEventListener("blur", releaseDetectedRegions)
   window.removeEventListener("resize", checkViewport)
   unlisten?.()
   unlistenFrame?.()
@@ -1633,6 +1903,18 @@ onBeforeUnmount(() => {
     height: 100%;
     object-fit: fill;
     pointer-events: none;
+  }
+  .detected-region-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    .detected-region {
+      position: absolute;
+      box-sizing: border-box;
+      border: 1px solid #22d3ee;
+      background: transparent;
+      box-shadow: 0 0 0 1px #083344aa;
+    }
   }
   // 长截图时保留透明选区边框和进度提示，让用户能看到当前采集区域；
   // 原始整屏画布与编辑器隐藏，底下的页面保持可见。
@@ -1668,6 +1950,10 @@ onBeforeUnmount(() => {
     box-shadow: 0 0 0 10000px #0007;
     &.is-resizing {
       outline-color: #7dd3fc;
+    }
+    &.is-region-overview {
+      outline-color: #facc15;
+      box-shadow: none;
     }
     .selection-size {
       position: absolute;
