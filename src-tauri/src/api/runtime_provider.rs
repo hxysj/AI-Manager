@@ -151,31 +151,18 @@ pub async fn save_provider(paths: &AppPaths, payload: Value) -> Result<(), Manag
 
 pub async fn delete_provider(paths: &AppPaths, payload: Value) -> Result<(), ManagerError> {
     let provider_id = string_value(payload.get("providerId"));
-    let mut providers = provider_store::read_providers(paths)?;
-    let mut keys = provider_store::read_keys(paths)?;
+    let providers = provider_store::read_providers(paths)?;
     let provider = providers
         .iter()
         .find(|item| item.get("id").and_then(Value::as_str) == Some(provider_id.as_str()))
         .cloned();
 
-    providers.retain(|item| item.get("id").and_then(Value::as_str) != Some(provider_id.as_str()));
-    let mut models = provider_store::read_models(paths)?;
-    let mut profiles = provider_store::read_profiles(paths)?;
-
-    models.retain(|item| {
-        item.get("providerId").and_then(Value::as_str) != Some(provider_id.as_str())
-    });
-    profiles.retain(|item| {
-        item.get("providerId").and_then(Value::as_str) != Some(provider_id.as_str())
-    });
-    keys.remove(&provider_id);
-    keys.remove(&format!("google-oauth:{provider_id}"));
     google_gateway::stop(paths, &provider_id).await;
     if provider.as_ref().is_some_and(|provider| provider["type"] == "google-account") {
         crate::api::google_session::clear(paths, &provider_id)?;
     }
 
-    provider_store::write_provider_bundle(paths, &providers, &models, &profiles, &keys)
+    provider_store::delete_provider(paths, &provider_id)
 }
 
 pub async fn sync_active_provider_config(
@@ -3780,6 +3767,63 @@ mod tests {
     use crate::core::paths::{resolve_app_paths, AppPaths};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn deleting_provider_ignores_unrelated_malformed_keys_and_preserves_other_data() {
+        tauri::async_runtime::block_on(async {
+            let (test_root, paths, config_dir) = create_codex_runtime_fixture();
+            let original_config = write_codex_config(&paths, &config_dir).await;
+            let original_providers = provider_store::read_providers(&paths).unwrap();
+            let original_models = provider_store::read_models(&paths).unwrap();
+            let original_profiles = provider_store::read_profiles(&paths).unwrap();
+            for cli in ["claude", "codex"] {
+                save_provider(&paths, json!({
+                    "id": format!("disabled-{cli}"), "cli": cli, "name": "待删除供应商",
+                    "type": if cli == "claude" { "anthropic" } else { "openai" },
+                    "enabled": false, "baseUrl": "https://example.com/v1",
+                    "apiKey": "target-secret",
+                    "runtimeConfig": { "modelList": ["target-model"], "mainModel": "target-model" }
+                })).await.unwrap();
+            }
+            let connection = crate::core::database::open(&paths).unwrap();
+            // 模拟历史遗留的空 Key 和空 id，删除操作必须保持其他供应商原样。
+            connection.execute("INSERT INTO provider_keys(provider_id,id,value)
+                VALUES('provider-codex','empty-value',''),('provider-codex','','legacy-ciphertext')", []).unwrap();
+            let mut expected_keys = provider_store::read_keys(&paths).unwrap();
+            for cli in ["claude", "codex"] {
+                expected_keys.remove(&format!("disabled-{cli}"));
+            }
+            let target_keys = provider_store::read_keys(&paths).unwrap();
+            let key_id = target_keys["disabled-claude"]["keys"][0]["id"].as_str().unwrap();
+            let mut request = crate::core::provider_key_usage::KeyRequest::new(
+                &paths, "disabled-claude", key_id, "target-secret",
+            );
+            request.start();
+            for cli in ["claude", "codex"] {
+                let id = format!("disabled-{cli}");
+                delete_provider(&paths, json!({ "providerId": id })).await.unwrap();
+                assert!(!provider_store::read_providers(&paths).unwrap().iter().any(|item| item["id"] == id));
+                assert!(!provider_store::read_models(&paths).unwrap().iter().any(|item| item["providerId"] == id));
+                assert!(!provider_store::read_keys(&paths).unwrap().contains_key(&id));
+                assert_eq!(connection.query_row(
+                    "SELECT COUNT(*) FROM provider_keys WHERE provider_id=?1 AND (is_current=1 OR is_active=1 OR value<>'')",
+                    [&id], |row| row.get::<_, i64>(0),
+                ).unwrap(), 0);
+            }
+            request.response(200, false);
+            request.finish();
+            assert_eq!(crate::core::provider_key_usage::read(
+                &paths, "disabled-claude", key_id, "target-secret",
+            ).unwrap()["successCount"], 1);
+            assert_eq!(provider_store::read_providers(&paths).unwrap(), original_providers);
+            assert_eq!(provider_store::read_models(&paths).unwrap(), original_models);
+            assert_eq!(provider_store::read_profiles(&paths).unwrap(), original_profiles);
+            assert_eq!(provider_store::read_keys(&paths).unwrap(), expected_keys);
+            assert_eq!(fs::read_to_string(config_dir.join("config.toml")).unwrap(), original_config);
+            drop(connection);
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
 
     #[test]
     fn disabled_provider_supports_management_without_reactivation() {

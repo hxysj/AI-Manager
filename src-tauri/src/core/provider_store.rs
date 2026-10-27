@@ -257,6 +257,17 @@ pub(crate) fn update_provider(paths: &AppPaths, item: &Value) -> Result<(), Mana
     Ok(())
 }
 
+pub(crate) fn delete_provider(paths: &AppPaths, provider_id: &str) -> Result<(), ManagerError> {
+    initialize(paths)?;
+    let connection = database::open(paths)?;
+    // 模型和运行配置随供应商行删除，触发器同时清除凭据，避免重写其他供应商的 Key。
+    connection.execute(
+        &format!("DELETE FROM providers WHERE id=?1 AND {API_ROWS}"),
+        [provider_id],
+    )?;
+    Ok(())
+}
+
 fn replace_records(
     connection: &Connection,
     items: &[Value],
