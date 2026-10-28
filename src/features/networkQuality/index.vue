@@ -210,6 +210,72 @@
 
       <!-- 诊断报告主面板 -->
       <template v-if="report">
+        <article
+          class="network-quality-panel-card network-quality-egress-panel"
+        >
+          <header class="network-quality-card-head">
+            <div class="network-quality-card-title">
+              <Globe :size="17" class="head-icon is-blue" />
+              <h3 class="egress-panel-title">检测到的出口 IP</h3>
+            </div>
+            <span class="network-quality-pill-tag is-blue">
+              {{ egressIps.length }} 个地址
+            </span>
+          </header>
+          <div class="network-quality-card-body">
+            <p class="egress-panel-description">
+              汇总本次检测实际返回的出口地址，同一 IP
+              合并展示，下方列出发现它的检测项。
+            </p>
+            <div v-if="egressIps.length" class="egress-ip-list">
+              <div
+                v-for="item in egressIps"
+                :key="item.id"
+                class="egress-ip-item"
+              >
+                <div class="egress-ip-heading">
+                  <span class="table-family-pill">
+                    {{ item.family === "ipv6" ? "IPv6" : "IPv4" }}
+                  </span>
+                  <span class="egress-ip-address">{{ item.address }}</span>
+                  <button
+                    type="button"
+                    class="passport-copy-btn"
+                    :title="
+                      copiedAddress === item.address ? '已复制' : '复制 IP'
+                    "
+                    @click="copyAddress(item.address)"
+                  >
+                    <Check
+                      v-if="copiedAddress === item.address"
+                      :size="14"
+                      class="text-success"
+                    />
+                    <Copy v-else :size="14" />
+                  </button>
+                  <span class="egress-ip-count">
+                    {{ item.sources.length }} 项检测
+                  </span>
+                </div>
+                <div class="egress-ip-sources">
+                  <span
+                    v-for="source in item.sources"
+                    :key="`${source.module}-${source.id}-${source.url}`"
+                    class="egress-ip-source"
+                    :title="source.url"
+                  >
+                    {{ egressModuleLabels[source.module] || source.module }}
+                    · {{ source.name }}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <p v-else class="egress-panel-empty">
+              本次检测未返回可确认的公网出口 IP。
+            </p>
+          </div>
+        </article>
+
         <!-- 核心遥测双列 Hero 卡片网格 (严格还原 2.png 布局) -->
         <div class="network-quality-dashboard-grid">
           <!-- 左侧列：测量完整性 + 网络质量评分 -->
@@ -1101,6 +1167,15 @@ const moduleOptions = [
   { value: "path", label: "路径" }
 ]
 
+const egressModuleLabels = {
+  identity: "公网身份",
+  geo: "地理位置",
+  portal: "连通性",
+  access: "服务",
+  ai: "AI",
+  path: "路径"
+}
+
 const countryNameZh = Object.freeze({
   china: "中国",
   "people's republic of china": "中国",
@@ -1347,6 +1422,8 @@ const identities = computed(() =>
     })
     .filter((item) => item.data)
 )
+// 后端先按完整地址合并再掩码，这里保留独立记录，避免相同掩码误合并不同出口。
+const egressIps = computed(() => arrayOf(report.value?.egressIps))
 const consensusRows = computed(() => {
   const rows = []
   for (const family of ["ipv4", "ipv6"]) {
@@ -2499,6 +2576,75 @@ onBeforeUnmount(() => {
     display: flex;
     flex-direction: column;
     gap: 14px;
+  }
+
+  .network-quality-egress-panel {
+    flex-shrink: 0;
+
+    .network-quality-card-body {
+      .egress-panel-description,
+      .egress-panel-empty {
+        margin: 0;
+        color: var(--color-text-muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .egress-ip-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 12px;
+
+        .egress-ip-item {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          padding: 12px;
+          border: 1px solid var(--color-line);
+          border-radius: 8px;
+
+          .egress-ip-heading {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+
+            .egress-ip-address {
+              color: var(--color-text);
+              font-family: Consolas, monospace;
+              font-size: 15px;
+              overflow-wrap: anywhere;
+            }
+
+            .egress-ip-count {
+              margin-left: auto;
+              color: var(--color-text-muted);
+              font-size: 12px;
+            }
+          }
+
+          .egress-ip-sources {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+
+            .egress-ip-source {
+              padding: 3px 8px;
+              border-radius: 4px;
+              background: var(--color-bg);
+              color: var(--color-text-muted);
+              font-size: 12px;
+              overflow-wrap: anywhere;
+            }
+          }
+        }
+      }
+
+      .egress-panel-empty {
+        margin-top: 12px;
+      }
+    }
   }
 
   /* 空白欢迎态 */

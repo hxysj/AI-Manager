@@ -162,6 +162,23 @@ struct IdentityReport {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct EgressIp {
+    id: String,
+    address: String,
+    family: String,
+    sources: Vec<EgressIpSource>,
+}
+
+#[derive(Clone, PartialEq, Serialize)]
+struct EgressIpSource {
+    module: String,
+    id: String,
+    name: String,
+    url: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct IdentityFamily {
     address: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -330,6 +347,8 @@ struct GeoOutcome {
     state: String,
     value: String,
     country_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_ip: Option<String>,
     rtt_ms: f64,
     error: String,
 }
@@ -451,6 +470,7 @@ struct RunReport {
     duration_ms: u64,
     transport: TransportReport,
     identity: IdentityReport,
+    egress_ips: Vec<EgressIp>,
     ip_intelligence: IpIntelligenceReport,
     findings: Vec<Finding>,
     consensus: ConsensusReport,
@@ -541,7 +561,6 @@ impl NetworkStack {
 
 #[derive(Clone, Copy)]
 enum IpProviderKind {
-    IpWho,
     IpApiIs,
     GeoJs,
     Rdap,
@@ -555,13 +574,7 @@ struct IpProviderEndpoint {
     kind: IpProviderKind,
 }
 
-const IP_PROVIDER_ENDPOINTS: [IpProviderEndpoint; 3] = [
-    IpProviderEndpoint {
-        id: "ipwho",
-        name: "ipwho.is",
-        category: "geo",
-        kind: IpProviderKind::IpWho,
-    },
+const IP_PROVIDER_ENDPOINTS: [IpProviderEndpoint; 2] = [
     IpProviderEndpoint {
         id: "geojs",
         name: "GeoJS",
@@ -630,7 +643,7 @@ impl ProgressEmitter {
 #[derive(Clone, Copy)]
 enum GeoParser {
     CloudflareTrace,
-    IpWho,
+    GeoJs,
     CountryIs,
     IpApiCo,
 }
@@ -651,10 +664,10 @@ const GEO_ENDPOINTS: [GeoEndpoint; 4] = [
         parser: GeoParser::CloudflareTrace,
     },
     GeoEndpoint {
-        id: "ipwho",
-        name: "ipwho.is",
-        url: "https://ipwho.is/",
-        parser: GeoParser::IpWho,
+        id: "geojs",
+        name: "GeoJS",
+        url: "https://get.geojs.io/v1/ip/geo.json",
+        parser: GeoParser::GeoJs,
     },
     GeoEndpoint {
         id: "country_is",
@@ -1055,19 +1068,41 @@ async fn export(payload: Value) -> Result<Value, ManagerError> {
 }
 
 fn mask_export_value(report: &mut Value) {
-    let replacements = [
+    let mut originals = [
         "/identity/ipv4/address",
         "/identity/ipv6/address",
         "/ipIntelligence/ipv4/ip",
         "/ipIntelligence/ipv6/ip",
     ]
     .iter()
-    .filter_map(|pointer| {
-        let original = report.pointer(pointer)?.as_str()?.to_string();
-        let parsed = original.parse::<IpAddr>().ok()?;
-        Some((original, mask_ip(&parsed.to_string())))
-    })
+    .filter_map(|pointer| report.pointer(pointer)?.as_str().map(str::to_string))
     .collect::<Vec<_>>();
+    if let Some(ips) = report.get("egressIps").and_then(Value::as_array) {
+        originals.extend(
+            ips.iter()
+                .filter_map(|ip| ip.get("address")?.as_str().map(str::to_string)),
+        );
+    }
+    if let Some(geo) = report.get("geo").and_then(Value::as_array) {
+        for result in geo {
+            for family in ["ipv4", "ipv6"] {
+                if let Some(ip) = result
+                    .get(family)
+                    .and_then(|outcome| outcome.get("observedIp"))
+                    .and_then(Value::as_str)
+                {
+                    originals.push(ip.to_string());
+                }
+            }
+        }
+    }
+    let replacements = originals
+        .into_iter()
+        .filter_map(|original| {
+            let parsed = original.parse::<IpAddr>().ok()?;
+            Some((original, mask_ip(&parsed.to_string())))
+        })
+        .collect::<Vec<_>>();
     if !replacements.is_empty() {
         mask_json_strings(report, &replacements);
     }
@@ -1360,7 +1395,8 @@ async fn run_report(
     let progress = ProgressEmitter::new(app, &options.run_id, options.modules.count() + 1);
     progress.start();
 
-    let (mut identity, ip_intelligence) = detect_identity(stack, options.family, &cancel).await;
+    let (mut identity, ip_intelligence, mut egress_ips) =
+        detect_identity(stack, options.family, &cancel).await;
     progress.complete("identity", "公网身份检测完成");
     let primary_family = choose_primary_family(options.family, &identity);
 
@@ -1428,6 +1464,7 @@ async fn run_report(
     )
     .await;
 
+    collect_geo_egress_ips(&mut egress_ips, &geo);
     let consensus = ConsensusReport {
         ipv4: country_consensus(
             geo.iter()
@@ -1471,6 +1508,7 @@ async fn run_report(
             proxy: stack.proxy_report(),
         },
         identity,
+        egress_ips,
         ip_intelligence,
         findings,
         consensus,
@@ -1481,8 +1519,7 @@ async fn run_report(
         connectivity,
     };
     if options.mask_ip {
-        mask_report_identity(&mut report.identity);
-        mask_report_intelligence(&mut report.ip_intelligence);
+        mask_report_addresses(&mut report);
     }
     progress.emit(status, "网络检测结束", progress.total);
     report
@@ -1531,7 +1568,7 @@ async fn detect_identity(
     stack: &NetworkStack,
     selection: FamilySelection,
     cancel: &CancellationToken,
-) -> (IdentityReport, IpIntelligenceReport) {
+) -> (IdentityReport, IpIntelligenceReport, Vec<EgressIp>) {
     let ipv4 = async {
         if selection.includes(AddressFamily::Ipv4) {
             detect_identity_family(stack, AddressFamily::Ipv4, cancel).await
@@ -1547,12 +1584,15 @@ async fn detect_identity(
         }
     };
     let (ipv4, ipv6) = join(ipv4, ipv6).await;
-    let (ipv4_identity, ipv4_intelligence) = match ipv4 {
-        Some((identity, intelligence)) => (Some(identity), Some(intelligence)),
-        None => (None, None),
+    let (ipv4_identity, ipv4_intelligence, mut egress_ips) = match ipv4 {
+        Some((identity, intelligence, ips)) => (Some(identity), Some(intelligence), ips),
+        None => (None, None, Vec::new()),
     };
     let (ipv6_identity, ipv6_intelligence) = match ipv6 {
-        Some((identity, intelligence)) => (Some(identity), Some(intelligence)),
+        Some((identity, intelligence, ips)) => {
+            egress_ips.extend(ips);
+            (Some(identity), Some(intelligence))
+        }
         None => (None, None),
     };
     (
@@ -1564,6 +1604,7 @@ async fn detect_identity(
             ipv4: ipv4_intelligence,
             ipv6: ipv6_intelligence,
         },
+        egress_ips,
     )
 }
 
@@ -1571,16 +1612,20 @@ async fn detect_identity_family(
     stack: &NetworkStack,
     family: AddressFamily,
     cancel: &CancellationToken,
-) -> Option<(IdentityFamily, IpFamilyIntelligence)> {
-    const ECHO_ENDPOINTS: [&str; 5] = [
-        "https://www.cloudflare.com/cdn-cgi/trace",
-        "https://api64.ipify.org/",
-        "https://ident.me/",
-        "https://ifconfig.me/ip",
-        "https://icanhazip.com/",
+) -> Option<(IdentityFamily, IpFamilyIntelligence, Vec<EgressIp>)> {
+    const ECHO_ENDPOINTS: [(&str, &str, &str); 5] = [
+        (
+            "cloudflare",
+            "Cloudflare",
+            "https://www.cloudflare.com/cdn-cgi/trace",
+        ),
+        ("ipify", "ipify", "https://api64.ipify.org/"),
+        ("ident_me", "ident.me", "https://ident.me/"),
+        ("ifconfig_me", "ifconfig.me", "https://ifconfig.me/ip"),
+        ("icanhazip", "icanhazip", "https://icanhazip.com/"),
     ];
 
-    let responses = join_all(ECHO_ENDPOINTS.iter().map(|url| async move {
+    let responses = join_all(ECHO_ENDPOINTS.iter().map(|(_, _, url)| async move {
         send_request(stack.client(family, false), Method::GET, url, &[], cancel)
             .await
             .ok()
@@ -1589,9 +1634,70 @@ async fn detect_identity_family(
     }))
     .await;
     let (address, source_votes) = select_public_ip(&responses, family)?;
+    let mut egress_ips = Vec::new();
+    for ((id, name, url), address) in ECHO_ENDPOINTS.iter().zip(&responses) {
+        if let Some(address) = address {
+            add_egress_ip(
+                &mut egress_ips,
+                *address,
+                EgressIpSource {
+                    module: "identity".to_string(),
+                    id: (*id).to_string(),
+                    name: (*name).to_string(),
+                    url: (*url).to_string(),
+                },
+            );
+        }
+    }
     let intelligence = lookup_ip_intelligence(stack, address, cancel).await;
     let identity = identity_from_intelligence(address, source_votes, &intelligence);
-    Some((identity, intelligence))
+    Some((identity, intelligence, egress_ips))
+}
+
+fn add_egress_ip(ips: &mut Vec<EgressIp>, address: IpAddr, source: EgressIpSource) {
+    let address_text = address.to_string();
+    if let Some(existing) = ips.iter_mut().find(|item| item.address == address_text) {
+        if !existing.sources.contains(&source) {
+            existing.sources.push(source);
+        }
+        return;
+    }
+    let family = if address.is_ipv4() { "ipv4" } else { "ipv6" };
+    ips.push(EgressIp {
+        id: format!("{family}-{}", ips.len()),
+        address: address_text,
+        family: family.to_string(),
+        sources: vec![source],
+    });
+}
+
+fn collect_geo_egress_ips(ips: &mut Vec<EgressIp>, geo: &[GeoResult]) {
+    for result in geo {
+        let Some(endpoint) = GEO_ENDPOINTS.iter().find(|item| item.id == result.id) else {
+            continue;
+        };
+        for outcome in [result.ipv4.as_ref(), result.ipv6.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(address) = outcome
+                .observed_ip
+                .as_deref()
+                .and_then(|ip| ip.parse::<IpAddr>().ok())
+            {
+                add_egress_ip(
+                    ips,
+                    address,
+                    EgressIpSource {
+                        module: "geo".to_string(),
+                        id: result.id.clone(),
+                        name: result.name.clone(),
+                        url: endpoint.url.to_string(),
+                    },
+                );
+            }
+        }
+    }
 }
 
 async fn lookup_ip_intelligence(
@@ -1656,7 +1762,6 @@ async fn probe_ip_provider(
     cancel: &CancellationToken,
 ) -> IpProviderResult {
     let source_url = match endpoint.kind {
-        IpProviderKind::IpWho => format!("https://ipwho.is/{address}"),
         IpProviderKind::IpApiIs => format!("https://api.ipapi.is/?q={address}"),
         IpProviderKind::GeoJs => format!("https://get.geojs.io/v1/ip/geo/{address}.json"),
         IpProviderKind::Rdap => format!("https://rdap.org/ip/{address}"),
@@ -1786,36 +1891,6 @@ impl IpIntelligenceData {
 
 fn parse_ip_provider_data(kind: IpProviderKind, value: &Value) -> Option<IpIntelligenceData> {
     let data = match kind {
-        IpProviderKind::IpWho => {
-            if value.get("success").and_then(Value::as_bool) == Some(false) {
-                return None;
-            }
-            IpIntelligenceData {
-                country_code: value
-                    .get("country_code")
-                    .and_then(Value::as_str)
-                    .and_then(normalize_country_code),
-                country_name: non_empty_json_string(value.get("country")),
-                continent_code: non_empty_json_string(value.get("continent_code")),
-                continent_name: non_empty_json_string(value.get("continent")),
-                region: non_empty_json_string(value.get("region")),
-                city: non_empty_json_string(value.get("city")),
-                latitude: value.get("latitude").and_then(json_f64),
-                longitude: value.get("longitude").and_then(json_f64),
-                timezone: first_non_empty_string(&[
-                    value.pointer("/timezone/id"),
-                    value.get("timezone"),
-                ]),
-                asn: value.pointer("/connection/asn").and_then(normalize_asn),
-                as_domain: non_empty_json_string(value.pointer("/connection/domain")),
-                isp: non_empty_json_string(value.pointer("/connection/isp")),
-                organization: first_non_empty_string(&[
-                    value.pointer("/connection/org"),
-                    value.pointer("/connection/isp"),
-                ]),
-                ..IpIntelligenceData::default()
-            }
-        }
         IpProviderKind::IpApiIs => {
             if value.get("is_bogon").and_then(Value::as_bool) == Some(true) {
                 return None;
@@ -1874,7 +1949,7 @@ fn parse_ip_provider_data(kind: IpProviderKind, value: &Value) -> Option<IpIntel
             }
         }
         IpProviderKind::GeoJs => {
-            let organization = non_empty_json_string(value.get("organization"));
+            let organization = non_empty_json_string(value.get("organization_name"));
             IpIntelligenceData {
                 country_code: value
                     .get("country_code")
@@ -2364,17 +2439,28 @@ async fn probe_geo_endpoint(
     cancel: &CancellationToken,
 ) -> GeoOutcome {
     let url = match (endpoint.parser, public_ip) {
-        (GeoParser::IpWho, Some(address)) => format!("https://ipwho.is/{address}"),
+        (GeoParser::GeoJs, Some(address)) => {
+            format!("https://get.geojs.io/v1/ip/geo/{address}.json")
+        }
         (GeoParser::CountryIs, Some(address)) => format!("https://api.country.is/{address}"),
         (GeoParser::IpApiCo, Some(address)) => format!("https://ipapi.co/{address}/json/"),
         _ => endpoint.url.to_string(),
     };
     let response = send_request(stack.client(family, false), Method::GET, &url, &[], cancel).await;
+    // 按指定 IP 查询归属时，正文里的 IP 是查询对象，不能当作该请求的出口。
+    let observed_ip = response.as_ref().ok().and_then(|response| {
+        if !(200..300).contains(&response.status) {
+            return None;
+        }
+        parse_geo_observed_ip(endpoint.parser, &response.body, public_ip, family)
+            .map(|address| address.to_string())
+    });
     match response {
         Ok(response) if matches!(response.status, 403 | 429) => GeoOutcome {
             state: "no_answer".to_string(),
             value: String::new(),
             country_name: String::new(),
+            observed_ip,
             rtt_ms: response.rtt_ms,
             error: String::new(),
         },
@@ -2382,6 +2468,7 @@ async fn probe_geo_endpoint(
             state: "error".to_string(),
             value: String::new(),
             country_name: String::new(),
+            observed_ip,
             rtt_ms: response.rtt_ms,
             error: format!("HTTP {}", response.status),
         },
@@ -2390,6 +2477,7 @@ async fn probe_geo_endpoint(
                 state: "success".to_string(),
                 country_name: name.unwrap_or_else(|| country_name(&code)),
                 value: code,
+                observed_ip,
                 rtt_ms: response.rtt_ms,
                 error: String::new(),
             },
@@ -2397,6 +2485,7 @@ async fn probe_geo_endpoint(
                 state: "error".to_string(),
                 value: String::new(),
                 country_name: String::new(),
+                observed_ip,
                 rtt_ms: response.rtt_ms,
                 error: "响应中没有有效国家代码".to_string(),
             },
@@ -2410,10 +2499,32 @@ async fn probe_geo_endpoint(
             .to_string(),
             value: String::new(),
             country_name: String::new(),
+            observed_ip,
             rtt_ms: 0.0,
             error: error.message,
         },
     }
+}
+
+fn parse_geo_observed_ip(
+    parser: GeoParser,
+    body: &str,
+    public_ip: Option<&str>,
+    family: AddressFamily,
+) -> Option<IpAddr> {
+    if matches!(parser, GeoParser::CloudflareTrace) {
+        return parse_echo_ip(body, family);
+    }
+    if public_ip.is_some() {
+        return None;
+    }
+    let value: Value = serde_json::from_str(body).ok()?;
+    if value.get("error").and_then(Value::as_bool) == Some(true)
+        || value.get("success").and_then(Value::as_bool) == Some(false)
+    {
+        return None;
+    }
+    parse_echo_ip(value.get("ip")?.as_str()?, family)
 }
 
 fn parse_geo_response(parser: GeoParser, body: &str) -> Option<(String, Option<String>)> {
@@ -2429,7 +2540,7 @@ fn parse_geo_response(parser: GeoParser, body: &str) -> Option<(String, Option<S
         return None;
     }
     let (code, name) = match parser {
-        GeoParser::IpWho => (
+        GeoParser::GeoJs => (
             value.get("country_code").and_then(Value::as_str),
             value.get("country").and_then(Value::as_str),
         ),
@@ -3623,6 +3734,24 @@ fn round_ratio(value: f64) -> f64 {
     (value.clamp(0.0, 1.0) * 1000.0).round() / 1000.0
 }
 
+fn mask_report_addresses(report: &mut RunReport) {
+    mask_report_identity(&mut report.identity);
+    mask_report_intelligence(&mut report.ip_intelligence);
+    for ip in &mut report.egress_ips {
+        ip.address = mask_ip(&ip.address);
+    }
+    for result in &mut report.geo {
+        for outcome in [result.ipv4.as_mut(), result.ipv6.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(ip) = &mut outcome.observed_ip {
+                *ip = mask_ip(ip);
+            }
+        }
+    }
+}
+
 fn mask_report_identity(identity: &mut IdentityReport) {
     if let Some(ipv4) = &mut identity.ipv4 {
         ipv4.address = mask_ip(&ipv4.address);
@@ -3734,7 +3863,6 @@ fn mask_text(value: &str, original: &str, masked: &str) -> String {
 
 fn provider_homepage(id: &str) -> &'static str {
     match id {
-        "ipwho" => "https://ipwho.is/",
         "ipapi_is" => "https://ipapi.is/",
         "geojs" => "https://geojs.io/",
         "rdap" => "https://rdap.org/",
@@ -3761,7 +3889,7 @@ fn mask_ip(value: &str) -> String {
 }
 
 fn demo_report(mask_ip_enabled: bool) -> RunReport {
-    let mut identity = IdentityReport {
+    let identity = IdentityReport {
         ipv4: Some(IdentityFamily {
             address: "192.0.2.42".to_string(),
             asn: Some("AS64496".to_string()),
@@ -3775,7 +3903,7 @@ fn demo_report(mask_ip_enabled: bool) -> RunReport {
             longitude: Some(-118.2437),
             timezone: Some("America/Los_Angeles".to_string()),
             source_votes: 4,
-            attribution_source_count: 4,
+            attribution_source_count: 3,
         }),
         ipv6: Some(IdentityFamily {
             address: "2001:db8:1234:5678::42".to_string(),
@@ -3790,10 +3918,10 @@ fn demo_report(mask_ip_enabled: bool) -> RunReport {
             longitude: Some(-118.2437),
             timezone: Some("America/Los_Angeles".to_string()),
             source_votes: 3,
-            attribution_source_count: 4,
+            attribution_source_count: 3,
         }),
     };
-    let mut ip_intelligence = IpIntelligenceReport {
+    let ip_intelligence = IpIntelligenceReport {
         ipv4: Some(demo_ip_family_intelligence("192.0.2.42", "US")),
         ipv6: Some(demo_ip_family_intelligence("2001:db8:1234:5678::42", "US")),
     };
@@ -3807,8 +3935,14 @@ fn demo_report(mask_ip_enabled: bool) -> RunReport {
             name: endpoint.name.to_string(),
             group: "geoip".to_string(),
             kind: "country".to_string(),
-            ipv4: Some(demo_geo_outcome(ipv4_codes[index], 12.0 + index as f64)),
-            ipv6: Some(demo_geo_outcome(ipv6_codes[index], 14.0 + index as f64)),
+            ipv4: Some(GeoOutcome {
+                observed_ip: (index == 0).then(|| "192.0.2.42".to_string()),
+                ..demo_geo_outcome(ipv4_codes[index], 12.0 + index as f64)
+            }),
+            ipv6: Some(GeoOutcome {
+                observed_ip: (index == 0).then(|| "2001:db8:1234:5678::42".to_string()),
+                ..demo_geo_outcome(ipv6_codes[index], 14.0 + index as f64)
+            }),
         })
         .collect::<Vec<_>>();
     let portal_results = PORTAL_ENDPOINTS
@@ -3887,11 +4021,32 @@ fn demo_report(mask_ip_enabled: bool) -> RunReport {
         })
         .collect::<Vec<_>>();
 
-    if mask_ip_enabled {
-        mask_report_identity(&mut identity);
-        mask_report_intelligence(&mut ip_intelligence);
-    }
-    RunReport {
+    let mut egress_ips = vec![
+        EgressIp {
+            id: "ipv4-0".to_string(),
+            address: "192.0.2.42".to_string(),
+            family: "ipv4".to_string(),
+            sources: vec![EgressIpSource {
+                module: "identity".to_string(),
+                id: "cloudflare".to_string(),
+                name: "Cloudflare".to_string(),
+                url: GEO_ENDPOINTS[0].url.to_string(),
+            }],
+        },
+        EgressIp {
+            id: "ipv6-0".to_string(),
+            address: "2001:db8:1234:5678::42".to_string(),
+            family: "ipv6".to_string(),
+            sources: vec![EgressIpSource {
+                module: "identity".to_string(),
+                id: "ipify".to_string(),
+                name: "ipify".to_string(),
+                url: "https://api64.ipify.org/".to_string(),
+            }],
+        },
+    ];
+    collect_geo_egress_ips(&mut egress_ips, &geo);
+    let mut report = RunReport {
         schema: 1,
         status: "success".to_string(),
         tool: TOOL_NAME.to_string(),
@@ -3904,6 +4059,7 @@ fn demo_report(mask_ip_enabled: bool) -> RunReport {
             proxy: "direct".to_string(),
         },
         identity,
+        egress_ips,
         ip_intelligence,
         findings: vec![Finding {
             id: "tcp_path_limited".to_string(),
@@ -3931,7 +4087,11 @@ fn demo_report(mask_ip_enabled: bool) -> RunReport {
             capability: tcp_capability(),
             targets,
         },
+    };
+    if mask_ip_enabled {
+        mask_report_addresses(&mut report);
     }
+    report
 }
 
 fn demo_ip_family_intelligence(ip: &str, country: &str) -> IpFamilyIntelligence {
@@ -3969,16 +4129,6 @@ fn demo_ip_family_intelligence(ip: &str, country: &str) -> IpFamilyIntelligence 
         ..IpIntelligenceData::default()
     };
     let sources = vec![
-        IpProviderResult {
-            id: "ipwho".to_string(),
-            name: "ipwho.is".to_string(),
-            category: "geo".to_string(),
-            source_url: format!("https://ipwho.is/{ip}"),
-            status: "ok".to_string(),
-            duration_ms: 42.0,
-            data: Some(geo.clone()),
-            error: None,
-        },
         IpProviderResult {
             id: "geojs".to_string(),
             name: "GeoJS".to_string(),
@@ -4023,6 +4173,7 @@ fn demo_geo_outcome(code: &str, rtt_ms: f64) -> GeoOutcome {
         state: "success".to_string(),
         value: code.to_string(),
         country_name: country_name(code),
+        observed_ip: None,
         rtt_ms,
         error: String::new(),
     }
@@ -4063,6 +4214,170 @@ mod tests {
             None
         );
         assert_eq!(parse_echo_ip("not-an-ip", AddressFamily::Ipv4), None);
+    }
+
+    #[test]
+    fn egress_ips_keep_distinct_addresses_and_merge_detection_sources() {
+        let mut ips = Vec::new();
+        let first: IpAddr = "1.1.1.1".parse().unwrap();
+        let source = EgressIpSource {
+            module: "identity".to_string(),
+            id: "cloudflare".to_string(),
+            name: "Cloudflare".to_string(),
+            url: GEO_ENDPOINTS[0].url.to_string(),
+        };
+        add_egress_ip(&mut ips, first, source.clone());
+        add_egress_ip(&mut ips, first, source.clone());
+        add_egress_ip(
+            &mut ips,
+            "8.8.8.8".parse().unwrap(),
+            EgressIpSource {
+                id: "ipify".to_string(),
+                name: "ipify".to_string(),
+                url: "https://api64.ipify.org/".to_string(),
+                ..source
+            },
+        );
+        let geo = vec![GeoResult {
+            id: "geojs".to_string(),
+            name: "GeoJS".to_string(),
+            group: "geoip".to_string(),
+            kind: "country".to_string(),
+            ipv4: Some(GeoOutcome {
+                observed_ip: Some(first.to_string()),
+                ..demo_geo_outcome("US", 12.0)
+            }),
+            ipv6: Some(GeoOutcome {
+                observed_ip: Some("2606:4700:4700::1111".to_string()),
+                ..demo_geo_outcome("US", 14.0)
+            }),
+        }];
+        collect_geo_egress_ips(&mut ips, &geo);
+        collect_geo_egress_ips(&mut ips, &geo);
+        assert_eq!(ips.len(), 3);
+        assert_eq!(ips[0].address, "1.1.1.1");
+        assert_eq!(ips[0].sources.len(), 2);
+        assert_eq!(ips[0].sources[0].module, "identity");
+        assert_eq!(ips[0].sources[1].module, "geo");
+        assert_eq!(ips[0].sources[1].id, "geojs");
+        assert_eq!(ips[0].sources[1].url, "https://get.geojs.io/v1/ip/geo.json");
+        assert_eq!(ips[1].address, "8.8.8.8");
+        assert_eq!(ips[1].sources.len(), 1);
+        assert_eq!(ips[2].family, "ipv6");
+        assert_eq!(ips[2].sources[0].module, "geo");
+        assert_eq!(ips[2].id, "ipv6-2");
+    }
+
+    #[test]
+    fn geo_observations_only_include_the_actual_request_egress() {
+        let body = r#"{"ip":"1.1.1.1","country":"US","success":true}"#;
+        for parser in [GeoParser::GeoJs, GeoParser::CountryIs, GeoParser::IpApiCo] {
+            assert_eq!(
+                parse_geo_observed_ip(parser, body, None, AddressFamily::Ipv4),
+                Some("1.1.1.1".parse().unwrap())
+            );
+            assert_eq!(
+                parse_geo_observed_ip(parser, body, Some("1.1.1.1"), AddressFamily::Ipv4),
+                None
+            );
+            assert_eq!(
+                parse_geo_observed_ip(parser, body, None, AddressFamily::Ipv6),
+                None
+            );
+        }
+        assert_eq!(
+            parse_geo_observed_ip(
+                GeoParser::CloudflareTrace,
+                "ip=8.8.8.8\nloc=US\n",
+                Some("1.1.1.1"),
+                AddressFamily::Ipv4,
+            ),
+            Some("8.8.8.8".parse().unwrap())
+        );
+        for body in [
+            r#"{"ip":"127.0.0.1","country":"US"}"#,
+            r#"{"ip":"1.1.1.1","success":false}"#,
+            r#"{"ip":"1.1.1.1","error":true}"#,
+            r#"{"server_ip":"1.1.1.1","country":"US"}"#,
+            r#"{"ip":"invalid","country":"US"}"#,
+        ] {
+            assert_eq!(
+                parse_geo_observed_ip(GeoParser::GeoJs, body, None, AddressFamily::Ipv4),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn geojs_location_and_partial_network_responses_keep_their_meaning() {
+        let body = r#"{"ip":"8.8.8.8","country":"United States","country_code":"US","asn":15169,"latitude":"37.751","longitude":"-97.822"}"#;
+        assert_eq!(
+            parse_geo_response(GeoParser::GeoJs, body),
+            Some(("US".to_string(), Some("United States".to_string())))
+        );
+        assert_eq!(
+            parse_geo_observed_ip(GeoParser::GeoJs, body, None, AddressFamily::Ipv4),
+            Some("8.8.8.8".parse().unwrap())
+        );
+        assert_eq!(
+            parse_geo_observed_ip(
+                GeoParser::GeoJs,
+                body,
+                Some("8.8.8.8"),
+                AddressFamily::Ipv4,
+            ),
+            None
+        );
+        // 任播地址可能只有网络信息，不能把缺失的地理位置补成成功。
+        let partial = json!({"ip": "1.1.1.1", "asn": 13335, "organization_name": "Cloudflare, Inc."});
+        assert_eq!(
+            parse_geo_response(GeoParser::GeoJs, &partial.to_string()),
+            None
+        );
+        assert_eq!(
+            parse_ip_provider_data(IpProviderKind::GeoJs, &partial)
+                .unwrap()
+                .asn
+                .as_deref(),
+            Some("AS13335")
+        );
+    }
+
+    #[test]
+    fn egress_masking_preserves_distinct_records_and_detection_sources() {
+        let mut report = demo_report(false);
+        let source = report.egress_ips[0].sources[0].clone();
+        for address in ["8.8.8.8", "8.8.4.4"] {
+            add_egress_ip(&mut report.egress_ips, address.parse().unwrap(), source.clone());
+        }
+        let source_count = report.egress_ips[0].sources.len();
+        let mut exported = serde_json::to_value(&report).unwrap();
+        mask_export_value(&mut exported);
+        assert_eq!(exported["egressIps"].as_array().unwrap().len(), 4);
+        assert_eq!(exported["egressIps"][2]["address"], "8.8.*.*");
+        assert_eq!(exported["egressIps"][3]["address"], "8.8.*.*");
+        assert_ne!(exported["egressIps"][2]["id"], exported["egressIps"][3]["id"]);
+        assert_eq!(
+            exported["egressIps"][0]["sources"].as_array().unwrap().len(),
+            source_count
+        );
+        assert_eq!(exported["geo"][0]["ipv4"]["observedIp"], "192.0.*.*");
+        let text = serde_json::to_string(&exported).unwrap();
+        for original in ["8.8.8.8", "8.8.4.4", "192.0.2.42", "2001:db8:1234:5678::42"] {
+            assert!(!text.contains(original));
+        }
+        mask_report_addresses(&mut report);
+        assert_eq!(report.egress_ips.len(), 4);
+        assert_eq!(report.egress_ips[2].address, "8.8.*.*");
+        assert_eq!(report.egress_ips[3].address, "8.8.*.*");
+        assert_eq!(report.egress_ips[0].sources.len(), source_count);
+        assert_eq!(
+            report.geo[0].ipv6.as_ref().unwrap().observed_ip.as_deref(),
+            Some("2001:db8:1234:5678:*:*:*:*")
+        );
+        let mut masked_export = serde_json::to_value(demo_report(true)).unwrap();
+        mask_export_value(&mut masked_export);
+        assert_eq!(masked_export["egressIps"][0]["address"], "192.0.*.*");
     }
 
     #[test]
@@ -4154,29 +4469,25 @@ mod tests {
 
     #[test]
     fn ip_intelligence_parsers_and_facts_keep_provider_conflicts() {
-        let ipwho = parse_ip_provider_data(
-            IpProviderKind::IpWho,
+        let geojs = parse_ip_provider_data(
+            IpProviderKind::GeoJs,
             &json!({
-                "success": true,
                 "country_code": "US",
                 "country": "United States",
                 "region": "California",
                 "city": "Los Angeles",
-                "latitude": 34.05,
-                "longitude": -118.24,
-                "timezone": {"id": "America/Los_Angeles"},
-                "connection": {
-                    "asn": 64496,
-                    "isp": "Example ISP",
-                    "org": "Example Org",
-                    "domain": "example.net"
-                }
+                "latitude": "34.05",
+                "longitude": "-118.24",
+                "timezone": "America/Los_Angeles",
+                "asn": 64496,
+                "organization_name": "Example Org"
             }),
         )
         .unwrap();
-        assert_eq!(ipwho.asn.as_deref(), Some("AS64496"));
-        assert_eq!(ipwho.city.as_deref(), Some("Los Angeles"));
-        assert_eq!(ipwho.latitude, Some(34.05));
+        assert_eq!(geojs.asn.as_deref(), Some("AS64496"));
+        assert_eq!(geojs.city.as_deref(), Some("Los Angeles"));
+        assert_eq!(geojs.latitude, Some(34.05));
+        assert_eq!(geojs.organization.as_deref(), Some("Example Org"));
 
         let ipapi_is = parse_ip_provider_data(
             IpProviderKind::IpApiIs,
@@ -4184,33 +4495,22 @@ mod tests {
                 "ip": "192.0.2.42",
                 "is_bogon": false,
                 "company": "Example Network",
-                "asn": "AS64496 Example Network",
-                "city": "Los Angeles",
-                "region": "California",
-                "country": "United States",
-                "lat": 34.05,
-                "lon": -118.24,
-                "timezone": "America/Los_Angeles"
-            }),
-        )
-        .unwrap();
-        assert_eq!(ipapi_is.country_name.as_deref(), Some("United States"));
-        assert_eq!(ipapi_is.city.as_deref(), Some("Los Angeles"));
-        assert_eq!(ipapi_is.asn.as_deref(), Some("AS64496"));
-        assert_eq!(ipapi_is.organization.as_deref(), Some("Example Network"));
-
-        let geojs = parse_ip_provider_data(
-            IpProviderKind::GeoJs,
-            &json!({
+                "asn": "AS64497 Example Network",
+                "city": "Toronto",
+                "region": "Ontario",
                 "country_code": "CA",
                 "country": "Canada",
-                "region": "Ontario",
-                "city": "Toronto",
-                "asn": "64497",
-                "organization": "Other Org"
+                "lat": 43.65,
+                "lon": -79.38,
+                "timezone": "America/Toronto"
             }),
         )
         .unwrap();
+        assert_eq!(ipapi_is.country_name.as_deref(), Some("Canada"));
+        assert_eq!(ipapi_is.city.as_deref(), Some("Toronto"));
+        assert_eq!(ipapi_is.asn.as_deref(), Some("AS64497"));
+        assert_eq!(ipapi_is.organization.as_deref(), Some("Example Network"));
+
         let rdap = parse_ip_provider_data(
             IpProviderKind::Rdap,
             &json!({
@@ -4232,16 +4532,6 @@ mod tests {
 
         let sources = vec![
             IpProviderResult {
-                id: "ipwho".to_string(),
-                name: "ipwho.is".to_string(),
-                category: "geo".to_string(),
-                source_url: "https://ipwho.is/".to_string(),
-                status: "ok".to_string(),
-                duration_ms: 1.0,
-                data: Some(ipwho),
-                error: None,
-            },
-            IpProviderResult {
                 id: "geojs".to_string(),
                 name: "GeoJS".to_string(),
                 category: "network".to_string(),
@@ -4249,6 +4539,16 @@ mod tests {
                 status: "ok".to_string(),
                 duration_ms: 1.0,
                 data: Some(geojs),
+                error: None,
+            },
+            IpProviderResult {
+                id: "ipapi_is".to_string(),
+                name: "ipapi.is".to_string(),
+                category: "geo".to_string(),
+                source_url: "https://ipapi.is/".to_string(),
+                status: "ok".to_string(),
+                duration_ms: 1.0,
+                data: Some(ipapi_is),
                 error: None,
             },
             IpProviderResult {
@@ -4315,7 +4615,8 @@ mod tests {
         assert!(report.contains("192.0.*.*"));
         assert!(report.contains("2001:db8:1234:5678:*:*:*:*"));
         assert!(report.contains("ipIntelligence"));
-        assert!(report.contains("https://ipwho.is/"));
+        assert!(report.contains("https://geojs.io/"));
+        assert!(!report.contains("ipwho"));
     }
 
     #[test]
@@ -4328,7 +4629,7 @@ mod tests {
         assert_eq!(report["transport"]["maskIp"], true);
         assert_eq!(
             report["ipIntelligence"]["ipv4"]["sources"][0]["sourceUrl"],
-            "https://ipwho.is/"
+            "https://geojs.io/"
         );
     }
 

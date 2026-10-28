@@ -534,6 +534,8 @@ async function load() {
     }
     warnings.value = [...result.errors, ...result.hotkeyErrors]
     dataPath.value = result.dataPath
+    // 事件可能先于挂载流程开始读取，首次草稿必须在配置实际返回后初始化。
+    if (props.settingsOnly && !ready.value) openSettings()
     ready.value = true
   } catch (cause) {
     error.value = `读取截图数据失败：${String(cause)}`
@@ -693,7 +695,6 @@ onMounted(async () => {
       return
     }
     await load()
-    if (props.settingsOnly && !disposed) openSettings()
   } catch (cause) {
     error.value = String(cause)
   }
