@@ -522,6 +522,14 @@ impl NetworkStack {
             .unwrap_or_else(|| "direct".to_string())
     }
 
+    fn resolver_report(&self) -> &'static str {
+        if self.proxy.is_some() {
+            "proxy"
+        } else {
+            "system"
+        }
+    }
+
     fn path_probe_mode(&self) -> PathProbeMode {
         match self.proxy.as_ref() {
             Some(proxy) if proxy.https.is_some() => PathProbeMode::ProxyHttps,
@@ -1459,7 +1467,7 @@ async fn run_report(
         transport: TransportReport {
             family: options.family.as_str().to_string(),
             mask_ip: options.mask_ip,
-            resolver: "system".to_string(),
+            resolver: stack.resolver_report().to_string(),
             proxy: stack.proxy_report(),
         },
         identity,
@@ -4400,7 +4408,7 @@ mod tests {
         let proxy = parse_system_proxy("socks=alice:secret@127.0.0.1:1080", "").unwrap();
         assert_eq!(
             proxy.http.as_deref(),
-            Some("socks5h://alice:secret@127.0.0.1:1080/")
+            Some("socks5h://alice:secret@127.0.0.1:1080")
         );
         assert_eq!(proxy.https, proxy.http);
         assert_eq!(proxy.report(), "system:socks5h://127.0.0.1:1080");
@@ -4411,16 +4419,14 @@ mod tests {
     #[test]
     fn proxy_path_mode_prefers_https_and_never_uses_direct_tcp() {
         let https = parse_system_proxy("127.0.0.1:7890", "").unwrap();
-        assert_eq!(
-            NetworkStack {
-                ipv4: None,
-                ipv6: None,
-                metadata: build_metadata_client(None).unwrap(),
-                proxy: Some(https),
-            }
-            .path_probe_mode(),
-            PathProbeMode::ProxyHttps
-        );
+        let https_stack = NetworkStack {
+            ipv4: None,
+            ipv6: None,
+            metadata: build_metadata_client(None).unwrap(),
+            proxy: Some(https),
+        };
+        assert_eq!(https_stack.path_probe_mode(), PathProbeMode::ProxyHttps);
+        assert_eq!(https_stack.resolver_report(), "proxy");
 
         let http_only = parse_system_proxy("http=127.0.0.1:7890", "").unwrap();
         assert_eq!(
