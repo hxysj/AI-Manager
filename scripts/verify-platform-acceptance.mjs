@@ -40,6 +40,7 @@ export async function verifyAcceptance(files) {
       report.arch === automated.arch, `${key} 系统或架构不一致`)
     require(report.desktopSession ===
       manual.desktopSession, `${key} 桌面会话不一致`)
+    require(Array.isArray(report.checks) && report.checks.every(check => check.status === "passed"), `${key} 存在失败或未执行项目`)
   }
   require(automated.scope === "automated-regression", "缺少自动回归报告")
   require(native.scope === "native-probes", "缺少原生探针报告")
@@ -89,6 +90,9 @@ export async function verifyAcceptance(files) {
   require(ports?.evidence?.listenerFound === true &&
     ports?.evidence?.selfTerminationBlocked ===
       true, "缺少端口与自身进程保护证据")
+  const clipboard = native.checks?.find(check => check.id === "native-clipboard")?.evidence
+  require((clipboard?.mode === "image-roundtrip" && clipboard.pixelsMatch === true)
+    || (manual.desktopSession === "wayland" && clipboard?.mode === "read-only" && clipboard.readable === true), "缺少剪贴板探针结果")
   const capture = native.checks?.find((check) => check.id === "native-capture")
   require(capture?.evidence?.frames?.length === 3, "缺少三帧连续采集证据")
   for (const frame of capture?.evidence?.frames || []) {

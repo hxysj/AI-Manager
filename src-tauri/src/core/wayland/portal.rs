@@ -4,16 +4,13 @@ use ashpd::desktop::{
     screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType},
     Session,
 };
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use image::RgbaImage;
 use pipewire::{self as pw, properties::properties, spa};
 use std::{
     cell::RefCell,
     rc::Rc,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc, Arc, OnceLock,
-    },
+    sync::{mpsc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -184,9 +181,8 @@ fn run_session(first: Request, receiver: &mpsc::Receiver<Request>) {
             }
         })
         .map_err(|error| format!("桌面共享授权失败：{error}"))?;
-        let closed = Arc::new(AtomicBool::new(false));
-        let closed_signal = closed.clone();
-        let closed_events = tauri::async_runtime::block_on(async {
+        let mut closed = false;
+        let mut closed_events = tauri::async_runtime::block_on(async {
             match &sharing {
                 Sharing::Remote(_, session, _) => session
                     .receive_closed()
@@ -199,12 +195,7 @@ fn run_session(first: Request, receiver: &mpsc::Receiver<Request>) {
             }
         })
         .map_err(|error| error.to_string())?;
-        let watcher = tauri::async_runtime::spawn(async move {
-            let mut closed_events = closed_events;
-            let _ = closed_events.next().await;
-            closed_signal.store(true, Ordering::SeqCst);
-        });
-        let result = (|| -> Result<(), String> {
+        (|| -> Result<(), String> {
             if streams.is_empty() {
                 return Err("没有授权共享的屏幕".into());
             }
@@ -364,6 +355,8 @@ fn run_session(first: Request, receiver: &mpsc::Receiver<Request>) {
             }
             loop {
                 mainloop.loop_().iterate(Duration::from_millis(10).into());
+                // 事件流借用会话，在采集线程轮询，避免把借用移交到独立任务。
+                closed = closed || closed_events.next().now_or_never().is_some();
                 let request = first.take().or_else(|| receiver.try_recv().ok());
                 let Some(request) = request else {
                     continue;
@@ -371,7 +364,7 @@ fn run_session(first: Request, receiver: &mpsc::Receiver<Request>) {
                 if matches!(request, Request::Release) {
                     return Ok(());
                 }
-                if closed.load(Ordering::SeqCst) {
+                if closed {
                     request.fail("屏幕共享已被系统停止，请重新开始截图");
                     // 保持关闭状态直到调用方释放，避免长截图循环重新弹授权窗口。
                     continue;
@@ -381,7 +374,8 @@ fn run_session(first: Request, receiver: &mpsc::Receiver<Request>) {
                         let started = Instant::now();
                         while started.elapsed() < Duration::from_secs(3) {
                             mainloop.loop_().iterate(Duration::from_millis(10).into());
-                            if closed.load(Ordering::SeqCst)
+                            closed = closed || closed_events.next().now_or_never().is_some();
+                            if closed
                                 || stream_error.borrow().is_some()
                                 || (started.elapsed() >= Duration::from_millis(80)
                                     && frames.borrow().iter().all(Option::is_some))
@@ -390,7 +384,7 @@ fn run_session(first: Request, receiver: &mpsc::Receiver<Request>) {
                             }
                         }
                         let failure = stream_error.borrow().clone();
-                        let result = if closed.load(Ordering::SeqCst) {
+                        let result = if closed {
                             Err("屏幕共享已被系统停止，请重新开始截图".into())
                         } else if let Some(error) = failure {
                             Err(error)
@@ -461,9 +455,7 @@ fn run_session(first: Request, receiver: &mpsc::Receiver<Request>) {
                     Request::Release => return Ok(()),
                 }
             }
-        })();
-        watcher.abort();
-        result
+        })()
     })();
     if let Err(error) = result {
         if let Some(request) = first.take() {

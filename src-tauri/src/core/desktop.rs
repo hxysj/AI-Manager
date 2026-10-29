@@ -296,6 +296,7 @@ pub fn selected_text() -> Result<String, ManagerError> {
     }
     // 应用未公开选区时，通过系统复制操作取词，超时不使用旧剪贴板冒充选区。
     let mut wayland_before = None;
+    let mut wayland_marker = None;
     let before = if is_wayland() {
         if let Ok(types) = wayland_clipboard(&["--list-types"], None) {
             let types = String::from_utf8_lossy(&types);
@@ -323,7 +324,13 @@ pub fn selected_text() -> Result<String, ManagerError> {
                 "无法保存当前剪贴板，请复制所选文字后使用剪贴板翻译",
             ));
         }
-        wayland_clipboard(&["--clear"], Some(&[]))?;
+        // 用可识别的文本替代清空，复制失败时仍能安全判断所有权并恢复原格式。
+        let marker = format!("monkey-thief-selection-{}", uuid::Uuid::new_v4());
+        wayland_clipboard(
+            &["--type", "text/plain;charset=utf-8"],
+            Some(marker.as_bytes()),
+        )?;
+        wayland_marker = Some(marker);
         Vec::new()
     } else {
         let before = clipboard(|context| {
@@ -343,7 +350,7 @@ pub fn selected_text() -> Result<String, ManagerError> {
         for _ in 0..20 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             if let Ok(text) = clipboard_text() {
-                if !text.is_empty() {
+                if !text.is_empty() && wayland_marker.as_ref() != Some(&text) {
                     return Ok(text);
                 }
             }
@@ -356,11 +363,16 @@ pub fn selected_text() -> Result<String, ManagerError> {
     let current = clipboard_text();
     // 非文字内容读取失败时保留现状，不能当作空剪贴板恢复并覆盖用户的新内容。
     if current.as_ref().is_ok_and(|current| {
-        current.is_empty() || result.as_ref().is_ok_and(|text| text == current)
+        wayland_marker
+            .as_ref()
+            .map_or_else(|| current.is_empty(), |marker| marker == current)
+            || result.as_ref().is_ok_and(|text| text == current)
     }) {
         if is_wayland() {
             if let Some((mime, bytes)) = wayland_before {
                 let _ = wayland_clipboard(&["--type", &mime], Some(&bytes));
+            } else {
+                let _ = wayland_clipboard(&["--clear"], Some(&[]));
             }
         } else {
             let _ = clipboard(|context| context.set(before));
@@ -434,31 +446,60 @@ pub fn start_shortcuts(
 }
 
 #[cfg(target_os = "linux")]
+fn portal_shortcut_labels() -> &'static Mutex<std::collections::HashMap<String, (String, String)>> {
+    static LABELS: OnceLock<Mutex<std::collections::HashMap<String, (String, String)>>> =
+        OnceLock::new();
+    LABELS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(target_os = "linux")]
+pub fn shortcut_label(action: &str) -> Option<String> {
+    portal_shortcut_labels()
+        .lock()
+        .unwrap()
+        .get(action)
+        .map(|(_, label)| label.clone())
+}
+
+#[cfg(target_os = "linux")]
 async fn portal_shortcuts(
     app: &AppHandle,
     bindings: &[(String, String)],
     activate: fn(&AppHandle, &str),
     report: fn(&AppHandle, Vec<String>),
 ) -> Result<(), ashpd::Error> {
-    use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
+    use ashpd::desktop::global_shortcuts::{
+        Activated, GlobalShortcuts, NewShortcut, Shortcut, ShortcutsChanged,
+    };
     use futures_util::StreamExt;
     let portal = GlobalShortcuts::new().await?;
-    struct SessionGuard(Option<ashpd::desktop::Session<GlobalShortcuts>>);
+    struct SessionGuard {
+        session: Option<ashpd::desktop::Session<GlobalShortcuts>>,
+        path: String,
+    }
     impl Drop for SessionGuard {
         fn drop(&mut self) {
-            if let Some(session) = self.0.take() {
+            portal_shortcut_labels()
+                .lock()
+                .unwrap()
+                .retain(|_, (path, _)| path != &self.path);
+            if let Some(session) = self.session.take() {
                 tauri::async_runtime::spawn(async move {
                     let _ = session.close().await;
                 });
             }
         }
     }
-    let guard = SessionGuard(Some(portal.create_session(Default::default()).await?));
-    let session = guard.0.as_ref().unwrap();
-    let session_path = serde_json::to_value(session)
+    let session = portal.create_session(Default::default()).await?;
+    let session_path = serde_json::to_value(&session)
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_default();
+    let guard = SessionGuard {
+        session: Some(session),
+        path: session_path.clone(),
+    };
+    let session = guard.session.as_ref().unwrap();
     let shortcuts = bindings
         .iter()
         .map(|(action, trigger)| {
@@ -471,18 +512,61 @@ async fn portal_shortcuts(
             NewShortcut::new(action, action).preferred_trigger(Some(trigger.as_str()))
         })
         .collect::<Vec<_>>();
-    let mut events = portal.receive_activated().await?;
-    portal
+    enum Event {
+        Activated(Activated),
+        Changed(ShortcutsChanged),
+        Closed,
+    }
+    let events = portal.receive_activated().await?.map(Event::Activated);
+    let changes = portal
+        .receive_shortcuts_changed()
+        .await?
+        .map(Event::Changed);
+    let closed = session.receive_closed().await?.map(|_| Event::Closed);
+    let mut events =
+        futures_util::stream::select(events, futures_util::stream::select(changes, closed)).boxed();
+    let update_labels = |shortcuts: &[Shortcut]| {
+        let mut labels = portal_shortcut_labels().lock().unwrap();
+        labels.retain(|_, (path, _)| path != &session_path);
+        for shortcut in shortcuts {
+            if bindings.iter().any(|(action, _)| action == shortcut.id())
+                && !shortcut.trigger_description().trim().is_empty()
+            {
+                labels.insert(
+                    shortcut.id().to_string(),
+                    (
+                        session_path.clone(),
+                        shortcut.trigger_description().to_string(),
+                    ),
+                );
+            }
+        }
+        let errors = bindings
+            .iter()
+            .filter(|(action, _)| !labels.contains_key(action))
+            .map(|(action, _)| format!("桌面门户未授权快捷键：{action}"))
+            .collect();
+        drop(labels);
+        report(app, errors);
+    };
+    let bound = portal
         .bind_shortcuts(&session, &shortcuts, None, Default::default())
         .await?
         .response()?;
-    report(app, Vec::new());
+    update_labels(bound.shortcuts());
     while let Some(event) = events.next().await {
-        if event.session_handle().as_str() == session_path {
-            activate(app, event.shortcut_id());
+        match event {
+            Event::Activated(event) if event.session_handle().as_str() == session_path => {
+                activate(app, event.shortcut_id())
+            }
+            Event::Changed(event) if event.session_handle().as_str() == session_path => {
+                update_labels(event.shortcuts())
+            }
+            Event::Closed => break,
+            _ => {}
         }
     }
-    session.close().await?;
+    let _ = session.close().await;
     report(app, vec!["桌面快捷键会话已停止，请重新启用快捷键".into()]);
     Ok(())
 }
@@ -490,7 +574,7 @@ async fn portal_shortcuts(
 #[cfg(target_os = "linux")]
 struct PortalInput {
     portal: ashpd::desktop::remote_desktop::RemoteDesktop,
-    session: ashpd::desktop::Session<ashpd::desktop::remote_desktop::RemoteDesktop>,
+    session: std::sync::Arc<ashpd::desktop::Session<ashpd::desktop::remote_desktop::RemoteDesktop>>,
     closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
     watcher: tauri::async_runtime::JoinHandle<()>,
 }
@@ -524,10 +608,12 @@ async fn wayland_input(
         let portal = RemoteDesktop::new()
             .await
             .map_err(|error| error.to_string())?;
-        let session = portal
-            .create_session(Default::default())
-            .await
-            .map_err(|error| error.to_string())?;
+        let session = std::sync::Arc::new(
+            portal
+                .create_session(Default::default())
+                .await
+                .map_err(|error| error.to_string())?,
+        );
         let result = async {
             portal
                 .select_devices(
@@ -543,14 +629,27 @@ async fn wayland_input(
             if !response.devices().contains(DeviceType::Keyboard) {
                 return Err(ashpd::Error::NoResponse);
             }
-            let mut events = session.receive_closed().await?;
             let closed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let signal = closed.clone();
+            let watched_session = session.clone();
+            let (ready, subscription) = tokio::sync::oneshot::channel();
             let watcher = tauri::async_runtime::spawn(async move {
                 use futures_util::StreamExt;
-                let _ = events.next().await;
+                match watched_session.receive_closed().await {
+                    Ok(mut events) => {
+                        let _ = ready.send(Ok(()));
+                        let _ = events.next().await;
+                    }
+                    Err(error) => {
+                        let _ = ready.send(Err(error));
+                    }
+                }
                 signal.store(true, std::sync::atomic::Ordering::SeqCst);
             });
+            if let Err(error) = subscription.await.unwrap_or(Err(ashpd::Error::NoResponse)) {
+                watcher.abort();
+                return Err(error);
+            }
             Ok::<_, ashpd::Error>((closed, watcher))
         }
         .await;

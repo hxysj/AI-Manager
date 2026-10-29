@@ -1616,7 +1616,9 @@ async function loadFrame() {
   if (!bytes.byteLength || generation !== frameGeneration) return
   longCaptureRequested.value = Boolean(captureMode?.long)
   portalCapture.value = Boolean(captureMode?.portal)
-  finishShortcut.value = captureMode?.finishShortcut || "Ctrl+Alt+F1"
+  finishShortcut.value =
+    captureMode?.finishShortcut ||
+    (portalCapture.value ? "待授权的长截图快捷键" : "Ctrl+Alt+F1")
   // 帧头和像素来自同一响应，避免连续截图时坐标与图像错配。
   const header = new DataView(bytes, 0, 20)
   const current = {

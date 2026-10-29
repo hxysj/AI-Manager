@@ -1633,8 +1633,10 @@ fn migrate_input_metadata(connection: &Connection, table: &str) -> Result<(), Ma
 }
 
 fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
-    let connection = database::open(paths)?;
-    let transaction = connection.unchecked_transaction()?;
+    let mut connection = database::open(paths)?;
+    // 结构检查后可能写入迁移，提前申请写锁，避免并发快照连接升级读锁时直接报忙。
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     // 旧版本的兼容视图可能引用已经删除的 image_assets，先移除，避免 SQLite 在重建任务表时解析失败。
     for name in ["image_inputs", "image_outputs"] {
         let object_type: Option<String> = transaction
@@ -2918,6 +2920,40 @@ mod tests {
     use super::*;
     use crate::core::paths::resolve_app_paths;
     use std::path::Path;
+
+    #[test]
+    fn open_waits_for_concurrent_schema_writer() {
+        let root =
+            std::env::temp_dir().join(format!("image-schema-lock-{}", uuid::Uuid::new_v4()));
+        let paths = resolve_app_paths(&root);
+        let mut connection = open(&paths).unwrap();
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let result = open(&paths).map(drop).map_err(|error| error.to_string());
+            sender.send(result).unwrap();
+        });
+        // 另一连接持有写锁时应等待，不能在读取结构后升级写锁并立即报忙。
+        let pending = receiver.recv_timeout(std::time::Duration::from_millis(250));
+        transaction.commit().unwrap();
+        let (waited, result) = match pending {
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (
+                true,
+                receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap(),
+            ),
+            Ok(result) => (false, result),
+            Err(error) => panic!("存储连接线程异常：{error}"),
+        };
+        worker.join().unwrap();
+        drop(connection);
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(waited, "结构初始化没有等待并发写入：{result:?}");
+        assert!(result.is_ok(), "写锁释放后应正常打开：{result:?}");
+    }
 
     fn insert_output(paths: &AppPaths, task_id: &str, position: i64, format: &str, bytes: &[u8]) {
         let connection = open(paths).unwrap();

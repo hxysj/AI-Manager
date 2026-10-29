@@ -11,12 +11,16 @@ pub fn capture(
     #[cfg(target_os = "linux")]
     if desktop::is_wayland() {
         let image = crate::core::wayland::portal::capture().map_err(failure)?;
-        if left < 0 || top < 0 || i64::from(left) + i64::from(width) > i64::from(image.width())
-            || i64::from(top) + i64::from(height) > i64::from(image.height()) {
+        if left < 0
+            || top < 0
+            || i64::from(left) + i64::from(width) > i64::from(image.width())
+            || i64::from(top) + i64::from(height) > i64::from(image.height())
+        {
             return Err(failure("共享屏幕尺寸已变化，请重新开始截图"));
         }
-        return Ok(DynamicImage::ImageRgba8(image::imageops::crop_imm(
-            &image, left as u32, top as u32, width, height).to_image()));
+        return Ok(DynamicImage::ImageRgba8(
+            image::imageops::crop_imm(&image, left as u32, top as u32, width, height).to_image(),
+        ));
     }
     let native = xcap::Monitor::all().map_err(failure)?;
     let mut output = image::RgbaImage::new(width, height);

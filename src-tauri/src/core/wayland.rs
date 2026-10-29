@@ -40,7 +40,7 @@ pub fn pointer_target(frames: &[&Frame], x: i32, y: i32) -> Result<(u32, f64, f6
             let (logical_width, logical_height) = frame
                 .logical_size
                 .filter(|(width, height)| *width > 0 && *height > 0)
-                .unwrap_or((width as i32, height as i32));
+                .ok_or("门户未提供屏幕逻辑尺寸，请手动滚动页面")?;
             return Ok((
                 frame.node,
                 (i64::from(x) - left) as f64 * f64::from(logical_width) / width as f64,
@@ -143,5 +143,11 @@ mod tests {
         assert!(pointer_target(&frames, -1, 0).is_err());
         assert!(pointer_target(&frames, 10, 0).is_err());
         assert!(compose(&[]).is_err());
+        let unknown_scale = Frame {
+            node: 10,
+            logical_size: None,
+            image: RgbaImage::new(4, 4),
+        };
+        assert!(pointer_target(&[&unknown_scale], 1, 1).is_err());
     }
 }

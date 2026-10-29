@@ -3,7 +3,7 @@
   "bundle": {
     "targets": ["appimage", "deb"],
     "deb": {
-      "depends": ["lsof", "xclip", "wl-clipboard", "xdg-desktop-portal", "policykit-1"]
+      "depends": ["lsof", "xclip", "wl-clipboard", "xdg-desktop-portal", "libpipewire-0.3-0", "policykit-1"]
     }
   }
 }

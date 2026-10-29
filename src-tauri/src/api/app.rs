@@ -669,6 +669,10 @@ pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, 
     .build()
     .map_err(|error| ManagerError::System(error.to_string()))?;
 
+    #[cfg(target_os = "linux")]
+    if crate::core::desktop::is_wayland() {
+        return Ok(json!({ "visible": false }));
+    }
     // 多个工具错开摆放，保留原生标题栏、缩放、最小化和单独关闭能力。
     let count = app
         .webview_windows()
@@ -810,7 +814,9 @@ pub fn move_quick_switch_by(app: &tauri::AppHandle, payload: Value) -> Result<Va
     if crate::core::desktop::is_wayland() {
         if payload["native"].as_bool().unwrap_or(false) {
             if let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) {
-                window.start_dragging().map_err(|error| ManagerError::System(error.to_string()))?;
+                window
+                    .start_dragging()
+                    .map_err(|error| ManagerError::System(error.to_string()))?;
             }
         }
         return Ok(json!({"nativeDrag": true}));
@@ -1125,7 +1131,10 @@ fn position_quick_switch_window(
         .map_err(|error| ManagerError::System(error.to_string()))?;
     #[cfg(target_os = "linux")]
     if crate::core::desktop::is_wayland() {
-        return Ok(PhysicalPosition::new(size.width as f64 / 2.0, size.height as f64 / 2.0));
+        return Ok(PhysicalPosition::new(
+            size.width as f64 / 2.0,
+            size.height as f64 / 2.0,
+        ));
     }
     let monitors = window
         .available_monitors()
