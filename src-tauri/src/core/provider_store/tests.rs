@@ -119,6 +119,96 @@ fn legacy_namespaced_uuid_keeps_its_primary_key_and_keys_on_save() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn desktop_prefix_pairs_keep_distinct_keys_and_provider_identity() {
+    for id in [uuid::Uuid::new_v4().to_string(), "provider-legacy".into()] {
+        for delete_legacy in [false, true] {
+            let (root, paths) = fixture();
+            initialize(&paths).unwrap();
+            let legacy_id = format!("claude-desktop:{id}");
+            let alias = format!("claude-desktop:{id}");
+            let legacy_alias = format!("claude-desktop:{legacy_id}");
+            let connection = database::open(&paths).unwrap();
+            for (owner, secret) in [(&id, "current-key"), (&legacy_id, "legacy-key")] {
+                connection.execute(
+                    "INSERT INTO providers(id,cli,type,name) VALUES(?1,'claude-desktop','anthropic',?1)",
+                    [owner],
+                ).unwrap();
+                connection.execute(
+                    "INSERT INTO provider_keys(provider_id,id,value,is_active) VALUES(?1,'shared',?2,1)",
+                    params![owner, secret],
+                ).unwrap();
+            }
+            let mut providers = read_desktop_providers(&paths).unwrap();
+            let public_ids = providers.iter().map(|item| text(item, "id")).collect::<HashSet<_>>();
+            assert_eq!(public_ids, HashSet::from([id.clone(), legacy_id.clone()]));
+            let mut keys = read_keys(&paths).unwrap();
+            assert_eq!(keys.len(), 2);
+            assert_eq!(keys[&alias]["keys"].as_array().unwrap().len(), 1);
+            assert_eq!(keys[&legacy_alias]["keys"].as_array().unwrap().len(), 1);
+            assert_eq!(keys[&alias]["keys"][0]["value"], "current-key");
+            assert_eq!(keys[&legacy_alias]["keys"][0]["value"], "legacy-key");
+            write_keys(&paths, &keys).unwrap();
+            assert_eq!(read_keys(&paths).unwrap(), keys);
+
+            // 两条记录分别可编辑、激活，同名 Key 不能跨供应商合并。
+            for active_id in [&id, &legacy_id] {
+                let settings = Map::from_iter([("currentProviderId".into(), json!(active_id))]);
+                write_desktop_bundle(&paths, &providers, &settings, &keys).unwrap();
+                assert_eq!(read_desktop_settings(&paths).unwrap()["currentProviderId"], *active_id);
+                assert_eq!(
+                    connection.query_row(
+                        "SELECT id FROM providers WHERE cli='claude-desktop' AND is_active=1",
+                        [], |row| row.get::<_, String>(0),
+                    ).unwrap(),
+                    *active_id
+                );
+            }
+            keys[&legacy_alias]["keys"][0]["note"] = json!("仅修改旧记录");
+            let settings = Map::from_iter([("currentProviderId".into(), json!(legacy_id))]);
+            write_desktop_bundle(&paths, &providers, &settings, &keys).unwrap();
+            assert_eq!(connection.query_row(
+                "SELECT note FROM provider_keys WHERE provider_id=?1", [&id],
+                |row| row.get::<_, String>(0),
+            ).unwrap(), "");
+            assert_eq!(connection.query_row(
+                "SELECT note FROM provider_keys WHERE provider_id=?1", [&legacy_id],
+                |row| row.get::<_, String>(0),
+            ).unwrap(), "仅修改旧记录");
+
+            // 删除一条记录后别名可能缩短，保存中的另一条密钥仍必须归属原主键。
+            let (deleted, survivor, removed_alias, expected) = if delete_legacy {
+                (&legacy_id, &id, &legacy_alias, "current-key")
+            } else {
+                (&id, &legacy_id, &alias, "legacy-key")
+            };
+            providers.retain(|item| text(item, "id") != *deleted);
+            keys.remove(removed_alias);
+            let settings = Map::from_iter([("currentProviderId".into(), json!(survivor))]);
+            write_desktop_bundle(&paths, &providers, &settings, &keys).unwrap();
+            assert_eq!(connection.query_row(
+                "SELECT provider_id FROM provider_keys WHERE is_current=1", [],
+                |row| row.get::<_, String>(0),
+            ).unwrap(), *survivor);
+            assert_eq!(connection.query_row(
+                "SELECT value FROM provider_keys WHERE is_current=1", [],
+                |row| row.get::<_, String>(0),
+            ).unwrap(), expected);
+            assert_eq!(
+                read_key(&paths, &format!("claude-desktop:{survivor}")).unwrap().unwrap()["keys"][0]["value"],
+                expected
+            );
+            let providers = read_desktop_providers(&paths).unwrap();
+            let keys = read_keys(&paths).unwrap();
+            let settings = read_desktop_settings(&paths).unwrap();
+            write_desktop_bundle(&paths, &providers, &settings, &keys).unwrap();
+            assert_eq!(read_keys(&paths).unwrap(), keys);
+            drop(connection);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
 fn legacy_database(paths: &AppPaths) {
     let connection = database::open(paths).unwrap();
     for table in [
@@ -413,6 +503,40 @@ fn api_and_official_account_activation_is_mutually_exclusive() {
     write_profiles(&paths, &profiles).unwrap();
     assert_eq!(read_active_codex_account_id(&paths).unwrap(), "");
     assert_eq!(read_profiles(&paths).unwrap().len(), 2);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn saving_provider_bundle_preserves_unchanged_legacy_keys_and_rejects_invalid_changes() {
+    let (root, paths) = fixture();
+    let mut providers = vec![json!({"id":"p","cli":"codex","name":"原名称"})];
+    write_provider_bundle(&paths, &providers, &[], &[], &Map::new()).unwrap();
+    let connection = database::open(&paths).unwrap();
+    connection.execute(
+        "INSERT INTO provider_keys(provider_id,id,value)
+         VALUES('p','empty-value',''),('p','','legacy-ciphertext')",
+        [],
+    ).unwrap();
+    let original_keys = read_keys(&paths).unwrap();
+    providers[0]["name"] = json!("修改名称");
+    write_provider_bundle(&paths, &providers, &[], &[], &original_keys).unwrap();
+    assert_eq!(read_keys(&paths).unwrap(), original_keys);
+    assert_eq!(read_providers(&paths).unwrap()[0]["name"], "修改名称");
+
+    // 未改动的数据原样保留，实际提交的无效密钥仍须拒绝并回滚整个保存。
+    providers[0]["name"] = json!("不应保存的名称");
+    for records in [
+        json!([{"id":"","value":"encrypted"}]),
+        json!([{"id":"new","value":""}]),
+        json!([{"id":"same","value":"encrypted-a"},{"id":"same","value":"encrypted-b"}]),
+    ] {
+        let keys = Map::from_iter([("p".into(), json!({"keys":records,"activeKeyId":""}))]);
+        let error = write_provider_bundle(&paths, &providers, &[], &[], &keys).unwrap_err();
+        assert!(error.to_string().contains("API Key 缺少 id、加密内容或 id 重复"));
+        assert_eq!(read_keys(&paths).unwrap(), original_keys);
+        assert_eq!(read_providers(&paths).unwrap()[0]["name"], "修改名称");
+    }
+    drop(connection);
     std::fs::remove_dir_all(root).unwrap();
 }
 

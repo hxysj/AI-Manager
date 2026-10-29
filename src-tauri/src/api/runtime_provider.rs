@@ -2224,10 +2224,9 @@ pub(crate) fn get_provider_api_key_with_id(
     paths: &AppPaths,
     provider_id: &str,
 ) -> Result<(String, String), ManagerError> {
-    let keys = provider_store::read_keys(paths)?;
-    let value = keys.get(provider_id);
-    let records = provider_key_records(value);
-    let active_key_id = active_provider_key_id(value, &records);
+    let value = provider_store::read_key(paths, provider_id)?;
+    let records = provider_key_records(value.as_ref());
+    let active_key_id = active_provider_key_id(value.as_ref(), &records);
 
     let key = records
         .iter()
@@ -2254,8 +2253,8 @@ pub fn read_provider_key_value(paths: &AppPaths, payload: &Value) -> Result<Valu
     } else {
         provider_id
     };
-    let keys = provider_store::read_keys(paths)?;
-    let records = provider_key_records(keys.get(&storage_id));
+    let value = provider_store::read_key(paths, &storage_id)?;
+    let records = provider_key_records(value.as_ref());
     let value = records
         .iter()
         .find(|record| record["id"] == key_id)
@@ -2276,15 +2275,19 @@ pub fn read_provider_key_usage(paths: &AppPaths, payload: &Value) -> Result<Valu
     } else {
         provider_id
     };
-    let keys = provider_store::read_keys(paths)?;
-    let records = provider_key_records(keys.get(&storage_id));
-    let active_key_id = active_provider_key_id(keys.get(&storage_id), &records);
+    let value = provider_store::read_key(paths, &storage_id)?;
+    let records = provider_key_records(value.as_ref());
+    let active_key_id = active_provider_key_id(value.as_ref(), &records);
     let logs = crate::api::usage::read_provider_key_logs(paths, &storage_id)?;
+    let owner = provider_store::resolve_key_provider_id(
+        &crate::core::database::open(paths)?,
+        &storage_id,
+    )?;
     let mut usage = Map::new();
     for record in records {
         let key_id = string_value(record.get("id"));
         let key = decrypt_provider_key(&string_value(record.get("value")))?;
-        let mut item = crate::core::provider_key_usage::read(paths, &storage_id, &key_id, &key)?;
+        let mut item = crate::core::provider_key_usage::read(paths, &owner, &key_id, &key)?;
         crate::api::usage::append_provider_key_usage(
             &mut item,
             &logs,
@@ -3827,6 +3830,116 @@ mod tests {
     use crate::core::paths::{resolve_app_paths, AppPaths};
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn desktop_prefix_pairs_keep_key_values_bindings_and_usage_separate() {
+        let (test_root, paths, _) = create_codex_runtime_fixture();
+        provider_store::initialize(&paths).unwrap();
+        let id = uuid::Uuid::new_v4().to_string();
+        let legacy_id = format!("claude-desktop:{id}");
+        let connection = crate::core::database::open(&paths).unwrap();
+        for (owner, secret, count) in [(&id, "current-secret", 1), (&legacy_id, "legacy-secret", 2)] {
+            let encrypted = encrypt_provider_key(secret).unwrap();
+            let hash = crate::core::provider_key_usage::fingerprint(secret);
+            connection.execute(
+                "INSERT INTO providers(id,cli,type) VALUES(?1,'claude-desktop','anthropic')", [owner],
+            ).unwrap();
+            connection.execute(
+                "INSERT INTO provider_keys(provider_id,id,key_hash,value,is_active,request_count,success_count)
+                 VALUES(?1,'shared',?2,?3,1,?4,?4)",
+                rusqlite::params![owner, hash, encrypted, count],
+            ).unwrap();
+        }
+        let desktop_keys = provider_store::read_keys(&paths).unwrap();
+        // 复现报告中的普通 Codex 编辑：Desktop 的前缀配对不能影响另一供应商。
+        tauri::async_runtime::block_on(save_provider(&paths, json!({
+            "id": "provider-codex", "name": "已编辑 Codex",
+            "apiKeys": [{"id": "default", "apiKey": "codex-secret"}],
+            "activeApiKeyId": "default"
+        }))).unwrap();
+        let saved_keys = provider_store::read_keys(&paths).unwrap();
+        for (alias, value) in &desktop_keys {
+            assert_eq!(saved_keys.get(alias), Some(value));
+        }
+        for (public_id, secret, count) in [
+            (&id, "current-secret", 1),
+            (&legacy_id, "legacy-secret", 2),
+        ] {
+            let payload = json!({"providerId": public_id, "keyId": "shared", "cli": "claude-desktop"});
+            assert_eq!(read_provider_key_value(&paths, &payload).unwrap()["apiKey"], secret);
+            assert_eq!(read_provider_key_usage(&paths, &payload).unwrap()["keys"]["shared"]["successCount"], count);
+            let hash: String = connection.query_row(
+                "SELECT api_key_hash FROM provider_key_bindings WHERE provider_id=?1 ORDER BY observed_at DESC LIMIT 1",
+                [format!("claude-desktop:{public_id}")], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(hash, crate::core::provider_key_usage::fingerprint(secret));
+        }
+        // 删除无前缀记录后，尚未刷新的界面仍可按完整旧 ID 读取剩余密钥。
+        connection.execute("DELETE FROM providers WHERE id=?1", [&id]).unwrap();
+        let payload = json!({"providerId": legacy_id, "keyId": "shared", "cli": "claude-desktop"});
+        assert_eq!(read_provider_key_value(&paths, &payload).unwrap()["apiKey"], "legacy-secret");
+        assert_eq!(read_provider_key_usage(&paths, &payload).unwrap()["keys"]["shared"]["successCount"], 2);
+        drop(connection);
+        fs::remove_dir_all(test_root).unwrap();
+    }
+
+    #[test]
+    fn saving_provider_ignores_unrelated_malformed_keys_and_preserves_usage() {
+        tauri::async_runtime::block_on(async {
+            let (test_root, paths, _) = create_codex_runtime_fixture();
+            for cli in ["claude", "codex"] {
+                save_provider(&paths, json!({
+                    "id": format!("target-{cli}"), "cli": cli, "name": "待编辑供应商",
+                    "type": if cli == "claude" { "anthropic" } else { "openai" },
+                    "enabled": false, "baseUrl": "https://example.com/v1",
+                    "apiKeys": [
+                        {"id": "primary", "apiKey": "primary-secret"},
+                        {"id": "backup", "apiKey": "backup-secret"}
+                    ],
+                    "activeApiKeyId": "primary"
+                })).await.unwrap();
+            }
+            let connection = crate::core::database::open(&paths).unwrap();
+            // 另一台设备的旧数据可以包含无效记录，编辑其他供应商不能重写这些记录。
+            connection.execute("INSERT INTO provider_keys(provider_id,id,value)
+                VALUES('provider-codex','empty-value',''),('provider-codex','','legacy-ciphertext')", []).unwrap();
+            let original_keys = provider_store::read_keys(&paths).unwrap();
+            for cli in ["claude", "codex"] {
+                let id = format!("target-{cli}");
+                let mut request = crate::core::provider_key_usage::KeyRequest::new(
+                    &paths, &id, "primary", "primary-secret",
+                );
+                request.start();
+                request.response(200, false);
+                request.finish();
+                let mut provider = find_provider(&paths, &id).unwrap();
+                provider["name"] = json!("已编辑供应商");
+                provider["apiKeys"] = json!([
+                    {"id": "primary", "name": "主 Key", "note": "原密钥"},
+                    {"id": "backup", "name": "备用 Key", "note": ""}
+                ]);
+                provider["activeApiKeyId"] = json!("backup");
+                save_provider(&paths, provider).await.unwrap();
+                assert_eq!(find_provider(&paths, &id).unwrap()["name"], "已编辑供应商");
+                let saved_keys = provider_store::read_keys(&paths).unwrap();
+                assert_eq!(saved_keys["provider-codex"], original_keys["provider-codex"]);
+                assert_eq!(saved_keys[&id]["activeKeyId"], "backup");
+                for index in 0..2 {
+                    assert_eq!(
+                        saved_keys[&id]["keys"][index]["value"],
+                        original_keys[&id]["keys"][index]["value"]
+                    );
+                }
+                assert_eq!(
+                    crate::core::provider_key_usage::read(&paths, &id, "primary", "primary-secret")
+                        .unwrap()["successCount"],
+                    1
+                );
+            }
+            drop(connection);
+            fs::remove_dir_all(test_root).unwrap();
+        });
+    }
 
     #[test]
     fn deleting_provider_ignores_unrelated_malformed_keys_and_preserves_other_data() {

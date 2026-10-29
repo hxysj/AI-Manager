@@ -49,9 +49,33 @@ fn rows(connection: &Connection, filter: &str) -> Result<Vec<Value>, ManagerErro
         "SELECT * FROM providers WHERE {filter} ORDER BY sort_order,id"
     ))?;
     let result = statement
-        .query_map([], item_from_row)?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>("id")?, item_from_row(row)?))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(result)
+    result
+        .into_iter()
+        .map(|(storage_id, mut item)| {
+            if item["cli"] == "claude-desktop" {
+                item["id"] = json!(desktop_public_id(connection, &storage_id)?);
+            }
+            Ok(item)
+        })
+        .collect()
+}
+
+fn desktop_public_id(connection: &Connection, id: &str) -> Result<String, ManagerError> {
+    if let Some(local_id) = id.strip_prefix("claude-desktop:") {
+        // 前缀和无前缀记录并存时保留完整标识，避免界面 ID 和密钥别名合并。
+        if !connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND cli='claude-desktop')",
+            [local_id],
+            |row| row.get::<_, bool>(0),
+        )? {
+            return Ok(local_id.to_string());
+        }
+    }
+    Ok(id.to_string())
 }
 
 pub fn read_providers(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
@@ -85,6 +109,15 @@ fn canonical_id(
         "desktop" => format!("claude-desktop:{id}"),
         _ => return Ok(id),
     };
+    if scope == "desktop"
+        && connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND cli='claude-desktop')",
+            [&id],
+            |row| row.get::<_, bool>(0),
+        )?
+    {
+        return Ok(id);
+    }
     // 旧记录保留原主键；新记录的 UUID 直接入库，不再拼接类型前缀。
     let exists = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1)",
@@ -549,8 +582,32 @@ pub fn write_runtime_state(
 pub fn read_keys(paths: &AppPaths) -> Result<Map<String, Value>, ManagerError> {
     initialize(paths)?;
     let connection = database::open(paths)?;
+    let stored = read_keys_from_connection(&connection)?;
+    let mut aliases = HashMap::new();
+    for row in connection
+        .prepare("SELECT id FROM providers WHERE cli='claude-desktop'")?
+        .query_map([], |row| row.get::<_, String>(0))?
+    {
+        let id = row?;
+        let alias = format!("claude-desktop:{}", desktop_public_id(&connection, &id)?);
+        aliases.insert(id, alias);
+    }
+    Ok(stored
+        .into_iter()
+        .map(|(id, value)| (aliases.remove(&id).unwrap_or(id), value))
+        .collect())
+}
+
+pub(crate) fn read_key(paths: &AppPaths, provider_id: &str) -> Result<Option<Value>, ManagerError> {
+    initialize(paths)?;
+    let connection = database::open(paths)?;
+    let id = resolve_key_provider_id(&connection, provider_id)?;
+    Ok(read_keys_from_connection(&connection)?.remove(&id))
+}
+
+fn read_keys_from_connection(connection: &Connection) -> Result<Map<String, Value>, ManagerError> {
     let mut result = Map::new();
-    let mut statement=connection.prepare("SELECT CASE WHEN p.cli='claude-desktop' AND p.id NOT LIKE 'claude-desktop:%' THEN 'claude-desktop:'||p.id ELSE p.id END,k.id,k.name,k.note,k.value,k.is_active FROM provider_keys k JOIN providers p ON p.id=k.provider_id WHERE k.is_current=1 ORDER BY k.provider_id,k.sort_order,k.id")?;
+    let mut statement=connection.prepare("SELECT p.id,k.id,k.name,k.note,k.value,k.is_active FROM provider_keys k JOIN providers p ON p.id=k.provider_id WHERE k.is_current=1 ORDER BY k.provider_id,k.sort_order,k.id")?;
     for row in statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -590,6 +647,40 @@ pub(crate) fn set_key(
     provider_id: &str,
     value: Option<&Value>,
 ) -> Result<(), ManagerError> {
+    let id = resolve_key_provider_id(connection, provider_id)?;
+    set_stored_key(connection, &id, value)
+}
+
+pub(crate) fn resolve_key_provider_id(
+    connection: &Connection,
+    provider_id: &str,
+) -> Result<String, ManagerError> {
+    if let Some(id) = provider_id.strip_prefix("claude-desktop:") {
+        canonical_id(connection, &json!({"id":id}), "desktop")
+    } else {
+        Ok(provider_id.to_string())
+    }
+}
+
+fn resolve_keys(
+    connection: &Connection,
+    keys: &Map<String, Value>,
+) -> Result<Map<String, Value>, ManagerError> {
+    let mut stored = Map::new();
+    for (alias, value) in keys {
+        let id = resolve_key_provider_id(connection, alias)?;
+        if stored.insert(id, value.clone()).is_some() {
+            return Err(ManagerError::System("API Key 的供应商标识冲突，未保存".into()));
+        }
+    }
+    Ok(stored)
+}
+
+fn set_stored_key(
+    connection: &Connection,
+    provider_id: &str,
+    value: Option<&Value>,
+) -> Result<(), ManagerError> {
     if let Some(id) = provider_id.strip_prefix("google-oauth:") {
         let credentials = value
             .and_then(Value::as_str)
@@ -610,12 +701,6 @@ pub(crate) fn set_key(
         )?;
         return Ok(());
     }
-    let resolved = if let Some(id) = provider_id.strip_prefix("claude-desktop:") {
-        canonical_id(connection, &json!({"id":id}), "desktop")?
-    } else {
-        provider_id.to_string()
-    };
-    let provider_id = resolved.as_str();
     let records = if let Some(raw) = value
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
@@ -689,14 +774,24 @@ pub(crate) fn set_key(
 }
 
 fn set_keys(connection: &Connection, keys: &Map<String, Value>) -> Result<(), ManagerError> {
+    set_stored_keys(connection, &resolve_keys(connection, keys)?)
+}
+
+fn set_stored_keys(connection: &Connection, keys: &Map<String, Value>) -> Result<(), ManagerError> {
+    let existing = read_keys_from_connection(connection)?;
     let ids = connection
-        .prepare("SELECT CASE WHEN cli='claude-desktop' AND id NOT LIKE 'claude-desktop:%' THEN 'claude-desktop:'||id ELSE id END FROM providers")?
+        .prepare("SELECT id FROM providers")?
         .query_map([], |row| row.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     for id in ids {
-        set_key(connection, &id, keys.get(&id))?;
+        // 在同一事务内比较原值，保留未改动的旧密钥，避免阻塞其他供应商的保存。
+        if keys.get(&id) != existing.get(&id) {
+            set_stored_key(connection, &id, keys.get(&id))?;
+        }
         let oauth_id = format!("google-oauth:{id}");
-        set_key(connection, &oauth_id, keys.get(&oauth_id))?;
+        if keys.get(&oauth_id) != existing.get(&oauth_id) {
+            set_stored_key(connection, &oauth_id, keys.get(&oauth_id))?;
+        }
     }
     Ok(())
 }
@@ -725,13 +820,16 @@ pub fn read_desktop_settings(paths: &AppPaths) -> Result<Map<String, Value>, Man
     }
     let active = connection
         .query_row(
-            "SELECT CASE WHEN id LIKE 'claude-desktop:%' THEN substr(id,16) ELSE id END FROM providers WHERE cli='claude-desktop' AND is_active=1",
+            "SELECT id FROM providers WHERE cli='claude-desktop' AND is_active=1",
             [],
             |row| row.get::<_, String>(0),
         )
         .optional()?
         .unwrap_or_default();
-    settings.insert("currentProviderId".into(), json!(active));
+    settings.insert(
+        "currentProviderId".into(),
+        json!(desktop_public_id(&connection, &active)?),
+    );
     Ok(settings)
 }
 
@@ -786,9 +884,11 @@ pub fn write_desktop_bundle(
     initialize(paths)?;
     let mut connection = database::open(paths)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // 在增删供应商前固定密钥归属，防止前缀配对变化后把另一条记录的密钥清空。
+    let keys = resolve_keys(&transaction, keys)?;
     replace_records(&transaction, providers, "desktop")?;
     set_desktop_settings(&transaction, settings)?;
-    set_keys(&transaction, keys)?;
+    set_stored_keys(&transaction, &keys)?;
     transaction.commit()?;
     Ok(())
 }
@@ -803,10 +903,11 @@ pub fn write_provider_bundle(
     initialize(paths)?;
     let mut connection = database::open(paths)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let keys = resolve_keys(&transaction, keys)?;
     replace_records(&transaction, providers, "api")?;
     set_models(&transaction, models)?;
     set_profiles(&transaction, profiles)?;
-    set_keys(&transaction, keys)?;
+    set_stored_keys(&transaction, &keys)?;
     transaction.commit()?;
     Ok(())
 }

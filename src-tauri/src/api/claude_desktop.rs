@@ -1448,7 +1448,11 @@ async fn process_gateway(
     let key = data.key(data.current_id())?;
     log["apiKeyId"] = json!(key_id);
     log["apiKeyHash"] = json!(crate::core::provider_key_usage::fingerprint(&key));
-    *key_request = Some(KeyRequest::new(paths, &storage_id, &key_id, &key));
+    let owner = provider_store::resolve_key_provider_id(
+        &crate::core::database::open(paths)?,
+        &storage_id,
+    )?;
+    *key_request = Some(KeyRequest::new(paths, &owner, &key_id, &key));
     if ["openai_chat", "openai_responses"].contains(&text(provider, "apiFormat")) {
         if endpoint != "/messages" {
             return Ok(gateway_error(
