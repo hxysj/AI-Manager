@@ -2760,41 +2760,11 @@ async fn remove_dir_all_if_exists(target_path: impl AsRef<Path>) -> Result<(), M
 }
 
 async fn extract_zip(zip_path: &str, target_path: &Path) -> Result<(), ManagerError> {
-    let mut command = Command::new("powershell.exe");
-
-    #[cfg(windows)]
-    command.creation_flags(CREATE_NO_WINDOW);
-
-    let output = command
-        .args(extract_zip_command_args(zip_path, target_path))
-        .output()
-        .await?;
-
-    if !output.status.success() {
-        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-        return Err(ManagerError::System(if message.is_empty() {
-            "Skill zip 解压失败".to_string()
-        } else {
-            message
-        }));
-    }
-
-    Ok(())
-}
-
-fn extract_zip_command_args(zip_path: &str, target_path: &Path) -> Vec<String> {
-    vec![
-        "-NoProfile".to_string(),
-        "-NonInteractive".to_string(),
-        "-Command".to_string(),
-        "Expand-Archive".to_string(),
-        "-LiteralPath".to_string(),
-        zip_path.to_string(),
-        "-DestinationPath".to_string(),
-        path_text(target_path),
-        "-Force".to_string(),
-    ]
+    let zip_path = PathBuf::from(zip_path);
+    let target_path = target_path.to_path_buf();
+    tokio::task::spawn_blocking(move || extract_repository_archive(&zip_path, &target_path))
+        .await
+        .map_err(|error| ManagerError::System(error.to_string()))?
 }
 
 async fn create_temp_dir(root_path: &str, prefix: &str) -> Result<PathBuf, ManagerError> {
@@ -3850,15 +3820,20 @@ mod tests {
         assert!(error.to_string().contains("Skill 已禁用"));
     }
 
-    #[test]
-    fn extract_zip_command_passes_paths_as_literal_parameters() {
-        let args = extract_zip_command_args("D:\\demo skill.zip", Path::new("D:\\target dir"));
-
-        assert!(args.contains(&"-LiteralPath".to_string()));
-        assert!(args.contains(&"D:\\demo skill.zip".to_string()));
-        assert!(args.contains(&"-DestinationPath".to_string()));
-        assert!(args.contains(&"D:\\target dir".to_string()));
-        assert!(!args.iter().any(|item| item.contains("$args")));
+    #[tokio::test]
+    async fn extracts_skill_zip_with_unicode_paths_without_shell() {
+        use std::io::Write;
+        let root = std::env::temp_dir().join(format!("skill-zip-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join("中文 skill [1].zip");
+        let mut writer = zip::ZipWriter::new(File::create(&archive).unwrap());
+        writer.start_file("示例/SKILL.md", zip::write::SimpleFileOptions::default()).unwrap();
+        writer.write_all(b"skill-content").unwrap();
+        writer.finish().unwrap();
+        let destination = root.join("target space");
+        extract_zip(archive.to_str().unwrap(), &destination).await.unwrap();
+        assert_eq!(std::fs::read(destination.join("示例/SKILL.md")).unwrap(), b"skill-content");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

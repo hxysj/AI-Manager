@@ -339,7 +339,7 @@ pub async fn install_update(
             .update
             .install(&downloaded_update.bytes)
             .map_err(|error| ManagerError::System(error.to_string()))?;
-        Ok(json!(true))
+        app.restart()
     }
 }
 
@@ -366,6 +366,13 @@ pub async fn uninstall_without_trace(
     app: &tauri::AppHandle,
     app_settings: &AppSettings,
 ) -> Result<Value, ManagerError> {
+    #[cfg(not(windows))]
+    {
+        let _ = (app, app_settings);
+        return Err(ManagerError::System("请通过系统卸载应用；用户数据目录可在设置中打开并自行清理".to_string()));
+    }
+    #[cfg(windows)]
+    {
     if cfg!(debug_assertions) {
         return Err(ManagerError::System("开发环境不执行无痕卸载".to_string()));
     }
@@ -429,6 +436,7 @@ pub async fn uninstall_without_trace(
         .map_err(|error| ManagerError::System(error.to_string()))?;
     app.exit(0);
     Ok(json!(true))
+    }
 }
 
 pub async fn handle_close_action(

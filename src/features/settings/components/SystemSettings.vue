@@ -134,13 +134,14 @@ import { appApi } from "@/api"
 const props = defineProps({
   settings: { type: Object, default: () => ({}) },
   cliTargets: { type: Array, default: () => [] },
+  capabilities: { type: Object, default: () => ({}) },
   pending: { type: Boolean, default: false },
   saveSettings: { type: Function, required: true }
 })
 
 defineEmits(["quit-app", "uninstall-without-trace"])
 
-const settingItems = [
+const settingItems = computed(() => [
   {
     key: "logEnabled",
     name: "log-enabled",
@@ -156,7 +157,7 @@ const settingItems = [
     kind: "switch",
     icon: Power,
     title: "开机自动启动",
-    description: "开启后登录 Windows 时自动启动软件，可随时关闭。"
+    description: "开启后登录系统时自动启动软件，可随时关闭。"
   },
   {
     key: "closeAction",
@@ -201,10 +202,10 @@ const settingItems = [
     title: "无痕卸载",
     description: "删除所有本地用户数据，并自动启动静默卸载。"
   }
-]
+].filter(item => item.key !== "uninstall-without-trace" || props.capabilities.nativeUninstall !== false))
 
 const floatingToolItems = computed(() =>
-  getToolItems({ cliTargets: props.cliTargets })
+  getToolItems({ cliTargets: props.cliTargets, capabilities: props.capabilities })
 )
 // 临时值只覆盖正在保存的字段，其他设置始终读取最新配置。
 const overrides = reactive({ quickSwitchTools: {} })

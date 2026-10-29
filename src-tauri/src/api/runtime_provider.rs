@@ -959,54 +959,27 @@ pub async fn launch_codex_provider_instance(
         }
     }
 
-    let launcher_path = profile_dir.join("launch.cmd");
-    let codex_run_command = codex_run_command(&codex_executable_path);
-
-    let mut launcher_lines = vec![
-        "@echo off".to_string(),
-        "title Codex 实例".to_string(),
-        format!("set \"CODEX_HOME={}\"", profile_dir.to_string_lossy()),
-        format!("set \"OPENAI_API_KEY={}\"", token),
-        format!("set \"OPENAI_BASE_URL={}\"", local_base_url),
-        format!("set \"OPENAI_MODEL={}\"", model),
+    let profile_path = profile_dir.to_string_lossy();
+    let mut environment = vec![
+        ("CODEX_HOME", profile_path.as_ref()),
+        ("OPENAI_API_KEY", token.as_str()),
+        ("OPENAI_BASE_URL", local_base_url.as_str()),
+        ("OPENAI_MODEL", model.as_str()),
     ];
     if !use_instance_proxy && !instance_proxy.is_empty() {
-        launcher_lines.extend([
-            format!("set \"HTTP_PROXY={}\"", instance_proxy),
-            format!("set \"HTTPS_PROXY={}\"", instance_proxy),
+        environment.extend([
+            ("HTTP_PROXY", instance_proxy.as_str()),
+            ("HTTPS_PROXY", instance_proxy.as_str()),
         ]);
     }
-    launcher_lines.extend([
-        format!("cd /d \"{}\"", paths.workspace_root),
-        codex_run_command,
-        String::new(),
-    ]);
-    tokio::fs::write(&launcher_path, launcher_lines.join("\r\n")).await?;
-
-    let mut command = std::process::Command::new("cmd.exe");
-    command
-        .args([
-            "/d",
-            "/c",
-            "start",
-            "",
-            "cmd.exe",
-            "/d",
-            "/k",
-            &launcher_path.to_string_lossy(),
-        ])
-        .current_dir(&paths.workspace_root)
-        .env("CODEX_HOME", &profile_dir)
-        .env("OPENAI_API_KEY", &token)
-        .env("OPENAI_BASE_URL", &local_base_url)
-        .env("OPENAI_MODEL", &model);
-    if !use_instance_proxy && !instance_proxy.is_empty() {
-        command.env("HTTP_PROXY", &instance_proxy);
-        command.env("HTTPS_PROXY", &instance_proxy);
-    }
-    command
-        .spawn()
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+    launch_cli_in_terminal(
+        &profile_dir,
+        &paths.workspace_root,
+        &codex_executable_path,
+        "Codex 实例",
+        &environment,
+    )
+    .await?;
 
     Ok(json!({
       "providerId": target_id,
@@ -1210,17 +1183,11 @@ pub async fn launch_claude_provider_instance(
         }
     }
 
-    let launcher_path = profile_dir.join("launch.cmd");
-    let claude_run_command = cli_run_command(&executable_path);
-    let mut launcher_lines = vec![
-        "@echo off".to_string(),
-        "title Claude 实例".to_string(),
-        format!(
-            "set \"CLAUDE_CONFIG_DIR={}\"",
-            profile_dir.to_string_lossy()
-        ),
-        format!("set \"{}={}\"", auth_field, token),
-        format!("set \"ANTHROPIC_BASE_URL={}\"", local_base_url),
+    let profile_path = profile_dir.to_string_lossy();
+    let mut environment = vec![
+        ("CLAUDE_CONFIG_DIR", profile_path.as_ref()),
+        (auth_field.as_str(), token.as_str()),
+        ("ANTHROPIC_BASE_URL", local_base_url.as_str()),
     ];
 
     for key in [
@@ -1233,38 +1200,18 @@ pub async fn launch_claude_provider_instance(
         "HTTP_PROXY",
         "HTTPS_PROXY",
     ] {
-        let value = string_value(env.get(key));
-
-        if !value.is_empty() {
-            launcher_lines.push(format!("set \"{}={}\"", key, value));
+        if let Some(value) = env.get(key).and_then(Value::as_str).filter(|value| !value.is_empty()) {
+            environment.push((key, value));
         }
     }
-
-    launcher_lines.extend([
-        format!("cd /d \"{}\"", paths.workspace_root),
-        claude_run_command,
-        String::new(),
-    ]);
-
-    tokio::fs::write(&launcher_path, launcher_lines.join("\r\n")).await?;
-
-    std::process::Command::new("cmd.exe")
-        .args([
-            "/d",
-            "/c",
-            "start",
-            "",
-            "cmd.exe",
-            "/d",
-            "/k",
-            &launcher_path.to_string_lossy(),
-        ])
-        .current_dir(&paths.workspace_root)
-        .env("CLAUDE_CONFIG_DIR", &profile_dir)
-        .env(&auth_field, &token)
-        .env("ANTHROPIC_BASE_URL", &local_base_url)
-        .spawn()
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+    launch_cli_in_terminal(
+        &profile_dir,
+        &paths.workspace_root,
+        &executable_path,
+        "Claude 实例",
+        &environment,
+    )
+    .await?;
 
     Ok(json!({
       "providerId": provider_id,
@@ -3781,7 +3728,7 @@ fn slugify_name(value: &str) -> String {
 async fn resolve_codex_executable_path(executable_path: &str) -> String {
     let path = Path::new(executable_path);
 
-    if path.extension().is_none() {
+    if cfg!(windows) && path.extension().is_none() {
         let cmd_path = format!("{}.cmd", executable_path);
 
         if tokio::fs::metadata(&cmd_path).await.is_ok() {
@@ -3792,10 +3739,96 @@ async fn resolve_codex_executable_path(executable_path: &str) -> String {
     executable_path.to_string()
 }
 
-fn codex_run_command(executable_path: &str) -> String {
-    cli_run_command(executable_path)
+async fn launch_cli_in_terminal(
+    profile_dir: &Path,
+    workspace: &str,
+    executable: &str,
+    title: &str,
+    environment: &[(&str, &str)],
+) -> Result<(), ManagerError> {
+    #[cfg(windows)]
+    {
+        let launcher = profile_dir.join("launch.cmd");
+        let mut lines = vec!["@echo off".to_string(), format!("title {title}")];
+        lines.extend(environment.iter().map(|(key, value)| format!("set \"{key}={value}\"")));
+        lines.extend([
+            format!("cd /d \"{workspace}\""),
+            cli_run_command(executable),
+            String::new(),
+        ]);
+        tokio::fs::write(&launcher, lines.join("\r\n")).await?;
+        std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "start", "", "cmd.exe", "/d", "/k"])
+            .arg(launcher)
+            .current_dir(workspace)
+            .envs(environment.iter().copied())
+            .spawn()?;
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let _ = title;
+        let launcher = profile_dir.join(if cfg!(target_os = "macos") { "launch.command" } else { "launch.sh" });
+        let script = unix_launcher_script(executable, workspace, environment);
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o700)
+            .open(&launcher)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o700))?;
+        file.write_all(script.as_bytes())?;
+        drop(file);
+
+        #[cfg(target_os = "macos")]
+        {
+            let output = Command::new("/usr/bin/open")
+                .args(["-a", "Terminal"])
+                .arg(&launcher)
+                .output()
+                .await?;
+            if !output.status.success() {
+                return Err(ManagerError::System(String::from_utf8_lossy(&output.stderr).trim().to_string()));
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let configured = std::env::var("AI_MANAGER_TERMINAL").ok();
+            let terminals: Vec<&str> = match configured.as_deref() {
+                Some(terminal) => vec![terminal],
+                None => vec!["x-terminal-emulator", "gnome-terminal", "konsole", "xterm", "kitty", "alacritty"],
+            };
+            let terminal = terminals.into_iter().find(|name| {
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                    .map(|dir| dir.join(name))
+                    .any(|path| path.metadata().is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0))
+            }).ok_or_else(|| ManagerError::System("未找到桌面终端，请安装终端或通过 AI_MANAGER_TERMINAL 指定终端可执行文件".to_string()))?;
+            let name = Path::new(terminal).file_name().and_then(|name| name.to_str()).unwrap_or(terminal);
+            std::process::Command::new(terminal)
+                .arg(if matches!(name, "gnome-terminal" | "kitty") { "--" } else { "-e" })
+                .arg("/bin/sh")
+                .arg(&launcher)
+                .current_dir(workspace)
+                .spawn()?;
+        }
+    }
+    Ok(())
 }
 
+#[cfg(any(unix, test))]
+fn unix_launcher_script(executable: &str, workspace: &str, environment: &[(&str, &str)]) -> String {
+    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\\''"));
+    let mut lines = vec!["#!/bin/sh".to_string()];
+    lines.extend(environment.iter().map(|(key, value)| format!("export {key}={}", quote(value))));
+    lines.push(format!("cd {} || exit 1", quote(workspace)));
+    let node = if executable.ends_with(".js") { "node " } else { "" };
+    lines.push(format!("exec {node}{}", quote(executable)));
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+#[cfg(windows)]
 fn cli_run_command(executable_path: &str) -> String {
     let lower = executable_path.to_lowercase();
 

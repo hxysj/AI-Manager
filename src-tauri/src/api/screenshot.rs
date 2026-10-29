@@ -542,11 +542,18 @@ pub async fn dispatch(
         service.ensure_enabled()?;
     }
     match action.as_str() {
-        "status" => Ok(json!(service.settings())),
+        "status" => {
+            let mut status = json!(service.settings());
+            status["supported"] = json!(cfg!(windows));
+            Ok(status)
+        }
         "set-enabled" => {
             let enabled = payload["enabled"]
                 .as_bool()
                 .ok_or_else(|| failure("缺少截图启停状态"))?;
+            if enabled && !cfg!(windows) {
+                return Err(failure("当前平台暂不支持原生截图与桌面贴图，可继续查看和导出历史记录"));
+            }
             service.set_enabled(enabled)?;
             let result = sync_runtime(&app);
             changed(&app);
@@ -2084,6 +2091,9 @@ pub fn start(app: AppHandle) {
 }
 
 fn sync_runtime(app: &AppHandle) -> Result<(), ManagerError> {
+    if !cfg!(windows) {
+        return Ok(());
+    }
     let service = app.state::<ScreenshotService>();
     if !service.settings().enabled {
         cancel_capture(app)?;

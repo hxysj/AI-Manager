@@ -5,7 +5,7 @@ use crate::api::{
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
-    ensure_app_directories, resolve_app_paths, AppPaths, DEFAULT_USER_DATA_PATH,
+    app_settings_path, ensure_app_directories, resolve_app_paths, AppPaths,
 };
 use crate::core::provider_store;
 use crate::core::settings::{load_app_settings, AppSettings};
@@ -466,7 +466,7 @@ impl ManagerState {
             .path()
             .app_data_dir()
             .map_err(|error| ManagerError::Path(error.to_string()))?;
-        let settings_file_path = PathBuf::from(DEFAULT_USER_DATA_PATH).join("app-settings.json");
+        let settings_file_path = app_settings_path();
         let app_settings = load_app_settings(settings_file_path)?;
         app_logs::set_enabled(app_settings.system.log_enabled);
         let user_data_path = PathBuf::from(&app_settings.data_path);

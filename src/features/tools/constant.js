@@ -12,7 +12,7 @@ import {
 } from 'lucide-vue-next'
 
 // 工具中心、悬浮窗和设置共用入口，保持名称、图标及可用条件一致。
-export function getToolItems({ cliTargets = [], repos = [] } = {}) {
+export function getToolItems({ cliTargets = [], repos = [], appSettings = {}, capabilities = appSettings.capabilities || {} } = {}) {
   const items = [
     {
       id: 'image-workbench',
@@ -101,5 +101,6 @@ export function getToolItems({ cliTargets = [], repos = [] } = {}) {
     })
   }
 
-  return items
+  // 工具中心、悬浮窗和系统设置统一遵循主进程提供的平台能力。
+  return items.filter(item => item.id !== 'port-monitor' || capabilities.portMonitor !== false)
 }

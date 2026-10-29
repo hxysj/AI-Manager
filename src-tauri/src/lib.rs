@@ -123,6 +123,7 @@ async fn dispatch_command(
 }
 
 pub fn run() {
+    crate::core::storage_state::initialize_cli_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -390,7 +391,7 @@ fn build_tray_menu(app: &tauri::AppHandle, state: &Value) -> tauri::Result<Menu<
     for (_, name, shortcut) in settings
         .shortcut_bindings()
         .into_iter()
-        .filter(|_| settings.enabled)
+        .filter(|_| settings.enabled && cfg!(windows))
     {
         let (id, label) = match name {
             "captureAutoCopy" => ("capture-auto-copy", "截屏并自动复制"),

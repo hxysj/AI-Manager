@@ -1,5 +1,5 @@
 use crate::core::error::ManagerError;
-use crate::core::paths::{home_path, path_text, portable_home_prefix, DEFAULT_USER_DATA_PATH};
+use crate::core::paths::{default_user_data_path, home_path, path_text, portable_home_prefix};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -78,6 +78,10 @@ pub struct AgentSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
+    #[serde(default)]
+    pub platform: String,
+    #[serde(default)]
+    pub capabilities: Value,
     pub data_path: String,
     pub default_data_path: String,
     pub settings_file_path: String,
@@ -95,7 +99,12 @@ pub struct AppSettings {
 
 pub fn load_app_settings(settings_file_path: PathBuf) -> Result<AppSettings, ManagerError> {
     if !settings_file_path.exists() {
-        return Ok(normalize_app_settings(settings_file_path, None));
+        let settings = normalize_app_settings(settings_file_path.clone(), None);
+        if let Some(parent) = settings_file_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&settings_file_path, serde_json::to_vec_pretty(&serialize_app_settings(&settings))?)?;
+        return Ok(settings);
     }
 
     let content = std::fs::read_to_string(&settings_file_path)?;
@@ -105,6 +114,7 @@ pub fn load_app_settings(settings_file_path: PathBuf) -> Result<AppSettings, Man
 
 pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value>) -> AppSettings {
     let input = payload.unwrap_or_else(|| json!({}));
+    let default_data_path = path_text(default_user_data_path());
     let portable_home_prefix = portable_home_prefix();
     let default_cli_config_paths = json!({
       "claude": path_text(portable_home_prefix.join(".claude")),
@@ -125,13 +135,22 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
     let translation = &input["agents"]["translation"];
 
     AppSettings {
+        platform: std::env::consts::OS.to_string(),
+        capabilities: json!({
+            "desktopCapture": cfg!(windows),
+            "desktopSelection": cfg!(windows),
+            "portMonitor": cfg!(windows),
+            "nativeUninstall": cfg!(windows),
+            "clipboardFiles": cfg!(windows)
+        }),
         data_path: resolve_portable_path(
             input
                 .get("dataPath")
                 .and_then(Value::as_str)
-                .unwrap_or(DEFAULT_USER_DATA_PATH),
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(&default_data_path),
         ),
-        default_data_path: DEFAULT_USER_DATA_PATH.to_string(),
+        default_data_path,
         settings_file_path: path_text(settings_file_path),
         cli_config_paths: json!({
           "claude": resolve_portable_path(
@@ -368,6 +387,24 @@ pub(crate) fn resolve_portable_path(value: &str) -> String {
         return String::new();
     }
 
+    if text == "~" {
+        return path_text(home_path());
+    }
+    if let Some(relative) = text.strip_prefix("~/").or_else(|| text.strip_prefix("~\\")) {
+        return path_text(home_path().join(relative.replace('\\', "/")));
+    }
+
+    #[cfg(not(windows))]
+    {
+        // 既有备份使用 %USERNAME% 表示主目录，跨平台恢复时只映射其相对部分。
+        if let Some((_, relative)) = text.split_once("%USERNAME%") {
+            return path_text(home_path().join(relative.trim_start_matches(['/', '\\']).replace('\\', "/")));
+        }
+        return text.to_string();
+    }
+
+    #[cfg(windows)]
+    {
     let actual_prefix = path_text(home_path());
     let portable_prefix = path_text(portable_home_prefix());
     let normalized_text = text.replace('/', "\\");
@@ -387,6 +424,7 @@ pub(crate) fn resolve_portable_path(value: &str) -> String {
     }
 
     text.to_string()
+    }
 }
 
 pub(crate) fn serialize_portable_path(value: &str) -> String {
@@ -396,6 +434,17 @@ pub(crate) fn serialize_portable_path(value: &str) -> String {
         return String::new();
     }
 
+    #[cfg(not(windows))]
+    {
+        return match Path::new(text).strip_prefix(home_path()) {
+            Ok(relative) if relative.as_os_str().is_empty() => "~".to_string(),
+            Ok(relative) => path_text(Path::new("~").join(relative)),
+            Err(_) => text.to_string(),
+        };
+    }
+
+    #[cfg(windows)]
+    {
     let actual_prefix = path_text(home_path());
     let portable_prefix = path_text(portable_home_prefix());
     let normalized_text = text.replace('/', "\\");
@@ -415,12 +464,15 @@ pub(crate) fn serialize_portable_path(value: &str) -> String {
     }
 
     text.to_string()
+    }
 }
 
+#[cfg(windows)]
 fn same_path_text(left: &str, right: &str) -> bool {
     left.eq_ignore_ascii_case(right)
 }
 
+#[cfg(windows)]
 fn starts_with_path_text(value: &str, prefix: &str) -> bool {
     value.to_lowercase().starts_with(&prefix.to_lowercase())
 }

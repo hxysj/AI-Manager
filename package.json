@@ -14,6 +14,9 @@
     "prebuild:renderer": "node scripts/build-translation-agent.mjs",
     "build:renderer": "vite build",
     "dist:win": "tauri build --bundles nsis --ci",
+    "dist:mac": "tauri build --bundles app,dmg --ci",
+    "dist:linux": "tauri build --bundles appimage,deb --ci",
+    "test:platform": "node scripts/test-platform.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -25,23 +25,14 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
     "useLocalToolsDir": true,
     "createUpdaterArtifacts": true,
-    "icon": ["../build/icon.png", "../build/icon.ico"],
+    "icon": ["../build/icon.png"],
     "resources": {
       "../assets/image-prompts/gpt-image-2-prompts.json": "assets/image-prompts/gpt-image-2-prompts.json",
       "../src/assets/ai-manager-logo.png": "assets/ai-manager-logo.png",
       "../build/icon.png": "assets/icon.png",
       "node/translation-agent.cjs": "node/translation-agent.cjs"
-    },
-    "windows": {
-      "nsis": {
-        "installMode": "currentUser",
-        "installerIcon": "../build/icon.ico",
-        "uninstallerIcon": "../build/icon.ico",
-        "installerHooks": "../build/installer.nsh"
-      }
     }
   },
   "plugins": {
@@ -49,10 +40,7 @@
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IENBNDdCRjQ0RUY1MzlCQ0UKUldUT20xUHZSTDlIeWdkaVdRY0Z6L0kvOUppYWxRWDdpb3BITzJHOG1XWVNwNkkwL241Y3pMZFgK",
       "endpoints": [
         "https://github.com/hxysj/AI-Manager/releases/latest/download/latest.json"
-      ],
-      "windows": {
-        "installMode": "passive"
-      }
+      ]
     }
   }
 }

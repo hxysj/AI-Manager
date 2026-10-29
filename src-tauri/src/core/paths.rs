@@ -1,7 +1,60 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_USER_DATA_PATH: &str = "D:\\ai-manager-data";
+pub fn default_user_data_path() -> PathBuf {
+    static DEFAULT_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DEFAULT_PATH
+        .get_or_init(|| {
+            select_writable_data_path(&user_data_candidates())
+                .unwrap_or_else(|| home_path().join("ai-manager-data"))
+        })
+        .clone()
+}
+
+pub fn app_settings_path() -> PathBuf {
+    // 优先找回已有设置；新增磁盘不能改变用户已经配置的数据位置。
+    user_data_candidates()
+        .iter()
+        .map(|root| root.join("app-settings.json"))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| default_user_data_path().join("app-settings.json"))
+}
+
+fn user_data_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+        const DRIVE_FIXED: u32 = 3;
+        // D 盘优先，其余数据盘按盘符排序，系统盘 C 放在最后。
+        for letter in std::iter::once(b'D').chain(b'E'..=b'Z').chain(std::iter::once(b'C')) {
+            let root = format!("{}:\\", letter as char);
+            let wide: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
+            if unsafe { GetDriveTypeW(wide.as_ptr()) } == DRIVE_FIXED {
+                candidates.push(PathBuf::from(root).join("ai-manager-data"));
+            }
+        }
+    }
+    candidates.push(home_path().join("ai-manager-data"));
+    candidates
+}
+
+fn select_writable_data_path(candidates: &[PathBuf]) -> Option<PathBuf> {
+    candidates.iter().find_map(|path| {
+        if std::fs::create_dir_all(path).is_err() {
+            return None;
+        }
+        let probe = path.join(format!(".write-check-{}", uuid::Uuid::new_v4()));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .ok()?;
+        drop(file);
+        std::fs::remove_file(probe).ok()?;
+        Some(path.clone())
+    })
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -203,17 +256,23 @@ pub fn public_paths(paths: &AppPaths) -> PublicPaths {
 }
 
 pub fn portable_home_prefix() -> PathBuf {
+    #[cfg(not(windows))]
+    return PathBuf::from("~");
+
+    #[cfg(windows)]
+    {
     let home = home_path();
 
     home.parent()
         .map(|parent| parent.join("%USERNAME%"))
         .unwrap_or(home)
+    }
 }
 
 pub fn home_path() -> PathBuf {
-    std::env::var_os("USERPROFILE")
+    std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from(""))
 }
 
@@ -223,8 +282,25 @@ pub fn path_text(path: impl AsRef<Path>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_app_paths;
+    use super::{resolve_app_paths, select_writable_data_path};
     use std::path::Path;
+
+    #[test]
+    fn data_directory_selection_uses_first_writable_candidate() {
+        let root = std::env::temp_dir().join(format!("data-path-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let blocked = root.join("blocked");
+        std::fs::write(&blocked, b"file").unwrap();
+        let preferred = root.join("preferred");
+        let other = root.join("other");
+        assert_eq!(
+            select_writable_data_path(&[blocked, preferred.clone(), other.clone()]),
+            Some(preferred.clone())
+        );
+        assert!(!other.exists());
+        assert_eq!(std::fs::read_dir(preferred).unwrap().count(), 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn resolves_lan_share_paths_under_workspace() {

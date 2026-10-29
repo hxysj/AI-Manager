@@ -538,6 +538,7 @@
         v-else-if="activeTab === 'system'"
         :settings="appSettings.system"
         :cli-targets="cliTargets"
+        :capabilities="appSettings.capabilities"
         :pending="pending"
         :save-settings="saveSettings"
         @quit-app="$emit('quit-app')"

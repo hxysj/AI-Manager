@@ -20,6 +20,34 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 static CLI_INFO_CACHE: OnceLock<Mutex<HashMap<String, (String, String)>>> = OnceLock::new();
 
+pub fn initialize_cli_path() {
+    #[cfg(unix)]
+    {
+        // 桌面图标启动时补入登录 shell 的 PATH，沿用用户的 Node/Git/CLI 安装配置。
+        let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
+        let output = Command::new(shell)
+            .args(["-lc", "printf '\\000%s\\000' \"$PATH\""])
+            .output();
+        if let Ok(output) = output {
+            if output.status.success() {
+                if let Some(path) = output.stdout.split(|byte| *byte == 0).nth(1).filter(|path| !path.is_empty()) {
+                    use std::os::unix::ffi::OsStrExt;
+                    let current = std::env::var_os("PATH").unwrap_or_default();
+                    let mut directories: Vec<PathBuf> = std::env::split_paths(std::ffi::OsStr::from_bytes(path)).collect();
+                    for directory in std::env::split_paths(&current) {
+                        if !directories.contains(&directory) {
+                            directories.push(directory);
+                        }
+                    }
+                    if let Ok(path) = std::env::join_paths(directories) {
+                        std::env::set_var("PATH", path);
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn create_initial_state(
     paths: &AppPaths,
     app_settings: &AppSettings,
