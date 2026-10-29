@@ -34,14 +34,20 @@
       />
     </div>
     <div
-      v-if="frame && !selection && !activeRegion && !longBusy"
+      v-if="frame && !longBusy && (portalCapture || (!selection && !activeRegion))"
       class="capture-instructions"
     >
       {{
-        longCaptureRequested
+        portalCapture
+          ? `共享画面按授权顺序排列 · 长截图时切回目标页面滚动 · 再按 ${finishShortcut} 完成`
+          : longCaptureRequested
           ? "选择区域后手动向下滚动 · Esc 完成截图"
           : "悬停界面块，点击自动选中 · 拖动自定义区域 · Esc 取消"
       }}
+      <label v-if="portalCapture" @pointerdown.stop @click.stop>
+        <input v-model="longAutoScroll" type="checkbox" />
+        长截图自动滚动
+      </label>
     </div>
     <div
       v-if="frame && (selection || activeRegion)"
@@ -78,12 +84,13 @@
         class="long-screenshot-button"
         :disabled="busy"
         @pointerdown.stop
-        @click.stop="startLongCapture"
+        @click.stop="startLongCapture()"
       >
         长截图
       </button>
       <span v-if="longBusy" class="long-screenshot-progress">
-        {{ longAutoScroll ? "自动向下滚动" : "手动向下滚动" }} · Esc 完成截图
+        {{ longAutoScroll ? "自动向下滚动" : "手动向下滚动" }} ·
+        {{ portalCapture ? finishShortcut : "Esc" }} 完成截图
       </span>
       <button
         v-if="selection && !longBusy"
@@ -403,6 +410,8 @@ const mode = query.get("mode")
 const id = query.get("id")
 const dismissCapture = query.get("capture") === "1"
 const longCaptureRequested = ref(false)
+const portalCapture = ref(false)
+const finishShortcut = ref("Ctrl+Alt+F1")
 const frame = ref(null)
 const autoCopy = ref(false)
 const desktop = ref(null)
@@ -946,7 +955,7 @@ async function startLongCapture() {
   )
     return
   longBusy.value = true
-  longAutoScroll.value = false
+  if (!portalCapture.value) longAutoScroll.value = false
   longProgress.value = 0
   longSize.value = { width: 0, height: 0 }
   const controller = new AbortController()
@@ -1021,6 +1030,7 @@ function finishLongCapture() {
 
 async function output(data) {
   if (busy.value) return
+  const generation = frameGeneration
   busy.value = true
   error.value = ""
   try {
@@ -1050,7 +1060,8 @@ async function output(data) {
           !data.output || data.output === data.source ? source : data.output
       }
     }
-    if (savedOutput?.output !== data.output) {
+    if (mode === "capture" && generation !== frameGeneration) return
+    if (!savedOutput || savedOutput.output !== data.output) {
       const newId = await screenshotApi.call("save-document", {
         source: data.source,
         output: data.output === data.source ? null : data.output,
@@ -1059,6 +1070,7 @@ async function output(data) {
         editingPinId: mode === "capture" ? null : id,
         origin
       })
+      if (mode === "capture" && generation !== frameGeneration) return
       savedOutput = { id: newId, output: data.output }
     }
     const newId = savedOutput.id
@@ -1603,6 +1615,8 @@ async function loadFrame() {
   ])
   if (!bytes.byteLength || generation !== frameGeneration) return
   longCaptureRequested.value = Boolean(captureMode?.long)
+  portalCapture.value = Boolean(captureMode?.portal)
+  finishShortcut.value = captureMode?.finishShortcut || "Ctrl+Alt+F1"
   // 帧头和像素来自同一响应，避免连续截图时坐标与图像错配。
   const header = new DataView(bytes, 0, 20)
   const current = {

@@ -951,8 +951,15 @@ pub async fn delete_device(
         devices.retain(|device| device.id != device_id);
         sessions.retain(|session| session.device_id != device_id);
         if delete_history {
+            let group_session_ids = sessions
+                .iter()
+                .filter(|session| session.mode == "group")
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>();
             messages.retain(|message| {
-                !direct_session_ids.contains(&message.session_id) && message.device_id != device_id
+                !direct_session_ids.contains(&message.session_id)
+                    && (message.device_id != device_id
+                        || group_session_ids.contains(&message.session_id.as_str()))
             });
             let removed_files = files
                 .iter()
@@ -6803,33 +6810,33 @@ mod tests {
                 )
                 .await
                 .unwrap();
-                // 删除设备但保留历史时，历史消息仍在，但不能继续显示为悬浮窗未读。
+                // 旧客户端仍可能传 deleteHistory=false，删除设备统一清理单聊副本。
                 let state = super::get_state(&registry, &paths).await.unwrap();
                 assert_eq!(state["data"]["totalUnread"], 0);
                 assert!(read_array::<LanShareDevice>(&paths.lan_share_files.devices)
                     .unwrap()
                     .is_empty());
-                assert_eq!(received.exists(), !delete_history);
-                assert_eq!(partial.exists(), !delete_history);
-                assert_eq!(checkpoint.exists(), !delete_history);
+                assert!(!received.exists());
+                assert!(!partial.exists());
+                assert!(!checkpoint.exists());
                 assert!(source.exists());
                 assert_eq!(
                     read_array::<LanShareMessage>(&paths.lan_share_files.messages)
                         .unwrap()
                         .is_empty(),
-                    delete_history
+                    true
                 );
                 assert_eq!(
                     read_array::<LanShareFile>(&paths.lan_share_files.files)
                         .unwrap()
                         .is_empty(),
-                    delete_history
+                    true
                 );
                 assert_eq!(
                     read_array::<LanShareSession>(&paths.lan_share_files.sessions)
                         .unwrap()
                         .is_empty(),
-                    delete_history
+                    true
                 );
                 tokio::fs::remove_dir_all(root).await.unwrap();
             }

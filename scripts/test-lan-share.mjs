@@ -426,6 +426,10 @@ for (const fileName of [
   }
   let finishSend
   api.listMessages = async () => []
+  api.getFileInfo = async ({ paths }) => paths.map(path => ({
+    path, name: path.split(/[\\/]/).at(-1), size: 100,
+    mimeType: "application/octet-stream"
+  }))
   api.sendMessage = () =>
     new Promise((resolve) => {
       finishSend = resolve
@@ -436,6 +440,7 @@ for (const fileName of [
       delete listeners.transfer
     }
   }
+  api.onIncomingTransferProgress = () => () => {}
   api.onMessageCreated = (callback) => {
     listeners.message = callback
     return () => {
@@ -489,7 +494,7 @@ for (const fileName of [
     false,
     "普通离线或已配对状态不能误判为对方删除"
   )
-  panel.addPaths(["D:/example.bin"])
+  await panel.addPaths(["D:/example.bin"])
   panel.sendMessage()
   await tick()
   const task = panel.sendingTasks[0]

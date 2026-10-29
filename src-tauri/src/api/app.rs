@@ -767,7 +767,11 @@ pub fn mark_quick_switch_ready(
         .transpose()
         .map_err(|error| ManagerError::System(error.to_string()))?
         .unwrap_or(false);
-    Ok(json!({ "visible": visible }))
+    #[cfg(target_os = "linux")]
+    let native_drag = crate::core::desktop::is_wayland();
+    #[cfg(not(target_os = "linux"))]
+    let native_drag = false;
+    Ok(json!({ "visible": visible, "nativeDrag": native_drag }))
 }
 
 pub fn set_quick_switch_collapsed(
@@ -802,6 +806,15 @@ pub fn set_quick_switch_collapsed(
 }
 
 pub fn move_quick_switch_by(app: &tauri::AppHandle, payload: Value) -> Result<Value, ManagerError> {
+    #[cfg(target_os = "linux")]
+    if crate::core::desktop::is_wayland() {
+        if payload["native"].as_bool().unwrap_or(false) {
+            if let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) {
+                window.start_dragging().map_err(|error| ManagerError::System(error.to_string()))?;
+            }
+        }
+        return Ok(json!({"nativeDrag": true}));
+    }
     let mut center = QUICK_SWITCH_WINDOW_POSITION
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?;
@@ -1046,6 +1059,12 @@ fn apply_quick_switch_collapsed(
     } else {
         QUICK_SWITCH_EXPANDED_HEIGHT
     };
+    #[cfg(target_os = "linux")]
+    if crate::core::desktop::is_wayland() {
+        set_quick_switch_size(window, width, height)?;
+        *center = None;
+        return Ok((width as f64 / 2.0, height as f64 / 2.0, ""));
+    }
     let position = window
         .outer_position()
         .map_err(|error| ManagerError::System(error.to_string()))?;
@@ -1104,6 +1123,10 @@ fn position_quick_switch_window(
     let size = window
         .outer_size()
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    #[cfg(target_os = "linux")]
+    if crate::core::desktop::is_wayland() {
+        return Ok(PhysicalPosition::new(size.width as f64 / 2.0, size.height as f64 / 2.0));
+    }
     let monitors = window
         .available_monitors()
         .map_err(|error| ManagerError::System(error.to_string()))?;

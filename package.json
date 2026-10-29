@@ -17,6 +17,8 @@
     "dist:mac": "tauri build --bundles app,dmg --ci",
     "dist:linux": "tauri build --bundles appimage,deb --ci",
     "test:platform": "node scripts/test-platform.mjs",
+    "test:acceptance": "node scripts/platform-acceptance.mjs",
+    "test:acceptance:verify": "node scripts/verify-platform-acceptance.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

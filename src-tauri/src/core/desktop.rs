@@ -1,5 +1,5 @@
 use super::error::ManagerError;
-use clipboard_rs::{Clipboard, ClipboardContext};
+use clipboard_rs::{common::RustImage, Clipboard, ClipboardContext};
 use enigo::{Coordinate, Direction, Enigo, Key, Keyboard, Mouse};
 use std::sync::{mpsc, Mutex, OnceLock};
 use tauri::AppHandle;
@@ -22,19 +22,106 @@ pub fn clipboard<T>(
 }
 
 pub fn clipboard_files() -> Result<Vec<String>, ManagerError> {
-    clipboard(|context| context.get_files()).map(|files| {
-        files
-            .into_iter()
-            .filter_map(|file| {
-                let path = if file.starts_with("file:") {
-                    url::Url::parse(&file).ok()?.to_file_path().ok()?
-                } else {
-                    std::path::PathBuf::from(file)
-                };
-                path.is_file().then(|| path.to_string_lossy().into_owned())
-            })
-            .take(100)
+    let files = if is_wayland() {
+        String::from_utf8(wayland_clipboard(&["--type", "text/uri-list"], None)?)
+            .map_err(failure)?
+            .lines()
+            .filter(|line| !line.starts_with('#'))
+            .map(str::to_string)
             .collect()
+    } else {
+        clipboard(|context| context.get_files())?
+    };
+    Ok(files
+        .into_iter()
+        .filter_map(|file| {
+            let path = if file.starts_with("file:") {
+                url::Url::parse(&file).ok()?.to_file_path().ok()?
+            } else {
+                std::path::PathBuf::from(file)
+            };
+            path.is_file().then(|| path.to_string_lossy().into_owned())
+        })
+        .take(100)
+        .collect())
+}
+
+fn wayland_clipboard(args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>, ManagerError> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(if input.is_some() {
+        "wl-copy"
+    } else {
+        "wl-paste"
+    });
+    command
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(bytes) = input {
+        let mut child = command
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|error| failure(format!("无法运行 wl-copy，请安装 wl-clipboard：{error}")))?;
+        let write = child
+            .stdin
+            .take()
+            .ok_or_else(|| failure("无法写入系统剪贴板"))?
+            .write_all(bytes);
+        if let Err(error) = write {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error.into());
+        }
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            return Err(failure(format!(
+                "系统剪贴板写入失败：{}",
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
+        return Ok(output.stdout);
+    }
+    let output = command
+        .output()
+        .map_err(|error| failure(format!("无法运行 wl-paste，请安装 wl-clipboard：{error}")))?;
+    if !output.status.success() {
+        return Err(failure(format!(
+            "系统剪贴板读取失败：{}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    Ok(output.stdout)
+}
+
+pub fn clipboard_text() -> Result<String, ManagerError> {
+    if is_wayland() {
+        return String::from_utf8(wayland_clipboard(&["--no-newline"], None)?).map_err(failure);
+    }
+    clipboard(|context| context.get_text())
+}
+
+pub fn clipboard_image() -> Result<image::DynamicImage, ManagerError> {
+    if is_wayland() {
+        return image::load_from_memory(&wayland_clipboard(&["--type", "image/png"], None)?)
+            .map_err(failure);
+    }
+    clipboard(|context| context.get_image()?.get_dynamic_image())
+}
+
+pub fn copy_image(image: &image::DynamicImage) -> Result<(), ManagerError> {
+    if is_wayland() {
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut bytes, image::ImageFormat::Png)
+            .map_err(failure)?;
+        wayland_clipboard(&["--type", "image/png"], Some(bytes.get_ref()))?;
+        return Ok(());
+    }
+    clipboard(|context| {
+        context.set_image(clipboard_rs::RustImageData::from_dynamic_image(
+            image.clone(),
+        ))
     })
 }
 
@@ -208,21 +295,54 @@ pub fn selected_text() -> Result<String, ManagerError> {
         }
     }
     // 应用未公开选区时，通过系统复制操作取词，超时不使用旧剪贴板冒充选区。
-    let before = clipboard(|context| {
-        context.get(&[
-            clipboard_rs::ContentFormat::Text,
-            clipboard_rs::ContentFormat::Rtf,
-            clipboard_rs::ContentFormat::Html,
-            clipboard_rs::ContentFormat::Image,
-            clipboard_rs::ContentFormat::Files,
-        ])
-    })?;
-    clipboard(|context| context.clear())?;
+    let mut wayland_before = None;
+    let before = if is_wayland() {
+        if let Ok(types) = wayland_clipboard(&["--list-types"], None) {
+            let types = String::from_utf8_lossy(&types);
+            if let Some(mime) = [
+                "text/uri-list",
+                "image/png",
+                "text/html",
+                "text/plain;charset=utf-8",
+                "text/plain",
+            ]
+            .into_iter()
+            .find(|mime| types.lines().any(|offered| offered == *mime))
+            {
+                wayland_before = Some((
+                    mime.to_string(),
+                    wayland_clipboard(&["--type", mime], None)?,
+                ));
+            } else if !types.trim().is_empty() {
+                return Err(failure(
+                    "当前剪贴板格式无法恢复，请复制所选文字后使用剪贴板翻译",
+                ));
+            }
+        } else {
+            return Err(failure(
+                "无法保存当前剪贴板，请复制所选文字后使用剪贴板翻译",
+            ));
+        }
+        wayland_clipboard(&["--clear"], Some(&[]))?;
+        Vec::new()
+    } else {
+        let before = clipboard(|context| {
+            context.get(&[
+                clipboard_rs::ContentFormat::Text,
+                clipboard_rs::ContentFormat::Rtf,
+                clipboard_rs::ContentFormat::Html,
+                clipboard_rs::ContentFormat::Image,
+                clipboard_rs::ContentFormat::Files,
+            ])
+        })?;
+        clipboard(|context| context.clear())?;
+        before
+    };
     let result = (|| {
         input(Input::Copy)?;
         for _ in 0..20 {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            if let Ok(text) = clipboard(|context| context.get_text()) {
+            if let Ok(text) = clipboard_text() {
                 if !text.is_empty() {
                     return Ok(text);
                 }
@@ -233,9 +353,18 @@ pub fn selected_text() -> Result<String, ManagerError> {
         ))
     })();
     // 仅在剪贴板仍为本次读取内容时恢复，避免覆盖用户期间主动复制的内容。
-    let current = clipboard(|context| context.get_text()).unwrap_or_default();
-    if current.is_empty() || result.as_ref().is_ok_and(|text| text == &current) {
-        let _ = clipboard(|context| context.set(before));
+    let current = clipboard_text();
+    // 非文字内容读取失败时保留现状，不能当作空剪贴板恢复并覆盖用户的新内容。
+    if current.as_ref().is_ok_and(|current| {
+        current.is_empty() || result.as_ref().is_ok_and(|text| text == current)
+    }) {
+        if is_wayland() {
+            if let Some((mime, bytes)) = wayland_before {
+                let _ = wayland_clipboard(&["--type", &mime], Some(&bytes));
+            }
+        } else {
+            let _ = clipboard(|context| context.set(before));
+        }
     }
     result
 }
@@ -264,10 +393,13 @@ pub fn start_shortcuts(
                 let mut errors = Vec::new();
                 #[cfg(target_os = "linux")]
                 if is_wayland() && !next.is_empty() {
+                    report(&app, vec!["正在等待桌面门户授权快捷键".into()]);
                     let handle = app.clone();
                     let shortcuts = next.clone();
                     portal_task = Some(tauri::async_runtime::spawn(async move {
-                        if let Err(error) = portal_shortcuts(&handle, &shortcuts, activate).await {
+                        if let Err(error) =
+                            portal_shortcuts(&handle, &shortcuts, activate, report).await
+                        {
                             report(&handle, vec![format!("无法注册桌面门户快捷键：{error}")]);
                         }
                     }));
@@ -291,7 +423,9 @@ pub fn start_shortcuts(
                         }
                     }
                 }
-                report(&app, errors);
+                if !is_wayland() || next.is_empty() {
+                    report(&app, errors);
+                }
                 previous = next;
             }
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -304,6 +438,7 @@ async fn portal_shortcuts(
     app: &AppHandle,
     bindings: &[(String, String)],
     activate: fn(&AppHandle, &str),
+    report: fn(&AppHandle, Vec<String>),
 ) -> Result<(), ashpd::Error> {
     use ashpd::desktop::global_shortcuts::{GlobalShortcuts, NewShortcut};
     use futures_util::StreamExt;
@@ -341,12 +476,14 @@ async fn portal_shortcuts(
         .bind_shortcuts(&session, &shortcuts, None, Default::default())
         .await?
         .response()?;
+    report(app, Vec::new());
     while let Some(event) = events.next().await {
         if event.session_handle().as_str() == session_path {
             activate(app, event.shortcut_id());
         }
     }
     session.close().await?;
+    report(app, vec!["桌面快捷键会话已停止，请重新启用快捷键".into()]);
     Ok(())
 }
 
@@ -354,93 +491,105 @@ async fn portal_shortcuts(
 struct PortalInput {
     portal: ashpd::desktop::remote_desktop::RemoteDesktop,
     session: ashpd::desktop::Session<ashpd::desktop::remote_desktop::RemoteDesktop>,
-    streams: Vec<ashpd::desktop::screencast::Stream>,
+    closed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    watcher: tauri::async_runtime::JoinHandle<()>,
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for PortalInput {
+    fn drop(&mut self) {
+        self.watcher.abort();
+    }
 }
 
 #[cfg(target_os = "linux")]
 async fn wayland_input(
     state: &mut Option<PortalInput>,
     action: Input,
-) -> Result<(i32, i32), ashpd::Error> {
-    use ashpd::desktop::{
-        remote_desktop::{DeviceType, KeyState, RemoteDesktop, SelectDevicesOptions},
-        screencast::{Screencast, SelectSourcesOptions, SourceType},
+) -> Result<(i32, i32), String> {
+    use ashpd::desktop::remote_desktop::{
+        DeviceType, KeyState, RemoteDesktop, SelectDevicesOptions,
     };
+    if let Input::Scroll(x, y, delta) = action {
+        crate::core::wayland::portal::scroll(x, y, delta)?;
+        return Ok((0, 0));
+    }
+    if state
+        .as_ref()
+        .is_some_and(|state| state.closed.load(std::sync::atomic::Ordering::SeqCst))
+    {
+        *state = None;
+    }
     if state.is_none() {
-        let portal = RemoteDesktop::new().await?;
-        let session = portal.create_session(Default::default()).await?;
-        portal
-            .select_devices(
-                &session,
-                SelectDevicesOptions::default()
-                    .set_devices(DeviceType::Keyboard | DeviceType::Pointer),
-            )
-            .await?
-            .response()?;
-        let screencast = Screencast::new().await?;
-        screencast
-            .select_sources(
-                &session,
-                SelectSourcesOptions::default()
-                    .set_sources(Some(SourceType::Monitor.into()))
-                    .set_multiple(true),
-            )
-            .await?
-            .response()?;
-        let response = portal
-            .start(&session, None, Default::default())
-            .await?
-            .response()?;
+        let portal = RemoteDesktop::new()
+            .await
+            .map_err(|error| error.to_string())?;
+        let session = portal
+            .create_session(Default::default())
+            .await
+            .map_err(|error| error.to_string())?;
+        let result = async {
+            portal
+                .select_devices(
+                    &session,
+                    SelectDevicesOptions::default().set_devices(Some(DeviceType::Keyboard.into())),
+                )
+                .await?
+                .response()?;
+            let response = portal
+                .start(&session, None, Default::default())
+                .await?
+                .response()?;
+            if !response.devices().contains(DeviceType::Keyboard) {
+                return Err(ashpd::Error::NoResponse);
+            }
+            let mut events = session.receive_closed().await?;
+            let closed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let signal = closed.clone();
+            let watcher = tauri::async_runtime::spawn(async move {
+                use futures_util::StreamExt;
+                let _ = events.next().await;
+                signal.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            Ok::<_, ashpd::Error>((closed, watcher))
+        }
+        .await;
+        let (closed, watcher) = match result {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = session.close().await;
+                return Err(format!("复制所选文字需要键盘输入授权：{error}"));
+            }
+        };
         *state = Some(PortalInput {
             portal,
             session,
-            streams: response.streams().to_vec(),
+            closed,
+            watcher,
         });
     }
     let state = state.as_ref().unwrap();
     match action {
         Input::Copy => {
+            let mut result = Ok(());
             for (code, key_state) in [
                 (29, KeyState::Pressed),
                 (46, KeyState::Pressed),
                 (46, KeyState::Released),
                 (29, KeyState::Released),
             ] {
-                state
+                let sent = state
                     .portal
                     .notify_keyboard_keycode(&state.session, code, key_state, Default::default())
-                    .await?;
-            }
-        }
-        Input::Scroll(x, y, delta) => {
-            for stream in &state.streams {
-                if let (Some((sx, sy)), Some((width, height))) = (stream.position(), stream.size())
-                {
-                    if x >= sx && y >= sy && x < sx + width && y < sy + height {
-                        state
-                            .portal
-                            .notify_pointer_motion_absolute(
-                                &state.session,
-                                stream.pipe_wire_node_id(),
-                                (x - sx) as f64,
-                                (y - sy) as f64,
-                                Default::default(),
-                            )
-                            .await?;
-                        break;
-                    }
+                    .await
+                    .map_err(|error| error.to_string());
+                if result.is_ok() {
+                    result = sent;
                 }
             }
-            state
-                .portal
-                .notify_pointer_axis_discrete(
-                    &state.session,
-                    ashpd::desktop::remote_desktop::Axis::Vertical,
-                    -delta.signum() * 3,
-                    Default::default(),
-                )
-                .await?;
+            result?;
         }
+        Input::Scroll(_, _, _) => {}
         Input::Cursor => {}
     }
     Ok((0, 0))

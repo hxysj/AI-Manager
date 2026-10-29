@@ -17,6 +17,13 @@ use tauri::{
 };
 use tauri_plugin_opener::OpenerExt;
 
+fn portal_capture() -> bool {
+    #[cfg(target_os = "linux")]
+    return crate::core::desktop::is_wayland();
+    #[cfg(not(target_os = "linux"))]
+    false
+}
+
 pub mod ocr;
 #[cfg(windows)]
 mod windows;
@@ -629,17 +636,28 @@ pub async fn dispatch(
             Ok(json!(true))
         }
         "capture-mode" => Ok(json!({
-            "long": service.long_capture_requested.load(Ordering::SeqCst)
+            "long": service.long_capture_requested.load(Ordering::SeqCst),
+            "portal": portal_capture(),
+            "finishShortcut": service.settings().shortcut_bindings().into_iter()
+                .find(|(_, action, _)| *action == "captureLong").map(|(_, _, shortcut)| shortcut)
         })),
         "long-start" => {
+            if portal_capture() && (!service.settings().hotkeys || !service.hotkey_errors.lock().unwrap().is_empty()) {
+                return Err(failure("请先开启并授权长截图快捷键；Wayland 通过再次按该快捷键完成截图"));
+            }
             let window = app
                 .get_webview_window("screenshot-capture")
                 .ok_or_else(|| failure("截图窗口已关闭"))?;
             // 覆盖层本身设置了 content_protected，长截图时保留透明边框和
             // 进度提示；仅让鼠标事件穿透到下方页面。已有贴图窗口必须
             // 暂时隐藏，否则 GDI 会把它们当成页面内容一起截入长图。
-            window.set_ignore_cursor_events(true).map_err(failure)?;
-            window.set_focusable(false).map_err(failure)?;
+            if portal_capture() {
+                // 隐藏选区画布，系统把焦点交回被截应用；连续帧沿用同一授权会话。
+                window.hide().map_err(failure)?;
+            } else {
+                window.set_ignore_cursor_events(true).map_err(failure)?;
+                window.set_focusable(false).map_err(failure)?;
+            }
             *service.long_preview_rect.lock().unwrap() = None;
             service.long_capturing.store(true, Ordering::SeqCst);
             let mut hidden = service.long_hidden_pins.lock().unwrap();
@@ -674,6 +692,10 @@ pub async fn dispatch(
                         .ok_or_else(|| failure("缺少滚动纵坐标"))?
                         as i32;
                     let delta = payload["delta"].as_i64().unwrap_or(-120).clamp(-120, 120) as i32;
+                    if portal_capture() {
+                        native::scroll_at(&app, x, y, delta)?;
+                        return Ok(json!(true));
+                    }
                     if let Some(window) = app.get_webview_window("screenshot-capture") {
                         let interactive = native::cursor_in_rect(&app, preview.as_ref());
                         window.set_ignore_cursor_events(true).map_err(failure)?;
@@ -691,7 +713,11 @@ pub async fn dispatch(
             end_long_capture(&app)?;
             if service.capturing.load(Ordering::SeqCst) {
                 if let Some(window) = app.get_webview_window("screenshot-capture") {
-                    window.set_ignore_cursor_events(false).map_err(failure)?;
+                    if portal_capture() {
+                        window.show().map_err(failure)?;
+                    } else {
+                        window.set_ignore_cursor_events(false).map_err(failure)?;
+                    }
                     window.set_focusable(true).map_err(failure)?;
                     window.set_focus().map_err(failure)?;
                 }
@@ -706,7 +732,9 @@ pub async fn dispatch(
                 .get_webview_window("screenshot-capture")
                 .ok_or_else(|| failure("截图窗口已关闭"))?;
             window.set_focusable(true).map_err(failure)?;
-            window.set_ignore_cursor_events(false).map_err(failure)?;
+            if !portal_capture() {
+                window.set_ignore_cursor_events(false).map_err(failure)?;
+            }
             if !window.is_visible().unwrap_or(false) {
                 window.show().map_err(failure)?;
             }
@@ -720,6 +748,10 @@ pub async fn dispatch(
             let window = app
                 .get_webview_window("screenshot-capture")
                 .ok_or_else(|| failure("截图窗口已关闭"))?;
+            if portal_capture() {
+                window.hide().map_err(failure)?;
+                return Ok(json!(true));
+            }
             window.set_focusable(false).map_err(failure)?;
             window.set_ignore_cursor_events(true).map_err(failure)?;
             if !window.is_visible().unwrap_or(false) {
@@ -859,9 +891,11 @@ pub async fn dispatch(
             };
             let center_x = f64::from(rect.x) + f64::from(rect.width) / 2.0;
             let center_y = f64::from(rect.y) + f64::from(rect.height) / 2.0;
-            let monitor = app
-                .monitor_from_point(center_x, center_y)
-                .map_err(failure)?
+            let monitor = if portal_capture() {
+                app.primary_monitor().map_err(failure)?
+            } else {
+                app.monitor_from_point(center_x, center_y).map_err(failure)?
+            }
                 .or(app.primary_monitor().map_err(failure)?)
                 .ok_or_else(|| failure("没有可用显示器"))?;
             let scale = monitor.scale_factor();
@@ -925,9 +959,11 @@ pub async fn dispatch(
             match window {
                 Ok(window) => {
                     // 使用物理像素精确落位，兼容负坐标和不同缩放比例的显示器。
-                    let positioned = window
-                        .set_position(position)
-                        .and_then(|_| window.set_size(size));
+                    let positioned = if portal_capture() {
+                        window.set_size(size)
+                    } else {
+                        window.set_position(position).and_then(|_| window.set_size(size))
+                    };
                     if let Err(error) = positioned {
                         service.ocr_results.lock().unwrap().remove(&result_id);
                         let _ = window.destroy();
@@ -963,6 +999,14 @@ pub async fn dispatch(
                         .as_f64()
                         .filter(|width| *width > 0.0)
                         .ok_or_else(|| failure("OCR 结果窗口宽度无效"))?;
+                    if portal_capture() {
+                        let size = window.inner_size().map_err(failure)?;
+                        let scale = window.scale_factor().map_err(failure)?;
+                        window
+                            .set_size(PhysicalSize::new((width.clamp(420.0, 960.0) * scale).round() as u32, size.height))
+                            .map_err(failure)?;
+                        return Ok(json!(true));
+                    }
                     let document_id = service
                         .ocr_results
                         .lock()
@@ -1131,6 +1175,9 @@ pub async fn dispatch(
             match payload["action"].as_str().unwrap_or("") {
                 "drag" => window.start_dragging().map_err(failure)?,
                 "move" => {
+                    if portal_capture() {
+                        return Err(failure("当前桌面由系统管理窗口位置，请拖动贴图移动"));
+                    }
                     let (x, y) = match payload["direction"].as_str() {
                         Some("up") => (0, -1),
                         Some("down") => (0, 1),
@@ -1174,7 +1221,11 @@ pub async fn dispatch(
                     let extra_height =
                         payload["extraHeight"].as_u64().unwrap_or(700).min(4096) as u32;
                     let size = window.inner_size().map_err(failure)?;
-                    let position = window.outer_position().map_err(failure)?;
+                    let position = if portal_capture() {
+                        PhysicalPosition::new(0, 0)
+                    } else {
+                        window.outer_position().map_err(failure)?
+                    };
                     let mut menu_windows = service.menu_windows.lock().unwrap();
                     if let Some((_, original_size)) = menu_windows.get(id) {
                         return Ok(
@@ -1197,7 +1248,9 @@ pub async fn dispatch(
                     let original = service.menu_windows.lock().unwrap().remove(id);
                     if let Some((position, size)) = original {
                         window.set_size(size).map_err(failure)?;
-                        window.set_position(position).map_err(failure)?;
+                        if !portal_capture() {
+                            window.set_position(position).map_err(failure)?;
+                        }
                     }
                     return Ok(json!(true));
                 }
@@ -1229,6 +1282,10 @@ pub async fn dispatch(
                         .as_f64()
                         .ok_or_else(|| failure("无效高度"))?
                         .clamp(48.0, 8192.0) as u32;
+                    if portal_capture() {
+                        window.set_size(PhysicalSize::new(width, height)).map_err(failure)?;
+                        return Ok(json!(true));
+                    }
                     let old_size = window.inner_size().map_err(failure)?;
                     let old_position = window.outer_position().map_err(failure)?;
                     let anchor_x = payload["anchorX"].as_f64().unwrap_or(0.5).clamp(0.0, 1.0);
@@ -1490,7 +1547,10 @@ fn ensure_capture_window(
     .shadow(false)
     // 框选画布和遮罩不参与桌面采集，连续截图不会把上一帧的暗色遮罩拍进去。
     .content_protected(true);
-    if let Some((left, top, width, height)) = bounds {
+    if portal_capture() {
+        // Wayland 不允许应用任意定位顶层窗口，用全屏画布展示已授权的屏幕图像。
+        builder = builder.fullscreen(true);
+    } else if let Some((left, top, width, height)) = bounds {
         builder = builder
             .position(f64::from(left), f64::from(top))
             .inner_size(f64::from(width), f64::from(height));
@@ -1566,9 +1626,11 @@ pub async fn screenshot_region_frame(
     {
         return Err("长截图区域尺寸无效或过大".into());
     }
-    let monitors = app
-        .available_monitors()
-        .map_err(|error| error.to_string())?;
+    let monitors = if portal_capture() {
+        Vec::new()
+    } else {
+        app.available_monitors().map_err(|error| error.to_string())?
+    };
     #[cfg(unix)]
     let capture_window = app.get_webview_window("screenshot-capture");
     #[cfg(unix)]
@@ -1582,8 +1644,10 @@ pub async fn screenshot_region_frame(
     })
     .await;
     #[cfg(unix)]
-    if let Some(window) = &capture_window {
-        let _ = window.show();
+    if !portal_capture() {
+        if let Some(window) = &capture_window {
+            let _ = window.show();
+        }
     }
     let image = image
     .map_err(|error| error.to_string())?
@@ -1643,29 +1707,32 @@ pub async fn begin_capture(
             window.hide().map_err(failure)?;
             tokio::time::sleep(std::time::Duration::from_millis(35)).await;
         }
-        let monitors = app.available_monitors().map_err(failure)?;
-        let (left, top, width, height) = capture_bounds(&monitors)?;
-        let frame = tauri::async_runtime::spawn_blocking(move || {
-            {
-                Ok::<_, ManagerError>(capture_frame_data(
-                    native::capture(&monitors, left, top, width, height)?,
-                    left,
-                    top,
-                    auto_copy,
-                ))
+        let handle = app.clone();
+        let (frame, left, top, width, height) = tauri::async_runtime::spawn_blocking(move || {
+            #[cfg(target_os = "linux")]
+            if portal_capture() {
+                let image = crate::core::wayland::portal::capture().map_err(failure)?;
+                let (width, height) = image.dimensions();
+                return Ok::<_, ManagerError>((capture_frame_data(
+                    DynamicImage::ImageRgba8(image), 0, 0, auto_copy), 0, 0, width, height));
             }
+            let monitors = handle.available_monitors().map_err(failure)?;
+            let (left, top, width, height) = capture_bounds(&monitors)?;
+            Ok::<_, ManagerError>((capture_frame_data(
+                native::capture(&monitors, left, top, width, height)?, left, top, auto_copy),
+                left, top, width, height))
         })
         .await
         .map_err(failure)??;
         // 采集期间用户可能已经关闭扩展，不能再创建截图窗口。
         service.ensure_enabled()?;
         let window = ensure_capture_window(app, Some((left, top, width, height)))?;
-        if window.inner_size().map_err(failure)? != PhysicalSize::new(width, height) {
+        if !portal_capture() && window.inner_size().map_err(failure)? != PhysicalSize::new(width, height) {
             window
                 .set_size(PhysicalSize::new(width, height))
                 .map_err(failure)?;
         }
-        if window.outer_position().map_err(failure)? != PhysicalPosition::new(left, top) {
+        if !portal_capture() && window.outer_position().map_err(failure)? != PhysicalPosition::new(left, top) {
             window
                 .set_position(PhysicalPosition::new(left, top))
                 .map_err(failure)?;
@@ -1684,9 +1751,17 @@ pub async fn begin_capture(
 fn cancel_capture(app: &AppHandle) -> Result<(), ManagerError> {
     end_long_capture(app)?;
     if let Some(window) = app.get_webview_window("screenshot-capture") {
-        window.set_focusable(false).map_err(failure)?;
-        window.set_ignore_cursor_events(true).map_err(failure)?;
+        if portal_capture() {
+            window.hide().map_err(failure)?;
+        } else {
+            window.set_focusable(false).map_err(failure)?;
+            window.set_ignore_cursor_events(true).map_err(failure)?;
+        }
         window.emit("screenshot:reset", ()).map_err(failure)?;
+    }
+    #[cfg(target_os = "linux")]
+    if portal_capture() {
+        crate::core::wayland::portal::release();
     }
     let service = app.state::<ScreenshotService>();
     *service.frame.lock().unwrap() = None;
@@ -1873,9 +1948,11 @@ fn open_pin_with_visibility(
         .map_err(failure)?;
     #[cfg(windows)]
     native::disable_window_transitions(&window)?;
-    window
-        .set_position(PhysicalPosition::new(pin.x, pin.y))
-        .map_err(failure)?;
+    if !portal_capture() {
+        window
+            .set_position(PhysicalPosition::new(pin.x, pin.y))
+            .map_err(failure)?;
+    }
     window
         .set_size(PhysicalSize::new(pin.width, pin.height))
         .map_err(failure)?;
@@ -1908,6 +1985,10 @@ pub fn window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent) {
             service.capturing.store(false, Ordering::SeqCst);
             *service.frame.lock().unwrap() = None;
             let _ = end_long_capture(app);
+            #[cfg(target_os = "linux")]
+            if portal_capture() {
+                crate::core::wayland::portal::release();
+            }
         }
         return;
     }

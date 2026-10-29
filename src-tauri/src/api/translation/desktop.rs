@@ -217,17 +217,23 @@ fn show_selection(app: &AppHandle, result: Result<String, String>, x: i32, y: i3
                 .build()?,
             };
             // 坐标来自原生物理像素，使用对应屏幕的缩放和边界，兼容副屏负坐标。
-            if let Some(monitor) = window.monitor_from_point(x as f64, y as f64)? {
-                let origin = monitor.position();
-                let size = monitor.size();
-                let popup = window.outer_size()?;
-                let position = fit_position(
-                    (x, y),
-                    (origin.x, origin.y),
-                    (size.width, size.height),
-                    (popup.width, popup.height),
-                );
-                window.set_position(PhysicalPosition::new(position.0, position.1))?;
+            #[cfg(target_os = "linux")]
+            let compositor_position = crate::core::desktop::is_wayland();
+            #[cfg(not(target_os = "linux"))]
+            let compositor_position = false;
+            if !compositor_position {
+                if let Some(monitor) = window.monitor_from_point(x as f64, y as f64)? {
+                    let origin = monitor.position();
+                    let size = monitor.size();
+                    let popup = window.outer_size()?;
+                    let position = fit_position(
+                        (x, y),
+                        (origin.x, origin.y),
+                        (size.width, size.height),
+                        (popup.width, popup.height),
+                    );
+                    window.set_position(PhysicalPosition::new(position.0, position.1))?;
+                }
             }
             if existing.is_some() && window.is_visible()? {
                 window.emit("translation:desktop-selection", &selection)?;

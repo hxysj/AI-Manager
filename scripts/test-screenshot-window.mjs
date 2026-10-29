@@ -27,7 +27,7 @@ assert.match(
   /script-src[^;]+\bwasm-unsafe-eval\b/,
   "OCR 的 WASM 编译必须被页面安全策略允许"
 )
-const filename = "src/features/screenshot/components/ScreenshotWindow.vue"
+const filename = "src/features/screenshot/components/ScreenshotWindow/index.vue"
 const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
   filename
 })
@@ -59,7 +59,9 @@ let captureFrame = null
 let saveFailure = false
 let pendingSaveDocument = null
 let captureLong = false
-let pendingSmartSelection = null
+let portalCapture = false
+let detectedRectangles = []
+let pendingRectangleDetection = null
 let pendingLongCapture = null
 let pendingPinMenuAction = null
 let useLargeModelOcr = false
@@ -146,6 +148,7 @@ await assert.rejects(binaryApi.image("test-pin", "output"), /数据格式无效/
 nativeImageResponse = Array.from(pngBytes)
 nativeFrameResponse = null
 const module = { exports: {} }
+const actualChildren = new Map()
 const localRequire = (name) => {
   if (name === "@/api/modules/screenshot")
     return {
@@ -164,7 +167,7 @@ const localRequire = (name) => {
             return { enabled: true, ocr: { useLargeModel: useLargeModelOcr } }
           if (action === "ocr") return pendingModelOcr(payload)
           if (action === "ocr-result-open") {
-            ocrWindowResult = payload.result
+            ocrWindowResult = { documentId: payload.id }
             return "test-ocr-result"
           }
           if (action === "ocr-result") return structuredClone(ocrWindowResult)
@@ -174,11 +177,9 @@ const localRequire = (name) => {
             pendingPinMenuAction
           )
             return pendingPinMenuAction(payload)
-          if (action === "capture-mode") return { long: captureLong }
+          if (action === "capture-mode") return { long: captureLong, portal: portalCapture, finishShortcut: "Ctrl+Alt+F9" }
           if (action === "smart-selection")
-            return pendingSmartSelection
-              ? pendingSmartSelection(payload)
-              : { regions: [] }
+            return { regions: [] }
           if (action === "document") {
             assert.equal(payload.metadataOnly, true)
             return {
@@ -211,12 +212,12 @@ const localRequire = (name) => {
     }
   if (name === "@/api/modules/system")
     return { systemApi: { selectFile: async () => null } }
-  if (name === "./ImageEditor.vue")
+  if (name === "../ImageEditor/index.vue")
     return {
       __esModule: true,
       default: { render: () => vue.h("div", { class: "editor" }) }
     }
-  if (name === "../renderer")
+  if (name === "../../renderer")
     return {
       loadImage: async () => ({ naturalWidth: 1600, naturalHeight: 1200 }),
       canvasSource,
@@ -224,7 +225,7 @@ const localRequire = (name) => {
       selectionRect,
       detectPageRegions: () => []
     }
-  if (name === "../ocr")
+  if (name === "@/features/screenshot/ocr")
     return {
       recognizePpocr: async (source) => {
         builtinOcrSources.push(source)
@@ -235,9 +236,26 @@ const localRequire = (name) => {
         }
       }
     }
-  if (name === "../long-screenshot")
+  if (name === "../../long-screenshot")
     return { captureLongScreenshot: (options) => pendingLongCapture(options) }
+  if (name === "../../rectangle-detector")
+    return { detectRectangleRegions: async () => pendingRectangleDetection ? pendingRectangleDetection() : detectedRectangles, disposeRectangleDetector() {} }
+  if (name === "@/api") return { translationApi: { desktopStatus: async () => ({ enabled: false }) } }
+  if (actualChildren.has(name))
+    return { __esModule: true, default: actualChildren.get(name) }
+  if (name.endsWith(".vue"))
+    return { __esModule: true, default: { render: () => null } }
   return require(name)
+}
+for (const name of ["CaptureMagnifier", "LongScreenshotPreview", "OcrResultPanel"]) {
+  actualChildren.set(`./components/${name}.vue`, await loadTestComponent(
+    `src/features/screenshot/components/ScreenshotWindow/components/${name}.vue`,
+    {
+      "@/api": localRequire("@/api"),
+      "@/api/modules/screenshot": localRequire("@/api/modules/screenshot"),
+      "@/features/screenshot/ocr": localRequire("@/features/screenshot/ocr")
+    }
+  ))
 }
 new Function(
   "require",
@@ -279,14 +297,16 @@ globalThis.ImageData = class {
 // 模拟浏览器异步 PNG 编码，覆盖大图贴图按钮的非阻塞路径。
 globalThis.FileReader = class {
   readAsDataURL(blob) {
-    this.result = blob.data
-    this.onload?.()
+    Promise.resolve(blob.data ?? blob.arrayBuffer().then(bytes =>
+      `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`
+    )).then(result => { this.result = result; this.onload?.() })
   }
 }
 const context = () => ({
   drawImage() {},
   clearRect() {},
   strokeRect() {},
+  measureText: text => ({ width: text.length * 8 }),
   getImageData: () => ({ data: [10, 20, 30, 255] })
 })
 globalThis.window = {
@@ -490,7 +510,7 @@ pendingPinMenuAction = ({ action }) => {
   if (action === "context-menu-open") {
     assert.equal(pinImage.style.width, "800px")
     assert.equal(pinImage.style.height, "600px")
-    assert.equal(pin.props.style.opacity, 1)
+    assert.equal(pinImage.props.style.opacity, 1)
     globalThis.innerWidth = 1080
     globalThis.innerHeight = 950
     return { width: 1600, height: 1200 }
@@ -730,8 +750,8 @@ await state.keydown(colorKey("Shift", { target: { tagName: "TEXTAREA" } }))
 assert.equal(copiedColors.length, colorCopyCount)
 assert.equal(state.colorValue, "10, 20, 30")
 await state.movePointer({ clientX: 790, clientY: 590 })
-assert.deepEqual(state.magnifierStyle, { left: "582px", top: "342px" })
-// 识别成功后自动贴图，结果交给独立窗口；重试仍以同一个已确认选区开始。
+assert.deepEqual(captureMagnifier.props.style, { left: "582px", top: "342px" })
+// 截图只持久化文档并打开独立识别窗口，推理由结果组件执行。
 const ocrSource = `data:image/png;base64,${pngBytes.toString("base64")}`
 const ocrSelection = { ...state.selection }
 async function restoreOcrSelection() {
@@ -740,102 +760,18 @@ async function restoreOcrSelection() {
   state.selection = { ...ocrSelection }
   state.editorSource = ocrSource
 }
-await state.output({ action: "ocr", source: ocrSource })
-assert.deepEqual(builtinOcrSources, [ocrSource])
-assert.equal(
-  requests.some((request) => request.action === "ocr"),
-  false
-)
-assert.equal(requests.at(-1).action, "ocr-result-open")
-assert.equal(requests.at(-1).payload.result.text, "识别成功")
-assert.equal(requests.at(-1).payload.id, "saved-pin")
+await state.output({ action: "ocr", source: ocrSource, output: ocrSource })
+assert.deepEqual(builtinOcrSources, [])
+assert.equal(requests.some(request => request.action === "ocr"), false)
+assert.deepEqual(requests.at(-1), { action: "ocr-result-open", payload: { id: "saved-pin" } })
 assert.equal(requests.at(-2).action, "pin")
 assert.equal(state.frame, null)
 assert.equal(state.selection, null)
-assert.equal(state.ocrResult, null)
 assert.deepEqual(
-  requests.findLast((request) => request.action === "save-document").payload.origin,
+  requests.findLast(request => request.action === "save-document").payload.origin,
   { x: -1720, y: 100 }
 )
-await restoreOcrSelection()
-useLargeModelOcr = true
-let completeModelOcr
-pendingModelOcr = (payload) => {
-  assert.deepEqual(payload, { source: ocrSource })
-  return new Promise((resolve) => {
-    completeModelOcr = resolve
-  })
-}
-const modelOcr = state.output({ action: "ocr", source: ocrSource })
-await tick()
-assert.equal(state.ocrLoading, true)
-assert.equal(state.busy, true)
-assert.ok(
-  findElement(
-    teleportTarget,
-    (element) => element.props.class === "ocr-loading-mask"
-  )
-)
-assert.deepEqual(state.ocrLoadingStyle, {
-  left: "100px", top: "100px", width: "263.5px", height: "157px"
-})
-assert.equal(state.magnifierVisible, false)
-assert.equal(
-  findElement(teleportTarget, (element) => element.props.class === "ocr-result-mask"),
-  undefined
-)
-assert.equal(state.ocrResult, null)
-await state.output({ action: "ocr", source: ocrSource })
-assert.equal(requests.filter((request) => request.action === "ocr").length, 1)
-completeModelOcr({
-  text: "模型识别结果",
-  lines: [{ text: "模型识别结果" }],
-  engine: "大模型 OCR · 测试"
-})
-await modelOcr
-assert.equal(state.ocrLoading, false)
-assert.equal(state.busy, false)
-assert.equal(requests.at(-1).payload.result.text, "模型识别结果")
-assert.equal(state.frame, null)
-assert.equal(builtinOcrSources.length, 1)
-await restoreOcrSelection()
-const pinsBeforeOcrFailure = requests.filter((request) => request.action === "pin").length
-pendingModelOcr = async () => {
-  throw new Error("模型不支持图片")
-}
-await state.output({ action: "ocr", source: ocrSource })
-assert.equal(state.ocrResult, null)
-assert.equal(state.ocrLoading, false)
-assert.equal(state.busy, false)
-assert.match(state.error, /模型不支持图片/)
-assert.equal(builtinOcrSources.length, 1)
-assert.ok(state.selection)
-assert.equal(
-  requests.filter((request) => request.action === "pin").length,
-  pinsBeforeOcrFailure
-)
-// 编辑已有贴图时，Blob 地址必须先转换为图片数据，再交给原生识别接口。
 const fetchImage = globalThis.fetch
-globalThis.fetch = async (source) => {
-  assert.equal(source, "blob:existing-pin")
-  return { blob: async () => ({ data: ocrSource }) }
-}
-pendingModelOcr = async (payload) => {
-  assert.deepEqual(payload, { source: ocrSource })
-  return { text: "已有贴图文字", lines: [], engine: "大模型 OCR" }
-}
-await state.output({ action: "ocr", source: "blob:existing-pin" })
-globalThis.fetch = fetchImage
-assert.equal(requests.at(-1).payload.result.text, "已有贴图文字")
-assert.equal(
-  requests.findLast((request) => request.action === "save-document").payload.source,
-  ocrSource
-)
-await restoreOcrSelection()
-useLargeModelOcr = false
-await state.output({ action: "ocr", source: ocrSource })
-assert.equal(builtinOcrSources.length, 2)
-state.ocrResult = null
 await restoreOcrSelection()
 
 // 保存失败时保留选区并恢复按钮，允许直接重试。
@@ -966,43 +902,30 @@ assert.equal(
 )
 assert.equal(state.frame, null)
 assert.deepEqual(failures, [])
-// 智能识别直接使用正式选框；新位置先清旧框，旧异步响应不能覆盖新位置。
+// 识别候选按帧缓存；移动和滚轮切换包裹层级，不再逐次请求原生窗口列表。
+detectedRectangles = [
+  { x: 20, y: 20, width: 200, height: 200 },
+  { x: 0, y: 0, width: 600, height: 300 }
+]
 captureFrame = { ...captureFrame, autoCopy: false }
 await listeners.get("screenshot:frame")()
 await tick()
-const smartReplies = []
-pendingSmartSelection = (payload) =>
-  new Promise((resolve) => smartReplies.push({ payload, resolve }))
 await state.movePointer({ clientX: 50, clientY: 50 })
-await new Promise((resolve) => setTimeout(resolve, 55))
-smartReplies[0].resolve({
-  regions: [{ x: 20, y: 20, width: 200, height: 200 }]
-})
-await tick()
-assert.deepEqual(state.activeRegion, { x: 20, y: 20, width: 200, height: 200 })
-assert.ok(
-  findElement(root, (element) => element.props.class === "capture-selection")
-)
-assert.equal(
-  findElement(root, (element) => element.props.class === "capture-auto-region"),
-  undefined
-)
-await state.movePointer({ clientX: 200, clientY: 50 })
+assert.deepEqual(state.activeRegion, detectedRectangles[0])
+state.adjustSmartLevel({ deltaY: 1, preventDefault() {} })
+assert.deepEqual(state.activeRegion, detectedRectangles[1])
+await state.movePointer({ clientX: 350, clientY: 250 })
 assert.equal(state.activeRegion, null)
-await new Promise((resolve) => setTimeout(resolve, 55))
-await state.movePointer({ clientX: 350, clientY: 50 })
-smartReplies[1].resolve({
-  regions: [{ x: 300, y: 0, width: 600, height: 200 }]
-})
+let completeOldDetection
+pendingRectangleDetection = () => new Promise(resolve => { completeOldDetection = resolve })
+await state.loadFrame()
+pendingRectangleDetection = null
+detectedRectangles = []
+await listeners.get("screenshot:frame")()
+completeOldDetection([{ x: 0, y: 0, width: 1600, height: 1200 }])
 await tick()
+await state.movePointer({ clientX: 50, clientY: 50 })
 assert.equal(state.activeRegion, null)
-await new Promise((resolve) => setTimeout(resolve, 55))
-smartReplies[2].resolve({
-  regions: [{ x: 650, y: 20, width: 200, height: 200 }]
-})
-await tick()
-assert.equal(state.activeRegion.x, 650)
-pendingSmartSelection = null
 state.cancelDrag()
 
 // 长截图入口框选后直接开始，隐藏取色及其快捷键；Esc 和原生事件都保存当前结果。
@@ -1121,23 +1044,32 @@ await tick()
 assert.equal(state.longCaptureRequested, false)
 assert.equal(state.magnifierVisible, true)
 assert.deepEqual(failures, [])
-// 切换截图后丢弃旧截图迟到的识别结果。
-await restoreOcrSelection()
-useLargeModelOcr = true
-const ocrWindowsBeforeReset = requests.filter((request) => request.action === "ocr-result-open").length
-const pinsBeforeOcrReset = requests.filter((request) => request.action === "pin").length
-pendingModelOcr = () =>
-  new Promise((resolve) => {
-    completeModelOcr = resolve
-  })
-const staleOcr = state.output({ action: "ocr", source: ocrSource })
-await tick()
+// 共享画布读取门户模式和实际快捷键；选中的自动滚动选项在开始时保留。
+portalCapture = true
+captureLong = true
 await listeners.get("screenshot:frame")()
-completeModelOcr({ text: "旧截图文字", lines: [], engine: "大模型 OCR" })
-await staleOcr
-assert.equal(state.ocrResult, null)
-assert.equal(requests.filter((request) => request.action === "ocr-result-open").length, ocrWindowsBeforeReset)
-assert.equal(requests.filter((request) => request.action === "pin").length, pinsBeforeOcrReset)
+await tick()
+assert.equal(state.portalCapture, true)
+assert.equal(state.finishShortcut, "Ctrl+Alt+F9")
+state.longAutoScroll = true
+state.startSelection({ button: 0, pointerId: 8, clientX: 20, clientY: 30 })
+await state.movePointer({ clientX: 120, clientY: 130 })
+let portalOptions
+pendingLongCapture = async options => {
+  portalOptions = options
+  assert.equal(options.shouldAutoScroll(), true)
+  await new Promise(resolve => options.signal.addEventListener("abort", resolve, { once: true }))
+  return { source: "portal-long.png", width: 200, height: 400 }
+}
+const portalLong = state.finishSelection()
+await tick()
+listeners.get("screenshot:long-finish")()
+await portalLong
+assert.equal(portalOptions.signal.reason, "finish")
+portalCapture = false
+captureLong = false
+const ocrWindowsBeforeReset = requests.filter(request => request.action === "ocr-result-open").length
+const pinsBeforeOcrReset = requests.filter(request => request.action === "pin").length
 // 图片保存期间切换截图，也不能把旧文档缓存为新选区的贴图。
 await restoreOcrSelection()
 let completeOcrSave
@@ -1169,13 +1101,16 @@ const ocrResultApp = renderer.createApp(module.exports.default)
 ocrResultApp.config.errorHandler = (error) => failures.push(String(error))
 const imagesBeforeResult = imageRequests.length
 ocrResultApp.mount(ocrResultRoot)
+await new Promise(setImmediate)
 await tick()
 const ocrResultState = ocrResultApp._instance.setupState
-assert.deepEqual(requests.at(-1), {
-  action: "ocr-result-action",
-  payload: { id: "test-ocr-result", action: "ready" }
-})
-assert.equal(imageRequests.length, imagesBeforeResult)
+const resultComponent = ocrResultApp._instance.subTree.children.find(child => child.component)?.component
+const resultState = resultComponent.setupState
+assert.equal(resultState.error, "")
+assert.equal(resultState.result.text, "识别成功")
+assert.equal(resultState.loading, false)
+assert.equal(imageUrls.size, 0)
+assert.ok(requests.some(request => request.action === "ocr-result-action" && request.payload.action === "ready"))
 assert.equal(findElement(ocrResultRoot, (element) => element.props.class?.includes("pin-window")), undefined)
 assert.ok(findElement(ocrResultRoot, (element) => element.props.class === "ocr-result-dialog"))
 const resultHeader = findElement(ocrResultRoot, (element) => element.props.class === "ocr-result-head")
@@ -1187,8 +1122,8 @@ assert.deepEqual(requests.at(-1), {
 const beforeRightDrag = requests.length
 await resultHeader.props.onPointerdown({ button: 2 })
 assert.equal(requests.length, beforeRightDrag)
-ocrResultState.ocrResult.text = "可以编辑并复制的识别结果"
-await ocrResultState.copyOcrResult()
+resultState.result.text = "可以编辑并复制的识别结果"
+await resultState.copyResultText()
 assert.equal(copiedColors.at(-1), "可以编辑并复制的识别结果")
 const resultClose = findElement(ocrResultRoot, (element) => element.props.class === "ocr-result-close")
 await resultClose.props.onClick()
@@ -1196,13 +1131,46 @@ assert.deepEqual(requests.at(-1), {
   action: "ocr-result-action",
   payload: { id: "test-ocr-result", action: "close" }
 })
-await ocrResultState.keydown(pinKey("Escape", { target: { tagName: "TEXTAREA" } }))
+await resultState.keydown(pinKey("Escape", { target: { tagName: "TEXTAREA" } }))
 assert.deepEqual(requests.at(-1), {
   action: "ocr-result-action",
   payload: { id: "test-ocr-result", action: "close" }
 })
 assert.deepEqual(failures, [])
 ocrResultApp.unmount()
+// 在真实结果组件中覆盖大模型等待、失败和销毁后迟到的响应。
+useLargeModelOcr = true
+let completeModelOcr
+pendingModelOcr = payload => {
+  assert.deepEqual(payload, { source: ocrSource })
+  return new Promise(resolve => { completeModelOcr = resolve })
+}
+const modelResultApp = renderer.createApp(actualChildren.get("./components/OcrResultPanel.vue"), {
+  resultId: "test-model-result"
+})
+modelResultApp.mount(node("root"))
+await new Promise(setImmediate)
+await tick()
+const modelResult = modelResultApp._instance.setupState
+assert.equal(typeof completeModelOcr, "function")
+assert.equal(modelResult.loading, true)
+completeModelOcr({ text: "模型文字", lines: [], engine: "大模型 OCR" })
+await tick()
+assert.equal(modelResult.loading, false)
+assert.equal(modelResult.result.text, "模型文字")
+pendingModelOcr = async () => { throw new Error("模型不支持图片") }
+await modelResult.recognizeDocument()
+assert.match(modelResult.error, /模型不支持图片/)
+pendingModelOcr = () => new Promise(resolve => { completeModelOcr = resolve })
+const lateResult = modelResult.recognizeDocument()
+await new Promise(setImmediate)
+await tick()
+modelResultApp.unmount()
+completeModelOcr({ text: "已销毁的旧文字", lines: [], engine: "大模型 OCR" })
+await lateResult
+assert.equal(modelResult.result.text, "模型文字")
+assert.equal(imageUrls.size, 0)
+useLargeModelOcr = false
 // 已有贴图识别会先传递结果，再关闭旧贴图，防止页面提前销毁。
 globalThis.location.search = "?mode=pin&id=test-pin"
 const ocrPinApp = renderer.createApp(module.exports.default)
@@ -1227,7 +1195,7 @@ await ocrPinState.output({
 })
 globalThis.fetch = fetchImage
 assert.equal(requests.at(-2).action, "ocr-result-open")
-assert.equal(requests.at(-2).payload.result.text, "贴图文字")
+assert.deepEqual(requests.at(-2).payload, { id: "saved-pin" })
 assert.deepEqual(requests.at(-1), {
   action: "pin-action",
   payload: { id: "test-pin", action: "close" }
@@ -1270,7 +1238,7 @@ async function loadTestComponent(filename, mocks) {
   const module = { exports: {} }
   const code = transformSync(
     `${script.content}\n${template.code}\n__component.render = render\nexport default __component`,
-    { format: "cjs" }
+    { format: "cjs", supported: { "dynamic-import": false } }
   ).code
   new Function("require", "module", "exports", code)(
     (name) => mocks[name] || require(name),
@@ -1717,10 +1685,14 @@ extensionApp.unmount()
 assert.equal(extensionUnsubscribed, 1)
 
 let editorPaints = 0
+const EditorToolbar = await loadTestComponent(
+  "src/features/screenshot/components/ImageEditor/components/EditorToolbar.vue", {}
+)
 const Editor = await loadTestComponent(
-  "src/features/screenshot/components/ImageEditor.vue",
+  "src/features/screenshot/components/ImageEditor/index.vue",
   {
-    "../renderer": {
+    "./components/EditorToolbar.vue": { __esModule: true, default: EditorToolbar },
+    "../../renderer": {
       loadImage: async () => ({ naturalWidth: 800, naturalHeight: 600 }),
       canvasSource,
       thumbnailSource,
@@ -1747,6 +1719,7 @@ editorApp.config.errorHandler = (error) => failures.push(String(error))
 editorApp.mount(node("root"))
 await tick()
 const editor = editorApp._instance.setupState
+const toolbarState = editorApp._instance.subTree.children.find(child => child.component)?.component.setupState
 // 没有标注时直接复用源图，点击贴图不再重绘整张画布。
 const initialPaints = editorPaints
 await editor.output("pin")
@@ -1759,7 +1732,7 @@ editorToolbar.props.onPointerenter()
 editorToolbar.props.onPointerleave()
 assert.deepEqual(toolbarHovers, [true, false])
 assert.deepEqual(
-  editor.tools.map((tool) => tool.id),
+  toolbarState.tools.map((tool) => tool.id),
   [
     "select",
     "rectangle",
@@ -1773,7 +1746,7 @@ assert.deepEqual(
   ]
 )
 assert.deepEqual(
-  editor.outputs.map((action) => action.id),
+  toolbarState.outputs.map((action) => action.id),
   ["pin", "ocr", "export", "copy"]
 )
 const drawingEvent = (clientX, clientY) => ({
@@ -1899,17 +1872,17 @@ const control = (label) =>
 editor.setTool("line")
 await tick()
 assert.equal(editor.lineOptions.type, "line")
-control("线宽").props["onUpdate:modelValue"](10)
+control("线宽").props.onChange({ target: { value: "10" } })
 control("线条样式").props.onClick()
 await tick()
-assert.equal(editor.dropdown, "style")
+assert.equal(toolbarState.dropdown, "style")
 assert.equal(
   control("虚线").children.some((element) => element.type === "svg"),
   true
 )
 control("虚线").props.onClick()
 await tick()
-assert.equal(editor.dropdown, "")
+assert.equal(toolbarState.dropdown, "")
 control("直线或箭头").props.onClick()
 await tick()
 control("箭头").props.onClick()
@@ -1925,9 +1898,9 @@ control("直线").props.onClick()
 await editor.startDrawing(drawingEvent(20, 30))
 editor.finishDrawing(drawingEvent(90, 100))
 assert.equal(editor.annotations.at(-1).type, "line")
-editor.dropdown = "style"
-editor.closeDropdown({ target: { closest: () => null } })
-assert.equal(editor.dropdown, "")
+toolbarState.dropdown = "style"
+toolbarState.closeDropdown({ target: { closest: () => null } })
+assert.equal(toolbarState.dropdown, "")
 
 // 文字默认一行，普通回车和中文输入不提交，确认后保留完整换行。
 editor.setTool("text")

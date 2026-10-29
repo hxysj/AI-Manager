@@ -34,7 +34,7 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             bundles: app,dmg
-          - os: macos-latest
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             bundles: app,dmg
           - os: ubuntu-22.04
@@ -60,20 +60,20 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file pkg-config libdbus-1-dev libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf libgbm-dev libclang-dev libpipewire-0.3-dev libxcb1-dev libxrandr-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev lsof xclip wl-clipboard
       - run: npm ci
-      - name: 校验发布流程与前端
-        run: |
-          npm run test:platform
-          node scripts/test-settings.mjs
-          node scripts/test-screenshot-settings.mjs
-          node scripts/test-screenshot-rectangles.mjs
-          node scripts/test-translation.mjs
-      - name: 校验 Rust 与跨平台基础行为
-        run: |
-          cargo check --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib cross_platform
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib platform_paths_and_windows_variants_are_independent
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib api::claude_desktop_runtime::tests
-          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib api::screenshot::tests
+      - name: 全模块自动回归并保存证据
+        run: node scripts/platform-acceptance.mjs --output acceptance/automated --build
+      - name: 校验目标平台原生代码
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+      - name: 原生端口探针
+        if: runner.os != 'Windows'
+        run: cargo run --locked --manifest-path src-tauri/Cargo.toml --features desktop-acceptance --bin desktop-acceptance -- --output acceptance/native --ports
+      - name: 保存自动验收记录
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-${{ matrix.target }}
+          path: acceptance/
+          if-no-files-found: warn
       - name: 构建安装包与更新签名
         shell: bash
         env:

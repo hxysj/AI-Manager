@@ -439,10 +439,18 @@ let disposed = false
 let usageSequence = 0
 let usageKey = ""
 let moveRequest = Promise.resolve()
+let nativeDrag = false
 let unsubscribeVisibility = null
 let visibilitySequence = 0
 // 拖动期间锁住悬浮样式，避免移动时误触发工具效果。
-const drag = reactive({ active: false, moved: false, x: 0, y: 0, distance: 0 })
+const drag = reactive({
+  active: false,
+  moved: false,
+  nativeStarted: false,
+  x: 0,
+  y: 0,
+  distance: 0
+})
 
 function formatCost(value) {
   const cost = Number(value || 0)
@@ -550,9 +558,10 @@ function startDrag(event) {
   wantedExpanded = expanded.value
   drag.active = true
   drag.moved = false
+  drag.nativeStarted = false
   drag.distance = 0
-  drag.x = event.screenX
-  drag.y = event.screenY
+  drag.x = nativeDrag ? event.clientX : event.screenX
+  drag.y = nativeDrag ? event.clientY : event.screenY
   event.currentTarget.setPointerCapture(event.pointerId)
   window.addEventListener("pointermove", moveDrag)
   window.addEventListener("pointerup", stopDrag)
@@ -560,12 +569,24 @@ function startDrag(event) {
 }
 
 function moveDrag(event) {
-  const x = event.screenX - drag.x
-  const y = event.screenY - drag.y
-  drag.x = event.screenX
-  drag.y = event.screenY
+  const positionX = nativeDrag ? event.clientX : event.screenX
+  const positionY = nativeDrag ? event.clientY : event.screenY
+  const x = positionX - drag.x
+  const y = positionY - drag.y
+  drag.x = positionX
+  drag.y = positionY
   drag.distance += Math.abs(x) + Math.abs(y)
   if (drag.distance > 3) drag.moved = true
+  if (nativeDrag && drag.moved) {
+    // Wayland 由合成器执行拖动，不查询全局光标或反复设置绝对坐标。
+    if (!drag.nativeStarted) {
+      drag.nativeStarted = true
+      moveRequest = appApi.moveQuickSwitchBy({ native: true })
+        .catch(error => createMessage.error(error.message || String(error)))
+        .finally(() => stopDrag())
+    }
+    return moveRequest
+  }
   if (drag.moved && (x || y)) {
     const sequence = visibilitySequence
     // 串行同步实际中心位置，贴边时让工具自动移到剩余空间。
@@ -730,6 +751,7 @@ watch(
       if (!disposed && props.ready) {
         const sequence = visibilitySequence
         const status = await appApi.markQuickSwitchReady()
+        nativeDrag = Boolean(status?.nativeDrag)
         // 已显示窗口重载时没有新显示事件；较新的可见性事件仍优先。
         if (!disposed && props.ready && sequence === visibilitySequence)
           windowVisible.value = status.visible

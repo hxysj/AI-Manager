@@ -3075,6 +3075,7 @@ dependencies = [
  "libc",
  "local-ip-address",
  "mime_guess",
+ "pipewire",
  "png 0.17.16",
  "qrcode",
  "regex",

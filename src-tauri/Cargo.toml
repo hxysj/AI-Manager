@@ -4,6 +4,15 @@ version = "2.0.28"
 description = "Desktop manager for AI CLI skills, repos and runtime metadata"
 authors = ["Monkey Thief"]
 edition = "2021"
+default-run = "monkey-thief"
+
+[features]
+desktop-acceptance = []
+
+[[bin]]
+name = "desktop-acceptance"
+path = "src/bin/desktop-acceptance.rs"
+required-features = ["desktop-acceptance"]
 
 # 开发构建默认会为每次代码变更保留大量增量编译和调试产物。
 # 限制代码生成单元并降低调试信息后，target/debug/deps 不会按默认的
@@ -81,6 +90,7 @@ sysinfo = "0.37"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ashpd = { version = "0.13.13", features = ["global_shortcuts", "remote_desktop", "screencast"] }
+pipewire = "0.10.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2", features = ["macos-private-api"] }

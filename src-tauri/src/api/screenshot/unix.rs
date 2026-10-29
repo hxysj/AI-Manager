@@ -1,6 +1,5 @@
 use super::*;
 use crate::core::desktop;
-use clipboard_rs::{common::RustImage, Clipboard, RustImageData};
 
 pub fn capture(
     monitors: &[tauri::Monitor],
@@ -9,6 +8,16 @@ pub fn capture(
     width: u32,
     height: u32,
 ) -> Result<DynamicImage, ManagerError> {
+    #[cfg(target_os = "linux")]
+    if desktop::is_wayland() {
+        let image = crate::core::wayland::portal::capture().map_err(failure)?;
+        if left < 0 || top < 0 || i64::from(left) + i64::from(width) > i64::from(image.width())
+            || i64::from(top) + i64::from(height) > i64::from(image.height()) {
+            return Err(failure("共享屏幕尺寸已变化，请重新开始截图"));
+        }
+        return Ok(DynamicImage::ImageRgba8(image::imageops::crop_imm(
+            &image, left as u32, top as u32, width, height).to_image()));
+    }
     let native = xcap::Monitor::all().map_err(failure)?;
     let mut output = image::RgbaImage::new(width, height);
     for monitor in monitors {
@@ -49,13 +58,11 @@ pub fn capture(
 }
 
 pub fn copy_image(_app: &AppHandle, image: &DynamicImage) -> Result<(), ManagerError> {
-    desktop::clipboard(|context| {
-        context.set_image(RustImageData::from_dynamic_image(image.clone()))
-    })
+    desktop::copy_image(image)
 }
 
 pub fn read_clipboard() -> Result<Vec<DynamicImage>, ManagerError> {
-    if let Ok(image) = desktop::clipboard(|context| context.get_image()?.get_dynamic_image()) {
+    if let Ok(image) = desktop::clipboard_image() {
         return Ok(vec![image]);
     }
     let mut images = Vec::new();
@@ -71,6 +78,10 @@ pub fn read_clipboard() -> Result<Vec<DynamicImage>, ManagerError> {
 }
 
 pub fn smart_selection(app: &AppHandle, x: i32, y: i32) -> Result<Vec<Value>, ManagerError> {
+    if desktop::is_wayland() {
+        // Wayland 使用共用的画面矩形检测，不访问其他客户端的私有窗口树。
+        return Ok(Vec::new());
+    }
     let monitors = app.available_monitors().map_err(failure)?;
     let mut regions = Vec::new();
     for window in xcap::Window::all().map_err(failure)? {
@@ -124,7 +135,11 @@ pub fn cursor_in_rect(app: &AppHandle, rect: Option<&CaptureRect>) -> bool {
 }
 
 pub fn scroll_at(app: &AppHandle, mut x: i32, mut y: i32, delta: i32) -> Result<(), ManagerError> {
-    if cfg!(target_os = "macos") || desktop::is_wayland() {
+    #[cfg(target_os = "linux")]
+    if desktop::is_wayland() {
+        return crate::core::wayland::portal::scroll(x, y, delta).map_err(failure);
+    }
+    if cfg!(target_os = "macos") {
         if let Some(monitor) = app
             .monitor_from_point(x as f64, y as f64)
             .map_err(failure)?

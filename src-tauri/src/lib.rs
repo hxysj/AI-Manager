@@ -1,5 +1,12 @@
 mod api;
 mod core;
+#[cfg(feature = "desktop-acceptance")]
+mod platform_acceptance;
+
+#[cfg(feature = "desktop-acceptance")]
+pub fn run_desktop_acceptance() -> Result<(), String> {
+    platform_acceptance::run()
+}
 
 use crate::api::{app, app_logs, screenshot, translation};
 use crate::core::error::ManagerError;

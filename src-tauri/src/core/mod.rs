@@ -14,3 +14,5 @@ pub mod state;
 pub mod storage_state;
 pub mod translation_store;
 pub mod usage_store;
+#[cfg(any(target_os = "linux", test))]
+pub mod wayland;

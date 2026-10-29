@@ -1,6 +1,5 @@
 use super::*;
 use crate::core::desktop;
-use clipboard_rs::Clipboard;
 
 pub fn start(app: AppHandle) {
     desktop::start_shortcuts(
@@ -32,7 +31,7 @@ pub fn start(app: AppHandle) {
                 // 等待用户松开全局快捷键修饰键，避免与复制操作叠加。
                 std::thread::sleep(std::time::Duration::from_millis(200));
                 let text = if clipboard {
-                    desktop::clipboard(|context| context.get_text())
+                    desktop::clipboard_text()
                 } else {
                     desktop::selected_text()
                 }

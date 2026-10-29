@@ -158,6 +158,8 @@ function loadComponent(path) {
 globalThis.window = {
   setTimeout,
   clearTimeout,
+  setInterval,
+  clearInterval,
   addEventListener() {},
   removeEventListener() {}
 }
@@ -677,6 +679,33 @@ assert.equal(panel.state.selectedPage, pageAfterUnmount)
 assert.deepEqual(panel.errors, [])
 assert.deepEqual(panel.warnings, [])
 assert.equal(visibilityListeners.size, 0)
+
+// Wayland 以局部坐标判断拖动，仅请求一次合成器拖动。
+const normalReady = handlers.markQuickSwitchReady
+handlers.markQuickSwitchReady = () => ({ visible: true, nativeDrag: true })
+let completeNativeDrag
+handlers.moveQuickSwitchBy = () => new Promise(resolve => { completeNativeDrag = resolve })
+const waylandPanel = mount(Quick, { state: fixture() })
+await tick()
+const nativeMovesBefore = calls.filter(call => call.name === "moveQuickSwitchBy").length
+waylandPanel.state.startDrag({
+  button: 0, clientX: 20, clientY: 20, pointerId: 10,
+  preventDefault() {}, currentTarget: { setPointerCapture() {} }
+})
+waylandPanel.state.moveDrag({ clientX: 22, clientY: 20 })
+assert.equal(calls.filter(call => call.name === "moveQuickSwitchBy").length, nativeMovesBefore)
+const nativeMove = waylandPanel.state.moveDrag({ clientX: 26, clientY: 20 })
+waylandPanel.state.moveDrag({ clientX: 32, clientY: 20 })
+assert.deepEqual(calls.at(-1), { name: "moveQuickSwitchBy", payload: { native: true } })
+assert.equal(calls.filter(call => call.name === "moveQuickSwitchBy").length, nativeMovesBefore + 1)
+completeNativeDrag(true)
+await nativeMove
+assert.equal(waylandPanel.state.drag.active, false)
+waylandPanel.unmount()
+assert.deepEqual(waylandPanel.errors, [])
+assert.deepEqual(waylandPanel.warnings, [])
+handlers.markQuickSwitchReady = normalReady
+handlers.moveQuickSwitchBy = () => true
 
 // 隐藏后丢弃迟到的展开和拖动结果；复用窗口时恢复收起状态且只初始化一次。
 const reusable = mount(Quick, { state: fixture() })
