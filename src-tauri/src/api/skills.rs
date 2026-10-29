@@ -3533,7 +3533,7 @@ mod tests {
     use super::{
         batch_skill_action, cleanup_expired_skill_trash, create_github_blob_url,
         create_repository_archive_url, delete_skills, ensure_skill_enabled,
-        extract_zip_command_args, load_skill_groups, proxy_points_to_local_app_proxy,
+        extract_zip, load_skill_groups, proxy_points_to_local_app_proxy,
         read_skill_trash, remove_skill_group_items, repository_archive_cache_path,
         repository_archive_zip_is_valid, repository_branch_candidates, resolve_archive_content_dir,
         resolve_archive_skill_source_dir, resolve_skill_status, save_skill_group,
@@ -3820,18 +3820,18 @@ mod tests {
         assert!(error.to_string().contains("Skill 已禁用"));
     }
 
-    #[tokio::test]
-    async fn extracts_skill_zip_with_unicode_paths_without_shell() {
+    #[test]
+    fn cross_platform_extracts_skill_zip_with_unicode_paths_without_shell() {
         use std::io::Write;
         let root = std::env::temp_dir().join(format!("skill-zip-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let archive = root.join("中文 skill [1].zip");
-        let mut writer = zip::ZipWriter::new(File::create(&archive).unwrap());
+        let mut writer = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
         writer.start_file("示例/SKILL.md", zip::write::SimpleFileOptions::default()).unwrap();
         writer.write_all(b"skill-content").unwrap();
         writer.finish().unwrap();
         let destination = root.join("target space");
-        extract_zip(archive.to_str().unwrap(), &destination).await.unwrap();
+        tauri::async_runtime::block_on(extract_zip(archive.to_str().unwrap(), &destination)).unwrap();
         assert_eq!(std::fs::read(destination.join("示例/SKILL.md")).unwrap(), b"skill-content");
         std::fs::remove_dir_all(root).unwrap();
     }

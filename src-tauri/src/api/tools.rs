@@ -10,7 +10,6 @@ use std::fmt::Write as FmtWrite;
 use std::io::{Cursor, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
-#[cfg(target_os = "windows")]
 use tokio::process::Command;
 use url::Url;
 use zip::write::SimpleFileOptions;
@@ -568,9 +567,46 @@ struct WindowsPortRecord {
 pub async fn list_ports() -> Result<Value, ManagerError> {
     #[cfg(not(target_os = "windows"))]
     {
-        Err(ManagerError::System(
-            "端口监测目前仅支持 Windows".to_string(),
-        ))
+        let mut records = Vec::new();
+        for args in [
+            vec!["-nP", "-iTCP", "-sTCP:LISTEN", "-FpcfPn"],
+            vec!["-nP", "-iUDP", "-FpcfPn"],
+        ] {
+            let output = Command::new("lsof").args(args).output().await.map_err(|error| {
+                ManagerError::System(format!("无法运行 lsof，请安装系统端口工具：{error}"))
+            })?;
+            if !output.status.success() && !output.stderr.is_empty() {
+                return Err(ManagerError::System(format!("读取端口失败：{}",
+                    String::from_utf8_lossy(&output.stderr).trim())));
+            }
+            records.extend(parse_lsof_ports(&String::from_utf8_lossy(&output.stdout)));
+        }
+        let ports = tauri::async_runtime::spawn_blocking(move || {
+            let mut system = sysinfo::System::new();
+            system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+            let owner = system.process(sysinfo::Pid::from_u32(std::process::id()))
+                .and_then(|process| process.effective_user_id().or(process.user_id()));
+            records.into_iter().map(|(pid, name, protocol, address, port)| {
+                let process = system.process(sysinfo::Pid::from_u32(pid));
+                let started_at = process.map(|process| process.start_time()).unwrap_or(0);
+                let reason = protected_process_reason(pid, &name).map(str::to_string)
+                    .or_else(|| if started_at == 0 {
+                        Some("无法校验进程启动时间".into())
+                    } else if owner.is_none() || process.and_then(|process| process.effective_user_id()
+                        .or(process.user_id())) != owner {
+                        Some("无权关闭其他用户或系统进程".into())
+                    } else { None });
+                json!({
+                    "id": format!("{protocol}:{address}:{port}:{pid}"), "pid": pid,
+                    "protocol": protocol, "localAddress": address, "localPort": port,
+                    "processName": name, "startedAt": started_at, "serviceNames": [],
+                    "executablePath": process.and_then(|process| process.exe())
+                        .map(|path| path.to_string_lossy().into_owned()).unwrap_or_default(),
+                    "canTerminate": reason.is_none(), "protectedReason": reason.unwrap_or_default()
+                })
+            }).collect::<Vec<_>>()
+        }).await.map_err(|error| ManagerError::System(error.to_string()))?;
+        Ok(json!({"ports": ports}))
     }
 
     #[cfg(target_os = "windows")]
@@ -722,10 +758,27 @@ pub async fn terminate_port_process(payload: Value) -> Result<Value, ManagerErro
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = payload;
-        Err(ManagerError::System(
-            "进程关闭目前仅支持 Windows".to_string(),
-        ))
+        tauri::async_runtime::spawn_blocking(move || {
+            let mut system = sysinfo::System::new();
+            system.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+            let process = system.process(sysinfo::Pid::from_u32(payload.pid))
+                .ok_or_else(|| ManagerError::System("进程已退出，请刷新列表".into()))?;
+            if payload.started_at <= 0 || process.start_time() != payload.started_at as u64 {
+                return Err(ManagerError::System("进程身份已改变，请刷新列表后重试".into()));
+            }
+            if let Some(reason) = protected_process_reason(payload.pid, &process.name().to_string_lossy()) {
+                return Err(ManagerError::System(reason.into()));
+            }
+            let owner = system.process(sysinfo::Pid::from_u32(std::process::id()))
+                .and_then(|process| process.effective_user_id().or(process.user_id()));
+            if owner.is_none() || process.effective_user_id().or(process.user_id()) != owner {
+                return Err(ManagerError::System("无权关闭其他用户或系统进程".into()));
+            }
+            if process.kill_with(sysinfo::Signal::Kill) != Some(true) {
+                return Err(ManagerError::System("关闭进程失败，请检查系统权限".into()));
+            }
+            Ok(json!({"pid": payload.pid}))
+        }).await.map_err(|error| ManagerError::System(error.to_string()))?
     }
 
     #[cfg(target_os = "windows")]
@@ -807,6 +860,63 @@ $started = [DateTimeOffset]$process.StartTime
     }
 }
 
+// 字段输出不依赖本地化表头，保留 IPv6 和含空格的进程名称。
+#[cfg(any(unix, test))]
+fn parse_lsof_ports(output: &str) -> Vec<(u32, String, String, String, u16)> {
+    let mut records = Vec::new();
+    let (mut pid, mut name, mut protocol) = (0, String::new(), String::new());
+    for line in output.lines().filter(|line| !line.is_empty()) {
+        let value = &line[1..];
+        match line.as_bytes()[0] {
+            b'p' => { pid = value.parse().unwrap_or(0); name.clear(); protocol.clear(); }
+            b'c' => name = value.into(),
+            b'f' => protocol.clear(),
+            b'P' => protocol = value.into(),
+            b'n' if pid > 0 && matches!(protocol.as_str(), "TCP" | "UDP") => {
+                let local = value.split("->").next().unwrap_or(value);
+                if let Some((address, port)) = local.rsplit_once(':') {
+                    if let Ok(port) = port.parse::<u16>() {
+                        records.push((pid, name.clone(), protocol.clone(),
+                            address.trim_start_matches('[').trim_end_matches(']').into(), port));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    records
+}
+
+#[cfg(test)]
+mod cross_platform_port_tests {
+    #[test]
+    fn cross_platform_lsof_preserves_ipv6_and_resets_socket_protocol() {
+        let ports = super::parse_lsof_ports(
+            "p921\ncMy App\nf3\nPTCP\nn[::1]:8080\nf4\nPUDP\nn*:5353\nf5\nnignored:9\np922\ncnode\nf6\nPTCP\nn127.0.0.1:3000\n",
+        );
+        assert_eq!(ports, vec![
+            (921, "My App".into(), "TCP".into(), "::1".into(), 8080),
+            (921, "My App".into(), "UDP".into(), "*".into(), 5353),
+            (922, "node".into(), "TCP".into(), "127.0.0.1".into(), 3000),
+        ]);
+        assert!(super::protected_process_reason(1, "launchd").is_some());
+        assert!(super::protected_process_reason(std::process::id(), "app").is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cross_platform_unix_port_monitor_finds_current_listener() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let output = tauri::async_runtime::block_on(super::list_ports()).unwrap();
+        assert!(output["ports"].as_array().unwrap().iter().any(|record| {
+            record["pid"] == std::process::id() && record["localPort"] == port
+                && record["startedAt"].as_u64().is_some_and(|time| time > 0)
+                && record["canTerminate"] == false
+        }));
+    }
+}
+
 fn protected_process_reason(pid: u32, process_name: &str) -> Option<&'static str> {
     if pid == std::process::id() {
         return Some("不能在端口监测中关闭当前应用");
@@ -833,6 +943,13 @@ fn protected_process_reason(pid: u32, process_name: &str) -> Option<&'static str
             | "fontdrvhost"
             | "secure system"
             | "memory compression"
+            | "launchd"
+            | "kernel_task"
+            | "systemd"
+            | "init"
+            | "kthreadd"
+            | "windowserver"
+            | "loginwindow"
     ) {
         return Some("系统关键进程不可关闭");
     }

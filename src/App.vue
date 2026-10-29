@@ -11,7 +11,7 @@
       standalone
       :tool-request="toolRequest"
       :cli-targets="state.cliTargets"
-      :capabilities="state.appSettings.capabilities"
+
       :providers="state.providers"
       :repos="state.repos"
       :runtime-models="state.runtimeModels"
@@ -169,7 +169,7 @@
           v-else-if="activeView === 'tools'"
           :tool-request="toolRequest"
           :cli-targets="state.cliTargets"
-          :capabilities="state.appSettings.capabilities"
+
           :providers="state.providers"
           :repos="state.repos"
           :runtime-models="state.runtimeModels"

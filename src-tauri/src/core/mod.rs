@@ -1,4 +1,6 @@
 pub mod database;
+#[cfg(unix)]
+pub mod desktop;
 pub mod error;
 pub mod image_prompt_store;
 pub mod image_store;

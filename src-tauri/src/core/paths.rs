@@ -27,7 +27,7 @@ fn user_data_candidates() -> Vec<PathBuf> {
         use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
         const DRIVE_FIXED: u32 = 3;
         // D 盘优先，其余数据盘按盘符排序，系统盘 C 放在最后。
-        for letter in std::iter::once(b'D').chain(b'E'..=b'Z').chain(std::iter::once(b'C')) {
+        for letter in windows_data_drive_letters() {
             let root = format!("{}:\\", letter as char);
             let wide: Vec<u16> = root.encode_utf16().chain(Some(0)).collect();
             if unsafe { GetDriveTypeW(wide.as_ptr()) } == DRIVE_FIXED {
@@ -37,6 +37,11 @@ fn user_data_candidates() -> Vec<PathBuf> {
     }
     candidates.push(home_path().join("ai-manager-data"));
     candidates
+}
+
+#[cfg(any(windows, test))]
+fn windows_data_drive_letters() -> impl Iterator<Item = u8> {
+    std::iter::once(b'D').chain(b'E'..=b'Z').chain(b'A'..=b'C')
 }
 
 fn select_writable_data_path(candidates: &[PathBuf]) -> Option<PathBuf> {
@@ -286,7 +291,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn data_directory_selection_uses_first_writable_candidate() {
+    fn cross_platform_data_directory_selection_uses_first_writable_candidate() {
         let root = std::env::temp_dir().join(format!("data-path-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&root).unwrap();
         let blocked = root.join("blocked");
@@ -302,6 +307,15 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn cross_platform_windows_drive_priority_covers_every_fixed_drive() {
+        let letters = super::windows_data_drive_letters().collect::<Vec<_>>();
+        assert_eq!(letters[0], b'D');
+        assert_eq!(letters[1], b'E');
+        assert_eq!(letters.last(), Some(&b'C'));
+        assert_eq!(letters.len(), 26);
+        assert_eq!(letters.iter().collect::<std::collections::HashSet<_>>().len(), 26);
+    }
     #[test]
     fn resolves_lan_share_paths_under_workspace() {
         let paths = resolve_app_paths(Path::new(r"D:\ai-manager-data"));

@@ -134,7 +134,6 @@ import { appApi } from "@/api"
 const props = defineProps({
   settings: { type: Object, default: () => ({}) },
   cliTargets: { type: Array, default: () => [] },
-  capabilities: { type: Object, default: () => ({}) },
   pending: { type: Boolean, default: false },
   saveSettings: { type: Function, required: true }
 })
@@ -200,12 +199,12 @@ const settingItems = computed(() => [
     kind: "action",
     icon: Trash2,
     title: "无痕卸载",
-    description: "删除所有本地用户数据，并自动启动静默卸载。"
+    description: "移除本地应用数据并启动系统卸载流程。"
   }
-].filter(item => item.key !== "uninstall-without-trace" || props.capabilities.nativeUninstall !== false))
+])
 
 const floatingToolItems = computed(() =>
-  getToolItems({ cliTargets: props.cliTargets, capabilities: props.capabilities })
+  getToolItems({ cliTargets: props.cliTargets })
 )
 // 临时值只覆盖正在保存的字段，其他设置始终读取最新配置。
 const overrides = reactive({ quickSwitchTools: {} })

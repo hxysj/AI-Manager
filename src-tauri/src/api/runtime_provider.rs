@@ -3828,6 +3828,23 @@ fn unix_launcher_script(executable: &str, workspace: &str, environment: &[(&str,
     lines.join("\n")
 }
 
+#[cfg(test)]
+mod cross_platform_launcher_tests {
+    #[test]
+    fn cross_platform_unix_launcher_preserves_literal_arguments() {
+        let script = super::unix_launcher_script(
+            "/Applications/Node's CLI/bin/start.js",
+            "/Users/Test/项目 $(touch unwanted)",
+            &[("CODEX_HOME", "/Users/Test/Profile's $HOME")],
+        );
+        assert!(script.contains("export CODEX_HOME='/Users/Test/Profile'\\''s $HOME'"));
+        assert!(script.contains("cd '/Users/Test/项目 $(touch unwanted)' || exit 1"));
+        assert!(script.contains("exec node '/Applications/Node'\\''s CLI/bin/start.js'"));
+        assert!(!script.contains("cmd.exe"));
+        assert!(!script.contains("\r"));
+    }
+}
+
 #[cfg(windows)]
 fn cli_run_command(executable_path: &str) -> String {
     let lower = executable_path.to_lowercase();

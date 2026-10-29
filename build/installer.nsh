@@ -96,7 +96,30 @@ FunctionEnd
   Goto aiManagerSkipUserDataCleanup
 
   aiManagerRemoveUserData:
-    ExecWait `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command "$$roots = @('D:\') + @([System.IO.DriveInfo]::GetDrives() | Where-Object { $$_.IsReady -and $$_.DriveType -eq 'Fixed' -and $$_.Name -ne 'D:\' -and $$_.Name -ne 'C:\' } | Sort-Object Name | ForEach-Object { $$_.Name }) + @('C:\'); $$candidates = @($$roots | ForEach-Object { Join-Path $$_ 'ai-manager-data\app-settings.json' }) + @(Join-Path $$env:USERPROFILE 'ai-manager-data\app-settings.json'); $$settingsPath = $$candidates | Where-Object { Test-Path -LiteralPath $$_ -PathType Leaf } | Select-Object -First 1; if ($$settingsPath) { $$settings = Get-Content -LiteralPath $$settingsPath -Raw | ConvertFrom-Json; $$dataPath = [Environment]::ExpandEnvironmentVariables([string]$$settings.dataPath); if ($$dataPath -and [System.IO.Path]::IsPathRooted($$dataPath)) { $$dataPath = [System.IO.Path]::GetFullPath($$dataPath); if ($$dataPath.TrimEnd('\') -ne [System.IO.Path]::GetPathRoot($$dataPath).TrimEnd('\')) { $$workspacePath = Join-Path $$dataPath 'workspace'; if (Test-Path -LiteralPath $$workspacePath) { Remove-Item -LiteralPath $$workspacePath -Recurse -Force } } } }"`
+    InitPluginsDir
+    FileOpen $0 "$PLUGINSDIR\ai-manager-cleanup.ps1" w
+    FileWrite $0 "$$ErrorActionPreference = 'Stop'$\r$\n"
+    FileWrite $0 "$$roots = @('D:\') + @([System.IO.DriveInfo]::GetDrives() | Where-Object { $$_.IsReady -and $$_.DriveType -eq 'Fixed' -and $$_.Name -ne 'D:\' -and $$_.Name -ne 'C:\' } | Sort-Object Name | ForEach-Object { $$_.Name }) + @('C:\')$\r$\n"
+    FileWrite $0 "$$candidates = @($$roots | ForEach-Object { Join-Path $$_ 'ai-manager-data\app-settings.json' }) + @(Join-Path $$env:USERPROFILE 'ai-manager-data\app-settings.json')$\r$\n"
+    FileWrite $0 "$$settingsPath = $$candidates | Where-Object { Test-Path -LiteralPath $$_ -PathType Leaf } | Select-Object -First 1$\r$\n"
+    FileWrite $0 "if (-not $$settingsPath) { exit 0 }$\r$\n"
+    FileWrite $0 "$$settings = Get-Content -LiteralPath $$settingsPath -Raw | ConvertFrom-Json$\r$\n"
+    FileWrite $0 "$$dataPath = [Environment]::ExpandEnvironmentVariables([string]$$settings.dataPath)$\r$\n"
+    FileWrite $0 "if (-not $$dataPath -or -not [System.IO.Path]::IsPathRooted($$dataPath)) { exit 1 }$\r$\n"
+    FileWrite $0 "$$dataPath = [System.IO.Path]::GetFullPath($$dataPath)$\r$\n"
+    FileWrite $0 "if ($$dataPath.TrimEnd('\') -eq [System.IO.Path]::GetPathRoot($$dataPath).TrimEnd('\')) { exit 1 }$\r$\n"
+    FileWrite $0 "$$workspacePath = Join-Path $$dataPath 'workspace'$\r$\n"
+    FileWrite $0 "$$screenshotsPath = Join-Path $$dataPath 'screenshots'$\r$\n"
+    FileWrite $0 "if (-not (Test-Path -LiteralPath (Join-Path $$workspacePath 'storage') -PathType Container)) { exit 1 }$\r$\n"
+    FileWrite $0 "$$ownedPaths = @('workspace', 'screenshots', 'local-backups', 'models') | ForEach-Object { Join-Path $$dataPath $$_ }$\r$\n"
+    FileWrite $0 "foreach ($$owned in $$ownedPaths) {$\r$\n"
+    FileWrite $0 "  $$resolved = [System.IO.Path]::GetFullPath($$owned)$\r$\n"
+    FileWrite $0 "  if (-not $$resolved.StartsWith($$dataPath.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { exit 1 }$\r$\n"
+    FileWrite $0 "  if (Test-Path -LiteralPath $$resolved) { Remove-Item -LiteralPath $$resolved -Recurse -Force }$\r$\n"
+    FileWrite $0 "}$\r$\n"
+    FileWrite $0 "Remove-Item -LiteralPath $$settingsPath -Force$\r$\n"
+    FileClose $0
+    ExecWait 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "$PLUGINSDIR\ai-manager-cleanup.ps1"'
 
   aiManagerSkipUserDataCleanup:
 !macroend

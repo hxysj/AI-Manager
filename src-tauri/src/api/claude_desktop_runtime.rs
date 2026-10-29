@@ -7,7 +7,14 @@ pub(crate) const APP_ID: &str = "claude-desktop";
 
 pub(crate) fn current_target(paths: &crate::core::paths::AppPaths) -> Option<Value> {
     let home = crate::core::paths::home_path();
-    let local = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    let local = std::env::var_os("AI_MANAGER_CLAUDE_DESKTOP_CONFIG_HOME")
+        .or_else(|| match std::env::consts::OS {
+            "windows" => std::env::var_os("LOCALAPPDATA"),
+            "linux" => std::env::var_os("XDG_CONFIG_HOME"),
+            _ => None,
+        })
+        .filter(|local| !local.is_empty())
+        .map(PathBuf::from);
     let mut target = target(std::env::consts::OS, &home, local.as_deref())?;
     target["managedSkillsPath"] =
         json!(Path::new(&paths.workspace_root).join("claude-desktop-plugins"));
@@ -19,7 +26,9 @@ fn target(platform: &str, home: &Path, local: Option<&Path>) -> Option<Value> {
         "windows" => local
             .map(Path::to_path_buf)
             .unwrap_or_else(|| home.join("AppData/Local")),
-        "macos" => home.join("Library/Application Support"),
+        "macos" => local.map(Path::to_path_buf)
+            .unwrap_or_else(|| home.join("Library/Application Support")),
+        "linux" => local.map(Path::to_path_buf).unwrap_or_else(|| home.join(".config")),
         _ => return None,
     };
     let mut roots = vec![root.join("Claude"), root.join("Claude-3p")];
@@ -187,7 +196,8 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("第三方模式"));
-        assert!(target("linux", home, None).is_none());
+        assert_eq!(target("linux", home, None).unwrap()["configPath"],
+            json!(home.join(".config/Claude")));
         let mac = target("macos", home, None).unwrap();
         assert_eq!(mac["sessionPaths"].as_array().unwrap().len(), 4);
     }

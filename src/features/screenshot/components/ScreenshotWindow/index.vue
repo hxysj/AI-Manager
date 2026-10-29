@@ -391,11 +391,7 @@ import CaptureMagnifier from "./components/CaptureMagnifier.vue"
 import LongScreenshotPreview from "./components/LongScreenshotPreview.vue"
 import OcrResultPanel from "./components/OcrResultPanel.vue"
 import PinToolbar from "./components/PinToolbar.vue"
-import {
-  canvasSource,
-  selectionRect,
-  thumbnailSource
-} from "../../renderer"
+import { canvasSource, selectionRect, thumbnailSource } from "../../renderer"
 import { captureLongScreenshot } from "../../long-screenshot"
 import {
   detectRectangleRegions,
@@ -520,18 +516,16 @@ const selectionStyle = computed(() => {
 const detectedRegions = computed(() => {
   if (!frame.value) return []
   // 总览、鼠标命中和导出共用完整候选集，大框先绘制，保留内部小框。
-  return [...pageRegions.value]
-    .reverse()
-    .map((region, index) => ({
-      ...region,
-      overlayKey: `${region.kind || "region"}-${region.id || index}-${region.x}-${region.y}-${region.width}-${region.height}`,
-      overlayStyle: {
-        left: `${(region.x / frame.value.width) * 100}%`,
-        top: `${(region.y / frame.value.height) * 100}%`,
-        width: `${(region.width / frame.value.width) * 100}%`,
-        height: `${(region.height / frame.value.height) * 100}%`
-      }
-    }))
+  return [...pageRegions.value].reverse().map((region, index) => ({
+    ...region,
+    overlayKey: `${region.kind || "region"}-${region.id || index}-${region.x}-${region.y}-${region.width}-${region.height}`,
+    overlayStyle: {
+      left: `${(region.x / frame.value.width) * 100}%`,
+      top: `${(region.y / frame.value.height) * 100}%`,
+      width: `${(region.width / frame.value.width) * 100}%`,
+      height: `${(region.height / frame.value.height) * 100}%`
+    }
+  }))
 })
 const longPreviewStyle = computed(() => {
   const bounds = desktop.value.getBoundingClientRect()
@@ -610,7 +604,9 @@ function containsRegion(region, point) {
 
 function applySmartLevels(point) {
   // 候选已按面积排序，移动鼠标只查询缓存，滚轮可以切换包裹层级。
-  const local = pageRegions.value.filter(region => containsRegion(region, point))
+  const local = pageRegions.value.filter((region) =>
+    containsRegion(region, point)
+  )
   const anchor = local[0]
   if (
     !anchor ||
@@ -1478,9 +1474,8 @@ async function keydown(event) {
   // 普通贴图聚焦后处理图片快捷键，编辑和菜单内的方向键保持原有用途。
   if (mode === "pin" && !editing.value) {
     if (
-      event.ctrlKey &&
+      (event.ctrlKey || event.metaKey) &&
       !event.altKey &&
-      !event.metaKey &&
       !event.shiftKey &&
       event.key.toLowerCase() === "c"
     ) {
@@ -1625,14 +1620,22 @@ async function loadFrame() {
   if (background.height !== current.height) background.height = current.height
   const context = background.getContext("2d", { willReadFrequently: true })
   const pixels = new Uint8ClampedArray(bytes, 20)
-  context.putImageData(new ImageData(pixels, current.width, current.height), 0, 0)
+  context.putImageData(
+    new ImageData(pixels, current.width, current.height),
+    0,
+    0
+  )
   originalImage = background
   pixelCanvas = background
   frame.value = current
   autoCopy.value = header.getUint32(16, true) === 1
   if (generation !== frameGeneration) return
   // 每帧仅检测一次；原始像素交给 Worker，不阻塞框选和截图首帧显示。
-  const detection = detectRectangleRegions(pixels, current.width, current.height)
+  const detection = detectRectangleRegions(
+    pixels,
+    current.width,
+    current.height
+  )
     .then((regions) => {
       if (disposed || generation !== frameGeneration) return
       pageRegions.value = regions
@@ -1640,7 +1643,7 @@ async function loadFrame() {
         applySmartLevels(pointer.value)
       }
     })
-    .catch(cause => {
+    .catch((cause) => {
       if (!disposed && generation === frameGeneration)
         error.value = `矩形检测失败：${String(cause)}`
     })

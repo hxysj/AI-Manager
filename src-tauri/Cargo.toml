@@ -73,3 +73,14 @@ windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_System_Co
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+clipboard-rs = { version = "0.3.5", features = ["wayland"] }
+enigo = "0.6.1"
+tauri-plugin-global-shortcut = "=2.3.1"
+xcap = "0.9.8"
+sysinfo = "0.37"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", features = ["global_shortcuts", "remote_desktop", "screencast"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }

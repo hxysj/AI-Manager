@@ -1199,7 +1199,117 @@ fn detect_system_proxy() -> Result<Option<SystemProxy>, ManagerError> {
 
 #[cfg(not(windows))]
 fn detect_system_proxy() -> Result<Option<SystemProxy>, ManagerError> {
+    let environment = |name: &str| {
+        std::env::var(name).or_else(|_| std::env::var(name.to_ascii_uppercase()))
+            .ok().filter(|value| !value.trim().is_empty())
+    };
+    let all = environment("all_proxy");
+    let http = environment("http_proxy").or_else(|| all.clone());
+    let https = environment("https_proxy").or_else(|| all.clone());
+    if http.is_some() || https.is_some() {
+        return Ok(Some(SystemProxy {
+            http: http.map(|value| normalize_proxy_url(&value, "http")).transpose()?,
+            https: https.map(|value| normalize_proxy_url(&value, "http")).transpose()?,
+            no_proxy: environment("no_proxy"),
+        }));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("/usr/sbin/scutil").arg("--proxy").output()?;
+        if !output.status.success() {
+            return Err(ManagerError::System("无法读取系统网络代理设置".into()));
+        }
+        return parse_macos_proxy(&String::from_utf8_lossy(&output.stdout));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let setting = |schema: &str, key: &str| -> Option<String> {
+            let output = std::process::Command::new("gsettings").args(["get", schema, key]).output().ok()?;
+            output.status.success().then(|| String::from_utf8_lossy(&output.stdout)
+                .trim().trim_matches('\'').to_string())
+        };
+        if setting("org.gnome.system.proxy", "mode").as_deref() == Some("manual") {
+            let address = |protocol: &str| {
+                let schema = format!("org.gnome.system.proxy.{protocol}");
+                let host = setting(&schema, "host").unwrap_or_default();
+                let port = setting(&schema, "port").unwrap_or_default();
+                (!host.is_empty() && port != "0").then(|| {
+                    format!("{protocol}={host}:{port}")
+                })
+            };
+            let proxy = ["http", "https", "socks"].into_iter().filter_map(address)
+                .collect::<Vec<_>>().join(";");
+            if !proxy.is_empty() {
+                let bypass = setting("org.gnome.system.proxy", "ignore-hosts").unwrap_or_default()
+                    .trim_matches(['[', ']']).replace(['\'', ' '], "").replace(',', ";");
+                return parse_system_proxy(&proxy, &bypass).map(Some);
+            }
+        }
+        // KDE 将手动代理保存在 kioslaverc，优先匹配当前桌面的配置工具。
+        for executable in ["kreadconfig6", "kreadconfig5"] {
+            let read = |key: &str| -> Option<String> {
+                let output = std::process::Command::new(executable)
+                    .args(["--file", "kioslaverc", "--group", "Proxy Settings", "--key", key])
+                    .output().ok()?;
+                output.status.success().then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+            };
+            if read("ProxyType").as_deref() != Some("1") { continue; }
+            let mut entries = Vec::new();
+            for (key, protocol) in [("httpProxy", "http"), ("httpsProxy", "https"), ("socksProxy", "socks")] {
+                if let Some(value) = read(key).filter(|value| !value.is_empty()) {
+                    entries.push(format!("{protocol}={}", value.replace(' ', ":")));
+                }
+            }
+            if !entries.is_empty() {
+                return parse_system_proxy(&entries.join(";"), &read("NoProxyFor").unwrap_or_default()).map(Some);
+            }
+        }
+    }
     Ok(None)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_macos_proxy(output: &str) -> Result<Option<SystemProxy>, ManagerError> {
+    let mut values = std::collections::HashMap::new();
+    let mut exclusions = Vec::new();
+    let mut in_exclusions = false;
+    for line in output.lines() {
+        let line = line.trim();
+        if line.starts_with("ExceptionsList :") { in_exclusions = true; continue; }
+        if line == "}" { in_exclusions = false; continue; }
+        if let Some((key, value)) = line.split_once(" : ") {
+            if in_exclusions { exclusions.push(value); }
+            else { values.insert(key, value); }
+        }
+    }
+    let mut entries = Vec::new();
+    for (prefix, protocol) in [("HTTP", "http"), ("HTTPS", "https"), ("SOCKS", "socks")] {
+        if values.get(format!("{prefix}Enable").as_str()) == Some(&"1") {
+            if let (Some(host), Some(port)) = (
+                values.get(format!("{prefix}Proxy").as_str()),
+                values.get(format!("{prefix}Port").as_str()),
+            ) {
+                let host = if host.contains(':') && !host.starts_with('[') { format!("[{host}]") } else { host.to_string() };
+                entries.push(format!("{protocol}={host}:{port}"));
+            }
+        }
+    }
+    if entries.is_empty() { return Ok(None); }
+    parse_system_proxy(&entries.join(";"), &exclusions.join(";")).map(Some)
+}
+
+#[cfg(test)]
+mod cross_platform_proxy_tests {
+    #[test]
+    fn cross_platform_scutil_proxy_parses_schemes_and_bypass_list() {
+        let proxy = super::parse_macos_proxy(
+            "<dictionary> {\n HTTPEnable : 1\n HTTPProxy : 127.0.0.1\n HTTPPort : 7890\n HTTPSEnable : 1\n HTTPSProxy : ::1\n HTTPSPort : 7891\n ExceptionsList : <array> {\n 0 : localhost\n 1 : *.local\n }\n}\n"
+        ).unwrap().unwrap();
+        assert_eq!(proxy.http.as_deref(), Some("http://127.0.0.1:7890/"));
+        assert_eq!(proxy.https.as_deref(), Some("http://[::1]:7891/"));
+        assert!(proxy.no_proxy.unwrap().contains("localhost"));
+        assert!(super::parse_macos_proxy("HTTPEnable : 0\n").unwrap().is_none());
+    }
 }
 
 fn parse_system_proxy(

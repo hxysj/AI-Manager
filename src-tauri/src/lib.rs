@@ -124,7 +124,14 @@ async fn dispatch_command(
 
 pub fn run() {
     crate::core::storage_state::initialize_cli_path();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(unix)]
+    let builder = if crate::core::desktop::is_wayland() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_global_shortcut::Builder::new().build())
+    };
+    builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
@@ -391,7 +398,7 @@ fn build_tray_menu(app: &tauri::AppHandle, state: &Value) -> tauri::Result<Menu<
     for (_, name, shortcut) in settings
         .shortcut_bindings()
         .into_iter()
-        .filter(|_| settings.enabled && cfg!(windows))
+        .filter(|_| settings.enabled)
     {
         let (id, label) = match name {
             "captureAutoCopy" => ("capture-auto-copy", "截屏并自动复制"),

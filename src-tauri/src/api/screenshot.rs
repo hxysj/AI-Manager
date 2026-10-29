@@ -20,6 +20,12 @@ use tauri_plugin_opener::OpenerExt;
 pub mod ocr;
 #[cfg(windows)]
 mod windows;
+#[cfg(unix)]
+mod unix;
+#[cfg(windows)]
+use windows as native;
+#[cfg(unix)]
+use unix as native;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -243,6 +249,13 @@ impl ScreenshotService {
                 "无法打开截图数据目录，可能已有应用实例正在使用：{error}"
             ))
         })?;
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            if unsafe { libc::flock(instance_lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+                return Err(failure("截图数据目录正在被另一个应用实例使用"));
+            }
+        }
         let file = root.join("session.json");
         let mut errors = Vec::new();
         let session = if file.exists() {
@@ -544,16 +557,13 @@ pub async fn dispatch(
     match action.as_str() {
         "status" => {
             let mut status = json!(service.settings());
-            status["supported"] = json!(cfg!(windows));
+            status["supported"] = json!(true);
             Ok(status)
         }
         "set-enabled" => {
             let enabled = payload["enabled"]
                 .as_bool()
                 .ok_or_else(|| failure("缺少截图启停状态"))?;
-            if enabled && !cfg!(windows) {
-                return Err(failure("当前平台暂不支持原生截图与桌面贴图，可继续查看和导出历史记录"));
-            }
             service.set_enabled(enabled)?;
             let result = sync_runtime(&app);
             changed(&app);
@@ -651,7 +661,6 @@ pub async fn dispatch(
             Ok(json!(true))
         }
         "long-scroll" => {
-            #[cfg(windows)]
             {
                 // 与鼠标穿透检测共用锁，注入滚轮期间不能重新拦截底层应用的鼠标事件。
                 let preview = service.long_preview_rect.lock().unwrap();
@@ -666,9 +675,9 @@ pub async fn dispatch(
                         as i32;
                     let delta = payload["delta"].as_i64().unwrap_or(-120).clamp(-120, 120) as i32;
                     if let Some(window) = app.get_webview_window("screenshot-capture") {
-                        let interactive = windows::cursor_in_rect(preview.as_ref());
+                        let interactive = native::cursor_in_rect(&app, preview.as_ref());
                         window.set_ignore_cursor_events(true).map_err(failure)?;
-                        let result = windows::scroll_at(x, y, delta);
+                        let result = native::scroll_at(&app, x, y, delta);
                         window
                             .set_ignore_cursor_events(!interactive)
                             .map_err(failure)?;
@@ -725,16 +734,8 @@ pub async fn dispatch(
             let y = payload["y"]
                 .as_i64()
                 .ok_or_else(|| failure("缺少智能选区纵坐标"))? as i32;
-            #[cfg(windows)]
-            {
-                let regions = windows::smart_selection(&app, x, y)?;
-                return Ok(json!({"regions": regions}));
-            }
-            #[cfg(not(windows))]
-            {
-                let _ = (x, y);
-                return Ok(json!({"regions": []}));
-            }
+            let regions = native::smart_selection(&app, x, y)?;
+            Ok(json!({"regions": regions}))
         }
         "pin-show" | "pin-ready" => {
             let id = id_from(&payload)?;
@@ -1015,10 +1016,7 @@ pub async fn dispatch(
             let image = decode_bytes(&std::fs::read(
                 service.document_dir(id_from(&payload)?)?.join("output.png"),
             )?)?;
-            #[cfg(windows)]
-            windows::copy_image(&app, &image)?;
-            #[cfg(not(windows))]
-            return Err(failure("图片剪贴板目前仅支持 Windows"));
+            native::copy_image(&app, &image)?;
             Ok(json!(true))
         }
         "export" => {
@@ -1571,18 +1569,21 @@ pub async fn screenshot_region_frame(
     let monitors = app
         .available_monitors()
         .map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    let capture_window = app.get_webview_window("screenshot-capture");
+    #[cfg(unix)]
+    if let Some(window) = &capture_window {
+        window.hide().map_err(|error| error.to_string())?;
+    }
     let image = tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(windows)]
-        {
-            windows::capture(&monitors, left, top, width, height)
-        }
-        #[cfg(not(windows))]
-        {
-            let _ = (monitors, left, top, width, height);
-            Err(failure("桌面截图目前仅支持 Windows"))
-        }
+        native::capture(&monitors, left, top, width, height)
     })
-    .await
+    .await;
+    #[cfg(unix)]
+    if let Some(window) = &capture_window {
+        let _ = window.show();
+    }
+    let image = image
     .map_err(|error| error.to_string())?
     .map_err(|error| error.to_string())?;
     Ok(tauri::ipc::Response::new(capture_frame_data(
@@ -1635,21 +1636,20 @@ pub async fn begin_capture(
         .long_capture_requested
         .store(long_capture, Ordering::SeqCst);
     let result = async {
+        #[cfg(unix)]
+        if let Some(window) = app.get_webview_window("screenshot-capture") {
+            window.hide().map_err(failure)?;
+        }
         let monitors = app.available_monitors().map_err(failure)?;
         let (left, top, width, height) = capture_bounds(&monitors)?;
         let frame = tauri::async_runtime::spawn_blocking(move || {
-            #[cfg(windows)]
             {
                 Ok::<_, ManagerError>(capture_frame_data(
-                    windows::capture(&monitors, left, top, width, height)?,
+                    native::capture(&monitors, left, top, width, height)?,
                     left,
                     top,
                     auto_copy,
                 ))
-            }
-            #[cfg(not(windows))]
-            {
-                Err::<Vec<u8>, ManagerError>(failure("桌面截图目前仅支持 Windows"))
             }
         })
         .await
@@ -1869,7 +1869,7 @@ fn open_pin_with_visibility(
         .build()
         .map_err(failure)?;
     #[cfg(windows)]
-    windows::disable_window_transitions(&window)?;
+    native::disable_window_transitions(&window)?;
     window
         .set_position(PhysicalPosition::new(pin.x, pin.y))
         .map_err(failure)?;
@@ -2065,9 +2065,8 @@ pub fn reset_input(app: &AppHandle) -> Result<(), ManagerError> {
 
 pub fn paste_clipboard(app: &AppHandle) -> Result<(), ManagerError> {
     app.state::<ScreenshotService>().ensure_enabled()?;
-    #[cfg(windows)]
     {
-        let images = windows::read_clipboard()?;
+        let images = native::read_clipboard()?;
         for image in images {
             let data = image_data(&image)?;
             let id = save_document(
@@ -2078,22 +2077,16 @@ pub fn paste_clipboard(app: &AppHandle) -> Result<(), ManagerError> {
         }
         Ok(())
     }
-    #[cfg(not(windows))]
-    Err(failure("剪贴板贴图目前仅支持 Windows"))
 }
 
 pub fn start(app: AppHandle) {
-    #[cfg(windows)]
-    windows::start_hotkeys(app.clone());
+    native::start_hotkeys(app.clone());
     if let Err(error) = sync_runtime(&app) {
         let _ = app.emit("screenshot:error", error.to_string());
     }
 }
 
 fn sync_runtime(app: &AppHandle) -> Result<(), ManagerError> {
-    if !cfg!(windows) {
-        return Ok(());
-    }
     let service = app.state::<ScreenshotService>();
     if !service.settings().enabled {
         cancel_capture(app)?;

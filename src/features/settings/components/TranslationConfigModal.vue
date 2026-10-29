@@ -94,7 +94,7 @@
         </div>
       </div>
 
-      <div v-if="desktopStatus.supported !== false" class="translation-section">
+      <div class="translation-section">
         <div class="translation-section-header">
           <span class="translation-section-title">快捷键配置</span>
           <button
@@ -166,16 +166,11 @@
           {{ desktopStatus.error }}
         </p>
         <p class="translation-hint">
-          <template v-if="desktopStatus.supported === false">
-            当前平台支持软件内选中文字后右键翻译；跨应用取词与全局翻译快捷键暂不可用。
-          </template>
-          <template v-else>
           目前仅支持 Codex 模式。 按快捷键划词取词，或先复制再按
           <strong>{{
             modelValue.clipboardShortcut || "Ctrl+Alt+Shift+T"
           }}</strong>
           翻译剪贴板。
-          </template>
         </p>
       </div>
 

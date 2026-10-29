@@ -15,11 +15,11 @@
           <div class="screenshot-extension-heading">
             <h3 class="screenshot-extension-title">截图贴图</h3>
             <span class="screenshot-extension-status" aria-live="polite">
-              {{ ready ? (!supported ? "当前平台暂不支持" : enabled ? "已启动" : "已关闭") : "读取中…" }}
+              {{ ready ? (enabled ? "已启动" : "已关闭") : "读取中…" }}
             </span>
           </div>
           <p class="screenshot-extension-description">
-            {{ supported ? "支持区域截图、长截图、文字识别和桌面贴图，关闭后保留历史与配置。" : "当前平台可查看和导出已有截图记录；原生截图、快捷键和桌面贴图暂不可用。" }}
+            支持区域截图、长截图、文字识别和桌面贴图，关闭后保留历史与配置。
           </p>
         </div>
       </div>
@@ -35,7 +35,7 @@
         <button
           class="screenshot-extension-button"
           type="button"
-          :disabled="!ready || pending || !supported"
+          :disabled="!ready || pending"
           @click="openManager(true)"
         >
           <Settings :size="15" />配置
@@ -48,7 +48,7 @@
           aria-label="启用截图贴图"
           :aria-checked="enabled"
           :aria-busy="pending"
-          :disabled="!ready || pending || !supported"
+          :disabled="!ready || pending"
           @click="toggleEnabled"
         >
           <span class="screenshot-extension-switch-thumb"></span>
@@ -96,7 +96,6 @@ const ScreenshotView = defineAsyncComponent(
   () => import("@/features/screenshot/index.vue")
 )
 const enabled = ref(false)
-const supported = ref(true)
 const ready = ref(false)
 const pending = ref(false)
 const error = ref("")
@@ -112,8 +111,7 @@ async function loadStatus() {
   try {
     const settings = await screenshotApi.call("status")
     if (disposed || pending.value || request !== sequence) return
-    supported.value = settings.supported !== false
-    enabled.value = supported.value && settings.enabled
+    enabled.value = settings.enabled
     ready.value = true
   } catch (cause) {
     if (!disposed && request === sequence) error.value = String(cause)
@@ -121,7 +119,7 @@ async function loadStatus() {
 }
 
 async function toggleEnabled() {
-  if (!ready.value || pending.value || !supported.value) return
+  if (!ready.value || pending.value) return
   pending.value = true
   sequence++
   error.value = ""

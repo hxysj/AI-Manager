@@ -108,7 +108,11 @@ pub async fn clipboard_files() -> Result<Value, ManagerError> {
         return Ok(lan_share_response(json!(files)));
     }
     #[cfg(not(windows))]
-    Ok(lan_share_response(json!([])))
+    {
+        let files = tauri::async_runtime::spawn_blocking(crate::core::desktop::clipboard_files)
+            .await.map_err(|error| ManagerError::System(error.to_string()))??;
+        Ok(lan_share_response(json!(files)))
+    }
 }
 
 pub(super) async fn publish(

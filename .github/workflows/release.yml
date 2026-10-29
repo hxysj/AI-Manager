@@ -1,207 +1,130 @@
-name: 发布 Windows 安装包
+name: 发布多平台安装包
 
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: windows-latest
-
+  prepare:
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     steps:
-      - name: 拉取代码
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          fetch-depth: 0
+          node-version: 22
+      - name: 校验版本与发布说明
+        id: version
+        run: node scripts/release.mjs prepare
 
-      - name: 安装 Node.js
-        uses: actions/setup-node@v4
+  build:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
-
-      - name: 安装 Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: 启用 Rust 编译缓存
-        uses: mozilla-actions/sccache-action@v0.0.9
-
-      - name: 缓存 Rust 依赖和产物
-        uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          workspaces: |
-            src-tauri -> target
-
-      - name: 缓存 Tauri 打包工具
-        uses: actions/cache@v4
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: src-tauri/target/.tauri
-          key: ${{ runner.os }}-tauri-tools-${{ hashFiles('src-tauri/tauri.conf.json', 'package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-tauri-tools-
-
-      - name: 安装依赖
-        run: npm ci
-
-      - name: 检查版本与发布说明
-        id: release-version
-        shell: pwsh
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+      - name: 安装 Linux 原生依赖
+        if: runner.os == 'Linux'
         run: |
-          $package = Get-Content package.json -Raw | ConvertFrom-Json
-          $version = [string]$package.version
-          $packageLock = Get-Content package-lock.json -Raw | ConvertFrom-Json -AsHashtable
-          $tauriConfig = Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
-          $cargo = Get-Content src-tauri/Cargo.toml -Raw
-          $cargoLock = Get-Content src-tauri/Cargo.lock -Raw
-          $cargoVersion = [regex]::Match($cargo, '(?ms)^\[package\]\s*.*?^version\s*=\s*"([^"]+)"').Groups[1].Value
-          $cargoLockVersion = [regex]::Match($cargoLock, '(?m)^name = "monkey-thief"\r?\nversion = "([^"]+)"').Groups[1].Value
-          $versions = @(
-            [string]$packageLock.version
-            [string]$packageLock['packages']['']['version']
-            [string]$tauriConfig.version
-            $cargoVersion
-            $cargoLockVersion
-          )
-          if ($version -notmatch '^\d+\.\d+\.\d+$' -or @($versions | Where-Object { $_ -ne $version }).Count -gt 0) {
-            throw 'package.json、锁文件、Cargo.toml 与 Tauri 配置中的版本号必须一致。'
-          }
-
-          $notes = Get-Content build/release-notes.md -Raw
-          if ($notes -match '请在发布前删除此行' -or $notes.TrimStart() -notmatch "^## $([regex]::Escape($version)) 变更说明(?:\r?\n|$)") {
-            throw '请先将 build/release-notes.md 更新为当前版本的变更说明，再发布。'
-          }
-          $releaseTag = "v$version"
-          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne $releaseTag) {
-            throw "发布标签必须为 $releaseTag，当前为 $env:GITHUB_REF_NAME。"
-          }
-          "tag=$releaseTag" >> $env:GITHUB_OUTPUT
-
-      - name: 打包 Windows 安装程序
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file pkg-config libdbus-1-dev libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev patchelf libgbm-dev libclang-dev libpipewire-0.3-dev libxcb1-dev libxrandr-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev lsof xclip wl-clipboard
+      - run: npm ci
+      - name: 校验发布流程与前端
+        run: |
+          npm run test:platform
+          node scripts/test-settings.mjs
+          node scripts/test-screenshot-settings.mjs
+          node scripts/test-translation.mjs
+      - name: 校验 Rust 与跨平台基础行为
+        run: |
+          cargo check --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib cross_platform
+      - name: 构建安装包与更新签名
+        shell: bash
         env:
           CARGO_INCREMENTAL: 0
-          SCCACHE_GHA_ENABLED: "true"
-          RUSTC_WRAPPER: sccache
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run dist:win
-
-      - name: 规范安装包文件名
-        shell: pwsh
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          $bundleDir = 'src-tauri/target/release/bundle/nsis'
-          $targetName = 'Monkey-Thief-windows-setup.exe'
-          $targetPath = Join-Path $bundleDir $targetName
-          $installer = Get-ChildItem $bundleDir -Filter '*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $installer) {
-            throw '未找到 Windows NSIS 安装程序。'
-          }
-
-          $signature = Get-Item -LiteralPath "$($installer.FullName).sig" -ErrorAction SilentlyContinue
-          if (-not $signature) {
-            throw '未找到 Tauri 更新签名文件。'
-          }
-
-          $targetSignaturePath = "$targetPath.sig"
-          if ($installer.Name -ne $targetName) {
-            if (Test-Path $targetPath) {
-              Remove-Item -LiteralPath $targetPath -Force
-            }
-            Move-Item -LiteralPath $installer.FullName -Destination $targetPath
-            if (Test-Path $targetSignaturePath) {
-              Remove-Item -LiteralPath $targetSignaturePath -Force
-            }
-            Move-Item -LiteralPath $signature.FullName -Destination $targetSignaturePath
-          }
-
-      - name: 生成旧版 Electron 更新元数据
-        shell: pwsh
-        run: |
-          $bundleDir = 'src-tauri/target/release/bundle/nsis'
-          $installer = Get-ChildItem $bundleDir -Filter '*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $installer) {
-            throw '未找到 Windows NSIS 安装程序。'
-          }
-
-          $package = Get-Content package.json -Raw | ConvertFrom-Json
-          $version = [string]$package.version
-          $sha512 = [Convert]::ToBase64String([System.Security.Cryptography.SHA512]::HashData([System.IO.File]::ReadAllBytes($installer.FullName)))
-          $releaseDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-          $notes = Get-Content build/release-notes.md -Raw
-          $notes = $notes -replace "`r`n", "`n"
-          $notesLines = $notes.TrimEnd("`n").Split("`n")
-
-          $latest = @(
-            "version: $version"
-            'files:'
-            "  - url: $($installer.Name)"
-            "    sha512: $sha512"
-            "    size: $($installer.Length)"
-            "path: $($installer.Name)"
-            "sha512: $sha512"
-            'releaseNotes: |'
-          )
-
-          foreach ($line in $notesLines) {
-            $latest += "  $line"
-          }
-
-          $latest += "releaseDate: '$releaseDate'"
-          Set-Content -Path (Join-Path $bundleDir 'latest.yml') -Value ($latest -join "`n") -Encoding utf8
-
-      - name: 生成 Tauri 更新元数据
-        shell: pwsh
-        env:
-          RELEASE_TAG: ${{ steps.release-version.outputs.tag }}
-        run: |
-          $bundleDir = 'src-tauri/target/release/bundle/nsis'
-          $updatePackage = Get-ChildItem $bundleDir -Filter '*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $updatePackage) {
-            throw '未找到 Tauri NSIS 更新安装程序。'
-          }
-
-          $signatureFile = Get-Item -LiteralPath "$($updatePackage.FullName).sig" -ErrorAction SilentlyContinue
-          if (-not $signatureFile) {
-            throw '未找到 Tauri 更新签名文件。'
-          }
-
-          $package = Get-Content package.json -Raw | ConvertFrom-Json
-          $version = [string]$package.version
-          $releaseDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffZ')
-          $notes = (Get-Content build/release-notes.md -Raw).Trim()
-          $signature = (Get-Content $signatureFile.FullName -Raw).Trim()
-          $downloadUrl = "https://github.com/hxysj/AI-Manager/releases/download/$env:RELEASE_TAG/$($updatePackage.Name)"
-          $platform = @{
-            signature = $signature
-            url = $downloadUrl
-          }
-          $latest = @{
-            version = $version
-            notes = $notes
-            pub_date = $releaseDate
-            platforms = @{
-              'windows-x86_64' = $platform
-              'windows-x86_64-nsis' = $platform
-            }
-          }
-
-          $latest | ConvertTo-Json -Depth 6 | Set-Content -Path (Join-Path $bundleDir 'latest.json') -Encoding utf8
-
-      - name: 上传 GitHub Release
-        uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          for key in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!key}" ]; then unset "$key"; fi
+          done
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            config=$(node -e 'process.stdout.write(JSON.stringify({bundle:{macOS:{signingIdentity:process.env.APPLE_SIGNING_IDENTITY}}}))')
+            npx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config "$config"
+          else
+            npx tauri build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          fi
+          if [ "${{ runner.os }}" = Linux ]; then
+            for deb in src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb; do
+              if [ ! -f "$deb.sig" ]; then
+                node node_modules/@tauri-apps/cli/tauri.js signer sign "$deb"
+              fi
+            done
+          fi
+      - name: 整理当前平台产物
+        run: node scripts/release.mjs stage ${{ matrix.target }} src-tauri/target/${{ matrix.target }}/release/bundle release-assets
+      - uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ steps.release-version.outputs.tag }}
+          name: release-${{ matrix.target }}
+          path: release-assets/*
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: artifacts
+      - name: 合并所有平台更新清单
+        run: node scripts/release.mjs merge artifacts release-assets
+      - name: 发布 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
           target_commitish: ${{ github.sha }}
           body_path: build/release-notes.md
-          files: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/nsis/*.zip
-            src-tauri/target/release/bundle/nsis/latest.yml
-            src-tauri/target/release/bundle/nsis/latest.json
-            src-tauri/target/release/bundle/nsis/*.sig
+          files: release-assets/*

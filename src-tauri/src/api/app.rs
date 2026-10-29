@@ -335,10 +335,17 @@ pub async fn install_update(
 
     #[cfg(not(windows))]
     {
-        downloaded_update
-            .update
-            .install(&downloaded_update.bytes)
-            .map_err(|error| ManagerError::System(error.to_string()))?;
+        if let Err(error) = downloaded_update.update.install(&downloaded_update.bytes) {
+            let message = format!("安装更新失败，可重试：{error}");
+            let version = downloaded_update.update.version.clone();
+            *DOWNLOADED_UPDATE.lock().await = Some(downloaded_update);
+            emit_update_status(app, json!({
+                "phase": "downloaded", "message": message, "version": version,
+                "manual": true, "configured": true, "isDev": cfg!(debug_assertions),
+                "percent": 100
+            }))?;
+            return Err(ManagerError::System(message));
+        }
         app.restart()
     }
 }
@@ -368,8 +375,78 @@ pub async fn uninstall_without_trace(
 ) -> Result<Value, ManagerError> {
     #[cfg(not(windows))]
     {
-        let _ = (app, app_settings);
-        return Err(ManagerError::System("请通过系统卸载应用；用户数据目录可在设置中打开并自行清理".to_string()));
+        if cfg!(debug_assertions) {
+            return Err(ManagerError::System("开发环境不执行无痕卸载".into()));
+        }
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::io::Write;
+        let data = PathBuf::from(&app_settings.data_path).canonicalize()?;
+        let home = crate::core::paths::home_path().canonicalize()?;
+        if data.parent().is_none() || data == home || !data.join("workspace/storage").is_dir() {
+            return Err(ManagerError::System("数据目录不是有效的应用数据目录，已停止卸载".into()));
+        }
+        let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+        let executable = std::env::current_exe()?.canonicalize()?;
+        let remove_application: String;
+        #[cfg(target_os = "macos")]
+        {
+            let bundle = executable.ancestors().find(|path| path.extension().is_some_and(|ext| ext == "app"))
+                .ok_or_else(|| ManagerError::System("当前应用不在 .app 安装目录中".into()))?;
+            if bundle.starts_with(&data) || data.starts_with(bundle) {
+                return Err(ManagerError::System("安装目录与数据目录不能互相包含".into()));
+            }
+            // 由系统授权框申请 /Applications 的删除权限；参数先进行 shell 转义。
+            let command = format!("/bin/rm -rf -- {}", quote(&bundle.to_string_lossy()));
+            let applescript = format!("do shell script {} with administrator privileges",
+                serde_json::to_string(&command)?);
+            remove_application = format!("/usr/bin/osascript -e {}", quote(&applescript));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(image) = std::env::var_os("APPIMAGE").map(PathBuf::from) {
+                let image = image.canonicalize()?;
+                if !image.is_file() || !image.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("AppImage"))
+                    || image.starts_with(&data) {
+                    return Err(ManagerError::System("AppImage 安装路径无效".into()));
+                }
+                remove_application = format!("/bin/rm -f -- {}", quote(&image.to_string_lossy()));
+            } else {
+                let output = tokio::process::Command::new("dpkg-query")
+                    .args(["-S", &executable.to_string_lossy()]).output().await?;
+                let content = String::from_utf8_lossy(&output.stdout);
+                let package = content.lines().filter_map(|line| line.split_once(": "))
+                    .find(|(_, file)| Path::new(file) == executable)
+                    .map(|(package, _)| package).filter(|package| {
+                        package.split(':').next() == Some(env!("CARGO_PKG_NAME"))
+                    }).ok_or_else(|| ManagerError::System("未找到当前应用的 DEB 安装记录".into()))?;
+                if unsafe { libc::geteuid() } != 0 && !std::env::split_paths(
+                    &std::env::var_os("PATH").unwrap_or_default()).any(|dir| dir.join("pkexec").is_file()) {
+                    return Err(ManagerError::System("系统缺少 pkexec，无法打开卸载授权窗口，请安装 polkit".into()));
+                }
+                remove_application = format!("{} /usr/bin/dpkg --remove {}",
+                    if unsafe { libc::geteuid() } == 0 { "" } else { "pkexec" }, quote(package));
+            }
+        }
+        let _ = app.autolaunch().disable();
+        let script = std::env::temp_dir().join(format!("ai-manager-uninstall-{}.sh", uuid::Uuid::new_v4()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o700).open(&script)?;
+        // 先完成系统卸载，授权被取消时保留数据；只清理本应用拥有的子目录。
+        let body = format!(
+            "#!/bin/sh\nwhile kill -0 {} 2>/dev/null; do sleep 1; done\nif {}; then\n/bin/rm -rf -- {} {} {} {}\n/bin/rm -f -- {}\n/bin/rmdir -- {} 2>/dev/null || true\nfi\n/bin/rm -f -- \"$0\"\n",
+            std::process::id(), remove_application,
+            quote(&data.join("workspace").to_string_lossy()),
+            quote(&data.join("screenshots").to_string_lossy()),
+            quote(&data.join("local-backups").to_string_lossy()),
+            quote(&data.join("models").to_string_lossy()),
+            quote(&app_settings.settings_file_path), quote(&data.to_string_lossy()),
+        );
+        file.write_all(body.as_bytes())?;
+        drop(file);
+        std::process::Command::new("/bin/sh").arg(script)
+            .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null()).spawn()?;
+        app.exit(0);
+        Ok(json!(true))
     }
     #[cfg(windows)]
     {
@@ -384,8 +461,10 @@ pub async fn uninstall_without_trace(
     let uninstaller_path = find_app_uninstaller(install_directory).await?;
     let data_path = PathBuf::from(&app_settings.data_path).canonicalize()?;
 
-    if data_path.parent().is_none() {
-        return Err(ManagerError::System("数据目录不能是磁盘根目录".to_string()));
+    if data_path.parent().is_none()
+        || crate::core::paths::home_path().canonicalize().is_ok_and(|home| home == data_path)
+        || !data_path.join("workspace/storage").is_dir() {
+        return Err(ManagerError::System("数据目录不是有效的应用数据目录，已停止卸载".to_string()));
     }
 
     if uninstaller_path.starts_with(&data_path) {
@@ -410,9 +489,10 @@ pub async fn uninstall_without_trace(
             to_powershell_literal(&uninstaller_path.to_string_lossy())
         ),
         "Wait-Process -Id $processId".to_string(),
-        "Remove-Item -LiteralPath $dataPath -Recurse -Force".to_string(),
+        "$ownedPaths = @('workspace', 'screenshots', 'local-backups', 'models') | ForEach-Object { Join-Path $dataPath $_ }".to_string(),
+        "foreach ($ownedPath in $ownedPaths) { if (Test-Path -LiteralPath $ownedPath) { Remove-Item -LiteralPath $ownedPath -Recurse -Force } }".to_string(),
         "Remove-Item -LiteralPath $settingsPath -Force".to_string(),
-        "Start-Process -FilePath $uninstallerPath -ArgumentList '/S'".to_string(),
+        "Start-Process -FilePath $uninstallerPath -ArgumentList '/S' -WindowStyle Hidden".to_string(),
     ]
     .join("; ");
 

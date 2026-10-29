@@ -78,10 +78,6 @@ pub struct AgentSettings {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettings {
-    #[serde(default)]
-    pub platform: String,
-    #[serde(default)]
-    pub capabilities: Value,
     pub data_path: String,
     pub default_data_path: String,
     pub settings_file_path: String,
@@ -135,14 +131,6 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
     let translation = &input["agents"]["translation"];
 
     AppSettings {
-        platform: std::env::consts::OS.to_string(),
-        capabilities: json!({
-            "desktopCapture": cfg!(windows),
-            "desktopSelection": cfg!(windows),
-            "portMonitor": cfg!(windows),
-            "nativeUninstall": cfg!(windows),
-            "clipboardFiles": cfg!(windows)
-        }),
         data_path: resolve_portable_path(
             input
                 .get("dataPath")

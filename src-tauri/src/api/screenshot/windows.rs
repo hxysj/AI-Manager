@@ -699,7 +699,7 @@ pub fn read_clipboard() -> Result<Vec<DynamicImage>, ManagerError> {
     }
 }
 
-pub(super) fn cursor_in_rect(rect: Option<&CaptureRect>) -> bool {
+pub(super) fn cursor_in_rect(_app: &AppHandle, rect: Option<&CaptureRect>) -> bool {
     let Some(rect) = rect else {
         return false;
     };
@@ -711,7 +711,7 @@ pub(super) fn cursor_in_rect(rect: Option<&CaptureRect>) -> bool {
         && i64::from(cursor.y) < i64::from(rect.y) + i64::from(rect.height)
 }
 
-pub fn scroll_at(x: i32, y: i32, delta: i32) -> Result<(), ManagerError> {
+pub fn scroll_at(_app: &AppHandle, x: i32, y: i32, delta: i32) -> Result<(), ManagerError> {
     if delta == 0 {
         return Ok(());
     }
@@ -809,7 +809,7 @@ pub fn start_hotkeys(app: AppHandle) {
                             as u32
                             & WS_EX_TRANSPARENT
                             != 0;
-                        let interactive = cursor_in_rect(preview.as_ref());
+                        let interactive = cursor_in_rect(&app, preview.as_ref());
                         // 只有预览区接收点击，其他位置始终交给底层页面手动滚动。
                         if transparent == interactive {
                             let _ = window.set_ignore_cursor_events(!interactive);

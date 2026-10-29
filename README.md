@@ -1,12 +1,12 @@
 <div align="center">
   <img src="src/assets/ai-manager-logo.png" width="104" height="104" alt="Monkey Thief 图标" />
   <h1>Monkey Thief</h1>
-  <p>面向 Claude Code 与 Codex 的本地优先 Windows 桌面管理与创作工具。</p>
+  <p>面向 Claude Code 与 Codex 的本地优先桌面管理与创作工具，接入 Windows、macOS 与 Linux。</p>
   <p>
     <a href="https://github.com/hxysj/AI-Manager/releases/latest">
       <img src="https://img.shields.io/github/v/release/hxysj/AI-Manager?display_name=tag&sort=semver" alt="最新版本" />
     </a>
-    <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="支持平台：Windows" />
+    <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078D4" alt="目标平台：Windows、macOS、Linux" />
     <img src="https://img.shields.io/badge/Tauri-2-24C8DB" alt="Tauri 2" />
     <img src="https://img.shields.io/badge/Vue-3-42B883" alt="Vue 3" />
   </p>
@@ -22,7 +22,7 @@
 </div>
 
 > [!NOTE]
-> 当前桌面端、安装器和自动发布流程以 Windows 为目标平台，发布产物为 NSIS 安装包。
+> 已为全部模块接入跨平台代码和构建入口。当前本机完成的是 Windows 编译与自动测试；macOS/Linux 原生交互仍需在对应系统验收，Wayland 的桌面交互存在协议限制，详见文末“多平台说明”。
 
 ## 项目截图
 
@@ -86,15 +86,17 @@ Monkey Thief 采用本地优先设计。Provider、账号、配置索引和运�
 
 环境要求：
 
-- Windows 10 或 Windows 11
-- WebView2 Runtime
+- Windows 10/11 与 WebView2 Runtime，或 macOS，或带桌面环境的 Linux
 - 需要管理对应 CLI 时，请先安装 Claude Code 或 Codex
 
 安装步骤：
 
 1. 打开 [GitHub Releases](https://github.com/hxysj/AI-Manager/releases/latest)。
-2. 下载 `Monkey-Thief-windows-setup.exe`。
-3. 运行安装程序并启动 Monkey Thief。
+2. 按系统下载安装包：
+   - Windows：`Monkey-Thief-windows-setup.exe`。
+   - Apple Silicon：`Monkey-Thief-macos-aarch64.dmg`；Intel Mac：`Monkey-Thief-macos-x86_64.dmg`。
+   - Linux：`Monkey-Thief-linux-x86_64.AppImage` 或 `Monkey-Thief-linux-x86_64.deb`。
+3. Windows 运行安装程序；Mac 将 `.app` 拖入应用程序目录；Linux 安装 DEB，或为 AppImage 添加执行权限后运行。
 4. 首次启动后进入 `Settings > 目录`，确认数据目录和 CLI 配置目录。
 
 ### 从源码运行
@@ -103,7 +105,9 @@ Monkey Thief 采用本地优先设计。Provider、账号、配置索引和运�
 
 - Node.js 20 或更高版本
 - Rust stable 工具链
-- Microsoft C++ Build Tools、Windows SDK 与 WebView2 Runtime
+- Windows：Microsoft C++ Build Tools、Windows SDK 与 WebView2 Runtime
+- macOS：Xcode Command Line Tools
+- Linux：WebKitGTK 4.1、GTK/AppIndicator，以及 X11/Wayland、PipeWire、GBM、Clang 开发依赖；完整安装列表见 `.github/workflows/release.yml`
 
 ```powershell
 git clone https://github.com/hxysj/AI-Manager.git

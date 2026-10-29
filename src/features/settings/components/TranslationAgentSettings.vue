@@ -5,7 +5,7 @@
         <div class="translation-heading">
           <span data-emphasis>划词翻译</span>
           <span class="translation-hint"
-            >软件内选中文字后右键点击「翻译」；Windows 其他应用选中文字后按 Ctrl+Alt+T。修改后点击上方「保存设置」。</span
+            >软件内选中文字后右键点击「翻译」；其他桌面应用选中文字后按 Ctrl+Alt+T。修改后点击上方「保存设置」。</span
           >
         </div>
         <button class="translation-back" type="button" @click="$emit('back')">
@@ -81,7 +81,7 @@
         所选 Provider / 账号已删除或禁用，请重新选择。
       </p>
       <p class="translation-hint">
-        翻译固定使用低推理强度（low）。Windows 桌面取词仅在按快捷键时读取选区；
+        翻译固定使用低推理强度（low）。桌面取词仅在按快捷键时读取选区；
         不支持取词的应用可先复制，再按 Ctrl+Alt+Shift+T 翻译剪贴板。
         关闭翻译会注销全局快捷键，关闭结果窗口会释放窗口资源。
       </p>

@@ -8,7 +8,7 @@
         <h1>统一管理 AI CLI 的 Skills、Configs 与 Repo 挂载状态</h1>
         <p class="dashboard-view__summary">
           当前实现围绕文档定义的集中式 Skill Source、CLI 自动探测、Metadata
-          解析、 Registry 同步与 Windows junction 挂载展开。
+          解析、 Registry 同步与 系统目录链接挂载展开。
         </p>
       </div>
       <div class="dashboard-view__hero-actions">

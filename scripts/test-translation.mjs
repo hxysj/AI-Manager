@@ -73,7 +73,10 @@ new Function('require', 'module', 'exports', 'loadMonaco', transformSync(
   if (name === '@/api') return { translationApi: api }
   if (name === 'lucide-vue-next') {
     const icon = { render: () => vue.h('span') }
-    return { Copy: icon, Languages: icon, X: icon }
+    return Object.fromEntries([
+      'AlertCircle', 'Bot', 'Check', 'CheckCircle2', 'ChevronDown',
+      'Copy', 'Languages', 'Loader2', 'X'
+    ].map(name => [name, icon]))
   }
   return require(name)
 }, module, module.exports, async () => {
@@ -82,7 +85,12 @@ new Function('require', 'module', 'exports', 'loadMonaco', transformSync(
 })
 
 function node(type, text = '') {
-  return { type, text, children: [], parent: null, props: {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 440, height: 460 }) }
+  return {
+    type, text, children: [], parent: null, props: {},
+    // DOM 查询由真实组件调用，测试节点也需要提供对应接口。
+    querySelector() { return null },
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 440, height: 460 })
+  }
 }
 const body = node('body')
 const renderer = vue.createRenderer({

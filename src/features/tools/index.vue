@@ -275,10 +275,6 @@ const props = defineProps({
     type: Array,
     default: () => []
   },
-  capabilities: {
-    type: Object,
-    default: () => ({})
-  },
   repos: {
     type: Array,
     default: () => []

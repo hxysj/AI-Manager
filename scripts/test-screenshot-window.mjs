@@ -27,7 +27,7 @@ assert.match(
   /script-src[^;]+\bwasm-unsafe-eval\b/,
   "OCR 的 WASM 编译必须被页面安全策略允许"
 )
-const filename = "src/features/screenshot/components/ScreenshotWindow.vue"
+const filename = "src/features/screenshot/components/ScreenshotWindow/index.vue"
 const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
   filename
 })
@@ -211,7 +211,7 @@ const localRequire = (name) => {
     }
   if (name === "@/api/modules/system")
     return { systemApi: { selectFile: async () => null } }
-  if (name === "./ImageEditor.vue")
+  if (name === "@/features/screenshot/components/ImageEditor/index.vue" || name === "../ImageEditor/index.vue")
     return {
       __esModule: true,
       default: { render: () => vue.h("div", { class: "editor" }) }
@@ -1718,7 +1718,7 @@ assert.equal(extensionUnsubscribed, 1)
 
 let editorPaints = 0
 const Editor = await loadTestComponent(
-  "src/features/screenshot/components/ImageEditor.vue",
+  "src/features/screenshot/components/ImageEditor/index.vue",
   {
     "../renderer": {
       loadImage: async () => ({ naturalWidth: 800, naturalHeight: 600 }),

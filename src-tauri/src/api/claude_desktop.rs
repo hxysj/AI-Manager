@@ -47,7 +47,10 @@ impl DesktopPaths {
             "windows" => local
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| home.join("AppData/Local")),
-            "macos" => home.join("Library/Application Support"),
+            "macos" => local
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| home.join("Library/Application Support")),
+            "linux" => local.map(Path::to_path_buf).unwrap_or_else(|| home.join(".config")),
             _ => return None,
         };
         let mut normal = root.join("Claude");
@@ -97,14 +100,19 @@ impl DesktopPaths {
     }
 
     fn current() -> Result<Option<Self>, ManagerError> {
-        if !["windows", "macos"].contains(&std::env::consts::OS) {
+        if !["windows", "macos", "linux"].contains(&std::env::consts::OS) {
             return Ok(None);
         }
         let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
             .filter(|home| !home.is_empty())
             .map(PathBuf::from)
             .ok_or_else(|| error("无法确定用户目录"))?;
-        let local = std::env::var_os("LOCALAPPDATA")
+        let local = std::env::var_os("AI_MANAGER_CLAUDE_DESKTOP_CONFIG_HOME")
+            .or_else(|| match std::env::consts::OS {
+                "windows" => std::env::var_os("LOCALAPPDATA"),
+                "linux" => std::env::var_os("XDG_CONFIG_HOME"),
+                _ => None,
+            })
             .filter(|local| !local.is_empty())
             .map(PathBuf::from);
         Ok(Self::resolve(std::env::consts::OS, &home, local.as_deref()))
@@ -690,7 +698,7 @@ impl DesktopData {
             }
         });
         if paths.is_none() {
-            warnings.push("仅支持 Windows 和 macOS 写入 Claude Desktop 配置".to_string());
+            warnings.push("无法确定 Claude Desktop 配置目录".to_string());
         }
         if provider.is_none() && !self.current_id().is_empty() {
             warnings.push("当前供应商记录已丢失，请重新选择供应商".to_string());
@@ -1795,7 +1803,8 @@ mod tests {
     fn platform_paths_and_windows_variants_are_independent() {
         let fixture = Fixture::new();
         let home = &fixture.root;
-        assert!(DesktopPaths::resolve("linux", home, None).is_none());
+        assert_eq!(DesktopPaths::resolve("linux", home, None).unwrap().normal,
+            home.join(".config/Claude/claude_desktop_config.json"));
         let mac = DesktopPaths::resolve("macos", home, None).unwrap();
         assert_eq!(
             mac.normal,
@@ -1805,6 +1814,12 @@ mod tests {
             mac.meta,
             home.join("Library/Application Support/Claude-3p/configLibrary/_meta.json")
         );
+        for platform in ["macos", "linux"] {
+            assert_eq!(
+                DesktopPaths::resolve(platform, home, Some(&home.join("custom"))).unwrap().normal,
+                home.join("custom/Claude/claude_desktop_config.json")
+            );
+        }
         let windows = DesktopPaths::resolve("windows", home, None).unwrap();
         assert_eq!(
             windows.normal,

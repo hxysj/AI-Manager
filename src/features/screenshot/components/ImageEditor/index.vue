@@ -433,7 +433,7 @@ async function output(action) {
 
 function textKeydown(event) {
   if (event.isComposing) return
-  if (event.key === "Enter" && event.ctrlKey) {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault()
     commitText()
   }
@@ -451,11 +451,11 @@ function keydown(event) {
     ["INPUT", "TEXTAREA", "SELECT"].includes(event.target.tagName)
   )
     return
-  if (event.ctrlKey && event.key.toLowerCase() === "z") {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
     event.preventDefault()
     event.shiftKey ? redo() : undo()
   }
-  if (event.ctrlKey && event.key.toLowerCase() === "y") {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
     event.preventDefault()
     redo()
   }

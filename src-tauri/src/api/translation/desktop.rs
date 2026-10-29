@@ -7,10 +7,14 @@ use tauri::{
 
 #[cfg(windows)]
 mod windows;
+#[cfg(unix)]
+mod unix;
 
 #[derive(Clone, Default)]
 pub struct DesktopTranslator {
     inner: Arc<Mutex<DesktopState>>,
+    #[cfg(unix)]
+    started: Arc<std::sync::OnceLock<()>>,
     #[cfg(windows)]
     wake: Arc<std::sync::OnceLock<std::sync::mpsc::SyncSender<()>>>,
 }
@@ -46,6 +50,8 @@ pub fn sync(app: &AppHandle, settings: &TranslationAgentSettings) {
             state.hotkey_error.clear();
         }
     }
+    #[cfg(unix)]
+    service.started.get_or_init(|| unix::start(app.clone()));
     #[cfg(windows)]
     {
         if settings.enabled {
@@ -74,7 +80,7 @@ pub fn dispatch(
         "status" => {
             let state = service.inner.lock().unwrap();
             Ok(
-                json!({ "supported": cfg!(windows), "enabled": state.enabled, "error": state.hotkey_error }),
+                json!({ "supported": true, "enabled": state.enabled, "error": state.hotkey_error }),
             )
         }
         "ready" => {
@@ -159,7 +165,6 @@ fn checked_text(text: String, shortcut: &str, clipboard_shortcut: &str) -> Resul
     Ok(text)
 }
 
-#[cfg(windows)]
 fn show_selection(app: &AppHandle, result: Result<String, String>, x: i32, y: i32) {
     let service = app.state::<DesktopTranslator>();
     let (shortcut, clipboard_shortcut) = {
