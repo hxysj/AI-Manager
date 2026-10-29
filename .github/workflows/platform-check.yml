@@ -1,0 +1,65 @@
+name: 多平台兼容性校验
+
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "scripts/**"
+      - "build/**"
+      - "package*.json"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.target }}
+      - name: 安装 Linux 原生依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential pkg-config libdbus-1-dev libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev libgbm-dev libclang-dev libpipewire-0.3-dev libxcb1-dev libxrandr-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev lsof xclip wl-clipboard
+      - run: npm ci
+      - name: 校验前端和发布清单
+        run: |
+          npm run test:platform
+          node scripts/test-settings.mjs
+          node scripts/test-screenshot-settings.mjs
+          node scripts/test-screenshot-rectangles.mjs
+          node scripts/test-translation.mjs
+          npm run build:renderer
+      - name: 校验原生代码与平台行为
+        run: |
+          cargo check --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib cross_platform
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib platform_paths_and_windows_variants_are_independent
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib api::claude_desktop_runtime::tests
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib api::screenshot::tests

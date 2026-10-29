@@ -65,11 +65,15 @@ jobs:
           npm run test:platform
           node scripts/test-settings.mjs
           node scripts/test-screenshot-settings.mjs
+          node scripts/test-screenshot-rectangles.mjs
           node scripts/test-translation.mjs
       - name: 校验 Rust 与跨平台基础行为
         run: |
           cargo check --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib cross_platform
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib platform_paths_and_windows_variants_are_independent
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib api::claude_desktop_runtime::tests
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib api::screenshot::tests
       - name: 构建安装包与更新签名
         shell: bash
         env:

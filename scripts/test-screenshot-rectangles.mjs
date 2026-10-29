@@ -406,4 +406,47 @@ abandoned.resolve(candidates)
 await flush()
 assert.deepEqual(captureState.pageRegions, [], '卸载后的检测结果不能回填')
 assert.ok(detectorDisposals >= detections.length)
+
+// 使用现有真实组件处理函数验证 Ctrl 和 Command，避免只校验源码字符串。
+globalThis.location.search = '?mode=pin&id=keyboard-test'
+const pinState = vue.proxyRefs(module.exports.default.setup({}, { expose() {} }))
+for (const modifier of ['ctrlKey', 'metaKey']) {
+  await pinState.keydown(keyEvent('c', { [modifier]: true }))
+  assert.deepEqual(requests.at(-1), {
+    action: 'copy', payload: { id: 'keyboard-test' }
+  })
+}
+const beforeInput = requests.length
+await pinState.keydown(keyEvent('c', { metaKey: true, target: { tagName: 'TEXTAREA' } }))
+assert.equal(requests.length, beforeInput, '文字输入框保留系统复制行为')
+
+const editorFile = 'src/features/screenshot/components/ImageEditor/index.vue'
+const editorDescriptor = parse(readFileSync(editorFile, 'utf8'), { filename: editorFile }).descriptor
+const editorScript = compileScript(editorDescriptor, { id: 'keyboard-editor', genDefaultAs: '__component' })
+const editorModule = { exports: {} }
+new Function('require', 'module', 'exports', transformSync(
+  `${editorScript.content}\nexport default __component`, { format: 'cjs' }
+).code)(name => {
+  if (name === 'vue') return { ...imports.vue, watch() {} }
+  if (name === '../../renderer') return imports[name]
+  if (name.endsWith('.vue')) return { __esModule: true, default: {} }
+  throw new Error(`测试中存在未处理的依赖：${name}`)
+}, editorModule, editorModule.exports)
+const editorState = vue.proxyRefs(editorModule.exports.default.setup(
+  { source: '', initialAnnotations: [], busy: false }, { expose() {}, emit() {} }
+))
+for (const modifier of ['ctrlKey', 'metaKey']) {
+  editorState.annotations = [{ type: 'pen' }]
+  editorState.undoStack = [[]]
+  editorState.redoStack = []
+  editorState.keydown(keyEvent('z', { [modifier]: true }))
+  assert.deepEqual(editorState.annotations, [])
+  editorState.keydown(keyEvent('z', { [modifier]: true, shiftKey: true }))
+  assert.deepEqual(editorState.annotations, [{ type: 'pen' }])
+  editorState.textPosition = { x: 1, y: 2 }
+  editorState.text = '跨平台输入'
+  editorState.textKeydown(keyEvent('Enter', { [modifier]: true }))
+  assert.equal(editorState.annotations.at(-1).text, '跨平台输入')
+}
 console.log(`截图矩形检测验证通过；4K 合成图 ${largeRegions.length} 个矩形，耗时 ${largeDuration.toFixed(1)} ms`)
+console.log('截图 Ctrl/Command 复制、撤销、重做与文字确认验证通过')

@@ -1574,6 +1574,8 @@ pub async fn screenshot_region_frame(
     #[cfg(unix)]
     if let Some(window) = &capture_window {
         window.hide().map_err(|error| error.to_string())?;
+        // 等待合成器提交隐藏状态，避免把上一帧覆盖层截入长图。
+        tokio::time::sleep(std::time::Duration::from_millis(35)).await;
     }
     let image = tauri::async_runtime::spawn_blocking(move || {
         native::capture(&monitors, left, top, width, height)
@@ -1639,6 +1641,7 @@ pub async fn begin_capture(
         #[cfg(unix)]
         if let Some(window) = app.get_webview_window("screenshot-capture") {
             window.hide().map_err(failure)?;
+            tokio::time::sleep(std::time::Duration::from_millis(35)).await;
         }
         let monitors = app.available_monitors().map_err(failure)?;
         let (left, top, width, height) = capture_bounds(&monitors)?;

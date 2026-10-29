@@ -197,7 +197,13 @@ mod tests {
             .unwrap()
             .contains("第三方模式"));
         assert_eq!(target("linux", home, None).unwrap()["configPath"],
-            json!(home.join(".config/Claude")));
+            json!(home.join(".config").join("Claude")));
+        for platform in ["macos", "linux"] {
+            assert_eq!(
+                target(platform, home, Some(Path::new("/custom"))).unwrap()["configPath"],
+                json!(Path::new("/custom").join("Claude"))
+            );
+        }
         let mac = target("macos", home, None).unwrap();
         assert_eq!(mac["sessionPaths"].as_array().unwrap().len(), 4);
     }

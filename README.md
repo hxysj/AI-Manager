@@ -92,7 +92,7 @@ Monkey Thief 采用本地优先设计。Provider、账号、配置索引和运�
 安装步骤：
 
 1. 打开 [GitHub Releases](https://github.com/hxysj/AI-Manager/releases/latest)。
-2. 按系统下载安装包：
+2. 按系统下载对应版本已发布的安装包。多平台构建产物采用以下命名，发布页尚未出现的文件需要先从源码构建：
    - Windows：`Monkey-Thief-windows-setup.exe`。
    - Apple Silicon：`Monkey-Thief-macos-aarch64.dmg`；Intel Mac：`Monkey-Thief-macos-x86_64.dmg`。
    - Linux：`Monkey-Thief-linux-x86_64.AppImage` 或 `Monkey-Thief-linux-x86_64.deb`。
@@ -118,13 +118,18 @@ npm run dev
 
 Tauri 开发窗口默认使用 `http://127.0.0.1:13134` 作为前端开发服务。如果该端口已被占用，启动器会自动顺延到下一个可用端口。仅调试界面时可以运行 `npm run dev:renderer`，它也会从 13134 开始自动顺延；依赖 Tauri IPC 的功能必须通过 `npm run dev` 使用。
 
-构建 Windows NSIS 安装包：
+在对应系统上构建安装包：
 
-```powershell
+```sh
+# Windows：NSIS
 npm run dist:win
+# macOS：APP 与 DMG
+npm run dist:mac
+# Linux：AppImage 与 DEB
+npm run dist:linux
 ```
 
-安装包输出到 `src-tauri/target/release/bundle/nsis/`。
+安装包分别输出到 `src-tauri/target/release/bundle/` 下的 `nsis/`、`macos/`、`dmg/`、`appimage/` 和 `deb/`。发布工作流同时构建 Windows x64、Apple Silicon、Intel Mac 和 Linux x64，收齐安装包和更新签名后才生成统一的 `latest.json`。
 
 ## 快速开始
 
@@ -215,7 +220,7 @@ AI-Manager/
 ├─ build/                     # 图标、NSIS Hooks 与发布说明
 ├─ assets/image-prompts/      # 内置图片提示词库
 ├─ scripts/                   # 构建辅助脚本
-└─ .github/workflows/         # Windows Release 自动发布流程
+└─ .github/workflows/         # 多平台校验和 Release 自动发布流程
 ```
 
 ## 支持的 AI 工具
@@ -237,11 +242,11 @@ Google 账号以 Codex Provider 的形式接入：本机网关将 Codex Response
 
 打开 `Settings > 目录`：
 
-- **Data 存放位置**：默认是 `D:\ai-manager-data`，修改后重启生效。
+- **Data 存放位置**：Windows 首次启动优先选择可写的 `D:\ai-manager-data`；不可用时按盘符检查其他本地固定磁盘，再回退到用户主目录。macOS 和 Linux 默认为 `~/ai-manager-data`。找到已有设置后继续使用已保存的目录，新增磁盘不会迁移现有数据；手动修改后重启生效。
 - **Claude 配置目录**：通常由应用自动检测，也可以手动选择 Claude Code 的全局配置目录。
 - **Codex 配置目录**：通常由应用自动检测，也可以手动选择 Codex 的全局配置目录。
 
-主要业务数据位于：
+主要业务数据位于所配置的 Data 目录，以下是 Windows 示例：
 
 ```text
 D:\ai-manager-data\
@@ -312,14 +317,33 @@ Claude Desktop 的“导入”先展示 Claude Code 供应商预览，支持搜�
 - 矩形、椭圆、箭头、画笔、文字和马赛克共用像素渲染器；`Ctrl+Z` 撤销，`Ctrl+Shift+Z` / `Ctrl+Y` 重做，`Enter` 复制结果。文字用 `Ctrl+Enter` 完成输入。
 - 可复制图片、保存 PNG、保留到本地历史或生成无边框置顶贴图；支持打开 PNG/JPEG/WebP 和读取剪贴板图片、本地图片文件。
 - 贴图按住并移动后拖动、滚轮围绕鼠标缩放、右键在鼠标位置打开菜单；双击移除屏幕贴图但保留截图历史。隐藏保留打开状态；关闭后可从历史恢复；删除历史会同时删除图片和贴图。
-- 默认快捷键为 `Ctrl+Alt+A` 截图、`Ctrl+Alt+P` 剪贴板贴图、`Ctrl+Alt+H` 统一显隐、`Ctrl+Alt+R` 取消鼠标穿透。四组快捷键均可在截图设置中单独修改；冲突会显示在工具页，托盘始终提供取消穿透入口。
+- 默认快捷键为 `Ctrl+F1` 截屏并复制、`Shift+F1` 自定义截屏、`F3` 剪贴板贴图、`Shift+F3` 统一显隐、`Ctrl+F3` 切换贴图组、`Ctrl+Alt+R` 取消鼠标穿透、`Ctrl+Alt+F1` 长截图。可在截图设置中单独修改；冲突会显示在工具页，托盘始终提供取消穿透入口。Mac 的图片复制、撤销和重做也支持 Command。
 - 截图窗口预加载并复用，不加载主界面业务依赖；截图准备完成后才显示透明选区窗口。区域贴图保留原始屏幕坐标和像素尺寸，不再自动缩小或移至左上角。
 - 选区底部提供浅色紧凑工具栏：矩形、椭圆、直线、箭头、画笔、荧光笔、马赛克、文字、橡皮擦、撤销/重做、取消、贴图、保存 PNG 和复制；颜色和线宽在工具选项中调整。
 - 点击功能扩展卡片的「配置」直接打开截图设置弹框，可录制快捷键、设置历史上限（1–500 张，默认 50）、控制全局快捷键和启动恢复；「截图记录」独立展示截图操作和历史，详情内不再放置配置按钮。编辑设置期间暂时停用截图快捷键，避免录制时误触发。
 - OCR 默认使用内置模型在本地识别，无需配置服务商；识别期间显示 loading。在截图设置中开启「启用大模型 OCR」后，可选择已有的 Codex Provider 或官方账号，并选择或输入支持图片识别的模型；截图会发送至所选服务商，关闭后恢复内置识别。
 - 设置、原图、标注、输出和缩略图保存在所配置数据目录的 `screenshots/` 下。全部历史（含贴图）按设置上限保留，新增图片、启动或降低上限时自动删除最旧的超限记录及文件，并关闭对应贴图；普通历史另有 512 MiB、30 天限制（至少保留最新一张普通截图）。同一目录由一个应用实例持有，避免并发覆盖。
 
-原生桌面捕获和图片剪贴板当前面向 Windows。混合 DPI、多屏拼接、焦点保持、跨应用剪贴板及强杀恢复需要结合实际显示器和目标应用验收；本实现未宣称完成 Snipaste 全功能兼容。窗口吸附、分组和滚动截图不在当前版本范围内。
+原生桌面捕获、图片剪贴板、贴图分组和长截图已接入 Windows、macOS 和 Linux 的系统实现。混合 DPI、多屏拼接、焦点保持、跨应用剪贴板及强杀恢复需要结合实际显示器和目标应用验收；macOS 与 Linux 的原生交互仍待实机验收，Wayland 的限制见下文。
+
+### 多平台说明
+
+各平台保留完整功能入口：Provider、Runtime、本地代理、账号、Skills、Rules、Sessions、Usage、Git、图片工作台、快传、备份和设置继续复用同一套业务逻辑；桌面输入、截图、剪贴板、端口管理、系统代理、终端和卸载通过系统适配实现。
+
+| 系统 | 桌面功能所需环境 |
+| --- | --- |
+| Windows | WebView2；保留现有原生快捷键、截图和进程管理实现。 |
+| macOS | 在系统设置中允许屏幕录制与辅助功能；通过 System Events 取词时还需允许自动化。发布时可通过 Apple 签名与公证配置生成正式分发包，未配置时为临时签名。 |
+| Linux X11 | 桌面会话、`lsof`、`xclip`，以及 GTK/WebKitGTK/AppIndicator、X11、PipeWire 等运行库。DEB 会声明额外工具依赖；AppImage 用户需自行安装桌面工具。 |
+| Linux Wayland | `xdg-desktop-portal`、与桌面环境匹配的门户后端和 `wl-clipboard`。快捷键、桌面捕获和输入需要门户授权；桌面环境需提供相应接口。 |
+
+Wayland 下的原生窗口/控件枚举、跨屏绝对定位、置顶及鼠标穿透受合成器支持范围影响；当前屏幕枚举仍依赖 XWayland，纯 Wayland 会话尚未覆盖。长截图连续采集可能重复请求授权，当前尚未完成与 X11 等价的交互验收。长截图时可再次按长截图组合键结束；macOS/X11 也可按 Esc。智能选区继续支持画面矩形检测；Unix 目前未接入与 Windows UIAutomation 相同的原生控件层级识别。需要完整桌面交互的 Linux 用户目前应使用 X11 会话。
+
+Runtime 启动在 Mac 使用 Terminal，在 Linux 自动查找常见桌面终端；可通过 `AI_MANAGER_TERMINAL` 指定终端可执行文件路径。应用启动时从登录 shell 读取 PATH，以识别通过用户环境安装的 Node、Git 和 CLI。使用本地翻译辅助服务时仍需安装 Node.js。
+
+Claude Desktop 默认配置父目录分别为 Windows 的 `%LOCALAPPDATA%`、Mac 的 `~/Library/Application Support`、Linux 的 `$XDG_CONFIG_HOME` 或 `~/.config`。可通过 `AI_MANAGER_CLAUDE_DESKTOP_CONFIG_HOME` 指定父目录，其下应包含 `Claude` 或 `Claude-3p`。Linux 适配要求客户端使用同样的配置、会话及 Skills 格式，不代表任意 Linux 客户端都兼容。
+
+卸载功能识别 Windows 安装器、Mac `.app`、Linux AppImage 或本项目 DEB；开发环境不执行卸载。系统卸载授权取消时保留用户数据；清理范围限于应用拥有的数据子目录与设置文件。更新与卸载需要在对应系统上的实际安装包中验收。
 
 ### 全局字号
 
@@ -401,7 +425,8 @@ Data 目录属于启动配置，保存后需要重启 Monkey Thief。重启前�
 - [x] API Key 使用状态与失败统计（逐 Key 归属）
 - [ ] 更细粒度的备份选择和恢复策略
 - [ ] Gemini CLI 集成
-- [ ] macOS 与 Linux 的构建和兼容性验证
+- [x] macOS 与 Linux 原生适配入口、安装包配置与发布矩阵
+- [ ] macOS / Linux 实机全模块验收与 Wayland 桌面交互补齐
 - [ ] 补充场景化使用文档
 
 > [!NOTE]

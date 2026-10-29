@@ -23,10 +23,10 @@ static CLI_INFO_CACHE: OnceLock<Mutex<HashMap<String, (String, String)>>> = Once
 pub fn initialize_cli_path() {
     #[cfg(unix)]
     {
-        // 桌面图标启动时补入登录 shell 的 PATH，沿用用户的 Node/Git/CLI 安装配置。
+        // 同时读取登录和交互配置，覆盖将 Node/Git/CLI PATH 写在 .zshrc 的安装方式。
         let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
         let output = Command::new(shell)
-            .args(["-lc", "printf '\\000%s\\000' \"$PATH\""])
+            .args(["-ilc", "printf '\\000%s\\000' \"$PATH\""])
             .output();
         if let Ok(output) = output {
             if output.status.success() {

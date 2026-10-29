@@ -23,14 +23,18 @@ pub fn clipboard<T>(
 
 pub fn clipboard_files() -> Result<Vec<String>, ManagerError> {
     clipboard(|context| context.get_files()).map(|files| {
-        files.into_iter().filter_map(|file| {
-            let path = if file.starts_with("file:") {
-                url::Url::parse(&file).ok()?.to_file_path().ok()?
-            } else {
-                std::path::PathBuf::from(file)
-            };
-            path.is_file().then(|| path.to_string_lossy().into_owned())
-        }).take(100).collect()
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let path = if file.starts_with("file:") {
+                    url::Url::parse(&file).ok()?.to_file_path().ok()?
+                } else {
+                    std::path::PathBuf::from(file)
+                };
+                path.is_file().then(|| path.to_string_lossy().into_owned())
+            })
+            .take(100)
+            .collect()
     })
 }
 
@@ -73,14 +77,22 @@ fn input(action: Input) -> Result<(i32, i32), ManagerError> {
                     match action {
                         Input::Cursor => {}
                         Input::Copy => {
-                            let modifier = if cfg!(target_os = "macos") { Key::Meta } else { Key::Control };
-                            enigo.key(modifier, Direction::Press).map_err(|error| error.to_string())?;
+                            let modifier = if cfg!(target_os = "macos") {
+                                Key::Meta
+                            } else {
+                                Key::Control
+                            };
+                            enigo
+                                .key(modifier, Direction::Press)
+                                .map_err(|error| error.to_string())?;
                             let result = enigo.key(Key::Unicode('c'), Direction::Click);
                             let release = enigo.key(modifier, Direction::Release);
                             result.and(release).map_err(|error| error.to_string())?;
                         }
                         Input::Scroll(x, y, delta) => {
-                            enigo.move_mouse(x, y, Coordinate::Abs).map_err(|error| error.to_string())?;
+                            enigo
+                                .move_mouse(x, y, Coordinate::Abs)
+                                .map_err(|error| error.to_string())?;
                             let result = enigo.scroll(-delta.signum() * 3, enigo::Axis::Vertical);
                             let restore = enigo.move_mouse(cursor.0, cursor.1, Coordinate::Abs);
                             result.and(restore).map_err(|error| error.to_string())?;
@@ -100,7 +112,9 @@ fn input(action: Input) -> Result<(i32, i32), ManagerError> {
 
 pub fn cursor_position() -> Result<(i32, i32), ManagerError> {
     // Wayland 不提供全局光标查询；弹窗由调用方定位到当前显示器。
-    if is_wayland() { return Err(failure("当前桌面不提供全局光标坐标")); }
+    if is_wayland() {
+        return Err(failure("当前桌面不提供全局光标坐标"));
+    }
     input(Input::Cursor)
 }
 
@@ -108,19 +122,57 @@ pub fn physical_cursor_position(app: &AppHandle) -> Result<(i32, i32), ManagerEr
     let (x, y) = cursor_position()?;
     if cfg!(target_os = "macos") {
         let screen = xcap::Monitor::from_point(x, y).map_err(failure)?;
-        if let Some(monitor) = app.available_monitors().map_err(failure)?
-            .into_iter().find(|monitor| monitor.name() == screen.name().ok().as_ref()) {
+        if let Some(monitor) = app
+            .available_monitors()
+            .map_err(failure)?
+            .into_iter()
+            .find(|monitor| monitor_matches(monitor, &screen))
+        {
             return Ok((
-                monitor.position().x + ((x - screen.x().map_err(failure)?) as f64 * monitor.scale_factor()).round() as i32,
-                monitor.position().y + ((y - screen.y().map_err(failure)?) as f64 * monitor.scale_factor()).round() as i32,
+                monitor.position().x
+                    + ((x - screen.x().map_err(failure)?) as f64 * monitor.scale_factor()).round()
+                        as i32,
+                monitor.position().y
+                    + ((y - screen.y().map_err(failure)?) as f64 * monitor.scale_factor()).round()
+                        as i32,
             ));
         }
+        return Err(failure("无法匹配光标所在显示器的物理边界"));
     }
     Ok((x, y))
 }
 
+pub fn monitor_matches(monitor: &tauri::Monitor, screen: &xcap::Monitor) -> bool {
+    // Tauri 与 xcap 的屏幕名称格式不同，用物理边界匹配，避免同型号双屏错配。
+    let Ok(scale) = screen.scale_factor().map(f64::from) else {
+        return false;
+    };
+    let Ok(x) = screen.x() else {
+        return false;
+    };
+    let Ok(y) = screen.y() else {
+        return false;
+    };
+    let Ok(width) = screen.width() else {
+        return false;
+    };
+    let Ok(height) = screen.height() else {
+        return false;
+    };
+    [
+        (f64::from(monitor.position().x), f64::from(x) * scale),
+        (f64::from(monitor.position().y), f64::from(y) * scale),
+        (f64::from(monitor.size().width), f64::from(width) * scale),
+        (f64::from(monitor.size().height), f64::from(height) * scale),
+    ]
+    .into_iter()
+    .all(|(actual, expected)| (actual - expected).abs() <= 2.0)
+}
+
 pub fn scroll_at(x: i32, y: i32, delta: i32) -> Result<(), ManagerError> {
-    if delta != 0 { input(Input::Scroll(x, y, delta))?; }
+    if delta != 0 {
+        input(Input::Scroll(x, y, delta))?;
+    }
     Ok(())
 }
 
@@ -131,14 +183,19 @@ pub fn selected_text() -> Result<String, ManagerError> {
             .args(["-e", "tell application \"System Events\" to tell first application process whose frontmost is true to get value of attribute \"AXSelectedText\" of (value of attribute \"AXFocusedUIElement\")"])
             .output()?;
         if output.status.success() {
-            let text = String::from_utf8_lossy(&output.stdout).trim_end_matches('\n').to_string();
-            if !text.trim().is_empty() { return Ok(text); }
+            let text = String::from_utf8_lossy(&output.stdout)
+                .trim_end_matches('\n')
+                .to_string();
+            if !text.trim().is_empty() {
+                return Ok(text);
+            }
         }
     }
     #[cfg(target_os = "linux")]
     {
         // PRIMARY 是选区而非普通剪贴板，读取它不会破坏用户之前复制的内容。
-        let mut command = std::process::Command::new(if is_wayland() { "wl-paste" } else { "xclip" });
+        let mut command =
+            std::process::Command::new(if is_wayland() { "wl-paste" } else { "xclip" });
         command.args(if is_wayland() {
             vec!["--primary", "--no-newline"]
         } else {
@@ -151,21 +208,29 @@ pub fn selected_text() -> Result<String, ManagerError> {
         }
     }
     // 应用未公开选区时，通过系统复制操作取词，超时不使用旧剪贴板冒充选区。
-    let before = clipboard(|context| context.get(&[
-        clipboard_rs::ContentFormat::Text, clipboard_rs::ContentFormat::Rtf,
-        clipboard_rs::ContentFormat::Html, clipboard_rs::ContentFormat::Image,
-        clipboard_rs::ContentFormat::Files,
-    ]))?;
+    let before = clipboard(|context| {
+        context.get(&[
+            clipboard_rs::ContentFormat::Text,
+            clipboard_rs::ContentFormat::Rtf,
+            clipboard_rs::ContentFormat::Html,
+            clipboard_rs::ContentFormat::Image,
+            clipboard_rs::ContentFormat::Files,
+        ])
+    })?;
     clipboard(|context| context.clear())?;
     let result = (|| {
         input(Input::Copy)?;
         for _ in 0..20 {
             std::thread::sleep(std::time::Duration::from_millis(50));
             if let Ok(text) = clipboard(|context| context.get_text()) {
-                if !text.is_empty() { return Ok(text); }
+                if !text.is_empty() {
+                    return Ok(text);
+                }
             }
         }
-        Err(failure("未能复制所选文字，请确认目标应用允许复制或使用剪贴板翻译快捷键"))
+        Err(failure(
+            "未能复制所选文字，请确认目标应用允许复制或使用剪贴板翻译快捷键",
+        ))
     })();
     // 仅在剪贴板仍为本次读取内容时恢复，避免覆盖用户期间主动复制的内容。
     let current = clipboard(|context| context.get_text()).unwrap_or_default();
@@ -193,7 +258,9 @@ pub fn start_shortcuts(
                     let _ = app.global_shortcut().unregister(shortcut.as_str());
                 }
                 #[cfg(target_os = "linux")]
-                if let Some(task) = portal_task.take() { task.abort(); }
+                if let Some(task) = portal_task.take() {
+                    task.abort();
+                }
                 let mut errors = Vec::new();
                 #[cfg(target_os = "linux")]
                 if is_wayland() && !next.is_empty() {
@@ -209,11 +276,18 @@ pub fn start_shortcuts(
                     for (action, shortcut) in &next {
                         let shortcut = shortcut.replace("Win+", "Super+");
                         let action = action.clone();
-                        match app.global_shortcut().on_shortcut(shortcut.as_str(), move |app, _, event| {
-                            if event.state == ShortcutState::Pressed { activate(app, &action); }
-                        }) {
+                        match app.global_shortcut().on_shortcut(
+                            shortcut.as_str(),
+                            move |app, _, event| {
+                                if event.state == ShortcutState::Pressed {
+                                    activate(app, &action);
+                                }
+                            },
+                        ) {
                             Ok(()) => registered.push(shortcut),
-                            Err(error) => errors.push(format!("快捷键 {shortcut} 注册失败：{error}")),
+                            Err(error) => {
+                                errors.push(format!("快捷键 {shortcut} 注册失败：{error}"))
+                            }
                         }
                     }
                 }
@@ -238,24 +312,39 @@ async fn portal_shortcuts(
     impl Drop for SessionGuard {
         fn drop(&mut self) {
             if let Some(session) = self.0.take() {
-                tauri::async_runtime::spawn(async move { let _ = session.close().await; });
+                tauri::async_runtime::spawn(async move {
+                    let _ = session.close().await;
+                });
             }
         }
     }
     let guard = SessionGuard(Some(portal.create_session(Default::default()).await?));
     let session = guard.0.as_ref().unwrap();
-    let session_path = serde_json::to_value(session).ok()
-        .and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default();
-    let shortcuts = bindings.iter().map(|(action, trigger)| {
-        let trigger = trigger.replace("Ctrl+", "CTRL+").replace("Alt+", "ALT+")
-            .replace("Shift+", "SHIFT+").replace("Win+", "LOGO+")
-            .replace("PrintScreen", "Print");
-        NewShortcut::new(action, action).preferred_trigger(Some(trigger.as_str()))
-    }).collect::<Vec<_>>();
+    let session_path = serde_json::to_value(session)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let shortcuts = bindings
+        .iter()
+        .map(|(action, trigger)| {
+            let trigger = trigger
+                .replace("Ctrl+", "CTRL+")
+                .replace("Alt+", "ALT+")
+                .replace("Shift+", "SHIFT+")
+                .replace("Win+", "LOGO+")
+                .replace("PrintScreen", "Print");
+            NewShortcut::new(action, action).preferred_trigger(Some(trigger.as_str()))
+        })
+        .collect::<Vec<_>>();
     let mut events = portal.receive_activated().await?;
-    portal.bind_shortcuts(&session, &shortcuts, None, Default::default()).await?.response()?;
+    portal
+        .bind_shortcuts(&session, &shortcuts, None, Default::default())
+        .await?
+        .response()?;
     while let Some(event) = events.next().await {
-        if event.session_handle().as_str() == session_path { activate(app, event.shortcut_id()); }
+        if event.session_handle().as_str() == session_path {
+            activate(app, event.shortcut_id());
+        }
     }
     session.close().await?;
     Ok(())
@@ -280,34 +369,77 @@ async fn wayland_input(
     if state.is_none() {
         let portal = RemoteDesktop::new().await?;
         let session = portal.create_session(Default::default()).await?;
-        portal.select_devices(&session, SelectDevicesOptions::default()
-            .set_devices(DeviceType::Keyboard | DeviceType::Pointer)).await?.response()?;
+        portal
+            .select_devices(
+                &session,
+                SelectDevicesOptions::default()
+                    .set_devices(DeviceType::Keyboard | DeviceType::Pointer),
+            )
+            .await?
+            .response()?;
         let screencast = Screencast::new().await?;
-        screencast.select_sources(&session, SelectSourcesOptions::default()
-            .set_sources(SourceType::Monitor).set_multiple(true)).await?.response()?;
-        let response = portal.start(&session, None, Default::default()).await?.response()?;
-        *state = Some(PortalInput { portal, session, streams: response.streams().to_vec() });
+        screencast
+            .select_sources(
+                &session,
+                SelectSourcesOptions::default()
+                    .set_sources(Some(SourceType::Monitor.into()))
+                    .set_multiple(true),
+            )
+            .await?
+            .response()?;
+        let response = portal
+            .start(&session, None, Default::default())
+            .await?
+            .response()?;
+        *state = Some(PortalInput {
+            portal,
+            session,
+            streams: response.streams().to_vec(),
+        });
     }
     let state = state.as_ref().unwrap();
     match action {
         Input::Copy => {
-            for (code, key_state) in [(29, KeyState::Pressed), (46, KeyState::Pressed),
-                (46, KeyState::Released), (29, KeyState::Released)] {
-                state.portal.notify_keyboard_keycode(&state.session, code, key_state, Default::default()).await?;
+            for (code, key_state) in [
+                (29, KeyState::Pressed),
+                (46, KeyState::Pressed),
+                (46, KeyState::Released),
+                (29, KeyState::Released),
+            ] {
+                state
+                    .portal
+                    .notify_keyboard_keycode(&state.session, code, key_state, Default::default())
+                    .await?;
             }
         }
         Input::Scroll(x, y, delta) => {
             for stream in &state.streams {
-                if let (Some((sx, sy)), Some((width, height))) = (stream.position(), stream.size()) {
+                if let (Some((sx, sy)), Some((width, height))) = (stream.position(), stream.size())
+                {
                     if x >= sx && y >= sy && x < sx + width && y < sy + height {
-                        state.portal.notify_pointer_motion_absolute(&state.session, stream.pipe_wire_node_id(),
-                            (x - sx) as f64, (y - sy) as f64, Default::default()).await?;
+                        state
+                            .portal
+                            .notify_pointer_motion_absolute(
+                                &state.session,
+                                stream.pipe_wire_node_id(),
+                                (x - sx) as f64,
+                                (y - sy) as f64,
+                                Default::default(),
+                            )
+                            .await?;
                         break;
                     }
                 }
             }
-            state.portal.notify_pointer_axis_discrete(&state.session,
-                ashpd::desktop::remote_desktop::Axis::Vertical, -delta.signum() * 3, Default::default()).await?;
+            state
+                .portal
+                .notify_pointer_axis_discrete(
+                    &state.session,
+                    ashpd::desktop::remote_desktop::Axis::Vertical,
+                    -delta.signum() * 3,
+                    Default::default(),
+                )
+                .await?;
         }
         Input::Cursor => {}
     }
