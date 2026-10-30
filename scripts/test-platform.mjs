@@ -58,6 +58,9 @@ try {
       path.join(directory, `应用${settings.extension}.sig`),
       `signature:${target}\n`
     )
+    if (settings.platform.startsWith("linux")) {
+      writeFileSync(path.join(directory, "应用.AppImage"), "appimage")
+    }
     for (const [folder, extension] of settings.platform.startsWith("darwin")
       ? [["dmg", ".dmg"]]
       : settings.platform.startsWith("linux")
@@ -92,9 +95,18 @@ try {
       "sha512:"
     )
   )
+  assert.ok(
+    readFileSync(
+      path.join(
+        temporary,
+        "release/Monkey-Thief-linux-x86_64.AppImage"
+      ),
+      "utf8"
+    ).includes("appimage")
+  )
   const signature = path.join(
     temporary,
-    "artifacts/x86_64-unknown-linux-gnu/Monkey-Thief-linux-x86_64.AppImage.sig"
+    "artifacts/x86_64-unknown-linux-gnu/Monkey-Thief-linux-x86_64.AppImage.tar.gz.sig"
   )
   writeFileSync(signature, "")
   assert.throws(

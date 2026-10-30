@@ -32,8 +32,8 @@ export const releaseTargets = {
   "x86_64-unknown-linux-gnu": {
     platform: "linux-x86_64",
     folder: "appimage",
-    extension: ".AppImage",
-    name: "Monkey-Thief-linux-x86_64.AppImage"
+    extension: ".AppImage.tar.gz",
+    name: "Monkey-Thief-linux-x86_64.AppImage.tar.gz"
   }
 }
 
@@ -119,9 +119,20 @@ export function stageRelease(root, target, bundleDirectory, outputDirectory) {
     )
   }
   if (settings.platform.startsWith("linux")) {
+    const appImage = singleFile(
+      path.join(bundleDirectory, settings.folder),
+      ".AppImage"
+    )
     const deb = singleFile(path.join(bundleDirectory, "deb"), ".deb")
     const debSignature = readFileSync(`${deb}.sig`, "utf8").trim()
     if (!debSignature) throw new Error("DEB 更新包签名不能为空")
+    copyFileSync(
+      appImage,
+      path.join(
+        outputDirectory,
+        settings.name.replace(".AppImage.tar.gz", ".AppImage")
+      )
+    )
     const name = "Monkey-Thief-linux-x86_64.deb"
     copyFileSync(deb, path.join(outputDirectory, name))
     writeFileSync(
