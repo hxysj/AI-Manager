@@ -81,6 +81,13 @@ async function run(id, command, commandArgs) {
   console.log(
     `${result.code === 0 ? "通过" : "失败"} ${id} (${Date.now() - started} ms)`
   )
+  if (result.code !== 0) {
+    // CI 日志保留失败尾部，避免只看到验收项名称而无法定位子进程错误。
+    const tail = log.trimEnd().split(/\r?\n/).slice(-120).join("\n")
+    console.error(`--- ${id} 失败日志（最后 120 行） ---`)
+    console.error(tail || "子进程没有输出")
+    console.error(`--- ${id} 失败日志结束 ---`)
+  }
 }
 
 const scripts = (await readdir(path.join(root, "scripts")))
@@ -91,6 +98,12 @@ for (const script of scripts)
     path.join(root, "scripts", script)
   ])
 
+// Tauri 构建配置把翻译 Agent 作为资源，Rust 验收前必须先生成它。
+if (args.includes("--build") || !args.includes("--renderer-only")) {
+  await run("renderer-build", process.execPath, [
+    path.join(root, "scripts", "build-translation-agent.mjs")
+  ])
+}
 if (!args.includes("--renderer-only")) {
   await run("rust-all-modules", "cargo", [
     "test",
@@ -111,9 +124,6 @@ if (!args.includes("--renderer-only")) {
   ])
 }
 if (args.includes("--build")) {
-  await run("renderer-build", process.execPath, [
-    "scripts/build-translation-agent.mjs"
-  ])
   await run("renderer-bundle", process.execPath, [
     "node_modules/vite/bin/vite.js",
     "build"
