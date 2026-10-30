@@ -122,9 +122,10 @@ jobs:
         shell: pwsh
         run: |
           $bundleDir = 'src-tauri/target/release/bundle/nsis'
-          $installer = Get-ChildItem $bundleDir -Filter '*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $installerName = 'Monkey-Thief-windows-setup.exe'
+          $installer = Get-Item -LiteralPath (Join-Path $bundleDir $installerName) -ErrorAction SilentlyContinue
           if (-not $installer) {
-            throw '未找到 Windows NSIS 安装程序。'
+            throw "未找到 Windows NSIS 安装程序：$installerName"
           }
 
           $package = Get-Content package.json -Raw | ConvertFrom-Json
@@ -159,9 +160,10 @@ jobs:
           RELEASE_TAG: ${{ steps.release-version.outputs.tag }}
         run: |
           $bundleDir = 'src-tauri/target/release/bundle/nsis'
-          $updatePackage = Get-ChildItem $bundleDir -Filter '*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $updatePackageName = 'Monkey-Thief-windows-setup.exe'
+          $updatePackage = Get-Item -LiteralPath (Join-Path $bundleDir $updatePackageName) -ErrorAction SilentlyContinue
           if (-not $updatePackage) {
-            throw '未找到 Tauri NSIS 更新安装程序。'
+            throw "未找到 Tauri NSIS 更新安装程序：$updatePackageName"
           }
 
           $signatureFile = Get-Item -LiteralPath "$($updatePackage.FullName).sig" -ErrorAction SilentlyContinue
