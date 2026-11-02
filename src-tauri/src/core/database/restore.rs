@@ -24,21 +24,34 @@ pub fn preview_rows(
         for table in read_restorable_tables(&connection)? {
             let columns = read_common_columns(&connection, &table)?;
             let key_column = primary_key(&connection, &table)?;
-            let current = read_rows(&connection, "main", &table, &columns, &key_column)?;
-            let backup = read_rows(&connection, "restore_source", &table, &columns, &key_column)?;
+            let mut current = read_rows(&connection, "main", &table, &columns, &key_column)?;
+            let mut backup = read_rows(&connection, "restore_source", &table, &columns, &key_column)?
+                .into_iter()
+                .collect::<Vec<_>>();
+            backup.sort_by(|left, right| {
+                left.1
+                    .get("sort_order")
+                    .and_then(Value::as_i64)
+                    .cmp(&right.1.get("sort_order").and_then(Value::as_i64))
+                    .then(left.0.cmp(&right.0))
+            });
             for (row_key, row) in backup {
+                let existing = existing_row(&current, &table, &row_key, &row);
                 let backup = comparable_row(&connection, &table, &row)?;
-                let current = current
-                    .get(&row_key)
+                let current_value = existing
+                    .map(|(_, row)| row)
                     .map(|row| comparable_row(&connection, &table, row))
                     .transpose()?;
-                if current.as_ref() != Some(&backup) {
+                if current_value.as_ref() != Some(&backup) {
                     differences.push(RestoreRowDifference {
                         table: table.clone(),
-                        row_key,
-                        current,
+                        row_key: row_key.clone(),
+                        current: current_value,
                         backup,
                     });
+                }
+                if existing.is_none() {
+                    current.insert(row_key, row);
                 }
             }
         }
@@ -46,6 +59,32 @@ pub fn preview_rows(
             (&left.table, &left.row_key).cmp(&(&right.table, &right.row_key))
         });
         Ok(differences)
+    })
+}
+
+fn existing_row<'a>(
+    current: &'a HashMap<String, Map<String, Value>>,
+    table: &str,
+    row_key: &str,
+    row: &Map<String, Value>,
+) -> Option<(&'a String, &'a Map<String, Value>)> {
+    current.get_key_value(row_key).or_else(|| {
+        if table != "providers" || row.get("type") != Some(&json!("codex-account")) {
+            return None;
+        }
+        let account = Value::Object(row.clone());
+        current
+            .iter()
+            .filter(|(_, candidate)| {
+                candidate.get("type") == row.get("type")
+                    && crate::core::provider_store::codex_accounts_match(
+                        &Value::Object((*candidate).clone()),
+                        &account,
+                    )
+            })
+            .min_by_key(|(key, candidate)| {
+                (candidate.get("is_active").and_then(Value::as_i64) != Some(1), *key)
+            })
     })
 }
 
@@ -127,6 +166,10 @@ fn comparable_row(
     let mut value = row.clone();
     value.remove("sort_order");
     if table == "providers" {
+        if value.get("type") == Some(&json!("codex-account")) {
+            // 同一官方账号在不同设备上的本地主键不属于业务差异。
+            value.remove("id");
+        }
         for column in PROVIDER_LOCAL_COLUMNS.iter().copied().chain([
             "created_at",
             "updated_at",
@@ -164,7 +207,7 @@ pub(super) fn merge_table(
 ) -> Result<(), ManagerError> {
     let columns = read_common_columns(transaction, table)?;
     let key_column = primary_key(transaction, table)?;
-    let current = read_rows(transaction, "main", table, &columns, &key_column)?;
+    let mut current = read_rows(transaction, "main", table, &columns, &key_column)?;
     let mut backup = read_rows(transaction, "restore_source", table, &columns, &key_column)?
         .into_iter()
         .collect::<Vec<_>>();
@@ -199,7 +242,11 @@ pub(super) fn merge_table(
         quote_identifier(&key_column)
     );
     for (row_key, mut row) in backup {
-        let existing = current.get(&row_key);
+        let existing = existing_row(&current, table, &row_key, &row);
+        let target_key = existing
+            .map(|(key, _)| key.clone())
+            .unwrap_or_else(|| row_key.clone());
+        let existing = existing.map(|(_, row)| row);
         let selected = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM restore_choices WHERE choice_key IN (?1, '*'))",
             [row_choice_key(table, &row_key)],
@@ -219,6 +266,8 @@ pub(super) fn merge_table(
             row.insert("sort_order".into(), json!(next_order));
             next_order += 1;
         }
+        // 关联历史和本机激活态继续使用本机主键，备份只更新业务字段。
+        row.insert(key_column.clone(), json!(target_key));
         if table == "providers" {
             // 在写入前恢复本机状态，防止备份中的激活记录触发唯一约束。
             let same_scope = existing.is_some_and(|old| {
@@ -308,9 +357,10 @@ pub(super) fn merge_table(
             })
             .collect::<Vec<_>>();
         transaction.execute(&sql, params_from_iter(values))?;
+        current.insert(target_key.clone(), row);
         transaction.execute(
             "INSERT INTO restore_applied(table_name, row_key) VALUES (?1, ?2)",
-            params![table, row_key],
+            params![table, target_key],
         )?;
     }
     Ok(())

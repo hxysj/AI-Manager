@@ -1167,6 +1167,10 @@ async fn save_account(
             ["id", "accountId", "account_id"]
                 .iter()
                 .any(|field| string_value(account.get(*field)) == account_id)
+                || provider_store::codex_accounts_match(
+                    account,
+                    &json!({"account_id":account_id,"email":email}),
+                )
         });
     let id = current_account
         .as_ref()
@@ -1984,6 +1988,36 @@ mod tests {
     }
 
     #[test]
+    fn deleting_account_preserves_other_accounts_when_prefix_pair_exists() {
+        with_account_paths(|paths| {
+            tauri::async_runtime::block_on(async {
+                let deleted = uuid::Uuid::new_v4().to_string();
+                let paired = uuid::Uuid::new_v4().to_string();
+                let legacy = format!("account:{paired}");
+                provider_store::write_codex_accounts(paths, &[
+                    json!({"id":deleted,"account_id":"deleted","access_token":"deleted-token"}),
+                    json!({"id":paired,"account_id":"paired","access_token":"current-token"}),
+                ]).unwrap();
+                let connection = crate::core::database::open(paths).unwrap();
+                connection.execute(
+                    "INSERT INTO providers(id,cli,type,account_id,access_token)
+                     VALUES(?1,'codex','codex-account','paired','legacy-token')",
+                    [&legacy],
+                ).unwrap();
+                provider_store::write_active_codex_account_id(paths, &paired).unwrap();
+                delete_account(paths, &json!([]), json!({"accountId":deleted})).await.unwrap();
+                let accounts = provider_store::read_codex_accounts(paths).unwrap();
+                assert_eq!(accounts.len(), 2);
+                for (id, token) in [(&paired, "current-token"), (&legacy, "legacy-token")] {
+                    let account = accounts.iter().find(|item| item["id"] == *id).unwrap();
+                    assert_eq!(account["auth"]["accessToken"], token);
+                }
+                assert_eq!(read_active_account_id(paths).unwrap(), paired);
+            });
+        });
+    }
+
+    #[test]
     fn new_account_uses_local_uuid_and_refresh_reuses_it() {
         with_account_paths(|paths| {
             tauri::async_runtime::block_on(async {
@@ -2024,6 +2058,31 @@ mod tests {
                     provider_store::read_active_codex_account_id(paths).unwrap(),
                     saved["id"]
                 );
+            });
+        });
+    }
+
+    #[test]
+    fn login_reuses_legacy_account_with_normalized_email() {
+        with_account_paths(|paths| {
+            tauri::async_runtime::block_on(async {
+                let id = uuid::Uuid::new_v4().to_string();
+                provider_store::write_codex_accounts(
+                    paths,
+                    &[json!({"id":id,"email":" User@Example.test ","disabled":true})],
+                ).unwrap();
+                let saved = save_account(
+                    paths,
+                    tokens_from_account(&cached_account()),
+                    json!({"email":"user@example.test"}),
+                    &mut json!({"account_id":"upstream-account"}),
+                    json!({}),
+                    String::new(),
+                ).await.unwrap();
+                assert_eq!(saved["id"], id);
+                assert_eq!(saved["disabled"], true);
+                assert_eq!(saved["account_id"], "upstream-account");
+                assert_eq!(provider_store::read_codex_accounts(paths).unwrap().len(), 1);
             });
         });
     }

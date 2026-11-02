@@ -1499,10 +1499,21 @@ fn append_json_restore_preview(
 
         for (index, item) in backup_items.iter().enumerate() {
             let item_key = get_restore_item_key(entry_path, item, index);
-            let Some(current_item) = current_map.get(&item_key) else {
+            let current_item = current_map.get(&item_key).or_else(|| {
+                if entry_path != "storage/codex-accounts.json" {
+                    return None;
+                }
+                current_map
+                    .iter()
+                    .filter(|(_, current)| provider_store::codex_accounts_match(current, item))
+                    .min_by_key(|(key, _)| *key)
+                    .map(|(_, current)| current)
+            });
+            let Some(current_item) = current_item else {
                 added.push(create_restore_preview_item(
                     entry_path, &item_key, item, "added", None,
                 )?);
+                current_map.insert(item_key, item.clone());
                 continue;
             };
 
@@ -1819,8 +1830,16 @@ fn merge_json_backup_value(
 
         for (index, item) in backup_items.iter().enumerate() {
             let item_key = get_restore_item_key(entry_path, item, index);
+            let next_index = next_index_map.get(&item_key).copied().or_else(|| {
+                if entry_path != "storage/codex-accounts.json" {
+                    return None;
+                }
+                next_items
+                    .iter()
+                    .position(|current| provider_store::codex_accounts_match(current, item))
+            });
 
-            if let Some(next_index) = next_index_map.get(&item_key).cloned() {
+            if let Some(next_index) = next_index {
                 if choice_text(choices, &create_restore_choice_key(entry_path, &item_key))
                     == "backup"
                 {
@@ -1949,6 +1968,9 @@ fn merge_restore_value(entry_path: &str, current_value: &Value, backup_value: &V
         let mut next_backup_value = backup_value.as_object().cloned().unwrap_or_default();
         let current_exists = current_value.is_object();
 
+        if let Some(id) = current_value.get("id") {
+            next_backup_value.insert("id".to_string(), id.clone());
+        }
         if let Some(usage) = current_value.get("usage") {
             next_backup_value.insert("usage".to_string(), usage.clone());
         } else {
@@ -3304,6 +3326,7 @@ fn normalize_prompt_runtime_restore_value(value: Value) -> Value {
 
 fn normalize_codex_account_restore_value(value: Value) -> Value {
     if let Value::Object(mut map) = value {
+        map.remove("id");
         map.remove("usage");
         map.remove("disabled");
         return Value::Object(map);
@@ -5158,6 +5181,47 @@ mod tests {
         assert_eq!(merged[0]["email"], "backup@example.com");
         assert_eq!(merged[0]["disabled"], true);
         assert_eq!(merged[1]["disabled"], true);
+    }
+
+    #[test]
+    fn legacy_codex_restore_matches_identity_in_preview_and_merge() {
+        let path = "storage/codex-accounts.json";
+        for current_identity in ["", "official"] {
+            let current = json!([{
+                "id":"local","account_id":current_identity,"email":" User@Example.test ",
+                "disabled":false,"usage":{"source":"local"},"access_token":"local-access"
+            }]);
+            let backup = json!([{
+                "id":"backup","account_id":"official","email":"user@example.test",
+                "disabled":true,"access_token":"backup-access"
+            }]);
+            let mut added = Vec::new();
+            let mut conflicts = Vec::new();
+            super::append_json_restore_preview(
+                path, &current, &backup, &mut added, &mut conflicts,
+            ).unwrap();
+            assert!(added.is_empty());
+            assert_eq!(conflicts.len(), 1);
+            let choices = Map::from_iter([(
+                super::create_restore_choice_key(path, "backup"), json!("backup"),
+            )]);
+            let unchanged = merge_json_backup_value(path, &current, &backup, &Map::new()).unwrap();
+            assert_eq!(unchanged, current);
+            let merged = merge_json_backup_value(path, &current, &backup, &choices).unwrap();
+            assert_eq!(merged.as_array().unwrap().len(), 1);
+            assert_eq!(merged[0]["id"], "local");
+            assert_eq!(merged[0]["disabled"], false);
+            assert_eq!(merged[0]["usage"]["source"], "local");
+            assert_eq!(merged[0]["access_token"], "backup-access");
+            assert_eq!(merge_json_backup_value(path, &merged, &backup, &choices).unwrap(), merged);
+            added.clear();
+            conflicts.clear();
+            super::append_json_restore_preview(
+                path, &merged, &backup, &mut added, &mut conflicts,
+            ).unwrap();
+            assert!(added.is_empty());
+            assert!(conflicts.is_empty());
+        }
     }
 
     #[test]

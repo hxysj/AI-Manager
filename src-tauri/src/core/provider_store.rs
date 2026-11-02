@@ -50,25 +50,36 @@ fn rows(connection: &Connection, filter: &str) -> Result<Vec<Value>, ManagerErro
     ))?;
     let result = statement
         .query_map([], |row| {
-            Ok((row.get::<_, String>("id")?, item_from_row(row)?))
+            Ok((
+                row.get::<_, String>("id")?,
+                row.get::<_, String>("type")?,
+                item_from_row(row)?,
+            ))
         })?
         .collect::<Result<Vec<_>, _>>()?;
     result
         .into_iter()
-        .map(|(storage_id, mut item)| {
-            if item["cli"] == "claude-desktop" {
-                item["id"] = json!(desktop_public_id(connection, &storage_id)?);
+        .map(|(storage_id, kind, mut item)| {
+            if kind == "codex-account" {
+                item["id"] = json!(public_id(connection, &storage_id, "account")?);
+            } else if item["cli"] == "claude-desktop" {
+                item["id"] = json!(public_id(connection, &storage_id, "desktop")?);
             }
             Ok(item)
         })
         .collect()
 }
 
-fn desktop_public_id(connection: &Connection, id: &str) -> Result<String, ManagerError> {
-    if let Some(local_id) = id.strip_prefix("claude-desktop:") {
+fn public_id(connection: &Connection, id: &str, scope: &str) -> Result<String, ManagerError> {
+    let (prefix, filter) = if scope == "account" {
+        ("account:", "type='codex-account'")
+    } else {
+        ("claude-desktop:", "cli='claude-desktop'")
+    };
+    if let Some(local_id) = id.strip_prefix(prefix) {
         // 前缀和无前缀记录并存时保留完整标识，避免界面 ID 和密钥别名合并。
         if !connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND cli='claude-desktop')",
+            &format!("SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND {filter})"),
             [local_id],
             |row| row.get::<_, bool>(0),
         )? {
@@ -93,6 +104,27 @@ pub fn read_codex_accounts(paths: &AppPaths) -> Result<Vec<Value>, ManagerError>
     rows(&database::open(paths)?, "type='codex-account'")
 }
 
+pub(crate) fn codex_accounts_match(left: &Value, right: &Value) -> bool {
+    let identity = |item: &Value| {
+        ["account_id", "accountId"]
+            .iter()
+            .filter_map(|field| item.get(*field).and_then(Value::as_str))
+            .map(str::trim)
+            .find(|value| !value.is_empty())
+            .unwrap_or("")
+            .to_string()
+    };
+    let left_id = identity(left);
+    let right_id = identity(right);
+    // 官方标识优先；只有缺少官方标识时才用邮箱匹配旧账号。
+    if !left_id.is_empty() && !right_id.is_empty() {
+        return left_id == right_id;
+    }
+    let left_email = left.get("email").and_then(Value::as_str).unwrap_or("").trim();
+    let right_email = right.get("email").and_then(Value::as_str).unwrap_or("").trim();
+    left_email.contains('@') && left_email.eq_ignore_ascii_case(right_email)
+}
+
 fn canonical_id(
     connection: &Connection,
     item: &Value,
@@ -109,13 +141,11 @@ fn canonical_id(
         "desktop" => format!("claude-desktop:{id}"),
         _ => return Ok(id),
     };
-    if scope == "desktop"
-        && connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND cli='claude-desktop')",
-            [&id],
-            |row| row.get::<_, bool>(0),
-        )?
-    {
+    if connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM providers WHERE id=?1 AND ((?2='account' AND type='codex-account') OR (?2='desktop' AND cli='claude-desktop')))",
+        params![id, scope],
+        |row| row.get::<_, bool>(0),
+    )? {
         return Ok(id);
     }
     // 旧记录保留原主键；新记录的 UUID 直接入库，不再拼接类型前缀。
@@ -344,14 +374,16 @@ pub fn write_codex_accounts(paths: &AppPaths, items: &[Value]) -> Result<(), Man
 
 pub fn read_active_codex_account_id(paths: &AppPaths) -> Result<String, ManagerError> {
     initialize(paths)?;
-    Ok(database::open(paths)?
+    let connection = database::open(paths)?;
+    let id = connection
         .query_row(
-            "SELECT CASE WHEN id LIKE 'account:%' THEN substr(id,9) ELSE id END FROM providers WHERE type='codex-account' AND is_active=1",
+            "SELECT id FROM providers WHERE type='codex-account' AND is_active=1",
             [],
-            |row| row.get(0),
+            |row| row.get::<_, String>(0),
         )
         .optional()?
-        .unwrap_or_default())
+        .unwrap_or_default();
+    public_id(&connection, &id, "account")
 }
 
 fn set_active_account(connection: &Connection, id: &str) -> Result<(), ManagerError> {
@@ -589,7 +621,7 @@ pub fn read_keys(paths: &AppPaths) -> Result<Map<String, Value>, ManagerError> {
         .query_map([], |row| row.get::<_, String>(0))?
     {
         let id = row?;
-        let alias = format!("claude-desktop:{}", desktop_public_id(&connection, &id)?);
+        let alias = format!("claude-desktop:{}", public_id(&connection, &id, "desktop")?);
         aliases.insert(id, alias);
     }
     Ok(stored
@@ -828,7 +860,7 @@ pub fn read_desktop_settings(paths: &AppPaths) -> Result<Map<String, Value>, Man
         .unwrap_or_default();
     settings.insert(
         "currentProviderId".into(),
-        json!(desktop_public_id(&connection, &active)?),
+        json!(public_id(&connection, &active, "desktop")?),
     );
     Ok(settings)
 }
@@ -915,10 +947,17 @@ pub fn write_provider_bundle(
 pub fn read_instances(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
     initialize(paths)?;
     let connection = database::open(paths)?;
-    let mut statement=connection.prepare("SELECT CASE WHEN type='codex-account' AND id NOT LIKE 'account:%' THEN 'account:'||id ELSE id END,name,type,instance_profile_dir,instance_sessions_path,instance_updated_at FROM providers WHERE instance_updated_at>0 ORDER BY instance_updated_at DESC")?;
-    let result=statement.query_map([],|row|Ok(json!({"id":row.get::<_,String>(0)?,"providerId":row.get::<_,String>(0)?,
+    let mut statement=connection.prepare("SELECT id,name,type,instance_profile_dir,instance_sessions_path,instance_updated_at FROM providers WHERE instance_updated_at>0 ORDER BY instance_updated_at DESC")?;
+    let mut result=statement.query_map([],|row|Ok(json!({"id":row.get::<_,String>(0)?,"providerId":row.get::<_,String>(0)?,
         "providerName":row.get::<_,Option<String>>(1)?.unwrap_or_default(),"providerType":row.get::<_,String>(2)?,"profileDir":row.get::<_,String>(3)?,
         "sessionsPath":row.get::<_,String>(4)?,"updatedAt":row.get::<_,i64>(5)?})))?.collect::<Result<Vec<_>,_>>()?;
+    for item in &mut result {
+        if item["providerType"] == "codex-account" {
+            let id = format!("account:{}", public_id(&connection, &text(item, "id"), "account")?);
+            item["id"] = json!(id);
+            item["providerId"] = json!(id);
+        }
+    }
     Ok(result)
 }
 

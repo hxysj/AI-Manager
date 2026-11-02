@@ -120,6 +120,90 @@ fn legacy_namespaced_uuid_keeps_its_primary_key_and_keys_on_save() {
 }
 
 #[test]
+fn codex_prefix_pairs_keep_distinct_ids_when_saving_and_deleting() {
+    for id in [uuid::Uuid::new_v4().to_string(), "legacy-account".into()] {
+        for delete_legacy in [false, true] {
+            let (root, paths) = fixture();
+            initialize(&paths).unwrap();
+            let legacy_id = format!("account:{id}");
+            let connection = database::open(&paths).unwrap();
+            for stored_id in [&id, &legacy_id] {
+                connection.execute(
+                    "INSERT INTO providers(id,cli,type,account_id,email)
+                     VALUES(?1,'codex','codex-account','same-upstream','same@example.test')",
+                    [stored_id],
+                ).unwrap();
+            }
+            let accounts = read_codex_accounts(&paths).unwrap();
+            assert_eq!(
+                accounts.iter().map(|item| text(item, "id")).collect::<HashSet<_>>(),
+                HashSet::from([id.clone(), legacy_id.clone()])
+            );
+            write_codex_accounts(&paths, &accounts).unwrap();
+            let instances = accounts.iter().map(|account| {
+                let id = format!("account:{}", text(account, "id"));
+                json!({"providerId":id,"profileDir":id,"updatedAt":1})
+            }).collect::<Vec<_>>();
+            write_instances(&paths, &instances).unwrap();
+            let saved = read_instances(&paths).unwrap();
+            assert_eq!(saved.len(), 2);
+            assert_eq!(
+                saved.iter().map(|item| text(item, "providerId")).collect::<HashSet<_>>().len(),
+                2
+            );
+            write_instances(&paths, &saved).unwrap();
+            for active in [&id, &legacy_id] {
+                write_active_codex_account_id(&paths, active).unwrap();
+                assert_eq!(read_active_codex_account_id(&paths).unwrap(), *active);
+                assert_eq!(connection.query_row(
+                    "SELECT id FROM providers WHERE is_active=1", [],
+                    |row| row.get::<_, String>(0),
+                ).unwrap(), *active);
+            }
+            let (deleted, survivor) = if delete_legacy {
+                (&legacy_id, &id)
+            } else {
+                (&id, &legacy_id)
+            };
+            write_active_codex_account_id(&paths, survivor).unwrap();
+            let remaining = accounts.into_iter()
+                .filter(|item| text(item, "id") != *deleted)
+                .collect::<Vec<_>>();
+            write_codex_accounts(&paths, &remaining).unwrap();
+            assert_eq!(connection.query_row(
+                "SELECT id FROM providers", [], |row| row.get::<_, String>(0),
+            ).unwrap(), *survivor);
+            let remaining = read_codex_accounts(&paths).unwrap();
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(read_active_codex_account_id(&paths).unwrap(), text(&remaining[0], "id"));
+            assert_eq!(read_instances(&paths).unwrap()[0]["profileDir"], format!("account:{survivor}"));
+            write_codex_accounts(&paths, &remaining).unwrap();
+            drop(connection);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
+fn codex_identity_prefers_official_id_and_matches_legacy_email() {
+    assert!(codex_accounts_match(
+        &json!({"account_id":"official","email":"old@example.test"}),
+        &json!({"accountId":"official","email":"new@example.test"}),
+    ));
+    assert!(codex_accounts_match(
+        &json!({"email":" User@Example.test "}),
+        &json!({"account_id":"official","email":"user@example.test"}),
+    ));
+    assert!(!codex_accounts_match(
+        &json!({"account_id":"workspace-a","email":"same@example.test"}),
+        &json!({"accountId":"workspace-b","email":"same@example.test"}),
+    ));
+    for email in ["", "未识别账号"] {
+        assert!(!codex_accounts_match(&json!({"email":email}), &json!({"email":email})));
+    }
+}
+
+#[test]
 fn desktop_prefix_pairs_keep_distinct_keys_and_provider_identity() {
     for id in [uuid::Uuid::new_v4().to_string(), "provider-legacy".into()] {
         for delete_legacy in [false, true] {

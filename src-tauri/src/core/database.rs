@@ -615,6 +615,88 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn codex_restore_matches_identity_and_preserves_local_id_and_activation() {
+        for scenario in ["legacy-prefix", "different-local-id", "email-only"] {
+            let root = std::env::temp_dir().join(format!("codex-restore-{}", uuid::Uuid::new_v4()));
+            let source = resolve_app_paths(&root.join("source"));
+            let target = resolve_app_paths(&root.join("target"));
+            let local_id = uuid::Uuid::new_v4().to_string();
+            let backup_id = if scenario == "legacy-prefix" {
+                local_id.clone()
+            } else {
+                uuid::Uuid::new_v4().to_string()
+            };
+            provider_store::write_codex_accounts(&source, &[json!({
+                "id":backup_id,"account_id":"official","email":"user@example.test",
+                "access_token":"backup-access","disabled":false
+            })]).unwrap();
+            let storage_id = if scenario == "legacy-prefix" {
+                let prefixed = format!("account:{backup_id}");
+                open(&source).unwrap().execute(
+                    "UPDATE providers SET id=?1 WHERE id=?2", params![prefixed,backup_id],
+                ).unwrap();
+                prefixed
+            } else {
+                backup_id
+            };
+            provider_store::write_codex_accounts(&target, &[json!({
+                "id":local_id,
+                "account_id":if scenario == "email-only" { "" } else { "official" },
+                "email":" User@Example.test ","access_token":"local-access",
+                "disabled":true,"usage":{"source":"local"}
+            })]).unwrap();
+            provider_store::write_active_codex_account_id(&target, &local_id).unwrap();
+            let content = backup(&source).unwrap();
+            let differences = super::preview_rows(&target, &content).unwrap();
+            assert_eq!(differences.len(), 1, "{scenario}");
+            assert!(differences[0].current.is_some(), "{scenario}");
+            assert_eq!(differences[0].row_key, storage_id);
+            super::restore_merged(&target, &content, &Map::new()).unwrap();
+            let accounts = provider_store::read_codex_accounts(&target).unwrap();
+            assert_eq!(accounts.len(), 1);
+            assert_eq!(accounts[0]["auth"]["accessToken"], "local-access");
+            let choices = Map::from_iter([(
+                super::row_choice_key("providers", &storage_id), json!("backup"),
+            )]);
+            for _ in 0..2 {
+                super::restore_merged(&target, &content, &choices).unwrap();
+                let accounts = provider_store::read_codex_accounts(&target).unwrap();
+                assert_eq!(accounts.len(), 1);
+                assert_eq!(accounts[0]["id"], local_id);
+                assert_eq!(accounts[0]["account_id"], "official");
+                assert_eq!(accounts[0]["auth"]["accessToken"], "backup-access");
+                assert_eq!(accounts[0]["disabled"], true);
+                assert_eq!(accounts[0]["usage"]["source"], "local");
+                assert_eq!(provider_store::read_active_codex_account_id(&target).unwrap(), local_id);
+                assert!(super::preview_rows(&target, &content).unwrap().is_empty());
+            }
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn codex_restore_deduplicates_backup_accounts_and_keeps_distinct_official_ids() {
+        let root = std::env::temp_dir().join(format!("codex-restore-{}", uuid::Uuid::new_v4()));
+        let source = resolve_app_paths(&root.join("source"));
+        let target = resolve_app_paths(&root.join("target"));
+        let ids = (0..3).map(|_| uuid::Uuid::new_v4().to_string()).collect::<Vec<_>>();
+        provider_store::write_codex_accounts(&source, &[
+            json!({"id":ids[0],"account_id":"official-a","email":"same@example.test"}),
+            json!({"id":ids[1],"account_id":"official-a","email":"same@example.test"}),
+            json!({"id":ids[2],"account_id":"official-b","email":"same@example.test"}),
+        ]).unwrap();
+        let content = backup(&source).unwrap();
+        for _ in 0..2 {
+            super::restore_merged(&target, &content, &Map::new()).unwrap();
+            let accounts = provider_store::read_codex_accounts(&target).unwrap();
+            assert_eq!(accounts.len(), 2);
+            assert_eq!(accounts[0]["account_id"], "official-a");
+            assert_eq!(accounts[1]["account_id"], "official-b");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn backup_keeps_only_allowed_business_data() {
         let root = std::env::temp_dir().join(format!(
             "monkey-thief-main-database-backup-{}",
