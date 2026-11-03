@@ -70,15 +70,27 @@
           </button>
         </div>
 
-        <!-- 监听配置按钮：刷新按钮旁边单独一个按钮点击后弹框出现 -->
+        <!-- 网关配置入口 -->
         <button
           class="tool-button"
           type="button"
           title="配置网关监听 IP 与端口"
+          :disabled="busy || loading"
           @click="openListenerModal"
         >
           <SlidersHorizontal :size="14" />
           监听配置
+        </button>
+
+        <button
+          class="tool-button"
+          type="button"
+          title="选择参与反代的 Provider 与官方账号"
+          :disabled="busy || loading"
+          @click="openPoolModal"
+        >
+          <Layers :size="14" />
+          底层池
         </button>
 
         <!-- 刷新按钮 -->
@@ -133,25 +145,7 @@
     <!-- 加载错误提示 -->
     <p v-if="loadError" class="gateway-error" role="alert">{{ loadError }}</p>
 
-    <!-- 4 个统计 KPI 卡片 -->
-    <section class="gateway-metrics">
-      <article
-        v-for="metric in metrics"
-        :key="metric.label"
-        class="metric-item"
-        :class="metric.type"
-      >
-        <div class="metric-top">
-          <span class="metric-icon">
-            <component :is="metric.icon" :size="16" />
-          </span>
-          <span class="metric-label">{{ metric.label }}</span>
-        </div>
-        <span class="metric-value">{{ metric.value }}</span>
-      </article>
-    </section>
-
-    <!-- 4 个管理页签导航 -->
+    <!-- 管理页签导航 -->
     <nav class="gateway-tabs" aria-label="反代管理">
       <button
         v-for="tab in tabs"
@@ -166,241 +160,8 @@
       </button>
     </nav>
 
-    <!-- 页签 1: 配置与模型 (底层池 + 支持模型) -->
-    <section v-if="activeTab === 'config'" class="gateway-content">
-      <!-- 底层池 (Provider) -->
-      <section class="gateway-panel">
-        <div class="panel-heading">
-          <div class="heading-title-group">
-            <Layers :size="16" class="heading-icon" />
-            <h3 class="panel-title">底层池 (Provider)</h3>
-          </div>
-          <span class="panel-detail"
-            >选择可用的底层 Provider，作为模型调用的后端池。</span
-          >
-        </div>
-
-        <div class="target-list">
-          <label
-            v-for="target in targets"
-            :key="target.id"
-            class="target-item"
-            :class="{ selected: draft.providerIds.includes(target.id) }"
-          >
-            <input
-              v-model="draft.providerIds"
-              class="target-checkbox"
-              type="checkbox"
-              :value="target.id"
-              @change="onProviderToggle"
-            />
-            <span class="target-info">
-              <span class="target-name">{{ target.name }}</span>
-              <span class="target-type">{{ target.type }}</span>
-            </span>
-            <span
-              v-if="draft.providerIds.includes(target.id)"
-              class="target-status-badge"
-            >
-              <span class="status-dot"></span>
-              {{ gateway.enabled ? "运行中" : "可用" }}
-            </span>
-          </label>
-          <p v-if="!targets.length" class="empty-state">
-            请先在 Providers 中添加 Provider、Codex 或 Gemini 官方账号。
-          </p>
-        </div>
-      </section>
-
-      <!-- 支持模型 -->
-      <section class="gateway-panel">
-        <div class="panel-heading">
-          <div class="heading-title-group">
-            <Boxes :size="16" class="heading-icon" />
-            <h3 class="panel-title">支持模型</h3>
-          </div>
-          <div class="heading-actions">
-            <button class="tool-button" type="button" @click="openImportModal">
-              <Upload :size="13" /> 导入模型
-            </button>
-            <button
-              class="tool-button primary"
-              type="button"
-              @click="openAddModelModal"
-            >
-              <Plus :size="13" /> 添加模型
-            </button>
-          </div>
-        </div>
-
-        <!-- 支持模型筛选栏 -->
-        <div v-if="modelEntries.length > 0" class="model-filter-bar">
-          <div class="search-input-wrap">
-            <Search :size="13" class="filter-icon" />
-            <input
-              v-model.trim="modelFilter.search"
-              class="model-search-input"
-              placeholder="搜索模型名称或 ID..."
-              @input="modelPage = 1"
-            />
-          </div>
-          <div class="target-select-wrap">
-            <select
-              v-model="modelFilter.targetId"
-              class="target-select"
-              @change="modelPage = 1"
-            >
-              <option value="all">
-                全部服务商 ({{ modelEntries.length }})
-              </option>
-              <option
-                v-for="target in modelTargetOptions"
-                :key="target.id"
-                :value="target.id"
-              >
-                {{ target.name }} ({{ target.count }})
-              </option>
-            </select>
-          </div>
-          <button
-            v-if="modelFilter.search || modelFilter.targetId !== 'all'"
-            class="tool-button"
-            type="button"
-            @click="resetModelFilter"
-          >
-            <RotateCcw :size="12" /> 重置
-          </button>
-        </div>
-
-        <div v-if="paginatedConfigModels.length > 0" class="model-table-wrap">
-          <table class="model-table">
-            <thead>
-              <tr>
-                <th>模型名称</th>
-                <th>模型 ID</th>
-                <th>路由目标</th>
-                <th>创建时间</th>
-                <th class="action-th">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in paginatedConfigModels" :key="item.alias">
-                <td>
-                  <div class="model-name-cell">
-                    <span
-                      class="brand-avatar"
-                      :class="getModelBrand(item.alias).class"
-                    >
-                      {{ getModelBrand(item.alias).initial }}
-                    </span>
-                    <span class="model-name-text">{{ item.alias }}</span>
-                  </div>
-                </td>
-                <td>
-                  <code class="model-id-code">{{ item.alias }}</code>
-                </td>
-                <td>
-                  <div class="target-cell">
-                    <span class="target-badge">{{ item.targetName }}</span>
-                    <span
-                      v-if="item.realModel && item.realModel !== item.alias"
-                      class="real-model-hint"
-                    >
-                      → {{ item.realModel }}
-                    </span>
-                  </div>
-                </td>
-                <td>
-                  <span class="time-text">{{
-                    item.createdAt ? formatDateTime(item.createdAt) : "—"
-                  }}</span>
-                </td>
-                <td class="action-td">
-                  <div class="table-actions">
-                    <button
-                      class="action-btn"
-                      type="button"
-                      title="编辑模型路由"
-                      @click="openEditModelModal(item)"
-                    >
-                      <Pencil :size="13" /> 编辑
-                    </button>
-                    <button
-                      class="action-btn danger"
-                      type="button"
-                      title="删除模型路由"
-                      @click="removeModelMapping(item.alias)"
-                    >
-                      <Trash2 :size="13" /> 删除
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div v-else-if="modelEntries.length > 0" class="empty-models-box">
-          <Boxes :size="32" class="empty-icon" />
-          <p class="empty-title">未找到匹配的模型</p>
-          <p class="empty-sub">请尝试调整关键字或筛选其他服务商</p>
-          <button class="tool-button" type="button" @click="resetModelFilter">
-            重置筛选
-          </button>
-        </div>
-
-        <div v-else class="empty-models-box">
-          <Boxes :size="36" class="empty-icon" />
-          <p class="empty-title">暂无模型</p>
-          <p class="empty-sub">还没有添加任何模型，点击「添加模型」开始配置</p>
-          <button
-            class="tool-button primary"
-            type="button"
-            @click="openAddModelModal"
-          >
-            <Plus :size="13" /> 添加模型
-          </button>
-        </div>
-
-        <!-- 支持模型分页设置栏 -->
-        <div v-if="filteredConfigModels.length > 0" class="pagination-footer">
-          <span class="total-text"
-            >共 {{ filteredConfigModels.length }} 个模型</span
-          >
-          <div class="page-controls">
-            <select
-              v-model.number="modelPageSize"
-              class="page-size-select"
-              @change="modelPage = 1"
-            >
-              <option :value="5">5 条/页</option>
-              <option :value="10">10 条/页</option>
-              <option :value="20">20 条/页</option>
-            </select>
-            <button
-              class="page-btn"
-              :disabled="modelPage <= 1"
-              @click="modelPage--"
-            >
-              &lt;
-            </button>
-            <span class="page-num active"
-              >{{ modelPage }} / {{ totalConfigModelPages }}</span
-            >
-            <button
-              class="page-btn"
-              :disabled="modelPage >= totalConfigModelPages"
-              @click="modelPage++"
-            >
-              &gt;
-            </button>
-          </div>
-        </div>
-      </section>
-    </section>
-
-    <!-- 页签 2: 接入地址 -->
-    <section v-else-if="activeTab === 'connections'" class="gateway-content">
+    <!-- 接入地址 -->
+    <section v-if="activeTab === 'connections'" class="gateway-content">
       <GatewayConnectionPanel
         :base-url="gateway.baseUrl || ''"
         :enabled="gateway.enabled === true"
@@ -411,7 +172,7 @@
       />
     </section>
 
-    <!-- 页签 3: 调用 Token -->
+    <!-- 调用 Token -->
     <section v-else-if="activeTab === 'tokens'" class="gateway-content">
       <section class="gateway-panel">
         <div class="panel-heading">
@@ -467,40 +228,13 @@
           </div>
         </div>
 
-        <!-- Token 明文展示提示框 (仅在 tokens 页签渲染) -->
-        <div v-if="createdToken" class="created-token-card" role="status">
-          <div class="created-card-top">
-            <span class="created-note"
-              >Token
-              创建成功！明文仅在创建后显示一次，请立即复制并妥善保存。</span
-            >
-            <button
-              class="tool-button"
-              type="button"
-              @click="createdToken = ''"
-            >
-              已保存并收起
-            </button>
-          </div>
-          <div class="created-card-body">
-            <code class="created-value">{{ createdToken }}</code>
-            <button
-              class="tool-button primary"
-              type="button"
-              @click="copyText(createdToken)"
-            >
-              <Copy :size="13" /> 复制密钥
-            </button>
-          </div>
-        </div>
-
         <!-- Token 列表表格 -->
         <div v-if="filteredTokens.length > 0" class="token-table-wrap">
           <table class="token-table">
             <thead>
               <tr>
                 <th>Token 名称</th>
-                <th>Token 前缀</th>
+                <th>API Key</th>
                 <th>创建时间</th>
                 <th>请求统计</th>
                 <th>输入 Token</th>
@@ -520,18 +254,48 @@
                   </div>
                 </td>
                 <td>
-                  <div class="token-hint-col">
-                    <div class="hint-row">
-                      <span class="hint-text">{{ token.tokenHint }}</span>
-                      <button
-                        class="hint-copy-btn"
-                        type="button"
-                        title="复制前缀"
-                        @click="copyText(token.tokenHint)"
-                      >
-                        <Copy :size="11" />
-                      </button>
-                    </div>
+                  <div class="api-key-display">
+                    <code class="api-key-value">{{
+                      tokenValues[token.id] || token.maskedKey
+                    }}</code>
+                    <button
+                      class="api-key-button"
+                      type="button"
+                      :title="
+                        token.canReveal
+                          ? tokenValues[token.id]
+                            ? '隐藏 API Key'
+                            : '预览 API Key'
+                          : '旧 Token 仅保存校验值，请重新创建后复制或预览'
+                      "
+                      :aria-label="`${tokenValues[token.id] ? '隐藏' : '预览'} ${token.name} 的 API Key`"
+                      :aria-pressed="!!tokenValues[token.id]"
+                      :disabled="
+                        !token.canReveal || pendingTokenIds.has(token.id)
+                      "
+                      @click="toggleTokenPreview(token)"
+                    >
+                      <component
+                        :is="tokenValues[token.id] ? EyeOff : Eye"
+                        :size="13"
+                      />
+                    </button>
+                    <button
+                      class="api-key-button"
+                      type="button"
+                      :title="
+                        token.canReveal
+                          ? '复制完整 API Key'
+                          : '旧 Token 仅保存校验值，请重新创建后复制或预览'
+                      "
+                      :aria-label="`复制 ${token.name} 的完整 API Key`"
+                      :disabled="
+                        !token.canReveal || pendingTokenIds.has(token.id)
+                      "
+                      @click="copyToken(token)"
+                    >
+                      <Copy :size="13" />
+                    </button>
                   </div>
                 </td>
                 <td>
@@ -575,8 +339,15 @@
                     <button
                       class="action-btn"
                       type="button"
-                      title="复制 Token 提示"
-                      @click="copyText(token.tokenHint)"
+                      :title="
+                        token.canReveal
+                          ? '复制完整 API Key'
+                          : '旧 Token 仅保存校验值，请重新创建后复制或预览'
+                      "
+                      :disabled="
+                        !token.canReveal || pendingTokenIds.has(token.id)
+                      "
+                      @click="copyToken(token)"
                     >
                       <Copy :size="12" /> 复制
                     </button>
@@ -658,7 +429,7 @@
       </section>
     </section>
 
-    <!-- 页签 4: 用量与追踪 -->
+    <!-- 用量与追踪 -->
     <section v-else class="gateway-content">
       <div class="usage-top-row">
         <!-- 用量概览 -->
@@ -895,7 +666,7 @@
       </section>
     </section>
 
-    <!-- 弹框 1: 监听配置弹框 (刷新按钮旁边单独按钮触发) -->
+    <!-- 监听配置弹框 -->
     <BaseModal
       v-if="showListenerModal"
       title="监听配置"
@@ -961,132 +732,115 @@
       </form>
     </BaseModal>
 
-    <!-- 弹框 2: 添加/编辑模型路由弹框 -->
+    <!-- 底层池弹框 -->
     <BaseModal
-      v-if="showAddModelModal"
-      :title="editingModelAlias ? '编辑支持模型' : '添加支持模型'"
-      description="为外部客户端调用的大模型名称指定路由目标和真实底层模型。"
-      @close="showAddModelModal = false"
+      v-if="showPoolModal"
+      title="底层池"
+      description="选择参与反代的 Provider 或官方账号，模型将从所选来源的已有配置中读取。"
+      @close="showPoolModal = false"
     >
-      <form class="modal-form" @submit.prevent="saveModelMapping">
-        <div class="field-column">
-          <label class="form-field">
-            <span class="field-label">外部模型名 (ID)</span>
-            <input
-              v-model.trim="modelForm.alias"
-              class="field-input"
-              required
-              :disabled="!!editingModelAlias"
-              placeholder="例如：gpt-4o 或 claude-3-7-sonnet"
-            />
-            <span class="field-help"
-              >外部客户端在请求参数 model 中指定的模型标识。</span
-            >
-          </label>
-          <label class="form-field">
-            <span class="field-label">路由目标 (底层池 Provider)</span>
-            <select v-model="modelForm.targetId" class="field-input" required>
-              <option value="">请选择池中目标</option>
-              <option
-                v-for="target in selectedTargets"
-                :key="target.id"
-                :value="target.id"
+      <form class="modal-form" @submit.prevent="savePoolConfig">
+        <div class="pool-content">
+          <div class="pool-header-bar">
+            <p class="pool-summary">
+              已选择 {{ poolProviderIds.length }} / {{ targets.length }} 个来源
+            </p>
+            <div v-if="targets.length" class="pool-batch-actions">
+              <button
+                type="button"
+                class="pool-action-link"
+                @click="selectAllPool"
               >
-                {{ target.name }} ({{ target.type }})
-              </option>
-            </select>
-            <span class="field-help"
-              >此模型的请求将转发至该底层目标并鉴权。</span
+                全选所有
+              </button>
+              <span class="pool-action-divider">|</span>
+              <button
+                type="button"
+                class="pool-action-link"
+                @click="clearAllPool"
+              >
+                清空选择
+              </button>
+            </div>
+          </div>
+          <div class="target-list">
+            <div
+              v-for="group in groupedTargets"
+              :key="group.name"
+              class="target-group"
             >
-          </label>
-          <label class="form-field">
-            <span class="field-label">真实底层模型名</span>
-            <input
-              v-model.trim="modelForm.model"
-              class="field-input"
-              required
-              placeholder="例如：claude-3-7-sonnet-20250219 或 gpt-4o-2024-11-20"
-            />
-            <span class="field-help"
-              >向上游 Provider 发起真实请求时填写的模型名。</span
-            >
-          </label>
+              <div class="target-group-header">
+                <div class="target-group-title">
+                  <span class="group-title-text">{{ group.name }}</span>
+                  <span class="group-count-badge">
+                    {{ getGroupSelectedCount(group) }} /
+                    {{ group.items.length }}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  class="group-action-btn"
+                  @click="toggleGroupSelection(group)"
+                >
+                  {{ isGroupAllSelected(group) ? "取消全选" : "全选本组" }}
+                </button>
+              </div>
+              <div class="target-group-items">
+                <label
+                  v-for="target in group.items"
+                  :key="target.id"
+                  class="target-item"
+                  :class="{ selected: poolProviderIds.includes(target.id) }"
+                >
+                  <input
+                    v-model="poolProviderIds"
+                    class="target-checkbox"
+                    type="checkbox"
+                    :value="target.id"
+                    :disabled="busy || loading"
+                  />
+                  <span class="target-info">
+                    <span class="target-name">{{ target.name }}</span>
+                    <span class="target-type">{{ target.type }}</span>
+                  </span>
+                  <span
+                    v-if="poolProviderIds.includes(target.id)"
+                    class="target-status-badge"
+                  >
+                    已选择
+                  </span>
+                </label>
+              </div>
+            </div>
+            <p v-if="!targets.length" class="empty-state">
+              请先在 Providers 中添加 Provider、Codex 或 Gemini 官方账号。
+            </p>
+          </div>
+          <p class="pool-hint">移出底层池后，该来源的模型将不再对外提供。</p>
         </div>
-
         <div class="modal-footer-actions">
-          <div></div>
+          <span></span>
           <div class="right-buttons">
             <button
               class="tool-button"
               type="button"
-              @click="showAddModelModal = false"
+              @click="showPoolModal = false"
             >
               取消
             </button>
-            <button class="tool-button primary" type="submit" :disabled="busy">
-              <Save :size="13" />
-              {{ editingModelAlias ? "保存修改" : "确认添加" }}
+            <button
+              class="tool-button primary"
+              type="submit"
+              :disabled="busy || loading"
+            >
+              <Save :size="13" /> 保存配置
             </button>
           </div>
         </div>
       </form>
     </BaseModal>
 
-    <!-- 弹框 3: 导入底层池模型弹框 -->
-    <BaseModal
-      v-if="showImportModal"
-      title="导入底层池模型"
-      description="自动识别所选底层池 Provider 支持的模型，勾选后可一键加入网关支持模型列表中。"
-      @close="showImportModal = false"
-    >
-      <div class="import-modal-content">
-        <div v-if="importableModels.length > 0" class="import-models-list">
-          <label
-            v-for="model in importableModels"
-            :key="model.id"
-            class="import-model-item"
-          >
-            <input
-              v-model="selectedImportModelIds"
-              type="checkbox"
-              :value="model.id"
-            />
-            <div class="import-model-meta">
-              <span class="import-name">{{ model.name || model.id }}</span>
-              <span class="import-target">{{ model.targetName }}</span>
-            </div>
-          </label>
-        </div>
-        <p v-else class="empty-state">
-          当前底层池中暂无可导入的未添加模型，请先在底层池中勾选 Provider。
-        </p>
-
-        <div class="modal-footer-actions">
-          <div></div>
-          <div class="right-buttons">
-            <button
-              class="tool-button"
-              type="button"
-              @click="showImportModal = false"
-            >
-              取消
-            </button>
-            <button
-              class="tool-button primary"
-              type="button"
-              :disabled="!selectedImportModelIds.length || busy"
-              @click="executeImportModels"
-            >
-              <Upload :size="13" /> 导入选中 ({{
-                selectedImportModelIds.length
-              }})
-            </button>
-          </div>
-        </div>
-      </div>
-    </BaseModal>
-
-    <!-- 弹框 4: 创建 Token 弹框 -->
+    <!-- 创建 Token 弹框 -->
     <BaseModal
       v-if="showCreateTokenModal"
       title="创建调用 Token"
@@ -1146,7 +900,7 @@
       </form>
     </BaseModal>
 
-    <!-- 弹框 5: 查看 Token 详情弹框 -->
+    <!-- Token 详情弹框 -->
     <BaseModal
       v-if="viewingToken"
       title="调用 Token 详情"
@@ -1159,8 +913,45 @@
           <span class="detail-value">{{ viewingToken.name }}</span>
         </div>
         <div class="detail-row">
-          <span class="detail-label">密钥前缀：</span>
-          <span class="detail-value">{{ viewingToken.tokenHint }}</span>
+          <span class="detail-label">API Key：</span>
+          <div class="api-key-display">
+            <code class="api-key-value">{{
+              tokenValues[viewingToken.id] || viewingToken.maskedKey
+            }}</code>
+            <button
+              class="api-key-button"
+              type="button"
+              :title="
+                viewingToken.canReveal
+                  ? tokenValues[viewingToken.id]
+                    ? '隐藏 API Key'
+                    : '预览 API Key'
+                  : '旧 Token 仅保存校验值，请重新创建后复制或预览'
+              "
+              :aria-label="`${tokenValues[viewingToken.id] ? '隐藏' : '预览'} API Key`"
+              :aria-pressed="!!tokenValues[viewingToken.id]"
+              :disabled="
+                !viewingToken.canReveal || pendingTokenIds.has(viewingToken.id)
+              "
+              @click="toggleTokenPreview(viewingToken)"
+            >
+              <component
+                :is="tokenValues[viewingToken.id] ? EyeOff : Eye"
+                :size="13"
+              />
+            </button>
+            <button
+              class="api-key-button"
+              type="button"
+              title="复制完整 API Key"
+              :disabled="
+                !viewingToken.canReveal || pendingTokenIds.has(viewingToken.id)
+              "
+              @click="copyToken(viewingToken)"
+            >
+              <Copy :size="13" />
+            </button>
+          </div>
         </div>
         <div class="detail-row">
           <span class="detail-label">用途说明：</span>
@@ -1222,7 +1013,7 @@
       </div>
     </BaseModal>
 
-    <!-- 弹框 6: 删除 Token 确认弹框 -->
+    <!-- 删除 Token 确认弹框 -->
     <BaseModal
       v-if="deletingToken"
       title="删除调用 Token"
@@ -1247,23 +1038,18 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue"
+import { computed, onMounted, reactive, ref, watch } from "vue"
 import {
-  AlertTriangle,
-  ArrowDownToLine,
-  ArrowRight,
-  ArrowUpFromLine,
   BarChart3,
-  Boxes,
   Code2,
   Copy,
   Download,
   Eye,
+  EyeOff,
   Info,
   KeyRound,
   Layers,
   ListFilter,
-  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -1275,7 +1061,6 @@ import {
   SlidersHorizontal,
   Square,
   Trash2,
-  Upload,
   Waypoints,
   X
 } from "lucide-vue-next"
@@ -1291,18 +1076,19 @@ const props = defineProps({
 })
 
 const tabs = [
-  { id: "config", label: "配置与模型", icon: Layers },
   { id: "connections", label: "接入地址", icon: Code2 },
   { id: "tokens", label: "调用 Token", icon: KeyRound },
   { id: "logs", label: "用量与追踪", icon: BarChart3 }
 ]
 
 const gateway = ref({})
-const activeTab = ref("config")
+const activeTab = ref("connections")
 const loading = ref(true)
 const busy = ref(false)
 const loadError = ref("")
-const createdToken = ref("")
+const tokenValues = reactive({})
+const pendingTokenIds = reactive(new Set())
+let tokenPreviewVersion = 0
 const deletingToken = ref(null)
 const viewingToken = ref(null)
 const lanBannerDismissed = ref(false)
@@ -1314,31 +1100,18 @@ const draft = reactive({
   modelMappings: {}
 })
 
-// 兼容单元测试中 setup.mapping 与 setup.addMapping()
-const mapping = reactive({ alias: "", targetId: "", model: "" })
 const tokenDraft = reactive({ name: "", description: "", expiresAt: "" })
 
 // 弹框控制状态
 const showListenerModal = ref(false)
 const listenerDraft = reactive({ host: "127.0.0.1", port: 8046 })
 
-const showAddModelModal = ref(false)
-const editingModelAlias = ref("")
-const modelForm = reactive({ alias: "", targetId: "", model: "" })
-
-const showImportModal = ref(false)
-const selectedImportModelIds = ref([])
+const showPoolModal = ref(false)
+const poolProviderIds = ref([])
 
 const showCreateTokenModal = ref(false)
 
 // 筛选与分页状态
-const modelFilter = reactive({
-  search: "",
-  targetId: "all"
-})
-const modelPage = ref(1)
-const modelPageSize = ref(10)
-
 const tokenFilter = reactive({
   name: "",
   description: "",
@@ -1380,128 +1153,94 @@ const targets = computed(() => [
     }))
 ])
 
-const selectedTargets = computed(() =>
-  targets.value.filter((item) => draft.providerIds.includes(item.id))
-)
-
-const metrics = computed(() => [
-  {
-    label: "累计请求",
-    value: formatNumber(gateway.value.usage?.requestCount || 0),
-    icon: Waypoints,
-    type: "request"
-  },
-  {
-    label: "失败请求",
-    value: formatNumber(gateway.value.usage?.failureCount || 0),
-    icon: AlertTriangle,
-    type: "failure"
-  },
-  {
-    label: "输入 Token",
-    value: formatTokenCount(gateway.value.usage?.inputTokens || 0),
-    icon: ArrowDownToLine,
-    type: "input"
-  },
-  {
-    label: "输出 Token",
-    value: formatTokenCount(gateway.value.usage?.outputTokens || 0),
-    icon: ArrowUpFromLine,
-    type: "output"
+function formatGroupTitle(target) {
+  if (target.type === "Gemini 官方账号" || target.cli === "google-account") {
+    return "Gemini 官方账号"
   }
-])
-
-const usageGroups = computed(() => [
-  { label: "调用方", items: gateway.value.byToken || [] },
-  { label: "底层目标", items: gateway.value.byProvider || [] },
-  { label: "真实模型", items: gateway.value.byModel || [] }
-])
-
-const modelEntries = computed(() => {
-  const list = []
-  for (const [alias, rule] of Object.entries(draft.modelMappings || {})) {
-    const target = targets.value.find((t) => t.id === rule.targetId)
-    list.push({
-      alias,
-      id: alias,
-      targetId: rule.targetId,
-      targetName: target
-        ? `${target.name} (${target.cli || target.type})`
-        : rule.targetId,
-      realModel: rule.model,
-      createdAt: rule.createdAt || null
-    })
+  if (target.type === "Codex 官方账号") {
+    return "Codex 官方账号"
   }
-  return list
-})
-
-const filteredConfigModels = computed(() => {
-  let list = modelEntries.value
-  if (modelFilter.targetId !== "all") {
-    list = list.filter((m) => m.targetId === modelFilter.targetId)
+  const cli = (target.cli || "").toLowerCase()
+  if (cli === "claude") {
+    return "Claude Provider"
   }
-  if (modelFilter.search) {
-    const q = modelFilter.search.toLowerCase()
-    list = list.filter(
-      (m) =>
-        m.alias.toLowerCase().includes(q) ||
-        (m.realModel && m.realModel.toLowerCase().includes(q)) ||
-        (m.targetName && m.targetName.toLowerCase().includes(q))
-    )
+  if (cli === "codex") {
+    return "Codex Provider"
   }
-  return list
-})
-
-const totalConfigModelPages = computed(() =>
-  Math.max(
-    1,
-    Math.ceil(filteredConfigModels.value.length / modelPageSize.value)
-  )
-)
-
-const paginatedConfigModels = computed(() => {
-  const start = (modelPage.value - 1) * modelPageSize.value
-  return filteredConfigModels.value.slice(start, start + modelPageSize.value)
-})
-
-const modelTargetOptions = computed(() => {
-  const map = new Map()
-  for (const item of modelEntries.value) {
-    const key = item.targetId
-    if (!map.has(key)) {
-      map.set(key, { id: key, name: item.targetName, count: 0 })
-    }
-    map.get(key).count++
+  if (cli === "openai") {
+    return "OpenAI Provider"
   }
-  return Array.from(map.values())
-})
-
-function resetModelFilter() {
-  modelFilter.search = ""
-  modelFilter.targetId = "all"
-  modelPage.value = 1
+  if (cli === "gemini") {
+    return "Gemini Provider"
+  }
+  if (target.cli) {
+    return `${target.cli.charAt(0).toUpperCase() + target.cli.slice(1)} Provider`
+  }
+  return target.type || "其他来源"
 }
 
-const importableModels = computed(() => {
-  const existingAliases = new Set(Object.keys(draft.modelMappings || {}))
-  const poolIds = new Set(draft.providerIds || [])
-  const list = []
-  for (const m of gateway.value.models || []) {
-    if (!existingAliases.has(m.id)) {
-      const target = targets.value.find(
-        (t) => t.id === m.owned_by || t.name === m.owned_by
-      )
-      list.push({
-        id: m.id,
-        name: m.name || m.displayName || m.id,
-        targetId:
-          target?.id || (poolIds.size ? poolIds.values().next().value : ""),
-        targetName: target?.name || m.owned_by || "底层池"
+const groupedTargets = computed(() => {
+  const map = new Map()
+
+  for (const target of targets.value) {
+    const groupName = formatGroupTitle(target)
+    if (!map.has(groupName)) {
+      map.set(groupName, {
+        name: groupName,
+        items: []
       })
     }
+    map.get(groupName).items.push(target)
   }
+
+  const list = Array.from(map.values())
+  const orderMap = {
+    "Claude Provider": 1,
+    "Codex Provider": 2,
+    "Gemini 官方账号": 3,
+    "Codex 官方账号": 4
+  }
+
+  list.sort((a, b) => {
+    const orderA = orderMap[a.name] || 99
+    const orderB = orderMap[b.name] || 99
+    if (orderA !== orderB) return orderA - orderB
+    return a.name.localeCompare(b.name)
+  })
+
   return list
 })
+
+function isGroupAllSelected(group) {
+  if (!group.items.length) return false
+  return group.items.every((item) => poolProviderIds.value.includes(item.id))
+}
+
+function getGroupSelectedCount(group) {
+  return group.items.filter((item) => poolProviderIds.value.includes(item.id))
+    .length
+}
+
+function toggleGroupSelection(group) {
+  const allSelected = isGroupAllSelected(group)
+  const itemIds = group.items.map((item) => item.id)
+  if (allSelected) {
+    poolProviderIds.value = poolProviderIds.value.filter(
+      (id) => !itemIds.includes(id)
+    )
+  } else {
+    const toAdd = itemIds.filter((id) => !poolProviderIds.value.includes(id))
+    poolProviderIds.value = [...poolProviderIds.value, ...toAdd]
+  }
+}
+
+function selectAllPool() {
+  poolProviderIds.value = targets.value.map((t) => t.id)
+}
+
+function clearAllPool() {
+  poolProviderIds.value = []
+}
 
 const filteredTokens = computed(() => {
   let list = gateway.value.tokens || []
@@ -1662,32 +1401,8 @@ function formatNumber(num) {
   return new Intl.NumberFormat("zh-CN").format(Number(num) || 0)
 }
 
-function getModelBrand(alias = "") {
-  const lower = String(alias).toLowerCase()
-  if (lower.includes("claude") || lower.includes("anthropic")) {
-    return { name: "Anthropic", initial: "A", class: "anthropic" }
-  }
-  if (lower.includes("gemini") || lower.includes("google")) {
-    return { name: "Google", initial: "G", class: "gemini" }
-  }
-  if (lower.includes("codex")) {
-    return { name: "Codex", initial: "</>", class: "codex" }
-  }
-  if (
-    lower.includes("gpt") ||
-    lower.includes("openai") ||
-    lower.includes("o1") ||
-    lower.includes("o3")
-  ) {
-    return { name: "OpenAI", initial: "O", class: "openai" }
-  }
-  if (lower.includes("doubao")) {
-    return { name: "Doubao", initial: "D", class: "doubao" }
-  }
-  return { name: "Model", initial: "M", class: "generic" }
-}
-
 function applyState(result, resetDraft = false) {
+  hideTokenPreviews()
   gateway.value = result
   if (resetDraft) {
     draft.host = result.host || "127.0.0.1"
@@ -1720,9 +1435,9 @@ async function perform(action, message, resetDraft = false) {
   busy.value = true
   try {
     const result = await action()
-    const { createdToken: token, ...state } = result
+    // 创建接口的明文不进入列表状态；需要时再通过专用接口读取。
+    const { createdToken, ...state } = result
     applyState(state, resetDraft)
-    if (token) createdToken.value = token.token
     if (message) createMessage.success(message)
     return result
   } catch (error) {
@@ -1742,9 +1457,10 @@ function configPayload() {
   }
 }
 
-function saveConfig() {
+function saveConfig(overrides = {}) {
   return perform(
-    () => multiProtocolGatewayApi.saveConfig(configPayload()),
+    () =>
+      multiProtocolGatewayApi.saveConfig({ ...configPayload(), ...overrides }),
     "网关配置已保存",
     true
   )
@@ -1789,75 +1505,25 @@ function resetListenerDefaults() {
   listenerDraft.port = 8046
 }
 
-function onProviderToggle() {
-  saveConfig()
+function openPoolModal() {
+  poolProviderIds.value = targets.value
+    .filter((target) => draft.providerIds.includes(target.id))
+    .map((target) => target.id)
+  showPoolModal.value = true
 }
 
-// 供单元测试调用
-function addMapping() {
-  draft.modelMappings[mapping.alias] = {
-    targetId: mapping.targetId,
-    model: mapping.model
-  }
-  mapping.alias = ""
-  mapping.model = ""
-}
-
-function openAddModelModal() {
-  editingModelAlias.value = ""
-  modelForm.alias = ""
-  modelForm.targetId =
-    selectedTargets.value[0]?.id || targets.value[0]?.id || ""
-  modelForm.model = ""
-  showAddModelModal.value = true
-}
-
-function openEditModelModal(item) {
-  editingModelAlias.value = item.alias
-  modelForm.alias = item.alias
-  modelForm.targetId = item.targetId
-  modelForm.model = item.realModel
-  showAddModelModal.value = true
-}
-
-async function saveModelMapping() {
-  if (!modelForm.alias || !modelForm.targetId || !modelForm.model) {
-    createMessage.error("请完整填写模型信息")
-    return
-  }
-  draft.modelMappings[modelForm.alias] = {
-    targetId: modelForm.targetId,
-    model: modelForm.model,
-    createdAt: draft.modelMappings[modelForm.alias]?.createdAt || Date.now()
-  }
-  showAddModelModal.value = false
-  await saveConfig()
-}
-
-async function removeModelMapping(alias) {
-  delete draft.modelMappings[alias]
-  await saveConfig()
-}
-
-function openImportModal() {
-  selectedImportModelIds.value = []
-  showImportModal.value = true
-}
-
-async function executeImportModels() {
-  for (const id of selectedImportModelIds.value) {
-    const item = importableModels.value.find((m) => m.id === id)
-    if (item) {
-      draft.modelMappings[item.id] = {
-        targetId: item.targetId || draft.providerIds[0] || "",
-        model: item.id,
-        createdAt: Date.now()
-      }
-    }
-  }
-  selectedImportModelIds.value = []
-  showImportModal.value = false
-  await saveConfig()
+async function savePoolConfig() {
+  const providerIds = poolProviderIds.value.filter((id) =>
+    targets.value.some((target) => target.id === id)
+  )
+  // 保留仍在池中的既有路由，移除已退出来源的路由，避免保存时指向无效目标。
+  const modelMappings = Object.fromEntries(
+    Object.entries(configPayload().modelMappings).filter(([, rule]) =>
+      providerIds.includes(rule.targetId)
+    )
+  )
+  const result = await saveConfig({ providerIds, modelMappings })
+  if (result) showPoolModal.value = false
 }
 
 async function submitCreateToken() {
@@ -1909,6 +1575,44 @@ async function deleteToken() {
   if (result) deletingToken.value = null
 }
 
+// 复制不会展开密钥；预览明文只留在当前页面，隐藏、刷新或切换页签时清除。
+function hideTokenPreviews() {
+  tokenPreviewVersion += 1
+  for (const id of Object.keys(tokenValues)) delete tokenValues[id]
+}
+
+async function readTokenKey(token) {
+  if (tokenValues[token.id]) return tokenValues[token.id]
+  if (pendingTokenIds.has(token.id)) return ""
+  pendingTokenIds.add(token.id)
+  try {
+    const result = await multiProtocolGatewayApi.getTokenValue({
+      tokenId: token.id
+    })
+    return result.apiKey
+  } catch (error) {
+    createMessage.error(error.message || "读取 API Key 失败")
+    return ""
+  } finally {
+    pendingTokenIds.delete(token.id)
+  }
+}
+
+async function copyToken(token) {
+  const apiKey = await readTokenKey(token)
+  if (apiKey) await copyText(apiKey)
+}
+
+async function toggleTokenPreview(token) {
+  if (tokenValues[token.id]) {
+    delete tokenValues[token.id]
+    return
+  }
+  const version = tokenPreviewVersion
+  const apiKey = await readTokenKey(token)
+  if (apiKey && version === tokenPreviewVersion) tokenValues[token.id] = apiKey
+}
+
 function exportLogs() {
   const logs = gateway.value.logs || []
   if (!logs.length) {
@@ -1936,6 +1640,7 @@ async function copyText(value) {
   }
 }
 
+watch([activeTab, viewingToken], hideTokenPreviews, { flush: "sync" })
 onMounted(load)
 </script>
 
@@ -2237,64 +1942,6 @@ onMounted(load)
     font-size: 12px;
   }
 
-  /* 4 个指标统计卡片 */
-  .gateway-metrics {
-    display: flex;
-    gap: 12px;
-
-    .metric-item {
-      display: flex;
-      flex: 1;
-      min-width: 0;
-      flex-direction: column;
-      gap: 10px;
-      padding: 14px 16px;
-      border: 1px solid var(--color-line);
-      border-radius: 10px;
-      background: var(--color-panel);
-
-      .metric-top {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-
-        .metric-icon {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          padding: 6px;
-          border-radius: 6px;
-        }
-        .metric-label {
-          font-size: 12px;
-          color: var(--color-text-muted);
-        }
-      }
-      .metric-value {
-        font-size: 22px;
-        overflow-wrap: anywhere;
-        color: var(--color-text);
-      }
-
-      &.request .metric-icon {
-        color: #7c3aed;
-        background: rgba(124, 58, 237, 0.08);
-      }
-      &.failure .metric-icon {
-        color: #ef4444;
-        background: rgba(239, 68, 68, 0.08);
-      }
-      &.input .metric-icon {
-        color: #2563eb;
-        background: rgba(37, 99, 235, 0.08);
-      }
-      &.output .metric-icon {
-        color: #059669;
-        background: rgba(5, 150, 105, 0.08);
-      }
-    }
-  }
-
   /* 页签导航 */
   .gateway-tabs {
     display: flex;
@@ -2370,245 +2017,6 @@ onMounted(load)
         }
       }
 
-      /* 底层池列表 (兼容测试选择器链) */
-      .target-list {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-
-        .target-item {
-          display: flex;
-          align-items: center;
-          gap: 10px;
-          width: 250px;
-          padding: 12px 14px;
-          border: 1px solid var(--color-line);
-          border-radius: 8px;
-          background: var(--color-panel-soft);
-          cursor: pointer;
-          transition:
-            border-color 0.15s,
-            background 0.15s;
-
-          &.selected {
-            border-color: #7c3aed;
-            background: rgba(124, 58, 237, 0.05);
-          }
-          .target-checkbox {
-            accent-color: #7c3aed;
-          }
-          .target-info {
-            display: flex;
-            flex: 1;
-            min-width: 0;
-            flex-direction: column;
-            gap: 3px;
-
-            .target-name {
-              font-size: 13px;
-              color: var(--color-text);
-              overflow: hidden;
-              text-overflow: ellipsis;
-              white-space: nowrap;
-            }
-            .target-type {
-              color: var(--color-text-muted);
-              font-size: 11px;
-            }
-          }
-          .target-status-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            color: #10b981;
-            font-size: 11px;
-            white-space: nowrap;
-
-            .status-dot {
-              width: 5px;
-              height: 5px;
-              border-radius: 50%;
-              background: #10b981;
-            }
-          }
-        }
-      }
-
-      /* 支持模型筛选栏 */
-      .model-filter-bar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 14px;
-
-        .search-input-wrap {
-          position: relative;
-          display: flex;
-          align-items: center;
-          flex: 1;
-
-          .filter-icon {
-            position: absolute;
-            left: 10px;
-            color: var(--color-text-muted);
-          }
-          .model-search-input {
-            width: 100%;
-            padding: 7px 10px 7px 30px;
-            box-sizing: border-box;
-            border: 1px solid var(--color-line);
-            border-radius: 6px;
-            color: var(--color-text);
-            background: var(--color-panel-soft);
-            font-size: 12px;
-            outline: none;
-
-            &:focus {
-              border-color: #7c3aed;
-            }
-          }
-        }
-
-        .target-select-wrap {
-          .target-select {
-            padding: 7px 10px;
-            border: 1px solid var(--color-line);
-            border-radius: 6px;
-            color: var(--color-text);
-            background: var(--color-panel-soft);
-            font-size: 12px;
-            outline: none;
-            cursor: pointer;
-
-            &:focus {
-              border-color: #7c3aed;
-            }
-          }
-        }
-      }
-
-      /* 支持模型表格 */
-      .model-table-wrap {
-        overflow-x: auto;
-
-        .model-table {
-          width: 100%;
-          border-collapse: collapse;
-
-          th {
-            padding: 9px 12px;
-            border-bottom: 1px solid var(--color-line);
-            text-align: left;
-            color: var(--color-text-muted);
-            font-size: 11px;
-
-            &.action-th {
-              text-align: right;
-            }
-          }
-          td {
-            padding: 12px;
-            border-bottom: 1px solid var(--color-line);
-            color: var(--color-text);
-            font-size: 12px;
-
-            &.action-td {
-              text-align: right;
-            }
-          }
-
-          .model-name-cell {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-
-            .brand-avatar {
-              display: inline-flex;
-              align-items: center;
-              justify-content: center;
-              width: 24px;
-              height: 24px;
-              border-radius: 6px;
-              font-size: 11px;
-
-              &.anthropic {
-                color: #d97706;
-                background: rgba(217, 119, 6, 0.1);
-              }
-              &.gemini {
-                color: #2563eb;
-                background: rgba(37, 99, 235, 0.1);
-              }
-              &.codex {
-                color: #059669;
-                background: rgba(5, 150, 105, 0.1);
-              }
-              &.openai {
-                color: #10b981;
-                background: rgba(16, 185, 129, 0.1);
-              }
-              &.doubao {
-                color: #3b82f6;
-                background: rgba(59, 130, 246, 0.1);
-              }
-              &.generic {
-                color: #7c3aed;
-                background: rgba(124, 58, 237, 0.1);
-              }
-            }
-            .model-name-text {
-              font-size: 13px;
-            }
-          }
-
-          .model-id-code {
-            color: #7c3aed;
-            font-size: 11px;
-          }
-          .target-cell {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-
-            .target-badge {
-              font-size: 12px;
-            }
-            .real-model-hint {
-              color: var(--color-text-muted);
-              font-size: 10px;
-            }
-          }
-          .time-text {
-            color: var(--color-text-muted);
-            font-size: 11px;
-          }
-        }
-      }
-
-      .empty-models-box {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: 32px 16px;
-        text-align: center;
-
-        .empty-icon {
-          color: var(--color-text-muted);
-          opacity: 0.5;
-          margin-bottom: 10px;
-        }
-        .empty-title {
-          margin: 0 0 6px;
-          color: var(--color-text);
-          font-size: 14px;
-        }
-        .empty-sub {
-          margin: 0 0 16px;
-          color: var(--color-text-muted);
-          font-size: 12px;
-        }
-      }
-
       /* Token 筛选与列表 */
       .token-filter-bar {
         display: flex;
@@ -2664,42 +2072,6 @@ onMounted(load)
         }
       }
 
-      .created-token-card {
-        padding: 14px;
-        margin-bottom: 16px;
-        border: 1px solid #10b981;
-        border-radius: 8px;
-        background: rgba(16, 185, 129, 0.05);
-
-        .created-card-top {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          margin-bottom: 10px;
-
-          .created-note {
-            color: #10b981;
-            font-size: 12px;
-          }
-        }
-        .created-card-body {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-
-          .created-value {
-            flex: 1;
-            padding: 8px 12px;
-            border-radius: 6px;
-            color: #10b981;
-            background: var(--color-panel);
-            overflow-wrap: anywhere;
-            font-family: Consolas, monospace;
-            font-size: 12px;
-          }
-        }
-      }
-
       .token-table-wrap {
         overflow-x: auto;
 
@@ -2740,35 +2112,6 @@ onMounted(load)
             .token-desc {
               color: var(--color-text-muted);
               font-size: 11px;
-            }
-          }
-
-          .token-hint-col {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-
-            .hint-row {
-              display: flex;
-              align-items: center;
-              gap: 5px;
-
-              .hint-text {
-                font-family: Consolas, monospace;
-                color: #7c3aed;
-                font-size: 11px;
-              }
-              .hint-copy-btn {
-                display: flex;
-                padding: 2px;
-                border: 0;
-                background: transparent;
-                color: var(--color-text-muted);
-                cursor: pointer;
-                &:hover {
-                  color: #7c3aed;
-                }
-              }
             }
           }
 
@@ -3198,6 +2541,41 @@ onMounted(load)
   }
 
   /* 表格内按钮组件 */
+  .api-key-display {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 170px;
+
+    .api-key-value {
+      min-width: 0;
+      max-width: 260px;
+      color: #7c3aed;
+      font-family: Consolas, monospace;
+      font-size: 11px;
+      overflow-wrap: anywhere;
+    }
+    .api-key-button {
+      display: inline-flex;
+      flex-shrink: 0;
+      padding: 3px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--color-text-muted);
+      cursor: pointer;
+
+      &:hover:not(:disabled) {
+        color: #7c3aed;
+        background: var(--color-primary-soft);
+      }
+      &:disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+    }
+  }
+
   .table-actions {
     display: inline-flex;
     align-items: center;
@@ -3238,6 +2616,171 @@ onMounted(load)
     flex-direction: column;
     gap: 16px;
     padding-top: 6px;
+
+    .pool-content {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+
+      .pool-header-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+
+        .pool-summary {
+          margin: 0;
+          color: var(--color-text);
+          font-size: 12px;
+        }
+
+        .pool-batch-actions {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+
+          .pool-action-link {
+            background: transparent;
+            border: none;
+            color: #7c3aed;
+            font-size: 11px;
+            cursor: pointer;
+            padding: 2px 4px;
+            border-radius: 4px;
+            transition: background-color 0.15s;
+
+            &:hover {
+              background: rgba(124, 58, 237, 0.08);
+            }
+          }
+
+          .pool-action-divider {
+            color: var(--color-line);
+          }
+        }
+      }
+
+      .target-list {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        max-height: 380px;
+        overflow-y: auto;
+        padding-right: 4px;
+
+        .target-group {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+
+          .target-group-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 2px 2px 0;
+
+            .target-group-title {
+              display: flex;
+              align-items: center;
+              gap: 6px;
+
+              .group-title-text {
+                color: var(--color-text);
+                font-size: 12px;
+                opacity: 0.85;
+              }
+
+              .group-count-badge {
+                display: inline-flex;
+                align-items: center;
+                padding: 1px 6px;
+                border-radius: 999px;
+                background: rgba(124, 58, 237, 0.08);
+                color: #7c3aed;
+                font-size: 11px;
+              }
+            }
+
+            .group-action-btn {
+              background: transparent;
+              border: none;
+              color: #7c3aed;
+              font-size: 11px;
+              cursor: pointer;
+              padding: 2px 6px;
+              border-radius: 4px;
+              transition: background-color 0.15s;
+
+              &:hover {
+                background: rgba(124, 58, 237, 0.08);
+              }
+            }
+          }
+
+          .target-group-items {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+          }
+        }
+
+        .target-item {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 12px 14px;
+          border: 1px solid var(--color-line);
+          border-radius: 8px;
+          background: var(--color-panel-soft);
+          cursor: pointer;
+          transition:
+            border-color 0.15s,
+            background 0.15s;
+
+          &.selected {
+            border-color: #7c3aed;
+            background: rgba(124, 58, 237, 0.05);
+          }
+
+          .target-checkbox {
+            accent-color: #7c3aed;
+          }
+
+          .target-info {
+            display: flex;
+            flex: 1;
+            min-width: 0;
+            flex-direction: column;
+            gap: 3px;
+
+            .target-name {
+              color: var(--color-text);
+              font-size: 13px;
+              overflow-wrap: anywhere;
+            }
+
+            .target-type {
+              color: var(--color-text-muted);
+              font-size: 11px;
+            }
+          }
+
+          .target-status-badge {
+            color: #10b981;
+            font-size: 11px;
+            white-space: nowrap;
+          }
+        }
+      }
+
+      .pool-hint {
+        margin: 0;
+        color: var(--color-text-muted);
+        font-size: 11px;
+        line-height: 1.5;
+      }
+    }
 
     .field-row {
       display: flex;
@@ -3294,49 +2837,6 @@ onMounted(load)
       display: flex;
       align-items: center;
       gap: 8px;
-    }
-  }
-
-  .import-modal-content {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-
-    .import-models-list {
-      max-height: 280px;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-
-      .import-model-item {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 10px;
-        border: 1px solid var(--color-line);
-        border-radius: 6px;
-        background: var(--color-panel-soft);
-        cursor: pointer;
-
-        &:hover {
-          border-color: #7c3aed;
-        }
-        .import-model-meta {
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
-
-          .import-name {
-            font-size: 12px;
-            color: var(--color-text);
-          }
-          .import-target {
-            font-size: 10px;
-            color: var(--color-text-muted);
-          }
-        }
-      }
     }
   }
 

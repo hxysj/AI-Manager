@@ -1549,6 +1549,10 @@ impl ManagerState {
             }
             "gateway:state" => multi_protocol_gateway::read_state(&self.paths),
             "gateway:usage" => multi_protocol_gateway::usage(&self.paths),
+            "gateway:token-value" => multi_protocol_gateway::read_token_value(
+                &self.paths,
+                &payload.unwrap_or_else(|| json!({})),
+            ),
             "gateway:save-config" => {
                 let result = multi_protocol_gateway::save_config(
                     &self.gateway_server_registry,

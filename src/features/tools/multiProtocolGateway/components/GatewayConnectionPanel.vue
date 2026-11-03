@@ -125,7 +125,8 @@
         <div class="model-browser">
           <div class="model-browser-heading">
             <span class="browser-caption"
-              >可在「配置与模型」中添加模型，启用后即可通过上述协议地址调用。</span
+              >模型来自顶部「底层池」中所选 Provider
+              或官方账号的已有配置。</span
             >
             <code class="models-path">GET {{ modelsPath }}</code>
           </div>
@@ -226,7 +227,8 @@
             <Boxes :size="32" class="empty-icon" />
             <p class="empty-title">暂时没有可用模型</p>
             <p class="empty-description">
-              在“配置与模型”中选择底层目标，添加模型路由并保存后，即可在这里接入。
+              点击顶部「底层池」选择 Provider
+              或官方账号，并确认所选来源已有可用模型。
             </p>
           </div>
 
@@ -347,7 +349,7 @@ const props = defineProps({
   modelMappings: { type: Object, default: () => ({}) },
   targets: { type: Array, default: () => [] }
 })
-const emit = defineEmits(["manage-tokens", "add-model"])
+const emit = defineEmits(["manage-tokens"])
 const selectedProtocol = ref("openai")
 const selectedEndpoint = ref("chat")
 const selectedModelId = ref("")

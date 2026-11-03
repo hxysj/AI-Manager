@@ -275,6 +275,7 @@ pub async fn create_token(
         "description": string_value(payload.get("description")),
         "tokenHint": token_hint(&raw),
         "tokenHash": hash_token(&raw),
+        "tokenEncrypted": runtime_provider::encrypt_provider_key(&raw)?,
         "enabled": payload.get("enabled").and_then(Value::as_bool).unwrap_or(true),
         "createdAt": now,
         "expiresAt": number_value(payload.get("expiresAt"), 0),
@@ -296,6 +297,28 @@ pub async fn create_token(
         "tokenHint": item["tokenHint"]
     });
     Ok(result)
+}
+
+pub fn read_token_value(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
+    let token_id = string_value(payload.get("tokenId"));
+    if token_id.is_empty() {
+        return Err(ManagerError::System("缺少网关 Token ID".into()));
+    }
+    let config = read_config(paths)?;
+    let token = config["tokens"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|item| item["id"].as_str() == Some(token_id.as_str()))
+        .ok_or_else(|| ManagerError::System("网关 Token 不存在，请刷新后重试".into()))?;
+    let encrypted = token["tokenEncrypted"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            ManagerError::System("旧 Token 仅保存了校验值，无法还原 API Key，请重新创建".into())
+        })?;
+    // 明文仅通过桌面管理接口按需返回，不随网关状态或请求日志下发。
+    Ok(json!({ "apiKey": runtime_provider::decrypt_provider_key(encrypted)? }))
 }
 
 pub async fn delete_token(
@@ -2054,7 +2077,18 @@ fn public_config(config: &Value) -> Value {
         .map(|item| {
             let mut item = item.clone();
             if let Some(object) = item.as_object_mut() {
+                let can_reveal = object
+                    .get("tokenEncrypted")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.is_empty());
+                let hint = string_value(object.get("tokenHint"));
+                object.insert(
+                    "maskedKey".into(),
+                    json!(format!("{}••••••••••••", hint.trim_end_matches('…'))),
+                );
+                object.insert("canReveal".into(), json!(can_reveal));
                 object.remove("tokenHash");
+                object.remove("tokenEncrypted");
             }
             item
         })

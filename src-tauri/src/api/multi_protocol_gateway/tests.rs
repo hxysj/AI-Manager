@@ -334,6 +334,98 @@ fn protocol_matrix_preserves_tools_usage_model_and_streams() {
 }
 
 #[test]
+fn token_keys_are_recoverable_without_leaking_into_public_state() {
+    run(async {
+        let fixture = Fixture::new();
+        let created = create_token(
+            &fixture.registry,
+            &fixture.paths,
+            json!({"name":"可重复读取的密钥"}),
+        )
+        .await
+        .unwrap();
+        let id = created["createdToken"]["id"].clone();
+        let raw = created["createdToken"]["token"].as_str().unwrap();
+        assert!(raw.starts_with("sk-"));
+        assert_eq!(raw.len(), 35);
+        let public = read_state(&fixture.paths).unwrap();
+        assert_eq!(public["tokens"][0]["canReveal"], true);
+        assert!(public["tokens"][0]["maskedKey"]
+            .as_str()
+            .unwrap()
+            .starts_with(&raw[..8]));
+        for hidden in [raw, "tokenEncrypted", "tokenHash"] {
+            assert!(!public.to_string().contains(hidden));
+        }
+        let disk = std::fs::read_to_string(&fixture.paths.storage_files.gateway_config).unwrap();
+        assert!(!disk.contains(raw));
+        let config = read_config(&fixture.paths).unwrap();
+        assert_eq!(
+            runtime_provider::decrypt_provider_key(
+                config["tokens"][0]["tokenEncrypted"].as_str().unwrap()
+            )
+            .unwrap(),
+            raw
+        );
+        // 新建管理对象并重新读取磁盘后，仍可取回完整密钥，停用只影响调用权限。
+        let registry = GatewayServerRegistry::new();
+        set_token_enabled(
+            &registry,
+            &fixture.paths,
+            json!({"tokenId":id,"enabled":false}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            read_token_value(&fixture.paths, &json!({"tokenId":id})).unwrap()["apiKey"],
+            raw
+        );
+        assert!(read_token_value(&fixture.paths, &json!({})).is_err());
+        assert!(read_token_value(&fixture.paths, &json!({"tokenId":"missing"})).is_err());
+
+        let legacy_raw = "mpg_legacy-token-without-recoverable-storage";
+        let mut config = read_config(&fixture.paths).unwrap();
+        config["tokens"].as_array_mut().unwrap().push(json!({
+            "id":"legacy","name":"旧 Token","enabled":true,
+            "tokenHash":hash_token(legacy_raw),"tokenHint":token_hint(legacy_raw)
+        }));
+        write_config(&fixture.paths, &config).await.unwrap();
+        let before = read_config(&fixture.paths).unwrap()["tokens"][1].clone();
+        let error = read_token_value(&fixture.paths, &json!({"tokenId":"legacy"})).unwrap_err();
+        assert!(error.to_string().contains("无法还原"));
+        assert_eq!(
+            read_state(&fixture.paths).unwrap()["tokens"][1]["canReveal"],
+            false
+        );
+        assert_eq!(read_config(&fixture.paths).unwrap()["tokens"][1], before);
+        let port = TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let state = enable(&registry, &fixture.paths, &json!({}), json!({"port":port}))
+            .await
+            .unwrap();
+        let response = Client::builder()
+            .no_proxy()
+            .build()
+            .unwrap()
+            .get(format!("{}/v1/models", state["baseUrl"].as_str().unwrap()))
+            .bearer_auth(legacy_raw)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        delete_token(&registry, &fixture.paths, json!({"tokenId":id}))
+            .await
+            .unwrap();
+        assert!(read_token_value(&fixture.paths, &json!({"tokenId":id})).is_err());
+        registry.stop().await;
+    });
+}
+
+#[test]
 fn auth_routing_http_errors_and_port_conflict_are_honest() {
     run(async {
         let fixture = Fixture::new();
