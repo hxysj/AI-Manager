@@ -500,7 +500,7 @@
             <thead>
               <tr>
                 <th>Token 名称</th>
-                <th>Token (前缀/密钥预览)</th>
+                <th>Token 前缀</th>
                 <th>创建时间</th>
                 <th>请求统计</th>
                 <th>输入 Token</th>
@@ -532,11 +532,6 @@
                         <Copy :size="11" />
                       </button>
                     </div>
-                    <span class="masked-preview"
-                      >••••••••••••{{
-                        token.tokenHint.replace(/…/g, "").slice(-4)
-                      }}</span
-                    >
                   </div>
                 </td>
                 <td>
@@ -2774,10 +2769,6 @@ onMounted(load)
                   color: #7c3aed;
                 }
               }
-            }
-            .masked-preview {
-              color: var(--color-text-muted);
-              font-size: 10px;
             }
           }
 

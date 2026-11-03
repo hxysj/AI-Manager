@@ -54,7 +54,7 @@ const api = {
   getState: async () => structuredClone(persisted),
   createToken: async payload => {
     calls.push(['create', payload])
-    return { ...structuredClone(persisted), createdToken: { token: 'mpg_once' } }
+    return { ...structuredClone(persisted), createdToken: { token: 'sk-once' } }
   },
   saveConfig: async payload => {
     calls.push(['save', payload])
@@ -112,7 +112,7 @@ setup.addMapping()
 assert.equal(setup.draft.modelMappings.alias.model, 'real-model')
 setup.tokenDraft.name = '调用方'
 await setup.createToken()
-assert.equal(setup.createdToken.value, 'mpg_once')
+assert.equal(setup.createdToken.value, 'sk-once')
 assert.ok(!Object.hasOwn(setup.gateway.value, 'createdToken'))
 assert.equal(setup.draft.port, 8047)
 assert.equal(setup.draft.modelMappings.alias.model, 'real-model')
@@ -136,7 +136,7 @@ for (const [tab, expected] of [['config', '底层池'], ['connections', '支持�
   assert.deepEqual(failures, [])
   assert.ok(html.includes(expected))
   assert.equal(html.includes('Multi-Protocol Support'), tab === 'connections')
-  if (tab !== 'tokens') assert.ok(!html.includes('mpg_once'))
+  if (tab !== 'tokens') assert.ok(!html.includes('sk-once'))
 }
 
 // 使用真实模板的事件处理器，验证选择、复制与示例联动，而非复制一套页面逻辑。
@@ -203,7 +203,7 @@ try {
         const header = protocol.id === 'openai' ? 'Authorization' : protocol.id === 'anthropic' ? 'x-api-key' : 'x-goog-api-key'
         assert.ok(snippet.includes(header))
         assert.ok(snippet.includes('AI_MANAGER_TOKEN'))
-        assert.ok(!snippet.includes('mpg_once'))
+        assert.ok(!snippet.includes('sk-once'))
         assert.ok(!snippet.includes('YOUR_MODEL'))
         const body = language === 'python'
           ? JSON.parse(snippet.match(/payload = ([\s\S]+?)\n\nrequest =/)[1])

@@ -30,7 +30,7 @@ const DEFAULT_PORT: u64 = 8046;
 const MAX_BODY_SIZE: usize = 32 * 1024 * 1024;
 const MAX_LOGS: usize = 5000;
 const CODEX_OFFICIAL_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-const TOKEN_PREFIX: &str = "mpg_";
+const TOKEN_PREFIX: &str = "sk-";
 
 #[derive(Clone)]
 pub struct GatewayServerRegistry {
