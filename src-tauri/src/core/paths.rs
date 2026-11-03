@@ -59,6 +59,8 @@ pub struct StorageFiles {
     pub codex_proxy_request_logs: String,
     pub codex_accounts: String,
     pub codex_active_account_id: String,
+    pub gateway_config: String,
+    pub gateway_request_logs: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -151,6 +153,8 @@ pub fn resolve_app_paths(user_data_path: &Path) -> AppPaths {
             codex_proxy_request_logs: path_text(storage_dir.join("codex-proxy-request-logs.json")),
             codex_accounts: path_text(storage_dir.join("codex-accounts.json")),
             codex_active_account_id: path_text(storage_dir.join("codex-active-account-id.json")),
+            gateway_config: path_text(storage_dir.join("multi-protocol-gateway.json")),
+            gateway_request_logs: path_text(storage_dir.join("multi-protocol-gateway-requests.json")),
         },
         lan_share_files: LanShareFiles {
             config: path_text(lan_share_dir.join("config.json")),

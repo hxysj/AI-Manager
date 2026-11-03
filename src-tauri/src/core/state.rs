@@ -1,7 +1,7 @@
 use crate::api::{
     app, app_logs, claude_desktop, codex_account, data, git_tool, google_account, image_workbench,
-    lan_share, network_quality, proxy, repos, rules, runtime_provider, screenshot, sessions,
-    settings, skills, system, tools, translation, usage,
+    lan_share, multi_protocol_gateway, network_quality, proxy, repos, rules, runtime_provider,
+    screenshot, sessions, settings, skills, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
@@ -26,6 +26,7 @@ pub struct ManagerState {
     codex_login_cache: codex_account::CodexLoginCache,
     google_login: google_account::GoogleLogin,
     proxy_server_registry: proxy::ProxyServerRegistry,
+    gateway_server_registry: multi_protocol_gateway::GatewayServerRegistry,
     desktop_manager: claude_desktop::DesktopManager,
     lan_share_registry: lan_share::LanShareServerRegistry,
     state: Value,
@@ -423,6 +424,12 @@ impl AppState {
 
         let google_result = google_account::start_enabled(&manager.paths).await;
         let desktop_result = manager.desktop_manager.start_enabled(&manager.paths).await;
+        let gateway_result = multi_protocol_gateway::start_enabled(
+            &manager.gateway_server_registry,
+            &manager.paths,
+            &manager.state["cliTargets"],
+        )
+        .await;
 
         proxy::start_enabled_servers(
             &manager.proxy_server_registry,
@@ -431,7 +438,8 @@ impl AppState {
         )
         .await?;
         desktop_result?;
-        google_result
+        google_result?;
+        gateway_result
     }
 
     pub async fn start_lan_share_service(&self, app: AppHandle) -> Result<(), ManagerError> {
@@ -496,6 +504,7 @@ impl ManagerState {
             codex_login_cache: codex_account::CodexLoginCache::new(),
             google_login: google_account::GoogleLogin::default(),
             proxy_server_registry: proxy::ProxyServerRegistry::new(),
+            gateway_server_registry: multi_protocol_gateway::GatewayServerRegistry::new(),
             desktop_manager: claude_desktop::DesktopManager::new(),
             lan_share_registry: lan_share::LanShareServerRegistry::new(),
             state,
@@ -1537,6 +1546,61 @@ impl ManagerState {
                 self.refresh_state().await?;
                 self.emit_state_changed(&app)?;
                 Ok(self.state.clone())
+            }
+            "gateway:state" => multi_protocol_gateway::read_state(&self.paths),
+            "gateway:usage" => multi_protocol_gateway::usage(&self.paths),
+            "gateway:save-config" => {
+                let result = multi_protocol_gateway::save_config(
+                    &self.gateway_server_registry,
+                    &self.paths,
+                    &self.state["cliTargets"],
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                Ok(result)
+            }
+            "gateway:enable" => {
+                let result = multi_protocol_gateway::enable(
+                    &self.gateway_server_registry,
+                    &self.paths,
+                    &self.state["cliTargets"],
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                Ok(result)
+            }
+            "gateway:disable" => {
+                let result =
+                    multi_protocol_gateway::disable(&self.gateway_server_registry, &self.paths)
+                        .await?;
+                Ok(result)
+            }
+            "gateway:create-token" => {
+                let result = multi_protocol_gateway::create_token(
+                    &self.gateway_server_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                Ok(result)
+            }
+            "gateway:delete-token" => {
+                let result = multi_protocol_gateway::delete_token(
+                    &self.gateway_server_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                Ok(result)
+            }
+            "gateway:set-token-enabled" => {
+                let result = multi_protocol_gateway::set_token_enabled(
+                    &self.gateway_server_registry,
+                    &self.paths,
+                    payload.unwrap_or_else(|| json!({})),
+                )
+                .await?;
+                Ok(result)
             }
             "codex:launch-provider-instance" => {
                 let result = runtime_provider::launch_codex_provider_instance(
@@ -2699,6 +2763,7 @@ mod tests {
                 codex_login_cache: codex_account::CodexLoginCache::new(),
                 google_login: google_account::GoogleLogin::default(),
                 proxy_server_registry: proxy::ProxyServerRegistry::new(),
+                gateway_server_registry: multi_protocol_gateway::GatewayServerRegistry::new(),
                 desktop_manager: claude_desktop::DesktopManager::new(),
                 lan_share_registry: lan_share::LanShareServerRegistry::new(),
                 state: json!({ "ready": true })

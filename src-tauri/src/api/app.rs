@@ -532,6 +532,7 @@ fn tool_window_title(tool_id: &str) -> Result<&'static str, ManagerError> {
         "coordinate-overlay" => Ok("坐标框预览"),
         "port-monitor" => Ok("端口监测"),
         "network-quality" => Ok("网络质量监测"),
+        "multi-protocol-gateway" => Ok("多协议反代"),
         "git" => Ok("Git 管理"),
         "lan-share" => Ok("设备快传"),
         "codex-pets" => Ok("Codex 宠物"),
@@ -562,7 +563,7 @@ pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, 
         .remove(&label);
     let large = matches!(
         tool_id,
-        "image-workbench" | "git" | "network-quality" | "lan-share"
+        "image-workbench" | "git" | "network-quality" | "lan-share" | "multi-protocol-gateway"
     );
     let window = WebviewWindowBuilder::new(
         app,

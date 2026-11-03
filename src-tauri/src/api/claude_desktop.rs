@@ -19,6 +19,11 @@ use tokio::sync::Mutex;
 #[path = "claude_desktop_protocol.rs"]
 mod protocol;
 
+// 统一网关复用现有的 Claude 请求转换，保持内容块和工具关联的语义一致。
+pub(crate) fn gateway_chat_request(payload: &Value) -> Result<Value, ManagerError> {
+    protocol::convert_request(payload, false)
+}
+
 const PROFILE_ID: &str = "a1796a13-0ec3-4dd0-b3a0-000000157230";
 const OFFICIAL_ID: &str = "claude-desktop-official";
 const GATEWAY_KEY: &str = "claude-desktop:gateway";

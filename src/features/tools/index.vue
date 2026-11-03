@@ -194,6 +194,11 @@
       />
       <LanShareView v-else-if="activeTool === 'lan-share'" />
       <NetworkQualityView v-else-if="activeTool === 'network-quality'" />
+      <MultiProtocolGateway
+        v-else-if="activeTool === 'multi-protocol-gateway'"
+        :providers="providers"
+        :codex-accounts="codexAccounts"
+      />
       <CodexPetManager v-else-if="activeTool === 'codex-pets'" />
       <PortMonitor
         v-else-if="activeTool === 'port-monitor'"
@@ -256,6 +261,9 @@ const JsonAgentTool = defineAsyncComponent(
 const NetworkQualityView = defineAsyncComponent(
   () => import("@/features/networkQuality/index.vue")
 )
+const MultiProtocolGateway = defineAsyncComponent(
+  () => import("@/features/tools/multiProtocolGateway/index.vue")
+)
 
 // 图片工作台按需加载，进入工具后再读取任务和官方账号。
 const ImageWorkbench = defineAsyncComponent(
@@ -280,6 +288,10 @@ const props = defineProps({
     default: () => []
   },
   providers: {
+    type: Array,
+    default: () => []
+  },
+  codexAccounts: {
     type: Array,
     default: () => []
   },

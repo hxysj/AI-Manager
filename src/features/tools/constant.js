@@ -8,6 +8,7 @@ import {
   Network,
   PawPrint,
   ScanLine,
+  ServerCog,
   Share2
 } from 'lucide-vue-next'
 
@@ -70,6 +71,14 @@ export function getToolItems({ cliTargets = [], repos = [] } = {}) {
       meta: '延迟 / 丢包 / 路径',
       icon: Activity,
       theme: 'green'
+    },
+    {
+      id: 'multi-protocol-gateway',
+      label: '多协议反代',
+      summary: '统一转发 Provider、Codex 与 Gemini 官方账号，管理调用 Token 和真实模型记录。',
+      meta: 'OpenAI / Claude / Gemini',
+      icon: ServerCog,
+      theme: 'violet'
     },
     {
       id: 'git',
