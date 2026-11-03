@@ -27,6 +27,7 @@ export const appApi = {
   setQuickSwitchCollapsed: (payload) =>
     request("quick-switch:set-collapsed", payload),
   moveQuickSwitchBy: (payload) => request("quick-switch:move-by", payload),
+  saveQuickSwitchPosition: () => request("quick-switch:save-position"),
   handleCloseAction: (payload) => request("app:close-action", payload),
   getAppLogs: (payload) => request("app-log:list", payload),
   clearAppLogs: () => request("app-log:clear"),

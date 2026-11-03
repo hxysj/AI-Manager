@@ -99,6 +99,7 @@ async fn dispatch_command(
         channel,
         "quick-switch:move-by"
             | "quick-switch:set-collapsed"
+            | "quick-switch:save-position"
             | "quick-switch:ready"
             | "tool-window:open"
             | "tool-window:ready"

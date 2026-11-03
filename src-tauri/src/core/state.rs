@@ -731,6 +731,11 @@ impl ManagerState {
             "quick-switch:move-by" => {
                 app::move_quick_switch_by(&app, payload.unwrap_or_else(|| json!({})))
             }
+            "quick-switch:save-position" => {
+                let result = app::save_quick_switch_position(&mut self.app_settings).await?;
+                self.state["appSettings"] = serde_json::to_value(&self.app_settings)?;
+                Ok(result)
+            }
             "data:export" => data::export_data_backup(&app, &self.paths, &self.app_settings).await,
             "data:preview-restore" => {
                 data::preview_data_backup_restore(

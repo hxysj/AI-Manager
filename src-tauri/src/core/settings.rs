@@ -34,7 +34,16 @@ pub struct SystemSettings {
     pub quick_switch_visible: bool,
     #[serde(default)]
     pub quick_switch_tools: BTreeMap<String, bool>,
+    #[serde(default)]
+    pub quick_switch_position: Option<QuickSwitchPosition>,
     pub auto_launch_enabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickSwitchPosition {
+    pub x: f64,
+    pub y: f64,
 }
 
 fn default_log_enabled() -> bool {
@@ -172,6 +181,13 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
                         .collect()
                 })
                 .unwrap_or_default(),
+            quick_switch_position: system
+                .get("quickSwitchPosition")
+                .and_then(|value| {
+                    let x = value.get("x").and_then(Value::as_f64)?;
+                    let y = value.get("y").and_then(Value::as_f64)?;
+                    (x.is_finite() && y.is_finite()).then_some(QuickSwitchPosition { x, y })
+                }),
             auto_launch_enabled: bool_value(system.get("autoLaunchEnabled"), false),
         },
         desktop: DesktopSettings {
@@ -300,6 +316,38 @@ mod floating_tools_tests {
             restored.system.quick_switch_tools.get("image-workbench"),
             None
         );
+    }
+
+    #[test]
+    fn quick_switch_position_survives_round_trip_and_invalid_values_are_ignored() {
+        let path = PathBuf::from("settings.json");
+        let settings = normalize_app_settings(
+            path.clone(),
+            Some(json!({
+                "system": {
+                    "quickSwitchPosition": { "x": -1920.5, "y": 860.25 }
+                }
+            })),
+        );
+        assert_eq!(
+            settings.system.quick_switch_position,
+            Some(QuickSwitchPosition { x: -1920.5, y: 860.25 })
+        );
+        let restored =
+            normalize_app_settings(path.clone(), Some(serialize_app_settings(&settings)));
+        assert_eq!(
+            restored.system.quick_switch_position,
+            settings.system.quick_switch_position
+        );
+        let invalid = normalize_app_settings(
+            path,
+            Some(json!({
+                "system": {
+                    "quickSwitchPosition": { "x": "invalid", "y": 100 }
+                }
+            })),
+        );
+        assert_eq!(invalid.system.quick_switch_position, None);
     }
 
     #[test]

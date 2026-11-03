@@ -594,6 +594,12 @@ function stopDrag(event) {
   window.removeEventListener("pointermove", moveDrag)
   window.removeEventListener("pointerup", stopDrag)
   window.removeEventListener("pointercancel", stopDrag)
+  if (wasActive && !disposed) {
+    // 等待最后一次移动完成后再保存，避免保存到拖动前的位置。
+    moveRequest = moveRequest
+      .then(() => appApi.saveQuickSwitchPosition())
+      .catch((error) => createMessage.error(error.message || String(error)))
+  }
   if (wasActive && !disposed && windowVisible.value) {
     // 松开时使用实际指针位置，修正拖动和窗口贴边造成的过期悬浮状态。
     if (Number.isFinite(event?.clientX) && Number.isFinite(event?.clientY)) {

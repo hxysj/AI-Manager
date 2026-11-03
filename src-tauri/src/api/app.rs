@@ -1,6 +1,8 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::AppPaths;
-use crate::core::settings::{serialize_app_settings, write_json_file, AppSettings};
+use crate::core::settings::{
+    serialize_app_settings, write_json_file, AppSettings, QuickSwitchPosition,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -713,6 +715,34 @@ pub fn set_quick_switch_collapsed(
     Ok(json!({ "collapsed": collapsed }))
 }
 
+pub async fn save_quick_switch_position(
+    app_settings: &mut AppSettings,
+) -> Result<Value, ManagerError> {
+    let position = {
+        let center = QUICK_SWITCH_WINDOW_POSITION
+            .lock()
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        center.as_ref().map(|center| QuickSwitchPosition {
+            x: center.x,
+            y: center.y,
+        })
+    };
+    let Some(position) = position else {
+        return Ok(json!(false));
+    };
+    if app_settings.system.quick_switch_position.as_ref() == Some(&position) {
+        return Ok(json!(false));
+    }
+    // 拖动结束后才落盘，避免指针移动期间反复写配置文件。
+    app_settings.system.quick_switch_position = Some(position);
+    write_json_file(
+        Path::new(&app_settings.settings_file_path),
+        &serialize_app_settings(app_settings),
+    )
+    .await?;
+    Ok(json!(true))
+}
+
 pub fn move_quick_switch_by(app: &tauri::AppHandle, payload: Value) -> Result<Value, ManagerError> {
     let mut center = QUICK_SWITCH_WINDOW_POSITION
         .lock()
@@ -795,6 +825,13 @@ pub fn sync_quick_switch_window(
     let mut center = QUICK_SWITCH_WINDOW_POSITION
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    if center.is_none() {
+        *center = app_settings
+            .system
+            .quick_switch_position
+            .as_ref()
+            .map(|position| PhysicalPosition::new(position.x, position.y));
+    }
     let Some(main_window) = app.get_webview_window("main") else {
         destroy_quick_switch_window(app)?;
         return Ok(());
